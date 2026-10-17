@@ -1,31 +1,21 @@
 // @ts-check
 /* global setTimeout, clearTimeout, setInterval, clearInterval */
 
-/** @import { HeartbeatOptions } from './types.js' */
-
 /**
- * @typedef {import('./types.js').ByteStream} ByteStream
- * @typedef {import('./types.js').KeyIdHex} KeyIdHex
- * @typedef {import('./types.js').OcapnNoiseNetwork} OcapnNoiseNetwork
- * @typedef {import('./types.js').OcapnNoiseSession} OcapnNoiseSession
- * @typedef {import('./types.js').OcapnNoiseTransport} OcapnNoiseTransport
- * @typedef {import('./types.js').SigningKeys} SigningKeys
- * @typedef {import('./types.js').TransportListener} TransportListener
- * @typedef {import('@endo/ocapn/codec-interface').OcapnCodec} OcapnCodec
- * @typedef {import('@endo/ocapn/components').OcapnLocation} OcapnLocation
- * @typedef {import('@endo/ocapn/components').OcapnSignature} OcapnSignature
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Reader<T>} Reader
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Writer<T>} Writer
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').AsyncQueue<T>} AsyncQueue
+ * @import { AsyncQueue, Reader, Writer } from '@endo/stream'
+ * @import { OcapnCodec } from '@endo/ocapn/codec-interface'
+ * @import { OcapnLocation, OcapnSignature } from '@endo/ocapn/components'
+ * @import {
+ *   ByteStream,
+ *   HeartbeatOptions,
+ *   KeyIdHex,
+ *   OcapnNoiseNetwork,
+ *   OcapnNoiseSession,
+ *   OcapnNoiseTransport,
+ *   ReconnectOptions,
+ *   SigningKeys,
+ *   TransportListener,
+ * } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -35,8 +25,10 @@ import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
   readOcapnHandshakeMessage,
   readOcapnHeartbeatMessage,
+  readOcapnSessionControlMessage,
   writeOcapnHandshakeMessage,
   writeOcapnHeartbeatMessage,
+  writeOcapnSessionControlMessage,
 } from '@endo/ocapn/operations';
 
 // Resolved through the package's own `./platform` subpath so that
@@ -218,6 +210,79 @@ const normalizeHeartbeatOptions = heartbeat => {
   return harden({ intervalMs, sessionTimeoutMs });
 };
 
+/** `op:session-hello` feature bit: the sender runs the heartbeat. */
+const FEATURE_HEARTBEAT = 1n;
+/** `op:session-hello` feature bit: the sender resumes lost sessions. */
+const FEATURE_RECONNECT = 2n;
+
+/**
+ * @param {bigint} features
+ * @param {bigint} bit
+ */
+const hasFeature = (features, bit) => (features / bit) % 2n === 1n;
+
+/** Defaults per designs/ocapn-noise-session-reconnect.md § 5. */
+const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS = 250;
+const DEFAULT_RECONNECT_BACKOFF_MAX_MS = 30_000;
+const DEFAULT_SESSION_HARD_TIMEOUT_MS = 10 * 60_000;
+/**
+ * `setTimeout` clamps a longer delay (including `Infinity`) to 1 ms, which
+ * would turn "wait a very long time" into "give up at once".
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+/**
+ * The identity greeting and the session hello take send nonces 0 and 1
+ * of every transport instance; session frames start after them.
+ */
+const HANDSHAKE_SENT_COUNT = 2n;
+const SESSION_END_WRITE_TIMEOUT_MS = 1000;
+
+/**
+ * @param {ReconnectOptions | boolean | undefined} reconnect
+ * @param {{ intervalMs: number, sessionTimeoutMs: number } | undefined} heartbeatSettings
+ * @returns {{ backoffInitialMs: number, backoffMaxMs: number, hardTimeoutMs: number } | undefined}
+ */
+const normalizeReconnectOptions = (reconnect, heartbeatSettings) => {
+  if (reconnect === undefined || reconnect === false) return undefined;
+  if (heartbeatSettings === undefined) {
+    throw makeError(
+      X`ocapn-noise: reconnect requires heartbeat, which detects the loss it recovers from`,
+    );
+  }
+  if (reconnect !== true && (typeof reconnect !== 'object' || !reconnect)) {
+    throw makeError(
+      X`ocapn-noise: reconnect must be a boolean or an options object, got ${q(reconnect)}`,
+    );
+  }
+  const {
+    backoffInitialMs = DEFAULT_RECONNECT_BACKOFF_INITIAL_MS,
+    hardTimeoutMs = DEFAULT_SESSION_HARD_TIMEOUT_MS,
+  } = reconnect === true ? {} : reconnect;
+  const {
+    backoffMaxMs = Math.max(
+      backoffInitialMs,
+      Math.min(DEFAULT_RECONNECT_BACKOFF_MAX_MS, hardTimeoutMs),
+    ),
+  } = reconnect === true ? {} : reconnect;
+  for (const [name, value] of /** @type {const} */ ([
+    ['backoffInitialMs', backoffInitialMs],
+    ['backoffMaxMs', backoffMaxMs],
+    ['hardTimeoutMs', hardTimeoutMs],
+  ])) {
+    if (typeof value !== 'number' || !(value > 0) || value > MAX_TIMER_MS) {
+      throw makeError(
+        X`ocapn-noise: reconnect.${q(name)} must be a positive number of milliseconds no greater than ${q(MAX_TIMER_MS)}, got ${q(value)}`,
+      );
+    }
+  }
+  if (backoffMaxMs < backoffInitialMs || backoffMaxMs > hardTimeoutMs) {
+    throw makeError(
+      X`ocapn-noise: reconnect.backoffMaxMs must lie between backoffInitialMs and hardTimeoutMs, got ${q(backoffMaxMs)}`,
+    );
+  }
+  return harden({ backoffInitialMs, backoffMaxMs, hardTimeoutMs });
+};
+
 /**
  * Count the transport-phase messages the receiving Noise CipherState
  * has accepted. Each successful `decrypt` consumes exactly one nonce,
@@ -294,6 +359,7 @@ const withTimeout = (promise, ms, label, stream) => {
  *   handshakeTimeoutMs?: number,
  *   maxInProgressPerLocalKey?: number,
  *   heartbeat?: HeartbeatOptions,
+ *   reconnect?: ReconnectOptions | boolean,
  * }} options
  * @returns {OcapnNoiseNetwork}
  */
@@ -302,9 +368,66 @@ export const makeOcapnNoiseNetwork = ({
   handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
   maxInProgressPerLocalKey = DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY,
   heartbeat,
+  reconnect,
 }) => {
   const cryptography = makeCryptography(codec);
   const heartbeatSettings = normalizeHeartbeatOptions(heartbeat);
+  const localReconnectSettings = normalizeReconnectOptions(
+    reconnect,
+    heartbeatSettings,
+  );
+  const localFeatures =
+    (heartbeatSettings === undefined ? 0n : FEATURE_HEARTBEAT) +
+    (localReconnectSettings === undefined ? 0n : FEATURE_RECONNECT);
+
+  /**
+   * One concrete transport connection under a session, with the Noise
+   * CipherStates of the handshake that opened it.
+   *
+   * @typedef {{
+   *   stream: ByteStream,
+   *   encrypt: (bytes: Uint8Array) => Uint8Array,
+   *   decrypt: (bytes: Uint8Array) => Uint8Array,
+   *   getReceivedCount: () => bigint,
+   *   sentCount: bigint,
+   * }} Instance
+   */
+  /**
+   * A frame waiting for the transport. Session frames carry their
+   * position in the session's frame stream; heartbeats carry none.
+   *
+   * @typedef {{ index: bigint | undefined, render: () => Uint8Array }} OutboundFrame
+   */
+  /**
+   * The network's handle on a session that resumes after loss.
+   *
+   * @typedef {{
+   *   sessionToken: Uint8Array,
+   *   getEpoch: () => bigint,
+   *   isAttached: () => boolean,
+   *   getReceivedFrames: () => bigint,
+   *   suspend: () => bigint,
+   *   attach: (instance: Instance, epoch: bigint, peerReceived: bigint) => void,
+   *   abort: (error: Error) => void,
+   *   dial: (epoch: bigint, received: bigint) => Promise<{ instance: Instance, peerHello: SessionHello }>,
+   * }} Reconnector
+   */
+  /**
+   * @typedef {{
+   *   type: 'op:session-hello',
+   *   features: bigint,
+   *   epoch: bigint,
+   *   session: Uint8Array,
+   *   received: bigint,
+   * }} SessionHello
+   */
+  /**
+   * Sessions that resume after loss, by peer key, so an inbound
+   * reconnect handshake finds the session it continues.
+   *
+   * @type {Map<KeyIdHex, Reconnector>}
+   */
+  const reconnectors = new Map();
 
   /**
    * @typedef {{
@@ -337,7 +460,7 @@ export const makeOcapnNoiseNetwork = ({
    * promote the winner to `active`, and release callers waiting on
    * `waiters`.
    *
-   * @typedef {{ session: OcapnNoiseSession, tiebreaker: Uint8Array, close: () => void }} Candidate
+   * @typedef {{ session: OcapnNoiseSession, tiebreaker: Uint8Array, reconnector?: Reconnector, close: () => void }} Candidate
    */
   /** @type {Map<KeyIdHex, Candidate>} */
   const active = new Map();
@@ -355,6 +478,16 @@ export const makeOcapnNoiseNetwork = ({
    * @type {Map<KeyIdHex, Set<() => void>>}
    */
   const inFlightByLocalKey = new Map();
+  /**
+   * The one unproven inbound handshake each resumable peer may hold.
+   * A SYN for a peer with a resumable session skips the cheap `adopted`
+   * refusal, since only its hello can say whether it resumes, so a
+   * recorded SYN replayed for such a peer would otherwise fill the whole
+   * `inFlightByLocalKey` budget. A newer attempt evicts the older one, so
+   * a replay cannot hold the slot against the peer's genuine redial.
+   * @type {Map<KeyIdHex, () => void>}
+   */
+  const resumeAttempts = new Map();
   /** @type {Map<KeyIdHex, { resolve: (s: OcapnNoiseSession) => void, reject: (e: Error) => void }[]>} */
   const waiters = new Map();
   /** @type {Map<KeyIdHex, string[]>} */
@@ -365,7 +498,7 @@ export const makeOcapnNoiseNetwork = ({
    * `provideSession` (i.e. peer-initiated handshakes). Drained by any
    * consumer iterating `inboundSessions`.
    *
-   * @type {import('@endo/stream').AsyncQueue<IteratorResult<OcapnNoiseSession, undefined>>}
+   * @type {AsyncQueue<IteratorResult<OcapnNoiseSession, undefined>>}
    */
   const inboundQueue = makeQueue();
   let inboundClosed = false;
@@ -556,6 +689,7 @@ export const makeOcapnNoiseNetwork = ({
     for (const c of fresh) if (c !== winner) c.close();
 
     active.set(peerId, winner);
+    if (winner.reconnector) reconnectors.set(peerId, winner.reconnector);
     recentErrors.delete(peerId);
 
     const queue = waiters.get(peerId) ?? [];
@@ -828,11 +962,65 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   /**
+   * Send this side's `op:session-hello` on a transport instance whose
+   * identity exchange just finished.
+   *
+   * @param {Writer<Uint8Array>} writer
+   * @param {(bytes: Uint8Array) => Uint8Array} encrypt
+   * @param {{ epoch: bigint, session: Uint8Array, received: bigint }} hello
+   */
+  const writeSessionHello = async (writer, encrypt, hello) => {
+    await null;
+    const bytes = writeOcapnSessionControlMessage(
+      { type: 'op:session-hello', features: localFeatures, ...hello },
+      codec,
+    );
+    await writer.next(encrypt(bytes));
+  };
+
+  /**
+   * Read the peer's `op:session-hello`.
+   *
+   * @param {Reader<Uint8Array>} reader
+   * @param {(bytes: Uint8Array) => Uint8Array} decrypt
+   * @returns {Promise<SessionHello>}
+   */
+  const readSessionHello = async (reader, decrypt) => {
+    await null;
+    const plain = decrypt(await readFrame(reader));
+    const message = readOcapnSessionControlMessage(codec.makeReader(plain));
+    if (message.type !== 'op:session-hello') {
+      throw makeError(
+        X`ocapn-noise: expected op:session-hello, got ${q(message.type)}`,
+      );
+    }
+    return harden({ ...message, session: asUint8(message.session) });
+  };
+
+  /**
+   * Whether a hello opens a session (epoch 0) on the handshake it was
+   * read from: the session it names must be that handshake's.
+   *
+   * @param {SessionHello} hello
+   * @param {Uint8Array} handshakeHash
+   */
+  const opensSession = (hello, handshakeHash) =>
+    hello.epoch === 0n &&
+    compareUint8Arrays(hello.session, asUint8(handshakeHash)) === 0;
+
+  /**
    * Build the streaming `NetworkSession` returned from `provideSession`.
    * Each inbound transport frame is one encrypted OCapN message; the
    * session reader decrypts and yields plaintext. The session writer
    * encrypts each outbound message and hands it to the transport as
    * one frame.
+   *
+   * With heartbeats, the session outlives the transport instance it
+   * was built on. With reconnect negotiated as well, losing that
+   * instance does not end the session: the dialing side runs a fresh
+   * Noise IK handshake (Rekey) on a new transport instance, the session
+   * epoch advances, and the frames the old instance did not deliver are
+   * replayed on the new one exactly once.
    *
    * @param {object} params
    * @param {RegisteredKey} params.localKey
@@ -842,16 +1030,18 @@ export const makeOcapnNoiseNetwork = ({
    * @param {OcapnSignature} params.peerLocationSignature
    * @param {Uint8Array} params.peerEd25519
    * @param {boolean} params.isInitiator
-   * @param {ByteStream} params.stream
-   * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
-   * @param {(bytes: Uint8Array) => Uint8Array} params.decrypt
-   * @param {() => bigint} params.getReceivedCount - How many
-   *   transport messages `decrypt` has accepted on this CipherState.
+   * @param {Instance} params.instance - The handshake's transport
+   *   instance, epoch 0.
+   * @param {Uint8Array} params.sessionToken - The Noise transcript hash
+   *   of the handshake that opened the session, which names it in a
+   *   reconnect's `op:session-hello`.
+   * @param {bigint} params.peerFeatures - The `features` bitset of the
+   *   peer's `op:session-hello`.
    * @param {() => void} params.onClose - Called when the session closes
    *   (peer disconnect, local `close()`, or stream end). Used by the
    *   network to forget the entry from `active` so a future
    *   `provideSession` does not resurrect a dead session.
-   * @returns {OcapnNoiseSession}
+   * @returns {{ session: OcapnNoiseSession, reconnector: Reconnector | undefined }}
    */
   const buildSession = ({
     localKey,
@@ -861,17 +1051,23 @@ export const makeOcapnNoiseNetwork = ({
     peerLocationSignature,
     peerEd25519,
     isInitiator,
-    stream,
-    encrypt,
-    decrypt,
-    getReceivedCount,
+    instance: firstInstance,
+    sessionToken,
+    peerFeatures,
     onClose,
   }) => {
     let closed = false;
+    const reconnectSettings =
+      heartbeatSettings !== undefined &&
+      hasFeature(peerFeatures, FEATURE_RECONNECT)
+        ? localReconnectSettings
+        : undefined;
 
-    // The session epoch numbers transport instances. Without reconnect
-    // there is only the handshake's instance, epoch 0.
-    const epoch = 0n;
+    // The session epoch numbers transport instances: 0 for the
+    // handshake's, advancing by one on each reconnect.
+    let epoch = 0n;
+    /** @type {Instance | undefined} */
+    let current = firstInstance;
     let pingSequence = 0n;
     let pongSequence = 0n;
     /** @type {bigint | undefined} */
@@ -882,20 +1078,33 @@ export const makeOcapnNoiseNetwork = ({
     let livenessTimer;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let writeStallTimer;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let hardTimer;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let redialTimer;
+    /** @type {number | undefined} */
+    let reconnectingSince;
 
-    // The session-level outbound queue: plaintext frames the session
-    // has accepted but the current transport instance has not. A frame
-    // is rendered and encrypted only when it reaches the transport, so
-    // the queue can outlive the transport instance it was filled for.
-    /** @type {Array<{ heartbeat: boolean, render: () => Uint8Array }>} */
-    const outbound = [];
+    // The session-level outbound queue: frames the session has accepted
+    // but the current transport instance has not. A frame is rendered
+    // and encrypted only when it reaches the transport, so the queue can
+    // outlive the transport instance it was filled for. Session frames
+    // (not heartbeats) carry their position in the session's frame
+    // stream, which a reconnect uses to replay each exactly once.
+    /** @type {Array<OutboundFrame>} */
+    let outbound = [];
     let queuedHeartbeatFrames = 0;
-    // The identity greeting, sent before the session exists, took send
-    // nonce 0.
-    let sentCount = 1n;
-    /** @type {Promise<void>} */
-    let drained = Promise.resolve();
-    let draining = false;
+    // Session frames handed to the current instance that the peer has
+    // not yet acknowledged by `op:pong`, kept for replay on reconnect.
+    /** @type {Array<{ frame: OutboundFrame, nonce: bigint }>} */
+    let unacked = [];
+    let nextFrameIndex = 0n;
+    // Session frames delivered to our reader, over every instance.
+    let receivedFrames = 0n;
+    /** @type {Instance | undefined} */
+    let drainingFor;
+    /** @type {Array<() => void>} */
+    let drainWaiters = [];
 
     /** @type {() => void} */
     let resolveClosed = () => {};
@@ -904,7 +1113,7 @@ export const makeOcapnNoiseNetwork = ({
       resolveClosed = resolve;
     });
 
-    const stopHeartbeat = () => {
+    const stopTimers = () => {
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       if (livenessTimer !== undefined) clearTimeout(livenessTimer);
       if (writeStallTimer !== undefined) clearTimeout(writeStallTimer);
@@ -913,9 +1122,20 @@ export const makeOcapnNoiseNetwork = ({
       writeStallTimer = undefined;
     };
 
+    const stopReconnecting = () => {
+      if (hardTimer !== undefined) clearTimeout(hardTimer);
+      if (redialTimer !== undefined) clearTimeout(redialTimer);
+      hardTimer = undefined;
+      redialTimer = undefined;
+      reconnectingSince = undefined;
+    };
+
     const fireOnClose = () => {
-      stopHeartbeat();
+      stopTimers();
+      stopReconnecting();
       resolveClosed();
+      for (const resolve of drainWaiters) resolve();
+      drainWaiters = [];
       try {
         onClose();
       } catch (_e) {
@@ -923,13 +1143,54 @@ export const makeOcapnNoiseNetwork = ({
       }
     };
 
+    /** @param {Instance} instance */
+    const closeInstance = instance => {
+      Promise.resolve(instance.stream.writer.return(undefined)).catch(() => {});
+      Promise.resolve(instance.stream.reader.return(undefined)).catch(() => {});
+    };
+
+    /**
+     * Tell a reconnect-capable peer that this end is deliberate, so it
+     * does not take the closing stream for a lost transport instance.
+     *
+     * @param {Instance} instance
+     * @returns {Promise<unknown>}
+     */
+    const sendSessionEnd = instance => {
+      if (reconnectSettings === undefined) return Promise.resolve();
+      try {
+        const end = writeOcapnSessionControlMessage(
+          { type: 'op:session-end', epoch },
+          codec,
+        );
+        // Bounded: the instance being closed may be the stalled one, and
+        // the close must not wait on its write.
+        /** @type {ReturnType<typeof setTimeout> | undefined} */
+        let endTimer;
+        return Promise.race([
+          Promise.resolve(
+            instance.stream.writer.next(instance.encrypt(end)),
+          ).catch(() => {}),
+          new Promise(resolve => {
+            endTimer = setTimeout(resolve, SESSION_END_WRITE_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(endTimer));
+      } catch (_e) {
+        return Promise.resolve();
+      }
+    };
+
     const close = () => {
       if (closed) return;
       closed = true;
-      // Tear both directions down. We suppress any rejection here
-      // because a transport's write half may have already closed.
-      Promise.resolve(stream.writer.return(undefined)).catch(() => {});
-      Promise.resolve(stream.reader.return(undefined)).catch(() => {});
+      // Tear both directions down, after the end notice if the peer
+      // expects one. We suppress any rejection here because a
+      // transport's write half may have already closed.
+      const instance = current;
+      if (instance !== undefined) {
+        void sendSessionEnd(instance).then(() => closeInstance(instance));
+      }
+      current = undefined;
       fireOnClose();
     };
 
@@ -937,8 +1198,11 @@ export const makeOcapnNoiseNetwork = ({
     let reader;
     /** @type {(plainText: Uint8Array) => void} */
     let enqueueFrame = () => {};
+    /** @type {Reconnector | undefined} */
+    let reconnector;
 
     if (heartbeatSettings === undefined) {
+      const { stream, decrypt } = firstInstance;
       reader = harden({
         next: async () => {
           await null;
@@ -994,91 +1258,271 @@ export const makeOcapnNoiseNetwork = ({
         close();
       };
 
-      // A transport write that does not complete within the session
-      // timeout is loss, not a stall: the peer, hearing nothing from us
-      // for as long, has given up on this transport instance too.
-      const onWriteStall = () => {
-        fail(
-          makeError(
-            X`ocapn-noise: transport write stalled for ${q(sessionTimeoutMs)}ms; session lost`,
-          ),
+      const endGracefully = () => {
+        if (closed) return;
+        inbound.put(harden({ done: true }));
+        closed = true;
+        if (current !== undefined) closeInstance(current);
+        current = undefined;
+        fireOnClose();
+      };
+
+      /**
+       * The current transport instance is gone. Without reconnect the
+       * session goes with it; with reconnect the session keeps its queue
+       * and waits for (or, on the dialing side, makes) a new instance.
+       *
+       * @param {Instance} instance
+       * @param {Error | undefined} error - `undefined` when the
+       *   transport ended without one.
+       */
+      const loseInstance = (instance, error) => {
+        if (closed || instance !== current) return;
+        if (reconnectSettings === undefined) {
+          if (error === undefined) endGracefully();
+          else fail(error);
+          return;
+        }
+        detach(instance);
+        if (reconnectingSince === undefined) {
+          reconnectingSince = Date.now();
+          const { hardTimeoutMs } = reconnectSettings;
+          lastDialError = undefined;
+          hardTimer = setTimeout(() => {
+            fail(
+              makeError(
+                X`ocapn-noise: session aborted; not reconnected within ${q(hardTimeoutMs)}ms`,
+                undefined,
+                lastDialError === undefined
+                  ? undefined
+                  : { cause: lastDialError },
+              ),
+            );
+          }, hardTimeoutMs);
+          backoffMs = reconnectSettings.backoffInitialMs;
+        }
+        if (isInitiator) scheduleRedial(0);
+      };
+
+      /**
+       * Drop the current instance, keeping every session frame it has
+       * not been acknowledged to deliver for replay on the next one.
+       *
+       * @param {Instance} instance
+       */
+      const detach = instance => {
+        current = undefined;
+        stopTimers();
+        closeInstance(instance);
+        const pending = outbound.filter(frame => frame.index !== undefined);
+        outbound = [...unacked.map(entry => entry.frame), ...pending];
+        unacked = [];
+        queuedHeartbeatFrames = 0;
+        peerAckedRecvNonce = undefined;
+      };
+
+      let backoffMs = 0;
+      /** @type {Error | undefined} */
+      let lastDialError;
+
+      /** @param {number} delayMs */
+      const scheduleRedial = delayMs => {
+        if (closed || redialTimer !== undefined) return;
+        redialTimer = setTimeout(() => {
+          redialTimer = undefined;
+          void redial();
+        }, delayMs);
+      };
+
+      const redial = async () => {
+        await null;
+        if (
+          closed ||
+          current !== undefined ||
+          reconnectSettings === undefined
+        ) {
+          return;
+        }
+        const nextEpoch = epoch + 1n;
+        /** @type {Awaited<ReturnType<Reconnector['dial']>>} */
+        let dialed;
+        try {
+          dialed = await /** @type {Reconnector} */ (reconnector).dial(
+            nextEpoch,
+            receivedFrames,
+          );
+        } catch (error) {
+          if (closed || current !== undefined) return;
+          lastDialError = /** @type {Error} */ (error);
+          const delayMs = backoffMs;
+          backoffMs = Math.min(backoffMs * 2, reconnectSettings.backoffMaxMs);
+          scheduleRedial(delayMs);
+          return;
+        }
+        const { instance, peerHello } = dialed;
+        if (closed || current !== undefined) {
+          closeInstance(instance);
+          return;
+        }
+        if (
+          peerHello.epoch !== nextEpoch ||
+          compareUint8Arrays(asUint8(peerHello.session), sessionToken) !== 0
+        ) {
+          // The peer no longer holds this session (it restarted, or gave
+          // up on us): nothing on the other side can take the queue.
+          closeInstance(instance);
+          fail(
+            makeError(
+              X`ocapn-noise: session aborted; peer refused to resume epoch ${q(nextEpoch)}`,
+            ),
+          );
+          return;
+        }
+        attach(instance, nextEpoch, peerHello.received);
+      };
+
+      /**
+       * Continue the session on a fresh transport instance.
+       *
+       * @param {Instance} instance
+       * @param {bigint} newEpoch
+       * @param {bigint} peerReceived - Session frames the peer has
+       *   delivered; queued frames before that position are dropped
+       *   rather than replayed.
+       */
+      const attach = (instance, newEpoch, peerReceived) => {
+        if (closed) {
+          closeInstance(instance);
+          return;
+        }
+        if (current !== undefined) detach(current);
+        if (peerReceived > nextFrameIndex) {
+          closeInstance(instance);
+          fail(
+            makeError(
+              X`ocapn-noise: session aborted; peer claims ${q(peerReceived)} frames of ${q(nextFrameIndex)} sent`,
+            ),
+          );
+          return;
+        }
+        stopReconnecting();
+        outbound = outbound.filter(
+          frame => frame.index !== undefined && frame.index >= peerReceived,
         );
+        epoch = newEpoch;
+        pingSequence = 0n;
+        pongSequence = 0n;
+        current = instance;
+        startInstance(instance);
       };
 
       // Hand queued frames to the transport one at a time, in order.
       // Encrypting at hand-off keeps the Noise nonce order equal to the
       // transport order however long a frame waits in the queue.
-      const drain = async () => {
+      /** @param {Instance} instance */
+      const drain = async instance => {
         await null;
-        while (!closed && outbound.length > 0) {
+        while (current === instance && outbound.length > 0) {
           const frame = outbound[0];
-          writeStallTimer = setTimeout(onWriteStall, sessionTimeoutMs);
+          // A transport write that does not complete within the session
+          // timeout is loss, not a stall: the peer, hearing nothing from
+          // us for as long, has given up on this transport instance too.
+          const stallTimer = setTimeout(
+            () =>
+              loseInstance(
+                instance,
+                makeError(
+                  X`ocapn-noise: transport write stalled for ${q(sessionTimeoutMs)}ms; session lost`,
+                ),
+              ),
+            sessionTimeoutMs,
+          );
+          writeStallTimer = stallTimer;
+          const nonce = instance.sentCount;
           try {
             // eslint-disable-next-line no-await-in-loop
-            await stream.writer.next(encrypt(frame.render()));
+            await instance.stream.writer.next(instance.encrypt(frame.render()));
           } catch (error) {
-            fail(/** @type {Error} */ (error));
+            loseInstance(instance, /** @type {Error} */ (error));
             return;
           } finally {
-            clearTimeout(writeStallTimer);
-            writeStallTimer = undefined;
+            // A stale drain must not clear a newer instance's timer.
+            clearTimeout(stallTimer);
+            if (writeStallTimer === stallTimer) writeStallTimer = undefined;
           }
-          sentCount += 1n;
+          instance.sentCount += 1n;
+          if (current !== instance) return;
           outbound.shift();
-          if (frame.heartbeat) queuedHeartbeatFrames -= 1;
+          if (frame.index === undefined) queuedHeartbeatFrames -= 1;
+          else if (reconnectSettings !== undefined) {
+            unacked.push({ frame, nonce });
+          }
+        }
+        if (outbound.length === 0) {
+          for (const resolve of drainWaiters) resolve();
+          drainWaiters = [];
         }
       };
 
-      /**
-       * @param {{ heartbeat: boolean, render: () => Uint8Array }} frame
-       */
+      const kickDrain = () => {
+        if (current === undefined || drainingFor === current) return;
+        const instance = current;
+        drainingFor = instance;
+        void drain(instance).finally(() => {
+          if (drainingFor === instance) drainingFor = undefined;
+          // Frames queued while a stale drain was unwinding.
+          if (current !== undefined && outbound.length > 0) kickDrain();
+        });
+      };
+
+      /** @param {OutboundFrame} frame */
       const enqueue = frame => {
         if (closed) return;
         outbound.push(frame);
-        if (frame.heartbeat) queuedHeartbeatFrames += 1;
-        if (!draining) {
-          draining = true;
-          drained = drain().finally(() => {
-            draining = false;
-          });
-        }
+        if (frame.index === undefined) queuedHeartbeatFrames += 1;
+        kickDrain();
       };
 
       enqueueFrame = plainText => {
         // The caller may reuse its buffer once the write resolves, and
         // the frame can wait in the queue past that.
         const copy = plainText.slice();
-        enqueue({ heartbeat: false, render: () => copy });
+        const index = nextFrameIndex;
+        nextFrameIndex += 1n;
+        enqueue({ index, render: () => copy });
       };
 
       const sendHeartbeat = () => {
+        const instance = current;
+        if (instance === undefined) return;
         // While the transport is stalled, heartbeats already waiting in
         // the queue carry all the liveness a fresh pair would, so do
         // not let a stall pile them up.
         if (queuedHeartbeatFrames > 0) return;
         const ping = pingSequence;
         pingSequence += 1n;
+        const pingEpoch = epoch;
         enqueue({
-          heartbeat: true,
+          index: undefined,
           render: () =>
             writeOcapnHeartbeatMessage(
-              { type: 'op:ping', epoch, sequence: ping },
+              { type: 'op:ping', epoch: pingEpoch, sequence: ping },
               codec,
             ),
         });
         const pong = pongSequence;
         pongSequence += 1n;
         enqueue({
-          heartbeat: true,
+          index: undefined,
           // Rendered at hand-off, so the acknowledgement is current
           // even when the frame waited out a stall.
           render: () =>
             writeOcapnHeartbeatMessage(
               {
                 type: 'op:pong',
-                epoch,
+                epoch: pingEpoch,
                 sequence: pong,
-                lastAckedRecvNonce: getReceivedCount() - 1n,
+                lastAckedRecvNonce: instance.getReceivedCount() - 1n,
               },
               codec,
             ),
@@ -1086,13 +1530,14 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       /**
-       * Absorb a heartbeat operation, reporting whether the frame was
-       * one. Any other frame belongs to the session above.
+       * Absorb a heartbeat or session-control operation, reporting
+       * whether the frame was one. Any other frame belongs to the
+       * session above.
        *
        * @param {Uint8Array} plainText
        * @returns {boolean}
        */
-      const absorbHeartbeat = plainText => {
+      const absorbControl = plainText => {
         /** @type {{ type: string, epoch: bigint, lastAckedRecvNonce?: bigint }} */
         let message;
         try {
@@ -1100,21 +1545,30 @@ export const makeOcapnNoiseNetwork = ({
           if (peekReader.peekTypeHint() !== 'record') return false;
           peekReader.enterRecord();
           const label = peekReader.readRecordLabel();
-          if (
-            label.type === 'bytestring' ||
-            (label.value !== 'op:ping' && label.value !== 'op:pong')
+          if (label.type === 'bytestring') return false;
+          const messageReader = codec.makeReader(plainText);
+          if (label.value === 'op:ping' || label.value === 'op:pong') {
+            message = readOcapnHeartbeatMessage(messageReader);
+          } else if (
+            reconnectSettings !== undefined &&
+            (label.value === 'op:session-end' ||
+              label.value === 'op:session-hello')
           ) {
+            message = readOcapnSessionControlMessage(messageReader);
+          } else {
             return false;
           }
-          const messageReader = codec.makeReader(plainText);
-          message = readOcapnHeartbeatMessage(messageReader);
           if (messageReader.index !== plainText.length) return false;
         } catch (_error) {
           return false;
         }
-        // A heartbeat from an earlier epoch is a straggler from an
+        // A control frame from an earlier epoch is a straggler from an
         // obsolete transport instance: dropped without effect.
         if (message.epoch < epoch) return true;
+        if (message.type === 'op:session-end') {
+          endGracefully();
+          return true;
+        }
         const { lastAckedRecvNonce } = message;
         if (
           lastAckedRecvNonce !== undefined &&
@@ -1122,28 +1576,33 @@ export const makeOcapnNoiseNetwork = ({
             lastAckedRecvNonce > peerAckedRecvNonce)
         ) {
           peerAckedRecvNonce = lastAckedRecvNonce;
+          const acked = lastAckedRecvNonce;
+          unacked = unacked.filter(entry => entry.nonce > acked);
         }
         return true;
       };
 
-      const onSessionTimeout = () => {
-        fail(
-          makeError(
-            X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
-          ),
-        );
-      };
-
-      const resetLivenessTimer = () => {
-        if (closed) return;
+      /** @param {Instance} instance */
+      const resetLivenessTimer = instance => {
+        if (closed || instance !== current) return;
         if (livenessTimer !== undefined) clearTimeout(livenessTimer);
-        livenessTimer = setTimeout(onSessionTimeout, sessionTimeoutMs);
+        livenessTimer = setTimeout(
+          () =>
+            loseInstance(
+              instance,
+              makeError(
+                X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
+              ),
+            ),
+          sessionTimeoutMs,
+        );
       };
 
       // Read the transport eagerly rather than at the consumer's pace,
       // so that a consumer that is slow to call `next` cannot starve
       // the liveness timer of the traffic that resets it.
-      const pump = async () => {
+      /** @param {Instance} instance */
+      const pump = async instance => {
         await null;
         for (;;) {
           /** @type {IteratorResult<Uint8Array>} */
@@ -1152,25 +1611,34 @@ export const makeOcapnNoiseNetwork = ({
           let plainText;
           try {
             // eslint-disable-next-line no-await-in-loop
-            result = await stream.reader.next(undefined);
+            result = await instance.stream.reader.next(undefined);
+            // Frames that straggle in after the instance was given up
+            // are not ours to deliver: the reconnect told the peer how
+            // many we took, and it replays the rest.
+            if (instance !== current) return;
             if (result.done) {
-              inbound.put(harden({ done: true }));
-              if (!closed) {
-                closed = true;
-                fireOnClose();
-              }
+              loseInstance(instance, undefined);
               return;
             }
-            plainText = decrypt(result.value);
+            plainText = instance.decrypt(result.value);
           } catch (error) {
-            fail(/** @type {Error} */ (error));
+            loseInstance(instance, /** @type {Error} */ (error));
             return;
           }
-          resetLivenessTimer();
-          if (!absorbHeartbeat(plainText)) {
+          resetLivenessTimer(instance);
+          if (!absorbControl(plainText)) {
+            receivedFrames += 1n;
             inbound.put(harden({ done: false, value: plainText }));
           }
         }
+      };
+
+      /** @param {Instance} instance */
+      const startInstance = instance => {
+        resetLivenessTimer(instance);
+        heartbeatTimer = setInterval(sendHeartbeat, intervalMs);
+        void pump(instance);
+        kickDrain();
       };
 
       reader = harden({
@@ -1187,20 +1655,12 @@ export const makeOcapnNoiseNetwork = ({
         },
         return: async () => {
           await null;
-          if (!closed) {
-            closed = true;
-            await stream.writer.return(undefined);
-            fireOnClose();
-          }
+          close();
           return harden({ done: true, value: undefined });
         },
         throw: async err => {
           await null;
-          if (!closed) {
-            closed = true;
-            await stream.writer.throw(err);
-            fireOnClose();
-          }
+          close();
           throw err;
         },
         [Symbol.asyncIterator]() {
@@ -1208,9 +1668,30 @@ export const makeOcapnNoiseNetwork = ({
         },
       });
 
-      resetLivenessTimer();
-      heartbeatTimer = setInterval(sendHeartbeat, intervalMs);
-      void pump();
+      if (reconnectSettings !== undefined) {
+        reconnector = {
+          sessionToken,
+          getEpoch: () => epoch,
+          isAttached: () => current !== undefined,
+          getReceivedFrames: () => receivedFrames,
+          // Stop delivery on the current instance before a resume reply
+          // advertises how many frames this side took, so the count the
+          // peer replays from is final.
+          suspend: () => {
+            if (current !== undefined) loseInstance(current, undefined);
+            return receivedFrames;
+          },
+          attach,
+          abort: fail,
+          // Replaced by `makeCandidate` right after the session is built;
+          // only the session's dialer calls it.
+          dial: async () => {
+            throw makeError(X`ocapn-noise: reconnect dial not installed`);
+          },
+        };
+      }
+
+      startInstance(firstInstance);
     }
 
     /** @type {Writer<Uint8Array>} */
@@ -1219,33 +1700,50 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         if (closed) return harden({ done: true, value: undefined });
         if (heartbeatSettings !== undefined) {
+          // Fail fast in the last stretch of the reconnect budget rather
+          // than accept a frame that will only be rejected with the
+          // session (designs/ocapn-noise-session-reconnect.md § 5). The
+          // stretch is at most half the budget, so a `backoffMaxMs` as
+          // long as `hardTimeoutMs` still leaves the queue to bridge the
+          // first half of an outage.
+          if (
+            reconnectSettings !== undefined &&
+            reconnectingSince !== undefined &&
+            Date.now() - reconnectingSince >
+              reconnectSettings.hardTimeoutMs -
+                Math.min(
+                  reconnectSettings.backoffMaxMs,
+                  reconnectSettings.hardTimeoutMs / 2,
+                )
+          ) {
+            throw makeError(
+              X`ocapn-noise: session is about to abort; not reconnected`,
+            );
+          }
           // The session queue owns the frame from here; a transport
           // stall delays it but does not block the caller.
           enqueueFrame(value);
           return harden({ done: false, value: undefined });
         }
-        await stream.writer.next(encrypt(value));
+        await firstInstance.stream.writer.next(firstInstance.encrypt(value));
         return harden({ done: false, value: undefined });
       },
       return: async () => {
         await null;
         // Deliver what the session already accepted before ending the
         // stream, unless the session is lost first.
-        await Promise.race([drained, closedPromise]);
-        if (!closed) {
-          closed = true;
-          await stream.writer.return(undefined);
-          fireOnClose();
+        if (heartbeatSettings !== undefined && outbound.length > 0) {
+          await Promise.race([
+            new Promise(resolve => drainWaiters.push(() => resolve(undefined))),
+            closedPromise,
+          ]);
         }
+        close();
         return harden({ done: true, value: undefined });
       },
       throw: async err => {
         await null;
-        if (!closed) {
-          closed = true;
-          await stream.writer.throw(err);
-          fireOnClose();
-        }
+        close();
         throw err;
       },
       [Symbol.asyncIterator]() {
@@ -1259,7 +1757,7 @@ export const makeOcapnNoiseNetwork = ({
       cryptography.makeOcapnPublicKey(peerEd25519Buffer).id,
     );
 
-    return harden({
+    const session = harden({
       sessionId,
       selfIdentity: {
         location,
@@ -1276,15 +1774,22 @@ export const makeOcapnNoiseNetwork = ({
       getLiveness: () =>
         harden({
           heartbeat: heartbeatSettings !== undefined,
+          reconnect: reconnectSettings !== undefined,
+          reconnecting: !closed && current === undefined,
           epoch,
-          lastAckedRecvNonce: getReceivedCount() - 1n,
+          lastAckedRecvNonce:
+            current === undefined ? undefined : current.getReceivedCount() - 1n,
           peerAckedRecvNonce,
           lastSentNonce:
-            heartbeatSettings === undefined ? undefined : sentCount - 1n,
+            heartbeatSettings === undefined || current === undefined
+              ? undefined
+              : current.sentCount - 1n,
           queuedFrames: outbound.length,
+          unackedFrames: unacked.length,
         }),
       close,
     });
+    return { session, reconnector };
   };
 
   /**
@@ -1298,18 +1803,20 @@ export const makeOcapnNoiseNetwork = ({
   const tiebreakerFromPrefixedSyn = prefixedSyn => prefixedSyn.slice(32, 64);
 
   /**
-   * Drive the initiator side of a single handshake. Does not wait for
-   * crossed-hello settlement; the caller is expected to register and
-   * settle via the outer state machine.
+   * Run the initiator side of one Noise IK handshake, the identity
+   * exchange, and the `op:session-hello` exchange on a fresh transport
+   * instance. Used both to open a session and to reconnect one.
    *
    * @param {RegisteredKey} localKey
    * @param {OcapnLocation} location
    * @param {Uint8Array} peerEd25519
-   * @returns {Promise<{ session: OcapnNoiseSession, tiebreaker: Uint8Array, close: () => void }>}
+   * @param {(handshakeHash: Uint8Array) => { epoch: bigint, session: Uint8Array, received: bigint }} makeHello
+   * @returns the transport `instance` positioned after the handshake, the
+   *   peer's verified `identity`, its `peerHello`, the crossed-hellos
+   *   `tiebreaker`, and this handshake's `handshakeHash`.
    */
-  const runInitiator = async (localKey, location, peerEd25519) => {
+  const dialHandshake = async (localKey, location, peerEd25519, makeHello) => {
     const { transport, hints } = selectOutgoingTransport(location);
-    const peerId = toHex(peerEd25519);
 
     // Build the SYN before dialing: `initiatorWriteSyn` rejects a weak or
     // malformed responder key, and a locator carrying one must not cause
@@ -1347,52 +1854,45 @@ export const makeOcapnNoiseNetwork = ({
       const nonces = countReceivedNonces(cipher.decrypt);
       const { decrypt } = nonces;
 
-      const {
-        peerLocation,
-        peerLocationSignature,
-        location: myLocation,
-        locationSignature,
-      } = await withTimeout(
-        exchangeIdentity(
-          localKey,
-          stream.reader,
-          stream.writer,
-          encrypt,
-          decrypt,
-          peerEd25519,
-          handshakeHash,
-        ),
+      const { identity, peerHello } = await withTimeout(
+        (async () => {
+          const exchanged = await exchangeIdentity(
+            localKey,
+            stream.reader,
+            stream.writer,
+            encrypt,
+            decrypt,
+            peerEd25519,
+            handshakeHash,
+          );
+          await writeSessionHello(
+            stream.writer,
+            encrypt,
+            makeHello(asUint8(handshakeHash)),
+          );
+          const hello = await readSessionHello(stream.reader, decrypt);
+          return { identity: exchanged, peerHello: hello };
+        })(),
         handshakeTimeoutMs,
         'post-handshake identity exchange',
         stream,
       );
 
-      /** @type {Candidate | undefined} */
-      let candidate;
-      const session = buildSession({
-        localKey,
-        location: myLocation,
-        locationSignature,
-        peerLocation,
-        peerLocationSignature,
-        peerEd25519,
-        isInitiator: true,
+      /** @type {Instance} */
+      const instance = {
         stream,
         encrypt,
         decrypt,
         getReceivedCount: nonces.getReceivedCount,
-        onClose: () => {
-          if (candidate) forgetActive(peerId, candidate);
-        },
-      });
-      candidate = {
-        session,
-        tiebreaker,
-        close: () => {
-          session.close();
-        },
+        sentCount: HANDSHAKE_SENT_COUNT,
       };
-      return candidate;
+      return {
+        instance,
+        identity,
+        peerHello,
+        tiebreaker,
+        handshakeHash: asUint8(handshakeHash),
+      };
     } catch (err) {
       // The handshake didn't graduate; close both halves of the
       // transport so the kernel doesn't sit on a half-open socket
@@ -1412,6 +1912,113 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   /**
+   * Build a session on an instance whose handshake just finished. If
+   * both sides negotiated reconnect, give it a reconnector that redials
+   * this peer; the reconnector is registered only if the candidate wins
+   * (`recordCandidate`).
+   *
+   * @param {object} params
+   * @param {KeyIdHex} params.peerId
+   * @param {RegisteredKey} params.localKey
+   * @param {Uint8Array} params.peerEd25519
+   * @param {boolean} params.isInitiator
+   * @param {Instance} params.instance
+   * @param {Awaited<ReturnType<typeof exchangeIdentity>>} params.identity
+   * @param {SessionHello} params.peerHello
+   * @param {Uint8Array} params.tiebreaker
+   * @param {Uint8Array} params.handshakeHash
+   * @returns {Candidate}
+   */
+  const makeCandidate = ({
+    peerId,
+    localKey,
+    peerEd25519,
+    isInitiator,
+    instance,
+    identity,
+    peerHello,
+    tiebreaker,
+    handshakeHash,
+  }) => {
+    /** @type {Candidate | undefined} */
+    let candidate;
+    /** @type {Reconnector | undefined} */
+    let reconnector;
+    const built = buildSession({
+      localKey,
+      location: identity.location,
+      locationSignature: identity.locationSignature,
+      peerLocation: identity.peerLocation,
+      peerLocationSignature: identity.peerLocationSignature,
+      peerEd25519,
+      isInitiator,
+      instance,
+      sessionToken: handshakeHash,
+      peerFeatures: peerHello.features,
+      onClose: () => {
+        if (reconnector && reconnectors.get(peerId) === reconnector) {
+          reconnectors.delete(peerId);
+        }
+        if (candidate) forgetActive(peerId, candidate);
+      },
+    });
+    const { session } = built;
+    reconnector = built.reconnector;
+    if (reconnector) {
+      const { sessionToken } = reconnector;
+      reconnector.dial = async (epoch, received) => {
+        const dialed = await dialHandshake(
+          localKey,
+          identity.peerLocation,
+          peerEd25519,
+          () => ({ epoch, session: sessionToken, received }),
+        );
+        return { instance: dialed.instance, peerHello: dialed.peerHello };
+      };
+    }
+    candidate = {
+      session,
+      tiebreaker,
+      reconnector,
+      close: () => session.close(),
+    };
+    return candidate;
+  };
+
+  /**
+   * Drive the initiator side of a single handshake. Does not wait for
+   * crossed-hello settlement; the caller is expected to register and
+   * settle via the outer state machine.
+   *
+   * @param {RegisteredKey} localKey
+   * @param {OcapnLocation} location
+   * @param {Uint8Array} peerEd25519
+   * @returns {Promise<Candidate>}
+   */
+  const runInitiator = async (localKey, location, peerEd25519) => {
+    const peerId = toHex(peerEd25519);
+    const dialed = await dialHandshake(
+      localKey,
+      location,
+      peerEd25519,
+      handshakeHash => ({ epoch: 0n, session: handshakeHash, received: 0n }),
+    );
+    if (!opensSession(dialed.peerHello, dialed.handshakeHash)) {
+      Promise.resolve(dialed.instance.stream.writer.return(undefined)).catch(
+        () => {},
+      );
+      throw makeError(X`ocapn-noise: peer did not open a fresh session`);
+    }
+    return makeCandidate({
+      peerId,
+      localKey,
+      peerEd25519,
+      isInitiator: true,
+      ...dialed,
+    });
+  };
+
+  /**
    * @param {ByteStream} stream
    */
   const handleIncoming = async stream => {
@@ -1420,6 +2027,8 @@ export const makeOcapnNoiseNetwork = ({
     let registeredPeerId;
     /** @type {(() => void) | undefined} */
     let releaseInbound;
+    /** @type {(() => void) | undefined} */
+    let releaseResumeAttempt;
     /** @type {(reason: Error) => void} */
     let rejectEvicted = () => {};
     /** @type {Promise<never>} */
@@ -1452,13 +2061,14 @@ export const makeOcapnNoiseNetwork = ({
       // unproven handshake (closing its stream and failing its pending
       // `exchangeIdentity`) rather than refusing this one. The slot is
       // released in `finally`.
-      releaseInbound = admitInbound(intendedKeyId, () => {
+      const evict = () => {
         rejectEvicted(
           Error('ocapn-noise: evicted by newer inbound handshakes'),
         );
         Promise.resolve(stream.writer.return(undefined)).catch(() => {});
         Promise.resolve(stream.reader.return(undefined)).catch(() => {});
-      });
+      };
+      releaseInbound = admitInbound(intendedKeyId, evict);
 
       const noise = makeOcapnSessionCryptography({
         wasmModule,
@@ -1492,10 +2102,29 @@ export const makeOcapnNoiseNetwork = ({
       // is simply refused, which is harmless. An UNCLAIMED session
       // (still in `pendingInbound`) is deliberately left alone here and
       // handled after `exchangeIdentity`, so a replay cannot displace it.
+      //
+      // A session that resumes after loss is the exception: the peer may
+      // be dialing to continue it, which only its `op:session-hello`
+      // (after `exchangeIdentity`) can tell.
+      const resumable = reconnectors.get(initiatorKeyHex);
       const adopted = active.get(initiatorKeyHex);
-      if (adopted && pendingInbound.indexOf(adopted.session) === -1) {
+      if (
+        !resumable &&
+        adopted &&
+        pendingInbound.indexOf(adopted.session) === -1
+      ) {
         await stream.writer.return(undefined);
         return;
+      }
+      if (resumable) {
+        const older = resumeAttempts.get(initiatorKeyHex);
+        if (older) older();
+        resumeAttempts.set(initiatorKeyHex, evict);
+        releaseResumeAttempt = () => {
+          if (resumeAttempts.get(initiatorKeyHex) === evict) {
+            resumeAttempts.delete(initiatorKeyHex);
+          }
+        };
       }
 
       // Register this inbound against the peer now, before we answer, so
@@ -1509,8 +2138,10 @@ export const makeOcapnNoiseNetwork = ({
       // peer's settlement waits on it, and it cannot displace the peer's
       // existing session (deferred to after `exchangeIdentity`).
       // The count is released in the `catch` or in `decrementAndSettle`.
-      registeredPeerId = initiatorKeyHex;
-      bumpInProgress(initiatorKeyHex);
+      if (!resumable) {
+        registeredPeerId = initiatorKeyHex;
+        bumpInProgress(initiatorKeyHex);
+      }
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
       await Promise.race([
         withTimeout(
@@ -1522,28 +2153,117 @@ export const makeOcapnNoiseNetwork = ({
         evicted,
       ]);
 
-      const {
-        peerLocation,
-        peerLocationSignature,
-        location,
-        locationSignature,
-      } = await Promise.race([
+      const { identity, peerHello } = await Promise.race([
         withTimeout(
-          exchangeIdentity(
-            localKey,
-            stream.reader,
-            stream.writer,
-            encrypt,
-            decrypt,
-            initiatorVerifyingKey,
-            handshakeHash,
-          ),
+          (async () => {
+            const exchanged = await exchangeIdentity(
+              localKey,
+              stream.reader,
+              stream.writer,
+              encrypt,
+              decrypt,
+              initiatorVerifyingKey,
+              handshakeHash,
+            );
+            const hello = await readSessionHello(stream.reader, decrypt);
+            return { identity: exchanged, peerHello: hello };
+          })(),
           handshakeTimeoutMs,
           'post-handshake identity exchange',
           stream,
         ),
         evicted,
       ]);
+      // Proven: a replay can no longer evict this handshake.
+      if (releaseResumeAttempt) {
+        releaseResumeAttempt();
+        releaseResumeAttempt = undefined;
+      }
+      /** @type {Instance} */
+      const instance = {
+        stream,
+        encrypt,
+        decrypt,
+        getReceivedCount: nonces.getReceivedCount,
+        sentCount: HANDSHAKE_SENT_COUNT,
+      };
+
+      if (resumable) {
+        if (peerHello.epoch > 0n) {
+          // A reconnect: the hello must name this session and either
+          // its next epoch or the epoch this side last attached. The
+          // latter is a retry whose resume reply the dialer never
+          // received: it has not attached that epoch, so resuming it
+          // again is safe. Anything else (a replay into another
+          // session, a stale epoch) is answered with a refusal, which
+          // tells the dialer this side does not hold what it asks to
+          // resume.
+          const attachedEpoch = resumable.getEpoch();
+          const resumes =
+            reconnectors.get(initiatorKeyHex) === resumable &&
+            compareUint8Arrays(peerHello.session, resumable.sessionToken) ===
+              0 &&
+            (peerHello.epoch === attachedEpoch + 1n ||
+              peerHello.epoch === attachedEpoch);
+          if (!resumes) {
+            await writeSessionHello(stream.writer, encrypt, {
+              epoch: 0n,
+              session: asUint8(handshakeHash),
+              received: 0n,
+            });
+            await stream.writer.return(undefined);
+            return;
+          }
+          // Suspend before sampling the count: an old instance that
+          // still delivers during the hello write would otherwise take
+          // frames the peer then replays.
+          const received = resumable.suspend();
+          await writeSessionHello(stream.writer, encrypt, {
+            epoch: peerHello.epoch,
+            session: resumable.sessionToken,
+            received,
+          });
+          resumable.attach(instance, peerHello.epoch, peerHello.received);
+          return;
+        }
+        if (resumable.isAttached()) {
+          // A fresh session from a peer we still hear from on the
+          // session we share: a late crossed hello. Refuse it, as for
+          // an adopted session above.
+          await stream.writer.return(undefined);
+          return;
+        }
+        // A fresh session from a peer whose session with us is waiting
+        // to resume: the peer has lost that session (it restarted), so
+        // nothing will ever resume it.
+        resumable.abort(
+          makeError(
+            X`ocapn-noise: session aborted; peer opened a new session instead of resuming`,
+          ),
+        );
+        registeredPeerId = initiatorKeyHex;
+        bumpInProgress(initiatorKeyHex);
+      }
+      if (!opensSession(peerHello, handshakeHash)) {
+        if (peerHello.epoch > 0n) {
+          // A reconnect of a session this side no longer holds: refuse
+          // it so the dialer aborts at once rather than retry until its
+          // hard timeout.
+          await writeSessionHello(stream.writer, encrypt, {
+            epoch: 0n,
+            session: asUint8(handshakeHash),
+            received: 0n,
+          });
+        }
+        throw makeError(
+          X`ocapn-noise: op:session-hello does not open a fresh session`,
+        );
+      }
+      await writeSessionHello(stream.writer, encrypt, {
+        epoch: 0n,
+        session: asUint8(handshakeHash),
+        received: 0n,
+      });
 
       // The peer is now proven live under `initiatorKeyHex`. Displacing a
       // stale UNCLAIMED session for this peer (a reconnect whose old
@@ -1567,29 +2287,17 @@ export const makeOcapnNoiseNetwork = ({
         }
       }
 
-      /** @type {Candidate | undefined} */
-      let candidate;
-      const session = buildSession({
+      const candidate = makeCandidate({
+        peerId: initiatorKeyHex,
         localKey,
-        location,
-        locationSignature,
-        peerLocation,
-        peerLocationSignature,
         peerEd25519: initiatorVerifyingKey,
         isInitiator: false,
-        stream,
-        encrypt,
-        decrypt,
-        getReceivedCount: nonces.getReceivedCount,
-        onClose: () => {
-          if (candidate) forgetActive(initiatorKeyHex, candidate);
-        },
-      });
-      candidate = {
-        session,
+        instance,
+        identity,
+        peerHello,
         tiebreaker,
-        close: () => session.close(),
-      };
+        handshakeHash: asUint8(handshakeHash),
+      });
 
       recordCandidate(initiatorKeyHex, candidate);
       // `decrementAndSettle` decrements before anything in it can throw,
@@ -1613,6 +2321,7 @@ export const makeOcapnNoiseNetwork = ({
       }
     } finally {
       if (releaseInbound) releaseInbound();
+      if (releaseResumeAttempt) releaseResumeAttempt();
     }
   };
 
@@ -1840,6 +2549,7 @@ export const makeOcapnNoiseNetwork = ({
     settleDeadlines.clear();
     outboundInFlight.clear();
     inFlightByLocalKey.clear();
+    resumeAttempts.clear();
     // Close any candidates that recorded themselves between
     // `runInitiator` resolution and `decrementAndSettle`. After this
     // sweep, future `recordCandidate` calls short-circuit on
@@ -1853,6 +2563,7 @@ export const makeOcapnNoiseNetwork = ({
     recentErrors.clear();
     for (const [, c] of active) c.close();
     active.clear();
+    reconnectors.clear();
     // Close any sessions queued for `inboundSessions` that nobody
     // ever consumed. Without this they hold their underlying socket
     // and WASM cipher state until the process exits.

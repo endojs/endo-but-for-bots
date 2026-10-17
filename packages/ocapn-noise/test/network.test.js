@@ -803,6 +803,92 @@ test('when the per-identity cap is full, the oldest unproven handshake is evicte
   t.false(otherReply.done, 'a different local identity still answers');
 });
 
+test('a replayed SYN for a resumable peer holds at most one inbound slot', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const cap = 3;
+  const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
+  const reconnect = { backoffInitialMs: 20, backoffMaxMs: 200 };
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    heartbeat,
+    reconnect,
+    handshakeTimeoutMs: 5000,
+    maxInProgressPerLocalKey: cap,
+  });
+  const netV = makeNetworkForTest(t, {
+    codec: cborCodec,
+    heartbeat,
+    reconnect,
+  });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  // V's session with A is resumable on A, so a SYN claiming V skips the
+  // cheap refusal for an already-adopted peer.
+  const [sessionV] = await Promise.all([
+    netV.provideSession(locA),
+    netA.waitForInboundSession(victim.keyId),
+  ]);
+  t.true(sessionV.getLiveness().reconnect);
+
+  const replayer = fabric.transportFor('replayer');
+  /** @type {import('../src/types.js').ByteStream[]} */
+  const streams = [];
+  t.teardown(() =>
+    Promise.all(streams.map(stream => stream.writer.return(undefined))),
+  );
+  /** @param {Uint8Array} syn */
+  const stalledSyn = async syn => {
+    const stream = await replayer.connect({ to: 'A' });
+    streams.push(stream);
+    await stream.writer.next(syn);
+    const reply = await stream.reader.next(undefined);
+    t.false(reply.done, 'the SYN was answered');
+    return stream;
+  };
+  /** @param {import('../src/types.js').ByteStream} stream */
+  const readUntilDone = async stream => {
+    await null;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const { done } = await stream.reader.next(undefined);
+      if (done) return true;
+    }
+  };
+
+  // Fewer replays than the cap: without the per-peer slot they would all
+  // stay held until the 5s handshake timeout.
+  const replaySyn = makeSynFrom(victim, publicKeyA);
+  const replays = [];
+  for (let i = 0; i < cap - 1; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    replays.push(await stalledSyn(replaySyn));
+  }
+  t.true(
+    await within(readUntilDone(replays[0]), 2000, 'older replay close'),
+    'a newer replay evicts the older one before the cap is full',
+  );
+
+  // The surviving replay holds one slot, so cap - 1 handshakes from other
+  // peers fit beside it without evicting one another.
+  const others = [];
+  for (let i = 0; i < cap - 1; i += 1) {
+    const syn = makeSynFrom(netV.generateSigningKeys(), publicKeyA);
+    // eslint-disable-next-line no-await-in-loop
+    others.push(await stalledSyn(syn));
+  }
+  for (const stream of [replays[replays.length - 1], ...others]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(within(readUntilDone(stream), 500, 'held stream'), {
+      message: /did not settle/,
+    });
+  }
+});
+
 test('a flood of stalled handshakes cannot lock a genuine peer out', async t => {
   t.timeout(10_000);
   const fabric = makeFabricForTest(t);

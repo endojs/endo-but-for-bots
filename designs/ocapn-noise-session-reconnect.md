@@ -1,12 +1,12 @@
 # OCapN-Noise Session Reconnect
 
-| | |
-|---|---|
-| **Created** | 2026-05-14 |
-| **Updated** | 2026-05-19 |
-| **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
-| **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md). |
+|             |                                                                                                                               |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Created** | 2026-05-14                                                                                                                    |
+| **Updated** | 2026-10-17                                                                                                                    |
+| **Author**  | Kris Kowal (prompted)                                                                                                         |
+| **Status**  | In progress: Phases 1–3 implemented (heartbeat, queue, reconnect with Rekey); Phases 4–5 (Resume, crossed-hellos) not started |
+| **Source**  | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md).               |
 
 ## What is the Problem Being Solved?
 
@@ -34,7 +34,7 @@ session looks alive long after the peer has crashed or the network has
 partitioned.
 
 Across CapTP implementations the consensus has been to build a
-*meta-TCP* session layer that
+_meta-TCP_ session layer that
 (a) maintains a short logical timeout independent of the TCP keepalive,
 (b) runs a continuous ping/pong heartbeat for liveness,
 (c) re-establishes the underlying TCP transport on detected loss without
@@ -94,7 +94,7 @@ operation; if no operation of any kind has arrived from the peer within
 `SESSION_TIMEOUT` (default: 30 s), the session is declared lost on this
 TCP pipe and the reconnection procedure begins.
 
-The heartbeat is a *single* operation (not a request/response pair).
+The heartbeat is a _single_ operation (not a request/response pair).
 Each side independently emits its own heartbeat on its own schedule;
 the receiving side treats any incoming traffic (heartbeat or otherwise)
 as evidence of liveness and resets its own per-peer timeout timer.
@@ -116,7 +116,7 @@ Field semantics:
 
 A separate `op:pong` operation (defined below) carries the explicit
 ack of the peer's last-decrypted nonce. For ordinary liveness,
-however, the receipt of *any* operation from the peer (including
+however, the receipt of _any_ operation from the peer (including
 but not limited to `op:pong`) is treated as evidence of liveness;
 each side emits its own `op:ping` on its own clock and does not
 block on a matching `op:pong`.
@@ -130,7 +130,7 @@ network-level property and cannot be codec-dependent: a peer that
 negotiated CBOR rather than syrups still needs to be told whether the
 session is alive.
 
-The amendment uses a *single* `op:ping` opcode for the liveness signal
+The amendment uses a _single_ `op:ping` opcode for the liveness signal
 (rather than paired `op:ping` / `op:pong` request/response on the
 liveness path): each side emits `op:ping` on its own clock, and any
 incoming op resets the per-peer timeout. A separate `op:pong` exists
@@ -212,14 +212,14 @@ Both sides may detect loss simultaneously and both may attempt to open
 a new TCP connection. The tiebreaker is **lexicographic comparison of
 the two session designators**: the side whose designator (treated as a
 32-byte big-endian unsigned integer) is numerically **smaller** is the
-*responder* for the new transport instance; the other side is the
-*initiator*. Both sides know both designators (they exchanged them at
+_responder_ for the new transport instance; the other side is the
+_initiator_. Both sides know both designators (they exchanged them at
 session establishment in Noise IK), so the tiebreaker is unambiguous.
 
 The **designator material** is each side's **ephemeral x25519 public
 key** used as the session's static-equivalent material in the Noise IK
 handshake (`e` from the initiator's first message and `e` from the
-responder's reply), *not* either side's long-term signing Ed25519
+responder's reply), _not_ either side's long-term signing Ed25519
 public key. Using the per-session ephemeral keeps the tiebreaker tied
 to the current session: a fresh session reseats the comparison without
 biasing any peer toward initiator-or-responder across reconnect
@@ -405,13 +405,16 @@ The amendment proposes the following defaults and tunable ranges. All
 are configurable per-network; the network records them in its session
 state.
 
-| Parameter | Default | Range | Meaning |
-|---|---|---|---|
-| `HEARTBEAT_INTERVAL` | 5 s | 1 s – 60 s | How often each side emits `op:ping`. |
-| `SESSION_TIMEOUT` | 30 s | `>= 3 * HEARTBEAT_INTERVAL` | How long without any incoming traffic before declaring loss and initiating reconnect. |
-| `RECONNECT_BACKOFF_INITIAL` | 250 ms | 50 ms – 5 s | First retry delay after a failed reconnect attempt. |
-| `RECONNECT_BACKOFF_MAX` | 30 s | up to `SESSION_HARD_TIMEOUT` | Cap on the exponential backoff. |
-| `SESSION_HARD_TIMEOUT` | 10 min | up to `Infinity` | Total time the session may remain in "reconnecting" before being abandoned. |
+| Parameter                   | Default | Range                        | Meaning                                                                               |
+| --------------------------- | ------- | ---------------------------- | ------------------------------------------------------------------------------------- |
+| `HEARTBEAT_INTERVAL`        | 5 s     | 1 s – 60 s                   | How often each side emits `op:ping`.                                                  |
+| `SESSION_TIMEOUT`           | 30 s    | `>= 3 * HEARTBEAT_INTERVAL`  | How long without any incoming traffic before declaring loss and initiating reconnect. |
+| `RECONNECT_BACKOFF_INITIAL` | 250 ms  | 50 ms – 5 s                  | First retry delay after a failed reconnect attempt.                                   |
+| `RECONNECT_BACKOFF_MAX`     | 30 s    | up to `SESSION_HARD_TIMEOUT` | Cap on the exponential backoff.                                                       |
+| `SESSION_HARD_TIMEOUT`      | 10 min  | up to `2 ** 31 - 1` ms       | Total time the session may remain in "reconnecting" before being abandoned.           |
+
+Every reconnect timer is capped at 2³¹−1 ms (about 24.8 days), the
+`setTimeout` ceiling; the network refuses longer values.
 
 **Hard-timeout queue terminal semantics.**
 When `SESSION_HARD_TIMEOUT` fires, the session is abandoned and the
@@ -436,7 +439,8 @@ The amendment specifies the following:
   resource-release semantics it carries) covers the
   `SESSION_HARD_TIMEOUT` exit.
 - Once a session is in the "approaching `SESSION_HARD_TIMEOUT`" window
-  (within the last `RECONNECT_BACKOFF_MAX` of the budget), new
+  (within the last `RECONNECT_BACKOFF_MAX` of the budget, or its last
+  half if that is shorter), new
   enqueues from the application MAY be rejected immediately rather
   than allowed to accumulate.
   This is fail-fast for callers who would otherwise see a long delay
@@ -483,6 +487,69 @@ For TCP-syrups (per
 operates per-transport-instance: each new TCP connection mounts a
 fresh `makeSyrupsReader` / `makeSyrupsWriter` pair. The session-level
 queue of outbound operations bridges across the framer instances.
+
+### 7. Session Control Records
+
+Phase 3 (Reconnect with Rekey) needs the two peers to agree, on every
+transport instance, on which features the session uses and, on a
+reconnect, which session and epoch the new instance continues.
+Two further operations carry that, _proposed, pending OCapN-org review_
+like `op:ping` and `op:pong`.
+The OCapN-Noise network consumes both; they never reach the CapTP
+session.
+
+`op:session-hello` is exchanged in both directions, encrypted, right
+after the identity exchange (`op:start-session`) on **every** transport
+instance, including the first:
+
+```
+<op:session-hello features epoch session received>
+```
+
+- `features`: a non-negative integer bitset of what the sender
+  supports. Bit 0 is heartbeat, bit 1 is reconnect. Reconnect is in
+  effect for the session only when both hellos advertise it. In this
+  phase the heartbeat bit is informational: a peer runs heartbeats when
+  its operator enables them, whatever the peer's hello says. Every
+  Phase 3 peer absorbs `op:ping` and `op:pong` whether or not it runs
+  heartbeats itself, so the operator only has to know that the peer is
+  Phase 3. Receivers ignore bits they do not know.
+- `epoch`: the session epoch of this transport instance (§ 2). `0`
+  opens a new session. A non-zero epoch asks to continue an existing
+  session on a fresh Noise handshake.
+- `session`: a 32-byte session token, the Noise transcript hash of the
+  session's first handshake. Both peers derived it from that handshake,
+  and nobody else can, so naming it together with the authenticated
+  peer key is the capability to resume.
+- `received`: how many session frames the sender has delivered to its
+  CapTP session. The peer drops queued frames before that position and
+  replays the rest, so each frame is delivered exactly once.
+
+On a reconnect the dialer sends `epoch` = its current epoch + 1. The
+responder accepts when the token names a session it holds for that peer
+and the epoch is either its own epoch + 1 or the epoch it last attached.
+The second case is a retry: the responder attached the epoch, but its
+reply was lost or arrived after the dialer's handshake timeout, so the
+dialer never attached it and asks again. The responder suspends the old
+instance before sampling `received`, replies with the same epoch and
+token, and both sides replay from the other's `received`.
+Any other hello is answered with a refusal hello, `epoch` = 0 and the
+new handshake's own transcript hash, which the dialer treats as "the
+peer no longer holds this session" and aborts the session at once
+rather than waiting out `SESSION_HARD_TIMEOUT`.
+In this phase only the dialer of the session redials; the responder
+waits for it. The crossed-hellos tiebreaker (§ 3, Phase 5) replaces
+that rule.
+
+`op:session-end` is sent before a deliberate close:
+
+```
+<op:session-end epoch>
+```
+
+It tells the peer the session ended on purpose, so the peer ends the
+session gracefully instead of treating the closed transport as loss and
+reconnecting.
 
 ## Diagrams
 
@@ -572,12 +639,12 @@ sequenceDiagram
 
 ## Dependencies
 
-| Design | Relationship |
-|---|---|
-| [ocapn-noise-network](ocapn-noise-network.md) | Direct: this amendment extends that network with reconnection semantics. |
-| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: the Resume-vs-Rekey choice (Open question C1) belongs in the cryptographic review's deliverable. |
-| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Indirect: this design lives entirely inside the network layer that document establishes. |
-| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
+| Design                                                                      | Relationship                                                                                                             |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [ocapn-noise-network](ocapn-noise-network.md)                               | Direct: this amendment extends that network with reconnection semantics.                                                 |
+| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)     | Direct: the Resume-vs-Rekey choice (Open question C1) belongs in the cryptographic review's deliverable.                 |
+| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Indirect: this design lives entirely inside the network layer that document establishes.                                 |
+| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md)                       | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
 
 ## Security Considerations
 
@@ -657,7 +724,8 @@ sequenceDiagram
    reconnect-with-rekey path.
 
 3. **Phase 3: Reconnect with Rekey.** Implement transparent reconnect
-   using a fresh Noise handshake on the new TCP transport. This is
+   using a fresh Noise handshake on the new TCP transport, negotiated
+   by the session control records of § 7. This is
    simpler than Resume and exercises the queue/epoch/tiebreaker logic
    without touching CipherState continuity.
 
@@ -734,16 +802,20 @@ The following were open in earlier drafts and are now settled:
   intent is to validate the design in one netlayer before proposing
   it across the OCapN operation set.
 - The `op:ping` and `op:pong` operations are new OCapN operations. The
-  amendment flags both as *proposed, pending OCapN-org review*. Until
+  amendment flags both as _proposed, pending OCapN-org review_. Until
   the operations are registered in the OCapN spec, OCapN-Noise running
   this amendment is interoperable only with implementations that have
   adopted the same proposal.
 - The session epoch and the resumption handshake live entirely inside
   the OCapN-Noise network and do not affect other networks
   (`tcp-testing-only`, `tcp-syrups`, etc.).
-- The behavior is opt-in by network identifier: a locator with
+- The behavior is scoped by network identifier: a locator with
   `network=np` gets the reconnect semantics; a locator with
-  `network=tcp-syrups` does not.
+  `network=tcp-syrups` does not. Within `np`, heartbeat and reconnect
+  are opt-in per network, but the `op:session-hello` exchange (§ 7) is
+  not: every OCapN-Noise handshake from Phase 3 onward sends it, so
+  Phase 3 peers do not interoperate with OCapN-Noise peers that predate
+  it. The package is pre-1.0, so this ships as a minor bump.
 
 ## Upgrade Considerations
 
@@ -760,7 +832,7 @@ The following were open in earlier drafts and are now settled:
   heartbeat is on; otherwise the pre-amendment behavior is used.
   Because the capability negotiation itself is new, this is a
   proposal for the OCapN spec group rather than a use of an existing
-  hook. Flagged as part of the *proposed, pending OCapN-org review*
+  hook. Flagged as part of the _proposed, pending OCapN-org review_
   status of the `op:ping` extension.
 
 ## Prompt
