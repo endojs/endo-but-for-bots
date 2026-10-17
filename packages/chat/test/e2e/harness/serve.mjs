@@ -1,4 +1,3 @@
-/* global process */
 // Serve the chat package for the daemon-free e2e harness pages under
 // test/e2e/harness/. Like test/inventory-item-actions/run.mjs, this is a bare
 // Vite server without the Endo daemon plugin; it keeps the `node:crypto`
