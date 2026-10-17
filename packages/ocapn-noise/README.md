@@ -199,15 +199,19 @@ const network = makeOcapnNoiseNetwork({
 ```
 
 Each session then sends `op:ping` inside the Noise channel every
-`intervalMs`, followed by an `op:pong` once it has received a frame
-from the peer.
+`intervalMs`.
+Once it has received a frame from the peer, each tick also sends an
+`op:pong` that acknowledges the frames received so far; it does not
+answer a particular `op:ping`.
 When `heartbeat` is set, the session reader skips heartbeat frames, so
 the consumer never sees them.
 A call to `session.reader.next()` that waits `sessionTimeoutMs` without
 any frame from the peer rejects, and the session closes.
-The timeout runs only while the consumer is waiting on the reader: a
-consumer that stops reading is not mistaken for a lost peer, and a lost
-peer is noticed only once the consumer reads again.
+The timeout runs only while the consumer is waiting on the reader.
+A consumer that stops reading does not notice a lost peer until it
+reads again, and until then the session keeps sending heartbeats.
+A transport read or heartbeat write that fails closes the session and
+stops its heartbeats.
 `session.getLiveness()` returns a `SessionLiveness` snapshot (see the
 type).
 

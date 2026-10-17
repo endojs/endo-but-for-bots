@@ -1070,9 +1070,8 @@ export const makeOcapn = (
       const { reason } = message;
       abort(reason);
     },
-    // When the network's heartbeats are on, it absorbs these before the
-    // session sees them. When they are off, a peer's heartbeat arrives
-    // here and is ignored.
+    // Absorbed by the OCapN-Noise session reader when heartbeats are on;
+    // otherwise ignored here.
     'op:ping': () => {},
     'op:pong': () => {},
   });

@@ -184,7 +184,6 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
  */
 const DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY = 256;
 
-/** Default `HEARTBEAT_INTERVAL`, per designs/ocapn-noise-session-reconnect.md § 5. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5000;
 
 const DEFAULT_SESSION_TIMEOUT_INTERVALS = 6;
@@ -256,6 +255,202 @@ const countNonces = (encrypt, decrypt) => {
     },
     getSentCount: () => sentCount,
     getReceivedCount: () => receivedCount,
+  });
+};
+
+/**
+ * Start a session's heartbeat: an interval that sends `op:ping` and,
+ * once the peer has spoken, `op:pong`, plus a reader that absorbs the
+ * peer's heartbeats and times out a read that waits too long.
+ *
+ * @param {object} params
+ * @param {OcapnCodec} params.codec
+ * @param {{ intervalMs: number, sessionTimeoutMs: number }} params.settings
+ * @param {ByteStream} params.stream
+ * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
+ * @param {bigint} params.epoch
+ * @param {() => bigint} params.getSentCount
+ * @param {() => bigint | undefined} params.getLastReceivedNonce
+ * @param {() => boolean} params.isClosed
+ * @param {(failure?: Error) => void} params.close - Ends the session;
+ *   a `failure` is reported by the consumer's next read.
+ */
+const makeHeartbeat = ({
+  codec,
+  settings: { intervalMs, sessionTimeoutMs },
+  stream,
+  encrypt,
+  epoch,
+  getSentCount,
+  getLastReceivedNonce,
+  isClosed,
+  close,
+}) => {
+  let pingSequence = 0n;
+  let pongSequence = 0n;
+  /** @type {bigint | undefined} */
+  let peerLastAckedRecvNonce;
+  /**
+   * Ends each read that waits under a liveness timeout, so a close
+   * leaves neither a blocked consumer nor a running timer.
+   *
+   * @type {Set<() => void>}
+   */
+  const abandonReads = new Set();
+
+  /** @param {Uint8Array} plainText */
+  const sendFrame = plainText => {
+    if (isClosed()) return;
+    // Encrypt and enqueue in the same turn so frames reach the
+    // transport in nonce order.
+    Promise.resolve(stream.writer.next(encrypt(plainText))).catch(error =>
+      close(error),
+    );
+  };
+
+  const sendHeartbeat = () => {
+    sendFrame(
+      writeOcapnHeartbeatMessage(
+        { type: 'op:ping', epoch, sequence: pingSequence },
+        codec,
+      ),
+    );
+    pingSequence += 1n;
+    const lastAckedRecvNonce = getLastReceivedNonce();
+    // Until the peer's first frame arrives there is no nonce to
+    // acknowledge, so the tick carries only the `op:ping`.
+    if (lastAckedRecvNonce === undefined) return;
+    sendFrame(
+      writeOcapnHeartbeatMessage(
+        {
+          type: 'op:pong',
+          epoch,
+          sequence: pongSequence,
+          lastAckedRecvNonce,
+        },
+        codec,
+      ),
+    );
+    pongSequence += 1n;
+  };
+
+  /**
+   * Peeks the record label without consuming the frame; a frame that
+   * cannot be peeked is left to the session above.
+   *
+   * @param {Uint8Array} plainText
+   * @returns {boolean}
+   */
+  const isHeartbeatFrame = plainText => {
+    try {
+      const peekReader = codec.makeReader(plainText);
+      if (peekReader.peekTypeHint() !== 'record') return false;
+      peekReader.enterRecord();
+      const label = peekReader.readRecordLabel();
+      return (
+        label.type !== 'bytestring' &&
+        (label.value === 'op:ping' || label.value === 'op:pong')
+      );
+    } catch (_error) {
+      return false;
+    }
+  };
+
+  /**
+   * Absorb a heartbeat operation, reporting whether the frame was one.
+   * Any other frame belongs to the session above. A frame labelled
+   * `op:ping` or `op:pong` that does not parse as one is a malformed
+   * operation, which aborts the session.
+   *
+   * @param {Uint8Array} plainText
+   * @returns {boolean}
+   */
+  const absorb = plainText => {
+    if (!isHeartbeatFrame(plainText)) return false;
+    /** @type {OcapnHeartbeatMessage} */
+    let message;
+    try {
+      const messageReader = codec.makeReader(plainText);
+      message = readOcapnHeartbeatMessage(messageReader);
+      if (messageReader.index !== plainText.length) {
+        throw makeError(X`trailing bytes after heartbeat operation`);
+      }
+    } catch (error) {
+      close();
+      throw makeError(
+        X`ocapn-noise: malformed heartbeat operation from peer: ${error}`,
+      );
+    }
+    // An `op:ping` carries nothing to record; only its arrival matters.
+    // A heartbeat from an earlier epoch is a straggler from an obsolete
+    // transport instance.
+    if (message.epoch < epoch || message.type !== 'op:pong') return true;
+    const { lastAckedRecvNonce } = message;
+    // An acknowledgment of a nonce this side has not yet used is not
+    // evidence of anything, so it is ignored rather than recorded.
+    if (
+      lastAckedRecvNonce < getSentCount() &&
+      (peerLastAckedRecvNonce === undefined ||
+        lastAckedRecvNonce > peerLastAckedRecvNonce)
+    ) {
+      peerLastAckedRecvNonce = lastAckedRecvNonce;
+    }
+    return true;
+  };
+
+  // The liveness timeout runs only while the consumer waits for a
+  // frame. Any frame from the peer, heartbeat or not, ends the wait.
+  /** @returns {Promise<IteratorResult<Uint8Array>>} */
+  const readPeerFrame = () => {
+    if (isClosed())
+      return Promise.resolve(harden({ done: true, value: undefined }));
+    /** @type {() => void} */
+    let abandon = () => {};
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let livenessTimer;
+    /** @type {Promise<IteratorResult<Uint8Array>>} */
+    const read = new Promise((resolve, reject) => {
+      abandon = () => resolve(harden({ done: true, value: undefined }));
+      livenessTimer = setTimeout(() => {
+        close(
+          makeError(
+            X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
+          ),
+        );
+      }, sessionTimeoutMs);
+      stream.reader.next(undefined).then(resolve, reject);
+    });
+    abandonReads.add(abandon);
+    return read.finally(() => {
+      clearTimeout(livenessTimer);
+      abandonReads.delete(abandon);
+    });
+  };
+
+  // A timer callback must never throw: a failure to encode or encrypt
+  // a heartbeat ends the session instead.
+  const tick = () => {
+    if (isClosed()) return;
+    try {
+      sendHeartbeat();
+    } catch (error) {
+      close(/** @type {Error} */ (error));
+    }
+  };
+
+  const timer = setInterval(tick, intervalMs);
+
+  const stop = () => {
+    clearInterval(timer);
+    for (const abandon of abandonReads) abandon();
+    abandonReads.clear();
+  };
+
+  return harden({
+    readPeerFrame,
+    absorb,
+    stop,
+    getPeerLastAckedRecvNonce: () => peerLastAckedRecvNonce,
   });
 };
 
@@ -891,25 +1086,11 @@ export const makeOcapnNoiseNetwork = ({
     onClose,
   }) => {
     let closed = false;
-
-    // The session epoch numbers transport instances. Without reconnect
-    // there is only the handshake's instance, epoch 0.
     const epoch = 0n;
-    let pingSequence = 0n;
-    let pongSequence = 0n;
-    /** @type {bigint | undefined} */
-    let peerLastAckedRecvNonce;
-    /** @type {ReturnType<typeof setInterval> | undefined} */
-    let heartbeatTimer;
-    /**
-     * Ends each transport read that waits under a liveness timeout, so a
-     * close leaves neither a blocked consumer nor a running timer.
-     *
-     * @type {Set<() => void>}
-     */
-    const abandonReads = new Set();
     /** @type {Error | undefined} */
-    let heartbeatFailure;
+    let closeFailure;
+    /** @type {ReturnType<typeof makeHeartbeat> | undefined} */
+    let sessionHeartbeat;
 
     /** @returns {bigint | undefined} */
     const getLastReceivedNonce = () => {
@@ -917,25 +1098,26 @@ export const makeOcapnNoiseNetwork = ({
       return receivedCount === 0n ? undefined : receivedCount - 1n;
     };
 
-    const stopHeartbeat = () => {
-      if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
-      heartbeatTimer = undefined;
-      for (const abandon of abandonReads) abandon();
-      abandonReads.clear();
-    };
-
     const fireOnClose = () => {
-      stopHeartbeat();
+      if (sessionHeartbeat !== undefined) sessionHeartbeat.stop();
       try {
         onClose();
       } catch (_e) {
-        // never throw out of teardown
+        // Swallow: onClose is best-effort cleanup.
       }
     };
 
-    const close = () => {
+    /**
+     * The one path that ends the session from inside it: tears down
+     * both directions and stops the heartbeat. A `failure` is reported
+     * once, by the consumer's next read.
+     *
+     * @param {Error} [failure]
+     */
+    const close = failure => {
       if (closed) return;
       closed = true;
+      closeFailure = failure;
       // Suppress rejections: a transport's write half may have already
       // closed.
       Promise.resolve(stream.writer.return(undefined)).catch(() => {});
@@ -943,175 +1125,18 @@ export const makeOcapnNoiseNetwork = ({
       fireOnClose();
     };
 
-    /** @type {() => Promise<IteratorResult<Uint8Array>>} */
-    let readPeerFrame = () => stream.reader.next(undefined);
-    /** @type {(plainText: Uint8Array) => boolean} */
-    let absorbHeartbeat = _plainText => false;
-
     if (heartbeatSettings !== undefined) {
-      const { intervalMs, sessionTimeoutMs } = heartbeatSettings;
-
-      /**
-       * @param {Uint8Array} plainText
-       */
-      const sendFrame = plainText => {
-        if (closed) return;
-        // Encrypt and enqueue in the same turn so frames reach the
-        // transport in nonce order.
-        Promise.resolve(stream.writer.next(encrypt(plainText))).catch(() => {});
-      };
-
-      const sendHeartbeat = () => {
-        sendFrame(
-          writeOcapnHeartbeatMessage(
-            { type: 'op:ping', epoch, sequence: pingSequence },
-            codec,
-          ),
-        );
-        pingSequence += 1n;
-        const lastAckedRecvNonce = getLastReceivedNonce();
-        // Until the peer's first frame arrives there is no nonce to
-        // acknowledge, so the tick carries only the `op:ping`.
-        if (lastAckedRecvNonce === undefined) return;
-        sendFrame(
-          writeOcapnHeartbeatMessage(
-            {
-              type: 'op:pong',
-              epoch,
-              sequence: pongSequence,
-              lastAckedRecvNonce,
-            },
-            codec,
-          ),
-        );
-        pongSequence += 1n;
-      };
-
-      /**
-       * Whether a frame is labelled as a heartbeat operation. Both
-       * codecs open a record with its label: Syrup inside the record
-       * brackets, CBOR as the first element of the record's tagged
-       * array. A frame that cannot be peeked this way is handed to the
-       * session above, whose own reader reports it.
-       *
-       * @param {Uint8Array} plainText
-       * @returns {boolean}
-       */
-      const isHeartbeatFrame = plainText => {
-        try {
-          const peekReader = codec.makeReader(plainText);
-          if (peekReader.peekTypeHint() !== 'record') return false;
-          peekReader.enterRecord();
-          const label = peekReader.readRecordLabel();
-          return (
-            label.type !== 'bytestring' &&
-            (label.value === 'op:ping' || label.value === 'op:pong')
-          );
-        } catch (_error) {
-          return false;
-        }
-      };
-
-      /**
-       * Absorb a heartbeat operation, reporting whether the frame was
-       * one. Any other frame belongs to the session above. A frame
-       * labelled `op:ping` or `op:pong` that does not parse as one is a
-       * malformed operation, which aborts the session.
-       *
-       * @param {Uint8Array} plainText
-       * @returns {boolean}
-       */
-      absorbHeartbeat = plainText => {
-        if (!isHeartbeatFrame(plainText)) return false;
-        /** @type {OcapnHeartbeatMessage} */
-        let message;
-        try {
-          const messageReader = codec.makeReader(plainText);
-          message = readOcapnHeartbeatMessage(messageReader);
-          if (messageReader.index !== plainText.length) {
-            throw makeError(X`trailing bytes after heartbeat operation`);
-          }
-        } catch (error) {
-          const failure = makeError(
-            X`ocapn-noise: malformed heartbeat operation from peer: ${error}`,
-          );
-          close();
-          throw failure;
-        }
-        // An `op:ping` is answered by the next tick's `op:pong`, so only
-        // its arrival matters. A heartbeat from an earlier epoch is a
-        // straggler from an obsolete transport instance.
-        if (message.epoch < epoch || message.type !== 'op:pong') return true;
-        const { lastAckedRecvNonce } = message;
-        // An acknowledgment of a nonce this side has not yet used is not
-        // evidence of anything, so it is ignored rather than recorded.
-        if (
-          lastAckedRecvNonce < getSentCount() &&
-          (peerLastAckedRecvNonce === undefined ||
-            lastAckedRecvNonce > peerLastAckedRecvNonce)
-        ) {
-          peerLastAckedRecvNonce = lastAckedRecvNonce;
-        }
-        return true;
-      };
-
-      /**
-       * The end of a heartbeat session's reads: the failure that closed
-       * it, reported once, and then the end of the stream.
-       *
-       * @returns {Promise<IteratorResult<Uint8Array>>}
-       */
-      const endOfReads = () => {
-        const failure = heartbeatFailure;
-        heartbeatFailure = undefined;
-        if (failure !== undefined) return Promise.reject(failure);
-        return Promise.resolve(harden({ done: true, value: undefined }));
-      };
-
-      // The liveness timeout runs only while the consumer waits for a
-      // frame, so a consumer that stops reading is never mistaken for a
-      // lost peer. Any frame from the peer, heartbeat or not, ends the
-      // wait.
-      readPeerFrame = () => {
-        if (closed) return endOfReads();
-        /** @type {() => void} */
-        let abandon = () => {};
-        /** @type {ReturnType<typeof setTimeout> | undefined} */
-        let livenessTimer;
-        /** @type {Promise<IteratorResult<Uint8Array>>} */
-        const read = new Promise((resolve, reject) => {
-          abandon = () => {
-            clearTimeout(livenessTimer);
-            endOfReads().then(resolve, reject);
-          };
-          livenessTimer = setTimeout(() => {
-            heartbeatFailure = makeError(
-              X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
-            );
-            close();
-          }, sessionTimeoutMs);
-          stream.reader.next(undefined).then(resolve, reject);
-        });
-        abandonReads.add(abandon);
-        return read.finally(() => {
-          clearTimeout(livenessTimer);
-          abandonReads.delete(abandon);
-        });
-      };
-
-      // A timer callback must never throw: a failure to encode or
-      // encrypt a heartbeat ends the session instead.
-      const tick = () => {
-        if (closed) return;
-        try {
-          sendHeartbeat();
-        } catch (error) {
-          heartbeatFailure = /** @type {Error} */ (error);
-          close();
-        }
-      };
-
-      heartbeatTimer = setInterval(tick, intervalMs);
+      sessionHeartbeat = makeHeartbeat({
+        codec,
+        settings: heartbeatSettings,
+        stream,
+        encrypt,
+        epoch,
+        getSentCount,
+        getLastReceivedNonce,
+        isClosed: () => closed,
+        close,
+      });
     }
 
     /** @type {Reader<Uint8Array>} */
@@ -1119,17 +1144,33 @@ export const makeOcapnNoiseNetwork = ({
       next: async () => {
         await null;
         for (;;) {
-          // eslint-disable-next-line no-await-in-loop
-          const result = await readPeerFrame();
+          /** @type {IteratorResult<Uint8Array>} */
+          let result;
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            result = await (sessionHeartbeat === undefined
+              ? stream.reader.next(undefined)
+              : sessionHeartbeat.readPeerFrame());
+          } catch (error) {
+            // A failed transport ends the session.
+            close();
+            throw error;
+          }
           if (result.done) {
             if (!closed) {
               closed = true;
               fireOnClose();
             }
+            const failure = closeFailure;
+            closeFailure = undefined;
+            if (failure !== undefined) throw failure;
             return harden({ done: true, value: undefined });
           }
           const plainText = decrypt(result.value);
-          if (!absorbHeartbeat(plainText)) {
+          if (
+            sessionHeartbeat === undefined ||
+            !sessionHeartbeat.absorb(plainText)
+          ) {
             return harden({ done: false, value: plainText });
           }
         }
@@ -1222,12 +1263,12 @@ export const makeOcapnNoiseNetwork = ({
       writer,
       getLiveness: () =>
         harden({
-          heartbeat: heartbeatSettings !== undefined,
+          heartbeat: sessionHeartbeat !== undefined,
           epoch,
           lastAckedRecvNonce: getLastReceivedNonce(),
-          peerLastAckedRecvNonce,
+          peerLastAckedRecvNonce: sessionHeartbeat?.getPeerLastAckedRecvNonce(),
         }),
-      close,
+      close: () => close(),
     });
   };
 
