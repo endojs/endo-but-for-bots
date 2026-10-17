@@ -552,9 +552,6 @@ It tells the peer the session ended on purpose, so the peer ends the
 session gracefully instead of treating the closed transport as loss and
 reconnecting.
 
-The hello is unconditional; § Compatibility Considerations states what
-that means for older peers.
-
 ## Diagrams
 
 ### Steady-State Heartbeat to TCP Drop to Reconnect to Sequence Resume
