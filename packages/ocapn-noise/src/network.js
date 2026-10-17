@@ -1348,8 +1348,11 @@ export const makeOcapnNoiseNetwork = ({
         await Promise.race([activeDrain, closedPromise]);
         if (!closed) {
           closed = true;
-          await stream.writer.return(undefined);
-          fireOnClose();
+          try {
+            await stream.writer.return(undefined);
+          } finally {
+            fireOnClose();
+          }
         }
         return harden({ done: true, value: undefined });
       },
@@ -1357,8 +1360,11 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         if (!closed) {
           closed = true;
-          await stream.writer.throw(err);
-          fireOnClose();
+          try {
+            await stream.writer.throw(err);
+          } finally {
+            fireOnClose();
+          }
         }
         throw err;
       },

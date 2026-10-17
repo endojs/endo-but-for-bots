@@ -2,6 +2,7 @@
 
 /** @import { ExecutionContext } from 'ava' */
 /** @import { OcapnCodec } from '@endo/ocapn/codec-interface' */
+/** @import { OcapnNoiseTransport } from '../src/types.js' */
 
 import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
@@ -38,8 +39,15 @@ const until = async predicate => {
  * @param {ExecutionContext<unknown>} t
  * @param {OcapnCodec} codec
  * @param {{ intervalMs: number, sessionTimeoutMs: number }} [settings]
+ * @param {(transport: OcapnNoiseTransport) => OcapnNoiseTransport} [wrap]
+ *   Applied to A's transport beneath the stall injector.
  */
-const connectStallablePair = async (t, codec, settings = heartbeat) => {
+const connectStallablePair = async (
+  t,
+  codec,
+  settings = heartbeat,
+  wrap = transport => transport,
+) => {
   const netA = makeOcapnNoiseNetwork({ codec, heartbeat: settings });
   const netB = makeOcapnNoiseNetwork({ codec, heartbeat: settings });
   t.teardown(() => {
@@ -49,7 +57,7 @@ const connectStallablePair = async (t, codec, settings = heartbeat) => {
   const keyA = netA.addSigningKeys(netA.generateSigningKeys());
   const keyB = netB.addSigningKeys(netB.generateSigningKeys());
   const { transportA, transportB } = makeMockTransportPair();
-  const injector = makeStallableTransport(transportA);
+  const injector = makeStallableTransport(wrap(transportA));
   await netA.addTransport(injector.transport);
   await netB.addTransport(transportB);
   const [sessionA, sessionB] = await Promise.all([
@@ -440,4 +448,48 @@ test('a queued Buffer frame is copied, not aliased', async t => {
     t.false(received.done);
     if (!received.done) t.deepEqual([...received.value], expected);
   }
+});
+
+test('writer.throw tears the session down even when the transport throw rejects', async t => {
+  const { sessionA, injector } = await connectStallablePair(
+    t,
+    cborCodec,
+    { intervalMs: heartbeat.intervalMs, sessionTimeoutMs: 60_000 },
+    transport =>
+      harden({
+        ...transport,
+        connect: async hints => {
+          await null;
+          const stream = await transport.connect(hints);
+          /** @type {typeof stream.writer} */
+          const writer = harden({
+            ...stream.writer,
+            throw: async () => {
+              await null;
+              throw Error('transport throw failed');
+            },
+            [Symbol.asyncIterator]() {
+              return writer;
+            },
+          });
+          return harden({ reader: stream.reader, writer });
+        },
+      }),
+  );
+  injector.stall();
+  const count = 80;
+  const writes = [];
+  for (let i = 0; i < count; i += 1) {
+    writes.push(sessionA.writer.next(Uint8Array.of(i)));
+  }
+  await delay(heartbeat.intervalMs);
+
+  await t.throwsAsync(() => sessionA.writer.throw(Error('local abort')), {
+    message: 'transport throw failed',
+  });
+  // The writers still waiting for room learn of the end.
+  const results = await Promise.all(writes);
+  t.true(results.some(({ done }) => done));
+  t.is(sessionA.getLiveness().queuedFrames, 0);
+  injector.resume();
 });
