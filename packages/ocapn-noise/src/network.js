@@ -1127,8 +1127,9 @@ export const makeOcapnNoiseNetwork = ({
        */
       const enqueueFrame = plainText => {
         // The caller may reuse its buffer once the write resolves, and
-        // the frame can wait in the queue past that.
-        const copy = plainText.slice();
+        // the frame can wait in the queue past that. Not `.slice()`: on a
+        // Node `Buffer` that returns a view over the same memory.
+        const copy = new Uint8Array(plainText);
         enqueue({ heartbeat: false, render: () => copy });
       };
 

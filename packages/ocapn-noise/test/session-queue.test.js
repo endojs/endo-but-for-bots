@@ -418,3 +418,26 @@ test('a transport write that rejects ends the session with its error', async t =
     value: undefined,
   });
 });
+
+test('a queued Buffer frame is copied, not aliased', async t => {
+  const { sessionA, sessionB, injector } = await connectStallablePair(
+    t,
+    cborCodec,
+  );
+  injector.stall();
+  await sessionA.writer.next(Uint8Array.of(0));
+  await until(() => injector.getHeldWrites() === 1);
+  // `Buffer.prototype.slice` is a view, so a `.slice()` copy would let
+  // the caller's reuse of the buffer reach the queued frame.
+  const buffer = Buffer.from([1, 2, 3]);
+  await sessionA.writer.next(buffer);
+  buffer.fill(9);
+  injector.resume();
+
+  for (const expected of [[0], [1, 2, 3]]) {
+    // eslint-disable-next-line no-await-in-loop
+    const received = await sessionB.reader.next(undefined);
+    t.false(received.done);
+    if (!received.done) t.deepEqual([...received.value], expected);
+  }
+});
