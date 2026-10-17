@@ -96,7 +96,6 @@ export interface OcapnNoiseSession {
   isInitiator: boolean;
   reader: Reader<Uint8Array>;
   writer: Writer<Uint8Array>;
-  /** A snapshot of this session's heartbeat state. */
   getLiveness(): SessionLiveness;
   close(): void;
 }
@@ -128,8 +127,7 @@ export interface SessionLiveness {
   lastAckedRecvNonce: bigint | undefined;
   /**
    * The highest of this side's send nonces the peer has acknowledged
-   * by `op:pong`, or `undefined` before the first `op:pong`. An
-   * acknowledgment of a nonce this side has not used is ignored.
+   * by `op:pong`, or `undefined` before the first `op:pong`.
    */
   peerLastAckedRecvNonce: bigint | undefined;
 }
