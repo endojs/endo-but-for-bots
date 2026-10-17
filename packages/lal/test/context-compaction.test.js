@@ -53,9 +53,84 @@ test('keeps complete recent protocol groups and summarizes only older completed 
 });
 
 test('unknown capacity does not become a fake automatic limit', t => {
-  t.is(planContextCompaction(dialogue(), { usedTokens: 1_000_000 }), undefined);
-  t.truthy(planContextCompaction(dialogue(), { windowTokens: 10_000 }));
+  t.is(planContextCompaction(dialogue(), { usedTokens: 1e6 }), undefined);
+  t.is(planContextCompaction(dialogue(), { windowTokens: 10_000 }), undefined);
+  t.truthy(
+    planContextCompaction(dialogue(), {
+      windowTokens: 10_000,
+      usedTokens: 7000,
+    }),
+  );
   t.is(planContextCompaction(dialogue(), { windowTokens: 100_000 }), undefined);
+});
+
+test('reported token occupancy, not serialized bytes, triggers compaction', t => {
+  const messages = [
+    { role: 'system', content: 'rules' },
+    { role: 'user', content: 'Keep working on the agreed implementation.' },
+    ...toolGroup(0, 60_000),
+  ];
+  // Reproduce Tokyo: a 272k window, about 25k reported tokens, and wire data
+  // larger than 70% of that token count. Opaque reasoning makes the units
+  // differ further; it must not become an additional token budget.
+  messages[2].responsesOutput.items[0].encrypted_content = 'opaque'.repeat(
+    50_000,
+  );
+  t.true(JSON.stringify(messages).length > 190_400);
+  t.is(
+    planContextCompaction(messages, {
+      windowTokens: 272_000,
+      usedTokens: 25_139,
+    }),
+    undefined,
+  );
+  t.is(
+    planContextCompaction(messages, {
+      windowTokens: 272_000,
+      usedTokens: 190_399,
+    }),
+    undefined,
+  );
+  t.truthy(
+    planContextCompaction(messages, {
+      windowTokens: 272_000,
+      usedTokens: 190_400,
+    }),
+  );
+});
+
+test('byte budgets scale with observed token occupancy for summary and tail', async t => {
+  const directive = { role: 'user', content: 'Continue the tests.' };
+  const groups = Array.from({ length: 8 }, (_, i) => toolGroup(i));
+  const messages = [directive, ...groups.flat()];
+  const originalBytes = new TextEncoder().encode(
+    JSON.stringify({ messages, tools: [] }),
+  ).length;
+  const plan = planContextCompaction(messages, {
+    windowTokens: 20_000,
+    usedTokens: 20_000,
+  });
+  if (!plan || plan.headroomBytes === undefined)
+    throw Error('Expected token-triggered budget');
+  const { headroomBytes } = plan;
+  t.is(headroomBytes, Math.floor(originalBytes * 0.7));
+  t.true(headroomBytes > 14_000);
+  t.true(plan.retained.length > 1 + groups[7].length);
+  const checkpoint = await summarizeContext(plan, async request => {
+    t.true(
+      new TextEncoder().encode(JSON.stringify({ messages: request, tools: [] }))
+        .length < headroomBytes,
+    );
+    return {
+      message: { role: 'assistant', content: 'Earlier tests completed.' },
+    };
+  });
+  t.deepEqual(checkpoint.retained, plan.retained);
+  t.true(
+    new TextEncoder().encode(
+      JSON.stringify({ messages: checkpoint.context, tools: [] }),
+    ).length < headroomBytes,
+  );
 });
 
 test('does not split or conceal unresolved tool evidence', t => {
@@ -113,14 +188,24 @@ test('rejects tool-producing, empty, cancelled and non-reducing summaries', asyn
 });
 
 test('reports oversized instructions and tools instead of silently dropping them', t => {
-  t.throws(() => planContextCompaction(dialogue(), { windowTokens: 50 }), {
-    message: /instructions and tools/,
-  });
+  t.throws(
+    () =>
+      planContextCompaction(dialogue(), {
+        windowTokens: 50,
+        usedTokens: new TextEncoder().encode(
+          JSON.stringify({ messages: dialogue(), tools: [] }),
+        ).length,
+      }),
+    {
+      message: /instructions and tools/,
+    },
+  );
   t.throws(
     () =>
       planContextCompaction(dialogue(), {
         windowTokens: 20_000,
         tools: [{ description: 'schema'.repeat(3000) }],
+        usedTokens: 100_000,
       }),
     { message: /instructions and tools/ },
   );
@@ -129,7 +214,7 @@ test('reports oversized instructions and tools instead of silently dropping them
 test('a smaller summary must still leave model headroom with tools and tail', async t => {
   const plan = planContextCompaction(
     [{ role: 'user', content: 'run tests' }, ...toolGroup(0), ...toolGroup(1)],
-    { windowTokens: 24_000 },
+    { windowTokens: 24_000, usedTokens: 21_000 },
   );
   await t.throwsAsync(
     summarizeContext(plan, async () => ({
@@ -180,7 +265,12 @@ test('compacts within the first turn, keeping parallel tools, opaque tail and di
   };
   const groups = Array.from({ length: 8 }, (_, index) => toolGroup(index));
   const messages = [system, directive, ...groups.flat()];
-  const plan = planContextCompaction(messages, { windowTokens: 40_000 });
+  const plan = planContextCompaction(messages, {
+    windowTokens: 40_000,
+    usedTokens: new TextEncoder().encode(
+      JSON.stringify({ messages, tools: [] }),
+    ).length,
+  });
   if (!plan) throw Error('Expected first-turn plan');
   t.deepEqual(plan.retained, [directive, ...groups[7]]);
   const checkpoint = await summarizeContext(plan, async request => {
@@ -216,7 +306,12 @@ test('an oversized completed tool group is summarized with bounded excerpts, not
     { role: 'user', content: 'run tests' },
     ...toolGroup(0, 50_000),
   ];
-  const plan = planContextCompaction(messages, { windowTokens: 12_000 });
+  const plan = planContextCompaction(messages, {
+    windowTokens: 12_000,
+    usedTokens: new TextEncoder().encode(
+      JSON.stringify({ messages, tools: [] }),
+    ).length,
+  });
   if (!plan) throw Error('Expected oversized-tool plan');
   t.deepEqual(plan.retained, [messages[0]]);
   let invoked = false;
@@ -265,14 +360,24 @@ test('repeated compaction carries prior summaries forward and resets context occ
   const directive = { role: 'user', content: 'complete the task' };
   const initial = [directive, ...toolGroup(0), ...toolGroup(1)];
   const first = await summarizeContext(
-    planContextCompaction(initial, { windowTokens: 24_000 }),
+    planContextCompaction(initial, {
+      windowTokens: 24_000,
+      usedTokens: new TextEncoder().encode(
+        JSON.stringify({ messages: initial, tools: [] }),
+      ).length,
+    }),
     async () => ({
       message: { role: 'assistant', content: 'Earlier decisions must remain.' },
     }),
   );
   const expanded = [...first.context, ...toolGroup(2), ...toolGroup(3)];
   const second = await summarizeContext(
-    planContextCompaction(expanded, { windowTokens: 24_000 }),
+    planContextCompaction(expanded, {
+      windowTokens: 24_000,
+      usedTokens: new TextEncoder().encode(
+        JSON.stringify({ messages: expanded, tools: [] }),
+      ).length,
+    }),
     async request => {
       t.true(request[0].content.includes(first.summary));
       return {
@@ -291,7 +396,12 @@ test('repeated compaction carries prior summaries forward and resets context occ
 });
 
 test('oversized non-tool summary input fails before dispatch, and cancellation does too', async t => {
-  const plan = planContextCompaction(dialogue(), { windowTokens: 2000 });
+  const plan = planContextCompaction(dialogue(), {
+    windowTokens: 2000,
+    usedTokens: new TextEncoder().encode(
+      JSON.stringify({ messages: dialogue(), tools: [] }),
+    ).length,
+  });
   let invoked = false;
   const invoke = async () => {
     invoked = true;

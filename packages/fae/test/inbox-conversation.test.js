@@ -269,6 +269,7 @@ test('first-turn checkpoint selects durable protocol context without erasing adm
   const checkpoint = await summarizeContext(
     planContextCompaction(await conversation.getContext(result.id), {
       windowTokens: 12_000,
+      usedTokens: 12_000,
     }),
     async () => ({
       message: {
