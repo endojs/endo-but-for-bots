@@ -101,9 +101,8 @@ for (const [codecName, codec] of /** @type {const} */ ([
     await delay(heartbeat.intervalMs * 2);
 
     const stalled = sessionA.getLiveness();
-    // The three writes are queued. Heartbeats coalesce rather than
-    // piling up: at most one ping/pong pair waits behind the frame the
-    // transport is holding.
+    // Heartbeats coalesce rather than piling up: at most one ping/pong
+    // pair waits behind the frame the transport is holding.
     t.true(stalled.queuedFrames >= 3, `queued ${stalled.queuedFrames}`);
     t.true(stalled.queuedFrames <= 6, `queued ${stalled.queuedFrames}`);
     t.is(injector.getHeldWrites(), 1);
@@ -360,8 +359,6 @@ test('closing the session while a write is held releases the writer', async t =>
   await sessionA.writer.next(Uint8Array.of(2));
   await until(() => injector.getHeldWrites() === 1);
   sessionA.close();
-  // The transport still holds the write, yet `return` settles and later
-  // writes see the session as ended.
   t.deepEqual(
     await Promise.race([
       sessionA.writer.return(undefined),

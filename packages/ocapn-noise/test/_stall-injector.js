@@ -63,7 +63,6 @@ export const makeStallableTransport = transport => {
 
   return harden({
     transport: stallable,
-    /** Hold every write from now until `resume`. */
     stall: () => {
       if (release !== undefined) return;
       gate = new Promise(resolve => {

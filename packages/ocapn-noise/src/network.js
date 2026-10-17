@@ -919,9 +919,10 @@ export const makeOcapnNoiseNetwork = ({
     let writeStallTimer;
 
     // The session-level outbound queue: plaintext frames the session
-    // has accepted but the current transport instance has not. A frame
-    // is rendered and encrypted only when it reaches the transport, so
-    // the queue can outlive the transport instance it was filled for.
+    // has accepted but the transport has not. `writer.next` resolves on
+    // acceptance, so a stalled transport holds a writer back only once
+    // the queue reaches its high-water mark; awaiting one in-flight
+    // write instead would hold every writer for the whole stall.
     /**
      * @typedef {{ heartbeat: boolean, render: () => Uint8Array }} OutboundFrame
      */
@@ -1146,9 +1147,7 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       // Validation stays here rather than in the drain, so a bad frame
-      // rejects its own `writer.next` instead of ending the session. A
-      // transport write error ends the session and surfaces through the
-      // reader.
+      // rejects its own `writer.next` instead of ending the session.
       acceptFrame = async plainText => {
         if (!(plainText instanceof Uint8Array)) {
           throw makeError(
