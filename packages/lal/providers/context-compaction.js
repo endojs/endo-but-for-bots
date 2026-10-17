@@ -3,8 +3,9 @@
 import { Fail } from '@endo/errors';
 
 /**
- * A conservative wire-size estimate, not a token reading. Include opaque
- * context and tool schemas; no provider capacity is invented here.
+ * Serialized byte size for retaining history and bounding summary requests.
+ * This is not a token estimate: opaque reasoning and JSON escaping can occupy
+ * many wire bytes without consuming the same number of model tokens.
  * @param {any} value
  */
 const wireBytes = value =>
@@ -26,27 +27,40 @@ export const planContextCompaction = (
   messages,
   { tools = [], windowTokens = 0, usedTokens = 0, force = false } = {},
 ) => {
-  const estimate = wireBytes({ messages, tools });
-  // Reserve 30% for the next reply, tool results and estimation error.
-  const threshold = Math.floor(windowTokens * 0.7);
-  if (!force && (!windowTokens || Math.max(estimate, usedTokens) < threshold))
+  // Only a provider token observation can trigger automatic compaction. Wire
+  // bytes and model tokens are different units, especially for opaque context.
+  // Leave 30% for the next reply and tool results. Unknown readings do not
+  // invent a context limit; explicit forcing remains available to callers.
+  const thresholdTokens = Math.floor(windowTokens * 0.7);
+  if (
+    !force &&
+    (!thresholdTokens || !usedTokens || usedTokens < thresholdTokens)
+  )
     return undefined;
+  const originalBytes = wireBytes({ messages, tools });
+  // Byte counts remain useful for selecting complete protocol groups. Convert
+  // the token headroom to a relative byte budget using the observed occupancy;
+  // never compare a byte count directly with a token count. This is a sizing
+  // heuristic, not a provider token count for the resulting summary or tail.
+  const headroomBytes =
+    thresholdTokens && usedTokens
+      ? Math.floor((originalBytes * thresholdTokens) / usedTokens)
+      : undefined;
+  const byteBudget = force
+    ? Math.min(headroomBytes ?? originalBytes, originalBytes)
+    : headroomBytes;
   const system = messages.filter(message => message.role === 'system');
   const history = messages.filter(message => message.role !== 'system');
   const directive = history.findLast(message => message.role === 'user');
   const anchor = directive ? [directive] : [];
   const baseBytes = wireBytes({ messages: [...system, ...anchor], tools });
-  if (threshold && baseBytes >= threshold)
+  if (headroomBytes !== undefined && baseBytes >= headroomBytes)
     Fail`Compaction instructions and tools exceed the model headroom`;
   // Half the remaining headroom goes to recent verbatim context, half to the
   // summary. Unknown capacity permits explicit forcing, never automatic sizing.
   const tailBudget = Math.max(
     0,
-    Math.floor(
-      ((force ? Math.min(threshold || estimate, estimate) : threshold) -
-        baseBytes) /
-        2,
-    ),
+    Math.floor(((byteBudget ?? originalBytes) - baseBytes) / 2),
   );
   const boundaries = [0];
   const pending = new Map();
@@ -100,8 +114,8 @@ export const planContextCompaction = (
     prefix,
     retained,
     tools,
-    headroomBytes: threshold || undefined,
-    originalBytes: estimate,
+    headroomBytes,
+    originalBytes,
   });
 };
 harden(planContextCompaction);
