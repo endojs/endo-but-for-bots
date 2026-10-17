@@ -119,8 +119,6 @@ The rationale is in the project's
 ### Protocol and keys
 
 - The Noise protocol name is `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
-  Noise mixes it into the handshake hash, so the pattern and the
-  cipher suite are bound to every session.
 - The prologue is the 10 ASCII bytes `OCapN/np/1`, one zero byte, and
   the intended responder's 32-byte Ed25519 verifying key.
 - Each peer's static X25519 private key is the clamped first half of
@@ -137,10 +135,10 @@ Lengths are in bytes, and multi-byte integers are big-endian.
 
 | Message | Layout | Length |
 |---|---|---|
-| Prefixed SYN | responder Ed25519 key (32, cleartext) ‖ Noise message 1 (132) | 164 |
-| Noise message 1 | `e` (32) ‖ encrypted `s` (32 + 16 tag) ‖ encrypted SYN payload (36 + 16 tag) | 132 |
-| SYN payload | initiator Ed25519 key (32) ‖ first encoding (2) ‖ further-encodings mask (2) | 36 |
-| SYNACK (Noise message 2) | `e` (32) ‖ encrypted SYNACK payload (1 + 16 tag) | 49 |
+| Prefixed SYN | responder Ed25519 key (32, cleartext) \|\| Noise message 1 (132) | 164 |
+| Noise message 1 | `e` (32) \|\| encrypted `s` (32 + 16 tag) \|\| encrypted SYN payload (36 + 16 tag) | 132 |
+| SYN payload | initiator Ed25519 key (32) \|\| first encoding (2) \|\| further-encodings mask (2) | 36 |
+| SYNACK (Noise message 2) | `e` (32) \|\| encrypted SYNACK payload (1 + 16 tag) | 49 |
 | SYNACK payload | accepted encoding (1) | 1 |
 | Transport message | ChaCha20-Poly1305 ciphertext of at most 65519 plaintext bytes, plus a 16-byte tag | at most 65535 |
 
@@ -174,16 +172,15 @@ The whole handshake is 213 bytes and one round trip.
 ### Handshake hash and channel binding
 
 The handshake hash is the 32-byte Noise `h` after message 2.
-Both peers compute the same value.
 Each peer's `op:start-session` location signature covers
 
-```
+```text
 "ocapn-location-v1\0" || uint32(len(h)) || h || my-location
 ```
 
 where `my-location` is the codec-serialized `my-location` record.
-A location signature from one session therefore does not verify in any
-other session.
+On `np/1` the binding is always the 32-byte `h`; it must never be
+empty.
 
 ### Key confirmation
 
