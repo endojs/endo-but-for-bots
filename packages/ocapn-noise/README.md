@@ -50,8 +50,9 @@ first message.
      The Edwards-to-Montgomery conversion drops the sign of x, so the
      holder of key A can also claim -A: a second identity for the same
      key holder, not an impersonation.
-     Message 1 carries no freshness (Noise §7.7 destination property
-     2), so anyone who has seen a genuine SYN can replay it.
+     Message 1 carries no freshness (Noise §7.7 payload security
+     properties, destination property 2), so anyone who has seen a
+     genuine SYN can replay it.
      A replay never becomes a session, because it cannot produce the
      channel-bound `op:start-session` below.
      Displacing the named peer's existing (unclaimed) session is deferred
@@ -112,8 +113,10 @@ across sessions even though it is signed only once per identity.
 
 This section is the contract a second implementation of `np/1` must
 match.
-The rationale is in the project's
-`designs/ocapn-noise-cryptographic-review.md`.
+The rationale for the key checks, channel binding, and key
+confirmation is in the OCapN-Noise cryptographic review of the as-built
+handshake, proposed in
+[endojs/endo-but-for-bots#1475](https://github.com/endojs/endo-but-for-bots/pull/1475).
 "Must" and "must not" are normative.
 
 ### Protocol and keys
@@ -148,7 +151,6 @@ The responder accepts the highest encoding both sides support.
 Transport messages use the Noise `CipherState` nonces, counting up from
 zero in each direction.
 The handshake has no third message.
-The whole handshake is 213 bytes and one round trip.
 
 ### Key checks
 
@@ -161,11 +163,9 @@ The whole handshake is 213 bytes and one round trip.
 - A responder must reject a SYN whose claimed initiator Ed25519 key is
   small-order, carries a torsion component, or does not convert to the
   static X25519 key Noise authenticated (`rs`).
-- The conversion to Montgomery form drops the sign of x.
-  The holder of key `A` can therefore also present `-A`, and sign as
-  `-A`, because signing needs only the scalar.
-  `A` and `-A` are two designators for one key holder.
-  Neither lets anyone impersonate a key they do not hold, but an
+- The conversion to Montgomery form drops the sign of x, so the
+  holder of key `A` can also present and sign as `-A`.
+  This lets no one impersonate a key they do not hold, but an
   implementation must not assume that one key holder has only one
   designator.
 
@@ -185,18 +185,18 @@ empty.
 ### Key confirmation
 
 Noise IK message 1 authenticates its sender only weakly (Noise §7.7
-source property 1).
-Anyone who holds the responder's private key can forge a SYN that
-claims any initiator (key-compromise impersonation), and anyone who
-has seen a SYN can replay it.
-Neither can compute the transport keys, because both lack the claimed
-initiator's private key.
+payload security properties, source property 1), so a holder of the
+responder's key can forge a SYN and anyone can replay one; the review
+above gives the attacks.
 
 - A responder **must not** treat an initiator as authenticated until it
   has decrypted and verified that initiator's `op:start-session`, the
   first transport message.
-  Until then it must not hand out a session, resolve crossed hellos in
-  that peer's favor, or displace an existing session with that peer.
+  Until then it must not hand out a session for that peer, and its
+  handshake must not win crossed-hello settlement or displace an
+  existing session with that peer.
+  An unproven handshake may still occupy a settlement slot, bounded by
+  the handshake timeout, as described under SYN above.
 - An initiator **must not** send application data in message 1.
   The SYN payload carries only the initiator's key and the encoding
   offer: it can be forged by a holder of the responder's key, it can be
