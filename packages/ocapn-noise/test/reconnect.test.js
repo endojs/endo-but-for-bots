@@ -227,7 +227,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
         sessionA.getLiveness().epoch > 0n,
     );
     await delay(heartbeat.intervalMs * 4);
-    // The greater side's dial wins.
     const { greater, lesser } = byEphemeral(injector, injectorB);
     t.is(sessionA.getLiveness().epoch, 1n);
     t.is(sessionB.getLiveness().epoch, 1n);
@@ -340,6 +339,46 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
   t.deepEqual(await readBytes(sessionA, 1), [101]);
   await sessionA.writer.next(Uint8Array.of(2));
   t.deepEqual(await readBytes(sessionB, 1), [2]);
+  sessionA.close();
+});
+
+test('the winner of crossed hellos stops deferring when its dials keep failing', async t => {
+  // Backoff of a millisecond keeps the greater side dialing nearly all
+  // the time, so a deference window that restarted with each of its
+  // failed dials would drop nearly every dial of the lesser side (paced
+  // apart here) until hardTimeoutMs.
+  const quickBackoff = { ...reconnect, backoffInitialMs: 1, backoffMaxMs: 1 };
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+    { reconnectA: quickBackoff, reconnectB: quickBackoff },
+  );
+  // The lesser side's dials are held until the greater side is dialing,
+  // so that they arrive while it defers to its own.
+  const { greater, lesser } = byEphemeral(injector, injectorB);
+  const connectsBefore = greater.getConnects();
+  greater.failOutboundAfter((heartbeat.sessionTimeoutMs * 9) / 10);
+  lesser.delayOutbound(heartbeat.sessionTimeoutMs / 4);
+  lesser.holdConnects(true);
+  injector.sever();
+  injectorB.sever();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await sessionB.writer.next(Uint8Array.of(101));
+  await eventually(() => greater.getConnects() > connectsBefore);
+  lesser.holdConnects(false);
+
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch >= 1n &&
+      sessionB.getLiveness().epoch === sessionA.getLiveness().epoch &&
+      !sessionA.getLiveness().reconnecting &&
+      !sessionB.getLiveness().reconnecting,
+  );
+  t.true(droppedDials(greater) >= 1);
+  t.is(greater.getOpenStreams(false), 1);
+  greater.failOutboundAfter(undefined);
+  t.deepEqual(await readBytes(sessionB, 1), [1]);
+  t.deepEqual(await readBytes(sessionA, 1), [101]);
   sessionA.close();
 });
 

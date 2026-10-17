@@ -41,6 +41,9 @@ export const makeLossyTransport = transport => {
   const all = [];
   let refusing = false;
   let refusingOutbound = false;
+  /** @type {number | undefined} */
+  let failOutboundAfterMs;
+  let outboundDelayMs = 0;
   let connects = 0;
   /** @type {Promise<void> | undefined} */
   let held;
@@ -113,6 +116,15 @@ export const makeLossyTransport = transport => {
       await null;
       connects += 1;
       if (held) await held;
+      if (outboundDelayMs > 0) {
+        const ms = outboundDelayMs;
+        await new Promise(resolve => setTimeout(resolve, ms));
+      }
+      if (failOutboundAfterMs !== undefined) {
+        const ms = failOutboundAfterMs;
+        await new Promise(resolve => setTimeout(resolve, ms));
+        throw Error('lossy transport: connection timed out');
+      }
       if (refusing || refusingOutbound) {
         throw Error('lossy transport: connection refused');
       }
@@ -150,6 +162,24 @@ export const makeLossyTransport = transport => {
      */
     refuseOutbound: refuse => {
       refusingOutbound = refuse;
+    },
+    /**
+     * Fail every outbound connection attempt after a delay, as an OS
+     * connect timeout would, or (with `undefined`) stop doing so.
+     *
+     * @param {number | undefined} ms
+     */
+    failOutboundAfter: ms => {
+      failOutboundAfterMs = ms;
+    },
+    /**
+     * Delay every outbound connection attempt, to pace a side's redials
+     * independently of its backoff.
+     *
+     * @param {number} ms
+     */
+    delayOutbound: ms => {
+      outboundDelayMs = ms;
     },
     /**
      * Hold every new connection attempt short of the peer until released,
