@@ -1854,9 +1854,7 @@ const makePatternKit = (): PatternKit => {
           optionalPatt,
         );
 
-      const partialNames = ownKeys(optionalSpecimen).filter(
-        (name): name is string => typeof name === 'string',
-      );
+      const partialNames = ownKeys(optionalSpecimen) as string[];
       const partialPatt = adaptRecordPattern(optionalPatt, partialNames);
       return (
         confirmMatches(requiredSpecimen, requiredPatt, reject) &&
@@ -2113,15 +2111,15 @@ const makePatternKit = (): PatternKit => {
         makeSplitPayload({}, base, optional, rest),
       ),
     split: (base, rest = undefined) => {
-      if (Array.isArray(base)) {
-        return M.splitArray(base, rest && [], rest);
+      if (passStyleOf(harden(base)) === 'copyArray') {
+        return M.splitArray(base as any, rest && [], rest);
       } else {
         return M.splitRecord(base, rest && {}, rest);
       }
     },
     partial: (base, rest = undefined) => {
-      if (Array.isArray(base)) {
-        return M.splitArray([], base, rest);
+      if (passStyleOf(harden(base)) === 'copyArray') {
+        return M.splitArray([], base as any, rest);
       } else {
         return M.splitRecord({}, base, rest);
       }
@@ -2197,11 +2195,11 @@ export const isAwaitArgGuard = (specimen: any): specimen is AwaitArgGuard =>
   matches(specimen, AwaitArgGuardShape);
 hideAndHardenFunction(isAwaitArgGuard);
 
-export function assertAwaitArgGuard(
+export const assertAwaitArgGuard: (
   specimen: any,
-): asserts specimen is AwaitArgGuard {
+) => asserts specimen is AwaitArgGuard = specimen => {
   mustMatch(specimen, AwaitArgGuardShape, 'awaitArgGuard');
-}
+};
 hideAndHardenFunction(assertAwaitArgGuard);
 
 const makeAwaitArgGuard = (argPattern: Pattern): AwaitArgGuard => {
@@ -2221,9 +2219,10 @@ export const RawGuardShape = M.kind('guard:rawGuard');
 export const isRawGuard = (specimen: any): specimen is RawGuard =>
   matches(specimen, RawGuardShape);
 
-export function assertRawGuard(specimen: any): asserts specimen is RawGuard {
+export const assertRawGuard: (
+  specimen: any,
+) => asserts specimen is RawGuard = specimen =>
   mustMatch(specimen, RawGuardShape, 'rawGuard');
-}
 
 /**
  */
@@ -2262,11 +2261,11 @@ export const MethodGuardPayloadShape = M.or(
 
 export const MethodGuardShape = M.kind('guard:methodGuard');
 
-export function assertMethodGuard(
+export const assertMethodGuard: (
   specimen: any,
-): asserts specimen is MethodGuard {
+) => asserts specimen is MethodGuard = specimen => {
   mustMatch(specimen, MethodGuardShape, 'methodGuard');
-}
+};
 hideAndHardenFunction(assertMethodGuard);
 
 /**
@@ -2323,11 +2322,11 @@ export const InterfaceGuardPayloadShape = M.splitRecord(
 
 export const InterfaceGuardShape = M.kind('guard:interfaceGuard');
 
-export function assertInterfaceGuard(
+export const assertInterfaceGuard: (
   specimen: any,
-): asserts specimen is InterfaceGuard {
+) => asserts specimen is InterfaceGuard = specimen => {
   mustMatch(specimen, InterfaceGuardShape, 'interfaceGuard');
-}
+};
 hideAndHardenFunction(assertInterfaceGuard);
 
 const makeInterfaceGuard = <MG extends Record<PropertyKey, MethodGuard>>(
