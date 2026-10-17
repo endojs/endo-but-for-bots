@@ -136,7 +136,7 @@ export interface HeartbeatOptions {
 export interface ReconnectOptions {
   /** `RECONNECT_BACKOFF_INITIAL`. Default 250. */
   backoffInitialMs?: number;
-  /** `RECONNECT_BACKOFF_MAX`. Default 30000, capped by `hardTimeoutMs`. */
+  /** `RECONNECT_BACKOFF_MAX`. Default 30000, capped by `hardTimeoutMs` and raised to `backoffInitialMs`. */
   backoffMaxMs?: number;
   /** `SESSION_HARD_TIMEOUT`. Default 600000. */
   hardTimeoutMs?: number;

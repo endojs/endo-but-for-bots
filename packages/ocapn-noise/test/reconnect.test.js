@@ -135,7 +135,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
     t.deepEqual(await readBytes(sessionB, 3), [2, 3, 4]);
     t.deepEqual(await readBytes(sessionA, 3), [102, 103, 104]);
 
-    // The new instance is live: heartbeats keep it up past a timeout.
     await delay(heartbeat.sessionTimeoutMs * 2);
     t.is(sessionA.getLiveness().epoch, 1n);
     t.false(sessionA.getLiveness().reconnecting);
@@ -176,7 +175,6 @@ test('the session aborts once SESSION_HARD_TIMEOUT passes unreconnected', async 
   await sessionA.writer.next(Uint8Array.of(1));
 
   await eventually(() => sessionA.getLiveness().reconnecting);
-  // Redials back off and are refused until the budget runs out.
   await t.throwsAsync(() => sessionA.reader.next(undefined), {
     message: /not reconnected within 1500ms/,
   });
@@ -287,7 +285,6 @@ test('a peer that restarts and opens a fresh session aborts the one waiting to r
   netA.shutdown();
   await eventually(() => sessionB.getLiveness().reconnecting);
 
-  // A comes back with the same identity but none of the session state.
   restartedA.addSigningKeys(signingKeysA);
   await restartedA.addTransport(transportA);
   const fresh = await restartedA.provideSession(netB.locationFor(keyB));
@@ -379,10 +376,24 @@ test('reconnect options are validated', t => {
       }),
     { message: /backoffMaxMs must lie between/ },
   );
+  for (const value of [null, 'yes', 1]) {
+    t.throws(
+      () =>
+        makeOcapnNoiseNetwork({
+          codec: cborCodec,
+          heartbeat,
+          reconnect: /** @type {any} */ (value),
+        }),
+      { message: /reconnect must be a boolean or an options object/ },
+      String(value),
+    );
+  }
   for (const options of [
     { backoffInitialMs: 100, backoffMaxMs: 100 },
     { backoffMaxMs: 1000, hardTimeoutMs: 1000 },
     { hardTimeoutMs: 2 ** 31 - 1 },
+    // The default `backoffMaxMs` rises to meet a larger initial delay.
+    { backoffInitialMs: 60_000 },
   ]) {
     t.notThrows(
       () =>

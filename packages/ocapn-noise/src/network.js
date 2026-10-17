@@ -235,7 +235,6 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
  * of every transport instance; session frames start after them.
  */
 const HANDSHAKE_SENT_COUNT = 2n;
-/** How long `close()` waits for the end notice before closing anyway. */
 const SESSION_END_WRITE_TIMEOUT_MS = 1000;
 
 /**
@@ -250,12 +249,20 @@ const normalizeReconnectOptions = (reconnect, heartbeatSettings) => {
       X`ocapn-noise: reconnect requires heartbeat, which detects the loss it recovers from`,
     );
   }
+  if (reconnect !== true && (typeof reconnect !== 'object' || !reconnect)) {
+    throw makeError(
+      X`ocapn-noise: reconnect must be a boolean or an options object, got ${q(reconnect)}`,
+    );
+  }
   const {
     backoffInitialMs = DEFAULT_RECONNECT_BACKOFF_INITIAL_MS,
     hardTimeoutMs = DEFAULT_SESSION_HARD_TIMEOUT_MS,
   } = reconnect === true ? {} : reconnect;
   const {
-    backoffMaxMs = Math.min(DEFAULT_RECONNECT_BACKOFF_MAX_MS, hardTimeoutMs),
+    backoffMaxMs = Math.max(
+      backoffInitialMs,
+      Math.min(DEFAULT_RECONNECT_BACKOFF_MAX_MS, hardTimeoutMs),
+    ),
   } = reconnect === true ? {} : reconnect;
   for (const [name, value] of /** @type {const} */ ([
     ['backoffInitialMs', backoffInitialMs],
@@ -471,6 +478,16 @@ export const makeOcapnNoiseNetwork = ({
    * @type {Map<KeyIdHex, Set<() => void>>}
    */
   const inFlightByLocalKey = new Map();
+  /**
+   * The one unproven inbound handshake each resumable peer may hold.
+   * A SYN for a peer with a resumable session skips the cheap `adopted`
+   * refusal, since only its hello can say whether it resumes, so a
+   * recorded SYN replayed for such a peer would otherwise fill the whole
+   * `inFlightByLocalKey` budget. A newer attempt evicts the older one, so
+   * a replay cannot hold the slot against the peer's genuine redial.
+   * @type {Map<KeyIdHex, () => void>}
+   */
+  const resumeAttempts = new Map();
   /** @type {Map<KeyIdHex, { resolve: (s: OcapnNoiseSession) => void, reject: (e: Error) => void }[]>} */
   const waiters = new Map();
   /** @type {Map<KeyIdHex, string[]>} */
@@ -1270,10 +1287,15 @@ export const makeOcapnNoiseNetwork = ({
         if (reconnectingSince === undefined) {
           reconnectingSince = Date.now();
           const { hardTimeoutMs } = reconnectSettings;
+          lastDialError = undefined;
           hardTimer = setTimeout(() => {
             fail(
               makeError(
                 X`ocapn-noise: session aborted; not reconnected within ${q(hardTimeoutMs)}ms`,
+                undefined,
+                lastDialError === undefined
+                  ? undefined
+                  : { cause: lastDialError },
               ),
             );
           }, hardTimeoutMs);
@@ -1300,6 +1322,8 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       let backoffMs = 0;
+      /** @type {Error | undefined} */
+      let lastDialError;
 
       /** @param {number} delayMs */
       const scheduleRedial = delayMs => {
@@ -1327,8 +1351,9 @@ export const makeOcapnNoiseNetwork = ({
             nextEpoch,
             receivedFrames,
           );
-        } catch (_error) {
+        } catch (error) {
           if (closed || current !== undefined) return;
+          lastDialError = /** @type {Error} */ (error);
           const delayMs = backoffMs;
           backoffMs = Math.min(backoffMs * 2, reconnectSettings.backoffMaxMs);
           scheduleRedial(delayMs);
@@ -1996,6 +2021,8 @@ export const makeOcapnNoiseNetwork = ({
     let registeredPeerId;
     /** @type {(() => void) | undefined} */
     let releaseInbound;
+    /** @type {(() => void) | undefined} */
+    let releaseResumeAttempt;
     /** @type {(reason: Error) => void} */
     let rejectEvicted = () => {};
     /** @type {Promise<never>} */
@@ -2028,13 +2055,14 @@ export const makeOcapnNoiseNetwork = ({
       // unproven handshake (closing its stream and failing its pending
       // `exchangeIdentity`) rather than refusing this one. The slot is
       // released in `finally`.
-      releaseInbound = admitInbound(intendedKeyId, () => {
+      const evict = () => {
         rejectEvicted(
           Error('ocapn-noise: evicted by newer inbound handshakes'),
         );
         Promise.resolve(stream.writer.return(undefined)).catch(() => {});
         Promise.resolve(stream.reader.return(undefined)).catch(() => {});
-      });
+      };
+      releaseInbound = admitInbound(intendedKeyId, evict);
 
       const noise = makeOcapnSessionCryptography({
         wasmModule,
@@ -2081,6 +2109,16 @@ export const makeOcapnNoiseNetwork = ({
       ) {
         await stream.writer.return(undefined);
         return;
+      }
+      if (resumable) {
+        const older = resumeAttempts.get(initiatorKeyHex);
+        if (older) older();
+        resumeAttempts.set(initiatorKeyHex, evict);
+        releaseResumeAttempt = () => {
+          if (resumeAttempts.get(initiatorKeyHex) === evict) {
+            resumeAttempts.delete(initiatorKeyHex);
+          }
+        };
       }
 
       // Register this inbound against the peer now, before we answer, so
@@ -2130,6 +2168,11 @@ export const makeOcapnNoiseNetwork = ({
         ),
         evicted,
       ]);
+      // Proven: a replay can no longer evict this handshake.
+      if (releaseResumeAttempt) {
+        releaseResumeAttempt();
+        releaseResumeAttempt = undefined;
+      }
       /** @type {Instance} */
       const instance = {
         stream,
@@ -2272,6 +2315,7 @@ export const makeOcapnNoiseNetwork = ({
       }
     } finally {
       if (releaseInbound) releaseInbound();
+      if (releaseResumeAttempt) releaseResumeAttempt();
     }
   };
 
@@ -2499,6 +2543,7 @@ export const makeOcapnNoiseNetwork = ({
     settleDeadlines.clear();
     outboundInFlight.clear();
     inFlightByLocalKey.clear();
+    resumeAttempts.clear();
     // Close any candidates that recorded themselves between
     // `runInitiator` resolution and `decrementAndSettle`. After this
     // sweep, future `recordCandidate` calls short-circuit on
