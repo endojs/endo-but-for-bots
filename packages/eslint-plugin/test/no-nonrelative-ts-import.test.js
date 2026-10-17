@@ -10,19 +10,20 @@ const tester = new RuleTester({
 
 tester.run('no-nonrelative-ts-import', rule, {
   valid: [
-    // Relative `.ts` imports are the supported pattern.
     "import { x } from './foo.ts';",
     "import { x } from '../sib/foo.ts';",
     "import type { T } from './types.ts';",
     "export { x } from './foo.ts';",
     "export * from './foo.ts';",
     "const p = import('./dyn.ts');",
-    // Non-relative imports without a `.ts` extension are fine.
     "import { x } from '@endo/foo';",
     "import { x } from '@endo/foo/sub.js';",
     "import { x } from 'pkg';",
     // A `.ts` substring that is not the extension must not trip the rule.
     "import { x } from '@endo/foo.ts-utils';",
+    // Declaration files are erased with the import type that names them.
+    "import type { T } from 'pkg/types.d.ts';",
+    'const p = import(`./dyn.ts`);',
   ],
   invalid: [
     {
@@ -47,6 +48,10 @@ tester.run('no-nonrelative-ts-import', rule, {
     },
     {
       code: "const p = import('pkg/dyn.ts');",
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    {
+      code: 'const p = import(`pkg/dyn.ts`);',
       errors: [{ messageId: 'nonRelativeTs' }],
     },
   ],

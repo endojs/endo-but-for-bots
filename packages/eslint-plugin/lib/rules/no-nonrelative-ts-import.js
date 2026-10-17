@@ -1,17 +1,13 @@
 /**
- * Disallow `.ts` (or `.mts`/`.cts`) import/export specifiers on non-relative
- * paths. Node.js refuses to resolve `.ts` specifiers under `node_modules`, and
- * Endo packages publish `.js` (types erased at pack time), so a bare/package
- * `.ts` specifier breaks for consumers — and for this repo once the dependency
- * is consumed as a published package. `.ts` may only be imported by relative
- * path within the same package (or another workspace package in this repo);
- * reach other packages through their published entrypoint. See
+ * Disallow `.ts` (or `.mts`/`.cts`) import specifiers on non-relative paths,
+ * since Node.js refuses to strip types under `node_modules`. See
  * `docs/typescript.md`.
  */
 
 'use strict';
 
 const TS_EXTENSION = /\.[mc]?ts$/;
+const DECLARATION_EXTENSION = /\.d\.[mc]?ts$/;
 
 const isRelative = specifier =>
   specifier.startsWith('./') || specifier.startsWith('../');
@@ -28,16 +24,28 @@ module.exports = {
     schema: [],
     messages: {
       nonRelativeTs:
-        "Non-relative '.ts' import specifier '{{specifier}}'. Node.js cannot resolve '.ts' under node_modules; use a relative specifier within the repo, or import the package's published entrypoint.",
+        "Non-relative '.ts' import specifier '{{specifier}}'. Node.js cannot resolve '.ts' under node_modules; use a relative specifier within the same package, or import the package's published entrypoint.",
     },
   },
 
   create(context) {
+    const specifierOf = sourceNode => {
+      if (!sourceNode) return undefined;
+      if (sourceNode.type === 'Literal') return sourceNode.value;
+      if (
+        sourceNode.type === 'TemplateLiteral' &&
+        sourceNode.expressions.length === 0
+      ) {
+        return sourceNode.quasis[0].value.cooked;
+      }
+      return undefined;
+    };
+
     const check = sourceNode => {
-      if (!sourceNode || sourceNode.type !== 'Literal') return;
-      const { value } = sourceNode;
+      const value = specifierOf(sourceNode);
       if (typeof value !== 'string') return;
       if (!TS_EXTENSION.test(value)) return;
+      if (DECLARATION_EXTENSION.test(value)) return;
       if (isRelative(value)) return;
       context.report({
         node: sourceNode,
@@ -47,13 +55,9 @@ module.exports = {
     };
 
     return {
-      // import ... from '...'; and import type ... from '...';
       ImportDeclaration: node => check(node.source),
-      // export ... from '...'; and export type ... from '...';
       ExportNamedDeclaration: node => check(node.source),
-      // export * from '...';
       ExportAllDeclaration: node => check(node.source),
-      // dynamic import('...') with a static string argument
       ImportExpression: node => check(node.source),
     };
   },
