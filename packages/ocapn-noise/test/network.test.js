@@ -473,13 +473,10 @@ test('replayed genuine SYN cannot displace the peer unclaimed session', async t 
 });
 
 test('a key-compromise-impersonation SYN never graduates', async t => {
-  // IK message 1 authenticates its sender only at Noise level 1: anyone
-  // holding the responder's static key can compute `ss` for any claimed
-  // initiator and forge a SYN the responder accepts. The forger still
-  // lacks the claimed initiator's static key, so it cannot compute `se`,
-  // derive the transport keys, or answer `op:start-session`. The
-  // responder must not treat the initiator as authenticated until that
-  // answer decrypts and verifies.
+  // IK message 1 authenticates the initiator only weakly (Noise §7.7
+  // source property 1): a holder of the responder's static key can forge
+  // a SYN for any claimed initiator, so the responder must not graduate
+  // that initiator until its `op:start-session` verifies.
   t.timeout(10_000);
   const handshakeTimeoutMs = 500;
   const fabric = makeFabricForTest(t);
