@@ -54,6 +54,7 @@ import {
   SYNACK_LENGTH,
 } from './bindings.js';
 import { compareUint8Arrays } from './bytewise-compare.js';
+import { initiatesOnCrossedHellos } from './crossed-hellos.js';
 
 const CAPTP_VERSION = '1.0';
 
@@ -1046,12 +1047,16 @@ export const makeOcapnNoiseNetwork = ({
     onClose,
   }) => {
     let closed = false;
-    // When both sides redial at once, the side whose ephemeral is the
-    // greater (as a 32-byte big-endian integer) initiates the new
-    // transport instance and the lesser responds.
-    const initiatesOnCrossedHellos =
-      compareUint8Arrays(localEphemeral, peerEphemeral) > 0;
-    let dialing = false;
+    const winsCrossedHellos = initiatesOnCrossedHellos(
+      localEphemeral,
+      peerEphemeral,
+      isInitiator,
+    );
+    // Redials in flight. Each counts from its start until the turn in
+    // which its result is attached or discarded, with no await in
+    // between, so no peer dial is accepted after ours lands but before it
+    // attaches.
+    let dialing = 0;
     const reconnectSettings =
       heartbeatSettings !== undefined &&
       hasFeature(peerFeatures, FEATURE_RECONNECT)
@@ -1330,7 +1335,7 @@ export const makeOcapnNoiseNetwork = ({
         const nextEpoch = epoch + 1n;
         /** @type {Awaited<ReturnType<Reconnector['dial']>>} */
         let dialed;
-        dialing = true;
+        dialing += 1;
         try {
           dialed = await /** @type {Reconnector} */ (reconnector).dial(
             nextEpoch,
@@ -1343,17 +1348,20 @@ export const makeOcapnNoiseNetwork = ({
           scheduleRedial(delayMs);
           return;
         } finally {
-          dialing = false;
+          dialing -= 1;
         }
         const { instance, peerHello } = dialed;
-        // `current !== undefined`: crossed hellos, the peer's dial reached
-        // us first and we took it, so this one is the instance the
-        // tiebreaker discards. `epoch + 1n !== nextEpoch`: the session
-        // moved to a later epoch while we dialed and lost that instance
-        // too, so dial again for the epoch after it.
+        // The peer's dial won the crossed hellos, or the session moved past
+        // this epoch while we dialed. In the second case, if that later
+        // instance is gone too, dial again, backing off as after a failure
+        // so that a peer that keeps overtaking us cannot spin the loop.
         if (closed || current !== undefined || epoch + 1n !== nextEpoch) {
           closeInstance(instance);
-          if (!closed && current === undefined) scheduleRedial(0);
+          if (!closed && current === undefined) {
+            const delayMs = backoffMs;
+            backoffMs = Math.min(backoffMs * 2, reconnectSettings.backoffMaxMs);
+            scheduleRedial(delayMs);
+          }
           return;
         }
         if (
@@ -1664,7 +1672,7 @@ export const makeOcapnNoiseNetwork = ({
           sessionToken,
           getEpoch: () => epoch,
           isAttached: () => current !== undefined,
-          prefersOwnDial: () => dialing && initiatesOnCrossedHellos,
+          prefersOwnDial: () => dialing > 0 && winsCrossedHellos,
           getReceivedFrames: () => receivedFrames,
           attach,
           abort: fail,
@@ -2173,14 +2181,13 @@ export const makeOcapnNoiseNetwork = ({
             await stream.writer.return(undefined);
             return;
           }
-          // A dial for an epoch the session has already reached is a
-          // straggler, and a dial that loses the crossed-hellos tiebreaker
-          // to our own is dropped too: close it without an answer, which
-          // the dialer takes as an ordinary failed attempt. A later epoch
-          // is taken as is, so a dialer that missed our answer to an
-          // earlier reconnect still converges. The epoch only orders
-          // dials; the session token and the handshake-authenticated
-          // initiator key checked above authorize the resume.
+          // Close the dial without an answer, which the dialer takes as an
+          // ordinary failed attempt. A later epoch is taken as is, so a
+          // dialer that missed our answer to an earlier reconnect still
+          // converges. The epoch only orders dials; the session token and
+          // the handshake-authenticated initiator key checked above
+          // authorize the resume, so a peer that jumps the epoch far
+          // ahead can stall only the session it authenticated into.
           if (
             peerHello.epoch <= resumable.getEpoch() ||
             resumable.prefersOwnDial()

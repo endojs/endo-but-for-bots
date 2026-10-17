@@ -32,6 +32,7 @@ export const makeLossyTransport = transport => {
    *   outbound: boolean,
    *   writes: number,
    *   firstWrite: Uint8Array | undefined,
+   *   writesAtReturn: number | undefined,
    * }} StreamState
    */
   /** @type {Set<StreamState>} */
@@ -58,6 +59,7 @@ export const makeLossyTransport = transport => {
       outbound,
       writes: 0,
       firstWrite: undefined,
+      writesAtReturn: undefined,
     };
     live.add(state);
     all.push(state);
@@ -90,6 +92,9 @@ export const makeLossyTransport = transport => {
       },
       return: value => {
         state.closed = true;
+        if (state.writesAtReturn === undefined) {
+          state.writesAtReturn = state.writes;
+        }
         return stream.writer.return(value);
       },
       throw: error => stream.writer.throw(error),
@@ -137,7 +142,12 @@ export const makeLossyTransport = transport => {
     refuse: refuse => {
       refusing = refuse;
     },
-    /** @param {boolean} refuse Refuse (or again allow) outbound connections only. */
+    /**
+     * Refuse (or again allow) outbound connections only, so the peer's
+     * dials still arrive.
+     *
+     * @param {boolean} refuse
+     */
     refuseOutbound: refuse => {
       refusingOutbound = refuse;
     },
@@ -173,16 +183,19 @@ export const makeLossyTransport = transport => {
       ).length,
     /**
      * Every stream this side has dialed or accepted, in order: its
-     * direction, how many chunks this side wrote to it, and the first
-     * (an initiator's SYN or a responder's SYNACK, which carry the
-     * handshake ephemerals in the clear).
+     * direction, how many chunks this side wrote to it, the first (an
+     * initiator's SYN or a responder's SYNACK, which carry the handshake
+     * ephemerals in the clear), whether this side closed it, and how many
+     * chunks it had written when it first ended its writer (`undefined`
+     * if it never did).
      */
     getStreams: () =>
-      all.map(({ outbound, writes, firstWrite, closed }) => ({
+      all.map(({ outbound, writes, firstWrite, closed, writesAtReturn }) => ({
         outbound,
         writes,
         firstWrite,
         closed,
+        writesAtReturn,
       })),
     /** How many connections have been attempted through the transport. */
     getConnects: () => connects,

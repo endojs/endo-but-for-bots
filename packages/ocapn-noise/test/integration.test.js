@@ -177,9 +177,14 @@ test('a CapTP session rides out a lost transport instance', async t => {
   /** @type {ReturnType<typeof makeLossyTransport>} */ (injector).sever();
   t.is(await E(greeter).hello('Carol'), 'hello, Carol');
   t.is(await E(greeter).hello('Dave'), 'hello, Dave');
-  // The partitioned instance carries nothing, so these answers rode a
-  // new one.
   t.is(calls, 3);
+  // Either side may have redialed, but a stream opened after the
+  // partition is up and carried the answers.
+  t.true(
+    /** @type {ReturnType<typeof makeLossyTransport>} */ (
+      injector
+    ).getOpenStreams() >= 1,
+  );
 });
 
 test('three-party handoff: A forwards a cap from B into C, and C invokes it', async t => {
