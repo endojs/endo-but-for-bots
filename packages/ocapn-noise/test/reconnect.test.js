@@ -299,6 +299,46 @@ for (const [codecName, codec] of /** @type {const} */ ([
   });
 }
 
+test('the winner of crossed hellos stops deferring to a dial of its own that hangs', async t => {
+  const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
+    t,
+    cborCodec,
+  );
+  // The greater side's dials neither fail nor complete, as in a one-way
+  // partition; only the lesser side's dials have a path.
+  const { greater } = byEphemeral(injector, injectorB);
+  const connectsBefore = greater.getConnects();
+  greater.holdConnects(true);
+  injector.sever();
+  injectorB.sever();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await eventually(() => greater.getConnects() > connectsBefore);
+
+  // The greater side drops the lesser side's dials while its own is
+  // young, then takes one once it has waited a session timeout.
+  const reconnectedBy = Date.now() + heartbeat.sessionTimeoutMs * 4;
+  await eventually(
+    () =>
+      sessionA.getLiveness().epoch === 1n &&
+      sessionB.getLiveness().epoch === 1n &&
+      !sessionA.getLiveness().reconnecting &&
+      !sessionB.getLiveness().reconnecting,
+  );
+  t.true(Date.now() < reconnectedBy);
+  t.true(droppedDials(greater) >= 1);
+  t.is(greater.getOpenStreams(false), 1);
+
+  // The hung dial lands late and is dropped for an epoch already reached.
+  greater.holdConnects(false);
+  await delay(heartbeat.intervalMs * 4);
+  t.is(sessionA.getLiveness().epoch, 1n);
+  t.is(sessionB.getLiveness().epoch, 1n);
+  t.deepEqual(await readBytes(sessionB, 1), [1]);
+  await sessionA.writer.next(Uint8Array.of(2));
+  t.deepEqual(await readBytes(sessionB, 1), [2]);
+  sessionA.close();
+});
+
 test('the crossed-hellos tiebreaker picks exactly one side, even on a tie', t => {
   const low = new Uint8Array(32).fill(1);
   const high = new Uint8Array(32).fill(2);

@@ -34,7 +34,12 @@ Deviations from the design as written:
   side with the greater ephemeral keeps its own dial, which is the same
   outcome as the smaller side being responder. Equal ephemerals, which
   only a peer echoing ours could produce, go to the side that opened the
-  session. P3 stays open for review.
+  session. The winner drops the peer's dial only while its own has been
+  in flight for less than `sessionTimeoutMs`; after that it takes the
+  peer's dial, so an outbound dial that hangs (a one-way partition where
+  connect neither fails nor completes) delays recovery by at most one
+  session timeout rather than until `hardTimeoutMs`. P3 stays open for
+  review.
 - **Either side redials (§ 3).** Both sides redial on loss, rather than
   only the side that opened the session.
 
