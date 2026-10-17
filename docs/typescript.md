@@ -4,8 +4,11 @@ This repo uses a "type-stripping" approach to TypeScript. Source files are
 authored in `.ts` with only erasable type syntax (no `enum`, `namespace`,
 `const enum`, or parameter properties). This lets the same source work:
 
-- **At development time** — imported directly as `.ts` (via a type-stripping
-  loader or Node's built-in `--experimental-strip-types`)
+- **At development time** — imported directly as `.ts`, stripped by Node's
+  built-in type stripping (on by default from Node.js 22.18 and 23.6; earlier
+  22.x releases need `--experimental-strip-types`). `@endo/cli` and
+  `@endo/daemon` instead register the `amaro/strip` hook for themselves and
+  the processes they fork.
 - **At publish time** — converted to `.js` by stripping type annotations
 
 ## Authoring `.ts` source

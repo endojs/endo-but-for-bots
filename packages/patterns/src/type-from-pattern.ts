@@ -426,10 +426,9 @@ export type TypeFromInterfaceGuard<G> =
 // - matches: type predicate for narrowing in if-blocks
 // - mustMatch: asserts signature for narrowing after call
 //
-// The runtime implementations live in patternMatchers.ts (which uses
-// @ts-nocheck and cannot be directly type-checked) and are re-exported
-// by types-index.js.  These declarations overlay the runtime types so
-// that consumers get type-narrowing for free.
+// The runtime implementations live in patternMatchers.ts and are
+// re-exported by types-index.js.  These declarations overlay the runtime
+// types so that consumers get type-narrowing for free.
 //
 // Invariant: each declared type must be a subtype of the runtime
 // implementation's actual type.  This is verified in types-index.js via
