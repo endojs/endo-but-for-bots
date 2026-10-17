@@ -14,6 +14,7 @@ import { Far } from '@endo/marshal';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeIrohNetLayer } from '../index.js';
 
 let iroh;
@@ -39,18 +40,21 @@ const makeIrohPeer = async ({ name, locator = new Map() }) => {
   const netlayerRef = {};
   const client = await makeOcapn({
     codec: syrupCodec,
-    network: (handlers, logger) =>
-      makeIrohNetLayer({
-        handlers,
-        logger,
-        iroh,
-        // Same-host run: publish loopback direct addresses so the dial
-        // succeeds without waiting for discovery to propagate.
-        publishPrivateAddresses: true,
-      }).then(netlayer => {
-        netlayerRef.netlayer = netlayer;
-        return netlayer;
-      }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeIrohNetLayer({
+          handlers,
+          logger,
+          iroh,
+          // Same-host run: publish loopback direct addresses so the dial
+          // succeeds without waiting for discovery to propagate.
+          publishPrivateAddresses: true,
+        }).then(netlayer => {
+          netlayerRef.netlayer = netlayer;
+          return netlayer;
+        }),
+      { codec: syrupCodec },
+    ),
     debugLabel: name,
     locator,
     debugMode: true,

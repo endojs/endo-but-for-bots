@@ -4,6 +4,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { fetchRemote, makeTestOcapn, test } from './_util.js';
 import { makeWebSocketNetLayer } from '../src/netlayers/websocket.js';
+import { makeStartSessionNetwork } from '../src/netlayers/start-session.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { syrupCodec } from '../src/syrup/index.js';
 
@@ -22,11 +23,15 @@ import { syrupCodec } from '../src/syrup/index.js';
  *
  * @param {NetlayerRef<Awaited<ReturnType<typeof makeWebSocketNetLayer>>>} netlayerRef
  */
-const captureWebSocketNetLayer = netlayerRef => (handlers, logger) =>
-  makeWebSocketNetLayer({ handlers, logger }).then(netlayer => {
-    netlayerRef.netlayer = netlayer;
-    return netlayer;
-  });
+const captureWebSocketNetLayer = netlayerRef =>
+  makeStartSessionNetwork(
+    (handlers, logger) =>
+      makeWebSocketNetLayer({ handlers, logger }).then(netlayer => {
+        netlayerRef.netlayer = netlayer;
+        return netlayer;
+      }),
+    { codec: syrupCodec },
+  );
 
 test('websocket netlayer establishes session and delivers messages', async t => {
   const objectTable = new Map();

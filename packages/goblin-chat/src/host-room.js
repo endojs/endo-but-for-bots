@@ -36,6 +36,7 @@ import { makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeChatroom } from './backend.js';
 import { encodeBase64Url } from './base64url.js';
 
@@ -277,19 +278,24 @@ export const hostRoom = async ({
     codec: syrupCodec,
     locator,
     verbose: true,
-    ...(captpVersion ? { captpVersion } : {}),
     logger: makeForwardingLogger('host-client', logSink),
-    network: handlers =>
-      makeWebSocketNetLayer({
-        handlers,
-        logger: makeForwardingLogger('host-netlayer', logSink),
-        specifiedHostname: bindHostname,
-        specifiedPort: bindPort,
-        ...(publicUrl ? { specifiedUrl: publicUrl } : {}),
-      }).then(netlayer => {
-        netlayerRef.netlayer = netlayer;
-        return netlayer;
-      }),
+    network: makeStartSessionNetwork(
+      handlers =>
+        makeWebSocketNetLayer({
+          handlers,
+          logger: makeForwardingLogger('host-netlayer', logSink),
+          specifiedHostname: bindHostname,
+          specifiedPort: bindPort,
+          ...(publicUrl ? { specifiedUrl: publicUrl } : {}),
+        }).then(netlayer => {
+          netlayerRef.netlayer = netlayer;
+          return netlayer;
+        }),
+      {
+        codec: syrupCodec,
+        ...(captpVersion ? { captpVersion } : {}),
+      },
+    ),
   });
   locator.set(swissStr, chatroom);
 

@@ -11,6 +11,7 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makeDurableNetLayer } from '../src/durable-netlayer.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
@@ -34,6 +35,7 @@ const COUNTER_SOURCE = `
  * @param {string} statePath
  * @param {number} port 0 to pick a port; a restarted daemon must pin
  *   its predecessor's port so the peer's reconnect finds it
+ * @param {Record<string, (description?: unknown) => object>} [resources]
  */
 const makeDaemon = (statePath, port, resources = {}) =>
   makeThixotropeDaemon({
@@ -60,14 +62,17 @@ const makeDurableClient = label =>
   makeTestOcapn({
     codec: syrupCodec,
     debugLabel: label,
-    network: (handlers, logger) =>
-      makeDurableNetLayer({
-        handlers,
-        logger,
-        makeBaseNetlayer: powers =>
-          makeTcpNetLayer({ ...powers, specifiedDesignator: label }),
-        reconnectDelayMs: 25,
-      }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeDurableNetLayer({
+          handlers,
+          logger,
+          makeBaseNetlayer: powers =>
+            makeTcpNetLayer({ ...powers, specifiedDesignator: label }),
+          reconnectDelayMs: 25,
+        }),
+      { codec: syrupCodec },
+    ),
   });
 
 test.serial('live remote references survive a daemon restart', async t => {

@@ -16,6 +16,7 @@ import baseTest from '@endo/ses-ava/test.js';
 import { E } from '@endo/eventual-send';
 import { netListenAllowed } from './_net-permission.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
+import { makeStartSessionNetwork } from '../src/netlayers/start-session.js';
 import { makeOcapn } from '../src/client/index.js';
 import { syrupCodec } from '../src/syrup/index.js';
 import { locationToLocationId } from '../src/client/util.js';
@@ -259,23 +260,27 @@ export const makeTestClient = async ({
   const locator = makeDefaultSwissnumTable
     ? makeDefaultSwissnumTable()
     : new Map();
+  const { captpVersion, ...clientOptionsRest } = clientOptions ?? {};
   const client = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel,
     locator,
     verbose,
     debugMode: true,
-    ...clientOptions,
-    network: (handlers, logger) =>
-      makeTcpNetLayer({
-        handlers,
-        logger,
-        specifiedDesignator: debugLabel,
-        writeLatencyMs,
-      }).then(netlayer => {
-        netlayerRef.netlayer = netlayer;
-        return netlayer;
-      }),
+    ...clientOptionsRest,
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeTcpNetLayer({
+          handlers,
+          logger,
+          specifiedDesignator: debugLabel,
+          writeLatencyMs,
+        }).then(netlayer => {
+          netlayerRef.netlayer = netlayer;
+          return netlayer;
+        }),
+      { codec: syrupCodec, captpVersion },
+    ),
   });
   const testClient = /** @type {Client<TestBootstrap>} */ (
     /** @type {unknown} */ (client)

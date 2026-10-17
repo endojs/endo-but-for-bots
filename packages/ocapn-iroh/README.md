@@ -21,10 +21,9 @@ because plain websockets authenticate nothing).
   OCapN `op:start-session`).
 - **Framing** — netstring-framed OCapN messages, in the codec the
   embedding `makeOcapn` instance was constructed with.
-- **Sessions** — the standard OCapN `op:start-session` handshake, run by
-  the OCapN client over this netlayer; crossed hellos are resolved by the
-  client's session-key comparison, as with the other connect-style
-  netlayers.
+- **Sessions** — the standard OCapN `op:start-session` handshake,
+  supplied by `makeStartSessionNetwork`
+  (`@endo/ocapn/netlayer/start-session`).
 - **Keep-alive** — a QUIC datagram heartbeat keeps quiet CapTP sessions
   alive across iroh's ~2 minute idle timeout and presumes the peer dead
   after two missed beats (mirroring the `@endo/daemon` iroh transport).
@@ -55,10 +54,14 @@ identifies sessions by the full location URI (designator *and* hints).
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeIrohNetLayer } from '@endo/ocapn-iroh';
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 
 const client = await makeOcapn({
   codec: syrupCodec,
-  network: (handlers, logger) => makeIrohNetLayer({ handlers, logger }),
+  network: makeStartSessionNetwork(
+    (handlers, logger) => makeIrohNetLayer({ handlers, logger }),
+    { codec: syrupCodec },
+  ),
   locator: new Map([['Greeter', greeter]]),
 });
 ```

@@ -10,6 +10,7 @@ import { E } from '@endo/eventual-send';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makeDurableNetLayer } from '../src/durable-netlayer.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
@@ -88,13 +89,16 @@ const makeDurableClient = async (label, baseFactory) => {
   return makeTestOcapn({
     codec: syrupCodec,
     debugLabel: label,
-    network: (handlers, logger) =>
-      makeDurableNetLayer({
-        handlers,
-        logger,
-        makeBaseNetlayer: baseFactory,
-        reconnectDelayMs: 25,
-      }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeDurableNetLayer({
+          handlers,
+          logger,
+          makeBaseNetlayer: baseFactory,
+          reconnectDelayMs: 25,
+        }),
+      { codec: syrupCodec },
+    ),
   });
 };
 

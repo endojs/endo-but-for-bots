@@ -25,6 +25,7 @@ import { makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
 import { makeChatroom } from '../src/backend.js';
 import { runChatParticipant } from '../src/interop-driver.js';
 
@@ -49,13 +50,15 @@ test('endo OCapN client interops with the JS goblin-chat backend', async t => {
   const hostClient = await makeOcapn({
     codec: syrupCodec,
     debugLabel: 'js-host',
-    captpVersion: CAPTP_VERSION,
     locator: hostLocator,
-    network: (handlers, logger) =>
-      makeWebSocketNetLayer({ handlers, logger }).then(netlayer => {
-        hostNetlayerRef.netlayer = netlayer;
-        return netlayer;
-      }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeWebSocketNetLayer({ handlers, logger }).then(netlayer => {
+          hostNetlayerRef.netlayer = netlayer;
+          return netlayer;
+        }),
+      { codec: syrupCodec, captpVersion: CAPTP_VERSION },
+    ),
   });
   if (!hostNetlayerRef.netlayer) {
     throw Error('makeWebSocketNetLayer did not resolve a netlayer');
@@ -68,8 +71,10 @@ test('endo OCapN client interops with the JS goblin-chat backend', async t => {
   const remoteClient = await makeOcapn({
     codec: syrupCodec,
     debugLabel: 'endo-remote',
-    captpVersion: CAPTP_VERSION,
-    network: (handlers, logger) => makeWebSocketNetLayer({ handlers, logger }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) => makeWebSocketNetLayer({ handlers, logger }),
+      { codec: syrupCodec, captpVersion: CAPTP_VERSION },
+    ),
   });
 
   try {

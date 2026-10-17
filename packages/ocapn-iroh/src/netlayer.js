@@ -37,9 +37,9 @@ import {
  * Wire shape: one bidirectional QUIC stream per connection, negotiated
  * under the `ocapn/netstring/0` ALPN, carrying netstring-framed OCapN
  * messages. Session establishment is the standard OCapN
- * `op:start-session` handshake, run by the OCapN client over this
- * netlayer; crossed hellos are resolved by the client's session-key
- * comparison, as with the other connect-style netlayers.
+ * `op:start-session` handshake, run by the `makeStartSessionNetwork`
+ * adapter (`@endo/ocapn/netlayer/start-session`) that wraps this
+ * netlayer. The factory receives that adapter's `NetlayerHandlers`.
  */
 
 const ALPN_STRING = 'ocapn/netstring/0';

@@ -7,10 +7,9 @@ import { makePipe } from '@endo/stream';
 import { makeSyrupReader } from '@endo/syrup-frame/reader.js';
 
 import { locationToLocationId } from '../client/util.js';
-import { sendHandshake } from '../client/handshake.js';
 
 /**
- * @import { Connection, Logger, NetLayer, NetlayerHandlers, SelfIdentity, SocketOperations } from '../client/types.js'
+ * @import { Connection, Logger, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.js'
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { Reader, Writer } from '@endo/stream'
  */
@@ -175,7 +174,7 @@ const makeSyrupDeframer = (logger, onFrame) => {
  * @typedef {object} TcpTestOnlyNetLayerDebug
  * @property {(location: OcapnLocation) => ConnectionSocketPair} establishConnection
  *
- * @typedef {NetLayer & import('../client/types.js').OcapnNetwork & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
+ * @typedef {NetLayer & { networkId: string, _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
  */
 
 /**
@@ -354,7 +353,7 @@ export const makeTcpNetLayer = async ({
     const socket = net.createConnection({ host, port: remotePort });
 
     const socketOps = makeFramedSocketOperations(socket);
-    // eslint-disable-next-line no-use-before-define
+
     const connection = handlers.makeConnection(netlayer, true, socketOps);
 
     setupSocketHandlers(socket, connection, () => {
@@ -422,24 +421,11 @@ export const makeTcpNetLayer = async ({
   const netlayer = harden({
     // OcapnNetwork interface
     networkId: 'tcp-testing-only',
-    // NetLayer interface (legacy, retained during migration)
+    // NetLayer interface, composed by `makeStartSessionNetwork`.
     location: localLocation,
     locationId: locationToLocationId(localLocation),
     connect: lookupOrConnect,
     shutdown,
-    /**
-     * The tcp-testing-only network uses the standard op:start-session
-     * handshake.  This method delegates to the core sendHandshake,
-     * making the handshake a network concern rather than OCapN core.
-     *
-     * @param {Connection} connection
-     * @param {string} captpVersion
-     * @param {SelfIdentity} selfIdentity
-     * @param {import('../codec-interface.js').OcapnCodec} codec
-     */
-    sendSessionHandshake: (connection, captpVersion, selfIdentity, codec) => {
-      sendHandshake(connection, selfIdentity, captpVersion, codec);
-    },
     _debug: {
       establishConnection: internalEstablishConnection,
     },

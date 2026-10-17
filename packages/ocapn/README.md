@@ -69,6 +69,28 @@ single concrete pluggable that `makeOcapn` runs against. Import
 `syrupCodec` from `@endo/ocapn/syrup` or `cborCodec` from `@endo/ocapn/cbor`,
 and pair it with a network whose `codec` matches.
 
+The network must establish sessions itself, as `@endo/ocapn-noise` does.
+A connect-style netlayer (`@endo/ocapn/netlayer/tcp-testing`,
+`@endo/ocapn/netlayer/ws`, `@endo/ocapn-iroh`) does not, so wrap it with the
+`op:start-session` adapter from `@endo/ocapn/netlayer/start-session`:
+
+```js
+import { makeStartSessionNetwork } from '@endo/ocapn/netlayer/start-session';
+
+const ocapn = await makeOcapn({
+  codec: syrupCodec,
+  network: makeStartSessionNetwork(makeNetlayer, {
+    codec: syrupCodec,
+    captpVersion: '1.0',
+  }),
+  locator,
+});
+```
+
+The same subpath exports `makeSelfIdentityFromPrivateKey(codec, location,
+privateKeyBytes)`, which rebuilds a session's self identity from a persisted
+private key so a durable netlayer can resume a session across restarts.
+
 ## Status
 
 This package is a work in progress and is not yet published to npm.

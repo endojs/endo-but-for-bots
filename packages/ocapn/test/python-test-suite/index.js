@@ -6,6 +6,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { getSelectorName } from '../../src/selector.js';
 import { makeTcpNetLayer } from '../../src/netlayers/tcp-test-only.js';
+import { makeStartSessionNetwork } from '../../src/netlayers/start-session.js';
 import { makeOcapn } from '../../src/client/index.js';
 import { syrupCodec } from '../../src/syrup/index.js';
 import { startGcScheduler } from '../_gc-util.js';
@@ -162,17 +163,20 @@ const start = async () => {
     codec: syrupCodec,
     verbose: true,
     locator,
-    network: (handlers, logger) =>
-      makeTcpNetLayer({
-        handlers,
-        logger,
-        specifiedPort: 22_046,
-        // The Python `ocapn-test-suite` `testing_only_tcp` netlayer
-        // writes a raw syrup record per `sendall` with no length prefix.
-        // Opt out of the JS netlayer's default `'syrup'` framing to
-        // interoperate with that suite.
-        framing: 'none',
-      }),
+    network: makeStartSessionNetwork(
+      (handlers, logger) =>
+        makeTcpNetLayer({
+          handlers,
+          logger,
+          specifiedPort: 22_046,
+          // The Python `ocapn-test-suite` `testing_only_tcp` netlayer
+          // writes a raw syrup record per `sendall` with no length prefix.
+          // Opt out of the JS netlayer's default `'syrup'` framing to
+          // interoperate with that suite.
+          framing: 'none',
+        }),
+      { codec: syrupCodec },
+    ),
   });
   const testObjectTable = makeTestObjectTable(ocapn);
   for (const [swissStr, object] of testObjectTable.entries()) {

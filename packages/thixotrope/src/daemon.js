@@ -5,6 +5,7 @@ import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
+import { makeSelfIdentityFromPrivateKey } from '@endo/ocapn/netlayer/start-session';
 import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
@@ -130,8 +131,7 @@ const buildDaemon = async ({
   verbose = false,
 }) => {
   const logError = verbose
-    ? // eslint-disable-next-line no-console
-      (...args) => console.error('thixotrope daemon:', ...args)
+    ? (...args) => console.error('thixotrope daemon:', ...args)
     : () => {};
 
   const cryptography = makeCryptography(codec);
@@ -223,6 +223,13 @@ const buildDaemon = async ({
   // These are outgoing answer positions, not restored incoming resolver obligations.
   // Settled cached answers and imports do not independently pin their vats.
   const pendingEndpointAnswers = new Set();
+  const endpointLocation = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'thixotrope-endpoint',
+    transport: 'thixotrope-endpoint',
+    designator: 'endpoint',
+    hints: /** @type {const} */ (false),
+  });
   const endpointClient = await makeOcapn({
     codec,
     debugLabel: 'thixotrope-endpoint',
@@ -251,21 +258,12 @@ const buildDaemon = async ({
       return harden({
         networkId: 'thixotrope-endpoint',
         codec,
-        location: harden({
-          type: /** @type {const} */ ('ocapn-peer'),
-          network: 'thixotrope-endpoint',
-          transport: 'thixotrope-endpoint',
-          designator: 'endpoint',
-          hints: /** @type {const} */ (false),
-        }),
+        location: endpointLocation,
         shutdown: () => {},
       });
     },
   });
-  // The endpoint's session with the hub: established through the
-  // resumeSession seam (handshake-free, restorable exports), frames
-  // flowing directly between the hub duct and the client's message
-  // handler.
+  // The endpoint's hub session is adopted handshake-free.
   let stopped = false;
   /** @type {Uint8Array[]} */
   const endpointOutbound = [];
@@ -283,9 +281,22 @@ const buildDaemon = async ({
     end: () => {},
   });
   records.registerWorkerConnection(endpointConnection, ENDPOINT_ID);
-  const endpointResumed = endpointHandlers.resumeSession(
-    endpointConnection,
-    endpointResumption,
+  const endpointResumed = endpointHandlers.adoptSession(
+    harden({
+      sessionId: endpointResumption.sessionId,
+      selfIdentity: makeSelfIdentityFromPrivateKey(
+        codec,
+        endpointLocation,
+        endpointResumption.selfPrivateKeyBytes,
+      ),
+      remotePublicKeyBytes: endpointResumption.peerPublicKeyBytes,
+      remoteLocation: endpointResumption.peerLocation,
+      remoteLocationSignature: endpointResumption.peerLocationSignature,
+      isInitiator: true,
+      write: endpointConnection.write,
+      close: endpointConnection.end,
+      hookKey: endpointConnection,
+    }),
   );
   records.registerResumedSession(ENDPOINT_ID, endpointResumed);
 
@@ -956,8 +967,7 @@ const buildDaemon = async ({
   // output. Startup writes toward the hub wait until its sink is attached.
   records.restoreWorker(ENDPOINT_ID);
   endpointSink = hub.attachSession(ENDPOINT_SESSION, {
-    send: (/** @type {Uint8Array} */ bytes) =>
-      endpointHandlers.handleMessageData(endpointConnection, bytes),
+    send: (/** @type {Uint8Array} */ bytes) => endpointResumed.dispatch(bytes),
   });
   for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
 
