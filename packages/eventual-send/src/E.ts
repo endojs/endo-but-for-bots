@@ -129,31 +129,34 @@ export type ESendOnlyMethods<T> = {
     : never;
 };
 
-export type ESendOnlyCallableOrMethods<T> = T extends Callable
-  ? ESendOnlyCallable<T> & ESendOnlyMethods<Required<T>>
-  : 0 extends 1 & T
-    ? never
+export type ESendOnlyCallableOrMethods<T> = 0 extends 1 & T // if T is any
+  ? any // propagate any cleanly
+  : T extends Callable
+    ? ESendOnlyCallable<T> & ESendOnlyMethods<Required<T>>
     : ESendOnlyMethods<Required<T>>;
 
-export type ECallableOrMethods<T> = T extends Callable
-  ? ECallable<T> & EMethods<Required<T>>
-  : 0 extends 1 & T
-    ? never
+export type ECallableOrMethods<T> = 0 extends 1 & T // if T is any
+  ? any // propagate any cleanly (avoid distributive expansion that displays Pick<any,string>)
+  : T extends Callable
+    ? ECallable<T> & EMethods<Required<T>>
     : EMethods<Required<T>>;
 
 /**
  * `PickCallable<T>` means to return a single root callable or a record type
  * consisting only of properties that are functions.
  */
-export type PickCallable<T> = T extends Callable
-  ? (...args: Parameters<T>) => ReturnType<T> // a root callable, no methods
-  : Pick<T, FilteredKeys<T, Callable>>; // any callable methods
+export type PickCallable<T> = 0 extends 1 & T // if T is any
+  ? any // propagate any (avoid Pick<any, string> distributive collapse)
+  : T extends Callable
+    ? (...args: Parameters<T>) => ReturnType<T> // a root callable, no methods
+    : Pick<T, FilteredKeys<T, Callable>>; // any callable methods
 
 /**
  * `RemoteFunctions<T>` means to return the functions and properties that are remotely callable.
  */
-export type RemoteFunctions<T> =
-  T extends RemotableBrand<infer _L, infer R> // if a given T is some remote interface R
+export type RemoteFunctions<T> = 0 extends 1 & T // if T is any
+  ? any // propagate any (avoid distributive collapse to Pick<any,string>)
+  : T extends RemotableBrand<infer _L, infer R> // if a given T is some remote interface R
     ? PickCallable<R> // then return the callable properties of R
     : T extends PromiseLike<infer U> // otherwise, if T is a promise
       ? RemoteFunctions<U> // recurse on the resolved value of T
@@ -208,14 +211,9 @@ const baseFreezableProxyHandler: ProxyHandler<any> = {
 const makeProxy = <T>(target: object, handler: ProxyHandler<object>): T =>
   new Proxy(target, handler) as T;
 
-const toBreakpointProperty = (
-  propertyKey: PropertyKey,
-): string | symbol | undefined =>
-  typeof propertyKey === 'number' ? `${propertyKey}` : propertyKey;
-
 const makeEMethod = (
   recipient: any,
-  propertyKey: PropertyKey,
+  propertyKey: string | symbol,
   receiver: object,
   HandledPromise: HandledPromiseConstructor,
 ): ((this: unknown, ...args: any[]) => Promise<unknown>) => {
@@ -223,6 +221,10 @@ const makeEMethod = (
     PropertyKey,
     (this: unknown, ...args: any[]) => Promise<unknown>
   > = {
+    // This function purposely checks the `this` value (see below)
+    // In order to be `this` sensitive it is defined using concise method
+    // syntax rather than as an arrow function. To ensure the function
+    // is not constructable, it also avoids the `function` syntax.
     [propertyKey](...args: any[]): Promise<unknown> {
       if (this !== receiver) {
         // Reject the async function call
@@ -235,10 +237,7 @@ const makeEMethod = (
         );
       }
 
-      if (
-        onSend &&
-        onSend.shouldBreakpoint(recipient, toBreakpointProperty(propertyKey))
-      ) {
+      if (onSend && onSend.shouldBreakpoint(recipient, propertyKey)) {
         // eslint-disable-next-line no-debugger
         debugger; // LOOK UP THE STACK
         // Stopped at a breakpoint on eventual-send of a method-call
@@ -254,7 +253,7 @@ const makeEMethod = (
 
 const makeESendOnlyMethod = (
   recipient: any,
-  propertyKey: PropertyKey,
+  propertyKey: string | symbol,
   receiver: object,
   HandledPromise: HandledPromiseConstructor,
 ): ((this: unknown, ...args: any[]) => undefined) => {
@@ -262,16 +261,17 @@ const makeESendOnlyMethod = (
     PropertyKey,
     (this: unknown, ...args: any[]) => undefined
   > = {
+    // This function purposely checks the `this` value (see below)
+    // In order to be `this` sensitive it is defined using concise method
+    // syntax rather than as an arrow function. To ensure the function
+    // is not constructable, it also avoids the `function` syntax.
     [propertyKey](...args: any[]): undefined {
       // Throw since the function returns nothing
       this === receiver ||
         Fail`Unexpected receiver for "${q(
           propertyKey,
         )}" method of E.sendOnly(${q(recipient)})`;
-      if (
-        onSend &&
-        onSend.shouldBreakpoint(recipient, toBreakpointProperty(propertyKey))
-      ) {
+      if (onSend && onSend.shouldBreakpoint(recipient, propertyKey)) {
         // eslint-disable-next-line no-debugger
         debugger; // LOOK UP THE STACK
         // Stopped at a breakpoint on eventual-send of a method-call

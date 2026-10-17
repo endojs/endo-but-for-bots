@@ -82,3 +82,13 @@ E.when(
   const local = { getVal: () => 'val' };
   expectType<Promise<string>>(E(local).getVal());
 }
+
+// E(any) propagates any rather than expanding to a union of proxy types
+{
+  type IsAny<T> = 0 extends 1 & T ? true : false;
+  const anyValue: any = null;
+  const eProxy = E(anyValue);
+  const eProxyIsAny: IsAny<typeof eProxy> = true;
+  const sendOnlyProxy = E.sendOnly(anyValue);
+  const sendOnlyProxyIsAny: IsAny<typeof sendOnlyProxy> = true;
+}
