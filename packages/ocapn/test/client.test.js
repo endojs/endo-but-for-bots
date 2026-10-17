@@ -1952,3 +1952,37 @@ test('resolver callbacks use op:deliver with no answer or resolver', async t => 
     shutdownBoth();
   }
 });
+
+test('crossed hellos through the start-session adapter yield one session', async t => {
+  // Each pair mints fresh keys, so repeating covers both key orderings.
+  for (let i = 0; i < 6; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const { clientKitA, clientKitB, shutdownBoth } = await makeTestClientPair();
+    try {
+      // Both sides dial at once, so each inbound hello lands while that
+      // side's own outbound connect is in flight.
+      // eslint-disable-next-line no-await-in-loop
+      const [sessionA, sessionB] = await Promise.all([
+        clientKitA.debug.provideInternalSession(clientKitB.location),
+        clientKitB.debug.provideInternalSession(clientKitA.location),
+      ]);
+      t.deepEqual(
+        [...new Uint8Array(sessionA.id)],
+        [...new Uint8Array(sessionB.id)],
+        'both sides agree on one session',
+      );
+      t.is(
+        clientKitA.debug.sessionManager.getActiveSession(clientKitB.locationId)
+          ?.id,
+        sessionA.id,
+      );
+      t.is(
+        clientKitB.debug.sessionManager.getActiveSession(clientKitA.locationId)
+          ?.id,
+        sessionB.id,
+      );
+    } finally {
+      shutdownBoth();
+    }
+  }
+});
