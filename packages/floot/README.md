@@ -316,8 +316,20 @@ const { fid, factory } = await provisionDevReview({
   reviewers: [reviewerA, reviewerB], // distinct reviewer Floot guest powers
   initiator,     // guest powers of the Floot conversation preparing the design
   operator,      // human operator's mail handle
+  // implementationTimeoutMs: 21_600_000, // opt in to a six-hour deadline
 });
 ```
+
+Implementation has no deadline by default (`implementationTimeoutMs: Infinity`).
+No timer is scheduled and elapsed time does not consume review rounds.
+To impose a deadline, pass a positive integer number of milliseconds to
+`provisionDevReview` (or `makeDevReviewChart` / `makeReviewedChangeChart` when
+constructing a chart directly).
+The configured timeout applies to each implementation attempt; expiry consumes
+one round and retries under the existing budget policy.
+Reviewer and infrastructure deadlines retain their existing policies.
+Charts are saved in factories and runs, so changing this setup option applies to
+newly provisioned workflows, not existing factories or runs.
 
 The participants here are guest **controls** used only during setup. A Floot
 factory host holds them under `session-agent-<session-id>`; the public session
