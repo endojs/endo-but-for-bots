@@ -16,6 +16,7 @@ import {
   whereEndoCache,
 } from '@endo/where';
 import { makeEndoClient } from './src/client.js';
+import { makeAmaroExecArgv } from './src/amaro-exec-argv.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
@@ -91,6 +92,7 @@ export const start = async (config = defaultConfig) => {
     ],
     {
       detached: true,
+      execArgv: makeAmaroExecArgv(),
       env,
       stdio: ['ignore', output, output, 'ipc'],
     },

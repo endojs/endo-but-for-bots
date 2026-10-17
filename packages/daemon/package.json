@@ -19,6 +19,9 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "./index.js",
   "module": "./index.js",
   "types": "./types.d.ts",
@@ -61,6 +64,7 @@
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/where": "workspace:^",
+    "amaro": "^1.1.9",
     "ses": "workspace:^",
     "ws": "^8.13.0"
   },

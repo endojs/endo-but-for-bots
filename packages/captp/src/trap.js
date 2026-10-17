@@ -1,4 +1,4 @@
-// Lifted mostly from `@endo/eventual-send/src/E.js`.
+// Lifted mostly from `@endo/eventual-send/src/E.ts`.
 
 import harden from '@endo/harden';
 
