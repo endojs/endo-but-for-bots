@@ -60,12 +60,16 @@ for (const [codecName, codec] of /** @type {const} */ ([
     // Idle for several session timeouts.
     await delay(heartbeat.sessionTimeoutMs * 3);
 
+    // Each side reads past the peer's queued heartbeats to its data.
     await sessionA.writer.next(Uint8Array.of(1, 2, 3));
     const received = await sessionB.reader.next(undefined);
     t.false(received.done);
     if (!received.done) {
       t.deepEqual([...received.value], [1, 2, 3]);
     }
+    await sessionB.writer.next(Uint8Array.of(4));
+    const reply = await sessionA.reader.next(undefined);
+    t.false(reply.done);
 
     const livenessA = sessionA.getLiveness();
     const livenessB = sessionB.getLiveness();
@@ -224,10 +228,15 @@ for (const [how, end] of /** @type {const} */ ([
         { codec: cborCodec, heartbeat },
         { codec: cborCodec, heartbeat },
       );
+      // A pending read on each side arms its liveness timeout.
+      const readA = sessionA.reader.next(undefined).catch(() => {});
+      const readB = sessionB.reader.next(undefined).catch(() => {});
+      await delay(0);
       // One heartbeat interval and one liveness timeout per session.
       t.true(timers.live().length >= 4);
       await end(sessionA, sessionB);
       t.deepEqual(timers.live(), []);
+      await Promise.all([readA, readB]);
     },
   );
 }
@@ -306,21 +315,23 @@ test('an op:pong acknowledging an unsent nonce is ignored', async t => {
     cborCodec,
   );
   await sessionB.writer.next(honest);
-  await delay(heartbeat.intervalMs);
+  await sessionB.writer.next(Uint8Array.of(1));
+  // Reading the data frame absorbs both pongs ahead of it.
+  const data = await sessionA.reader.next(undefined);
+  t.false(data.done);
   // A sent its greeting at nonce 0, so only the honest pong counts.
   t.is(sessionA.getLiveness().peerLastAckedRecvNonce, 0n);
   sessionA.close();
 });
 
-test('a slow consumer pauses the read-ahead without losing the session', async t => {
+test('a consumer that stops reading is not mistaken for a lost peer', async t => {
   const { sessionA, sessionB } = await connectPair(
     t,
     { codec: cborCodec, heartbeat },
     { codec: cborCodec },
   );
   const frameCount = 200;
-  // B writes far more than the read-ahead holds while A reads nothing,
-  // for longer than the session timeout.
+  // B writes while A reads nothing for longer than the session timeout.
   const writes = [];
   for (let index = 0; index < frameCount; index += 1) {
     writes.push(sessionB.writer.next(Uint8Array.of(index)));
@@ -354,10 +365,47 @@ test('heartbeat options are validated', t => {
       makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat: { intervalMs: 0 } }),
     { message: /positive number/ },
   );
-  const network = makeOcapnNoiseNetwork({
-    codec: cborCodec,
-    heartbeat: { intervalMs: 10 },
-  });
-  network.shutdown();
+  for (const intervalMs of [NaN, -0, Infinity, 2 ** 31]) {
+    t.throws(
+      () =>
+        makeOcapnNoiseNetwork({ codec: cborCodec, heartbeat: { intervalMs } }),
+      { message: /positive number of at most 2147483647/ },
+      `intervalMs ${intervalMs}`,
+    );
+  }
+  for (const sessionTimeoutMs of [NaN, 2 ** 31]) {
+    t.throws(
+      () =>
+        makeOcapnNoiseNetwork({
+          codec: cborCodec,
+          heartbeat: { intervalMs: 10, sessionTimeoutMs },
+        }),
+      { message: /at least 3 times heartbeat.intervalMs and at most/ },
+      `sessionTimeoutMs ${sessionTimeoutMs}`,
+    );
+  }
+  // The bounds themselves are accepted.
+  for (const options of [
+    { intervalMs: 10 },
+    { intervalMs: 10, sessionTimeoutMs: 30 },
+    { intervalMs: 10, sessionTimeoutMs: 2 ** 31 - 1 },
+  ]) {
+    const network = makeOcapnNoiseNetwork({
+      codec: cborCodec,
+      heartbeat: options,
+    });
+    network.shutdown();
+  }
   t.pass();
+});
+
+test('closing the writer ends a pending heartbeat read', async t => {
+  const { sessionA } = await connectPair(
+    t,
+    { codec: cborCodec, heartbeat },
+    { codec: cborCodec },
+  );
+  const pending = sessionA.reader.next(undefined);
+  await sessionA.writer.return(undefined);
+  t.deepEqual(await pending, { done: true, value: undefined });
 });

@@ -187,17 +187,12 @@ const DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY = 256;
 /** Default `HEARTBEAT_INTERVAL`, per designs/ocapn-noise-session-reconnect.md § 5. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5000;
 
-/** The default `SESSION_TIMEOUT` is this multiple of the heartbeat interval. */
 const DEFAULT_SESSION_TIMEOUT_INTERVALS = 6;
 
 const MIN_SESSION_TIMEOUT_INTERVALS = 3;
 
-/**
- * With heartbeats, the transport is read ahead of the consumer. This
- * many decrypted frames may wait for the consumer before the read-ahead
- * pauses, so a slow consumer applies backpressure to the peer.
- */
-const MAX_INBOUND_QUEUED_FRAMES = 64;
+/** Timers clamp a longer delay to 1ms, so a longer setting is refused. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /**
  * @param {HeartbeatOptions | undefined} heartbeat
@@ -206,19 +201,24 @@ const MAX_INBOUND_QUEUED_FRAMES = 64;
 const normalizeHeartbeatOptions = heartbeat => {
   if (heartbeat === undefined) return undefined;
   const { intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS } = heartbeat;
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+  if (
+    !Number.isFinite(intervalMs) ||
+    intervalMs <= 0 ||
+    intervalMs > MAX_TIMER_MS
+  ) {
     throw makeError(
-      X`ocapn-noise: heartbeat.intervalMs must be a positive number, got ${q(intervalMs)}`,
+      X`ocapn-noise: heartbeat.intervalMs must be a positive number of at most ${q(MAX_TIMER_MS)}, got ${q(intervalMs)}`,
     );
   }
   const { sessionTimeoutMs = DEFAULT_SESSION_TIMEOUT_INTERVALS * intervalMs } =
     heartbeat;
   if (
     !Number.isFinite(sessionTimeoutMs) ||
-    sessionTimeoutMs < MIN_SESSION_TIMEOUT_INTERVALS * intervalMs
+    sessionTimeoutMs < MIN_SESSION_TIMEOUT_INTERVALS * intervalMs ||
+    sessionTimeoutMs > MAX_TIMER_MS
   ) {
     throw makeError(
-      X`ocapn-noise: heartbeat.sessionTimeoutMs must be at least ${q(MIN_SESSION_TIMEOUT_INTERVALS)} times heartbeat.intervalMs, got ${q(sessionTimeoutMs)}`,
+      X`ocapn-noise: heartbeat.sessionTimeoutMs must be at least ${q(MIN_SESSION_TIMEOUT_INTERVALS)} times heartbeat.intervalMs and at most ${q(MAX_TIMER_MS)}, got ${q(sessionTimeoutMs)}`,
     );
   }
   return harden({ intervalMs, sessionTimeoutMs });
@@ -901,8 +901,15 @@ export const makeOcapnNoiseNetwork = ({
     let peerLastAckedRecvNonce;
     /** @type {ReturnType<typeof setInterval> | undefined} */
     let heartbeatTimer;
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let livenessTimer;
+    /**
+     * Ends each transport read that waits under a liveness timeout, so a
+     * close leaves neither a blocked consumer nor a running timer.
+     *
+     * @type {Set<() => void>}
+     */
+    const abandonReads = new Set();
+    /** @type {Error | undefined} */
+    let heartbeatFailure;
 
     /** @returns {bigint | undefined} */
     const getLastReceivedNonce = () => {
@@ -910,15 +917,11 @@ export const makeOcapnNoiseNetwork = ({
       return receivedCount === 0n ? undefined : receivedCount - 1n;
     };
 
-    /** Wakes a paused read-ahead so it can observe the close. */
-    let releaseReadAhead = () => {};
-
     const stopHeartbeat = () => {
-      releaseReadAhead();
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
-      if (livenessTimer !== undefined) clearTimeout(livenessTimer);
       heartbeatTimer = undefined;
-      livenessTimer = undefined;
+      for (const abandon of abandonReads) abandon();
+      abandonReads.clear();
     };
 
     const fireOnClose = () => {
@@ -940,46 +943,12 @@ export const makeOcapnNoiseNetwork = ({
       fireOnClose();
     };
 
-    /** @type {Reader<Uint8Array>} */
-    let reader;
+    /** @type {() => Promise<IteratorResult<Uint8Array>>} */
+    let readPeerFrame = () => stream.reader.next(undefined);
+    /** @type {(plainText: Uint8Array) => boolean} */
+    let absorbHeartbeat = _plainText => false;
 
-    if (heartbeatSettings === undefined) {
-      reader = harden({
-        next: async () => {
-          await null;
-          const result = await stream.reader.next(undefined);
-          if (result.done) {
-            if (!closed) {
-              closed = true;
-              fireOnClose();
-            }
-            return harden({ done: true, value: undefined });
-          }
-          return harden({ done: false, value: decrypt(result.value) });
-        },
-        return: async () => {
-          await null;
-          if (!closed) {
-            closed = true;
-            await stream.writer.return(undefined);
-            fireOnClose();
-          }
-          return harden({ done: true, value: undefined });
-        },
-        throw: async err => {
-          await null;
-          if (!closed) {
-            closed = true;
-            await stream.writer.throw(err);
-            fireOnClose();
-          }
-          throw err;
-        },
-        [Symbol.asyncIterator]() {
-          return reader;
-        },
-      });
-    } else {
+    if (heartbeatSettings !== undefined) {
       const { intervalMs, sessionTimeoutMs } = heartbeatSettings;
 
       /**
@@ -1052,7 +1021,7 @@ export const makeOcapnNoiseNetwork = ({
        * @param {Uint8Array} plainText
        * @returns {boolean}
        */
-      const absorbHeartbeat = plainText => {
+      absorbHeartbeat = plainText => {
         if (!isHeartbeatFrame(plainText)) return false;
         /** @type {OcapnHeartbeatMessage} */
         let message;
@@ -1063,12 +1032,15 @@ export const makeOcapnNoiseNetwork = ({
             throw makeError(X`trailing bytes after heartbeat operation`);
           }
         } catch (error) {
-          throw makeError(
+          const failure = makeError(
             X`ocapn-noise: malformed heartbeat operation from peer: ${error}`,
           );
+          close();
+          throw failure;
         }
-        // A heartbeat from an earlier epoch is a straggler from an
-        // obsolete transport instance.
+        // An `op:ping` is answered by the next tick's `op:pong`, so only
+        // its arrival matters. A heartbeat from an earlier epoch is a
+        // straggler from an obsolete transport instance.
         if (message.epoch < epoch || message.type !== 'op:pong') return true;
         const { lastAckedRecvNonce } = message;
         // An acknowledgment of a nonce this side has not yet used is not
@@ -1084,100 +1056,47 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       /**
-       * @typedef {{ done: true } | { done: false, value: Uint8Array } | { error: Error }} InboundItem
+       * The end of a heartbeat session's reads: the failure that closed
+       * it, reported once, and then the end of the stream.
+       *
+       * @returns {Promise<IteratorResult<Uint8Array>>}
        */
-      /** @type {AsyncQueue<InboundItem>} */
-      const inbound = makeQueue();
+      const endOfReads = () => {
+        const failure = heartbeatFailure;
+        heartbeatFailure = undefined;
+        if (failure !== undefined) return Promise.reject(failure);
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      };
 
-      const onSessionTimeout = () => {
-        if (closed) return;
-        inbound.put(
-          harden({
-            error: makeError(
+      // The liveness timeout runs only while the consumer waits for a
+      // frame, so a consumer that stops reading is never mistaken for a
+      // lost peer. Any frame from the peer, heartbeat or not, ends the
+      // wait.
+      readPeerFrame = () => {
+        if (closed) return endOfReads();
+        /** @type {() => void} */
+        let abandon = () => {};
+        /** @type {ReturnType<typeof setTimeout> | undefined} */
+        let livenessTimer;
+        /** @type {Promise<IteratorResult<Uint8Array>>} */
+        const read = new Promise((resolve, reject) => {
+          abandon = () => {
+            clearTimeout(livenessTimer);
+            endOfReads().then(resolve, reject);
+          };
+          livenessTimer = setTimeout(() => {
+            heartbeatFailure = makeError(
               X`ocapn-noise: no traffic from peer for ${q(sessionTimeoutMs)}ms; session lost`,
-            ),
-          }),
-        );
-        close();
-      };
-
-      const resetLivenessTimer = () => {
-        if (closed) return;
-        if (livenessTimer !== undefined) clearTimeout(livenessTimer);
-        livenessTimer = setTimeout(onSessionTimeout, sessionTimeoutMs);
-      };
-
-      let queuedFrames = 0;
-      /** @type {(() => void) | undefined} */
-      let resumePump;
-      const releasePump = () => {
-        const resume = resumePump;
-        resumePump = undefined;
-        if (resume !== undefined) resume();
-      };
-      releaseReadAhead = releasePump;
-
-      // Read the transport eagerly rather than at the consumer's pace,
-      // so that a consumer that is slow to call `next` cannot starve
-      // the liveness timer of the traffic that resets it.
-      const pump = async () => {
-        await null;
-        for (;;) {
-          /** @type {IteratorResult<Uint8Array>} */
-          let result;
-          /** @type {Uint8Array} */
-          let plainText;
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            result = await stream.reader.next(undefined);
-            if (closed) {
-              inbound.put(harden({ done: true }));
-              return;
-            }
-            if (result.done) {
-              inbound.put(harden({ done: true }));
-              if (!closed) {
-                closed = true;
-                fireOnClose();
-              }
-              return;
-            }
-            plainText = decrypt(result.value);
-          } catch (error) {
-            inbound.put(harden({ error: /** @type {Error} */ (error) }));
+            );
             close();
-            return;
-          }
-          resetLivenessTimer();
-          /** @type {boolean} */
-          let absorbed;
-          try {
-            absorbed = absorbHeartbeat(plainText);
-          } catch (error) {
-            inbound.put(harden({ error: /** @type {Error} */ (error) }));
-            close();
-            return;
-          }
-          if (!absorbed) {
-            inbound.put(harden({ done: false, value: plainText }));
-            queuedFrames += 1;
-            if (queuedFrames >= MAX_INBOUND_QUEUED_FRAMES) {
-              // A full queue proves the peer is alive, and the stall is
-              // local, so the liveness timer waits with the read-ahead.
-              if (livenessTimer !== undefined) clearTimeout(livenessTimer);
-              livenessTimer = undefined;
-              // eslint-disable-next-line no-await-in-loop
-              await new Promise(resolve => {
-                resumePump = () => resolve(undefined);
-              });
-              if (closed) {
-                inbound.put(harden({ done: true }));
-                return;
-              }
-              resetLivenessTimer();
-            }
-          }
-        }
+          }, sessionTimeoutMs);
+          stream.reader.next(undefined).then(resolve, reject);
+        });
+        abandonReads.add(abandon);
+        return read.finally(() => {
+          clearTimeout(livenessTimer);
+          abandonReads.delete(abandon);
+        });
       };
 
       // A timer callback must never throw: a failure to encode or
@@ -1187,57 +1106,62 @@ export const makeOcapnNoiseNetwork = ({
         try {
           sendHeartbeat();
         } catch (error) {
-          inbound.put(harden({ error: /** @type {Error} */ (error) }));
+          heartbeatFailure = /** @type {Error} */ (error);
           close();
         }
       };
 
-      reader = harden({
-        next: async () => {
-          await null;
-          const item = await inbound.get();
-          if (!('error' in item) && !item.done) {
-            queuedFrames -= 1;
-            if (queuedFrames < MAX_INBOUND_QUEUED_FRAMES) releasePump();
-          }
-          if ('error' in item || item.done) {
-            // Leave the terminal state for any later or concurrent read.
-            inbound.put(harden({ done: true }));
-          }
-          if ('error' in item) throw item.error;
-          if (item.done) return harden({ done: true, value: undefined });
-          return harden({ done: false, value: item.value });
-        },
-        return: async () => {
-          await null;
-          if (!closed) {
-            closed = true;
-            // Release the transport reader too, so the pump stops.
-            Promise.resolve(stream.reader.return(undefined)).catch(() => {});
-            await stream.writer.return(undefined);
-            fireOnClose();
-          }
-          return harden({ done: true, value: undefined });
-        },
-        throw: async err => {
-          await null;
-          if (!closed) {
-            closed = true;
-            Promise.resolve(stream.reader.return(undefined)).catch(() => {});
-            await stream.writer.throw(err);
-            fireOnClose();
-          }
-          throw err;
-        },
-        [Symbol.asyncIterator]() {
-          return reader;
-        },
-      });
-
-      resetLivenessTimer();
       heartbeatTimer = setInterval(tick, intervalMs);
-      void pump();
     }
+
+    /** @type {Reader<Uint8Array>} */
+    const reader = harden({
+      next: async () => {
+        await null;
+        for (;;) {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await readPeerFrame();
+          if (result.done) {
+            if (!closed) {
+              closed = true;
+              fireOnClose();
+            }
+            return harden({ done: true, value: undefined });
+          }
+          const plainText = decrypt(result.value);
+          if (!absorbHeartbeat(plainText)) {
+            return harden({ done: false, value: plainText });
+          }
+        }
+      },
+      return: async () => {
+        await null;
+        if (!closed) {
+          closed = true;
+          try {
+            await stream.writer.return(undefined);
+          } finally {
+            fireOnClose();
+          }
+        }
+        return harden({ done: true, value: undefined });
+      },
+      throw: async err => {
+        await null;
+        if (!closed) {
+          closed = true;
+          try {
+            await stream.writer.throw(err);
+          } finally {
+            fireOnClose();
+          }
+        }
+        throw err;
+      },
+      [Symbol.asyncIterator]() {
+        return reader;
+      },
+    });
 
     /** @type {Writer<Uint8Array>} */
     const writer = harden({
@@ -1251,8 +1175,11 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         if (!closed) {
           closed = true;
-          await stream.writer.return(undefined);
-          fireOnClose();
+          try {
+            await stream.writer.return(undefined);
+          } finally {
+            fireOnClose();
+          }
         }
         return harden({ done: true, value: undefined });
       },
@@ -1260,8 +1187,11 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         if (!closed) {
           closed = true;
-          await stream.writer.throw(err);
-          fireOnClose();
+          try {
+            await stream.writer.throw(err);
+          } finally {
+            fireOnClose();
+          }
         }
         throw err;
       },
