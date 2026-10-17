@@ -8,6 +8,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './test/e2e',
+  /* Daemon-free harness suites run under playwright.harness.config.ts. */
+  testIgnore: ['formula-inspector.spec.ts'],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
