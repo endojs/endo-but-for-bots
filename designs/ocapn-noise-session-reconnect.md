@@ -411,7 +411,12 @@ state.
 | `SESSION_TIMEOUT`           | 30 s    | `>= 3 * HEARTBEAT_INTERVAL`  | How long without any incoming traffic before declaring loss and initiating reconnect. |
 | `RECONNECT_BACKOFF_INITIAL` | 250 ms  | 50 ms – 5 s                  | First retry delay after a failed reconnect attempt.                                   |
 | `RECONNECT_BACKOFF_MAX`     | 30 s    | up to `SESSION_HARD_TIMEOUT` | Cap on the exponential backoff.                                                       |
-| `SESSION_HARD_TIMEOUT`      | 10 min  | up to `Infinity`             | Total time the session may remain in "reconnecting" before being abandoned.           |
+| `SESSION_HARD_TIMEOUT`      | 10 min  | up to `2 ** 31 - 1` ms       | Total time the session may remain in "reconnecting" before being abandoned.           |
+
+The ceiling on `SESSION_HARD_TIMEOUT` (and so on every reconnect timer) is
+2³¹−1 ms, about 24.8 days, the largest delay `setTimeout` honors.
+A longer delay, `Infinity` included, would be clamped to 1 ms and give up
+at once, so the network refuses any value above the ceiling.
 
 **Hard-timeout queue terminal semantics.**
 When `SESSION_HARD_TIMEOUT` fires, the session is abandoned and the
