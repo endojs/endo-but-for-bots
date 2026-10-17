@@ -1,0 +1,10 @@
+import '/home/user/endo-but-for-bots/packages/ses/index.js';
+lockdown();
+const c = new Compartment();
+const r = [];
+const ev = s => { try { r.push(String(c.evaluate(s))); } catch (e) { r.push(e.name); } };
+ev('let b = 3; b');
+ev('typeof b');
+ev('let b = 4; b');
+ev('let undefined = 3; "ok"');
+console.log('SES shim:', r.join('/'));

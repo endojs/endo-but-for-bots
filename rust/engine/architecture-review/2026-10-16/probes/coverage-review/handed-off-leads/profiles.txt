@@ -1,0 +1,18 @@
+Callgrind summaries (valgrind --tool=callgrind on target/release/ironhorse-xst; inclusive Ir; raw .out files discarded).
+
+m_keys_plain_2k.js (2,000 x Object.keys of a 2-key object): 565,323,909 total
+  to_read_key 487,442,215 (86.2%) -> install_pending_intrinsics 479,314,155 (84.8%)
+  mop_own_keys_inner 31,167,007 (5.5%); materialize_intrinsic_own_surface 13,564,000 (2.4%)
+
+m_global_loop_100k.js (top-level var loop, 100,000 iterations): 984,756,939 total (9,847/iteration)
+  exec_set_variable 42.1%, mop_set_inner 35.3%, ordinary_set 34.5%, exec_get_variable 26.4%,
+  with_native_frame 26.3%, ordinary_define_own_property 19.2%, BuildHasher::hash_one 17.6%
+m_func_loop_100k.js (same loop in a function): 229,800,412 total (2,298/iteration)
+
+m_aw_200k.js (200,000 a[i&1023]=i on new Array(1024).fill(0), in a function): 2,705,082,444 total
+  property_at_set 2,082,367,183 (77.0%): ordinary_set 60.1%, find_property 44.5%,
+  array_define_index 36.4%, PropertyIndex::find 33.5%, SymbolIds::get 11.1%
+m_awp_200k.js (same writes on a pushed array): 1,162,821,604 total
+  property_at_set 554,920,754 (2,775/write), SymbolIds::get 193,039,049 (965/write)
+m_arp_200k.js (reads on the pushed array): 840,141,450 total; property_at_get 124,417,026 (622/read)
+m_tw_200k.js (Uint8Array writes): 810,253,625 total (4,051/iteration including the loop)

@@ -1,0 +1,50 @@
+^built-ins/Function/prototype/toString/: total=80 pass=12 fail=68 unsup=0 notrun=0
+      68 shared-positive-test-failure
+^built-ins/Math/random/: total=5 pass=0 fail=5 unsup=0 notrun=0
+      3 oracle-gate-off:oracle-only-complete
+      1 ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoke
+      1 ironhorse failed a harness assertion the oracle passed: Test262Error: random should be an 
+^built-ins/Date/prototype/toTemporalInstant: total=8 pass=0 fail=8 unsup=0 notrun=0
+      5 shared-test262-failure
+      3 shared-positive-test-failure
+^annexB/built-ins/String/prototype/(anchor|big|blink|bold|fixed|fontcolor|fontsize|italics|link|small|strike|sub|sup)/: total=82 pass=0 fail=82 unsup=0 notrun=0
+      43 shared-test262-failure
+      39 shared-positive-test-failure
+^annexB/built-ins/RegExp/legacy-accessors: total=24 pass=0 fail=24 unsup=0 notrun=0
+      18 shared-positive-test-failure
+      6 shared-test262-failure
+static-init: total=69 pass=65 fail=4 unsup=0 notrun=0
+      3 parse-or-decode
+      1 oracle-gate-off:oracle-only-complete
+^built-ins/Atomics/(wait|notify|waitAsync)/: total=230 pass=0 fail=0 unsup=0 notrun=230
+      228 structural:multi-agent
+      2 structural:can-block
+^built-ins/TypedArray/prototype/(toSorted|toReversed|with)/: total=43 pass=5 fail=38 unsup=0 notrun=0
+      26 oracle-gate-off:oracle-only-complete
+      4 ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a RangeErro
+      3 ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoke
+^intl402/NumberFormat/prototype/formatRange: total=21 pass=10 fail=0 unsup=11 notrun=0
+      11 unsupported-opcode:Intl.NumberFormat:formatRange
+^annexB/language/(eval-code|function-code|global-code)/: total=781 pass=142 fail=639 unsup=0 notrun=0
+      563 shared-positive-test-failure
+      76 shared-test262-failure
+^annexB/language/comments/: total=8 pass=0 fail=8 unsup=0 notrun=0
+      5 negative-type-unmatched:Test262Error
+      3 negative-type-unmatched:EvalError
+^built-ins/Promise/(allKeyed|allSettledKeyed)/: total=89 pass=2 fail=87 unsup=0 notrun=0
+      46 async:reported-failure
+      26 shared-positive-test-failure
+      10 shared-test262-failure
+^built-ins/Iterator/(zip|zipKeyed)/: total=82 pass=5 fail=77 unsup=0 notrun=0
+      64 shared-positive-test-failure
+      13 shared-test262-failure
+^built-ins/Iterator/prototype/(chunks|windows)/: total=78 pass=9 fail=69 unsup=0 notrun=0
+      55 shared-positive-test-failure
+      14 shared-test262-failure
+^built-ins/Atomics/pause/: total=5 pass=0 fail=5 unsup=0 notrun=0
+      3 shared-positive-test-failure
+      2 shared-test262-failure
+^built-ins/ShadowRealm/: total=64 pass=0 fail=0 unsup=0 notrun=64
+      64 feature:ShadowRealm
+^built-ins/AbstractModuleSource/: total=8 pass=0 fail=8 unsup=0 notrun=0
+      8 shared-test262-failure

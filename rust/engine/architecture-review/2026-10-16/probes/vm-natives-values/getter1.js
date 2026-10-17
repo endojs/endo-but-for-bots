@@ -1,0 +1,18 @@
+const r = [];
+const T = (f) => { try { r.push(String(f())); } catch (e) { r.push(e.name + ':' + e.message); } };
+const d = Temporal.Duration.from('P1Y2M');
+T(() => d.years);
+T(() => d['ye' + 'ars']);
+T(() => Reflect.get(d, 'years'));
+T(() => { const { years } = d; return years; });
+T(() => new Proxy(d, {}).years);
+T(() => Object.create(d).years);
+T(() => { Object.defineProperty(d, 'years', { value: 99 }); return d.years; });
+const c = new Intl.Collator();
+T(() => typeof Reflect.get(c, 'compare'));
+T(() => typeof c['comp' + 'are']);
+T(() => typeof Intl.Collator.prototype.compare);
+const p = Temporal.PlainDate.from('2021-03-04');
+T(() => p.month + ',' + Reflect.get(p, 'month') + ',' + p['mon' + 'th']);
+T(() => { const { month } = p; return month; });
+throw new Error(JSON.stringify(r));

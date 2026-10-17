@@ -1,0 +1,26 @@
+(function(){'use strict';
+var out=[];
+function t(name,f){try{var r=f();out.push(name+':no-throw'+(r===undefined?'':'='+r));}catch(e){out.push(name+':'+e.constructor.name);}}
+var frozen=Object.freeze({k:1,0:'a'}), key='k';
+t('static',function(){frozen.k=2;return frozen.k;});
+t('computed',function(){frozen[key]=2;return frozen.k;});
+t('computed lit',function(){frozen["k"]=2;return frozen.k;});
+t('index',function(){frozen[0]='b';return frozen[0];});
+t('+=',function(){frozen[key]+=1;return frozen.k;});
+t('++',function(){frozen[key]++;return frozen.k;});
+t('newkey',function(){frozen['zz']=1;return frozen.zz;});
+var g={get k(){return 1}};
+t('getter',function(){g[key]=2;return g.k;});
+t('destr',function(){[frozen[key]]=[5];return frozen.k;});
+var s=Symbol('s'); var so={}; so[s]=1; Object.freeze(so);
+t('sym frozen',function(){so[s]=2;return so[s];});
+var ne=Object.preventExtensions({}); 
+t('sym new',function(){ne[Symbol()]=1;});
+t('global undefined',function(){globalThis["undefined"]=5;});
+var nw={}; Object.defineProperty(nw,'k',{value:1,writable:false});
+t('nonwritable',function(){nw[key]=2;return nw.k;});
+var ta=new Uint8Array(2); Object.freeze; Object.defineProperty(ta,'foo',{value:1,writable:false});
+t('ta named',function(){ta['foo']=2;return ta.foo;});
+t('ta named static',function(){ta.foo=2;return ta.foo;});
+throw new Error(out.join(" | "));
+})();

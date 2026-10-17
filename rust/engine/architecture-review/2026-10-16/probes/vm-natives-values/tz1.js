@@ -1,0 +1,16 @@
+const r = [];
+const T = (f) => { try { r.push(String(f())); } catch (e) { r.push(e.name + ':' + e.message); } };
+const f = (tz) => new Intl.DateTimeFormat('en-US', {timeZone: tz, hour: 'numeric', minute: 'numeric', timeZoneName: 'short'});
+T(() => f('America/New_York').format(Date.UTC(2024, 6, 1, 12)));
+T(() => f('America/New_York').format(Date.UTC(2024, 0, 1, 12)));
+T(() => f('Europe/London').format(Date.UTC(2024, 6, 1, 12)));
+T(() => f('Australia/Sydney').format(Date.UTC(2024, 0, 1, 12)));
+T(() => f('Asia/Kolkata').format(Date.UTC(2024, 0, 1, 12)));
+T(() => f('Pacific/Chatham').format(Date.UTC(2024, 0, 1, 12)));
+T(() => f('America/Sao_Paulo').format(Date.UTC(2010, 0, 1, 12)));
+T(() => new Intl.DateTimeFormat('en-US', {timeZone: 'Europe/Kyiv'}).resolvedOptions().timeZone);
+T(() => new Intl.DateTimeFormat('en-US', {timeZone: 'utc'}).resolvedOptions().timeZone);
+T(() => new Intl.DateTimeFormat('en-US', {timeZone: 'Etc/GMT+5'}).resolvedOptions().timeZone);
+T(() => new Intl.DateTimeFormat('en-US').resolvedOptions().timeZone);
+T(() => new Intl.DateTimeFormat('en-US', {timeZone: 'Antarctica/Troll'}).resolvedOptions().timeZone);
+throw new Error(JSON.stringify(r));

@@ -1,0 +1,1 @@
+var n=0; var r={value:1,done:false}; var end={value:undefined,done:true}; var it={[Symbol.iterator](){var i=0;return {next(){return i++<1000001?r:end;}};}}; var m = new Map(); try { new Set(it); n=1;} catch(e){n="caught "+e;} throw new Error("set n="+n);

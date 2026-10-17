@@ -1,0 +1,11 @@
+var k = 'Weak' + 'Ref';
+var before = Object.getOwnPropertyNames(globalThis).indexOf(k) >= 0;
+var viaIn = k in globalThis;
+var after = Object.getOwnPropertyNames(globalThis).indexOf(k) >= 0;
+var k2 = 'Prox' + 'y';
+var d = Object.getOwnPropertyDescriptor(globalThis, k2);
+var k3 = 'Refl' + 'ect';
+var keysHas = Reflect.ownKeys(globalThis).indexOf(k3) >= 0;
+var g = globalThis[k3];
+var keysHas2 = Reflect.ownKeys(globalThis).indexOf(k3) >= 0;
+throw new Error(JSON.stringify({before: before, viaIn: viaIn, after: after, proxyDesc: !!d, keysHasReflect: keysHas, reflectType: typeof g, keysHasReflectAfterGet: keysHas2}));

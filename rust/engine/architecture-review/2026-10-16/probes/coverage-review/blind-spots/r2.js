@@ -1,0 +1,21 @@
+const out = [];
+function t(name, f) { try { out.push([name, f()]); } catch (e) { out.push([name, 'THROW ' + (e && e.constructor && e.constructor.name) + ': ' + (e && e.message)]); } }
+t('global-proto', () => Object.getPrototypeOf(globalThis) === Object.prototype);
+t('global-proto-null', () => Object.getPrototypeOf(globalThis) === null);
+t('global-toString', () => typeof globalThis.toString);
+t('global-str', () => Object.prototype.toString.call(globalThis));
+t('sloppy-fn-caller', () => JSON.stringify(Object.getOwnPropertyDescriptor(function(){}, 'caller')));
+t('sloppy-fn-caller-has', () => Object.prototype.hasOwnProperty.call(function(){}, 'caller'));
+t('strict-fn-caller', () => { 'use strict'; return Object.prototype.hasOwnProperty.call(function(){}, 'caller'); });
+t('arrow-caller', () => Object.prototype.hasOwnProperty.call(() => 1, 'caller'));
+t('method-caller', () => Object.prototype.hasOwnProperty.call({m(){}}.m, 'caller'));
+t('gen-caller', () => Object.prototype.hasOwnProperty.call(function*(){}, 'caller'));
+t('class-caller', () => Object.prototype.hasOwnProperty.call(class{}, 'caller'));
+t('fnproto-caller', () => { const d = Object.getOwnPropertyDescriptor(Function.prototype, 'caller'); return d ? typeof d.get + typeof d.set + d.configurable : 'none'; });
+t('fn-caller-value', () => { function f() { return f.caller; } return String(f()); });
+t('fn-arguments-value', () => { function f() { return f.arguments; } return String(f(1)); });
+t('fn-keys-names', () => Object.getOwnPropertyNames(function f(){}).join(','));
+t('bound-keys', () => Object.getOwnPropertyNames(function f(){}.bind(null)).join(','));
+t('fn-caller-set', () => { function f(){} f.caller = 5; return String(f.caller); });
+t('fn-caller-delete', () => { function f(){} return delete f.caller; });
+throw new Error(JSON.stringify(out));
