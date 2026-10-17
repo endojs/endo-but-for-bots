@@ -182,12 +182,9 @@ export const makeLossyTransport = transport => {
           (outbound === undefined || state.outbound === outbound),
       ).length,
     /**
-     * Every stream this side has dialed or accepted, in order: its
-     * direction, how many chunks this side wrote to it, the first (an
-     * initiator's SYN or a responder's SYNACK, which carry the handshake
-     * ephemerals in the clear), whether this side closed it, and how many
-     * chunks it had written when it first ended its writer (`undefined`
-     * if it never did).
+     * Every stream this side has dialed or accepted, in order. The first
+     * write is kept because an initiator's SYN or a responder's SYNACK
+     * carries the handshake ephemerals in the clear.
      */
     getStreams: () =>
       all.map(({ outbound, writes, firstWrite, closed, writesAtReturn }) => ({

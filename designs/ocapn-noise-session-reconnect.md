@@ -19,31 +19,12 @@ uses Rekey only, pending Open question C1.
 Deviations from the design as written:
 
 - **Resumption hello (§ 4).** Under Rekey, the new instance carries an
-  `op:session-hello` naming the session (by the opening handshake's
-  transcript hash) and the epoch the dialer asks for, not a `RESUME`
-  record. The responder refuses a hello for a session it does not hold.
-  It closes, without an answer, a dial for an epoch the session has
-  already reached and a dial that loses the crossed-hellos tiebreaker;
-  the dialer treats either as a failed attempt and backs off. It accepts
-  any later epoch, not only `previous_epoch + 1`, so a dialer that
-  missed the answer to an earlier reconnect still converges. The epoch
-  orders dials; the session token and the handshake-authenticated peer
-  key authorize the resume.
-- **Tiebreaker (§ 3, P3).** Designator comparison is implemented, using
-  the x25519 ephemerals of the handshake that opened the session. The
-  side with the greater ephemeral keeps its own dial, which is the same
-  outcome as the smaller side being responder. Equal ephemerals, which
-  only a peer echoing ours could produce, go to the side that opened the
-  session. Once its own redial has connected, the rest of that dial is
-  bounded by the handshake timeout, and the winner drops the peer's dials
-  until it settles. While its own redial has not connected, it drops them
-  only for `sessionTimeoutMs` after it first drops one, then takes the
-  peer's dial, so an outbound connect that hangs (a one-way partition
-  where connect neither fails nor completes) delays recovery by at most
-  one session timeout rather than until `hardTimeoutMs`. P3 stays open for
-  review.
-- **Either side redials (§ 3).** Both sides redial on loss, rather than
-  only the side that opened the session.
+  `op:session-hello` naming the session and the epoch the dialer asks
+  for, not a `RESUME` record. The responder accepts any later epoch, not
+  only `previous_epoch + 1`, so a dialer that missed an answer still
+  converges.
+- **Tiebreaker (§ 3, P3).** Designator comparison is implemented (see
+  `prefersOwnDial` in `src/network.js`); P3 stays open.
 
 ## What is the Problem Being Solved?
 
@@ -346,10 +327,11 @@ On the new TCP transport, after TCP connect succeeds:
    ```
 
 2. Responder side decrypts and validates that
-   `new_epoch == previous_epoch + 1` (the Rekey path, which has no
-   `RESUME` record, relaxes this; see § Status), that the resumption is on the
+   `new_epoch == previous_epoch + 1`, that the resumption is on the
    expected session (cross-referenced by the designator pair), and
    that `last_acked_recv_nonce` does not jump backward.
+   The Rekey path, which has no `RESUME` record, relaxes the epoch
+   check; see § Status.
 
 3. Responder side sends a `RESUME-ACK` record, encrypted under the
    existing responder-to-initiator CipherState at its own next

@@ -332,7 +332,6 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
   t.true(droppedDials(greater) >= 1);
   t.is(greater.getOpenStreams(false), 1);
 
-  // The hung dial lands late and is dropped for an epoch already reached.
   greater.holdConnects(false);
   await delay(heartbeat.intervalMs * 4);
   t.is(sessionA.getLiveness().epoch, 1n);
@@ -369,7 +368,6 @@ test('closing a session while both sides are mid-redial ends it on both', async 
   await eventually(
     () => injector.getConnects() >= 2 && injectorB.getConnects() >= 1,
   );
-  // A's op:session-end is lost in the partition.
   sessionA.close();
   injector.holdConnects(false);
   injectorB.holdConnects(false);

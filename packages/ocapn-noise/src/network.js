@@ -2207,10 +2207,9 @@ export const makeOcapnNoiseNetwork = ({
 
       if (resumable) {
         if (peerHello.epoch > 0n) {
-          // A reconnect. A hello that names another session (a replay
-          // into the wrong session) is answered with a refusal, which
-          // tells the dialer this side does not hold what it asks to
-          // resume.
+          // A hello that names another session (a replay into the
+          // wrong session) is answered with a refusal, which tells the
+          // dialer this side does not hold what it asks to resume.
           const known =
             reconnectors.get(initiatorKeyHex) === resumable &&
             compareUint8Arrays(peerHello.session, resumable.sessionToken) === 0;
