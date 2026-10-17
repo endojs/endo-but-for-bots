@@ -1,0 +1,1 @@
+throw new Error((function(){ try { eval("(--12)"); return "no" } catch (e) { return e.name + ": " + e.message } })())

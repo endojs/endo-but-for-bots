@@ -1,0 +1,2 @@
+FAIL test/built-ins/Function/prototype/toString/method-computed-property-name.js: Object: Conforms to NativeFunction Syntax: "undefined" ([ { a(){} }.a ](){ })
+pass=79 fail=1

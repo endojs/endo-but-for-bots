@@ -1,0 +1,12 @@
+const r = [];
+const d = Temporal.Duration.from({ years: 1 });
+r.push(d.years, d['ye' + 'ars'], Reflect.get(d, 'years'), new Proxy(d, {}).years);
+const { years } = d; r.push(years);
+r.push(Object.getOwnPropertyDescriptor(Temporal.Duration.prototype, 'years'));
+r.push('years' in Temporal.Duration.prototype);
+const c = new Intl.Collator('en');
+r.push(typeof c.compare, typeof Reflect.get(c, 'compare'), typeof c['comp' + 'are']);
+const p = Temporal.PlainDate.from('2024-03-05');
+r.push(p.month, Reflect.get(p, 'month'), p['mon' + 'th']);
+const f = Object.create(d); let e; try { e = f.years; } catch (x) { e = x.name; } r.push(String(e));
+throw new Error(JSON.stringify(r.map(String)));

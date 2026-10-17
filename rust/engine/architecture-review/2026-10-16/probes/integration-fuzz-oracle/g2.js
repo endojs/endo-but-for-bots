@@ -1,0 +1,1 @@
+try { eval("(--12)"); "no" } catch (e) { e.name + ": " + e.message }

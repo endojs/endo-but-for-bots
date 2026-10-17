@@ -1,0 +1,10 @@
+n=16 ceiling=20000: completed=true halt=Return computrons_this_run=627 result_len=720895 wall=13.155454ms
+n=16 void control: completed=true halt=Return computrons_this_run=627 result_len=9 wall=221.11µs
+n=18 ceiling=20000: completed=true halt=Return computrons_this_run=699 result_len=2883583 wall=50.139621ms
+n=18 void control: completed=true halt=Return computrons_this_run=699 result_len=9 wall=217.471µs
+n=20 ceiling=20000: completed=true halt=Return computrons_this_run=772 result_len=11534335 wall=249.787963ms
+n=20 void control: completed=true halt=Return computrons_this_run=772 result_len=9 wall=231.295µs
+n=22 ceiling=20000: completed=true halt=Return computrons_this_run=845 result_len=46137343 wall=803.449691ms
+n=22 void control: completed=true halt=Return computrons_this_run=845 result_len=9 wall=262.965µs
+n=24 ceiling=20000: completed=true halt=Return computrons_this_run=917 result_len=184549375 wall=3.208714044s
+n=24 void control: completed=true halt=Return computrons_this_run=917 result_len=9 wall=301.934µs

@@ -1,0 +1,50 @@
+// Each case is evaluated independently; errors are recorded by name.
+const R = (s, f) => new RegExp(s, f);
+const cases = {
+  crossPlaneFold: () => R(String.raw`\u{20400}`, "iu").test("\u{20428}"),
+  crossPlaneFoldClass: () => R(String.raw`[\u{20400}]`, "iu").test("\u{20428}"),
+  deseretFold: () => R(String.raw`\u{10400}`, "iu").test("\u{10428}"),
+  lookbehindBackrefLen: () => R(String.raw`(?<=\1(ⱥ))x`, "i").test("Ⱥyⱥx"),
+  compileAnnexB: () => { const r = R(String.raw`a`, "g"); r.lastIndex = 3; const out = r.compile("b", "i"); return [out === r, r.source, r.flags, r.test("B"), r.lastIndex]; },
+  quantifiedModifier: () => R(String.raw`(?i:a)+`, "").test("AA"),
+  pNonUnicode: () => [R(String.raw`\p{L}`, "").test("p{L}"), R(String.raw`\p{L}`, "").test("A")],
+  annexBBackref: () => R(String.raw`\1`, "").test("\x01"),
+  annexBOctal: () => R(String.raw`\07`, "").test("\x07"),
+  annexBQuantLookahead: () => R(String.raw`(?=a)*`, "").test("a"),
+  annexBControl: () => R(String.raw`\c_`, "").test("\\c_"),
+  annexBClassControl: () => R(String.raw`[\c_]`, "").test("\x1f"),
+  dupNamed: () => R(String.raw`(?<a>x)|(?<a>y)`, "").exec("y").groups.a,
+  dupNamedReplace: () => "y".replace(R(String.raw`(?<a>x)|(?<a>y)`, ""), "[$<a>]"),
+  indices: () => JSON.stringify(R(String.raw`(?<g>b)(c)?`, "d").exec("ab").indices),
+  indicesGroups: () => JSON.stringify(R(String.raw`(?<g>b)`, "d").exec("ab").indices.groups),
+  nulSubject: () => [R(String.raw`\0`, "").test("\0"), R(String.raw`a\0b`, "").exec("xa\0b").index, R(String.raw`^.$`, "").test("\0")],
+  stickyLastIndex: () => { const r = R(String.raw`a`, "y"); r.lastIndex = 1; const t = r.test("ba"); const li = r.lastIndex; const t2 = r.test("ba"); return [t, li, t2, r.lastIndex]; },
+  wordBoundaryNonU: () => R(String.raw`a\b`, "i").test("aſ"),
+  wordBoundaryU: () => R(String.raw`a\b`, "iu").test("aſ"),
+  kelvinNonU: () => R(String.raw`K`, "i").test("k"),
+  kelvinU: () => R(String.raw`K`, "iu").test("k"),
+  sigma: () => R(String.raw`σ`, "i").test("ς"),
+  wordClassU: () => [R(String.raw`\w`, "iu").test("ſ"), R(String.raw`\W`, "iu").test("ſ")],
+  escape: () => RegExp.escape("foo.bar-1 /x"),
+  vSet: () => [R(String.raw`[\p{L}--\p{Lu}]`, "v").test("A"), R(String.raw`[\p{L}&&\p{Lu}]`, "v").test("A"), R(String.raw`^[\q{abc|d}]$`, "v").test("abc")],
+  vStringProp: () => R(String.raw`^\p{RGI_Emoji}$`, "v").test("\u{1F468}‍\u{1F469}‍\u{1F467}"),
+  vCaseFold: () => R(String.raw`[\q{AB}]`, "vi").test("ab"),
+  flagsOrder: () => { const log = []; const o = {}; for (const [k, f] of [["hasIndices","d"],["global","g"],["ignoreCase","i"],["multiline","m"],["dotAll","s"],["unicode","u"],["unicodeSets","v"],["sticky","y"]]) Object.defineProperty(o, k, { get() { log.push(f); return true; } }); const g = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags").get; return [g.call(o), log.join("")]; },
+  flagsDescriptor: () => typeof Object.getOwnPropertyDescriptor(RegExp.prototype, "global"),
+  lastIndexUnicodeMid: () => { const r = R(String.raw`.`, "gu"); r.lastIndex = 1; const m = r.exec("\u{1F600}x"); return [m.index, m[0].length, r.lastIndex]; },
+  emptyAlternationU: () => "\u{1F600}".replace(R(String.raw`(?:)`, "gu"), "_"),
+  splitLimitCaptures: () => JSON.stringify("a1b2c3".split(R(String.raw`(\d)`, ""), 4)),
+  subclassSplit: () => { class R extends RegExp { exec(s) { this.n = (this.n||0)+1; return super.exec(s); } } const r = new R(","); return JSON.stringify("a,b".split(r)); },
+  symbolReplaceCustom: () => "abc".replace({ [Symbol.replace](s, r) { return s + r; } }, "!"),
+  backrefCaseInsensitiveU: () => R(String.raw`(k)\1`, "iu").test("kK"),
+  lookbehindVariable: () => R(String.raw`(?<=a+)b`, "").exec("aaab").index,
+  lookbehindCapture: () => JSON.stringify(R(String.raw`(?<=(\d+)(\d+))$`, "").exec("1053")),
+  namedGroupUnicodeName: () => R(String.raw`(?<\u{1d4d1}>x)`, "u").exec("x").groups["\u{1d4d1}"],
+  sourceEscape: () => [new RegExp("/").source, RegExp("\n").source, new RegExp("").source],
+  toStringGeneric: () => RegExp.prototype.toString.call({ source: "a", flags: "b" }),
+};
+const out = {};
+for (const k of Object.keys(cases)) {
+  try { out[k] = cases[k](); } catch (e) { out[k] = "throws " + (e && e.name) + ": " + (e && e.message); }
+}
+throw new Error(JSON.stringify(out, null, 0));

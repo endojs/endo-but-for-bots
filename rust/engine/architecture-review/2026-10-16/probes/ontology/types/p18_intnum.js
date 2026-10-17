@@ -1,0 +1,25 @@
+var out = {};
+function t(name, f){ try { out[name] = String(f()); } catch (e) { out[name] = 'THROW ' + (e && e.name) + ':' + String(e && e.message); } }
+var I = 1, D = Math.sqrt(1) * 1.0, D2 = parseFloat('1'), D3 = 0.5 * 2, B = 2147483647, BD = Math.pow(2, 31) - 1;
+t('map_get', function(){ return [new Map([[I,'a']]).get(D), new Map([[D,'a']]).get(I), new Map([[B,'b']]).get(BD), new Map([[D2,'c']]).get(1)].join(','); });
+t('map_has_after_delete', function(){ var m = new Map([[I,1]]); m.delete(D3); return m.size; });
+t('set_has', function(){ return [new Set([I]).has(D), new Set([D]).has(I), new Set([I, D, D2, D3]).size].join(','); });
+t('includes', function(){ return [[I].includes(D), [D].includes(I), [I].indexOf(D3), [D].lastIndexOf(I)].join(','); });
+t('strict_eq', function(){ return [I === D, Object.is(I, D), B === BD].join(','); });
+t('switch', function(){ switch (D) { case 1: return 'hit'; } return 'miss'; });
+t('defprop_samevalue', function(){ var o = {}; Object.defineProperty(o, 'x', {value: I, writable: false, configurable: false}); Object.defineProperty(o, 'x', {value: D}); return 'ok'; });
+t('defprop_samevalue_rev', function(){ var o = {}; Object.defineProperty(o, 'x', {value: D, writable: false, configurable: false}); Object.defineProperty(o, 'x', {value: I}); return 'ok'; });
+t('defprop_array_elem', function(){ var a = [D]; Object.freeze(a); Object.defineProperty(a, 0, {value: I}); return 'ok'; });
+t('defprop_array_len', function(){ var a = [1,2]; Object.defineProperty(a, 'length', {writable: false}); Object.defineProperty(a, 'length', {value: 2.0 * D}); return 'ok'; });
+t('ta_includes', function(){ return [new Float64Array([D]).includes(I), new Int8Array([I]).includes(D), new Float64Array([I]).indexOf(D)].join(','); });
+t('weakmap_obj', function(){ return 'skip'; });
+t('obj_key', function(){ var o = {}; o[I] = 'i'; return o[D] + o[D2] + o[BD - 2147483646]; });
+t('array_idx', function(){ var a = ['x', 'y']; return a[D] + a[D3]; });
+t('frozen_assign_same', function(){ 'use strict'; var o = Object.freeze({x: I}); try { o.x = D; return 'no throw'; } catch (e) { return e.name; } });
+t('proxy_invariant', function(){ var tgt = {}; Object.defineProperty(tgt, 'x', {value: I, writable: false, configurable: false}); var p = new Proxy(tgt, { get: function(){ return D; } }); return p.x; });
+t('proxy_invariant_desc', function(){ var tgt = {}; Object.defineProperty(tgt, 'x', {value: D, writable: false, configurable: false}); var p = new Proxy(tgt, { getOwnPropertyDescriptor: function(){ return {value: I, writable: false, configurable: false, enumerable: false}; } }); return Object.getOwnPropertyDescriptor(p, 'x').value; });
+t('map_nan', function(){ var n1 = NaN, n2 = 0/0, n3 = Math.sqrt(-1); var m = new Map([[n1, 'a']]); return m.get(n2) + m.get(n3) + new Set([n1, n2, n3]).size; });
+t('map_neg_large', function(){ var a = -2147483648, b = -Math.pow(2, 31); return new Map([[a, 'a']]).get(b); });
+t('sort_mixed', function(){ return [D3, I, 0.5, 2].sort(function(a, b){ return a - b; }).join(','); });
+t('atomics_cmpxchg', function(){ var a = new Int32Array(new SharedArrayBuffer(4)); a[0] = 1; return Atomics.compareExchange(a, 0, D, 5) + ',' + a[0]; });
+throw new Error(JSON.stringify(out));

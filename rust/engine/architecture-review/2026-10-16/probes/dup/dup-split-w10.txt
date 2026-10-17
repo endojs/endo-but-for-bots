@@ -1,0 +1,17 @@
+# window=10 lit=False; inline #[cfg(test)] modules split out
+crate	norm_lines	of_which_test_mod	dup_lines	dup_in_test_mod	prod_dup_pct
+benches	52	0	0	0	0.0
+ironhorse-262	4714	1842	44	20	0.8
+ironhorse-compile	13812	321	216	0	1.6
+ironhorse-fuzz	1684	476	20	20	0.0
+ironhorse-meter	1037	35	98	0	9.8
+ironhorse-regexp	5529	421	114	0	2.2
+ironhorse-runtime	118	0	58	0	49.2
+ironhorse-snapshot	20474	9612	759	558	1.9
+ironhorse-text	128	30	0	0	0.0
+ironhorse-unicode	143	0	0	0	0.0
+ironhorse-vm	64103	3813	2924	22	4.8
+stack-depth-prototypes	96	0	0	0	0.0
+stack-lanes	955	0	0	0	0.0
+wasm-worker-spike	882	0	62	0	7.0
+xs-oracle	923	252	130	0	19.4

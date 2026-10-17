@@ -1,0 +1,245 @@
+[compile:749 0.4] - Host stack overflow from deep source in parser, scoper or coder: every shape in `depth/*.js`   (100k parens, arrays, objects, templates, arrows, blocks, functions, `class extends`, `new`,   `!`, `a=`, destructuring) is a catchable `SyntaxError: stack overflow`, including via `eval` and   `Function`.
+[compile:753 0.3] - Compile at the VM's deepest native re-entry aborting the host: worst at-limit shapes   (`reentry/re_{parens,blocks,cond,tagged,funcs,plus,elseif,destr,classes}.js` at `nest(62)`) all   compile on the 8 MiB release thread; `nest(63)` is refused by the VM's own `ReentryLimit` first.
+[compile:756 1.0] - Nondeterminism from `HashMap`/`HashSet` in the compiler: no hash collection is iterated   (lookups only); float parsing and symbol hashing are host-independent.
+[compile:758 -] - Exponential cover-grammar re-parses: the parser never re-parses or backtracks; conversion is   linear per level (cost is CMP-5's clones, bounded by depth).
+[compile:760 0.2] - `scope_lookup` chain climbs as an unmetered super-linear path: each scope visited is charged via   `scope_get_declare`/`declare_ref` (`scoper.rs:901-927`).
+[compile:762 0.0] - `check_strict_binding_top` discarding its result (`let _ = …`, `stmt.rs:1616`) losing strict   arrow-parameter errors: errors are recorded through the parser's error state; all ten   `v2/strict_arrow.js` shapes are `SyntaxError` as in Node.
+[compile:765 0.0] - Unmetered coder targets (`create_target`): bounded by a constant per metered code record.
+[compile:766 0.0] - Quadratic BigInt literal conversion as a metering hole: it charges `work(limbs.len())` per digit   before the step.
+[compile:768 0.0] - Identifier tables diverging between lexer and regexp `\p{ID_Start}`: identical sets (measured).
+[compile:769 1.0] - Hashbang, `import.meta` in scripts, RegExp modifiers, `using` in blocks/functions: behave per spec.
+[compile:770 0.5] - `Function`-loop memory growth as a compiler retention leak (`fnleak*.js`, `fl.js`): confounded —   `ironhorse-xst` halts `HeapExhausted` on any 400k-iteration allocation loop, even   `for (…) { var o = {a: n}; }` (`v2/objloop.js`), so garbage is not reclaimed within one run;   forwarded to the VM memory/GC region, not a compil
+[compile:774 0.5] - Nested `eval` 200 levels deep (`depth/evalNested.js`): halts `HeapExhausted` from exponential   string growth in the probe itself (Node throws `RangeError: Invalid string length`); a VM string   limit question, not the compiler's.
+[integration-fu:620 0.6] - `-Wclobbered` at `xs_shim.c:295` as undefined behaviour: not UB, because `the` is never written after `setjmp`; the `noinline` variant removes the warning (INT-11 keeps the hygiene point).
+[integration-fu:621 0.3] - `xs_oracle_regexp` keeping `fxCompileRegExp`'s `code`/`data` chunks in unrooted C locals across `fxMatchRegExp`: the prior reviewer's probe (`regexp_main.c`, patterns up to 92 KB, and a variant with GC disabled, `variant/nogc.out`) shows identical, correct captures. The matcher does not allocate between compile and match.
+[integration-fu:622 0.5] - Fuzz builds without overflow checks (`fuzz/Cargo.toml` is its own workspace with no `[profile]`): plain `cargo fuzz run` without `-O` adds `-Cdebug-assertions`, which turns overflow checks on. Static, from cargo-fuzz's documented defaults; cargo-fuzz is not installed here.
+[integration-fu:623 0.4] - The prior reviewer's `ih_reject=13` in `gen_program`: XS also rejects these programs. In console mode XS emits a small SyntaxError-throwing stub, so the bytecode is non-empty; `compile_differential_check` classifies all of them as `BothReject` (probe `rust_probe_int2.rs`: 81 `BothReject` and 1,419 `Identical` in 1,500; 118 and
+[integration-fu:624 0.0] - The fuzz comparator ignoring thrown values hides current divergences: 237 both-abort samples across all surfaces, 0 thrown-value mismatches (`rust_probe_int2.rs`). Kept only as an ontology note.
+[integration-fu:625 1.0] - The ephemeral VM machine poisoned after an unwound panic: no; the next `evaluate` works (INT-P1 A2/A3).
+[integration-fu:626 1.0] - Release `endor run` overflowing on default main threads: 1 MiB suffices for the budget programs (INT-12 limits the claim to debug builds and small `ulimit -s`).
+[integration-fu:627 0.3] - Oracle `build.rs` overlays making the oracle diverge from shipped XS: they remove C UB in numeric classification and overlapping `snprintf` only. Note that the prior reviewer's `cbuild/oracle_probe` binary was built *without* the two overlays; the probes reused here (`e2`, `s1`) do not touch numeric literals outside int32 or R
+[integration-fu:628 0.3] - `PersistentMachine` meter ceiling arithmetic (`(state.index >> 16).saturating_add(limit)`, `compile_allowance`): saturating and re-based per crank; no bypass found.
+[integration-fu:629 1.0] - `MachineError::Store` boxing and `Result` size on the hot path: as documented.
+[integration-fu:630 0.0] - `cranks.rs` generator byte reuse: same pattern as INT-7 but with coprime moduli, so every sub-shape stays reachable.
+[integration-fu:634 0.4] - INT-P1: `rust_probe_int1_embedding_mirror.rs` → `rust_probe_int1.out`. Covers INT-2 and INT-4; run from `rust/endo/ironhorse-store-sqlite/tests/`, debug; deleted. `endo_probe_unbuildable.rs` is the direct `endo`-crate version that could not be built.
+[integration-fu:635 0.0] - INT-P2: `rust_probe_int2.rs` → `rust_probe_int2.out` (compile classification; thrown-value agreement).
+[integration-fu:636 0.0] - INT-P3: `rust_probe_int3.rs` → `int3.out`. Covers INT-6 and INT-8.
+[integration-fu:637 0.0] - INT-P4: `rust_probe_int4.rs` (byte identity per surface; output in INT-6).
+[integration-fu:638 0.0] - INT-P5: `rust_probe_int5.rs` → `int5.out` (INT-7).
+[integration-fu:639 0.0] - INT-P6: `rust_probe_int6.rs`, a re-run of the prior reviewer's probes 1 and 3 (INT-3, INT-9).
+[integration-fu:640 0.0] - INT-P7: `rust_probe_int7.rs` → `int7.out` (INT-12).
+[integration-fu:641 0.0] - INT-P8: `rust_probe_int8.rs` (ephemeral per-evaluation cost).
+[integration-fu:642 0.0] - INT-P9: `clobber/` (INT-11).
+[integration-fu:643 0.5] - Worker: `worker_no_gc.py` → `worker_no_gc.out` (INT-1).
+[integration-fu:644 0.3] - JS probes `e1_eval_context.js`, `e2_strict_script_var.js`, `s1_spread_setter.js`, `s1b.js`, re-run on `ironhorse-xst`, node and the prior `cbuild/oracle_probe`.
+[integration-fu:645 0.0] - All temporary test files were deleted from the repository; `git status` is clean.
+[regexp:421 0.5] - **Native-stack overflow on deep nesting / long subjects** — the parser, measure, emit, and   matcher all use explicit `Vec` work-stacks, not recursion; nesting is bounded by   `MAX_NESTING_DEPTH = 512` with a catchable `SyntaxError`, and pattern length is heap-linear.   No native recursion reachable from guest input. (Design s
+[regexp:425 -] - **Catastrophic backtracking unmetered** — the matcher *does* meter every step and expose   1024-step interruption; only the *unarmed* host fails to enforce a bound. Recorded as the   narrower RGX-6 rather than a metering hole.
+[regexp:428 1.0] - **Cross-crate Unicode-table duplication** — checked `ironhorse-compile`/`ironhorse-text`/   `ironhorse-vm`; none carries its own general-category/property tables, and identifier   tables are shared from `ironhorse-unicode`. No duplication.
+[regexp:431 0.5] - **Nondeterminism (HashMap iteration, float, address)** — the matcher/compiler are pure   integer/byte work; `capture_group_names` is a `Vec` in first-seen order; charset sorts are   `sort_unstable` + `dedup` on total orders. GC roots are explicitly sorted   (`gc.rs` `gc_roots`). No nondeterminism found in-region.
+[regexp:435 0.2] - **CESU-8 surrogate handling under `u`** — `find_character`/`cesu8_decode` correctly keep   lone surrogates standalone and combine only valid pairs; the lookbehind backref byte   arithmetic (matcher.rs:414-456) is a deliberate, documented XS-faithful quirk   (designs/ironhorse-known-defects.md), not a new bug.
+[regexp:439 0.0] - **`cross-plane fold` over-match** (p11 `/\u{20400}/iu` matches `\u{20428}`) — this is   XS-faithful: `FOLD1` is keyed by the low 16 bits and applied across all planes   (charcase.rs:2393-2399 documents the false-positives-across-planes behavior). A divergence   from Node, but an intended XS-parity departure, not an in-region d
+[snapshot-image:1177 0.0] - **Determinism:** all 34 VM `*_snapshot`/`*_rows` capture functions sort hash-map iteration by owner (scripted check); the slot codec canonicalizes NaN; no address enters the bytes; the streaming and image writers share encoders.
+[snapshot-image:1178 0.4] - **Allocation before validation:** all ~40 count-driven `Vec::with_capacity` calls in `image.rs` decoders clamp by `p.len()/k`; `decode_heap`'s `seen` scratch is sized after the truncation gate; `shared_codec` uses `collect` with no reservation.
+[snapshot-image:1179 0.4] - **Integer overflow in offsets:** `Cursor::bytes` and `decode_strings`/`decode_names` use `checked_add`; HEAP/STAC sizes are computed in u64; `AtomWriter` checks the cumulative envelope.
+[snapshot-image:1180 -] - **Recursion on nested structures:** all decoders are iterative.
+[snapshot-image:1181 0.2] - **Decoder panics:** only `try_into().unwrap()` on exact-length slices; `unreachable!` in `encode_function_state` (`image.rs:2214`) is reachable only through unchecked tooling.
+[snapshot-image:1182 0.0] - **Bytecode trust:** restored segments are framing-checked only, but dispatch already treats bytecode as untrusted (`run()` accepts raw bytecode, and the `bytecode_decoder` fuzz target exists), so restore grants nothing `run()` does not (medium confidence; dispatch not re-audited here).
+[snapshot-image:1183 0.5] - **WeakRef targets that are symbols:** these would fail the restore's `Kind::Instance` owner check, but the engine follows XS and refuses symbol weak targets (`natives/weak.rs:5-27`).
+[snapshot-image:1184 0.7] - **"Live generators/async/WeakRef/FinalizationRegistry/Proxy refuse persistence":** no longer true; all are carried (`persist_gates.rs`, `pending_row_gates.rs`) and `Coverage::Pending` is empty.
+[snapshot-image:1185 0.8] - **Promise `finally` handlers as non-persisting runtime natives:** they register in `promise_functions`, which `function_persists` admits (`natives/promise.rs:226-235`).
+[snapshot-image:1186 -] - **Nested decoder over-reservation:** inner reservations (cells, items, args) are clamped per row, and a dishonest count fails on the same row, so at most about 1.3× the payload is reserved transiently.
+[snapshot-store:702 0.7] - Crash between page writes and manifest write: SQLite commits rows, summaries, sections and manifest in one IMMEDIATE transaction under WAL + `synchronous=FULL` (`lib.rs:1106-1264`); FileStore swaps a complete fsynced file by rename and syncs the directory (`store_file.rs:258-326`). No torn epoch is reachable.
+[snapshot-store:703 0.5] - SQLite single writer: enforced, not just documented (`locking_mode=EXCLUSIVE` read back, plus an empty `BEGIN IMMEDIATE` at open, `lib.rs:351-382`), and tested by `tests/writer_exclusion.rs`.
+[snapshot-store:704 0.5] - Sequential stale FileStore handles: `commit_verified` reloads the durable file first, so a stale handle gets `EpochMismatch`/`BaselineMismatch` (`store_file.rs:625-633`); only truly concurrent commits race (SNS-9).
+[snapshot-store:705 0.0] - Migration atomicity: the ladder runs in memory, `validate_state` checks the result, and one compare-and-swap write lands it on every backend; SQLite rolls back DDL with it (verified by the backend's trigger-abort tests at `lib.rs:1374-1500`).
+[snapshot-store:706 0.4] - Free-segment diffing: the arena's free list mutates only by `push`/`pop` (`value.rs:1244-1286`, `:1428`) and `free_low` tracks every `pop`, so shipping segments from the low-water mark is exact.
+[snapshot-store:707 0.7] - Dirty-pages-only heap walk in the persist gate: a function's persistability is fixed for the life of its slot (`promise_functions`, `proxy_revokers` and the Intl maps lose entries only when GC frees the key slot), so the induction in `persist.rs:561-576` holds.
+[snapshot-store:708 0.5] - Partial collector unsoundness versus the full collector: summaries use the same `each_ref_slot` edges the full tracer uses (`gc.rs:187`), and every side-table value is a root, so page reachability over-approximates the full mark set; stale edges from free records only retain more.
+[snapshot-store:709 0.2] - Store suite coverage across backends: `metamorphic_suite`, `lazy_working_set_bound`, `boundary_collection_twins`, `checkpoint_acceptance`, `resume_equals_uninterrupted`, `commit_contract` and `consistent_edits_resume` run on Memory, File and SQLite (in-memory and on-disk); `sparse_section_acceptance` runs on SQLite in-memory o
+[snapshot-store:710 0.5] - Manifest decode bounds: every length is checked before slicing, `chunk_len` is capped at `u32::MAX` before any `usize` narrowing, and trailing bytes are refused (`store.rs:775-931`).
+[snapshot-store:711 1.0] - FileStore directory clamps: counts are checked against the file length before reservation (`store_file.rs:385-475`).
+[test262-harnes:498 0.5] - Resume can mix batches across corpora/engines: no; `plan` and `aggregate_plan` bind exact `run_id` strings and the plan, and the dirty checks cover `rust/engine` and `c/moddable` (`full-run.sh:223-236`).
+[test262-harnes:499 0.2] - Negative early tests pass on any Ironhorse throw: no; `evaluate_negative_early` keys on `IronhorseCompile`, and `$DONOTEVALUATE()` runtime throws cannot satisfy it (`xst.rs:1347`).
+[test262-harnes:500 0.0] - Expectations parser loses whitespace/newlines in failure reasons: no; JSON-quoted and round-trip tested (`expectations.rs:465-489`).
+[test262-harnes:501 0.3] - `probe_global` caching a transient machine failure: no; `MachineError` is not cached (`xst.rs:995-997`).
+[test262-harnes:502 0.0] - Determinism gate comparing NaN halts: handled by Debug-string fingerprint (`xst.rs:1441-1443`).
+[test262-harnes:503 0.3] - Shards stale against HEAD: they were last regenerated in `db164064` (4 engine commits before HEAD); a fresh single-file `endot-ih` run at HEAD reproduced the shard row I checked (`coerced-index-resize.js`).
+[test262-harnes:504 0.0] - Async refinement manufacturing passes: no; only `Test262:AsyncTestComplete` with no unhandled rejection is Covered (`xst.rs:2243-2267`).
+[test262-harnes:505 0.5] - `MeterLimit` compile errors counted as early errors in practice: unreachable, because the harness uses `ParseMeter::new()` (unbounded); kept as latent T262-14.
+[test262-harnes:506 1.0] - Oracle-only `oracle-nontermination` rows hiding Ironhorse hangs in Script cases: the control probe shows Script attribution works; only modules are affected (T262-3).
+[vm-boot-realm-:834 0.7] - **`JSON.parse` key, then `Object.assign` onto `Object.prototype`, then for-in** (`p1_forin_shadow.js`): correct. `object_assign` converts keys through `to_read_key`, which runs the pass.
+[vm-boot-realm-:835 0.7] - **IteratorClose `return` on for-of `break` and destructuring, with no `return` in the source** (`p6_iterclose.js`): correct in both.
+[vm-boot-realm-:836 0.9] - **RegExp natives reading `flags`/`exec` implicitly** (`replaceAll`, `matchAll`, `split`, `new RegExp(re)`; `p7_regexp_flags.js`): all agree with Node, through fast paths.
+[vm-boot-realm-:837 0.0] - **Spy-proxy probe under the Promise, Array and RegExp prototypes** (`p5_spy_chain.js`): no extra misses observed, matching Node.   The natives avoid these reads (see the await lead below).
+[vm-boot-realm-:839 0.8] - **`construct_compartment` rolling `installed_names_len` back on failure** (`natives/compartment.rs:170-172`): `create_environment` runs no install pass, so the floor never advances inside the guarded region. No resurrection path was found.
+[vm-boot-realm-:840 0.5] - **`HostValue` lifetime and GC:** the branded scope is invariant, and collection requires quiescence (`compartment.rs:1244-1257`), so no dangling host value mid-call.
+[vm-boot-realm-:841 0.8] - **`boot_fingerprint` determinism:** it sorts the HashMap-derived inputs, uses `Debug` of `f64` (exact) and is computed once per process. `intrinsic_surface_holders` is a HashSet used only for membership.
+[vm-boot-realm-:842 0.2] - **`Compartment::execute` endowment order:** `pending_ids` and `pending_names` are `BTreeSet`s, so the order is deterministic.
+[vm-boot-realm-:843 1.0] - **`ironhorse-unicode` table integrity:** the even lengths (1,372 and 1,598) and the full-domain hash test are present, and the odd-index panic is unreachable.
+[vm-boot-realm-:844 0.4] - **`Promise.prototype.finally` internal `[[PromiseFinally*]]` string keys** (`p15_finally_internal.js`): not visible on the closures handed to `then`; own keys are `["length","name"]`, as in Node.
+[vm-boot-realm-:845 0.6] - **Out of region, survived, handed off:** `await` of a native promise never reads `constructor`.   - The code is `suspend.rs:1150-1162` (`schedule_native_await`), whose comment cites XS's `mxGetID(_constructor)` check.   - Probe `p16_await_ctor_getter.js`: Node logs `["constructor read"]`; ironhorse logs `[]`.   - Relevant test
+[vm-boot-realm-:851 -] ---
+[vm-boot-realm-:855 0.0] All probes are under `../../../probes/vm-boot-realm-modules/`. The Rust probes were run with:
+[vm-boot-realm-:858 -] ``` CARGO_TARGET_DIR=$SCRATCH/audit-target RUST_MIN_STACK=33554432 cargo test --release -p <crate> --test <name> -- --nocapture ```
+[vm-boot-realm-:862 -] The temporary test files were then deleted from the repository; copies are kept next to the JS probes.
+[vm-boot-realm-:864 1.0] **J1 `p2_forin_shadow_proto.js`.** Output: ironhorse `Error: ["toFixed","x"]`; node `Error: ["x"]`.
+[vm-boot-realm-:866 -] ```js var parsed = JSON.parse('{"to' + 'Fixed":1, "x":2}'); Object.setPrototypeOf(Number.prototype, parsed); var seen = []; for (var k in Object(1)) seen.push(k); throw new Error(JSON.stringify(seen)); ```
+[vm-boot-realm-:874 0.3] **J2 `p3_get_hole_replace.js`.** Output: ironhorse `{"out":"[]","afterComputedRead":"function"}`; node `{"out":"[function toFixed() ","afterComputedRead":"function"}`.
+[vm-boot-realm-:876 -] ```js var re = /a/; re.exec = function () { var r = ["a"]; r.index = 0; r.groups = Object(1); return r; }; var out = "a".replace(re, "[$<to" + "Fixed>]"); var again = typeof Number.prototype["to" + "Fixed"]; throw new Error(JSON.stringify({ out: out.slice(0, 20), afterComputedRead: again })); ```
+[vm-boot-realm-:884 1.0] **J3: timing through `xst` (whole process; an empty script takes 17 ms).**
+[vm-boot-realm-:888 0.0] | `p8_novel_keys_fns0.js` (`o["k"+j]=j` × 20k) | 5.35 s |
+[vm-boot-realm-:889 0.0] | `p8_fns100k_only.js` (100k closures + 20k index keys) | 0.86 s |
+[vm-boot-realm-:890 0.0] | `p8_novel_keys_fns100k.js` | 12.40 s |
+[vm-boot-realm-:891 0.0] | `p9_json_keys.js` | 0.27 s |
+[vm-boot-realm-:892 0.0] | `p9_json_then_computed.js` | 0.88 s |
+[vm-boot-realm-:893 0.0] | `p9_computed_existing.js` | 0.50 s |
+[vm-boot-realm-:894 -] | node, 20k novel keys | 15 ms |
+[vm-boot-realm-:896 1.0] **J4: computed-read timing through `xst`.**
+[vm-boot-realm-:900 0.0] | `p11_static_read.js` | 0.61 s |
+[vm-boot-realm-:901 0.0] | `p11_index_read.js` | 0.62 s |
+[vm-boot-realm-:902 0.0] | `p11_computed_read.js` | 3.85 s |
+[vm-boot-realm-:903 0.0] | `p14_hasown_plain.js` | 2.59 s |
+[vm-boot-realm-:904 0.0] | `p14_keys_plain.js` | 3.06 s |
+[vm-boot-realm-:906 0.5] **J5: Compartment and Hardened JavaScript surface.** `p12_compartment_surface.js` output: `protoKeys ["globalThis","evaluate","constructor","Symbol(Symbol.toStringTag)"]`, and:
+[vm-boot-realm-:911 1.0] | `evaluate` | `"2"` |
+[vm-boot-realm-:912 0.0] | `evalIdentity` | `false` |
+[vm-boot-realm-:913 1.0] | `import` | `undefined` |
+[vm-boot-realm-:914 1.0] | `importNow` | `undefined` |
+[vm-boot-realm-:915 1.0] | `name` | `undefined` |
+[vm-boot-realm-:916 1.0] | `ModuleSource` | `undefined` |
+[vm-boot-realm-:917 1.0] | `harden` | `true` |
+[vm-boot-realm-:918 1.0] | `petrify` | `function` |
+[vm-boot-realm-:919 1.0] | `assert` | `undefined` |
+[vm-boot-realm-:920 0.0] | `HandledPromise` | `undefined` |
+[vm-boot-realm-:921 0.0] | `lockdownAgain` | `TypeError: lockdown already called` |
+[vm-boot-realm-:922 0.0] | `mathRandom` | `undefined` |
+[vm-boot-realm-:924 1.0] `p13_date_lockdown.js` output:
+[vm-boot-realm-:928 0.0] | `nowBefore`, `nowStart`, `nowInCompartment` | `0` |
+[vm-boot-realm-:929 1.0] | `dateIdentity` | `true` |
+[vm-boot-realm-:930 1.0] | `mathIdentity` | `true` |
+[vm-boot-realm-:931 0.0] | `protoCtor` | `TypeError` |
+[vm-boot-realm-:932 0.0] | `compartmentCtorInside` | `false` |
+[vm-boot-realm-:934 0.0] **R1 `zz_audit_vm-boot-realm-modules_1.rs` (ironhorse-vm; output under BOOT-3, BOOT-4 and BOOT-6).**
+[vm-boot-realm-:936 0.0] ```rust use ironhorse_vm::{parse_symbols, Interp, Machine}; use std::time::Instant; fn rss_kb() -> u64 { let s = std::fs::read_to_string("/proc/self/statm").unwrap();     s.split_whitespace().nth(1).unwrap().parse::<u64>().unwrap() * 4 } fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {     let (code, symbols) 
+[vm-boot-realm-:989 0.6] **R2 `zz_audit_vm-boot-realm-modules_2.rs` (ironhorse-snapshot; output under BOOT-1).** It uses `#[path = "common/twin.rs"] mod carry;` for `compile`, `crank` and `sig`:
+[vm-boot-realm-:992 0.5] ```rust fn twin_print(label: &str, first: &str, observation: &str) {     let (bytecode, names) = carry::compile(first);     let initial = || { let mut m = Interp::new(); m.link_intrinsics(&names);         let o = m.run(&bytecode); assert!(o.completed, "{:?}", o.halt); m };     let mut live = initial();     let live_seen = carry:
+[vm-boot-realm-:1014 0.0] **R3 `zz_audit_vm-boot-realm-modules_3.rs` (ironhorse-vm; output under BOOT-5).**
+[vm-boot-realm-:1016 -] ```rust fn body() {     let mut crank = String::new();     for i in 0..200 { crank.push_str(&format!("var fresh_{i} = {i}; ")); }     crank.push('0');     for keys in [0usize, 10_000, 50_000] {         let setup = format!("var p = []; for (var j = 0; j < {keys}; j++) p.push('\"k' + j + '\":0'); \              var o = JSON.parse(
+[vm-core-dispat:728 0.1] - **Operator semantics:** 121 checks matched Node exactly (`$P/p1_ops.js`). They covered:   - `%` with −0 and `i32::MIN % -1`; `**` with negative or zero bases, `NaN`, `Infinity`   - BigInt: mixing `TypeError`, `/0n` and `%0n` `RangeError`, negative `**`, negative shifts, two's-complement `& | ^ ~`, comparisons with Number and S
+[vm-core-dispat:734 0.8] - **Control flow:** 86 checks matched (`$P/p3_ctrl.js`): try/finally override of return, throw, break and continue with labels; catch scoping and destructuring; `with` and unscopables; TDZ in params, class, `for` head and `switch`; mapped/unmapped `arguments`; closures and per-iteration `let`. One exception was the Annex B funct
+[vm-core-dispat:735 0.3] - **Classes, private names, super, generators:** 63 checks matched (`$P/p5_class.js`): `#x in`, brand checks, double init, static private through subclass, super property get/set/computed/static/arrow/object literal, derived-constructor returns, `yield*` throw/return delegation, generator return-in-finally, re-entrancy `TypeErro
+[vm-core-dispat:736 0.0] - **Exception unwinding across native, generator and accessor boundaries:** 11 checks matched (`$P/p19_nested.js`).
+[vm-core-dispat:737 0.0] - **`super[index]` assignment:** an earlier inspection suspected that `intern_key(index.to_string())` in `set_super_at` broke array receivers. The probe matched Node (`$P/p16_super_index.js`).
+[vm-core-dispat:738 0.2] - **Integer `+ − × % neg`:** overflow is handled with `checked_*` and `wrapping_*` (`numeric.rs:367-436`); only `DECREMENT` is unchecked (CORE-1).
+[vm-core-dispat:739 0.5] - **Branch targets:** a negative `branch_target` is cast to a huge `usize` and stops at the `pc >= len` `Decode` halt; it does not panic. `CATCH` validates its target (`dispatch.rs:4621`).
+[vm-core-dispat:740 0.8] - **`leave_call(...).expect(...)` and the other `expect` sites in `dispatch.rs`, `frames.rs` and `private.rs`:** every caller is guarded by a depth or index check.
+[vm-core-dispat:741 0.2] - **Stack indexing in `exec_transfer`/`exec_module`/`exec_at`/`exec_super_at`:** all are guarded by `checked_sub` and minimum counts.
+[vm-core-dispat:742 0.6] - **Determinism:** no order-sensitive iteration of a `RandomState` HashMap in this region. `hoist_vars_to_global` sorts (`environment.rs:103-104`); `has_unhandled_rejection` uses `any`; the iterator latch reset is order-free.
+[vm-core-dispat:743 -] - **NaN canonicalization:** literals, increments and payload copies all start from canonical values.
+[vm-core-dispat:744 0.5] - **`count_new_locals`:** the per-closure O(body) scan is paid for by the per-byte `tick_chunk_new(n)` charge.
+[vm-core-dispat:745 1.0] - **Unhandled opcodes:** only `HOST`, `CODE_ARCHIVE_*`, `STRING_ARCHIVE_*` and `NO_CODE`. The compiler emits none of them.
+[vm-core-dispat:746 0.0] - **Deep recursion `d(1000)`:** halts `StackOverflow(4060)`, as the XS 4096-slot geometry requires.
+[vm-core-dispat:747 0.5] - **Property-key id exhaustion:** 70,000 distinct computed keys exhaust the key space even through reads and `in` (`$P/p15_*.js` → `RangeError: property key space exhausted`). XS also interns on `fxAt`; this belongs to the property/key reviewer, as a note that ids are never reclaimed.
+[vm-core-dispat:748 0.4] - **Cross-region leads, not owned here:**   - `new Promise(r => r(Promise.resolve(x)))` settles one tick early (`$P/p8b.js`: node `["p1","p2","rp-nested",…]`, ironhorse `["p1","rp-nested","p2",…]`). This is the NewPromiseResolveThenableJob tick count, in the promise natives.   - `break` out of `for await` over an async generator
+[vm-core-dispat:756 0.0] ```rust use ironhorse_vm::{parse_symbols, ChunkOffset, Halt, Interp, Kind, Payload, RunOutcome, Slot, SlotIndex}; use std::mem::size_of; fn measure(label: &str, src: &str) {     let (code, symbols) = ironhorse_compile::compile_atoms(src).unwrap();     let symbols = parse_symbols(&symbols);     let mut vm = Interp::new();     vm.
+[vm-core-dispat:788 -] Output:
+[vm-core-dispat:790 -] ``` AUDIT size_of Slot=24 Payload=16 Kind=1 SlotIndex=4 ChunkOffset=4 Option<Slot>=24 Halt=56 RunOutcome=248 Result<Slot,Halt>=56 AUDIT size_of Interp=6080 AUDIT baseline: completed=true halt=Return slots+=6 chunk_bytes+=4 raw_meter+=1478704 AUDIT 1000 arrows: completed=true halt=Return slots+=4006 chunk_bytes+=6004 raw_meter+=1
+[vm-core-dispat:809 0.0] | `for (...) { s = s + i; }` | 2,209 |
+[vm-core-dispat:810 0.5] | + `f(i)` with `f(a){return a}` | 6,235 |
+[vm-core-dispat:811 1.0] | + `f(i)` with 3 `var` locals | 11,710 |
+[vm-core-dispat:812 1.0] | `{ let x = i; s = s + x; }` | 3,049 |
+[vm-core-dispat:813 0.0] | same inside `try {…} catch {}` | 5,459 |
+[vm-core-dispat:814 -] | same, frame with 12 more bindings | 5,856 |
+[vm-core-dispat:815 1.0] | `s = s + o.c` (3-property object) | 4,365 |
+[vm-core-dispat:816 1.0] | top-level (global) `s = s + i` | 9,759 |
+[vm-functions-a:791 0.5] - `Vec::split_off(0)` swapping the whole stack buffer into `SavedFrame`: on rustc 1.91.1, `split_off(0)` copies only the tail (verified with a 3-element split from capacity 4096, which left `other.cap=3`).
+[vm-functions-a:792 0.7] - Shadowed `let` lost from `id_map` after a block `UNWIND` (`retain` drops the name entirely): `p16`/`p16b` give the right results; the by-name paths do not hit it.
+[vm-functions-a:793 0.7] - Sync generator `yield*` protocol (missing `throw` closes and throws TypeError, `return` forwarding, `throw` forwarding, `finally` yields during `return()`, re-entrancy TypeError, `finally` return override): all match node (`p05`).
+[vm-functions-a:794 1.0] - Mapped and unmapped `arguments`, `with` receiver, direct-eval `this`/`new.target`, indirect eval scope, direct eval `var` leakage (sloppy and strict), per-iteration closure bindings: all match node (`p17`, except Annex B.3.3, inventoried).
+[vm-functions-a:795 0.7] - Class constructor called without `new`, derived `this` TDZ, derived constructor returning `undefined` without `super`, bind name and length, Proxy `.call`: correct (TypeError or ReferenceError, `bound foo/2`, 7).
+[vm-functions-a:796 0.4] - Error `cause`, `Error.prototype.toString` generic edge cases, AggregateError from an iterable with a cause, `Promise.withResolvers`, `Promise.try` argument forwarding, resolving a promise with itself: correct (`p25`).
+[vm-functions-a:797 0.5] - `await` of a native promise and `await` of a thenable tick counts: match node (`p06` A rows).
+[vm-functions-a:798 1.0] - `Promise.all`/`allSettled`/`race`/`any` with native elements: tick order matches node (`p07`).
+[vm-functions-a:799 0.8] - HashMap iteration nondeterminism in this region: `hoist_vars_to_global` sorts, `has_unhandled_rejection` uses an order-independent `any`, and saved-frame `id_map` rows are sorted (`persist.rs:2459`).
+[vm-functions-a:800 0.5] - `enter_construct_bound` quadratic copy unmetered: each level goes through `reserve_work_scratch`, which charges per element, so the charge is quadratic too.
+[vm-functions-a:801 1.0] - Eval code segments leaking forever: `collect_garbage` compacts them (2,000 to 0 in probe `e`).   Whether production paged collection does too was not checked.
+[vm-functions-a:803 0.7] - Out-of-region observations, for the owners:   - `new Array(100000).fill(3)` throws `RangeError: property key space exhausted` (array natives intern index keys);   - `Object.keys` shares FN-16's per-call key-string allocation.
+[vm-memory-gc-m:727 0.2] - HashMap iteration order reaching guest-visible or persisted state through the collector:   roots are sorted and deduplicated (`interp/gc.rs:29-35`), live chunk offsets are sorted   (`value.rs:1876-1878`), finalization callbacks run in owner order (`natives/weak.rs:257`),   reaction arenas use `BTreeSet`.
+[vm-memory-gc-m:731 0.5] - A per-machine leak on drop: the 63.6 KB left after dropping an `Interp` is one-time process   state (1, 10 and 50 machines all leave 63.6 KB; `zz_audit_vm_memory_2.rs` test f).
+[vm-memory-gc-m:733 -] - Sweep cost on a large empty arena: 1.55 ms for 801,101 records with nothing to reclaim.
+[vm-memory-gc-m:734 -] - Map/Set delete: tombstones compact amortized; 40k front deletes take 148 ms, linear.
+[vm-memory-gc-m:735 1.0] - Meter overflow: `charge_and_check` fails closed on `checked_add` (`meter.rs:276-282`); the   unchecked `tick_*` adds need 2⁴⁸ computrons.
+[vm-memory-gc-m:737 0.0] - `meter.out` build mode: release; key cases re-measured in release (`$P/probe3.out`).
+[vm-memory-gc-m:738 -] - Map entry ceiling charge (96 B by capacity class) is close to the resident cost (127 B).
+[vm-memory-gc-m:739 -] - Boot footprint and slot size: 327 KB per new machine and a 24-byte slot are both smaller   than XS.
+[vm-memory-gc-m:741 -] - Chunk allocation charged one raw unit per byte (200 MB in 0.36 s for 3,079 computrons): XS   parity, a memset, and bounded per crank by the ceiling.
+[vm-memory-gc-m:743 0.7] - The generated CharacterClassEscapes test (`$P/t262.js`) halting `HeapExhausted` is the regexp   state cap (T262-7), not garbage: the same test with a join-based `buildString` still halts   at 25 MB peak.
+[vm-memory-gc-m:746 0.5] - Weak semantics at the boundary: `WeakRef` targets are nulled before the sweep, registries   with cells are roots as in XS, and `KeepDuringJobs` is trivially satisfied because nothing   collects inside a crank.
+[vm-memory-gc-m:749 0.5] - String concatenation, `JSON.stringify` and naive `indexOf` charging far below their work   (`doubling_concat_25`: 252,588 ns per computron; `indexOf` 1e6×1e3: 6.1 s for 265,555   computrons, `$P/probe3.out`) are real but belong to the natives-values region (NVAL-1,   NVAL-3); the concatenation cases are additionally bounded pe
+[vm-natives-obj:559 0.6] - **GC rooting of Rust-local vectors** (filter's `kept`, the Set-method results, `typed_array_from_source` snapshots): safe, because collection is quiescent-only (`gc.rs:110` `admit_collection` → `NotQuiescent` mid-crank).
+[vm-natives-obj:560 0.4] - **HashMap-order nondeterminism**: none found.   - Finalization cleanup sorts registries by index (`weak.rs:257`).   - The `functions.iter().find` sites match a unique boot method (no compartment copies `ObjectToString`; `realm.rs:150-164` copies only eval, Function and Compartment).   - The `CollKey` content hash is process-ra
+[vm-natives-obj:564 1.0] - **Collection brand recovery under `Reflect.apply`, `.call`, `bind`, Proxy, spread, `Array.from` and the Map/Set constructors**: all correct (p24).
+[vm-natives-obj:565 0.0] - **Array edge cases**: 44 cases match node (p01), including 2^53 array-likes, holes, sort stability, comparator throw, toSorted/toSpliced/with, `flat(Infinity)`, copyWithin, Array.from closing, species, isConcatSpreadable, proxy trap order, and length 2^32. The only difference is the error text for push overflow.
+[vm-natives-obj:566 -] - **Map/Set semantics**: correct for SameValueZero, -0 and NaN, integer-vs-double keys, BigInt and string keys, delete and re-add during iteration, forEach additions, union/difference/symmetricDifference/isSubsetOf, size<0 → RangeError, and groupBy basic results (p19).
+[vm-natives-obj:567 0.5] - **Buffers**: correct for resizable buffers and out-of-bounds views, `transfer` and `transferToFixedLength` semantics, SAB grow plus Atomics.add, `TypedArray.set` with overlapping buffers (same and different type), the default sort order of -0/0/NaN, `TypedArray.from` over a Set, and subarray species (p19).
+[vm-natives-obj:568 0.0] - **Float16**: `Math.f16round` boundaries (65504, 65520→Infinity, 2^-25→0, 1.5·2^-25→2^-24, ties to even, denormal min→0) and `Float16Array` stores are correct.
+[vm-natives-obj:569 0.8] - **Cyclic `[a].join()`**: halts with `ReentryLimit` instead of node's `"1-"`. This is the engine-wide policy (plain recursion halts with `StackOverflow`, p03) and is XS/xsnap-faithful. It belongs to the stack region.
+[vm-natives-obj:570 -] - **Map delete**: amortized O(1) (216 ns/computron).
+[vm-natives-obj:571 -] - **Shift and unshift**: metered proportionally (100 ns/computron against a 90 baseline). This is a perf issue only (NOBJ-15), not a metering hole.
+[vm-natives-obj:572 0.5] - **`NotImplemented("concat:sparse-arg")`**: unreachable, since the guard requires dense operands (`dispatch.rs:4514-4536`).
+[vm-natives-obj:573 -] - **WeakRef keep-alive during a job**: guaranteed by quiescent-only collection.
+[vm-natives-obj:574 0.0] - **Uint8Array base64/hex**: smoke results correct (`"1,2,3|0102ff|AQID"`).
+[vm-natives-val:778 0.5] - **Number formatting:** `toFixed`, `toPrecision`, `toExponential`, radix `toString` (including fractional values, `Math.PI.toString(36)`, `MAX_VALUE` base 36), `-0`, `1e21` and range errors all match Node (`num1.js`: 36/36 values identical; only error message texts differ).
+[vm-natives-val:779 0.3] - **`Number()` / `parseFloat` / unary `+` over 49 tricky inputs:** numeric separators, `0x`, signed hex, `Infinity` spellings, U+FEFF / U+180E / U+0085 / U+2028 whitespace, denormal boundaries, 400-digit literals, `1n`, Arabic digits. All 196 results match Node (`parse1.js`). Only `parseInt` and non-decimal accumulation are wron
+[vm-natives-val:780 0.5] - JSON stringify of lone surrogates, `toJSON`, wrappers, BigInt `toJSON`, gaps (string and number), replacer arrays with Number / String wrappers, `rawJSON` / `isRawJSON`, `__proto__` keys, duplicate keys, reviver `context.source` and property order all match Node (`json1.js`: 38/40). The plain-host `built-ins/JSON` test262 resu
+[vm-natives-val:781 0.3] - `String.prototype.normalize` uses ICU4X and preserves lone surrogates. `toWellFormed`, `isWellFormed`, `at`, `fromCodePoint` range errors, `String.raw`, `substr`, `lastIndexOf(NaN)`, `replaceAll('')` and the trim whitespace set all match Node. `built-ins/String` is 1218/1223 on the plain host.
+[vm-natives-val:782 0.0] - `Math.sumPrecise` uses an exact 35-limb fixed-point accumulator with correct ties-to-even and -0 handling; unit tests and probes agree.
+[vm-natives-val:783 1.0] - BigInt `asIntN` / `asUintN` / bitwise / shift semantics: `built-ins/BigInt` is 76/77 on the plain host (1 cross-realm).
+[vm-natives-val:784 0.5] - URI encode / decode are linear, charged per unit and spec-correct. The 20 s test262 timeout (`S15.1.3.2_A2.5_T1.js`, Node 0.32 s) comes from general interpreter cost: decodeURIComponent itself is about 2.5 µs per call (`uri_bench1.js`: 0.50 s for 200k calls vs a 0.17 s loop baseline).
+[vm-natives-val:785 1.0] - Uint8Array base64 / hex: charged per unit, heap admitted; `built-ins/Uint8Array` 68/70 (both failures are the immutable-ArrayBuffer harness).
+[vm-natives-val:786 1.0] - Nondeterminism: no HashMap iteration feeds an output in these files (the HashMaps are lookups only; locale extensions use a `BTreeMap`). Number rendering uses Rust's deterministic formatting. Math transcendental functions are platform libm unless `deterministic-math` (enabled by `consensus`). The time sources are the constant 
+[vm-natives-val:787 0.7] - Host panics: fuzz-style probe `panic1.js` (multibyte, huge and garbage inputs across 11 Temporal / Date / Intl parsers, plus nine extreme Temporal arithmetic calls) produced only catchable errors, no panic. The slicing in `date.rs` / `temporal.rs` parsers is on verified ASCII boundaries.
+[vm-natives-val:788 0.0] - Date range edges: ±8.64e15 clipping, `+275760-09-13T00:00:00.000Z` / `.001Z`, `-271821-04-20`, `MakeDay` month normalization via i128, `setFullYear` on an invalid date, and `setYear` all match Node.
+[vm-natives-val:789 0.0] - JSON.parse with 20,000 distinct keys is fast (0.25 s). The slow case I hit (`o[k[i]] = 1` for 20,000 distinct computed names: 5.6 s vs Node 0.17 s, `rep_d.js`) is in property storage or interning, outside this region; passed on as a lead for the property-model reviewer.
+[vm-natives-val:791 -] ---
+[vm-natives-val:795 0.0] Probe sources and raw outputs are in `../../../probes/vm-natives-values/`:
+[vm-natives-val:796 0.0] - JS probes: `*.js`, with `*.ih` / `*.node` outputs.
+[vm-natives-val:797 1.0] - `run.sh`: an IronHorse vs Node differ.
+[vm-natives-val:798 0.0] - `t262run.py`: the plain-host test262 runner; per-file results in `t262/*.json`.
+[vm-natives-val:799 0.0] - `zz_audit_nval_1.rs`, `zz_audit_nval_2.rs`: copies of the deleted Rust probes.
+[vm-natives-val:801 0.0] Rust probe 1 (`ironhorse-vm/tests/zz_audit_nval_1.rs`, deleted after the run; release build, `CARGO_TARGET_DIR=$SCRATCH/audit-target`):
+[vm-natives-val:803 0.0] ```rust use ironhorse_vm::Interp; use std::time::Instant; fn run(label: &str, src: &str) {     let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");     let names = ironhorse_vm::parse_symbols(&s);     let mut m = Interp::new(); m.link_intrinsics(&names);     let t = Instant::now(); let out = m.run(&b); let ms =
+[vm-natives-val:833 -] Output (machine shared with other builds, so absolute times are noisy; the ratios are what matter):
+[vm-natives-val:835 -] ``` baseline-loop  completed=true computrons=    67500034 ms=   7249.0 computrons/ms=    9311.6 baseline-str   completed=true computrons=     7125388 ms=    619.0 computrons/ms=   11510.9 bigint-mul     completed=true computrons=      128117 ms=   2198.9 computrons/ms=      58.3 bigint-div     completed=true computrons=       28
+[vm-natives-val:853 0.0] Rust probe 2 (`ironhorse-vm/tests/zz_audit_nval_2.rs`, deleted): the same harness with `m.arm_meter(100, Box::new(move |c| c <= limit))`.
+[vm-natives-val:855 -] ``` includes   limit=20000 completed=true  computrons=15047 ms=7962.2 halt=Return bigint-mul limit=5000  completed=false computrons=6145  ms=8.4    halt=MeterAbort   (limit hit during setup; inconclusive) control    limit=20000 completed=false computrons=20028 ms=0.8    halt=MeterAbort ```
+[vm-natives-val:861 0.8] Plain-host test262 summary (`t262run.py`): sloppy mode only; async and module cases skipped; no `$262`, so cross-realm cases fail as `call: not a function`; tip at `target/test262-report/test262-src`.
+[vm-natives-val:865 -] | built-ins/JSON | 163/165 |
+[vm-natives-val:866 -] | built-ins/String | 1218/1223 |
+[vm-natives-val:867 -] | built-ins/Number | 339/340 |
+[vm-natives-val:868 -] | built-ins/BigInt | 76/77 |
+[vm-natives-val:869 -] | built-ins/Date | 583/594 |
+[vm-natives-val:870 -] | built-ins/Math | 322/327 |
+[vm-natives-val:871 -] | built-ins/parseInt | 54/55 |
+[vm-natives-val:872 -] | built-ins/parseFloat | 53/54 |
+[vm-natives-val:873 -] | built-ins/Uint8Array | 68/70 |
+[vm-natives-val:874 -] | built-ins/decodeURIComponent | 54/56 (1 timeout) |
+[vm-natives-val:875 -] | built-ins/encodeURIComponent | 30/31 |
+[vm-natives-val:876 -] | built-ins/Temporal | 2023/4603 |
+[vm-natives-val:877 -] | intl402 | 785/3357 |
+[vm-property-mo:892 1.0] - **PropertyIndex and replica divergence:** its maps use `RandomState`, but   iteration order only affects which owners are dropped first. Lookups return   the same node as a linear scan; the index is not persisted and not metered.   No divergence.
+[vm-property-mo:896 0.3] - **Stale `accessors` entries after slot reuse:** the table is pruned by   owner liveness (`interp/state.rs:2478`, `gc_hook(early, owner_pair)`).
+[vm-property-mo:898 0.0] - **Dual index/name storage inconsistencies:** 26 `dualkey.js` cases, with and   without pre-interned names, match node.
+[vm-property-mo:900 0.0] - **ValidateAndApplyPropertyDescriptor edge cases match node:**   non-configurable enumerable change, same or different getter, NaN and -0,   data↔accessor conversion defaults, generic-on-accessor, set-only keeping   get (`mop5.js`).
+[vm-property-mo:904 0.4] - **Array exotic length semantics match node:** shrink stopping at a   non-configurable element, strict TypeError, partial shrink with   `writable:false`, RangeError on bad lengths, `valueOf` called twice, index   4294967295, non-writable `length` with push or index define (`mop5.js`,   `arrlen.js`).
+[vm-property-mo:909 -] - **String exotic matches node:** own-key order including out-of-range index   expandos, same-value define, "-0", strict delete and assignment.
+[vm-property-mo:911 0.0] - **TypedArray matches node:** `"-0"`, `"1.5"`, `"Infinity"`, `"NaN"` are   numeric (no prototype read); `"0.0"` and `"1e2"` are ordinary;   out-of-bounds set through a child receiver; define/delete rules;   detached-buffer keys.
+[vm-property-mo:915 -] - **Arguments exotic** mapping and unmapping (assign, delete,   define-value/non-writable/accessor, strict) matches node.
+[vm-property-mo:917 -] - **Proxy invariants** for defineProperty, has, get, set, deleteProperty   (including the ES2020 non-extensible check), getPrototypeOf,   setPrototypeOf, isExtensible, preventExtensions and ownKeys are correct by   reading and probe. Freeze and isFrozen trap order matches node.
+[vm-property-mo:921 0.7] - **Divergences from node where IronHorse is correct:**   - `Object.isFrozen(Object.preventExtensions([]))`: IronHorse `false`     (spec, since `length` is writable); node `true`.   - `Object.seal(new Uint8Array(2))`: IronHorse throws, per ES2024 TypedArray     `[[DefineOwnProperty]]`.   - `Object.preventExtensions` of a length-
+[vm-property-mo:928 1.0] - **Divergences that are implementation-defined:**   - for-in over a Proxy: trap order differs from node; IronHorse follows the     spec's informative EnumerateObjectProperties.   - Function own-key order (`caller` after `prototype`, no `arguments`).
+[vm-property-mo:932 0.7] - **`find_property`/`instance_prototype` fast paths in natives are guarded:**   species (`natives/array.rs:1845-1945`), RegExp `exec`   (`natives/regexp.rs:228-280`), `prototype_of`, `render`, `rawJSON`, `super`   home. All 15 `bypass1.js` cases match node: Proxy `newTarget` `prototype`   get, `instanceof`/`isPrototypeOf` throug
+[vm-property-mo:940 -] - **Guest-reachable poison latch:** not found. All exhaustion probes (names,   JSON, symbols, eval names, template sites) produced a catchable   `RangeError`.
+[vm-property-mo:943 0.7] - **`keys_alloc.js` HeapExhausted:** not property-specific. The control   `keys_alloc_ctrl.js`, which allocates the same strings without   `Object.keys`, also exhausts, so this is a GC-within-script question for the   memory region.
+[vm-property-mo:947 1.0] - **The O(N) chain walk itself (lookups):** hits and misses are O(1) once   indexed; `big_idx_100k.js` and the read-only loops scale linearly. The cost   is churn (PROP-3) and per-op overhead (PROP-4), not lookup complexity.

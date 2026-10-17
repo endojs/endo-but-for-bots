@@ -1,0 +1,14 @@
+native_async_generator_method: routed 3, named in body 3, routed-but-unnamed [], named-but-not-routed 0
+native_method_array: routed 31, named in body 32, routed-but-unnamed [], named-but-not-routed 1
+native_method_array_callback: routed 11, named in body 11, routed-but-unnamed [], named-but-not-routed 0
+native_method_buffer: routed 47, named in body 47, routed-but-unnamed [], named-but-not-routed 0
+native_method_collection: routed 34, named in body 34, routed-but-unnamed [], named-but-not-routed 0
+native_method_function: routed 60, named in body 60, routed-but-unnamed [], named-but-not-routed 0
+native_method_intl: routed 32, named in body 32, routed-but-unnamed [], named-but-not-routed 0
+native_method_iterator: routed 19, named in body 19, routed-but-unnamed [], named-but-not-routed 0
+native_method_object: routed 58, named in body 58, routed-but-unnamed [], named-but-not-routed 0
+native_method_promise: routed 20, named in body 20, routed-but-unnamed [], named-but-not-routed 0
+native_method_regexp: routed 10, named in body 10, routed-but-unnamed [], named-but-not-routed 0
+native_method_string: routed 37, named in body 37, routed-but-unnamed [], named-but-not-routed 0
+native_method_temporal: routed 30, named in body 30, routed-but-unnamed [], named-but-not-routed 0
+routed-but-unnamed total: 0
