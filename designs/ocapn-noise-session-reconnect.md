@@ -3,10 +3,40 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-05-19 |
+| **Updated** | 2026-10-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md). |
+
+## Status
+
+Phases 1, 2, 3, and 5 are implemented in `packages/ocapn-noise`
+(`src/network.js`, `src/crossed-hellos.js`; tests in
+`test/heartbeat.test.js`, `test/session-queue.test.js`, and
+`test/reconnect.test.js`). Phase 4 (Resume) is not started; reconnect
+uses Rekey only, pending Open question C1.
+
+Deviations from the design as written:
+
+- **Resumption hello (§ 4).** Under Rekey, the new instance carries an
+  `op:session-hello` naming the session (by the opening handshake's
+  transcript hash) and the epoch the dialer asks for, not a `RESUME`
+  record. The responder refuses a hello for a session it does not hold.
+  It closes, without an answer, a dial for an epoch the session has
+  already reached and a dial that loses the crossed-hellos tiebreaker;
+  the dialer treats either as a failed attempt and backs off. It accepts
+  any later epoch, not only `previous_epoch + 1`, so a dialer that
+  missed the answer to an earlier reconnect still converges. The epoch
+  orders dials; the session token and the handshake-authenticated peer
+  key authorize the resume.
+- **Tiebreaker (§ 3, P3).** Designator comparison is implemented, using
+  the x25519 ephemerals of the handshake that opened the session. The
+  side with the greater ephemeral keeps its own dial, which is the same
+  outcome as the smaller side being responder. Equal ephemerals, which
+  only a peer echoing ours could produce, go to the side that opened the
+  session. P3 stays open for review.
+- **Either side redials (§ 3).** Both sides redial on loss, rather than
+  only the side that opened the session.
 
 ## What is the Problem Being Solved?
 
@@ -309,7 +339,8 @@ On the new TCP transport, after TCP connect succeeds:
    ```
 
 2. Responder side decrypts and validates that
-   `new_epoch == previous_epoch + 1`, that the resumption is on the
+   `new_epoch == previous_epoch + 1` (the Rekey path, which has no
+   `RESUME` record, relaxes this; see § Status), that the resumption is on the
    expected session (cross-referenced by the designator pair), and
    that `last_acked_recv_nonce` does not jump backward.
 

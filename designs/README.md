@@ -495,7 +495,7 @@ LLM-agent stack).*
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Deprecated (superseded by [ocapn-noise-network](ocapn-noise-network.md)) |
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
-| [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
+| [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-10-17 | In Progress |
 | [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
