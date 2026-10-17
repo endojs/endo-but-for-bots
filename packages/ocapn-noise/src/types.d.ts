@@ -96,37 +96,27 @@ export interface OcapnNoiseSession {
   isInitiator: boolean;
   reader: Reader<Uint8Array>;
   writer: Writer<Uint8Array>;
-  /** A snapshot of the session's heartbeat state. */
   getLiveness(): SessionLiveness;
   close(): void;
 }
 
 /**
- * Session heartbeat settings, per
- * `designs/ocapn-noise-session-reconnect.md` § 5. With heartbeats, each
- * side emits `op:ping` and `op:pong` inside the Noise channel every
- * `intervalMs`, and the session closes with an error once
- * `sessionTimeoutMs` elapse without any frame from the peer.
- *
- * Enable heartbeats only toward peers that absorb them: a peer that
- * does not know `op:ping` and `op:pong` aborts the session. The peer's
- * interval must also be well under this side's `sessionTimeoutMs`, or
- * this side drops a healthy session.
+ * Session heartbeat settings; the README's "Session heartbeats" section
+ * describes the behavior.
  */
 export interface HeartbeatOptions {
   /** Milliseconds between heartbeats. Default 5000. */
   intervalMs?: number;
   /**
-   * Milliseconds without a frame from the peer before the session is
-   * lost. Default six intervals; must be at least three intervals.
+   * Milliseconds a pending read waits for a frame from the peer before
+   * the session is lost. Default six intervals; must be at least three
+   * intervals.
    */
   sessionTimeoutMs?: number;
 }
 
 export interface SessionLiveness {
-  /** Whether this session sends and absorbs heartbeats. */
   heartbeat: boolean;
-  /** The transport instance number. */
   epoch: bigint;
   /**
    * The highest Noise nonce this side has decrypted, or `undefined`
@@ -202,7 +192,6 @@ export interface MakeOcapnNoiseNetworkOptions {
   codec: OcapnCodec;
   handshakeTimeoutMs?: number;
   maxInProgressPerLocalKey?: number;
-  /** Off by default; see `HeartbeatOptions`. */
   heartbeat?: HeartbeatOptions;
 }
 

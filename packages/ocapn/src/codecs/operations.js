@@ -69,7 +69,7 @@ const OpGcAnswersCodec = makeOcapnRecordCodecFromDefinition(
 
 // Proposed, pending OCapN-org review: the session heartbeat of
 // designs/ocapn-noise-session-reconnect.md. Only the OCapN-Noise network
-// emits these; other networks neither send nor expect them.
+// emits these; an OCapN session that receives one ignores it.
 const OpPingCodec = makeOcapnRecordCodecFromDefinition('OpPing', 'op:ping', {
   epoch: NonNegativeIntegerCodec,
   sequence: NonNegativeIntegerCodec,
