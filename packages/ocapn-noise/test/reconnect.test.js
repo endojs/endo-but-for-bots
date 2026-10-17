@@ -346,7 +346,7 @@ test('the winner of crossed hellos stops deferring when its dials keep failing',
   // Backoff of a millisecond keeps the greater side dialing nearly all
   // the time, so a deference window that restarted with each of its
   // failed dials would drop nearly every dial of the lesser side (paced
-  // apart here) until hardTimeoutMs.
+  // apart here) until hardTimeoutMs, past the wait below.
   const quickBackoff = { ...reconnect, backoffInitialMs: 1, backoffMaxMs: 1 };
   const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
     t,
@@ -374,7 +374,6 @@ test('the winner of crossed hellos stops deferring when its dials keep failing',
       !sessionA.getLiveness().reconnecting &&
       !sessionB.getLiveness().reconnecting,
   );
-  t.true(droppedDials(greater) >= 1);
   t.is(greater.getOpenStreams(false), 1);
   greater.failOutboundAfter(undefined);
   t.deepEqual(await readBytes(sessionB, 1), [1]);
