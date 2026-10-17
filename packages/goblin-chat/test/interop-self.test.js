@@ -50,7 +50,6 @@ test('endo OCapN client interops with the JS goblin-chat backend', async t => {
   const hostClient = await makeOcapn({
     codec: syrupCodec,
     debugLabel: 'js-host',
-    captpVersion: CAPTP_VERSION,
     locator: hostLocator,
     network: makeStartSessionNetwork(
       (handlers, logger) =>
@@ -58,7 +57,7 @@ test('endo OCapN client interops with the JS goblin-chat backend', async t => {
           hostNetlayerRef.netlayer = netlayer;
           return netlayer;
         }),
-      { codec: syrupCodec },
+      { codec: syrupCodec, captpVersion: CAPTP_VERSION },
     ),
   });
   if (!hostNetlayerRef.netlayer) {
@@ -72,10 +71,9 @@ test('endo OCapN client interops with the JS goblin-chat backend', async t => {
   const remoteClient = await makeOcapn({
     codec: syrupCodec,
     debugLabel: 'endo-remote',
-    captpVersion: CAPTP_VERSION,
     network: makeStartSessionNetwork(
       (handlers, logger) => makeWebSocketNetLayer({ handlers, logger }),
-      { codec: syrupCodec },
+      { codec: syrupCodec, captpVersion: CAPTP_VERSION },
     ),
   });
 

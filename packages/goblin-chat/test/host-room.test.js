@@ -59,7 +59,6 @@ test.serial(
 
     const remote = await makeOcapn({
       codec: syrupCodec,
-      captpVersion: CAPTP_VERSION,
       network: makeStartSessionNetwork(
         handlers =>
           makeWebSocketNetLayer({
@@ -68,7 +67,7 @@ test.serial(
             // exceptional paths anyway.
             logger: { log: () => {}, info: () => {}, error: () => {} },
           }),
-        { codec: syrupCodec },
+        { codec: syrupCodec, captpVersion: CAPTP_VERSION },
       ),
     });
 

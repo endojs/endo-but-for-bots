@@ -40,9 +40,8 @@ const COUNTER_SOURCE = `
 
 /** @import { ExecutionContext } from 'ava' */
 /**
- * @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options]
- * @param root0
- * @param root0.onDeleteWorker
+ * @param {ExecutionContext} t
+ * @param {{ onDeleteWorker?: (id: string) => void }} [options]
  */
 const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
