@@ -72,7 +72,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
       { intervalMs: heartbeat.intervalMs, sessionTimeoutMs: 5000 },
     );
     injector.stall();
-    // Stall for longer than the heartbeat interval, writing as we go.
     /** @type {bigint | undefined} */
     let sentBefore;
     for (const byte of [1, 2, 3]) {
@@ -101,8 +100,8 @@ for (const [codecName, codec] of /** @type {const} */ ([
     t.true(stalled.queuedFrames <= 6, `queued ${stalled.queuedFrames}`);
     t.is(injector.getHeldWrites(), 1);
     // B's heartbeats still reach A, so A does not take the stall for a
-    // loss, and A's own send nonce has not moved.
-    t.is(stalled.lastSentNonce, sentBefore);
+    // loss.
+    t.is(stalled.lastSentNonce, /** @type {bigint} */ (sentBefore));
 
     injector.resume();
 
@@ -117,13 +116,9 @@ for (const [codecName, codec] of /** @type {const} */ ([
     const recovered = sessionA.getLiveness();
     t.is(recovered.queuedFrames, 0);
     t.is(recovered.epoch, 0n);
+    t.true(recovered.lastSentNonce > /** @type {bigint} */ (sentBefore));
     t.true(
-      /** @type {bigint} */ (recovered.lastSentNonce) >
-        /** @type {bigint} */ (sentBefore),
-    );
-    t.true(
-      sessionB.getLiveness().lastAckedRecvNonce >=
-        /** @type {bigint} */ (recovered.lastSentNonce) - 2n,
+      sessionB.getLiveness().lastAckedRecvNonce >= recovered.lastSentNonce - 2n,
     );
 
     await sessionB.writer.next(Uint8Array.of(9));
@@ -207,8 +202,8 @@ test('writer.next waits while the queue is at its high-water mark', async t => {
   }
   await delay(heartbeat.intervalMs);
   // The writes are concurrent, yet the queue holds no more than the
-  // high-water mark plus one coalesced ping/pong pair.
-  // Queued heartbeats count against the mark too.
+  // high-water mark plus one coalesced ping/pong pair, which counts
+  // against the mark.
   t.true(settled >= 62 && settled <= 64, `settled ${settled}`);
   const { queuedFrames } = sessionA.getLiveness();
   t.true(queuedFrames <= 66, `queued ${queuedFrames}`);
@@ -321,8 +316,57 @@ test('sessions without heartbeats write directly and report no queue', async t =
     netB.waitForInboundSession(keyA),
   ]);
   const liveness = sessionA.getLiveness();
-  t.is(liveness.lastSentNonce, undefined);
+  // The identity greeting took send nonce 0.
+  t.is(liveness.lastSentNonce, 0n);
   t.is(liveness.queuedFrames, 0);
+});
+
+test('an invalid frame rejects its own write and leaves the session open', async t => {
+  const { sessionA, sessionB } = await connectStallablePair(t, cborCodec);
+  await t.throwsAsync(
+    () =>
+      sessionA.writer.next(
+        /** @type {Uint8Array} */ (/** @type {unknown} */ ('not bytes')),
+      ),
+    { message: /session frame must be a Uint8Array/ },
+  );
+  await t.throwsAsync(() => sessionA.writer.next(new Uint8Array(65_536)), {
+    message: /session frame of 65536 bytes exceeds 65519/,
+  });
+  t.deepEqual(await sessionA.writer.next(Uint8Array.of(5)), {
+    done: false,
+    value: undefined,
+  });
+  const received = await sessionB.reader.next(undefined);
+  t.false(received.done);
+  if (!received.done) t.deepEqual([...received.value], [5]);
+});
+
+test('closing the session while a write is held releases the writer', async t => {
+  const { sessionA, injector } = await connectStallablePair(t, cborCodec, {
+    intervalMs: heartbeat.intervalMs,
+    sessionTimeoutMs: 60_000,
+  });
+  injector.stall();
+  await sessionA.writer.next(Uint8Array.of(1));
+  await sessionA.writer.next(Uint8Array.of(2));
+  await until(() => injector.getHeldWrites() === 1);
+  sessionA.close();
+  // The transport still holds the write, yet `return` settles and later
+  // writes see the session as ended.
+  t.deepEqual(
+    await Promise.race([
+      sessionA.writer.return(undefined),
+      delay(1000).then(() => 'stuck'),
+    ]),
+    { done: true, value: undefined },
+  );
+  t.deepEqual(await sessionA.writer.next(Uint8Array.of(3)), {
+    done: true,
+    value: undefined,
+  });
+  t.is(sessionA.getLiveness().queuedFrames, 0);
+  injector.resume();
 });
 
 test('a transport write that rejects ends the session with its error', async t => {
