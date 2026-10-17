@@ -513,12 +513,12 @@ test('a key-compromise-impersonation SYN never graduates', async t => {
   const synack = await forgerStream.reader.next(undefined);
   t.false(synack.done, 'A accepts the forged SYN and answers it');
 
-  // Without `se` the forger can only guess at an encrypted
-  // `op:start-session`.
   await forgerStream.writer.next(new Uint8Array(64));
   /** @returns {Promise<boolean>} */
   const drainUntilHangUp = async () => {
-    const frame = await forgerStream.reader.next(undefined);
+    const frame = await forgerStream.reader.next(undefined).catch(() => ({
+      done: true,
+    }));
     return frame.done || drainUntilHangUp();
   };
   const hungUp = await within(
@@ -527,6 +527,8 @@ test('a key-compromise-impersonation SYN never graduates', async t => {
     'hang-up',
   ).catch(() => false);
   t.true(hungUp, 'A hangs up on the forger');
+  // Let any pending graduation callback run before asserting its absence.
+  await new Promise(resolve => setTimeout(resolve, handshakeTimeoutMs));
   t.false(graduated, 'A never graduates a session for the claimed peer');
 });
 
