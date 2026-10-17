@@ -193,9 +193,12 @@ const DEFAULT_SESSION_TIMEOUT_INTERVALS = 6;
 /** The design's floor: `SESSION_TIMEOUT >= 3 * HEARTBEAT_INTERVAL`. */
 const MIN_SESSION_TIMEOUT_INTERVALS = 3;
 
-// Outbound frames a heartbeat session queues before `writer.next`
-// waits for the transport to take some, so a stalled or slow transport
-// pushes back on the writer instead of growing the queue without bound.
+// Writer frames a heartbeat session queues before `writer.next` waits
+// for the transport to take some, so a stalled or slow transport pushes
+// back on the writer instead of growing the queue without bound. The
+// bound holds for concurrent writers too, because a writer checks for
+// room before it enqueues. Heartbeats coalesce to at most one queued
+// ping/pong pair, so the queue never holds more than this plus two.
 const OUTBOUND_HIGH_WATER_FRAMES = 64;
 
 /**
@@ -904,13 +907,17 @@ export const makeOcapnNoiseNetwork = ({
     /** @type {Promise<void>} */
     let drained = Promise.resolve();
     let draining = false;
-    // Writers waiting for the queue to fall below its high-water mark.
-    /** @type {Array<() => void>} */
+    // Writers waiting, in call order, for the queue to fall below its
+    // high-water mark. A waiter's frame is enqueued in the same turn
+    // that room appears, so a later writer cannot overtake it.
+    /**
+     * @type {Array<{ plainText: Uint8Array, resolve: (accepted: boolean) => void }>}
+     */
     let spaceWaiters = [];
-    const releaseSpaceWaiters = () => {
-      const released = spaceWaiters;
+    const rejectSpaceWaiters = () => {
+      const rejected = spaceWaiters;
       spaceWaiters = [];
-      for (const resolve of released) resolve();
+      for (const { resolve } of rejected) resolve(false);
     };
 
     /** @type {() => void} */
@@ -932,7 +939,13 @@ export const makeOcapnNoiseNetwork = ({
     const fireOnClose = () => {
       stopHeartbeat();
       resolveClosed();
-      releaseSpaceWaiters();
+      // Frames still queued when the session ends are dropped. Their
+      // writes have already resolved, so the error the reader surfaces
+      // is the only report of the loss. A writer still waiting for room
+      // learns of it from a `done` result.
+      outbound.length = 0;
+      queuedHeartbeatFrames = 0;
+      rejectSpaceWaiters();
       try {
         onClose();
       } catch (_e) {
@@ -1044,10 +1057,19 @@ export const makeOcapnNoiseNetwork = ({
               writeStallTimer = undefined;
             }
             sentCount += 1n;
+            if (closed) return;
             outbound.shift();
             if (frame.heartbeat) queuedHeartbeatFrames -= 1;
-            if (outbound.length < OUTBOUND_HIGH_WATER_FRAMES) {
-              releaseSpaceWaiters();
+            while (
+              spaceWaiters.length > 0 &&
+              outbound.length < OUTBOUND_HIGH_WATER_FRAMES
+            ) {
+              const { plainText, resolve } =
+                /** @type {(typeof spaceWaiters)[number]} */ (
+                  spaceWaiters.shift()
+                );
+              enqueueFrame(plainText);
+              resolve(true);
             }
           }
         } finally {
@@ -1245,13 +1267,17 @@ export const makeOcapnNoiseNetwork = ({
         if (heartbeatSettings !== undefined) {
           // A transport write error ends the session and surfaces
           // through the reader.
-          enqueueFrame(value);
-          if (outbound.length >= OUTBOUND_HIGH_WATER_FRAMES) {
-            await new Promise(resolve => {
-              spaceWaiters.push(() => resolve(undefined));
-            });
+          if (
+            spaceWaiters.length === 0 &&
+            outbound.length < OUTBOUND_HIGH_WATER_FRAMES
+          ) {
+            enqueueFrame(value);
+            return harden({ done: false, value: undefined });
           }
-          return harden({ done: false, value: undefined });
+          const accepted = await new Promise(resolve => {
+            spaceWaiters.push({ plainText: value, resolve });
+          });
+          return harden({ done: !accepted, value: undefined });
         }
         await stream.writer.next(encrypt(value));
         return harden({ done: false, value: undefined });

@@ -136,12 +136,15 @@ export interface SessionLiveness {
   peerAckedRecvNonce: bigint | undefined;
   /**
    * The highest Noise nonce whose transport write has completed, or
-   * `undefined` without heartbeats, whose sessions write directly.
+   * `undefined` without heartbeats, whose sessions write directly. A
+   * frame the transport is still taking has consumed its nonce but is
+   * not counted here.
    */
   lastSentNonce: bigint | undefined;
   /**
    * Frames the session has accepted from its writer (or its own
-   * heartbeats) that the transport has not yet taken.
+   * heartbeats) that the transport has not yet taken. Zero once the
+   * session has ended, because frames still queued then are dropped.
    */
   queuedFrames: number;
 }
