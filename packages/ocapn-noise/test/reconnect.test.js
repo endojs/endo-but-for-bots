@@ -305,14 +305,19 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
     cborCodec,
   );
   // The greater side's dials neither fail nor complete, as in a one-way
-  // partition; only the lesser side's dials have a path.
-  const { greater } = byEphemeral(injector, injectorB);
+  // partition; only the lesser side's dials have a path. The lesser
+  // side's dials are held too until the greater side is dialing, so that
+  // they arrive while it defers to its own.
+  const { greater, lesser } = byEphemeral(injector, injectorB);
   const connectsBefore = greater.getConnects();
   greater.holdConnects(true);
+  lesser.holdConnects(true);
   injector.sever();
   injectorB.sever();
   await sessionA.writer.next(Uint8Array.of(1));
+  await sessionB.writer.next(Uint8Array.of(101));
   await eventually(() => greater.getConnects() > connectsBefore);
+  lesser.holdConnects(false);
 
   // The greater side drops the lesser side's dials while its own is
   // young, then takes one once it has waited a session timeout.
@@ -334,6 +339,7 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
   t.is(sessionA.getLiveness().epoch, 1n);
   t.is(sessionB.getLiveness().epoch, 1n);
   t.deepEqual(await readBytes(sessionB, 1), [1]);
+  t.deepEqual(await readBytes(sessionA, 1), [101]);
   await sessionA.writer.next(Uint8Array.of(2));
   t.deepEqual(await readBytes(sessionB, 1), [2]);
   sessionA.close();
