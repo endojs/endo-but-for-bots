@@ -154,8 +154,11 @@ Field semantics:
 - `sequence`: a monotonic counter that increments on every `op:pong`
   this side emits in this session epoch. A uint64. Independent of
   the `op:ping` sequence.
-- `last_acked_recv_nonce`: the highest Noise recv-nonce this side
-  has decrypted successfully on the current CipherState. A uint64.
+- `last_acked_recv_nonce`: the number of session frames this side
+  has decrypted successfully in the current session epoch. A uint64.
+  Because every transport instance rekeys (§ 4), this equals the Noise
+  recv-nonce of the current CipherState; the count, not the nonce, is
+  the contract, and it restarts at 0 with each epoch.
 
 `op:pong` is the explicit-ack form C2 (§ 4) calls out. A side that
 receives `op:pong` updates its `peer_acked_recv_nonce` for the
@@ -267,13 +270,20 @@ The previous instance's CipherStates are discarded, never carried
 across the boundary.
 The new instance gets new keys from its own handshake, and its nonces
 start at 0 under those keys.
-This settles Open question C1; the reasoning is
+This settles Open question C1 as recommendation R3 of the
+cryptographic review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), which rewrites
 [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)
-§ 6 (recommendation R3):
+and carries the reasoning in its section 6, "Reconnect: Rekey, not
+Resume".
+Until [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475) lands, the copy of that file on this branch is the
+earlier, deprecated review and does not contain R3.
+It reverses the tentative decision recorded on
+[#252](https://github.com/endojs/endo-but-for-bots/pull/252) ("Tentatively
+run with resume and rekey-cap"), so it needs the maintainer's
+confirmation (Open question C1 below).
+The reasoning:
 
 - With IK a Rekey is two Noise messages, 213 bytes and one round trip.
-  The earlier argument that Rekey is bandwidth-heavy assumed XX's three
-  messages.
 - Continuing a CipherState (the former Option Resume) would require
   both sides to keep live keys and nonce high-water marks across TCP
   connections.
@@ -305,20 +315,17 @@ On the new TCP transport, after TCP connect succeeds:
 4. Each side tells the other how many session frames it has received.
    Each side then replays, in order, the frames the peer has not
    received, ahead of anything queued during the gap.
-   The acknowledgments carried by `op:pong` (§ 1) bound how much each
-   side must retain for replay; under Rekey they count frames per
-   epoch, because nonces restart with each instance.
+   The `last_acked_recv_nonce` counts carried by `op:pong` (§ 1) bound
+   how much each side must retain for replay.
 
 **Replay idempotence at the CapTP layer.**
 Step 4 above replays unacknowledged operations under the new
 instance's keys.
 At the Noise layer this is sound (no `(key, nonce)` pair is reused).
-If the replay can deliver an operation the peer already received, at
-the CapTP layer it is semantically equivalent to delivering the same
-operation twice, which the application must absorb idempotently.
-An implementation that counts delivered frames exactly (step 4)
-delivers no duplicates and needs none of the following; otherwise each
-CapTP operation type carries this requirement on the receiver:
+Frames received but not yet counted when the old instance broke are
+replayed, so the receiver must absorb a duplicate delivery
+idempotently.
+Each CapTP operation type carries this requirement on the receiver:
 
 - `op:deliver` (request-response): the receiver dedupes by
   `(session, answer-position)`.
@@ -344,12 +351,6 @@ Where dedup state is not already maintained, this design adds the
 requirement.
 This is in scope for the implementation of this amendment in
 `packages/ocapn-noise-network` and the consuming CapTP layer.
-
-**Resolution of C1 (was: Resume vs. Rekey).**
-Rekey on every reconnect, per
-[ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)
-§ 6. The Resume option, its `RESUME` / `RESUME-ACK` records, and the
-rekey-cap policy that defended it are removed.
 
 **Resolution of C2 (was: implicit vs. explicit ack).**
 `last_acked_recv_nonce` is acknowledged explicitly, via the
@@ -545,7 +546,7 @@ sequenceDiagram
 | Design | Relationship |
 |---|---|
 | [ocapn-noise-network](ocapn-noise-network.md) | Direct: this amendment extends that network with reconnection semantics. |
-| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: settles Open question C1 as Rekey (its recommendation R3). |
+| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: its recommendation R3, as rewritten in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), settles Open question C1 as Rekey. |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Indirect: this design lives entirely inside the network layer that document establishes. |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
 
@@ -553,8 +554,7 @@ sequenceDiagram
 
 - The non-negotiable rule is no `(key, nonce)` pair is ever reused under
   ChaCha20-Poly1305. Rekey on every reconnect preserves it by
-  construction: no Noise key outlives its transport instance, and each
-  instance has its own forward secrecy.
+  construction: no Noise key outlives its transport instance.
 - A reconnect is authenticated exactly like a new session (Noise IK plus
   the channel-bound `op:start-session`). The record naming the session
   and epoch travels inside the new encrypted channel, so a
@@ -631,10 +631,7 @@ sequenceDiagram
    exercises the queue/epoch/tiebreaker logic and never carries a
    CipherState across instances.
 
-4. **Phase 4: dropped.** Reconnect with Resume is removed: C1 is
-   settled as Rekey (§ 4), so Phase 3 is the only reconnect path.
-
-5. **Phase 5: Crossed-hellos.** Add the designator-comparison
+4. **Phase 4: Crossed-hellos.** Add the designator-comparison
    tiebreaker. Most easily tested with a fault injector that forces
    simultaneous loss detection.
 
@@ -651,10 +648,9 @@ sequenceDiagram
    comparison without exchange. Flagged for review (Open question P3).
 
 3. **Rekey on every reconnect; no Resume.**
-   A fresh Noise IK handshake costs one round trip, rules out
-   `(key, nonce)` reuse by construction, and gives each transport
-   instance forward secrecy. Settled by the cryptographic review
-   (was Open question C1).
+   A fresh Noise IK handshake costs one round trip and rules out
+   `(key, nonce)` reuse by construction (§ 4). Pending maintainer
+   confirmation (Open question C1).
 
 4. **Session state lives in the network, not in OCapN core.**
    Consistent with the layering established by
@@ -680,6 +676,9 @@ that introduced it.
   whether the OCapN spec recommends a profile range.
 - **T2** (§ 5): Fixed vs. adaptive heartbeat. Amendment leans toward
   fixed.
+- **C1** (§ 4): Rekey on every reconnect, per R3 of the cryptographic
+  review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475). This reverses the tentative Resume-with-rekey-cap
+  decision on #252 and awaits the maintainer's confirmation.
 
 The following were open in earlier drafts and are now settled:
 
@@ -689,10 +688,6 @@ The following were open in earlier drafts and are now settled:
   Settled per maintainer review on PR #252.
 - **C2** (was § 4): explicit ack via `op:pong` (not implicit-by-traffic).
   Settled per maintainer review on PR #252.
-- **C1** (was § 4): Rekey on every reconnect; Resume is dropped.
-  Settled by
-  [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)
-  § 6 (R3).
 
 ## Compatibility Considerations
 
