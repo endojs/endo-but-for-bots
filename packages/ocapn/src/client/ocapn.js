@@ -1070,8 +1070,9 @@ export const makeOcapn = (
       const { reason } = message;
       abort(reason);
     },
-    // Liveness belongs to the network, which absorbs heartbeats before
-    // the session sees them.
+    // When the network's heartbeats are on, it absorbs these before the
+    // session sees them. When they are off, a peer's heartbeat arrives
+    // here and is ignored.
     'op:ping': () => {},
     'op:pong': () => {},
   });

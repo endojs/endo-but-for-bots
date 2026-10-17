@@ -96,6 +96,7 @@ export interface OcapnNoiseSession {
   isInitiator: boolean;
   reader: Reader<Uint8Array>;
   writer: Writer<Uint8Array>;
+  /** A snapshot of this session's heartbeat state. */
   getLiveness(): SessionLiveness;
   close(): void;
 }
@@ -116,7 +117,9 @@ export interface HeartbeatOptions {
 }
 
 export interface SessionLiveness {
+  /** Whether this side sends and absorbs heartbeats. */
   heartbeat: boolean;
+  /** The transport epoch carried in heartbeats; `0n` until reconnect. */
   epoch: bigint;
   /**
    * The highest Noise nonce this side has decrypted, or `undefined`
