@@ -946,6 +946,13 @@ export const makeOcapnNoiseNetwork = ({
       for (const { resolve } of rejected) resolve(false);
     };
 
+    // Settles the drain's wait on the frame the transport holds, so a
+    // write the transport never settles cannot hold the drain once the
+    // session has ended. One per frame, so waiting retains nothing past
+    // the frame.
+    /** @type {(() => void) | undefined} */
+    let abandonWrite;
+
     /** @type {() => void} */
     let resolveClosed = () => {};
     /** @type {Promise<void>} */
@@ -965,6 +972,7 @@ export const makeOcapnNoiseNetwork = ({
     const fireOnClose = () => {
       stopHeartbeat();
       resolveClosed();
+      if (abandonWrite !== undefined) abandonWrite();
       // The writes of the frames dropped here have already resolved, so
       // the error the reader surfaces is the only report of the loss. A
       // writer still waiting for room learns of it from a `done` result.
@@ -1080,15 +1088,18 @@ export const makeOcapnNoiseNetwork = ({
               const written = Promise.resolve(
                 stream.writer.next(encrypt(frame.render())),
               );
-              // A write the transport never settles must not hold the
-              // drain once the session has ended.
-              written.catch(() => {});
               // eslint-disable-next-line no-await-in-loop
-              await Promise.race([written, closedPromise]);
+              await /** @type {Promise<void>} */ (
+                new Promise((resolve, reject) => {
+                  abandonWrite = () => resolve(undefined);
+                  written.then(() => resolve(undefined), reject);
+                })
+              );
             } catch (error) {
               fail(/** @type {Error} */ (error));
               return;
             } finally {
+              abandonWrite = undefined;
               clearTimeout(writeStallTimer);
               writeStallTimer = undefined;
             }
