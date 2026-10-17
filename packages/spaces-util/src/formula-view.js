@@ -8,6 +8,9 @@ import harden from '@endo/harden';
 import { h } from 'preact';
 
 import { getFormulaViewSpec } from './formula-view-registry.js';
+import { RetentionPathsView } from './retention-paths-view.js';
+
+/** @import { RetentionPath } from './retention-paths-view.js' */
 
 /**
  * @typedef {object} FormulaProperty
@@ -143,6 +146,17 @@ const referenceButton = ({
  *   header renders a "stack N/M" hint when greater than 1.
  * @param {number} [props.stackPosition]
  *   1-based position within the stack. Defaults to `stackDepth`.
+ * @param {RetentionPath[]} [props.retentionPaths]
+ *   The retention-path snapshot for this formula (from #284's
+ *   `EndoHost.listRetentionPaths`). When present alongside a
+ *   `retentionPathsState`, the back face renders a read-only
+ *   "Retention paths" table below the property list.
+ * @param {'loading' | 'error' | 'ready'} [props.retentionPathsState]
+ *   Fetch state for the retention-path snapshot. Omit both this and
+ *   `retentionPaths` to suppress the table entirely (e.g. in unit tests
+ *   of the base property view).
+ * @param {string} [props.retentionPathsError]
+ *   Human-facing message shown when `retentionPathsState` is `'error'`.
  * @returns {VNode}
  */
 export const FormulaView = ({
@@ -150,8 +164,23 @@ export const FormulaView = ({
   onNavigateReference,
   stackDepth = 1,
   stackPosition = stackDepth,
+  retentionPaths,
+  retentionPathsState,
+  retentionPathsError,
 }) => {
   const spec = getFormulaViewSpec(record.type);
+
+  // The read-only "Retention paths" table renders below the property
+  // list. It is suppressed entirely when the caller supplies neither a
+  // snapshot nor a fetch state, so the base property view is unchanged.
+  const retentionSection =
+    retentionPathsState === undefined && retentionPaths === undefined
+      ? null
+      : h(RetentionPathsView, {
+          paths: retentionPaths,
+          state: retentionPathsState,
+          error: retentionPathsError,
+        });
 
   const headerChildren = [
     h(
@@ -211,6 +240,7 @@ export const FormulaView = ({
         spec.emptyStateText ||
           'No formula properties to display for this type.',
       ),
+      retentionSection,
     );
   }
 
@@ -354,6 +384,7 @@ export const FormulaView = ({
     null,
     header,
     h('dl', { class: 'formula-view-property-list' }, ...dlChildren),
+    retentionSection,
   );
 };
 harden(FormulaView);
