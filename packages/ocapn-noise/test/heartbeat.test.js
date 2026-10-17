@@ -57,18 +57,21 @@ for (const [codecName, codec] of /** @type {const} */ ([
       { codec, heartbeat },
     );
 
-    // Idle for several session timeouts.
+    // Both sides wait on their readers, so the liveness timeout runs,
+    // while the session idles for several session timeouts.
+    const receivedP = sessionB.reader.next(undefined);
+    const replyP = sessionA.reader.next(undefined);
     await delay(heartbeat.sessionTimeoutMs * 3);
 
-    // Each side reads past the peer's queued heartbeats to its data.
+    // Each pending read skips the peer's heartbeats and gets its data.
     await sessionA.writer.next(Uint8Array.of(1, 2, 3));
-    const received = await sessionB.reader.next(undefined);
+    const received = await receivedP;
     t.false(received.done);
     if (!received.done) {
       t.deepEqual([...received.value], [1, 2, 3]);
     }
     await sessionB.writer.next(Uint8Array.of(4));
-    const reply = await sessionA.reader.next(undefined);
+    const reply = await replyP;
     t.false(reply.done);
 
     const livenessA = sessionA.getLiveness();

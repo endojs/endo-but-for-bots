@@ -212,7 +212,7 @@ export const table = [
     },
   },
   {
-    // <op:ping epoch sequence>  ; both non-negative integers
+    // <op:ping epoch sequence>
     name: 'op:ping',
     value: {
       type: 'op:ping',
