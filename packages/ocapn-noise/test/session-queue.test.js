@@ -18,9 +18,9 @@ const delay = milliseconds =>
 
 // Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
 const heartbeat = { intervalMs: 50, sessionTimeoutMs: 500 };
-// For tests that stall the transport but must not see a loss: the stall
-// window is a few heartbeat intervals, and a loaded macOS runner has
-// stretched it past 500ms.
+// For tests that stall the transport but must not see a loss: wide enough
+// that a stall of a few heartbeat intervals on a loaded runner cannot fake
+// a loss.
 const wideHeartbeat = { intervalMs: 50, sessionTimeoutMs: 2000 };
 
 /**

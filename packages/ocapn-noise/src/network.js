@@ -1285,7 +1285,7 @@ export const makeOcapnNoiseNetwork = ({
           }, hardTimeoutMs);
           backoffMs = reconnectSettings.backoffInitialMs;
         }
-        // Either side redials; should both, the crossed-hellos
+        // Either side redials; if both do, the crossed-hellos
         // tiebreaker keeps one of the two new transport instances.
         scheduleRedial(0);
       };
@@ -1337,21 +1337,22 @@ export const makeOcapnNoiseNetwork = ({
             receivedFrames,
           );
         } catch (_error) {
-          dialing = false;
           if (closed || current !== undefined) return;
           const delayMs = backoffMs;
           backoffMs = Math.min(backoffMs * 2, reconnectSettings.backoffMaxMs);
           scheduleRedial(delayMs);
           return;
+        } finally {
+          dialing = false;
         }
-        dialing = false;
         const { instance, peerHello } = dialed;
-        // Crossed hellos: the peer's dial reached us first and we took
-        // it, so this one is the instance the tiebreaker discards.
+        // `current !== undefined`: crossed hellos, the peer's dial reached
+        // us first and we took it, so this one is the instance the
+        // tiebreaker discards. `epoch + 1n !== nextEpoch`: the session
+        // moved to a later epoch while we dialed and lost that instance
+        // too, so dial again for the epoch after it.
         if (closed || current !== undefined || epoch + 1n !== nextEpoch) {
           closeInstance(instance);
-          // The session moved to a later epoch while we dialed and lost
-          // that instance too: dial again for the epoch after it.
           if (!closed && current === undefined) scheduleRedial(0);
           return;
         }
@@ -2173,14 +2174,13 @@ export const makeOcapnNoiseNetwork = ({
             return;
           }
           // A dial for an epoch the session has already reached is a
-          // straggler (the losing half of crossed hellos, or a dial whose
-          // answer was lost): close it without an answer, which the
-          // dialer takes as an ordinary failed attempt. A later epoch is
-          // taken as is, so a dialer that missed our answer to an earlier
-          // reconnect still converges.
-          // Crossed hellos: when both sides are redialing and ours wins
-          // the tiebreaker, this one is dropped the same way and our own
-          // dial carries the session.
+          // straggler, and a dial that loses the crossed-hellos tiebreaker
+          // to our own is dropped too: close it without an answer, which
+          // the dialer takes as an ordinary failed attempt. A later epoch
+          // is taken as is, so a dialer that missed our answer to an
+          // earlier reconnect still converges. The epoch only orders
+          // dials; the session token and the handshake-authenticated
+          // initiator key checked above authorize the resume.
           if (
             peerHello.epoch <= resumable.getEpoch() ||
             resumable.prefersOwnDial()

@@ -16,9 +16,7 @@ import { makeLossyTransport } from './_loss-injector.js';
 const delay = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 
-// Wide enough that timer jitter on a loaded CI runner cannot fake a loss:
-// a macOS runner under the unsafe-lockdown pass has stretched heartbeat
-// gaps past 500ms and forced a spurious second reconnect.
+// Wide enough that timer jitter on a loaded CI runner cannot fake a loss.
 const heartbeat = { intervalMs: 50, sessionTimeoutMs: 1000 };
 const reconnect = {
   backoffInitialMs: 20,
@@ -167,10 +165,9 @@ for (const [codecName, codec] of /** @type {const} */ ([
       t,
       codec,
     );
-    // Simultaneous loss: both sides stop hearing each other at the same
-    // moment, so both time out and both redial. Holding every dial short
-    // of the peer until both sides are dialing makes the two cross however
-    // far apart timer jitter puts the two timeouts.
+    // Holding every dial short of the peer until both sides are dialing
+    // makes the two cross however far apart timer jitter puts the two
+    // timeouts.
     injector.holdConnects(true);
     injectorB.holdConnects(true);
     injector.sever();
@@ -192,8 +189,6 @@ for (const [codecName, codec] of /** @type {const} */ ([
         !sessionB.getLiveness().reconnecting &&
         sessionA.getLiveness().epoch > 0n,
     );
-    // Exactly one new transport instance survives, seen once from each
-    // end, and both sides agree on its epoch.
     await delay(heartbeat.intervalMs * 4);
     t.is(injector.getOpenStreams() + injectorB.getOpenStreams(), 2);
     t.is(injector.getOpenStreams(), 1);
@@ -212,7 +207,6 @@ test('either side redials: the side that accepted the session reconnects it', as
     t,
     cborCodec,
   );
-  // A, which opened the session, cannot dial out; B must.
   injector.refuseOutbound(true);
   injector.sever();
   await sessionB.writer.next(Uint8Array.of(7));

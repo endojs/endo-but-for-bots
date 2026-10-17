@@ -18,7 +18,9 @@ const never = new Promise(() => {});
  * a kernel send buffer are when the path dies, and reads never yield
  * again), while streams opened afterwards work normally. A test can
  * also refuse new connections, to hold a partition open across
- * reconnect attempts, or hold them to force crossed hellos (Phase 5).
+ * reconnect attempts, or hold them to force crossed hellos
+ * (`designs/ocapn-noise-session-reconnect.md` § 3, Crossed-Hellos
+ * Tiebreaker).
  *
  * @param {OcapnNoiseTransport} transport
  */
