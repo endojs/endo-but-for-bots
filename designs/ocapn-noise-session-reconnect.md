@@ -156,9 +156,10 @@ Field semantics:
   the `op:ping` sequence.
 - `last_acked_recv_nonce`: the number of session frames this side
   has decrypted successfully in the current session epoch. A uint64.
-  Because every transport instance rekeys (§ 4), this equals the Noise
-  recv-nonce of the current CipherState; the count, not the nonce, is
-  the contract, and it restarts at 0 with each epoch.
+  It counts session frames only, not the reconnect handshake's own
+  records, so it need not equal the Noise recv-nonce of the current
+  CipherState; the count is the contract, and it restarts at 0 with
+  each epoch.
 
 `op:pong` is the explicit-ack form C2 (§ 4) calls out. A side that
 receives `op:pong` updates its `peer_acked_recv_nonce` for the
@@ -270,17 +271,12 @@ The previous instance's CipherStates are discarded, never carried
 across the boundary.
 The new instance gets new keys from its own handshake, and its nonces
 start at 0 under those keys.
-This settles Open question C1 as recommendation R3 of the
-cryptographic review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), which rewrites
-[ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)
+This proposes to settle Open question C1 as recommendation R3 of the
+cryptographic review in
+[#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), which
+rewrites [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md)
 and carries the reasoning in its section 6, "Reconnect: Rekey, not
 Resume".
-Until [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475) lands, the copy of that file on this branch is the
-earlier, deprecated review and does not contain R3.
-It reverses the tentative decision recorded on
-[#252](https://github.com/endojs/endo-but-for-bots/pull/252) ("Tentatively
-run with resume and rekey-cap"), so it needs the maintainer's
-confirmation (Open question C1 below).
 The reasoning:
 
 - With IK a Rekey is two Noise messages, 213 bytes and one round trip.
@@ -546,7 +542,7 @@ sequenceDiagram
 | Design | Relationship |
 |---|---|
 | [ocapn-noise-network](ocapn-noise-network.md) | Direct: this amendment extends that network with reconnection semantics. |
-| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: its recommendation R3, as rewritten in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), settles Open question C1 as Rekey. |
+| [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: its recommendation R3, as rewritten in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475), proposes to settle Open question C1 as Rekey. |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Indirect: this design lives entirely inside the network layer that document establishes. |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
 
@@ -649,8 +645,7 @@ sequenceDiagram
 
 3. **Rekey on every reconnect; no Resume.**
    A fresh Noise IK handshake costs one round trip and rules out
-   `(key, nonce)` reuse by construction (§ 4). Pending maintainer
-   confirmation (Open question C1).
+   `(key, nonce)` reuse by construction (§ 4).
 
 4. **Session state lives in the network, not in OCapN core.**
    Consistent with the layering established by
@@ -677,8 +672,9 @@ that introduced it.
 - **T2** (§ 5): Fixed vs. adaptive heartbeat. Amendment leans toward
   fixed.
 - **C1** (§ 4): Rekey on every reconnect, per R3 of the cryptographic
-  review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475). This reverses the tentative Resume-with-rekey-cap
-  decision on #252 and awaits the maintainer's confirmation.
+  review in [#1475](https://github.com/endojs/endo-but-for-bots/pull/1475).
+  This reverses the tentative Resume-with-rekey-cap decision on #252
+  and awaits the maintainer's confirmation.
   If the maintainer keeps a Resume path instead, it needs a nonce-safe
   construction (for example a fresh key derived per transport instance
   from the session's keys, so no `(key, nonce)` pair can repeat after a
