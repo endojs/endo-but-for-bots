@@ -225,6 +225,16 @@ const hasFeature = (features, bit) => (features / bit) % 2n === 1n;
 const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS = 250;
 const DEFAULT_RECONNECT_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_SESSION_HARD_TIMEOUT_MS = 10 * 60_000;
+/**
+ * `setTimeout` clamps a longer delay (including `Infinity`) to 1 ms, which
+ * would turn "wait a very long time" into "give up at once".
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+/**
+ * The identity greeting and the session hello take send nonces 0 and 1
+ * of every transport instance; session frames start after them.
+ */
+const HANDSHAKE_SENT_COUNT = 2n;
 /** How long `close()` waits for the end notice before closing anyway. */
 const SESSION_END_WRITE_TIMEOUT_MS = 1000;
 
@@ -252,9 +262,9 @@ const normalizeReconnectOptions = (reconnect, heartbeatSettings) => {
     ['backoffMaxMs', backoffMaxMs],
     ['hardTimeoutMs', hardTimeoutMs],
   ])) {
-    if (!(value > 0)) {
+    if (typeof value !== 'number' || !(value > 0) || value > MAX_TIMER_MS) {
       throw makeError(
-        X`ocapn-noise: reconnect.${q(name)} must be a positive number of milliseconds, got ${q(value)}`,
+        X`ocapn-noise: reconnect.${q(name)} must be a positive number of milliseconds no greater than ${q(MAX_TIMER_MS)}, got ${q(value)}`,
       );
     }
   }
@@ -1125,8 +1135,7 @@ export const makeOcapnNoiseNetwork = ({
     /**
      * Tell a reconnect-capable peer that this end is deliberate, so it
      * does not take the closing stream for a lost transport instance.
-     */
-    /**
+     *
      * @param {Instance} instance
      * @returns {Promise<unknown>}
      */
@@ -1150,7 +1159,6 @@ export const makeOcapnNoiseNetwork = ({
           }),
         ]).finally(() => clearTimeout(endTimer));
       } catch (_e) {
-        // best effort
         return Promise.resolve();
       }
     };
@@ -1233,7 +1241,6 @@ export const makeOcapnNoiseNetwork = ({
         close();
       };
 
-      /** End the session as the peer asked, without an error. */
       const endGracefully = () => {
         if (closed) return;
         inbound.put(harden({ done: true }));
@@ -1652,7 +1659,8 @@ export const makeOcapnNoiseNetwork = ({
           },
           attach,
           abort: fail,
-          // Installed by the network once the session is registered.
+          // Replaced by `makeCandidate` right after the session is built;
+          // only the session's dialer calls it.
           dial: async () => {
             throw makeError(X`ocapn-noise: reconnect dial not installed`);
           },
@@ -1772,6 +1780,9 @@ export const makeOcapnNoiseNetwork = ({
    * @param {OcapnLocation} location
    * @param {Uint8Array} peerEd25519
    * @param {(handshakeHash: Uint8Array) => { epoch: bigint, session: Uint8Array, received: bigint }} makeHello
+   * @returns the transport `instance` positioned after the handshake, the
+   *   peer's verified `identity`, its `peerHello`, the crossed-hellos
+   *   `tiebreaker`, and this handshake's `handshakeHash`.
    */
   const dialHandshake = async (localKey, location, peerEd25519, makeHello) => {
     const { transport, hints } = selectOutgoingTransport(location);
@@ -1842,9 +1853,7 @@ export const makeOcapnNoiseNetwork = ({
         encrypt,
         decrypt,
         getReceivedCount: nonces.getReceivedCount,
-        // The identity greeting and the session hello took send nonces
-        // 0 and 1.
-        sentCount: 2n,
+        sentCount: HANDSHAKE_SENT_COUNT,
       };
       return {
         instance,
@@ -1872,8 +1881,10 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   /**
-   * Build a session on an instance whose handshake just finished, and
-   * register it for reconnect if both sides negotiated that.
+   * Build a session on an instance whose handshake just finished. If
+   * both sides negotiated reconnect, give it a reconnector that redials
+   * this peer; the reconnector is registered only if the candidate wins
+   * (`recordCandidate`).
    *
    * @param {object} params
    * @param {KeyIdHex} params.peerId
@@ -2125,9 +2136,7 @@ export const makeOcapnNoiseNetwork = ({
         encrypt,
         decrypt,
         getReceivedCount: nonces.getReceivedCount,
-        // The identity greeting and the session hello take send nonces
-        // 0 and 1.
-        sentCount: 2n,
+        sentCount: HANDSHAKE_SENT_COUNT,
       };
 
       if (resumable) {

@@ -343,4 +343,52 @@ test('reconnect options are validated', t => {
       }),
     { message: /backoffInitialMs.* must be a positive number/ },
   );
+  for (const [name, value] of /** @type {Array<[string, unknown]>} */ ([
+    ['backoffInitialMs', 0],
+    ['backoffInitialMs', NaN],
+    ['backoffInitialMs', '10'],
+    ['backoffMaxMs', 0],
+    ['backoffMaxMs', NaN],
+    ['hardTimeoutMs', 0],
+    ['hardTimeoutMs', NaN],
+    ['hardTimeoutMs', '600000'],
+    // `setTimeout` would clamp these to 1 ms and abort at once.
+    ['hardTimeoutMs', Infinity],
+    ['hardTimeoutMs', 2 ** 31],
+  ])) {
+    t.throws(
+      () =>
+        makeOcapnNoiseNetwork({
+          codec: cborCodec,
+          heartbeat,
+          reconnect: /** @type {any} */ ({ [name]: value }),
+        }),
+      { message: /must be a positive number/ },
+      `${name}: ${String(value)}`,
+    );
+  }
+  t.throws(
+    () =>
+      makeOcapnNoiseNetwork({
+        codec: cborCodec,
+        heartbeat,
+        reconnect: { backoffMaxMs: 2000, hardTimeoutMs: 1000 },
+      }),
+    { message: /backoffMaxMs must lie between/ },
+  );
+  for (const options of [
+    { backoffInitialMs: 100, backoffMaxMs: 100 },
+    { backoffMaxMs: 1000, hardTimeoutMs: 1000 },
+    { hardTimeoutMs: 2 ** 31 - 1 },
+  ]) {
+    t.notThrows(
+      () =>
+        makeOcapnNoiseNetwork({
+          codec: cborCodec,
+          heartbeat,
+          reconnect: options,
+        }),
+      JSON.stringify(options),
+    );
+  }
 });
