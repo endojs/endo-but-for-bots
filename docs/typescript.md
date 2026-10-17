@@ -6,9 +6,13 @@ authored in `.ts` with only erasable type syntax (no `enum`, `namespace`,
 
 - **At development time** — imported directly as `.ts`, stripped by Node's
   built-in type stripping (on by default from Node.js 22.18 and 23.6; earlier
-  22.x releases need `--experimental-strip-types`). `@endo/cli` and
-  `@endo/daemon` instead register the `amaro/strip` hook for themselves and
-  the processes they fork.
+  22.x releases need `--experimental-strip-types`). `@endo/cli` registers the
+  `amaro/strip` hook, and `@endo/daemon` adds it to the `execArgv` of the
+  processes it forks.
+- **At bundle time** — `@endo/bundle-source` strips types from `.ts` modules
+  that a bundle reaches through workspace packages. Code that calls
+  `@endo/compartment-mapper` directly on workspace sources must supply a
+  parser for `ts` the same way.
 - **At publish time** — converted to `.js` by stripping type annotations
 
 ## Authoring `.ts` source
@@ -28,9 +32,8 @@ full set of restrictions.
 
 ### Import specifiers
 
-In `.ts` source files, import other source files using `.ts` specifiers — but
-**only for relative imports** within the same package, or another workspace
-package in this repo:
+In `.ts` source files, import other source files using `.ts` specifiers, but
+**only by relative path within the same package**:
 
 ```ts
 import { foo } from './foo.ts';
@@ -40,11 +43,13 @@ import type { Bar } from './types.ts';
 At pack time these specifiers are automatically rewritten to `.js` for the
 published tarball by [ts-node-pack](https://github.com/turadg/ts-node-pack).
 
-Do **not** reach into another package by a `.ts` specifier across a published
-boundary (e.g. `import … from '@endo/foo/src/bar.ts'`). Node.js refuses to
-load `.ts` resolved under `node_modules`, so that breaks for consumers — and
-also for this repo once the dependency is consumed as a published package.
-Cross-package imports must go through the package's normal `.js` entrypoint.
+Do **not** import another package's source by a `.ts` specifier, whether by
+package name (`import { x } from '@endo/foo/src/bar.ts'`) or by a relative path
+that leaves the package. Node.js refuses to load `.ts` resolved under
+`node_modules`, and a relative path into another package names a file that is
+not in the published tarball. Reach other packages through their `.js`
+entrypoint. The `@endo/no-nonrelative-ts-import` lint rule rejects the
+package-name form.
 
 ### Package entrypoints stay `.js`
 
@@ -68,67 +73,16 @@ exists, every entrypoint is a `.js` file and every `.ts` import is relative.
 
 ### The `emitDeclarationOnly` constraint
 
-The repo-wide `tsconfig-build-options.json` sets `emitDeclarationOnly: true`.
-This means `tsc` only generates `.d.ts` declaration files, not `.js` runtime
-files. This is intentional because:
-
-1. Most source files are `.js` with JSDoc annotations (not `.ts`) — this is
-   the legacy state being migrated from
-2. We don't use a separate `dist/` output directory to avoid requiring a build
-   watcher during development
-3. Without `emitDeclarationOnly`, `tsc` would try to write `.js` output for
-   `.js` input files, causing errors like:
-   ```
-   error TS5055: Cannot write file 'src/foo.js' because it would overwrite input file.
-   ```
+The repo-wide `tsconfig-build-options.json` sets `emitDeclarationOnly: true`,
+so `tsc` only generates `.d.ts` files. Most sources are still `.js`, and
+without this setting `tsc` would try to overwrite them with its `.js` output.
 
 ## Packing
 
-Publishable tarballs are built by [ts-node-pack][]. It runs out-of-tree —
-nothing in the working copy is mutated — and is driven from the repo root by
-`yarn pack:all`, which writes every public workspace's `.tgz` into `dist/`.
-`yarn release:npm` wraps that step and `npm publish`-es each tarball in turn,
-replacing the previous `lerna publish from-package` flow.
-
-[ts-node-pack]: https://github.com/turadg/ts-node-pack
-
-For each package ts-node-pack:
-
-1. Copies the `npm-packlist` into a temp staging directory (same file-set
-   that `npm pack` would produce).
-2. If the package has `.ts` sources, runs `tsc` with a derived config to
-   emit `.d.ts` files alongside the staged `.js`.
-3. Strips types from staged `.ts` / `.mts` files (erasure only) and renames
-   them to `.js` / `.mjs`. Line and column positions are preserved, so no
-   sourcemaps are needed for debugging.
-4. Rewrites relative `.ts` import specifiers to `.js` in the emitted `.js`
-   and `.d.ts` files (`from './foo.ts'` → `from './foo.js'`,
-   `import('./foo.ts')`, `declare module './foo.ts'`,
-   `<reference path="./foo.ts" />`).
-5. Rewrites `package.json`: `main` / `module` / `types` / `bin` / `exports` /
-   `files` get their `.ts` entries flipped to `.js` + `.d.ts`,
-   `workspace:` protocol specifiers in dependencies get resolved to concrete
-   version ranges, and `devDependencies` / `scripts` are stripped.
-6. Validates that no `.ts` specifiers remain anywhere in the staged tree.
-7. Runs `npm pack` inside the staging directory and writes the resulting
-   `.tgz` to `dist/`.
-
-Pure JS+JSDoc packages skip step 2 and ship their `.js` sources verbatim —
-the same tarball `npm pack` would have produced before ts-node-pack, just
-with `workspace:` specifiers resolved.
-
-### Migration path
-
-Packages are being migrated from `.js` (with JSDoc type annotations) to
-`.ts` incrementally. The steps for each package:
-
-1. Rename `.js` source files to `.ts` and convert JSDoc annotations to
-   TypeScript syntax.
-2. Update import specifiers from `.js` to `.ts`.
-3. Run `yarn pack:all` and spot-check the resulting `dist/<name>-*.tgz`.
-
-No per-package `prepack`/`postpack` wiring is required; ts-node-pack handles
-the whole pipeline at the repo level.
+`yarn pack:all` builds every public workspace's tarball into `dist/` with
+[ts-node-pack](https://github.com/turadg/ts-node-pack), which erases types
+from `.ts` sources, rewrites relative `.ts` specifiers to `.js`, and fails if
+any `.ts` specifier remains. `yarn release:npm` publishes those tarballs.
 
 ## Exported types
 

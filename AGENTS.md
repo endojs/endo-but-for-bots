@@ -15,14 +15,9 @@ Our TypeScript conventions accommodate `.js` development (this repo) and `.ts` c
 
 ### `.ts` source with erasable syntax
 
-`.ts` files may contain runtime code, provided it uses only **erasable** type syntax (no `enum`, `namespace`, `const enum`, or parameter properties). Types are stripped at dev/test time by Node.js's built-in type stripping (on by default from Node.js 22.18 and 23.6), at runtime in `@endo/cli` and `@endo/daemon` by the [`amaro/strip`](https://github.com/nodejs/amaro) hook they register, and at pack time by [ts-node-pack](https://github.com/turadg/ts-node-pack) for the published `.js`. See [`docs/typescript.md`](docs/typescript.md).
+`.ts` files may contain runtime code, provided it uses only **erasable** type syntax (no `enum`, `namespace`, `const enum`, or parameter properties). Import `.ts` only by relative specifier within the same package, and keep package entrypoints `.js`. [`docs/typescript.md`](docs/typescript.md) states these rules and describes where types are stripped.
 
-Two rules keep this compatible with Node's module resolver:
-
-- **Runtime `.ts` imports must be relative** — same package, or another workspace package in this repo. Node.js will not load `.ts` specifiers resolved under `node_modules`, so never import another published package's source by its `.ts` extension.
-- **Package entrypoints must be `.js`** in source, since consumers resolve them from `node_modules`. A `.js` entrypoint may import or re-export from `.ts` (e.g. `packages/patterns/index.js` re-exports from `./src/patterns/patternMatchers.ts`, and `packages/eventual-send/src/no-shim.js` imports `makeE` from `./E.ts`).
-
-A `.ts` file may instead be type-only (e.g. `type-from-pattern.ts` using `declare`), emitting just `.d.ts`. Where each kind of type definition belongs is summarized below.
+A `.ts` file may instead be type-only (e.g. `type-from-pattern.ts` using `declare`), emitting just `.d.ts`.
 
 ### The `types-index` convention
 
