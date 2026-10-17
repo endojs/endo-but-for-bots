@@ -19,6 +19,9 @@
     "endo": "./bin/endo.cjs"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "exports": {},
   "scripts": {
     "build": "exit 0",

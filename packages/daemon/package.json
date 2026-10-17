@@ -19,6 +19,9 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "./index.js",
   "module": "./index.js",
   "types": "./types.d.ts",
