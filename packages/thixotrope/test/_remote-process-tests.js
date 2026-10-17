@@ -23,9 +23,9 @@ import {
 /** @import {ExecutionContext, TestFn} from 'ava' */
 
 /**
- * @param {ExecutionContext} t @param {string} path @param {'replay' | 'ironhorse'} kind
- * @param path
- * @param kind
+ * @param {ExecutionContext} t
+ * @param {string} path
+ * @param {'replay' | 'ironhorse'} kind
  */
 const launch = async (t, path, kind) => {
   const child = fork(
@@ -73,8 +73,8 @@ const launch = async (t, path, kind) => {
 };
 
 /**
- * @param {TestFn} test @param {'replay' | 'ironhorse'} kind
- * @param kind
+ * @param {TestFn} test
+ * @param {'replay' | 'ironhorse'} kind
  */
 export const registerRemoteProcessTests = (test, kind) => {
   for (const phase of ['before-dispatch', 'after-dispatch']) {

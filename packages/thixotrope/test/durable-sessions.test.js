@@ -35,7 +35,7 @@ const COUNTER_SOURCE = `
  * @param {string} statePath
  * @param {number} port 0 to pick a port; a restarted daemon must pin
  *   its predecessor's port so the peer's reconnect finds it
- * @param resources
+ * @param {Record<string, (description?: unknown) => object>} [resources]
  */
 const makeDaemon = (statePath, port, resources = {}) =>
   makeThixotropeDaemon({

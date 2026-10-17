@@ -54,7 +54,7 @@ import { locationToLocationId } from '../client/util.js';
  * @param {string} captpVersion
  * @param {OcapnCodec} codec
  */
-export const sendHandshake = (
+const sendHandshake = (
   connection,
   selfIdentity,
   captpVersion,
@@ -139,7 +139,6 @@ const handleSessionHandshakeMessage = (
       }
       const locationId = locationToLocationId(peerLocation);
       if (sessionManager.getActiveSession(locationId)) {
-        // throw error
         throw Error(`Active session already exists for ${locationId}`);
       }
 

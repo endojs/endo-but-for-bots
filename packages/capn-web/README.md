@@ -308,7 +308,7 @@ model-deep, mesh-shaped.** The two are complementary, not redundant.
 [cw-spec]: https://github.com/cloudflare/capnweb/blob/main/protocol.md
 
 [^o-readme]: `@endo/ocapn` package overview — `packages/ocapn/README.md`
-[^o-handshake]: Handshake (`op:start-session`, location signature, crossed-hellos) — `packages/ocapn/src/client/handshake.js`
+[^o-handshake]: Handshake (`op:start-session`, location signature, crossed-hellos) — `packages/ocapn/src/netlayers/start-session.js`
 [^o-crypto]: Session id derivation, Ed25519 location signing — `packages/ocapn/src/cryptography.js`
 [^o-handoff]: `HandoffGiveSigEnvelope` / `SignedHandoffReceive` codec, signature verification — `packages/ocapn/src/codecs/descriptors.js`; `deposit-gift` / `withdraw-gift` bootstrap methods — `packages/ocapn/src/client/ocapn.js`
 [^o-sturdy]: Sturdy refs `(location, swissNum)` — `packages/ocapn/src/client/sturdyrefs.js`

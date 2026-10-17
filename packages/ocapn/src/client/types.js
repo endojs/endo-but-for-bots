@@ -299,8 +299,7 @@
  * Handlers `makeStartSessionNetwork` gives a connect-style netlayer.
  * @typedef {object} NetlayerHandlers
  * @property {(netlayer: NetLayer, isOutgoing: boolean, socket: SocketOperations) => Connection} makeConnection
- * Creates a connection wrapper. The start-session adapter handles identity
- * creation and initiates the handshake for outgoing connections.
+ * Creates a connection wrapper.
  * @property {(connection: Connection, data: Uint8Array) => void} handleMessageData
  * @property {(connection: Connection, reason?: Error) => void} handleConnectionClose
  * @property {(connection: Connection, resumption: SessionResumption) => ResumedSession} resumeSession

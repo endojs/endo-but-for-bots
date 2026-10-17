@@ -7,7 +7,7 @@
 
 `@endo/ocapn` core no longer runs the `op:start-session` handshake.
 The handshake moves to a network adapter, `makeStartSessionNetwork` from the new export `@endo/ocapn/netlayer/start-session`, which connect-style netlayers (`@endo/ocapn/netlayer/tcp-testing`, `@endo/ocapn/netlayer/ws`, iroh, the thixotrope durable netlayer) compose.
-The `client/handshake.js` module is removed; its handshake logic now lives in the adapter module.
+The same export provides `makeSelfIdentityFromPrivateKey`, which rebuilds a session's self identity from a persisted private key so a durable netlayer can resume sessions.
 
 Breaking changes in `@endo/ocapn`:
 
@@ -22,4 +22,4 @@ To migrate, wrap the existing netlayer factory: `makeOcapn({ codec, network: mak
 The wire is unchanged.
 
 `@endo/goblin-chat` and `@endo/thixotrope` compose the adapter internally; their public APIs, including goblin-chat's `captpVersion` option, are unchanged.
-`@endo/ocapn-iroh` has no source change; its README now shows the netlayer wrapped in `makeStartSessionNetwork`, which callers passing `makeIrohNetlayer` to `makeOcapn` must now do.
+Callers passing `makeIrohNetlayer` from `@endo/ocapn-iroh` to `makeOcapn` must now wrap it in `makeStartSessionNetwork`.
