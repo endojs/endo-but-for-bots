@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-05-19 |
+| **Updated** | 2026-10-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In progress: Phases 1–3 implemented (heartbeat, queue, reconnect with Rekey); Phases 4–5 (Resume, crossed-hellos) not started |
 | **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md). |
 
 ## What is the Problem Being Solved?
@@ -484,6 +484,68 @@ operates per-transport-instance: each new TCP connection mounts a
 fresh `makeSyrupsReader` / `makeSyrupsWriter` pair. The session-level
 queue of outbound operations bridges across the framer instances.
 
+### 7. Session Control Records
+
+Phase 3 (Reconnect with Rekey) needs the two peers to agree, on every
+transport instance, on which features the session uses and, on a
+reconnect, which session and epoch the new instance continues.
+Two further operations carry that, *proposed, pending OCapN-org review*
+like `op:ping` and `op:pong`.
+The OCapN-Noise network consumes both; they never reach the CapTP
+session.
+
+`op:session-hello` is exchanged in both directions, encrypted, right
+after the identity exchange (`op:start-session`) on **every** transport
+instance, including the first:
+
+```
+<op:session-hello features epoch session received>
+```
+
+- `features`: a non-negative integer bitset of what the sender
+  supports. Bit 0 is heartbeat, bit 1 is reconnect. A feature is in
+  effect for the session only when both hellos advertise it.
+- `epoch`: the session epoch of this transport instance (§ 2). `0`
+  opens a new session. A non-zero epoch asks to continue an existing
+  session on a fresh Noise handshake.
+- `session`: a 32-byte session token, the Noise transcript hash of the
+  session's first handshake. Both peers derived it from that handshake,
+  and nobody else can, so naming it together with the authenticated
+  peer key is the capability to resume.
+- `received`: how many session frames the sender has delivered to its
+  CapTP session. The peer drops queued frames before that position and
+  replays the rest, so each frame is delivered exactly once.
+
+On a reconnect the dialer sends `epoch` = its current epoch + 1. The
+responder accepts when the token names a session it holds for that peer
+and the epoch is either its own epoch + 1 or the epoch it last attached.
+The second case is a retry: the responder attached the epoch, but its
+reply was lost or arrived after the dialer's handshake timeout, so the
+dialer never attached it and asks again. The responder suspends the old
+instance before sampling `received`, replies with the same epoch and
+token, and both sides replay from the other's `received`.
+Any other hello is answered with a refusal hello, `epoch` = 0 and the
+new handshake's own transcript hash, which the dialer treats as "the
+peer no longer holds this session" and aborts the session at once
+rather than waiting out `SESSION_HARD_TIMEOUT`.
+In this phase only the dialer of the session redials; the responder
+waits for it. The crossed-hellos tiebreaker (§ 3, Phase 5) replaces
+that rule.
+
+`op:session-end` is sent before a deliberate close:
+
+```
+<op:session-end epoch>
+```
+
+It tells the peer the session ended on purpose, so the peer ends the
+session gracefully instead of treating the closed transport as loss and
+reconnecting.
+
+Because the hello is unconditional, an OCapN-Noise peer running Phase 3
+does not interoperate with one that predates it, even with heartbeat
+and reconnect off (§ Compatibility Considerations).
+
 ## Diagrams
 
 ### Steady-State Heartbeat to TCP Drop to Reconnect to Sequence Resume
@@ -657,7 +719,8 @@ sequenceDiagram
    reconnect-with-rekey path.
 
 3. **Phase 3: Reconnect with Rekey.** Implement transparent reconnect
-   using a fresh Noise handshake on the new TCP transport. This is
+   using a fresh Noise handshake on the new TCP transport, negotiated
+   by the session control records of § 7. This is
    simpler than Resume and exercises the queue/epoch/tiebreaker logic
    without touching CipherState continuity.
 
@@ -741,9 +804,13 @@ The following were open in earlier drafts and are now settled:
 - The session epoch and the resumption handshake live entirely inside
   the OCapN-Noise network and do not affect other networks
   (`tcp-testing-only`, `tcp-syrups`, etc.).
-- The behavior is opt-in by network identifier: a locator with
+- The behavior is scoped by network identifier: a locator with
   `network=np` gets the reconnect semantics; a locator with
-  `network=tcp-syrups` does not.
+  `network=tcp-syrups` does not. Within `np`, heartbeat and reconnect
+  are opt-in per network, but the `op:session-hello` exchange (§ 7) is
+  not: every OCapN-Noise handshake from Phase 3 onward sends it, so
+  Phase 3 peers do not interoperate with OCapN-Noise peers that predate
+  it. The package is pre-1.0, so this ships as a minor bump.
 
 ## Upgrade Considerations
 

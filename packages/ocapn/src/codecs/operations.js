@@ -91,7 +91,7 @@ export const OcapnHeartbeatOperationsCodecs = makeRecordUnionCodec(
 );
 
 // Proposed, pending OCapN-org review: the session control records of
-// designs/ocapn-noise-session-reconnect.md. The OCapN-Noise network
+// designs/ocapn-noise-session-reconnect.md § 7. The OCapN-Noise network
 // exchanges `op:session-hello` right after `op:start-session` on every
 // transport instance, and sends `op:session-end` before a deliberate
 // close. Both are consumed by the network and never reach the session.
