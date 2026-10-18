@@ -19,10 +19,12 @@ import {
   keys,
   mapGet,
   weakmapGet,
+  reflectDeleteProperty,
   reflectHas,
   assign,
 } from './commons.js';
 import { compartmentEvaluate } from './compartment-evaluate.js';
+import { makeNotifierWithResolver } from './notifier-with-resolver.js';
 
 const { quote: q } = assert;
 
@@ -257,6 +259,16 @@ export const makeModuleInstance = (
       configurable: false,
     };
 
+    // Define on exportsTarget eagerly so cross-module reads through the
+    // namespace import (`'*'` notifier) see the TDZ-aware getter even before
+    // imports() completes its sort-and-define pass. Keep this descriptor
+    // configurable so the late pass can delete and re-define it in sorted
+    // order before freezing the namespace.
+    defineProperty(exportsTarget, fixedExportName, {
+      ...exportsProps[fixedExportName],
+      configurable: true,
+    });
+
     notifiers[fixedExportName] = fixedGetNotify.notify;
   });
 
@@ -345,6 +357,16 @@ export const makeModuleInstance = (
         configurable: false,
       };
 
+      // Define on exportsTarget eagerly so cross-module reads through the
+      // namespace import see the TDZ-aware getter before imports() completes
+      // its sort-and-define pass. Keep this descriptor configurable so the
+      // late pass can delete and re-define it in sorted order before freezing
+      // the namespace.
+      defineProperty(exportsTarget, liveExportName, {
+        ...exportsProps[liveExportName],
+        configurable: true,
+      });
+
       notifiers[liveExportName] = liveGetNotify.notify;
     },
   );
@@ -354,23 +376,84 @@ export const makeModuleInstance = (
   };
   notifiers['*'] = notifyStar;
 
-  const wireUpExportNotifier = (exportName, notify) => {
-    if (!notifiers[exportName] && notify !== false) {
-      notifiers[exportName] = notify;
-
-      // exported live binding state
-      let value;
-      const update = newValue => (value = newValue);
-      notify(update);
-      exportsProps[exportName] = {
-        get() {
-          return value;
-        },
-        set: undefined,
-        enumerable: true,
-        configurable: false,
-      };
+  const wireUpExportNotifier = (
+    exportName,
+    notify,
+    deferredSpecifier,
+    deferredImportName,
+  ) => {
+    if (notifiers[exportName] || notify === false) {
+      return;
     }
+    if (notify === undefined) {
+      if (deferredSpecifier === undefined) {
+        return;
+      }
+      // The upstream module did not yet expose a notifier for
+      // `deferredImportName` when this re-export was wired. This is the
+      // star-export cycle of endojs/endo#59: the upstream's notifier for
+      // that name may be wired only later, in its own candidate-all walk,
+      // after this module's `imports()` returns. Install a notifier that
+      // queues subscribers until the upstream resolves, then forwards them
+      // through. {@link makeNotifierWithResolver} is the synchronous
+      // variant of `Promise.withResolvers` that captures this pattern; each
+      // `notify` call lazily attempts to resolve against the upstream's
+      // notifiers. An unresolved forwarding notifier stays queued with its
+      // upstream rather than becoming a recursive forwarding target.
+      const { notify: queueOrForward } = makeNotifierWithResolver(() => {
+        const upstreamInstance = mapGet(importedInstances, deferredSpecifier);
+        if (upstreamInstance === undefined) {
+          throw SyntaxError(
+            `The requested module '${deferredSpecifier}' does not provide an export named '${deferredImportName}'`,
+          );
+        }
+        const upstreamNotify = upstreamInstance.notifiers[deferredImportName];
+        if (upstreamNotify === undefined && !upstreamInstance.isExecuting) {
+          throw SyntaxError(
+            `The requested module '${deferredSpecifier}' does not provide an export named '${deferredImportName}'`,
+          );
+        }
+        return upstreamNotify;
+      });
+      notify = queueOrForward;
+    }
+    notifiers[exportName] = notify;
+
+    // Re-exported live binding state. The exported getter throws
+    // ReferenceError until the upstream binding propagates a value through
+    // `notify`, mirroring the cross-module TDZ semantics of ECMA-262:
+    // reading a re-export of an upstream `const` or `let` binding during a
+    // cycle's linked-but-not-yet-evaluated window raises a ReferenceError
+    // rather than silently returning the cached `undefined`. An upstream
+    // `var` binding clears its TDZ as part of its hoisting preamble (see
+    // `functor.js`), so for `var` the updater fires before the
+    // downstream's getter is observed and the getter returns `undefined`.
+    let value;
+    let tdz = true;
+    const update = newValue => {
+      value = newValue;
+      tdz = false;
+    };
+    notify(update);
+    exportsProps[exportName] = {
+      get() {
+        if (tdz) {
+          throw ReferenceError(`binding ${q(exportName)} not yet initialized`);
+        }
+        return value;
+      },
+      set: undefined,
+      enumerable: true,
+      configurable: false,
+    };
+    // Define on exportsTarget eagerly so cross-module namespace reads see
+    // the TDZ-aware getter before imports() completes. Keep this descriptor
+    // configurable so the late pass can delete and re-define it in sorted
+    // order before freezing the namespace.
+    defineProperty(exportsTarget, exportName, {
+      ...exportsProps[exportName],
+      configurable: true,
+    });
   };
 
   // Per the calling convention for the moduleFunctor generated from
@@ -381,7 +464,7 @@ export const makeModuleInstance = (
   // The updateRecord must conform to moduleAnalysis.imports
   // updateRecord = Map<specifier, importUpdaters>
   // importUpdaters = Map<importName, [update(newValue)*]>
-  function imports(updateRecord) {
+  const imports = updateRecord => {
     // By the time imports is called, the importedInstances should already be
     // initialized with module instances that satisfy
     // imports.
@@ -428,7 +511,12 @@ export const makeModuleInstance = (
       if (reexportMap[specifier]) {
         // Set up reexport notifiers instantly so they are available in cycles.
         for (const [localName, exportedName] of reexportMap[specifier]) {
-          wireUpExportNotifier(exportedName, importNotifiers[localName]);
+          wireUpExportNotifier(
+            exportedName,
+            importNotifiers[localName],
+            specifier,
+            localName,
+          );
         }
       }
     }
@@ -446,13 +534,16 @@ export const makeModuleInstance = (
     // since all properties of the exports namespace must be keyed by a string
     // and the string must correspond to a valid identifier, sorting these
     // properties works for this specific case.
-    arrayForEach(arraySort(keys(exportsProps)), k =>
-      defineProperty(exportsTarget, k, exportsProps[k]),
-    );
+    arrayForEach(arraySort(keys(exportsProps)), k => {
+      if (!reflectDeleteProperty(exportsTarget, k)) {
+        throw TypeError(`Cannot reorder module export ${q(k)}`);
+      }
+      defineProperty(exportsTarget, k, exportsProps[k]);
+    });
 
     freeze(exportsTarget);
     activate();
-  }
+  };
 
   let optFunctor;
   if (__syncModuleFunctor__ !== undefined) {
@@ -466,12 +557,14 @@ export const makeModuleInstance = (
   }
   let didThrow = false;
   let thrownError;
-  function execute() {
+  let isExecuting = false;
+  const execute = () => {
     if (optFunctor) {
       // uninitialized
       const functor = optFunctor;
       optFunctor = null;
       // initializing - call with `this` of `undefined`.
+      isExecuting = true;
       try {
         functor(
           freeze({
@@ -485,17 +578,22 @@ export const makeModuleInstance = (
       } catch (e) {
         didThrow = true;
         thrownError = e;
+      } finally {
+        isExecuting = false;
       }
       // initialized
     }
     if (didThrow) {
       throw thrownError;
     }
-  }
+  };
 
   return freeze({
     notifiers,
     exportsProxy,
+    get isExecuting() {
+      return isExecuting;
+    },
     execute,
   });
 };

@@ -45,15 +45,14 @@ export const buildFunctorSource = (scriptSource, sourceOptions, sourceUrl) => {
     preamble = `let ${preamble};`;
   }
 
-  preamble += `${h.HIDDEN_IMPORTS}([${keys(isrc)
-    .map(
-      src =>
-        `[${js(src)}, [${Object.entries(isrc[src])
-          .map(([exp, upds]) => `[${js(exp)},[${upds.join(',')}]]`)
-          .join(',')}]]`,
-    )
-    .join(',')}]);`;
-
+  // Hoisted declarations (function declarations and `var` initializers)
+  // must run before the imports call so that, when imports() walks the
+  // module graph and synchronously executes upstream modules during a
+  // cycle, those upstreams already observe this module's hoisted bindings
+  // as initialized rather than in the temporal dead zone. ECMA-262 model:
+  // function/var bindings are created and initialized during
+  // InitializeEnvironment, which precedes dependency evaluation in
+  // Module.Evaluate.
   preamble += sourceOptions.hoistedDecls
     .map(([vname, isOnce, cvname]) => {
       let src = '';
@@ -65,6 +64,15 @@ export const buildFunctorSource = (scriptSource, sourceOptions, sourceUrl) => {
       return src;
     })
     .join('');
+
+  preamble += `${h.HIDDEN_IMPORTS}([${keys(isrc)
+    .map(
+      src =>
+        `[${js(src)}, [${Object.entries(isrc[src])
+          .map(([exp, upds]) => `[${js(exp)},[${upds.join(',')}]]`)
+          .join(',')}]]`,
+    )
+    .join(',')}]);`;
 
   // The outer function destructures the module calling convention's internal
   // variables into hidden lexical variables.
