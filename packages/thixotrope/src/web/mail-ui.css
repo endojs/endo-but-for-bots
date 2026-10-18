@@ -477,17 +477,30 @@ input {
 }
 
 .draft-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   margin: 16px 0;
 }
-.draft-editor textarea {
-  width: 100%;
-  box-sizing: border-box;
+.inline-mail-editor {
+  min-height: 180px;
+  padding: 12px;
+  border: 1px solid #dce2dc;
+  border-radius: 6px;
+  line-height: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.draft-editor .value-pill {
-  align-self: flex-start;
+.inline-mail-editor:focus {
+  outline: 2px solid #526c58;
+  outline-offset: 2px;
+}
+.inline-mail-editor:empty::before {
+  content: 'Write a message…';
+  color: #828b82;
+  pointer-events: none;
+}
+.inline-mail-editor .shared-value {
+  white-space: nowrap;
+  vertical-align: baseline;
+  user-select: all;
 }
 .value-suggestions {
   display: flex;

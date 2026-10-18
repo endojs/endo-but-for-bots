@@ -3,8 +3,10 @@ import './mail-ui-lockdown.js';
 import { confineComponent } from '@endo/preact-container/compartment';
 import { h, renderConfined } from '@endo/preact-container/renderer';
 
+import { makeMailEditor } from './mail-editor.js';
+
 /** @import { MailUi } from '../../web/mail-ui.js' */
-/** @import { MailUiApi } from '../../web/mail-ui.js' */
+/** @import { MailUiApi, MailEditor } from '../../web/mail-ui.js' */
 
 const token = location.hash.slice(1);
 /** @param {string} path @param {unknown} [body] */
@@ -42,7 +44,7 @@ const start = async () => {
       const compartment = new Compartment({ harden });
       /** @type {{MailUi: typeof MailUi}} */
       const { MailUi: guest } = compartment.evaluate(source);
-      /** @type {typeof confineComponent<{api: MailUiApi}>} */
+      /** @type {typeof confineComponent<{api: MailUiApi, editor: MailEditor}>} */
       const confineMail = confineComponent;
       const Component = confineMail(guest, {
         name: 'Mail',
@@ -56,24 +58,9 @@ const start = async () => {
       let dialog = null;
       /** @type {Element | null} */
       let returnFocus = null;
-      // Move into the text following an inserted value without exposing DOM
-      // focus or selection methods to the confined component.
-      let previousTextCount = 0;
+      const { editor, mount } = makeMailEditor();
       const syncDialog = () => {
-        const editor = root.querySelector('.draft-editor');
-        const texts = editor?.querySelectorAll('textarea');
-        const count = texts?.length ?? 0;
-        if (editor && count > previousTextCount) {
-          const index = editor.getAttribute('data-focus-text');
-          const target = editor.querySelector(
-            `textarea[data-text-index="${index}"]`,
-          );
-          if (target instanceof HTMLTextAreaElement) {
-            target.focus();
-            target.setSelectionRange(0, 0);
-          }
-        }
-        previousTextCount = count;
+        mount(root);
         const next = root.querySelector('[role="dialog"]');
         const content = root.querySelector('.mail-content');
         if (content instanceof HTMLElement) content.inert = next !== null;
@@ -88,7 +75,12 @@ const start = async () => {
         dialog = next;
       };
       const observer = new MutationObserver(syncDialog);
-      observer.observe(root, { childList: true, subtree: true });
+      observer.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-disabled'],
+      });
       root.addEventListener('keydown', event => {
         if (event.key !== 'Tab' || !dialog) return;
         const controls = dialog.querySelectorAll(
@@ -109,7 +101,7 @@ const start = async () => {
         }
       });
       root.replaceChildren();
-      renderConfined(h(Component, { api }), root, {
+      renderConfined(h(Component, { api, editor }), root, {
         allowedTags: [
           'main',
           'header',
