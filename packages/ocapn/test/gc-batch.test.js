@@ -84,7 +84,7 @@ test('empty lists and malformed notices retain immediate codec behavior', t => {
 });
 
 test('a deferred GC send failure invokes the session abort handler once', async t => {
-  t.timeout(1_000);
+  t.timeout(1000);
   const error = Error('write failed after uncertain acceptance');
   let attempts = 0;
   let resolveFailure;
@@ -108,7 +108,8 @@ test('a deferred GC send failure invokes the session abort handler once', async 
     commitSentRefCounts: noop,
   });
   comms.send(answers(1n));
-  t.is(await failed, error);
+  const failure = await failed;
+  t.is(failure, error);
   comms.send(answers(2n));
   await Promise.resolve();
   t.is(attempts, 1, 'failed or unplugged sends are not retried');
