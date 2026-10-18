@@ -195,17 +195,41 @@ test.serial(
   },
 );
 
-test.serial('import hook makers ignore replaced Map and Set', t => {
+test.serial(
+  'node-powers releases the read mutex after a failed read while Promise is replaced',
+  async t => {
+    const powers = makeReadPowers({ fs, url });
+    const missing = new URL(
+      'missing-cached-intrinsics-fixture',
+      import.meta.url,
+    ).href;
+    const [first, second] = withPoisonedGlobals(['Promise'], () => [
+      powers.read(missing),
+      powers.read(import.meta.url),
+    ]);
+    await t.throwsAsync(first, { code: 'ENOENT' });
+    const bytes = await second;
+    t.true(bytes.length > 0);
+  },
+);
+
+test.serial('import hooks ignore replaced Map and Set', async t => {
+  await null;
   const readPowers = makeReadNowPowers({ fs, url });
   const baseLocation = 'file:///a/';
+  // The hooks consult `Set` lazily, when deferring an error for a
+  // compartment they have not seen before, so each hook must be invoked
+  // for `file:///a/b/` while `Set` remains replaced.
+  const parse = () => {
+    throw Error('unexpected parse');
+  };
+  parse.isSyncParser = true;
   /** @type {any} */
   const compartmentOptions = {
     packageLocation: 'file:///a/b/',
     packageName: 'b',
     attenuators: {},
-    parse: () => {
-      throw Error('unexpected parse');
-    },
+    parse,
     shouldDeferError: () => false,
     compartments: {},
   };
@@ -214,18 +238,29 @@ test.serial('import hook makers ignore replaced Map and Set', t => {
     entryModuleSpecifier: './index.js',
     moduleSourceHook: undefined,
   };
-  withPoisonedGlobals(['Map', 'Set'], () => {
+  const restore = poisonGlobals(['Map', 'Set']);
+  try {
     const makeImportHook = makeImportHookMaker(
       readPowers,
       baseLocation,
       hookMakerOptions,
     );
-    t.is(typeof makeImportHook(compartmentOptions), 'function');
+    const importHook = makeImportHook(compartmentOptions);
     const makeImportNowHook = makeImportNowHookMaker(
       readPowers,
       baseLocation,
       hookMakerOptions,
     );
-    t.is(typeof makeImportNowHook(compartmentOptions), 'function');
-  });
+    const importNowHook = makeImportNowHook(compartmentOptions);
+    const nowRecord = /** @type {any} */ (importNowHook('missing-now'));
+    t.throws(() => nowRecord.execute(), {
+      message: /Cannot find external module "missing-now"/,
+    });
+    const record = /** @type {any} */ (await importHook('missing'));
+    t.throws(() => record.execute(), {
+      message: /Cannot find external module "missing"/,
+    });
+  } finally {
+    restore();
+  }
 });
