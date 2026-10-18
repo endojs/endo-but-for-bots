@@ -18,8 +18,11 @@
  *   debugName: string,
  *   snapshot: unknown,
  *   onOutbound: (message: Record<string, unknown>) => void,
+ *   onOutboundBatch?: (messages: Array<Record<string, unknown>>) => void,
  * }) => Promise<WorkerIncarnation>} start `debugName` is for diagnostics
- *   only — it must not influence engine behavior
+ *   only — it must not influence engine behavior. Engines may use the optional
+ *   batch callback instead of the single-frame callback for a completed crank;
+ *   preserve frame order and emit each frame through exactly one callback.
  * @property {(ref: unknown) => Promise<void>} [releaseSnapshot] release a
  *   superseded snapshot ref (e.g. drop its content-addressed store root);
  *   called after a newer snapshot is durably recorded

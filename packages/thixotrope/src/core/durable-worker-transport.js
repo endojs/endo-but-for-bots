@@ -3,7 +3,7 @@
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
-import { Fail, q } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 
 import { makeSerialQueue } from '../serial-queue.js';
 import { WorkerHaltError } from './worker-engine.js';
@@ -58,6 +58,8 @@ import { WorkerHaltError } from './worker-engine.js';
  * @param {(bytes: Uint8Array, sequenceNumber: number) => void} options.onFrame
  *   worker→host frames, each with its session-lifetime sequence
  *   number for the hub's inbound watermark
+ * @param {(frames: Array<{bytes: Uint8Array, sequenceNumber: number}>) => void} [options.onFrames]
+ *   one completed crank, retaining each frame's replay identity
  * @param {number} [options.idleSleepMs] put the worker to sleep after this
  *   long with no operations. The worker binary drains the engine's
  *   promise-job queue to quiescence after every delivery and workers
@@ -83,6 +85,7 @@ export const makeDurableWorkerTransport = (
     store,
     engine,
     onFrame,
+    onFrames = undefined,
     idleSleepMs = undefined,
     snapshotEveryDeliveries = undefined,
     debugLabel = undefined,
@@ -248,6 +251,25 @@ export const makeDurableWorkerTransport = (
       debugName,
       snapshot: snapshotRef,
       onOutbound: processOutboundEnvelope,
+      onOutboundBatch:
+        onFrames === undefined
+          ? undefined
+          : envelopes => {
+              if (destroyed) return;
+              const frames = envelopes.map(envelope => {
+                if (envelope.t !== 'f' || typeof envelope.b64 !== 'string') {
+                  throw makeError(
+                    X`worker ${q(debugName)}: invalid duct frame`,
+                  );
+                }
+                seenOutbound += 1;
+                return {
+                  bytes: decodeBase64(envelope.b64),
+                  sequenceNumber: outboundBase + seenOutbound,
+                };
+              });
+              if (frames.length > 0) onFrames(frames);
+            },
     });
     // Awake from the moment the process runs: replies to replayed
     // frames can reach userland before the replay loop returns, and an

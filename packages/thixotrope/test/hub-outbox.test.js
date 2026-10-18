@@ -400,3 +400,59 @@ test('sequence commit failure exposes no frame to the transport', t => {
   );
   t.deepEqual(sent, ['1']);
 });
+
+for (const crash of [false, true]) {
+  test(`deferred cleanup retains replay identity (crash: ${crash})`, t => {
+    /** @type {any} */
+    let state = {
+      version: 2,
+      refs: {},
+      publications: {},
+      sessions: {
+        destination: {
+          durable: true,
+          queue: ['00', '01'],
+          queueSequences: ['', ''],
+          nextDelivery: '0',
+        },
+      },
+    };
+    let commits = 0;
+    const store = {
+      getState: () => state,
+      setState: next => {
+        state = JSON.parse(JSON.stringify(next));
+        commits += 1;
+      },
+    };
+    const sends = [];
+    const owned = new Set();
+    const adapter = {
+      durable: true,
+      requireAcceptance: true,
+      deferCleanup: true,
+      send: (_bytes, sequence) => {
+        t.is(state.sessions.destination.queueSequences[0], sequence);
+        sends.push(sequence);
+        owned.add(sequence);
+        return true;
+      },
+    };
+    const hub = makeOcapnHub({ codec: syrupCodec, store });
+    const sink = hub.attachSession('destination', adapter);
+    t.is(commits, 3, 'no final cleanup commit');
+    t.deepEqual(state.sessions.destination.queueSequences, ['2']);
+    if (crash) {
+      makeOcapnHub({ codec: syrupCodec, store }).attachSession(
+        'destination',
+        adapter,
+      );
+      t.deepEqual(sends, ['1', '2', '2']);
+    } else {
+      sink.flush();
+      t.is(commits, 4, 'explicit flush commits deferred removals');
+      t.deepEqual(state.sessions.destination.queue, []);
+    }
+    t.deepEqual([...owned], ['1', '2'], 'receiver applies each identity once');
+  });
+}

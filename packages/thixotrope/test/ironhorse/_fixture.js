@@ -90,6 +90,14 @@ export const makeFixture = async (
       let incrementCrank = false;
       const worker = await rawEngine.start({
         ...options,
+        onOutboundBatch:
+          options.onOutboundBatch === undefined
+            ? undefined
+            : frames => {
+                if (incrementCrank && frames.length > 0)
+                  inject('after commit before outbound', options.debugName);
+                options.onOutboundBatch?.(frames);
+              },
         onOutbound: frame => {
           if (incrementCrank)
             inject('after commit before outbound', options.debugName);

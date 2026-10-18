@@ -81,7 +81,24 @@ registerHooks({
     if (!url.includes('/packages/thixotrope/src/')) return result;
     let source = result.source?.toString();
     if (source === undefined) return result;
-    if (url.endsWith('/net/hub.js')) {
+    if (url.endsWith('/core/daemon.js')) {
+      if (
+        process.env.THIX_MAIL_TRANSFERS === 'off' ||
+        process.env.THIX_MAIL_TRANSFERS === 'cleanup'
+      ) {
+        source = replace(
+          source,
+          'onFrames: frames => holder.sink.deliverBatch(frames),',
+          'onFrames: undefined,',
+        );
+      }
+      if (
+        process.env.THIX_MAIL_TRANSFERS === 'off' ||
+        process.env.THIX_MAIL_TRANSFERS === 'batch'
+      ) {
+        source = replace(source, 'deferCleanup: true,', 'deferCleanup: false,');
+      }
+    } else if (url.endsWith('/net/hub.js')) {
       source = replace(
         source,
         'const gcBatching = true;',

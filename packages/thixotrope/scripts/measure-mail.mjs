@@ -32,6 +32,14 @@ if (!['name', 'reference'].includes(recipientStrategy))
   throw Error('Expected name or reference recipient strategy');
 if (!['atomic', 'log'].includes(hubStrategy))
   throw Error('Expected atomic or log hub strategy');
+const transferStrategy = process.env.THIX_MAIL_TRANSFERS ?? 'both';
+if (!['off', 'cleanup', 'batch', 'both'].includes(transferStrategy))
+  throw Error('Expected off, cleanup, batch, or both transfer strategy');
+if (
+  transferStrategy !== 'both' &&
+  !globalThis[Symbol.for('thixotrope.mailProfile')]
+)
+  throw Error('Transfer ablation requires profile-mail-loader.mjs');
 const gcStrategy = process.env.THIX_MAIL_GC ?? 'both';
 if (!['off', 'client', 'both'].includes(gcStrategy))
   throw Error('Expected off, client, or both GC strategy');
@@ -298,6 +306,7 @@ try {
           recipient: recipientStrategy,
           hub: hubStrategy,
           gc: gcStrategy,
+          transfers: transferStrategy,
           gcPressure,
           boot: process.env.THIX_MAIL_BOOT_DIR ? 'override' : 'default',
         },

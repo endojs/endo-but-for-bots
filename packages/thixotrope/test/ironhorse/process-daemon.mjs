@@ -83,6 +83,14 @@ const engine = harden({
     let active = false;
     const worker = await rawEngine.start({
       ...options,
+      onOutboundBatch:
+        options.onOutboundBatch === undefined
+          ? undefined
+          : frames => {
+              if (active && frames.length > 0) boundary('heap');
+              options.onOutboundBatch?.(frames);
+              if (active && frames.length > 0) boundary('output');
+            },
       onOutbound: frame => {
         if (active) boundary('heap');
         options.onOutbound(frame);

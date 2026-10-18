@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { WorkerEngine } from '../src/core/worker-engine.js' */
+
 /**
  * The durable worker transport as the hub's durability envelope: the
  * transport journals host→worker frames before the duct, wakes
@@ -414,4 +416,60 @@ test('a never-idle worker still bounds its journal by the snapshot cadence', asy
   await transport.crash();
   t.is(await E(counter).incr(), 6, 'recovered from the awake snapshot');
   t.is(await E(counter).getCount(), 6);
+});
+
+test('completed-crank batches retain individual identities across replay and snapshot', async t => {
+  t.timeout(10_000);
+  const store = makeMemoryStore().provideWorkerStore('e'.repeat(32));
+  /** @type {number[][]} */
+  const batches = [];
+  /** @type {WorkerEngine} */
+  const engine = {
+    canSnapshot: true,
+    start: async ({ onOutboundBatch }) => ({
+      deliver: async () => {
+        onOutboundBatch?.([
+          { t: 'f', b64: 'AQID' },
+          { t: 'f', b64: 'BAUG' },
+        ]);
+      },
+      snapshot: async () => 'snapshot',
+      terminate: async () => {},
+    }),
+  };
+  const options = {
+    workerId: 'e'.repeat(32),
+    store,
+    engine,
+    onFrame: () => t.fail('batch-capable engine must use the batch callback'),
+    onFrames: (
+      /** @type {Array<{bytes: Uint8Array, sequenceNumber: number}>} */ frames,
+    ) => batches.push(frames.map(frame => frame.sequenceNumber)),
+  };
+  const transport = makeDurableWorkerTransport(transportPowers, options);
+  t.teardown(() => transport.retire());
+  await transport.wake();
+  t.true(transport.write(frozenBytes(new Uint8Array([1])), '1'));
+  await transport.crash();
+  await transport.wake();
+  t.deepEqual(batches, [
+    [1, 2],
+    [3, 4],
+    [1, 2],
+    [3, 4],
+  ]);
+  await transport.sleep();
+  t.is(store.getMeta().hubDelivery, '1');
+  t.is(store.getMeta().outboundBase, 4);
+  t.deepEqual(store.readJournal(), []);
+  await transport.retire();
+  const restored = makeDurableWorkerTransport(transportPowers, options);
+  t.teardown(() => restored.retire());
+  // After host restart and truncation, a retained hub tail is already owned.
+  t.true(restored.write(frozenBytes(new Uint8Array([1])), '1'));
+  t.is(store.journalLength(), 1);
+  await restored.wake();
+  t.true(restored.write(frozenBytes(new Uint8Array([2])), '2'));
+  await restored.crash();
+  t.deepEqual(batches.at(-1), [5, 6]);
 });

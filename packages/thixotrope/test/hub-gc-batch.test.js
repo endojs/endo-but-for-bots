@@ -127,3 +127,97 @@ for (const kind of ['answers', 'exports']) {
     });
   }
 }
+
+for (const failCommit of [false, true]) {
+  test(`completed crank commits once and replays partial prefix (failure: ${failCommit})`, t => {
+    /** @type {any} */
+    let state = {
+      version: 2,
+      publications: {},
+      refs: Object.fromEntries(
+        [1, 2, 3].map(n => [
+          `r${n}`,
+          {
+            origin: 'origin',
+            position: String(n),
+            backing: 'answer',
+            flavor: 'promise',
+            mentionsIn: 0,
+            refcounts: {},
+            listeners: [],
+          },
+        ]),
+      ),
+      sessions: {
+        origin: { durable: true },
+        source: {
+          durable: true,
+          answersOwed: { 1: { ref: 'r1' }, 2: { ref: 'r2' }, 3: { ref: 'r3' } },
+        },
+      },
+    };
+    let commits = 0;
+    let inject = false;
+    const store = {
+      getState: () => state,
+      setState: next => {
+        if (inject) {
+          inject = false;
+          throw Error('before crank commit');
+        }
+        state = JSON.parse(JSON.stringify(next));
+        commits += 1;
+      },
+    };
+    const hub = makeOcapnHub({ codec: syrupCodec, store });
+    let source = hub.attachSession('source', {
+      durable: true,
+      send: () => true,
+    });
+    const frames = [1, 2, 3].map(n => {
+      const writer = syrupCodec.makeWriter();
+      writer.enterRecord();
+      writer.writeSelectorFromString('op:gc-answers');
+      writer.enterList();
+      writer.writeInteger(BigInt(n));
+      writer.exitList();
+      writer.exitRecord();
+      return { bytes: writer.getBytes(), sequenceNumber: n };
+    });
+    source.deliver(frames[0].bytes, 1);
+    let before = commits;
+    inject = failCommit;
+    if (failCommit) {
+      t.throws(() => source.deliverBatch(frames), {
+        message: 'before crank commit',
+      });
+      t.is(state.sessions.source.processedUpTo, '1');
+      t.is(state.sessions.origin.queue.length, 1);
+      // Lose the failed attempt's RAM and regenerate only the missing suffix.
+      source = makeOcapnHub({ codec: syrupCodec, store }).attachSession(
+        'source',
+        {
+          durable: true,
+          send: () => true,
+        },
+      );
+      before = commits;
+    }
+    source.deliverBatch(frames);
+    t.is(commits - before, 1);
+    t.is(state.sessions.source.processedUpTo, '3');
+    t.is(state.sessions.origin.queue.length, 3);
+    t.deepEqual(Object.keys(state.refs), []);
+    const restored = makeOcapnHub({ codec: syrupCodec, store });
+    const replay = restored.attachSession('source', {
+      durable: true,
+      send: () => true,
+    });
+    replay.deliverBatch(frames);
+    t.is(
+      state.sessions.origin.queue.length,
+      3,
+      'no duplicate GC after restart',
+    );
+  });
+}

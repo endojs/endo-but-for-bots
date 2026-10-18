@@ -149,7 +149,7 @@ export const makeIronhorseEngine = (
       };
     },
     releaseSnapshot: async ref => remove(imagePath(ref), { force: true }),
-    start: async ({ debugName, snapshot, onOutbound }) => {
+    start: async ({ debugName, snapshot, onOutbound, onOutboundBatch }) => {
       if (!runtime)
         throw Error(
           'Acquire the Ironhorse state directory before starting workers',
@@ -340,7 +340,9 @@ export const makeIronhorseEngine = (
               budget: limits.crankBudget,
             });
           }
-          for (const frame of JSON.parse(reply.result)) onOutbound(frame);
+          const frames = JSON.parse(reply.result);
+          if (onOutboundBatch !== undefined) onOutboundBatch(frames);
+          else for (const frame of frames) onOutbound(frame);
         },
         snapshot: async () => {
           await close(); // SQLite folds the WAL before the file is copied.

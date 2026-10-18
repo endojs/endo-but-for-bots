@@ -229,6 +229,7 @@ const buildDaemon = async (
           // the very traffic it exists to absorb.
           resident: workerStore.getMeta().ephemeral === true,
           onFatal: () => hub.retireSession(workerId),
+          onFrames: frames => holder.sink.deliverBatch(frames),
           onFrame: (
             /** @type {Uint8Array} */ bytes,
             /** @type {number} */ sequenceNumber,
@@ -245,6 +246,7 @@ const buildDaemon = async (
         // queue, never break.
         durable: true,
         requireAcceptance: true,
+        deferCleanup: true,
       });
       if (workerStore.getMeta().failure !== undefined)
         hub.retireSession(workerId);

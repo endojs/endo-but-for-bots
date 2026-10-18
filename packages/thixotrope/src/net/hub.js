@@ -1,4 +1,5 @@
 // @ts-check
+import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 import { decodeHex, encodeHex } from '@endo/hex';
@@ -234,6 +235,7 @@ export const makeOcapnHub = ({
    *   dialLocation: any,
    *   send: (bytes: Uint8Array, deliverySequence?: string) => unknown,
    *   requireAcceptance: boolean,
+   *   deferCleanup: boolean,
    *   attached: boolean,
    *   remote: boolean,
    *   onAbort: ((error: unknown) => void) | undefined,
@@ -388,6 +390,7 @@ export const makeOcapnHub = ({
           throw Error(`ocapn hub: session ${sessionKey} is not attached`);
         },
         requireAcceptance: false,
+        deferCleanup: false,
         attached: false,
         remote: false,
         onAbort: undefined,
@@ -942,9 +945,10 @@ export const makeOcapnHub = ({
       }
     } finally {
       session.flushing = false;
-      // One final commit releases the accepted tail. A crash before it merely
-      // replays stable sequences already owned by the receiving adapter.
-      persist();
+      // Replay-safe receivers have durably journaled the stable identities.
+      // Keep removals dirty until the next necessary commit; a crash replays
+      // already-owned identities, which that receiver must deduplicate.
+      if (!session.deferCleanup) persist();
     }
   }
 
@@ -1969,6 +1973,9 @@ export const makeOcapnHub = ({
      * @param {boolean} [powers.requireAcceptance] release an outbox entry only
      *   on a synchronous true receipt for that delivery; false retains it.
      *   Reattach or a subsequent delivery retries retained work.
+     * @param {boolean} [powers.deferCleanup] piggyback accepted-tail removal
+     *   on the next commit. Requires durable, synchronous acceptance and a
+     *   receiver that persists delivery identities and deduplicates replay.
      * @param {boolean} [powers.durable] frames toward this session
      *   queue in the tables while it is detached, instead of breaking
      *   to their senders
@@ -1988,6 +1995,7 @@ export const makeOcapnHub = ({
         send,
         durable = false,
         requireAcceptance = false,
+        deferCleanup = false,
         remote = false,
         onAbort = undefined,
         identity = undefined,
@@ -1995,7 +2003,11 @@ export const makeOcapnHub = ({
     ) => {
       const session = provideSessionState(sessionKey);
       session.send = send;
+      !deferCleanup ||
+        (durable && requireAcceptance) ||
+        Fail`deferred outbox cleanup requires durable acceptance`;
       session.requireAcceptance = requireAcceptance;
+      session.deferCleanup = deferCleanup;
       session.attached = true;
       session.retired = false;
       session.durable = durable;
@@ -2039,7 +2051,7 @@ export const makeOcapnHub = ({
       prepareOutboxHead(session);
       persist();
       for (const key of sessions.keys()) flushOutbox(key);
-      return harden({
+      const sink = harden({
         /**
          * @param {Uint8Array} bytes one inbound OCapN frame
          * @param {number | bigint} [sequenceNumber] the frame's position in the
@@ -2087,6 +2099,23 @@ export const makeOcapnHub = ({
           persist();
           for (const key of sessions.keys()) flushOutbox(key);
         },
+        /**
+         * Commit a completed crank atomically, preserving frame order and
+         * individual replay identities. Never publish an intermediate effect.
+         * @param {Array<{bytes: Uint8Array, sequenceNumber: number | bigint}>} frames
+         */
+        deliverBatch: frames => {
+          deliveryDepth += 1;
+          try {
+            for (const { bytes, sequenceNumber } of frames) {
+              sink.deliver(bytes, sequenceNumber);
+            }
+          } finally {
+            deliveryDepth -= 1;
+          }
+          persist();
+          for (const key of sessions.keys()) flushOutbox(key);
+        },
         /** Retry retained outbox work when a destination becomes writable. */
         flush: () => {
           persist();
@@ -2096,6 +2125,7 @@ export const makeOcapnHub = ({
           session.attached = false;
         },
       });
+      return sink;
     },
     /**
      * Publish a reference row under a swissnum: `(origin session,
