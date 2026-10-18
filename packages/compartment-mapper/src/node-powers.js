@@ -39,7 +39,10 @@
 import { createRequire } from 'module';
 import { encodeHex } from '@endo/hex';
 
-const { Function, Promise, URL } = globalThis;
+const { Promise, URL } = globalThis;
+
+/** @param {undefined} _value */
+const noop = _value => {};
 
 /**
  * @type {FileURLToPathFn}
@@ -95,7 +98,7 @@ const makeReadPowersSloppy = ({
    */
   const read = async location => {
     const promise = readMutex;
-    let release = Function.prototype;
+    let release = noop;
     readMutex = new Promise(resolve => {
       release = resolve;
     });

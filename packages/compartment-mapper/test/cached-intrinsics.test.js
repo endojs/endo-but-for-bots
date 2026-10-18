@@ -3,14 +3,18 @@ import './ses-lockdown.js';
 import test from 'ava';
 import fs from 'node:fs';
 import url from 'node:url';
-import { mapNodeModules } from '../src/node-modules.js';
-import { makeReadPowers } from '../src/node-powers.js';
+import { mapNodeModules } from '../node-modules.js';
+import { makeReadNowPowers, makeReadPowers } from '../node-powers.js';
 import {
   getModulePaths,
   wrap,
 } from '../src/parse-cjs-shared-export-wrapper.js';
 import { loadFromMap } from '../import-lite.js';
-import { defaultParserForLanguage } from '../src/import-parsers.js';
+import {
+  makeImportHookMaker,
+  makeImportNowHookMaker,
+} from '../src/import-hook.js';
+import { defaultParserForLanguage } from '../import-parsers.js';
 import { makeProjectFixtureReadPowers } from './project-fixture.js';
 
 /**
@@ -77,7 +81,6 @@ const withPoisonedGlobals = (names, thunk) => {
 test.serial(
   'node-powers fallback URL conversions ignore a replaced URL',
   async t => {
-    // Omitting `url` selects the fallback conversions.
     const { fileURLToPath, pathToFileURL } = makeReadPowers(
       /** @type {any} */ ({ fs }),
     );
@@ -85,35 +88,36 @@ test.serial(
       t.fail('makeReadPowers must provide URL conversions');
       return;
     }
+    const location = 'file:///expected/path';
+    const expectedPath = url.fileURLToPath(location);
+    const expectedLocation = url.pathToFileURL(expectedPath).href;
     withPoisonedGlobals(['URL'], () => {
-      t.is(fileURLToPath('file:///expected/path'), '/expected/path');
-      t.is(`${pathToFileURL('/expected/path')}`, 'file:///expected/path');
+      t.is(fileURLToPath(location), expectedPath);
+      t.is(`${pathToFileURL(expectedPath)}`, expectedLocation);
     });
   },
 );
 
-test.serial(
-  'node-powers read ignores replaced Function and Promise',
-  async t => {
-    const powers = makeReadPowers({ fs, url });
-    // `read` uses both intrinsics synchronously, before its first `await`.
-    // Poisoning only that span keeps the test runner's own promises working.
-    const bytes = await withPoisonedGlobals(['Function', 'Promise'], () =>
-      powers.read(import.meta.url),
-    );
-    t.true(bytes.length > 0);
-  },
-);
+test.serial('node-powers read ignores a replaced Promise', async t => {
+  const powers = makeReadPowers({ fs, url });
+  // `read` uses `Promise` synchronously, before its first `await`.
+  // Poisoning only that span keeps the test runner's own promises working.
+  const bytes = await withPoisonedGlobals(['Promise'], () =>
+    powers.read(import.meta.url),
+  );
+  t.true(bytes.length > 0);
+});
 
 test.serial('getModulePaths ignores a replaced URL', async t => {
   const readPowers = /** @type {any} */ ({
     fileURLToPath: url.fileURLToPath,
   });
+  const expected = {
+    filename: url.fileURLToPath('file:///a/b/c.js'),
+    dirname: url.fileURLToPath('file:///a/b'),
+  };
   withPoisonedGlobals(['URL'], () => {
-    t.deepEqual(getModulePaths(readPowers, 'file:///a/b/c.js'), {
-      filename: '/a/b/c.js',
-      dirname: '/a/b',
-    });
+    t.deepEqual(getModulePaths(readPowers, 'file:///a/b/c.js'), expected);
   });
 });
 
@@ -167,3 +171,38 @@ test.serial(
     }
   },
 );
+
+test.serial('import hook makers ignore replaced Map and Set', t => {
+  const readPowers = makeReadNowPowers({ fs, url });
+  const baseLocation = 'file:///a/';
+  /** @type {any} */
+  const compartmentOptions = {
+    packageLocation: 'file:///a/b/',
+    packageName: 'b',
+    attenuators: {},
+    parse: () => {
+      throw Error('unexpected parse');
+    },
+    shouldDeferError: () => false,
+    compartments: {},
+  };
+  const hookMakerOptions = {
+    entryCompartmentName: 'file:///a/',
+    entryModuleSpecifier: './index.js',
+    moduleSourceHook: undefined,
+  };
+  withPoisonedGlobals(['Map', 'Set'], () => {
+    const makeImportHook = makeImportHookMaker(
+      readPowers,
+      baseLocation,
+      hookMakerOptions,
+    );
+    t.is(typeof makeImportHook(compartmentOptions), 'function');
+    const makeImportNowHook = makeImportNowHookMaker(
+      readPowers,
+      baseLocation,
+      hookMakerOptions,
+    );
+    t.is(typeof makeImportNowHook(compartmentOptions), 'function');
+  });
+});
