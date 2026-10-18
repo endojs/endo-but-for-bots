@@ -295,3 +295,183 @@ textarea {
   color: #315a3b;
   font-size: 13px;
 }
+
+/* The inventory is a sibling of the shaded mail area, never under its veil. */
+.mail {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 32px;
+  max-width: 1440px;
+}
+.inventory {
+  padding: 18px 18px 24px 0;
+  border-right: 1px solid #dfe4dc;
+  min-width: 0;
+}
+.inventory h2 {
+  margin: 10px 0 6px;
+}
+.inventory-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 15px 0;
+  border-top: 1px solid #e4e9e0;
+  overflow-wrap: anywhere;
+}
+.inventory-entry strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.inventory-entry .hint {
+  font-size: 11px;
+}
+.mail-area {
+  position: relative;
+  min-width: 0;
+}
+.mail-content {
+  min-height: 620px;
+}
+.mail-content[aria-hidden='true'] {
+  pointer-events: none;
+}
+.known-value {
+  background: #e5eee1;
+  color: #315a3b;
+}
+.unknown-value {
+  position: relative;
+  background: #f7edd9;
+  border-color: #ddc79c;
+  color: #795b25;
+  cursor: pointer;
+  padding-left: 18px;
+}
+.unknown-value:hover {
+  background: #f0e1c1;
+}
+.unknown-marker {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #9a7435;
+  color: white;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 650;
+}
+.adoption-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 90px 20px 30px;
+  background: rgb(33 43 35 / 30%);
+  backdrop-filter: blur(2px);
+  border-radius: 12px;
+}
+.adoption-modal {
+  width: 100%;
+  max-width: 390px;
+  padding: 30px;
+  background: #fff;
+  border: 1px solid #d9dfd7;
+  border-radius: 12px;
+  box-shadow: 0 16px 50px rgb(18 34 22 / 18%);
+}
+.adoption-modal h2 {
+  margin: 10px 0 14px;
+}
+input {
+  font: inherit;
+  color: inherit;
+  background: white;
+  border: 1px solid #d9dfd7;
+  border-radius: 6px;
+  padding: 11px 12px;
+  width: 100%;
+}
+@media (max-width: 1050px) {
+  .mail {
+    grid-template-columns: 160px minmax(0, 1fr);
+    gap: 18px;
+    padding: 0 20px;
+  }
+  .messages {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .message-list {
+    max-height: 240px;
+    overflow-y: auto;
+    border-right: 0;
+    border-bottom: 1px solid #e8ece5;
+  }
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  nav {
+    display: flex;
+    gap: 8px;
+  }
+  .folder {
+    width: auto;
+    gap: 20px;
+  }
+  .reader {
+    min-height: 280px;
+    padding: 24px;
+  }
+  .reader > .empty {
+    margin-top: 90px;
+  }
+}
+@media (max-width: 560px) {
+  .mail {
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 12px;
+    padding: 0 12px;
+    margin: 20px auto;
+  }
+  .inventory {
+    padding-right: 10px;
+  }
+  .inventory h2 {
+    font-size: 17px;
+  }
+  .inventory .eyebrow {
+    letter-spacing: 1px;
+    font-size: 8px;
+  }
+  .masthead {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .header-actions {
+    justify-content: flex-start;
+    gap: 8px;
+  }
+  .workspace {
+    width: auto;
+    text-align: left;
+  }
+  .header-actions button {
+    padding: 8px 10px;
+  }
+  .adoption-shade {
+    padding: 60px 8px 20px;
+  }
+  .adoption-modal {
+    padding: 20px 14px;
+  }
+  .adoption-modal .compose-footer {
+    flex-wrap: wrap;
+  }
+}

@@ -542,6 +542,8 @@ characters, and each suggested name has 1–128 characters.
 `inbox()` and `outbox()` retain contact references in `from` and `to`.
 Their content arrays describe value parts as `{ name }`, without granting the value to a view.
 `take(id, index)` returns the value at that position in the received content array.
+Pass `'outbox'` as its third argument to retrieve a sent value.
+Sent records retain their value references; listings still expose descriptions only.
 It rejects text positions and out-of-range indices; repeated names are unambiguous by position.
 The caller decides whether and where to keep that value.
 Renaming or removing an address-book label does not change a held contact reference.
@@ -556,14 +558,22 @@ yarn workspace @endo/thixotrope mail-ui /absolute/path/to/state
 yarn workspace @endo/thixotrope mail-ui --workspace default --port 8123 /absolute/path/to/state counter
 ```
 
-The UI has Inbox, Sent, and Compose, with explicit refresh and plain-text rendering.
+The UI has an inventory sidebar, Inbox, Sent, and Compose, with explicit refresh and
+plain-text rendering.
+Message value pills use your inventory's name when the exact reference is already present.
+Unrecognized values use the sender's suggestion on an amber pill with a question mark.
+Click an unrecognized pill to adopt it under a local name.
+The adoption dialog shades only the mail area, leaving the inventory visible.
+Adoption refuses to replace a different value under an existing name.
+After adoption, the inventory and every matching message pill refresh together.
 Contacts are introduced with the CLI; the composer lists contacts that are ready.
 Messages may be text only or include one of the explicitly granted values.
 The grant values are captured at launch, so later inventory edits cannot widen them.
-The component runs in an SES compartment with only Preact hooks and a narrow mail facade,
+The component runs in an SES compartment with only Preact hooks and a narrow mail/adoption facade,
 through `@endo/preact-container`'s confined renderer.
 The trusted browser shell owns DOM access and requests; the component receives neither.
-A local HTTP bridge holds the control connection and exposes only mail descriptions and sends.
+A local HTTP bridge holds the control connection and exposes only inventory/mail descriptions,
+sends, and adoption of values shown in mail.
 It binds loopback, requires the launch secret for every API request, refuses other origins and
 hostnames, and sends a restrictive Content Security Policy.
 The URL's fragment holds that secret; keep the URL private.

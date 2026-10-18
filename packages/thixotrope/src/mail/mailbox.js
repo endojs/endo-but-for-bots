@@ -42,7 +42,9 @@ export const makeMailbox = makeObservableMap => {
     send: M.call(CapabilityShape, ContentShape).returns(M.string()),
     inbox: M.call().returns(M.arrayOf(M.record())),
     outbox: M.call().returns(M.arrayOf(M.record())),
-    take: M.call(M.string(), M.number()).returns(CapabilityShape),
+    take: M.call(M.string(), M.number())
+      .optional(M.or('inbox', 'outbox'))
+      .returns(CapabilityShape),
     discard: M.call(M.string()).returns(M.boolean()),
     // Listeners are the observable map's to take, plain or remote.
     subscribeInbox: M.call(M.raw())
@@ -102,7 +104,7 @@ export const makeMailbox = makeObservableMap => {
           harden({
             id,
             to: contact,
-            content: describeContent(content),
+            content,
             status,
             error,
           }),
@@ -126,11 +128,21 @@ export const makeMailbox = makeObservableMap => {
           content: describeContent(content),
         })),
       ),
-    outbox: () => harden([...outbox.entries()].map(([, message]) => message)),
-    /** @param {string} id @param {number} index content array position */
-    take: (id, index) => {
+    outbox: () =>
+      harden(
+        [...outbox.entries()].map(([, message]) => ({
+          ...message,
+          content: describeContent(message.content),
+        })),
+      ),
+    /**
+     * @param {string} id
+     * @param {number} index content array position
+     * @param {'inbox' | 'outbox'} [box]
+     */
+    take: (id, index, box = 'inbox') => {
       /** @type {{content: MailContent} | undefined} */
-      const message = inbox.get(id);
+      const message = (box === 'inbox' ? inbox : outbox).get(id);
       if (message === undefined) throw Fail`Unknown message`;
       (Number.isInteger(index) &&
         index >= 0 &&

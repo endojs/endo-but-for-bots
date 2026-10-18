@@ -78,14 +78,17 @@ try {
   const attachments = new Map();
   for (const key of new Set(keys))
     attachments.set(key, await client.call('lookup', key));
-  const service = makeMailUiService(
+  const service = makeMailUiService({
     book,
-    await client.call('lookup', 'contacts'),
-    values.workspace,
+    contacts: await client.call('lookup', 'contacts'),
+    inventory: await client.call('getInventory'),
+    workspace: values.workspace,
     attachments,
-  );
+    adoptValue: (name, value) => client.call('adopt', name, value),
+  });
   const mail = harden({
     snapshot: () => client.race(service.snapshot()),
+    adopt: (token, name) => client.race(service.adopt(token, name)),
     send: (name, text, attachment) =>
       client.race(service.send(name, text, attachment)),
   });

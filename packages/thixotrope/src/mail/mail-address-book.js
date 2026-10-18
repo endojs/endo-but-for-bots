@@ -63,7 +63,9 @@ export const makeMailAddressBook = (
     send: M.call(M.remotable('contact'), ContentShape).returns(M.promise()),
     inbox: M.call().returns(M.promise()),
     outbox: M.call().returns(M.promise()),
-    take: M.call(M.string(), M.number()).returns(M.promise()),
+    take: M.call(M.string(), M.number())
+      .optional(M.or('inbox', 'outbox'))
+      .returns(M.promise()),
     discard: M.call(M.string()).returns(M.promise()),
   });
 
@@ -195,8 +197,13 @@ export const makeMailAddressBook = (
     },
     inbox: () => E(provideMailbox()).inbox(),
     outbox: () => E(provideMailbox()).outbox(),
-    /** @param {string} id @param {number} index */
-    take: (id, index) => E(provideMailbox()).take(id, index),
+    /**
+     * @param {string} id
+     * @param {number} index
+     * @param {'inbox' | 'outbox'} [box]
+     */
+    take: (id, index, box = 'inbox') =>
+      E(provideMailbox()).take(id, index, box),
     /** @param {string} id */
     discard: id => E(provideMailbox()).discard(id),
   });

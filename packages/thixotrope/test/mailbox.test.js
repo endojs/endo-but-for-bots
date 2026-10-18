@@ -1095,3 +1095,24 @@ test('ordered content supports text-only mail and several independently named va
     { message: /remotable/ },
   );
 });
+
+test('sent value descriptions retain retrievable reference identity', async t => {
+  const mailbox = makeProtocolMailbox(makeObservableMap);
+  const value = makeCounter();
+  const contact = Far('Contact', { deliver: () => true });
+  const id = await E(mailbox).send(contact, [
+    'Try ',
+    { name: 'suggested', value },
+  ]);
+  t.is(await E(mailbox).take(id, 1, 'outbox'), value);
+  t.deepEqual((await E(mailbox).outbox())[0].content, [
+    'Try ',
+    { name: 'suggested' },
+  ]);
+  await t.throwsAsync(() => E(mailbox).take(id, 0, 'outbox'), {
+    message: /text/,
+  });
+  await t.throwsAsync(() => E(mailbox).take(id, 1), {
+    message: /Unknown message/,
+  });
+});

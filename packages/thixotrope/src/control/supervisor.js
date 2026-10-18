@@ -577,7 +577,7 @@ export const serveThixotrope = async (
       [...allocating].filter(id => daemon.listWorkerIds().includes(id));
     const daemonMethods = {
       help: () =>
-        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), lookup(key), keep(key, value), getAddressBook(), inventoryStatus(), watchInventory(listener).',
+        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), lookup(key), keep(key, value), getAddressBook(), getInventory(), adopt(key, value), inventoryStatus(), watchInventory(listener).',
       stop: () => {
         timers.setTimer(requestStop, 0);
         return 'Stopping supervisor';
@@ -793,6 +793,23 @@ export const serveThixotrope = async (
         assertInstallationName(key);
         await E(workspace.inventory).set(key, value);
         return true;
+      },
+      // The trusted client attenuates this map before presenting it to a UI.
+      getInventory: () => {
+        const workspace = current();
+        assertWorkspace(workspace);
+        return workspace.inventory;
+      },
+      /**
+       * Place an adopted value atomically without replacing another value.
+       * @param {string} key
+       * @param {unknown} value
+       */
+      adopt: async (key, value) => {
+        const workspace = current();
+        assertWorkspace(workspace);
+        await E(workspace.access).put(key, value);
+        return key;
       },
       inventoryStatus: () => {
         const { inventory } = current();

@@ -59,7 +59,10 @@ export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
     try {
       if (request.method === 'GET' && url === '/api/mail') {
         json(200, await mail.snapshot());
-      } else if (request.method === 'POST' && url === '/api/send') {
+      } else if (
+        request.method === 'POST' &&
+        (url === '/api/send' || url === '/api/adopt')
+      ) {
         if (request.headers['content-type'] !== 'application/json') {
           json(415, { error: 'Expected application/json' });
           request.resume();
@@ -95,7 +98,11 @@ export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
           json(400, { error: 'Expected a message record' });
           return;
         }
-        json(200, await mail.send(input.name, input.text, input.attachment));
+        const result =
+          url === '/api/adopt'
+            ? await mail.adopt(input.token, input.name)
+            : await mail.send(input.name, input.text, input.attachment);
+        json(200, result);
       } else {
         json(404, { error: 'Not found' });
         request.resume();
