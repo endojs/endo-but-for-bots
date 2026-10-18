@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Partition a measured mail interval without double-counting concurrent work."""
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import html
 import json
 import math
@@ -122,6 +122,8 @@ summary = {
     'filesystemIntervals': grouped('filesystem', ['file', 'name']),
     'syscalls': grouped('syscall', ['file', 'name']),
     'workerPhases': grouped('vm', ['request', 'name']),
+    'protocolInbound': dict(Counter(e['frameType'] for e in active_events if e['kind'] == 'worker-request' and e.get('frameType'))),
+    'protocolOutbound': dict(Counter(op for e in active_events if e['kind'] == 'worker-request' for op in e.get('outbound') or [])),
     'hostSpans': grouped('host', ['name']),
     'maxWorkerPhaseOutsideRequestMs': max(clock_violations, default=0),
     'unmatchedWorkerPhases': unmatched_phases,
@@ -159,7 +161,8 @@ def arc(begin, ms, inner, outer, color, label):
     parts.append(f'<path d="{d}" fill="{color}" stroke="#f8fafc" stroke-width="1"><title>{html.escape(label)}: {ms:.3f} ms ({ms/total*100:.2f}%)</title></path>')
     return (a+b)/2
 text(44, 54, 'Where the mail time goes', 32, weight='650')
-text(44, 86, f'Colocated mailbox · fresh measured send · trial {window["trial"]} · median of {len(windows)} instrumented sends', 17, '#64748b')
+selection = f'explicit selection from {len(windows)} sends' if args.trial is not None else f'median of {len(windows)} instrumented sends'
+text(44, 86, f'Colocated mailbox · fresh measured send · trial {window["trial"]} · {selection}', 17, '#64748b')
 text(44, 114, f'Contact lookup {stage_totals["contact-lookup"]:.1f} ms → Send / notification {stage_totals["send-and-notify"]:.1f} ms', 17, '#64748b')
 order = [k for k in root_colors if k in roots]
 cursor = 0

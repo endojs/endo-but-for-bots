@@ -99,8 +99,8 @@ registerHooks({
       );
       source = replace(
         source,
-        'await E(contacts).get(name)',
-        `await ${profile}.async('contact-lookup', () => E(contacts).get(name))`,
+        'await E(contacts).get(recipient)',
+        `await ${profile}.async('contact-lookup', () => E(contacts).get(recipient))`,
       );
       source = replace(
         source,

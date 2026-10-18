@@ -23,6 +23,13 @@ import { makeMailUiService } from '../src/web/mail-ui-service.js';
 const mode = process.argv[2] ?? 'push';
 if (!['push', 'colocated', 'legacy'].includes(mode))
   throw Error('Expected push, colocated, or legacy');
+const recipientStrategy =
+  process.env.THIX_MAIL_RECIPIENT ?? (mode === 'legacy' ? 'name' : 'reference');
+const hubStrategy = process.env.THIX_MAIL_HUB ?? 'atomic';
+if (!['name', 'reference'].includes(recipientStrategy))
+  throw Error('Expected name or reference recipient strategy');
+if (!['atomic', 'log'].includes(hubStrategy))
+  throw Error('Expected atomic or log hub strategy');
 const trialCount = Number(process.env.THIX_MAIL_TRIALS ?? 3);
 if (!Number.isInteger(trialCount) || trialCount < 1 || trialCount > 1000)
   throw Error('Expected 1–1000 measured trials');
@@ -39,7 +46,16 @@ const profiling = process.env.THIX_MAIL_PROFILE
       process.env.THIX_MAIL_PROFILE_WORKER,
     )
   : undefined;
-const powers = profiling?.powers ?? basePowers;
+const profiledPowers = profiling?.powers ?? basePowers;
+const powers =
+  hubStrategy === 'log'
+    ? harden({
+        ...profiledPowers,
+        syncFiles: (await import('./mail-hub-log.mjs')).makeMailHubLog(
+          profiledPowers.syncFiles,
+        ),
+      })
+    : profiledPowers;
 const root = await mkdtemp(join(tmpdir(), 'thix-measure-mail-'));
 /** @type {{epoch: number, ms: number, hub: boolean}[]} */
 const writes = [];
@@ -180,7 +196,15 @@ try {
         const epoch = Date.now();
         const window = profiling?.begin(trial);
         const start = performance.now();
-        await service.send('Notes', [marker]);
+        await service.send(
+          recipientStrategy === 'name'
+            ? 'Notes'
+            : {
+                token: latest.contacts.find(entry => entry.name === 'Notes')
+                  .token,
+              },
+          [marker],
+        );
         const acceptedMs = performance.now() - start;
         await until(state =>
           state.inbox.some(message => message.content.includes(marker)),
@@ -224,6 +248,10 @@ try {
     JSON.stringify(
       {
         note: `Three seeds, ${trialCount} measured text sends; no periodic snapshots or idle sleeps; no HTTP/browser stage.`,
+        strategy: {
+          recipient: recipientStrategy,
+          hub: hubStrategy,
+        },
         results,
       },
       null,

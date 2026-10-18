@@ -1,4 +1,5 @@
 // @ts-check
+import { decodeBase64 } from '@endo/base64';
 import harden from '@endo/harden';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -17,11 +18,21 @@ import { makeSyncFilePowers } from '../src/platform/node/sync-files.js';
 export const makeMailProfile = (powers, destination, workerBinary) => {
   const trace = globalThis[Symbol.for('thixotrope.mailProfile')];
   if (!trace) throw Error('Fine profiling requires profile-mail-loader.mjs');
+  const frameType = frame => {
+    if (frame?.t !== 'f') return frame?.t;
+    const head = new TextDecoder().decode(
+      decodeBase64(frame.b64).subarray(0, 64),
+    );
+    const tag = /^<(\d+)'/.exec(head);
+    return tag
+      ? head.slice(tag[0].length, tag[0].length + Number(tag[1]))
+      : 'unknown';
+  };
   const readers = [];
   const descriptors = new Map();
   const stack = [];
   const fileClass = path =>
-    path?.endsWith('/hub.json')
+    path?.endsWith('/hub.json') || path?.endsWith('/hub.json.experiment-log')
       ? 'hub'
       : path?.endsWith('/journal.jsonl')
         ? 'worker-journal'
@@ -134,7 +145,15 @@ export const makeMailProfile = (powers, destination, workerBinary) => {
           return harden({
             write: text => {
               const message = JSON.parse(text);
+              const envelope = message.source?.startsWith('thixotropeDispatch(')
+                ? JSON.parse(
+                    JSON.parse(
+                      message.source.slice('thixotropeDispatch('.length, -2),
+                    ),
+                  )
+                : undefined;
               request = {
+                frameType: frameType(envelope),
                 start: trace.clock(),
                 name:
                   message.op === 'deliver'
@@ -163,7 +182,14 @@ export const makeMailProfile = (powers, destination, workerBinary) => {
                         request.name,
                         request.start,
                         trace.clock(),
-                        { pid: child.pid, worker: label },
+                        {
+                          pid: child.pid,
+                          worker: label,
+                          frameType: request.frameType,
+                          outbound: JSON.parse(line).result?.startsWith('[')
+                            ? JSON.parse(JSON.parse(line).result).map(frameType)
+                            : undefined,
+                        },
                       );
                     request = undefined;
                     yield line;
