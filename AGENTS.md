@@ -13,15 +13,11 @@ This file provides conventions and constraints for AI agents working in this rep
 
 Our TypeScript conventions accommodate `.js` development (this repo) and `.ts` consumers (e.g. agoric-sdk). See [agoric-sdk/docs/typescript.md](https://github.com/Agoric/agoric-sdk/blob/master/docs/typescript.md) for full background.
 
-### No `.ts` in runtime bundles
+### `.ts` source with erasable syntax
 
-Never use `.ts` files in modules that are transitively imported into an Endo bundle. The Endo bundler does not understand `.ts` syntax. We avoid build steps for runtime imports.
+`.ts` files may contain runtime code, provided it uses only **erasable** type syntax (no `enum`, `namespace`, `const enum`, or parameter properties). Import `.ts` only by relative specifier within the same package, and keep package entrypoints `.js`. [`docs/typescript.md`](docs/typescript.md) states these rules and describes where types are stripped.
 
-### `.ts` files are for type definitions only
-
-Use `.ts` files to define exported types. These are never imported at runtime. They are made available to consumers through a `types-index` module.
-
-When a `.ts` file contains runtime code (e.g. `type-from-pattern.ts` with `declare` statements), it still produces only `.d.ts` output — the `declare` keyword ensures no JS is emitted. Actual runtime code belongs in `.js` files.
+A `.ts` file may instead be type-only (e.g. `type-from-pattern.ts` using `declare`), emitting just `.d.ts`.
 
 ### The `types-index` convention
 
@@ -50,7 +46,7 @@ export * from './types-index.js';
 
 ### `emitDeclarationOnly`
 
-The repo-wide `tsconfig-build-options.json` sets `emitDeclarationOnly: true`. `tsc` only generates `.d.ts` files, not `.js`. This means `.ts` files with runtime code (not just types) would need `build-ts-to-js` or equivalent — which this repo does not currently have. Keep `.ts` files type-only.
+The repo-wide `tsconfig-build-options.json` sets `emitDeclarationOnly: true`, so `tsc --build` only generates `.d.ts` files. Runtime `.js` for `.ts` sources is produced at pack time by [ts-node-pack](https://github.com/turadg/ts-node-pack), invoked via `yarn pack:all` — see `docs/typescript.md`. `.ts` files may contain runtime code as long as the syntax is erasable (no `enum`, `namespace`, parameter properties).
 
 ### Imports in `.js` files
 
