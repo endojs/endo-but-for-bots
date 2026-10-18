@@ -358,9 +358,14 @@ impl WorkerLimits {
         })
     }
 
-    fn apply(&self, machine: &mut Interp) {
-        machine.set_slot_ceiling(self.slot_ceiling);
-        machine.set_chunk_ceiling(self.chunk_ceiling as usize);
+    fn apply(&self, machine: &mut Interp) -> Result<(), String> {
+        machine
+            .set_slot_ceiling(self.slot_ceiling)
+            .map_err(|e| format!("slotCeiling refused: {e:?}"))?;
+        machine
+            .set_chunk_ceiling(self.chunk_ceiling as usize)
+            .map_err(|e| format!("chunkCeiling refused: {e:?}"))?;
+        Ok(())
     }
 }
 
@@ -380,7 +385,7 @@ fn open_heap(
     let mut store = SqliteHeapStore::open(path).map_err(|e| format!("open: {e:?}"))?;
     let mut session = if fresh {
         let mut machine = Interp::new();
-        limits.apply(&mut machine);
+        limits.apply(&mut machine)?;
         begin_store_session(machine, signature, &mut store)
             .map_err(|(_, e)| format!("begin: {e:?}"))?
     } else {
@@ -388,7 +393,7 @@ fn open_heap(
         resume_from_store(&store, signature).map_err(|e| format!("restore: {e:?}"))?
     };
     // Arena policy is not snapshot state. Reapply it after every restoration.
-    limits.apply(session.machine_mut());
+    limits.apply(session.machine_mut())?;
     Ok((store, session, fresh))
 }
 
@@ -532,7 +537,7 @@ mod tests {
         let signature = Signature::new("configured-heap");
         let mut store = MemoryStore::new();
         let mut machine = Interp::new();
-        limits.apply(&mut machine);
+        limits.apply(&mut machine).unwrap();
         let mut session = begin_store_session(machine, &signature, &mut store)
             .map_err(|(_, error)| error)
             .unwrap();
@@ -551,7 +556,7 @@ mod tests {
         checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
         drop(session);
         let mut restored = resume_from_store(&store, &signature).unwrap();
-        limits.apply(restored.machine_mut());
+        limits.apply(restored.machine_mut()).unwrap();
         assert_eq!(
             restored.machine_mut().slots().ceiling(),
             limits.slot_ceiling
@@ -578,7 +583,7 @@ mod tests {
             eval(&mut session, "globalThis.kept = []", 1000000).unwrap();
             let budget = if heap_failure {
                 let ceiling = session.machine_mut().slots().capacity() + 100;
-                session.machine_mut().set_slot_ceiling(ceiling);
+                session.machine_mut().set_slot_ceiling(ceiling).unwrap();
                 10000000
             } else {
                 1000
@@ -607,6 +612,22 @@ mod tests {
         assert_eq!(limits.bootstrap_budget, u64::MAX);
         assert!(positive_integer(&json!(0), "budget").is_err());
         assert!(positive_integer(&json!("18446744073709551616"), "budget").is_err());
+    }
+
+    #[test]
+    fn configured_ceilings_above_consensus_limits_are_refused() {
+        let mut limits = test_limits();
+        limits.slot_ceiling = ironhorse_vm::CONSENSUS_MAX_SLOT_CEILING + 1;
+        assert!(limits
+            .apply(&mut Interp::new())
+            .unwrap_err()
+            .contains("slotCeiling refused"));
+        limits.slot_ceiling = test_limits().slot_ceiling;
+        limits.chunk_ceiling = (ironhorse_vm::CONSENSUS_MAX_CHUNK_CEILING + 1) as u32;
+        assert!(limits
+            .apply(&mut Interp::new())
+            .unwrap_err()
+            .contains("chunkCeiling refused"));
     }
 
     #[test]

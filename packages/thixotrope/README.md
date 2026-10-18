@@ -649,10 +649,12 @@ Per-vat overrides are not implemented yet.
 | --- | --- | --- | --- |
 | `THIXOTROPE_CRANK_BUDGET` | computrons per guest crank | 10,000,000 | 1 to 2^64−1 |
 | `THIXOTROPE_BOOTSTRAP_BUDGET` | computrons per bootstrap script or peer initialization | 1,000,000,000 | 1 to 2^64−1 |
-| `THIXOTROPE_SLOT_CEILING` | slot records | 1,000,000 | 1 to 2^32−1 |
-| `THIXOTROPE_CHUNK_CEILING` | chunk address-space bytes | 268,435,456 | 1 to 2^32−1 |
+| `THIXOTROPE_SLOT_CEILING` | slot records | 1,000,000 | 1 to 44,739,242 |
+| `THIXOTROPE_CHUNK_CEILING` | chunk address-space bytes | 268,435,456 | 1 to 536,870,912 |
 | `THIXOTROPE_REQUEST_TIMEOUT_MS` | milliseconds per worker request | 60,000 | 1 to 2^31−1 |
 
+The worker uses Ironhorse’s consensus profile, which bounds the slot and chunk ceilings.
+It rejects settings above those bounds before executing guest code.
 Supply positive decimal integers; zero does not mean unlimited.
 The engine API also accepts bigint budgets; numeric inputs must fit unsigned 32 bits.
 Status reports computron budgets as decimal strings to preserve precision.
