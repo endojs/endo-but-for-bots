@@ -23,13 +23,24 @@ import { makeMailUiService } from '../src/web/mail-ui-service.js';
 const mode = process.argv[2] ?? 'push';
 if (!['push', 'colocated', 'legacy'].includes(mode))
   throw Error('Expected push, colocated, or legacy');
+const trialCount = Number(process.env.THIX_MAIL_TRIALS ?? 3);
+if (!Number.isInteger(trialCount) || trialCount < 1 || trialCount > 1000)
+  throw Error('Expected 1–1000 measured trials');
 const legacy = process.argv[3]
   ? (await import(pathToFileURL(process.argv[3]).href)).makeMailUiService
   : undefined;
 if (mode === 'legacy' && !legacy)
   throw Error('Legacy mode requires a service module');
+const basePowers = makeNodePowers();
+const profiling = process.env.THIX_MAIL_PROFILE
+  ? (await import('./mail-profile.mjs')).makeMailProfile(
+      basePowers,
+      process.env.THIX_MAIL_PROFILE,
+      process.env.THIX_MAIL_PROFILE_WORKER,
+    )
+  : undefined;
+const powers = profiling?.powers ?? basePowers;
 const root = await mkdtemp(join(tmpdir(), 'thix-measure-mail-'));
-const powers = makeNodePowers();
 /** @type {{epoch: number, ms: number, hub: boolean}[]} */
 const writes = [];
 const syncFiles = harden({
@@ -162,11 +173,12 @@ try {
           state.outbox.length === 3 &&
           state.outbox.every(message => message.status === 'delivered'),
       );
-      for (let trial = 0; trial < 3; trial += 1) {
+      for (let trial = 0; trial < trialCount; trial += 1) {
         const marker = `${mode} ${trial}`;
         const before = await client.call('status');
         const index = writes.length;
         const epoch = Date.now();
+        const window = profiling?.begin(trial);
         const start = performance.now();
         await service.send('Notes', [marker]);
         const acceptedMs = performance.now() - start;
@@ -174,6 +186,7 @@ try {
           state.inbox.some(message => message.content.includes(marker)),
         );
         const visibleMs = performance.now() - start;
+        if (window) profiling?.end(window);
         const changes = writes.slice(index);
         const after = await client.call('status');
         const row = {
@@ -210,7 +223,7 @@ try {
   console.log(
     JSON.stringify(
       {
-        note: 'Three seeds, three warm text sends per mode; no periodic snapshots or idle sleeps; no HTTP/browser stage.',
+        note: `Three seeds, ${trialCount} measured text sends; no periodic snapshots or idle sleeps; no HTTP/browser stage.`,
         results,
       },
       null,
@@ -220,5 +233,6 @@ try {
 } finally {
   for (const client of clients) client.close();
   await supervisor?.close();
+  await profiling?.dump(results);
   await rm(root, { recursive: true, force: true });
 }
