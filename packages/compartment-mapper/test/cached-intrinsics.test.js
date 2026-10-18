@@ -26,10 +26,12 @@ import { makeProjectFixtureReadPowers } from './project-fixture.js';
  * @returns {() => void}
  */
 const poisonGlobals = names => {
-  const originals = names.map(name => [
-    name,
-    Object.getOwnPropertyDescriptor(globalThis, name),
-  ]);
+  const descriptors = names.map(
+    name =>
+      /** @type {PropertyDescriptor} */ (
+        Object.getOwnPropertyDescriptor(globalThis, name)
+      ),
+  );
   const poisons = names.map(name => {
     const fail = () => {
       throw Error(`ambient ${name} used after module initialization`);
@@ -49,9 +51,9 @@ const poisonGlobals = names => {
     });
   });
   return () => {
-    for (const [name, descriptor] of originals) {
-      Object.defineProperty(globalThis, name, descriptor);
-    }
+    names.forEach((name, index) => {
+      Object.defineProperty(globalThis, name, descriptors[index]);
+    });
   };
 };
 
@@ -76,13 +78,16 @@ test.serial(
   'node-powers fallback URL conversions ignore a replaced URL',
   async t => {
     // Omitting `url` selects the fallback conversions.
-    const powers = makeReadPowers(/** @type {any} */ ({ fs }));
+    const { fileURLToPath, pathToFileURL } = makeReadPowers(
+      /** @type {any} */ ({ fs }),
+    );
+    if (!fileURLToPath || !pathToFileURL) {
+      t.fail('makeReadPowers must provide URL conversions');
+      return;
+    }
     withPoisonedGlobals(['URL'], () => {
-      t.is(powers.fileURLToPath('file:///expected/path'), '/expected/path');
-      t.is(
-        `${powers.pathToFileURL('/expected/path')}`,
-        'file:///expected/path',
-      );
+      t.is(fileURLToPath('file:///expected/path'), '/expected/path');
+      t.is(`${pathToFileURL('/expected/path')}`, 'file:///expected/path');
     });
   },
 );
