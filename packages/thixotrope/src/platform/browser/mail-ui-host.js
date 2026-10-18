@@ -6,7 +6,7 @@ import { h, renderConfined } from '@endo/preact-container/renderer';
 import { makeMailEditor } from './mail-editor.js';
 
 /** @import { MailUi } from '../../web/mail-ui.js' */
-/** @import { MailUiApi, MailEditor } from '../../web/mail-ui.js' */
+/** @import { MailUiApi, MailEditor, MailSnapshot } from '../../web/mail-ui.js' */
 
 const token = location.hash.slice(1);
 /** @param {string} path @param {unknown} [body] */
@@ -27,7 +27,66 @@ const request = async (path, body = undefined) => {
 };
 /** @type {MailUiApi} */
 const api = harden({
-  snapshot: () => request('/api/mail'),
+  subscribe: (onState, onError) => {
+    const abort = new AbortController();
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let retry;
+    let delay = 500;
+    const connect = async () => {
+      /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
+      let reader;
+      try {
+        const response = await fetch('/api/events', {
+          headers: { authorization: `Bearer ${token}` },
+          signal: abort.signal,
+          credentials: 'omit',
+          redirect: 'error',
+        });
+        if (!response.ok || !response.body)
+          throw Error(
+            'Mail subscription refused. Open the current private URL.',
+          );
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!abort.signal.aborted) {
+          // eslint-disable-next-line no-await-in-loop -- Consume stream frames in wire order.
+          const { done, value } = await reader.read();
+          if (done) throw Error('Mail connection lost. Reconnecting…');
+          buffer += decoder.decode(value, { stream: true });
+          let end = buffer.indexOf('\n\n');
+          while (end >= 0) {
+            const frame = buffer.slice(0, end);
+            buffer = buffer.slice(end + 2);
+            const data = frame
+              .split('\n')
+              .find(line => line.startsWith('data: '));
+            if (data) {
+              const state = JSON.parse(data.slice(6));
+              if (frame.startsWith('event: error')) throw Error(state.error);
+              delay = 500;
+              onState(/** @type {MailSnapshot} */ (harden(state)));
+            }
+            end = buffer.indexOf('\n\n');
+          }
+        }
+      } catch (reason) {
+        if (abort.signal.aborted) return;
+        onError(/** @type {Error} */ (reason));
+        retry = setTimeout(() => {
+          void connect();
+        }, delay);
+        delay = Math.min(delay * 2, 10_000);
+      } finally {
+        await reader?.cancel().catch(() => {});
+      }
+    };
+    void connect();
+    return harden(() => {
+      abort.abort();
+      clearTimeout(retry);
+    });
+  },
   adopt: (valueToken, name) =>
     request('/api/adopt', { token: valueToken, name }),
   send: (name, content) => request('/api/send', { name, content }),

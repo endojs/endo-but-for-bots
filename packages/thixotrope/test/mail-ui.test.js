@@ -66,7 +66,12 @@ test('the mail UI resolves labels at its edge and sends only granted values', as
     message: /4096/,
   });
   t.is(sent.length, 2);
-  t.deepEqual(Object.keys(service).sort(), ['adopt', 'send', 'snapshot']);
+  t.deepEqual(Object.keys(service).sort(), [
+    'adopt',
+    'send',
+    'snapshot',
+    'subscribe',
+  ]);
 });
 
 test('inventory autocomplete captures references and preserves interleaved message parts', async t => {
@@ -134,6 +139,7 @@ test.serial(
           inventory: [],
         };
       },
+      subscribe: async () => async () => {},
       adopt: async () => 'kept',
       send: async () => {
         sends += 1;
@@ -318,4 +324,173 @@ test('value pills use inventory identity and adoption never replaces a different
   await t.throwsAsync(() => service.adopt(offered.token, 'stale'), {
     message: /no longer available/,
   });
+});
+
+test('mail subscriptions follow messages, inventory and contact state, and release upstream observers', async t => {
+  t.timeout(10_000);
+  const { makeMailbox } = await import('../src/mail/mailbox.js');
+  const { makeMailContact } = await import('../src/mail/mail-contact.js');
+  const mailbox = makeMailbox(makeObservableMap);
+  const inventory = makeObservableMap();
+  const contacts = makeObservableMap();
+  const contact = makeMailContact(() => mailbox);
+  contacts.set('Bob', contact);
+  const book = Far('LiveMail', {
+    contacts: () =>
+      Promise.all(
+        contacts.entries().map(async ([name, value]) => ({
+          name,
+          ...(await E(value).status()),
+        })),
+      ),
+    inbox: () => E(mailbox).inbox(),
+    outbox: () => E(mailbox).outbox(),
+    take: (id, index, box) => E(mailbox).take(id, index, box),
+    send: (to, parts) => E(mailbox).send(to, parts),
+  });
+  const service = makeMailUiService({
+    book,
+    mailbox,
+    contacts,
+    inventory,
+    workspace: 'live',
+    attachments: new Map(),
+    adoptValue: async () => 'unused',
+  });
+  /** @type {import('../src/web/mail-ui.js').MailSnapshot[]} */
+  const updates = [];
+  /** @type {(() => void) | undefined} */
+  let wake;
+  /** @type {Error | undefined} */
+  let failure;
+  const close = await service.subscribe(
+    state => {
+      updates.push(state);
+      wake?.();
+    },
+    error => {
+      failure = error;
+      wake?.();
+    },
+  );
+  t.teardown(close);
+  /** @param {(state: import('../src/web/mail-ui.js').MailSnapshot) => boolean} predicate */
+  const until = async predicate => {
+    while (!updates.some(predicate)) {
+      if (failure) throw failure;
+      // eslint-disable-next-line no-await-in-loop -- Wait for the next subscription notification.
+      await new Promise(resolve => {
+        wake = () => resolve(undefined);
+      });
+    }
+  };
+  await until(state => state.contacts[0]?.status === 'pending');
+  const value = Far('Counter', {});
+  await E(mailbox).receive(contact, 1n, ['hello ', { name: 'theirs', value }]);
+  await until(state => state.inbox.length === 1);
+  inventory.set('mine', value);
+  await until(state =>
+    state.inbox[0]?.content.some(
+      part => typeof part !== 'string' && part.localName === 'mine',
+    ),
+  );
+  const invitation = await E(contact).invite();
+  await E(invitation).accept(Far('Receiver', { deliver: () => true }));
+  await until(state => state.contacts[0]?.status === 'ready');
+  await service.send('Bob', ['outgoing']);
+  await until(state => state.outbox[0]?.status === 'delivered');
+  await close();
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+  t.deepEqual(contacts.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+  t.is(failure, undefined);
+});
+
+test.serial(
+  'event stream delivers pushed state and releases its subscription on disconnect',
+  async t => {
+    t.timeout(10_000);
+    /** @type {((state: any) => void) | undefined} */
+    let publish;
+    let closes = 0;
+    let finish;
+    const closed = new Promise(resolve => {
+      finish = resolve;
+    });
+    const server = await serveMailUi({
+      mail: harden({
+        snapshot: async () => {
+          throw Error('stream must not poll');
+        },
+        subscribe: async onState => {
+          publish = onState;
+          return async () => {
+            closes += 1;
+            finish();
+          };
+        },
+        adopt: async () => '',
+        send: async () => '',
+      }),
+      assets: new Map(),
+      port: 0,
+    });
+    t.teardown(() => server.close());
+    const url = new URL(server.url);
+    const abort = new AbortController();
+    t.teardown(() => abort.abort());
+    t.is((await fetch(`${url.origin}/api/events`)).status, 403);
+    const response = await fetch(`${url.origin}/api/events`, {
+      headers: { authorization: `Bearer ${url.hash.slice(1)}` },
+      signal: abort.signal,
+    });
+    t.is(response.headers.get('content-type'), 'text/event-stream');
+    const reader = response.body?.getReader();
+    t.truthy(reader);
+    const pending = reader?.read();
+    publish?.({ workspace: 'pushed' });
+    const chunk = await pending;
+    t.is(
+      new TextDecoder().decode(chunk?.value),
+      'data: {"workspace":"pushed"}\n\n',
+    );
+    abort.abort();
+    await closed;
+    t.is(closes, 1);
+  },
+);
+
+test('failed subscription setup releases observers already acquired', async t => {
+  t.timeout(10_000);
+  let released = false;
+  const inventory = makeObservableMap();
+  const contacts = makeObservableMap();
+  const service = makeMailUiService({
+    book: Far('UnusedBook', {}),
+    mailbox: Far('RefusingMailbox', {
+      subscribeInbox: () =>
+        Far('Subscription', {
+          unsubscribe: () => {
+            released = true;
+          },
+        }),
+      subscribeOutbox: () => {
+        throw Error('subscription refused');
+      },
+    }),
+    contacts,
+    inventory,
+    workspace: 'test',
+    attachments: new Map(),
+    adoptValue: async () => '',
+  });
+  await t.throwsAsync(
+    () =>
+      service.subscribe(
+        () => {},
+        () => {},
+      ),
+    { message: /subscription refused/ },
+  );
+  t.true(released);
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
 });

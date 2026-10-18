@@ -1116,3 +1116,36 @@ test('sent value descriptions retain retrievable reference identity', async t =>
     message: /Unknown message/,
   });
 });
+
+test('contact status subscribers observe transitions and can unsubscribe', async t => {
+  t.timeout(10_000);
+  const contact = makeMailContact(() => makeProtocolMailbox(makeObservableMap));
+  const states = [];
+  let wake;
+  const subscription = await E(contact).subscribeStatus(
+    Far('StatusObserver', {
+      changed: state => {
+        states.push(state.status);
+        wake?.();
+      },
+    }),
+  );
+  t.teardown(() => E(subscription).unsubscribe());
+  const until = async status => {
+    while (!states.includes(status))
+      // eslint-disable-next-line no-await-in-loop -- Wait for the next subscription notification.
+      await new Promise(resolve => {
+        wake = () => resolve(undefined);
+      });
+  };
+  await until('pending');
+  await E(contact).invite();
+  await E(contact).revokeInvitation();
+  await until('cancelled');
+  const invitation = await E(contact).invite();
+  await E(invitation).accept(Far('RemoteInbox', {}));
+  await until('ready');
+  await E(subscription).unsubscribe();
+  t.true(states.includes('cancelled'));
+  t.is(states.at(-1), 'ready');
+});

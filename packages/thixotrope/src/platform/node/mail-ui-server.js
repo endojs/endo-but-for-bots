@@ -2,21 +2,25 @@
 import harden from '@endo/harden';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
+import { clearInterval, setInterval } from 'node:timers';
 
-/** @import { MailUiApi } from '../../web/mail-ui.js' */
+/** @import { MailUiService } from '../../web/mail-ui-service.js' */
+/** @import { MailSnapshot } from '../../web/mail-ui.js' */
 
 /**
  * A local browser bridge. The socket client and administration never cross
  * this boundary. Every API request needs the launch secret, and cross-origin
  * requests and rebinding hostnames are refused before touching mail.
  * @param {object} options
- * @param {MailUiApi} options.mail
+ * @param {MailUiService} options.mail
  * @param {Map<string, {type: string, body: string}>} options.assets
  * @param {number} [options.port]
  */
 export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
   const token = randomBytes(32).toString('hex');
   let origin = '';
+  /** @type {Set<() => Promise<void>>} */
+  const streams = new Set();
   const server = createServer(async (request, response) => {
     const headers = {
       'cache-control': 'no-store',
@@ -57,7 +61,75 @@ export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
       return;
     }
     try {
-      if (request.method === 'GET' && url === '/api/mail') {
+      if (request.method === 'GET' && url === '/api/events') {
+        response.writeHead(200, {
+          ...headers,
+          'content-type': 'text/event-stream',
+          'x-accel-buffering': 'no',
+        });
+        response.flushHeaders();
+        let closed = false;
+        let blocked = false;
+        /** @type {MailSnapshot | undefined} */
+        let pending;
+        /** @type {Promise<() => Promise<void>> | undefined} */
+        let opening;
+        const close = async () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(heartbeat);
+          streams.delete(close);
+          response.end();
+          try {
+            await (
+              await opening
+            )?.();
+          } catch (_error) {
+            /* Failed setup has already released its subscriptions. */
+          }
+        };
+        const flush = () => {
+          if (closed || blocked || pending === undefined) return;
+          const state = pending;
+          pending = undefined;
+          blocked = !response.write(`data: ${JSON.stringify(state)}\n\n`);
+        };
+        response.on('drain', () => {
+          blocked = false;
+          flush();
+        });
+        response.once('close', () => {
+          void close();
+        });
+        // Keep intermediaries from timing out idle streams. This carries no
+        // state and performs no reads: state arrives only from subscriptions.
+        const heartbeat = setInterval(() => {
+          if (!closed && !blocked) blocked = !response.write(': keepalive\n\n');
+        }, 20_000);
+        streams.add(close);
+        opening = mail.subscribe(
+          state => {
+            pending = state;
+            flush();
+          },
+          error => {
+            if (!closed)
+              response.write(
+                `event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`,
+              );
+            void close();
+          },
+        );
+        try {
+          await opening;
+        } catch (error) {
+          if (!closed)
+            response.write(
+              `event: error\ndata: ${JSON.stringify({ error: /** @type {Error} */ (error).message })}\n\n`,
+            );
+          void close();
+        }
+      } else if (request.method === 'GET' && url === '/api/mail') {
         json(200, await mail.snapshot());
       } else if (
         request.method === 'POST' &&
@@ -127,6 +199,7 @@ export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
   return harden({
     url: `${origin}/#${token}`,
     close: async () => {
+      await Promise.all([...streams].map(close => close()));
       server.closeAllConnections();
       await new Promise((resolve, reject) =>
         server.close(error => (error ? reject(error) : resolve(undefined))),

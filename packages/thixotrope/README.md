@@ -554,21 +554,28 @@ With a supervisor already running, open the private URL printed by:
 
 ```sh
 yarn workspace @endo/thixotrope mail-ui /absolute/path/to/state
-# Optionally grant inventory values that the composer may attach:
+# Optionally include additional captured values:
 yarn workspace @endo/thixotrope mail-ui --workspace default --port 8123 /absolute/path/to/state counter
 ```
 
-The UI has an inventory sidebar, Inbox, Sent, and Compose, with explicit refresh and
-plain-text rendering.
+The UI has an inventory sidebar, Inbox, Sent, and Compose.
+State arrives over an authenticated event stream, without polling or a refresh button.
+The bridge subscribes to mailbox inbox/outbox changes, inventory and contact-map changes,
+and each contact's `subscribeStatus(listener)` interface.
+Notifications coalesce while a projection or network write is pending.
+Closing a stream unsubscribes its upstream observers; a lost connection reconnects with backoff.
 Message value pills use your inventory's name when the exact reference is already present.
 Unrecognized values use the sender's suggestion on an amber pill with a question mark.
 Click an unrecognized pill to adopt it under a local name.
 The adoption dialog shades only the mail area, leaving the inventory visible.
 Adoption refuses to replace a different value under an existing name.
-After adoption, the inventory and every matching message pill refresh together.
+After adoption, the inventory and every matching message pill update together.
 Contacts are introduced with the CLI; the composer lists contacts that are ready.
-Messages may be text only or include one of the explicitly granted values.
-The grant values are captured at launch, so later inventory edits cannot widen them.
+Type `@` in the inline composer to search inventory values and insert a reference pill.
+The editor preserves ordered text and reference parts, with atomic pill deletion and native undo.
+The bridge captures each offered reference, so replacing an inventory entry cannot change a
+value already selected in a draft.
+Only descriptions and opaque reference tokens reach the browser.
 The component runs in an SES compartment with only Preact hooks and a narrow mail/adoption facade,
 through `@endo/preact-container`'s confined renderer.
 The trusted browser shell owns DOM access and requests; the component receives neither.
@@ -581,6 +588,8 @@ Ctrl-C closes the bridge and its control connection, leaving the supervisor runn
 
 This prototype changes persisted mail factory implementations and message records.
 Use a fresh state directory for the new API; existing guest heaps retain their old code.
+Older contacts without `subscribeStatus` still appear, but cannot push status changes.
+The bridge discovers that interface with `__getMethodNames__()` rather than probing methods.
 
 ## Ironhorse demos and CI tests
 

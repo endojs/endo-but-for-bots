@@ -47,6 +47,7 @@ export const makeMailContact = provideMailbox => {
   const MailContactI = M.interface('MailContact', {
     help: M.call().returns(M.string()),
     status: M.call().returns(M.record()),
+    subscribeStatus: M.call(M.raw()).returns(M.remotable('subscription')),
     assertIntroducible: M.call().returns(M.boolean()),
     // The redemption callback stays in this vat and is not passable.
     invite: M.call().optional(M.raw()).returns(M.remotable('invitation')),
@@ -64,6 +65,42 @@ export const makeMailContact = provideMailbox => {
   /** @type {string | undefined} */
   let error;
   let invitationOpen = false;
+  const SubscriptionI = M.interface('ContactStatusSubscription', {
+    unsubscribe: M.call().returns(M.undefined()),
+  });
+  const subscribers = new Set();
+  const snapshot = () => harden({ status, error });
+  /** @param {any} state */
+  const cancel = state => {
+    subscribers.delete(state);
+    state.active = false;
+    state.listener = undefined;
+    state.pending = undefined;
+  };
+  /** @param {any} state */
+  const pump = state => {
+    if (!state.active || state.busy || state.pending === undefined) return;
+    const next = state.pending;
+    state.pending = undefined;
+    state.busy = true;
+    void E(state.listener)
+      .changed(next)
+      .then(
+        () => {
+          state.busy = false;
+          pump(state);
+        },
+        () => cancel(state),
+      );
+  };
+  const changed = () => {
+    const next = snapshot();
+    for (const state of subscribers) {
+      state.pending = next;
+      pump(state);
+    }
+  };
+
   const assertIntroducible = () => {
     (status !== 'ready' && remote === undefined && !invitationOpen) ||
       Fail`Introduction already started`;
@@ -80,8 +117,22 @@ export const makeMailContact = provideMailbox => {
   });
   const contact = makeExo('MailContact', MailContactI, {
     help: () =>
-      'A local contact for one correspondent: status(), invite(onRedeemed?), accept(invitation), revokeInvitation(), deliver(content).',
-    status: () => harden({ status, error }),
+      'A local contact for one correspondent: status(), subscribeStatus(listener), invite(onRedeemed?), accept(invitation), revokeInvitation(), deliver(content).',
+    status: snapshot,
+    /** @param {any} listener */
+    subscribeStatus: listener => {
+      const state = {
+        listener,
+        active: true,
+        busy: false,
+        pending: snapshot(),
+      };
+      subscribers.add(state);
+      pump(state);
+      return makeExo('ContactStatusSubscription', SubscriptionI, {
+        unsubscribe: () => cancel(state),
+      });
+    },
     /**
      * Refuse now if an introduction is already open or complete, so a caller
      * can check before it does anything with a cost, such as dialing.
@@ -103,6 +154,7 @@ export const makeMailContact = provideMailbox => {
       assertIntroducible();
       invitationOpen = true;
       status = 'pending';
+      changed();
       return makeExo('MailboxInvitation', MailboxInvitationI, {
         help: () => 'accept(counterpart) exchanges inbox capabilities once.',
         /** @param {any} counterpart */
@@ -115,6 +167,7 @@ export const makeMailContact = provideMailbox => {
           remote = counterpart;
           status = 'ready';
           error = undefined;
+          changed();
           if (first && onRedeemed !== undefined) onRedeemed();
           return receiver;
         },
@@ -128,7 +181,10 @@ export const makeMailContact = provideMailbox => {
     revokeInvitation: () => {
       if (!invitationOpen) return false;
       invitationOpen = false;
-      if (status === 'pending') status = 'cancelled';
+      if (status === 'pending') {
+        status = 'cancelled';
+        changed();
+      }
       return true;
     },
     /**
@@ -139,6 +195,7 @@ export const makeMailContact = provideMailbox => {
     accept: invitation => {
       assertIntroducible();
       status = 'pending';
+      changed();
       const attempt = E(invitation)
         .accept(receiver)
         .then(counterpart => {
@@ -151,12 +208,14 @@ export const makeMailContact = provideMailbox => {
             remote = counterpart;
             status = 'ready';
             error = undefined;
+            changed();
           },
           reason => {
             if (remote !== attempt) return;
             remote = undefined;
             status = 'failed';
             error = describeError(reason);
+            changed();
           },
         );
       remote = attempt;

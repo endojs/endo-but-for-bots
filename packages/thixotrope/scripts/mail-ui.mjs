@@ -80,6 +80,7 @@ try {
     attachments.set(key, await client.call('lookup', key));
   const service = makeMailUiService({
     book,
+    mailbox: await client.call('lookup', 'mailbox'),
     contacts: await client.call('lookup', 'contacts'),
     inventory: await client.call('getInventory'),
     workspace: values.workspace,
@@ -88,9 +89,10 @@ try {
   });
   const mail = harden({
     snapshot: () => client.race(service.snapshot()),
+    subscribe: (onState, onError) =>
+      client.race(service.subscribe(onState, onError)),
     adopt: (token, name) => client.race(service.adopt(token, name)),
-    send: (name, text, attachment) =>
-      client.race(service.send(name, text, attachment)),
+    send: (name, content) => client.race(service.send(name, content)),
   });
   const server = await serveMailUi({ mail, assets, port });
   console.error(`Mail (${values.workspace}): ${server.url}`);

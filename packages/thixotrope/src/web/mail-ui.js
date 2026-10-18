@@ -5,7 +5,7 @@
 /** @typedef {{id: string, content: readonly (string | ValuePart)[], from?: string, to?: string, status?: string, error?: string}} Message */
 /** @typedef {{name: string, status: string}} Contact */
 /** @typedef {{workspace: string, inbox: Message[], outbox: Message[], contacts: Contact[], attachments: ValuePart[], inventory: [string, string][]}} MailSnapshot */
-/** @typedef {{snapshot: () => Promise<MailSnapshot>, adopt: (token: string, name: string) => Promise<string>, send: (name: string, content: readonly (string | {token: string})[]) => Promise<string>}} MailUiApi */
+/** @typedef {{subscribe: (onState: (state: MailSnapshot) => void, onError: (error: Error) => void) => (() => void), adopt: (token: string, name: string) => Promise<string>, send: (name: string, content: readonly (string | {token: string})[]) => Promise<string>}} MailUiApi */
 
 /** @typedef {{parts: (string | ValuePart)[], query?: string}} EditorSnapshot */
 /** @typedef {{subscribe: (listener: (state: EditorSnapshot) => void) => (() => void), insert: (value: ValuePart) => void, clear: () => void}} MailEditor */
@@ -56,31 +56,22 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
-  const refresh = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      setData(await api.snapshot());
-    } catch (reason) {
-      setError(/** @type {Error} */ (reason).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  useEffect(() => {
-    let active = true;
-    api.snapshot().then(
-      value => {
-        if (active) setData(value);
-      },
-      reason => {
-        if (active) setError(reason.message);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, []);
+  const [connected, setConnected] = useState(false);
+  useEffect(
+    () =>
+      api.subscribe(
+        state => {
+          setData(state);
+          setConnected(true);
+          setError('');
+        },
+        reason => {
+          setConnected(false);
+          setError(reason.message);
+        },
+      ),
+    [],
+  );
 
   /** @param {{preventDefault: () => void}} event */
   const send = async event => {
@@ -101,7 +92,7 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
       setComposing(false);
       setFolder('outbox');
       setSelected('');
-      setNotice('Message queued. Refresh Sent to check delivery.');
+      setNotice('Message queued. Delivery status updates automatically.');
     } catch (reason) {
       setError(
         `${/** @type {Error} */ (reason).message} Check Sent before sending again.`,
@@ -110,12 +101,6 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
       setBusy(false);
     }
     sending.current = false;
-    // Refresh failure must not turn an accepted send into a retryable draft.
-    try {
-      setData(await api.snapshot());
-    } catch (_reason) {
-      /* Manual refresh remains available. */
-    }
   };
   /** @param {ValuePart} part */
   const showAdoption = part => {
@@ -137,11 +122,6 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
       const name = await api.adopt(adopting.token, localName);
       setAdopting(undefined);
       setNotice(`Adopted as ${name}.`);
-      try {
-        setData(await api.snapshot());
-      } catch (_reason) {
-        setError('The value was adopted. Refresh to update the inventory.');
-      }
     } catch (reason) {
       setAdoptError(/** @type {Error} */ (reason).message);
     } finally {
@@ -203,9 +183,9 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
             { class: 'header-actions' },
             h('span', { class: 'workspace' }, data?.workspace ?? 'Connecting…'),
             h(
-              'button',
-              { type: 'button', onClick: refresh, disabled: busy },
-              'Refresh',
+              'span',
+              { class: 'hint', role: 'status' },
+              connected ? 'Live' : 'Connecting…',
             ),
             h(
               'button',
@@ -286,7 +266,7 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
                     h(
                       'p',
                       { class: 'hint' },
-                      'No ready contacts. Introduce a correspondent with thix invite / accept, then refresh.',
+                      'No ready contacts. Introduce a correspondent with thix invite / accept.',
                     ),
                   h(
                     'p',
