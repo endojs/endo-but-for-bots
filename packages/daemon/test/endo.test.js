@@ -7738,3 +7738,63 @@ test('SortedSetStore supports ordered bounded scans and restart persistence', as
   t.deepEqual(await E(setAfter).keys(M.string()), ['beta', 'delta', 'gamma']);
   t.true(await E(setAfter).has(3n));
 });
+
+test('guest makes sorted stores named in its own pet store', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  const map = await E(guest).makeSortedMapStore('sorted-map');
+  const set = await E(guest).makeSortedSetStore('sorted-set');
+  await E(map).init('beta', 2);
+  await E(map).init('alpha', 1);
+  await E(set).add('gamma');
+  await E(set).add('alpha');
+
+  t.deepEqual(await E(map).entries(M.string(), { start: 'alpha' }), [
+    ['alpha', 1],
+    ['beta', 2],
+  ]);
+  t.deepEqual(await E(set).keys(M.string(), { end: 'beta' }), ['alpha']);
+  t.is(await E(guest).lookup('sorted-map'), map);
+  t.is(await E(host).lookup(['guest-agent', 'sorted-set']), set);
+});
+
+test('sorted stores scan remotable slots and reflect set, delete, and snapshot', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeSortedMapStore('sorted-map');
+  const set = await E(host).makeSortedSetStore('sorted-set');
+  const guest = await E(host).provideGuest('slot-guest');
+
+  // Scans decode each candidate's key and value slots, not just its rank.
+  await E(map).init(harden({ owner: guest }), guest);
+  await E(set).add(harden({ owner: guest }));
+  const [[key, value]] = await E(map).entries(M.record());
+  t.is(key.owner, guest);
+  t.is(value, guest);
+  const [setKey] = await E(set).keys(M.record());
+  t.is(setKey.owner, guest);
+
+  // Mutations are visible to the next indexed scan and to snapshots.
+  await E(map).init('alpha', 1);
+  await E(map).init('beta', 2);
+  await E(map).set('alpha', 11);
+  await E(map).delete(harden({ owner: guest }));
+  t.deepEqual(await E(map).entries(M.any()), [
+    ['alpha', 11],
+    ['beta', 2],
+  ]);
+  t.deepEqual(
+    await E(map).snapshot(),
+    makeCopyMap([
+      ['alpha', 11],
+      ['beta', 2],
+    ]),
+  );
+
+  await E(set).add('alpha');
+  await E(set).delete(harden({ owner: guest }));
+  t.deepEqual(await E(set).entries(M.any()), ['alpha']);
+  t.deepEqual(await E(set).snapshot(), makeCopySet(['alpha']));
+  t.is(await E(set).getSize(), 1);
+});
