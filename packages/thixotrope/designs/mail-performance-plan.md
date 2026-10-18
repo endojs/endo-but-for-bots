@@ -112,8 +112,8 @@ An earlier colocated variant had an 8,160 ms outlier with 304 writes and extra w
 The original bridge had a 19,182 ms outlier, and the pushed-head variant had a 2,099 ms outlier.
 All of those samples remain in the results rather than being discarded as warm-up.
 The provisional 50–100 ms target is not met.
-The subsequent [fine-grained capture](mail-latency-colocated.md) partitions a fresh 419 ms send and
-identifies a 173 ms remote contact lookup that can be replaced with the already pushed reference.
+The subsequent [fine-grained capture](mail-latency-colocated.md) compares fresh 418 ms and 364 ms sends after combining native dispatch and outbound extraction.
+It retains a 1,611 ms outlier and identifies the remaining remote contact lookup as avoidable.
 
 ## Validation of the first changes
 
@@ -124,3 +124,19 @@ The clean workspace declaration build, package typecheck, and all 14 type-contra
 Package source and test ESLint reports no errors.
 The documentation build still reports the existing 102 errors and 190 warnings elsewhere in the
 monorepo; no new Thixotrope documentation error was identified.
+
+## Combined native delivery experiment
+
+The worker now advertises `deliver-v1` and accepts one request that dispatches, runs promise jobs,
+collects and completes finalizer cascades, then extracts outbound with a distinct budget.
+It omits the post-extraction collection; the trusted JSON-only outbox cannot register finalizers.
+Older pinned workers retain their original delivery path.
+
+Seven fresh instrumented sends per variant reduced the median from 417.969 ms to 364.448 ms (12.8%).
+The selected baseline spent 62.879 ms in three extraction collections; the new path has none.
+Four dispatch/cascade sweeps remain, and finalizer-generated frames are included before replying.
+The [updated sunburst and complete samples](mail-latency-colocated.md) separate concurrent work and
+retain a 1,611 ms / 77-delivery outlier, so this does not establish improved tail latency.
+Native unit and host integration tests cover finalization, budgets, restore, and legacy selection.
+The next proposals remain direct recipient references, grouped durable ownership commits, and
+classification of excess protocol activity; the 50–100 ms target remains unmet.
