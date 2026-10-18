@@ -12,7 +12,10 @@ import {
   makeSelector,
   makeSturdyRef,
 } from '@endo/ocapn';
-import { makeOcapnOperationsCodecs } from '@endo/ocapn/operations';
+import {
+  makeGcBatcher,
+  makeOcapnOperationsCodecs,
+} from '@endo/ocapn/operations';
 import { locationToLocationId } from '@endo/ocapn/client/util';
 
 import { describeError } from '../describe-error.js';
@@ -306,6 +309,43 @@ export const makeOcapnHub = ({
     }
   };
 
+  const gcBatching = true;
+  /** @type {Map<string, ReturnType<typeof makeGcBatcher>> | undefined} */
+  let gcBatches;
+  /** @param {() => void} action */
+  const withGcBatch = action => {
+    if (!gcBatching || gcBatches) {
+      action();
+      return;
+    }
+    const batches = new Map();
+    gcBatches = batches;
+    try {
+      action();
+    } finally {
+      gcBatches = undefined;
+      // Still inside deliveryDepth: all frame bytes and the source watermark
+      // commit together before any destination can observe the batch.
+      for (const batch of batches.values()) batch.flush();
+    }
+  };
+  /**
+   * @param {string} destination
+   * @param {Record<string, any>} message
+   */
+  const sendGcMessage = (destination, message) => {
+    if (!gcBatches) {
+      sendMessage(destination, message);
+      return;
+    }
+    let batch = gcBatches.get(destination);
+    if (!batch) {
+      batch = makeGcBatcher(notice => sendMessage(destination, notice));
+      gcBatches.set(destination, batch);
+    }
+    batch.send(message);
+  };
+
   // --- persistence ---
 
   let deliveryDepth = 0;
@@ -585,12 +625,12 @@ export const makeOcapnHub = ({
       return;
     }
     if (row.backing === 'answer') {
-      sendMessage(row.origin, {
+      sendGcMessage(row.origin, {
         type: 'op:gc-answers',
         answerPositions: [BigInt(row.position)],
       });
     } else if (row.mentionsIn > 0) {
-      sendMessage(row.origin, {
+      sendGcMessage(row.origin, {
         type: 'op:gc-exports',
         exportPositions: [BigInt(row.position)],
         wireDeltas: [BigInt(row.mentionsIn)],
@@ -1682,65 +1722,69 @@ export const makeOcapnHub = ({
         return;
       }
       case 'op:gc-exports': {
-        const exportPositions = /** @type {Array<bigint>} */ (
-          message.exportPositions
-        );
-        const wireDeltas = /** @type {Array<bigint>} */ (message.wireDeltas);
-        for (let i = 0; i < exportPositions.length; i += 1) {
-          const key = String(exportPositions[i]);
-          const delta = Number(wireDeltas[i] ?? 1n);
-          const refId = session.ourExports.get(key);
-          if (refId === undefined) {
-            // eslint-disable-next-line no-continue
-            continue;
+        withGcBatch(() => {
+          const exportPositions = /** @type {Array<bigint>} */ (
+            message.exportPositions
+          );
+          const wireDeltas = /** @type {Array<bigint>} */ (message.wireDeltas);
+          for (let i = 0; i < exportPositions.length; i += 1) {
+            const key = String(exportPositions[i]);
+            const delta = Number(wireDeltas[i] ?? 1n);
+            const refId = session.ourExports.get(key);
+            if (refId === undefined) {
+              // eslint-disable-next-line no-continue
+              continue;
+            }
+            const row = refs.get(refId);
+            if (row === undefined) {
+              session.ourExports.delete(key);
+              // eslint-disable-next-line no-continue
+              continue;
+            }
+            const count = (row.refcounts.get(sessionKey) ?? 0) - delta;
+            if (count > 0) {
+              row.refcounts.set(sessionKey, count);
+            } else {
+              row.refcounts.delete(sessionKey);
+              row.facing.delete(sessionKey);
+              session.ourExports.delete(key);
+              maybeReleaseRef(row);
+            }
+            dirty = true;
           }
-          const row = refs.get(refId);
-          if (row === undefined) {
-            session.ourExports.delete(key);
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          const count = (row.refcounts.get(sessionKey) ?? 0) - delta;
-          if (count > 0) {
-            row.refcounts.set(sessionKey, count);
-          } else {
-            row.refcounts.delete(sessionKey);
-            row.facing.delete(sessionKey);
-            session.ourExports.delete(key);
-            maybeReleaseRef(row);
-          }
-          dirty = true;
-        }
+        });
         persist();
         return;
       }
       case 'op:gc-answers': {
-        for (const position of message.answerPositions) {
-          const key = String(position);
-          const route = session.answersOwed.get(key);
-          if (route === undefined) {
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          session.answersOwed.delete(key);
-          dirty = true;
-          /** @type {string | null | undefined} */
-          let refId;
-          if ('ref' in route) {
-            refId = route.ref;
-          } else if ('local' in route) {
-            refId = route.local;
-          }
-          if (refId !== null && refId !== undefined) {
-            const row = refs.get(refId);
-            if (row !== undefined) {
-              // The route's pin is gone; if that was the last root,
-              // the release propagates (gc-answers toward an answer's
-              // owner, gc-exports toward an export's origin).
-              maybeReleaseRef(row);
+        withGcBatch(() => {
+          for (const position of message.answerPositions) {
+            const key = String(position);
+            const route = session.answersOwed.get(key);
+            if (route === undefined) {
+              // eslint-disable-next-line no-continue
+              continue;
+            }
+            session.answersOwed.delete(key);
+            dirty = true;
+            /** @type {string | null | undefined} */
+            let refId;
+            if ('ref' in route) {
+              refId = route.ref;
+            } else if ('local' in route) {
+              refId = route.local;
+            }
+            if (refId !== null && refId !== undefined) {
+              const row = refs.get(refId);
+              if (row !== undefined) {
+                // The route's pin is gone; if that was the last root,
+                // the release propagates (gc-answers toward an answer's
+                // owner, gc-exports toward an export's origin).
+                maybeReleaseRef(row);
+              }
             }
           }
-        }
+        });
         persist();
         return;
       }
