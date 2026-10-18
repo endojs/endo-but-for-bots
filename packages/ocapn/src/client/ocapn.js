@@ -16,6 +16,7 @@
  */
 
 import harden from '@endo/harden';
+
 import { ZERO_N } from '@endo/nat';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
@@ -35,6 +36,9 @@ import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
 import { makeGrantDetails } from './grant-tracker.js';
+import { makeGcBatcher } from '../codecs/gc-batch.js';
+
+const gcBatching = true;
 
 /**
  * The message a durable-session embedder's peer sees when a host answer it was
@@ -71,6 +75,7 @@ const sink = harden(() => {});
  * @property {Logger} logger
  * @property {(message: any) => void} rawDispatch
  * @property {(reason?: any) => void} onReject
+ * @property {(error: Error) => void} onSendError
  * @property {(message: any) => void} rawSend
  * @property {() => void} clearPendingRefCounts
  * @property {() => void} commitSentRefCounts
@@ -91,9 +96,10 @@ const sink = harden(() => {});
  * @param {MakeOcapnCommsKitOptions} opts
  * @returns {OcapnCommsKit}
  */
-const makeOcapnCommsKit = ({
+export const makeOcapnCommsKit = ({
   logger,
   onReject,
+  onSendError,
   rawDispatch,
   rawSend,
   clearPendingRefCounts,
@@ -148,7 +154,7 @@ const makeOcapnCommsKit = ({
   /**
    * @param {Record<string, any>} message
    */
-  const send = message => {
+  const sendNow = message => {
     // Don't throw here if unplugged, just don't send.
     if (didUnplug()) {
       logger.info(`Unplugged, not sending message:`, message);
@@ -179,6 +185,30 @@ const makeOcapnCommsKit = ({
       logger.info('Error in send', error);
       clearPendingRefCounts();
       throw error;
+    }
+  };
+
+  const gcBatch = makeGcBatcher(sendNow);
+  let gcFlushScheduled = false;
+  /** @param {Record<string, any>} message */
+  const send = message => {
+    if (!gcBatching) {
+      sendNow(message);
+      return;
+    }
+    gcBatch.send(message);
+    if (gcBatch.hasPending() && !gcFlushScheduled) {
+      gcFlushScheduled = true;
+      void Promise.resolve()
+        .then(() => {
+          gcFlushScheduled = false;
+          gcBatch.flush();
+        })
+        .catch(error => {
+          // A GC write failure must close the session, not silently lose deltas
+          // or retry a possibly accepted decrement with a fresh identity.
+          onSendError(error);
+        });
     }
   };
 
@@ -239,6 +269,7 @@ const makeOcapnCommsKit = ({
     subscribeMessages,
   });
 };
+harden(makeOcapnCommsKit);
 
 /**
  * @typedef {(handler: RemoteKitHandler) => RemoteKit} MakeRemoteKitForHandler
@@ -1117,6 +1148,7 @@ export const makeOcapn = (
   } = makeOcapnCommsKit({
     logger,
     onReject,
+    onSendError: abort,
     rawDispatch: dispatchMessage,
     // eslint-disable-next-line no-use-before-define
     rawSend: serializeAndSendMessage,
