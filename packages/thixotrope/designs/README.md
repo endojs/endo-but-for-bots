@@ -6,6 +6,10 @@ This directory holds the implementation notes behind contracts that are implemen
 [native resource installation](native-resource-installation.md),
 [Ironhorse limits](ironhorse-limits.md) and [layered message delivery](message-delivery.md),
 together with proposals that remain exploratory.
+[Incremental mail UI subscriptions](mail-ui-subscriptions.md) records the desired push-state
+change and the measured latency breakdown motivating it.
+The [mail performance plan](mail-performance-plan.md) tracks implementation and experiments across
+subscriptions, persistence, vat placement, and runtime overhead.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing
