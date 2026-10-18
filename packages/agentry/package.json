@@ -72,7 +72,7 @@
     "test:live": "ava --config ava-live.config.js"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.87.1",
+    "@earendil-works/pi-agent-core": "^1.1.0",
     "@earendil-works/pi-ai": "^0.87.1",
     "@earendil-works/pi-coding-agent": "^0.87.1",
     "@earendil-works/pi-tui": "^0.87.1",
