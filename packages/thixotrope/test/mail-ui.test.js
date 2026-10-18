@@ -41,7 +41,7 @@ test('the mail UI resolves labels at its edge and sends only granted values', as
   attachments.set('counter', replacement);
   t.deepEqual(await service.snapshot(), {
     workspace: 'alice',
-    contacts: [{ name: 'Bob', status: 'ready' }],
+    contacts: [{ name: 'Bob', token: '2', status: 'ready' }],
     inbox: [{ id: '1', from: 'Bob', content: ['Hello'] }],
     outbox: [],
     attachments: [{ name: 'counter', token: '1' }],
@@ -141,7 +141,8 @@ test.serial(
       },
       subscribe: async () => async () => {},
       adopt: async () => 'kept',
-      send: async () => {
+      send: async recipient => {
+        t.deepEqual(recipient, { token: 'selected' });
         sends += 1;
         return '1';
       },
@@ -210,7 +211,10 @@ test.serial(
         await fetch(`${origin}/api/send`, {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
-          body: JSON.stringify({ name: 'Bob', content: ['Hello'] }),
+          body: JSON.stringify({
+            recipient: { token: 'selected' },
+            content: ['Hello'],
+          }),
         })
       ).status,
       200,
@@ -559,6 +563,7 @@ test('incremental mail projection shares upstream streams and never rereads hist
   for (let i = 1; i <= 100; i += 1) {
     rawMailbox.receive(contact, BigInt(i), ['old', { name: 'theirs', value }]);
   }
+  const sent = [];
   let inboxStreams = 0;
   const mailbox = Far('PushOnlyMailbox', {
     subscribeInboxEntries: (listener, ephemeral) => {
@@ -581,7 +586,12 @@ test('incremental mail projection shares upstream streams and never rereads hist
     mailbox,
     inventory,
     contacts,
-    book: Far('NoReads', {}),
+    book: Far('NoReads', {
+      send: (recipient, content) => {
+        sent.push({ recipient, content });
+        return 'sent';
+      },
+    }),
     workspace: 'push',
     attachments: new Map(),
     adoptValue: async () => 'unused',
@@ -613,6 +623,7 @@ test('incremental mail projection shares upstream streams and never rereads hist
   t.is(inboxStreams, 1);
   t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 1n });
   t.is(views[0].inbox.length, 100);
+  const selected = views[0].contacts[0].token;
   t.is(views[0], views[2]);
   rawMailbox.receive(contact, 101n, ['new', { name: 'theirs', value }]);
   await flush();
@@ -628,6 +639,17 @@ test('incremental mail projection shares upstream streams and never rereads hist
   await flush();
   t.is(views[0].inbox.length, 100);
   t.like(views[0].inbox[99].content[1], { localName: 'mine' });
+  contacts.delete('Notes');
+  contacts.set(
+    'Self',
+    Far('ReplacementContact', { status: () => ({ status: 'ready' }) }),
+  );
+  await flush();
+  await service.send({ token: selected }, ['captured recipient']);
+  t.deepEqual(sent, [{ recipient: contact, content: ['captured recipient'] }]);
+  await t.throwsAsync(() => service.send({ token: 'unknown' }, ['no']), {
+    message: /Unknown contact selection/,
+  });
   await closed[0]();
   t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 1n });
   await Promise.all(closed.slice(1).map(close => close()));

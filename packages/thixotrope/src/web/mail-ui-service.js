@@ -36,6 +36,8 @@ export const makeMailUiService = ({
   const grants = new Map(attachments);
   /** @type {Map<string, {name: string, value: any}>} */
   const selections = new Map();
+  /** @type {Map<string, any>} */
+  const recipients = new Map();
   // Tokens designate references in this connection, never inventory names.
   const tokens = new WeakMap();
   let nextToken = 0n;
@@ -94,12 +96,16 @@ export const makeMailUiService = ({
       selections.set(token, { name, value });
       return { name, token };
     });
+    for (const ref of state.contacts.values()) {
+      recipients.set(tokenFor(ref), ref);
+    }
     /** @type {MailSnapshot} */
     const result = harden({
       workspace,
       contacts: [...state.contacts].map(([name, ref]) => ({
-        name,
         ...state.statuses.get(ref),
+        name,
+        token: tokenFor(ref),
       })),
       inbox: describe(state.inbox, 'inbox'),
       outbox: describe(state.outbox, 'outbox'),
@@ -287,7 +293,14 @@ export const makeMailUiService = ({
       });
       const result = harden({
         workspace,
-        contacts: listedContacts,
+        contacts: await Promise.all(
+          listedContacts.map(async entry => {
+            const ref = await E(contacts).get(entry.name);
+            const token = tokenFor(ref);
+            recipients.set(token, ref);
+            return { ...entry, token };
+          }),
+        ),
         inbox: await describeMessages(inbox, 'inbox'),
         outbox: await describeMessages(outbox, 'outbox'),
         inventory: inventorySnapshot.entries,
@@ -311,9 +324,13 @@ export const makeMailUiService = ({
       // cannot cause an existing inventory name to be silently replaced.
       return adoptValue(name, value);
     },
-    send: async (name, parts) => {
-      (typeof name === 'string' && name.length > 0 && name.length <= 128) ||
-        Fail`Expected a contact name`;
+    send: async (recipient, parts) => {
+      const name = typeof recipient === 'string' ? recipient : undefined;
+      (typeof recipient === 'object' &&
+        recipient !== null &&
+        typeof recipient.token === 'string') ||
+        (typeof name === 'string' && name.length > 0 && name.length <= 128) ||
+        Fail`Expected a recipient selection`;
       (Array.isArray(parts) && parts.length > 0 && parts.length <= 256) ||
         Fail`Expected message parts`;
       let length = 0;
@@ -329,8 +346,14 @@ export const makeMailUiService = ({
       length <= 4096 || Fail`Expected at most 4096 text characters`;
       content.some(part => typeof part !== 'string' || part.trim()) ||
         Fail`Expected a nonempty message`;
-      const contact = await E(contacts).get(name);
-      contact !== undefined || Fail`Unknown contact ${name}`;
+      // String names retain compatibility with older local bridge callers.
+      // The browser selects an offered reference, so rename/replacement cannot
+      // redirect a composed message and no lookup crank is needed on send.
+      const contact =
+        typeof recipient === 'string'
+          ? await E(contacts).get(recipient)
+          : recipients.get(recipient.token);
+      contact !== undefined || Fail`Unknown contact selection ${recipient}`;
       return E(book).send(contact, harden(content));
     },
   });

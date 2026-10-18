@@ -92,7 +92,7 @@ try {
     subscribe: (onState, onError) =>
       client.race(service.subscribe(onState, onError)),
     adopt: (token, name) => client.race(service.adopt(token, name)),
-    send: (name, content) => client.race(service.send(name, content)),
+    send: (recipient, content) => client.race(service.send(recipient, content)),
   });
   const server = await serveMailUi({
     mail,

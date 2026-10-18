@@ -3,9 +3,9 @@
 
 /** @typedef {{name: string, token: string, localName?: string}} ValuePart */
 /** @typedef {{id: string, content: readonly (string | ValuePart)[], from?: string, to?: string, status?: string, error?: string}} Message */
-/** @typedef {{name: string, status: string}} Contact */
+/** @typedef {{name: string, token: string, status: string}} Contact */
 /** @typedef {{workspace: string, inbox: Message[], outbox: Message[], contacts: Contact[], attachments: ValuePart[], inventory: [string, string][]}} MailSnapshot */
-/** @typedef {{subscribe: (onState: (state: MailSnapshot) => void, onError: (error: Error) => void) => (() => void), adopt: (token: string, name: string) => Promise<string>, send: (name: string, content: readonly (string | {token: string})[]) => Promise<string>}} MailUiApi */
+/** @typedef {{subscribe: (onState: (state: MailSnapshot) => void, onError: (error: Error) => void) => (() => void), adopt: (token: string, name: string) => Promise<string>, send: (recipient: string | {token: string}, content: readonly (string | {token: string})[]) => Promise<string>}} MailUiApi */
 
 /** @typedef {{parts: (string | ValuePart)[], query?: string}} EditorSnapshot */
 /** @typedef {{subscribe: (listener: (state: EditorSnapshot) => void) => (() => void), insert: (value: ValuePart) => void, clear: () => void}} MailEditor */
@@ -83,7 +83,7 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
     setNotice('');
     try {
       await api.send(
-        recipient,
+        { token: recipient },
         draft.map(part =>
           typeof part === 'string' ? part : { token: part.token },
         ),
@@ -256,7 +256,7 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
                       ...contacts.map(contact =>
                         h(
                           'option',
-                          { key: contact.name, value: contact.name },
+                          { key: contact.token, value: contact.token },
                           contact.name,
                         ),
                       ),

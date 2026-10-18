@@ -89,7 +89,7 @@ const api = harden({
   },
   adopt: (valueToken, name) =>
     request('/api/adopt', { token: valueToken, name }),
-  send: (name, content) => request('/api/send', { name, content }),
+  send: (recipient, content) => request('/api/send', { recipient, content }),
 });
 
 const start = async () => {
