@@ -11,6 +11,7 @@ import statistics
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('trace', type=Path)
 parser.add_argument('output', type=Path, help='output basename for .json and .svg')
+parser.add_argument('--label', help='name of this experiment for the figure title')
 parser.add_argument('--segments', action='store_true', help='include every wall-partition segment in JSON')
 parser.add_argument('--trial', type=int, help='defaults to the median elapsed-time trial')
 args = parser.parse_args()
@@ -106,7 +107,7 @@ for event in active_events:
         continue
     envelopes = [e for e in data['events'] if e['kind'] == 'worker-request'
                  and e.get('pid') == event.get('pid') and e['name'] == event['request']
-                 and e['start'] < event['end'] and e['end'] > event['start']]
+                 and e['start'] < event['end'] + 1 and e['end'] > event['start'] - 1]
     if envelopes:
         best = min(max(0, e['start']-event['start'], event['end']-e['end']) for e in envelopes)
         clock_violations.append(best)
@@ -114,6 +115,7 @@ for event in active_events:
         unmatched_phases += 1
 summary = {
     'trial': window['trial'], 'totalMs': total,
+    **({'label': args.label} if args.label else {}),
     'trialElapsedMs': [w['end']-w['start'] for w in windows],
     'selectedBy': 'explicit trial' if args.trial is not None else 'median elapsed-time trial',
     'results': next(r for r in data['results'] if r['trial'] == window['trial']),
@@ -160,7 +162,7 @@ def arc(begin, ms, inner, outer, color, label):
     d = f'M {point(outer,a)} A {outer},{outer} 0 {large} 1 {point(outer,b)} L {point(inner,b)} A {inner},{inner} 0 {large} 0 {point(inner,a)} Z'
     parts.append(f'<path d="{d}" fill="{color}" stroke="#f8fafc" stroke-width="1"><title>{html.escape(label)}: {ms:.3f} ms ({ms/total*100:.2f}%)</title></path>')
     return (a+b)/2
-text(44, 54, 'Where the mail time goes', 32, weight='650')
+text(44, 54, args.label or 'Where the mail time goes', 32, weight='650')
 selection = f'explicit selection from {len(windows)} sends' if args.trial is not None else f'median of {len(windows)} instrumented sends'
 text(44, 86, f'Colocated mailbox · fresh measured send · trial {window["trial"]} · {selection}', 17, '#64748b')
 text(44, 114, f'Contact lookup {stage_totals["contact-lookup"]:.1f} ms → Send / notification {stage_totals["send-and-notify"]:.1f} ms', 17, '#64748b')
