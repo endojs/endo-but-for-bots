@@ -158,3 +158,19 @@ The next experiment should batch GC lists in both client and hub, rather than ex
 collected reference into a separately journaled native crank.
 Preserve call ordering, reference deltas, durable ownership, and replay identities in that design.
 The trigger that initiates reclamation bursts still needs tracing.
+
+## Ordered GC batching
+
+The client now coalesces consecutive GC notices, and the hub preserves lists through routing.
+Ordinary messages and changes of GC kind remain ordering barriers.
+A deterministic 130-position replay fixture becomes three bounded frames and retains exact deltas.
+Native finalizer and SIGKILL recovery checks pass with a separately built updated guest bundle.
+
+In five-send GC-stress runs, client-only batching retained a 3.364-second / 122-delivery burst.
+Client plus hub batching reduced the largest observed sample to 712 ms / 20 deliveries.
+The final combined guest/log repeat measured a 196 ms median and a 627 ms maximum.
+These forced-collection samples are not comparable to unstressed medians or estimates of p99.
+The [GC-batching note](mail-gc-batching.md) retains the initial candidate, final repeat, raw traces,
+and sunbursts, including the less favorable repeat outlier.
+Next investigate durable commit grouping, full-heap GC cost, and instruction attribution in guest
+execution; do not relax finalizer behavior or disk-before-delivery ordering to meet a target.

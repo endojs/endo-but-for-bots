@@ -1,0 +1,475 @@
+{
+  "trial": 4,
+  "totalMs": 261.520263671875,
+  "label": "GC stress: host client + hub batching",
+  "trialElapsedMs": [
+    628.815673828125,
+    244.803955078125,
+    712.402099609375,
+    252.408447265625,
+    261.520263671875
+  ],
+  "selectedBy": "median elapsed-time trial",
+  "results": {
+    "mode": "colocated",
+    "trial": 4,
+    "epoch": 1792322602523,
+    "acceptedMs": 261.5078749999957,
+    "visibleMs": 261.5167919999949,
+    "hubWrites": 12,
+    "hubMs": 116.94929200000479,
+    "deliveries": 1,
+    "deliveryMs": 205.95404199999757,
+    "snapshots": 0,
+    "wakes": 0
+  },
+  "wallPartition": [
+    {
+      "name": "Other / unmeasured",
+      "ms": 12.647705078125,
+      "percent": 4.836223740579376
+    },
+    {
+      "name": "Host JS only",
+      "ms": 2.673828125,
+      "percent": 1.0224171876619115
+    },
+    {
+      "name": "Filesystem only",
+      "ms": 121.017822265625,
+      "percent": 46.27474007806293
+    },
+    {
+      "name": "Filesystem + VM",
+      "ms": 0.947021484375,
+      "percent": 0.3621216463605328
+    },
+    {
+      "name": "VM only",
+      "ms": 124.23388671875,
+      "percent": 47.504497347335246
+    }
+  ],
+  "causalStages": {
+    "bridge-completion": 28.412841796875,
+    "send-and-notify": 233.107421875
+  },
+  "filesystemIntervals": [
+    {
+      "name": "hub / writeTextAtomic",
+      "ms": 116.937744140625,
+      "count": 12
+    },
+    {
+      "name": "other / exists",
+      "ms": 0.013671875,
+      "count": 1
+    },
+    {
+      "name": "other / readText",
+      "ms": 0.0517578125,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / appendTextDurable",
+      "ms": 4.955078125,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / exists",
+      "ms": 0.0068359375,
+      "count": 1
+    }
+  ],
+  "syscalls": [
+    {
+      "name": "hub / close",
+      "ms": 0.276123046875,
+      "count": 24
+    },
+    {
+      "name": "hub / directory-fsync",
+      "ms": 56.83544921875,
+      "count": 12
+    },
+    {
+      "name": "hub / file-fsync",
+      "ms": 53.396484375,
+      "count": 12
+    },
+    {
+      "name": "hub / open",
+      "ms": 1.591552734375,
+      "count": 24
+    },
+    {
+      "name": "hub / rename",
+      "ms": 3.239990234375,
+      "count": 12
+    },
+    {
+      "name": "hub / rm",
+      "ms": 0.640380859375,
+      "count": 12
+    },
+    {
+      "name": "hub / writeFile",
+      "ms": 0.83935546875,
+      "count": 12
+    },
+    {
+      "name": "other / exists",
+      "ms": 0.010986328125,
+      "count": 1
+    },
+    {
+      "name": "other / readFile",
+      "ms": 0.050537109375,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / close",
+      "ms": 0.013916015625,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / exists",
+      "ms": 0.005859375,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / file-fsync",
+      "ms": 4.88037109375,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / open",
+      "ms": 0.027099609375,
+      "count": 1
+    },
+    {
+      "name": "worker-journal / writeFile",
+      "ms": 0.0234375,
+      "count": 1
+    }
+  ],
+  "workerPhases": [
+    {
+      "name": "deliver / compile-and-relink",
+      "ms": 0.701904296875,
+      "count": 1
+    },
+    {
+      "name": "deliver / execution-and-jobs",
+      "ms": 62.134033203125,
+      "count": 1
+    },
+    {
+      "name": "deliver / extraction-compilation",
+      "ms": 0.463623046875,
+      "count": 1
+    },
+    {
+      "name": "deliver / finalizer-callbacks",
+      "ms": 1.082275390625,
+      "count": 1
+    },
+    {
+      "name": "deliver / garbage-collection",
+      "ms": 60.39892578125,
+      "count": 2
+    },
+    {
+      "name": "deliver / outbound-extraction",
+      "ms": 0.400146484375,
+      "count": 1
+    }
+  ],
+  "protocolInbound": {
+    "op:deliver": 1
+  },
+  "protocolOutbound": {
+    "op:deliver": 3,
+    "op:gc-exports": 1
+  },
+  "hostSpans": [
+    {
+      "name": "hub.json-serialization",
+      "ms": 1.336669921875,
+      "count": 12
+    },
+    {
+      "name": "hub.table-serialization",
+      "ms": 1.12109375,
+      "count": 12
+    },
+    {
+      "name": "ui.projection",
+      "ms": 0.216064453125,
+      "count": 2
+    }
+  ],
+  "maxWorkerPhaseOutsideRequestMs": 1.06640625,
+  "unmatchedWorkerPhases": 0,
+  "leaves": [
+    {
+      "path": [
+        "Other / unmeasured",
+        "Bridge / IPC gap"
+      ],
+      "ms": 11.37060546875
+    },
+    {
+      "path": [
+        "Host JS only",
+        "hub.table-serialization"
+      ],
+      "ms": 1.12109375
+    },
+    {
+      "path": [
+        "Host JS only",
+        "hub.json-serialization"
+      ],
+      "ms": 1.336669921875
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Filesystem setup"
+      ],
+      "ms": 0.11279296875
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Open"
+      ],
+      "ms": 1.592529296875
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Write bytes"
+      ],
+      "ms": 0.840087890625
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "File fsync"
+      ],
+      "ms": 53.397705078125
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Close"
+      ],
+      "ms": 0.268798828125
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Rename"
+      ],
+      "ms": 3.240234375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Directory fsync"
+      ],
+      "ms": 55.93505859375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Hub state",
+        "Remove scratch"
+      ],
+      "ms": 0.603271484375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Other files",
+        "Filesystem setup"
+      ],
+      "ms": 0.004150390625
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Other files",
+        "exists"
+      ],
+      "ms": 0.010986328125
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Other files",
+        "readFile"
+      ],
+      "ms": 0.050537109375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Worker journal",
+        "Filesystem setup"
+      ],
+      "ms": 0.0107421875
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Worker journal",
+        "exists"
+      ],
+      "ms": 0.005859375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Worker journal",
+        "Open"
+      ],
+      "ms": 0.027099609375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Worker journal",
+        "Write bytes"
+      ],
+      "ms": 0.0234375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Worker journal",
+        "File fsync"
+      ],
+      "ms": 4.880615234375
+    },
+    {
+      "path": [
+        "Filesystem only",
+        "Worker journal",
+        "Close"
+      ],
+      "ms": 0.013916015625
+    },
+    {
+      "path": [
+        "Filesystem + VM",
+        "Hub state",
+        "Directory fsync + Compile / relink"
+      ],
+      "ms": 0.701904296875
+    },
+    {
+      "path": [
+        "Filesystem + VM",
+        "Hub state",
+        "Directory fsync + Execute / jobs"
+      ],
+      "ms": 0.199462890625
+    },
+    {
+      "path": [
+        "Filesystem + VM",
+        "Hub state",
+        "Filesystem setup + Execute / jobs"
+      ],
+      "ms": 0.0009765625
+    },
+    {
+      "path": [
+        "Filesystem + VM",
+        "Hub state",
+        "Close + Execute / jobs"
+      ],
+      "ms": 0.007568359375
+    },
+    {
+      "path": [
+        "Filesystem + VM",
+        "Hub state",
+        "Remove scratch + Execute / jobs"
+      ],
+      "ms": 0.037109375
+    },
+    {
+      "path": [
+        "VM only",
+        "Native delivery",
+        "Execute / jobs"
+      ],
+      "ms": 61.888916015625
+    },
+    {
+      "path": [
+        "Other / unmeasured",
+        "Worker reply gap"
+      ],
+      "ms": 1.277099609375
+    },
+    {
+      "path": [
+        "VM only",
+        "Native delivery",
+        "GC"
+      ],
+      "ms": 60.39892578125
+    },
+    {
+      "path": [
+        "VM only",
+        "Native delivery",
+        "Finalizers"
+      ],
+      "ms": 1.082275390625
+    },
+    {
+      "path": [
+        "VM only",
+        "Native delivery",
+        "Extraction compile"
+      ],
+      "ms": 0.463623046875
+    },
+    {
+      "path": [
+        "VM only",
+        "Native delivery",
+        "Extract frames"
+      ],
+      "ms": 0.400146484375
+    },
+    {
+      "path": [
+        "Host JS only",
+        "ui.projection"
+      ],
+      "ms": 0.216064453125
+    }
+  ],
+  "notes": [
+    "Sunburst sectors partition elapsed wall time. Concurrent filesystem and VM work occupies its own sector.",
+    "Filesystem and VM diagnostic totals include that overlap and must not be summed together.",
+    "Worker phases are elapsed intervals, not CPU samples. Execution includes promise jobs; finalizer callbacks are measured separately from collector time.",
+    "Other / unmeasured retains IPC, scheduling, profiling overhead and uninstrumented host work; no CPU attribution is inferred.",
+    "Endpoint requires send acceptance and pushed inbox state; it excludes HTTP and browser rendering.",
+    "High-resolution cross-process epoch clocks are checked against host request envelopes; interpret sub-millisecond differences cautiously."
+  ]
+}
