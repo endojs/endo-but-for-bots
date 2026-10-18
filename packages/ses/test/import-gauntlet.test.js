@@ -739,6 +739,50 @@ test('cyclic named reexport with renaming reexport, renamer imported first, cons
   t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
 });
 
+// Reading a renaming reexport through the reexporter's namespace while the
+// upstream `const` is still in its temporal dead zone. `owner.js` imports
+// `renamer.js` as a namespace, `renamer.js` reexports `owner.js`'s `y` as
+// `z`, and `owner.js` reads `ns.z` before its own `const y` initializes.
+// Node.js raises ReferenceError. Unlike the cases above, the read lands on
+// the reexporter's own exported getter installed by `wireUpExportNotifier`,
+// so this covers the TDZ guard on that getter.
+test('cyclic renaming reexport read through namespace during temporal dead zone observes ReferenceError', async t => {
+  t.plan(2);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/renamer.js': `
+      export { y as z } from './owner.js';
+    `,
+    'https://example.com/owner.js': `
+      import * as ns from './renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: ns.z };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+      export const y = 42;
+      export const after = () => ns.z;
+    `,
+    'https://example.com/main.js': `
+      export * from './owner.js';
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+  t.is(namespace.after(), 42);
+});
+
 test('export-as with duplicated export name', async t => {
   t.plan(4);
 
