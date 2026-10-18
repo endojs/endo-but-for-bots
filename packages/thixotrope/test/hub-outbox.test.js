@@ -249,3 +249,154 @@ test.serial(
     ]);
   },
 );
+
+test('outbox batches accepted-prefix removal with the next sequence commit', t => {
+  /** @type {any} */
+  let state = {
+    version: 2,
+    refs: {},
+    publications: {},
+    sessions: {
+      destination: {
+        durable: true,
+        queue: ['00', '01'],
+        queueSequences: ['', ''],
+        nextDelivery: '0',
+      },
+    },
+  };
+  let commits = 0;
+  const hub = makeOcapnHub({
+    codec: syrupCodec,
+    store: {
+      getState: () => state,
+      setState: next => {
+        state = JSON.parse(JSON.stringify(next));
+        commits += 1;
+      },
+    },
+  });
+  const sent = [];
+  hub.attachSession('destination', {
+    durable: true,
+    requireAcceptance: true,
+    send: (bytes, sequence) => {
+      const saved = state.sessions.destination;
+      t.is(
+        saved.queueSequences[0],
+        sequence,
+        'replay identity is durable before wire',
+      );
+      t.is(
+        saved.queue[0],
+        hex(bytes),
+        'frame ownership is durable before wire',
+      );
+      sent.push(sequence);
+      return true;
+    },
+  });
+  t.deepEqual(sent, ['1', '2']);
+  t.is(
+    commits,
+    4,
+    'attach, first sequence, next sequence plus removal, final removal',
+  );
+  t.deepEqual(state.sessions.destination.queue, []);
+});
+
+test('failed final outbox commit replays the accepted tail with its original identity', t => {
+  /** @type {any} */
+  let state = {
+    version: 2,
+    refs: {},
+    publications: {},
+    sessions: {
+      destination: {
+        durable: true,
+        queue: ['00', '01'],
+        queueSequences: ['', ''],
+        nextDelivery: '0',
+      },
+    },
+  };
+  let fail = true;
+  const store = {
+    getState: () => state,
+    setState: next => {
+      if (fail && next.sessions.destination.queue.length === 0) {
+        throw Error('injected final commit failure');
+      }
+      state = JSON.parse(JSON.stringify(next));
+    },
+  };
+  const accepted = new Set();
+  const sends = [];
+  const adapter = {
+    durable: true,
+    requireAcceptance: true,
+    send: (_bytes, sequence) => {
+      sends.push(sequence);
+      accepted.add(sequence);
+      return true;
+    },
+  };
+  const first = makeOcapnHub({ codec: syrupCodec, store });
+  t.throws(() => first.attachSession('destination', adapter), {
+    message: /injected final commit failure/,
+  });
+  t.deepEqual(state.sessions.destination.queueSequences, ['2']);
+  fail = false;
+  const restored = makeOcapnHub({ codec: syrupCodec, store });
+  restored.attachSession('destination', adapter);
+  t.deepEqual(sends, ['1', '2', '2']);
+  t.deepEqual([...accepted], ['1', '2']);
+  t.deepEqual(state.sessions.destination.queue, []);
+});
+
+test('sequence commit failure exposes no frame to the transport', t => {
+  /** @type {any} */
+  let state = {
+    version: 2,
+    refs: {},
+    publications: {},
+    sessions: {
+      destination: {
+        durable: true,
+        queue: ['00'],
+        queueSequences: [''],
+        nextDelivery: '0',
+      },
+    },
+  };
+  let fail = true;
+  const store = {
+    getState: () => state,
+    setState: next => {
+      if (fail && next.sessions.destination.queueSequences[0] === '1') {
+        throw Error('injected sequence commit failure');
+      }
+      state = JSON.parse(JSON.stringify(next));
+    },
+  };
+  const sent = [];
+  const adapter = {
+    durable: true,
+    send: (_bytes, sequence) => {
+      sent.push(sequence);
+      return true;
+    },
+  };
+  const hub = makeOcapnHub({ codec: syrupCodec, store });
+  t.throws(() => hub.attachSession('destination', adapter), {
+    message: /sequence commit failure/,
+  });
+  t.deepEqual(sent, []);
+  t.deepEqual(state.sessions.destination.queueSequences, ['']);
+  fail = false;
+  makeOcapnHub({ codec: syrupCodec, store }).attachSession(
+    'destination',
+    adapter,
+  );
+  t.deepEqual(sent, ['1']);
+});

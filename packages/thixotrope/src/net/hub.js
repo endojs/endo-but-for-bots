@@ -830,6 +830,15 @@ export const makeOcapnHub = ({
 
   // --- outbound ---
 
+  /** @param {any} session */
+  const prepareOutboxHead = session => {
+    if (session.attached && session.queueSequences[0] === '') {
+      session.nextDelivery += 1n;
+      session.queueSequences[0] = String(session.nextDelivery);
+      dirty = true;
+    }
+  };
+
   /**
    * Hand committed frame bytes to a session: send if attached, queue
    * durably if the session will return, drop loudly otherwise. Tables
@@ -844,7 +853,9 @@ export const makeOcapnHub = ({
       session.queue.push(encodeHex(bytes));
       session.queueSequences.push('');
       dirty = true;
-      persist();
+      // Attached outboxes commit the frame together with its replay sequence
+      // before sending. Detached outboxes still need an immediate commit.
+      if (!session.attached) persist();
       flushOutbox(sessionKey);
       if (
         !session.attached &&
@@ -866,16 +877,12 @@ export const makeOcapnHub = ({
     session.flushing = true;
     try {
       while (session.queue.length > 0 && session.attached) {
-        // Retry a failed table commit before exposing any of its effects.
-        persist();
         // The destination journals the stable sequence with the bytes. A
         // crash after send but before removal resends the same sequence.
-        if (session.queueSequences[0] === '') {
-          session.nextDelivery += 1n;
-          session.queueSequences[0] = String(session.nextDelivery);
-          dirty = true;
-          persist();
-        }
+        prepareOutboxHead(session);
+        // Also commits removals accepted by the preceding iteration. Until
+        // this succeeds, no new frame may escape and replay retains ownership.
+        persist();
         const accepted = session.send(
           decodeHex(session.queue[0]),
           session.queueSequences[0],
@@ -892,10 +899,12 @@ export const makeOcapnHub = ({
         session.queue.shift();
         session.queueSequences.shift();
         dirty = true;
-        persist();
       }
     } finally {
       session.flushing = false;
+      // One final commit releases the accepted tail. A crash before it merely
+      // replays stable sequences already owned by the receiving adapter.
+      persist();
     }
   }
 
@@ -1981,6 +1990,9 @@ export const makeOcapnHub = ({
         session.queueSequences.push(...sequences);
         deliveryDepth -= 1;
       }
+      // Withdrawals are now in their final order. Commit the first replay
+      // identity with the queued batch, rather than in another replacement.
+      prepareOutboxHead(session);
       persist();
       for (const key of sessions.keys()) flushOutbox(key);
       return harden({
@@ -2022,6 +2034,12 @@ export const makeOcapnHub = ({
           }
           // Commit source watermark, reference changes, and every outgoing
           // frame together before any destination can observe the delivery.
+          // Include each attached destination's head sequence in that same
+          // commit. Leave tails unassigned so gift-withdrawal ordering survives
+          // a blocked adapter and subsequent reattachment.
+          for (const destination of sessions.values()) {
+            prepareOutboxHead(destination);
+          }
           persist();
           for (const key of sessions.keys()) flushOutbox(key);
         },
