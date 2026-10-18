@@ -10,6 +10,8 @@ together with proposals that remain exploratory.
 change and the measured latency breakdown motivating it.
 The [mail performance plan](mail-performance-plan.md) tracks implementation and experiments across
 subscriptions, persistence, vat placement, and runtime overhead.
+[Fine-grained colocated mail latency](mail-latency-colocated.md) breaks a newly measured 419 ms send
+into filesystem syscalls, VM phases, host serialization, and concurrent work.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing

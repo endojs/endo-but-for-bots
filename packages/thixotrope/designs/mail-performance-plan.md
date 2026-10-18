@@ -112,6 +112,8 @@ An earlier colocated variant had an 8,160 ms outlier with 304 writes and extra w
 The original bridge had a 19,182 ms outlier, and the pushed-head variant had a 2,099 ms outlier.
 All of those samples remain in the results rather than being discarded as warm-up.
 The provisional 50–100 ms target is not met.
+The subsequent [fine-grained capture](mail-latency-colocated.md) partitions a fresh 419 ms send and
+identifies a 173 ms remote contact lookup that can be replaced with the already pushed reference.
 
 ## Validation of the first changes
 
