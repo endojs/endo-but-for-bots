@@ -1,6 +1,6 @@
 --- a/rust/thixotrope-ironhorse-worker/src/main.rs
 +++ b/rust/thixotrope-ironhorse-worker/src/main.rs
-@@ -117,0 +118,11 @@
+@@ -120,0 +121,11 @@
 +
 +fn mail_trace_start() -> (std::time::Instant, f64) {
 +    (std::time::Instant::now(), std::time::SystemTime::now()
@@ -12,26 +12,27 @@
 +        "phase":phase, "request":request, "start":started.1, "ms":duration_ms}));
 +}
 +
-@@ -118,0 +130,3 @@
-+    let request = if source.starts_with("thixotropeDispatch(") { "dispatch" }
-+        else if source == "JSON.stringify(thixotropeTakeOutbound())" { "drain" } else { "other" };
+@@ -121,0 +133,3 @@
++    let extracting = source == "JSON.stringify(thixotropeTakeOutbound())";
++    let request = if source.starts_with("thixotropeDispatch(") || extracting { "deliver" } else { "other" };
 +    let compile_started = mail_trace_start();
-@@ -174,0 +189,2 @@
-+    mail_trace_end("compile-and-relink", request, compile_started);
+@@ -177,0 +192,2 @@
++    mail_trace_end(if extracting { "extraction-compilation" } else { "compile-and-relink" }, request, compile_started);
 +    let run_started = mail_trace_start();
-@@ -175,0 +192 @@
-+    mail_trace_end("execution-and-jobs", request, run_started);
-@@ -181 +198 @@
--    sweep_and_notify(m, budget)?;
-+    sweep_and_notify(m, budget, request)?;
-@@ -214 +231 @@
+@@ -178,0 +195 @@
++    mail_trace_end(if extracting { "outbound-extraction" } else { "execution-and-jobs" }, request, run_started);
+@@ -188 +205,2 @@
+-    sweep_and_notify(session.machine_mut(), budget)?;
++    let request = if source.starts_with("thixotropeDispatch(") { "deliver" } else { "other" };
++    sweep_and_notify(session.machine_mut(), budget, request)?;
+@@ -240 +258 @@
 -fn sweep_and_notify(m: &mut Interp, budget: u64) -> Result<(), String> {
 +fn sweep_and_notify(m: &mut Interp, budget: u64, request: &str) -> Result<(), String> {
-@@ -216,0 +234 @@
+@@ -242,0 +261 @@
 +        let gc_started = mail_trace_start();
-@@ -218,0 +237 @@
+@@ -244,0 +264 @@
 +        mail_trace_end("garbage-collection", request, gc_started);
-@@ -234,0 +254 @@
+@@ -260,0 +281 @@
 +        let finalize_started = mail_trace_start();
-@@ -235,0 +256 @@
+@@ -261,0 +283 @@
 +        mail_trace_end("finalizer-callbacks", request, finalize_started);

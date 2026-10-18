@@ -33,8 +33,9 @@ if not any(e['kind'] == 'vm' for e in active_events):
 files = {'hub': 'Hub state', 'worker-journal': 'Worker journal',
          'worker-tables': 'Worker tables', 'session-store': 'Session store', 'other': 'Other files'}
 phases = {'compile-and-relink': 'Compile / relink', 'execution-and-jobs': 'Execute / jobs',
-          'garbage-collection': 'GC', 'finalizer-callbacks': 'Finalizers'}
-requests = {'dispatch': 'Dispatch', 'drain': 'Outbound drain', 'other': 'Other evaluation'}
+          'garbage-collection': 'GC', 'finalizer-callbacks': 'Finalizers', 'extraction-compilation': 'Extraction compile',
+          'outbound-extraction': 'Extract frames'}
+requests = {'deliver': 'Native delivery', 'dispatch': 'Dispatch', 'drain': 'Outbound drain', 'other': 'Other evaluation'}
 ops = {'file-fsync': 'File fsync', 'directory-fsync': 'Directory fsync', 'writeFile': 'Write bytes',
        'open': 'Open', 'close': 'Close', 'rename': 'Rename', 'rm': 'Remove scratch'}
 root_colors = {'Filesystem only': '#2563eb', 'VM only': '#7c3aed',
@@ -157,7 +158,7 @@ def arc(begin, ms, inner, outer, color, label):
     d = f'M {point(outer,a)} A {outer},{outer} 0 {large} 1 {point(outer,b)} L {point(inner,b)} A {inner},{inner} 0 {large} 0 {point(inner,a)} Z'
     parts.append(f'<path d="{d}" fill="{color}" stroke="#f8fafc" stroke-width="1"><title>{html.escape(label)}: {ms:.3f} ms ({ms/total*100:.2f}%)</title></path>')
     return (a+b)/2
-text(44, 54, 'Where the ~400 ms goes', 32, weight='650')
+text(44, 54, 'Where the mail time goes', 32, weight='650')
 text(44, 86, f'Colocated mailbox · fresh measured send · trial {window["trial"]} · median of {len(windows)} instrumented sends', 17, '#64748b')
 text(44, 114, f'Contact lookup {stage_totals["contact-lookup"]:.1f} ms → Send / notification {stage_totals["send-and-notify"]:.1f} ms', 17, '#64748b')
 order = [k for k in root_colors if k in roots]

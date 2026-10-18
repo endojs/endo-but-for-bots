@@ -136,12 +136,15 @@ export const makeMailProfile = (powers, destination, workerBinary) => {
               const message = JSON.parse(text);
               request = {
                 start: trace.clock(),
-                name: message.source?.startsWith('thixotropeDispatch(')
-                  ? 'dispatch'
-                  : message.source ===
-                      'JSON.stringify(thixotropeTakeOutbound())'
-                    ? 'drain'
-                    : message.op,
+                name:
+                  message.op === 'deliver'
+                    ? 'deliver'
+                    : message.source?.startsWith('thixotropeDispatch(')
+                      ? 'dispatch'
+                      : message.source ===
+                          'JSON.stringify(thixotropeTakeOutbound())'
+                        ? 'drain'
+                        : message.op,
               };
               stream.write(text);
             },

@@ -5,6 +5,7 @@ export default {
   ...base,
   files: [
     'test/ironhorse/scenarios.js',
+    'test/ironhorse/delivery.js',
     'test/ironhorse/reliability.js',
     'test/ironhorse/limits.js',
     'test/ironhorse/native-install.js',

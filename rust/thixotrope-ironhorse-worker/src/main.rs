@@ -115,7 +115,10 @@ impl SourceCompiler for Compiler {
     }
 }
 
-fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {
+/// Compile and execute a source unit, including its promise jobs. The caller
+/// chooses the collection boundary; outbound extraction is a trusted read that
+/// allocates only unregistered bridge temporaries, reclaimed by the next crank.
+fn run_source(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {
     let m = session.machine_mut();
     let ceiling = (m.meter_index() >> 16).saturating_add(budget);
     m.rearm_meter(
@@ -176,10 +179,33 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     if !outcome.completed {
         return Err(crank_halted(&outcome.halt));
     }
-    // Collection is deterministic and runs only after a successful crank;
-    // an exhausted or otherwise halted crank must remain a fatal failure.
-    sweep_and_notify(m, budget)?;
     Ok(outcome.result)
+}
+
+fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {
+    let result = run_source(session, source, budget)?;
+    // Never collect after a halt. Recovery replays from the last image.
+    sweep_and_notify(session.machine_mut(), budget)?;
+    Ok(result)
+}
+
+/// One host request dispatches, drains promise jobs, collects, and runs every
+/// finalizer round before taking outbound. The trusted bootstrap's outbox holds
+/// only JSON-parsed frame data: reading it cannot expose guest getters or
+/// register finalizers. Its temporary array/string need no second collection.
+/// Keep extraction's budget distinct, as it was in the two-request protocol.
+fn deliver(
+    session: &mut StoreSession,
+    source: &str,
+    budget: u64,
+    drain_budget: u64,
+) -> Result<String, String> {
+    eval(session, source, budget)?;
+    run_source(
+        session,
+        "JSON.stringify(thixotropeTakeOutbound())",
+        drain_budget,
+    )
 }
 
 /// The fatal message for a crank that did not complete. Every such crank is
@@ -439,7 +465,12 @@ fn run() -> Result<(), String> {
     }
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
-    writeln!(stdout, "{}", json!({"op":"ready"})).map_err(|e| e.to_string())?;
+    writeln!(
+        stdout,
+        "{}",
+        json!({"op":"ready", "features":["deliver-v1"]})
+    )
+    .map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -463,7 +494,24 @@ fn run() -> Result<(), String> {
                 continue;
             }
         };
-        let result = match eval(&mut session, source, budget) {
+        let delivery = request["op"] == "deliver";
+        let extraction_budget = if delivery && !request["drainBudget"].is_null() {
+            match positive_integer(&request["drainBudget"], "drainBudget") {
+                Ok(budget) => budget,
+                Err(error) => {
+                    reply(&mut stdout, json!({"op":"error", "message":error}))?;
+                    continue;
+                }
+            }
+        } else {
+            limits.crank_budget
+        };
+        let outcome = if delivery {
+            deliver(&mut session, source, budget, extraction_budget)
+        } else {
+            eval(&mut session, source, budget)
+        };
+        let result = match outcome {
             Ok(result) => result,
             Err(error) => {
                 reply(&mut stdout, json!({"op":"fatal", "message":error}))?;
@@ -893,5 +941,102 @@ mod tests {
             costly.contains("guest crank halted") && !costly.contains("cascade exceeded"),
             "{costly}"
         );
+    }
+
+    fn delivery_session() -> (StoreSession, MemoryStore) {
+        let signature = Signature::new("combined-delivery");
+        let mut store = MemoryStore::new();
+        let session = begin_store_session(Interp::new(), &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        (session, store)
+    }
+
+    const TEST_OUTBOX: &str = "globalThis.frames = []; \
+        globalThis.thixotropeTakeOutbound = () => { \
+          const result = frames; frames = []; return result; \
+        }; 0";
+
+    #[test]
+    fn combined_delivery_includes_jobs_and_finalizer_frames_before_extracting() {
+        let (mut session, _) = delivery_session();
+        let budget = test_limits().crank_budget;
+        eval(&mut session, TEST_OUTBOX, budget).unwrap();
+        eval(
+            &mut session,
+            "globalThis.registry = new FinalizationRegistry(held => { \
+            frames.push('final:' + held); \
+            Promise.resolve().then(() => frames.push('cleanup-job')); \
+          }); \
+          globalThis.dispatch = () => { \
+            frames.push('sync'); \
+            Promise.resolve().then(() => { \
+              frames.push('job'); registry.register({}, 'gone'); \
+            }); \
+          }; 0",
+            budget,
+        )
+        .unwrap();
+        let frames = deliver(&mut session, "dispatch()", budget, budget).unwrap();
+        assert_eq!(frames, r#"["sync","job","final:gone","cleanup-job"]"#);
+        assert!(!session.machine_mut().finalization_cleanup_pending());
+        assert_eq!(
+            eval(&mut session, "JSON.stringify(frames)", budget).unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn combined_delivery_completes_cleanup_cascades_and_survives_restore() {
+        let (mut session, mut store) = delivery_session();
+        let budget = test_limits().crank_budget;
+        eval(&mut session, TEST_OUTBOX, budget).unwrap();
+        eval(
+            &mut session,
+            "globalThis.rounds = 0; \
+            globalThis.registry = new FinalizationRegistry(() => { \
+              rounds += 1; frames.push(rounds); \
+              if (rounds < 6) registry.register({}, 0); \
+            }); 0",
+            budget,
+        )
+        .unwrap();
+        assert_eq!(
+            deliver(&mut session, "registry.register({}, 0)", budget, budget).unwrap(),
+            "[1,2,3,4,5,6]"
+        );
+        assert!(!session.machine_mut().finalization_cleanup_pending());
+        let signature = Signature::new("combined-delivery");
+        checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        let mut restored = resume_from_store(&store, &signature).unwrap();
+        assert_eq!(
+            deliver(&mut restored, "frames.push(++rounds)", budget, budget).unwrap(),
+            "[7]"
+        );
+    }
+
+    #[test]
+    fn combined_delivery_halts_on_an_endless_cleanup_before_extracting() {
+        let (mut session, _) = delivery_session();
+        let budget = test_limits().crank_budget;
+        eval(&mut session, TEST_OUTBOX, budget).unwrap();
+        let error = deliver(
+            &mut session,
+            "globalThis.endless = new FinalizationRegistry(() => endless.register({}, 0)); \
+             endless.register({}, 0); 0",
+            budget,
+            budget,
+        )
+        .unwrap_err();
+        assert!(error.contains("finalization cascade exceeded"), "{error}");
+    }
+
+    #[test]
+    fn combined_delivery_keeps_extraction_budget_separate() {
+        let (mut session, _) = delivery_session();
+        let budget = test_limits().crank_budget;
+        eval(&mut session, TEST_OUTBOX, budget).unwrap();
+        let error = deliver(&mut session, "frames.push('ready')", budget, 1).unwrap_err();
+        assert!(error.contains("MeterAbort"), "{error}");
     }
 }

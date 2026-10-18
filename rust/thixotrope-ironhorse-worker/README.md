@@ -6,27 +6,40 @@ XS runtime dependency. The host adapter and runnable two-guest-vat demo are in
 
 ```
 cargo build --release -p thixotrope-ironhorse-worker
-thixotrope-ironhorse-worker heap.sqlite PROFILE_DIGEST ACTIVE_LEASE_PATH boot.js worker-peer.js
+thixotrope-ironhorse-worker heap.sqlite PROFILE_DIGEST ACTIVE_LEASE_PATH LIMITS_JSON boot.js worker-peer.js
 ```
 
 For a fresh file, the runner evaluates trusted boot files and commits before
-printing `{"op":"ready"}`. For an existing file, it migrates the heap to the
-current store schema if needed, restores it, reinstalls the source compiler and
-meter, and prints the same ready record.
+printing `{"op":"ready","features":["deliver-v1"]}`.
+For an existing file, it migrates the heap to the current store schema if needed, restores it,
+reinstalls the source compiler and meter, and prints the same ready record.
 The worker binary and bootstrap must match the stored image's engine profile.
 
-Stdin and stdout carry NDJSON. An eval request has `op: "eval"`, `source`, and an
-optional `budget` in computrons. The reply is `op: "result"` with the engine's
-string rendering of the result. It is emitted only after the complete crank
-(including promise jobs) commits to SQLite. Deterministic VM halts produce
-`op: "fatal"` and exit without committing the failed crank. Storage failures
-exit without publishing a result. `op: "close"` folds the SQLite WAL before a
-successful exit; the adapter requires that success before copying an image.
+Stdin and stdout carry NDJSON.
+An eval request has `op: "eval"`, `source`, and an optional `budget` in computrons.
+It executes the source and promise jobs, then collects and runs the complete finalizer cascade.
+The reply is `op: "result"` with the engine's string rendering of the result.
 
-The NDJSON interface is a **trusted supervisor interface**, not a guest-facing
-protocol. Guests run in SES compartments supplied by the worker bootstrap. Guest
-OCapN output stays in the heap queue until a separate crank drains and commits
-it.
+A combined request has `op: "deliver"`, dispatch `source`, `budget`, and an optional
+`drainBudget` (defaulting to the crank budget).
+It performs the same dispatch, promise jobs, collection, and finalizer cascade, then executes
+`JSON.stringify(thixotropeTakeOutbound())` with the separate drain budget.
+Extraction runs after finalizer callbacks and their promise jobs, so their frames are included.
+It does not collect a second time: the trusted bootstrap's outbox contains JSON-parsed frame data,
+and extraction allocates only unregistered bridge temporaries.
+The next crank can reclaim those temporaries.
+The adapter uses this operation only when the ready record advertises `deliver-v1`.
+Pinned older binaries retain their original two-evaluation delivery schedule.
+
+Deterministic VM halts produce `op: "fatal"` and exit without checkpointing the failed crank.
+Results do not checkpoint the heap on every request.
+`op: "close"` checkpoints the heap and folds the SQLite WAL before a successful exit;
+the adapter requires that success before copying an image.
+Storage failures exit without publishing a successful close.
+
+The NDJSON interface is a **trusted supervisor interface**, not a guest-facing protocol.
+Guests run in SES compartments supplied by the worker bootstrap.
+Guest OCapN output stays in the heap queue until the combined operation extracts it.
 The adapter then releases those frames to the comms hub.
 The daemon acquires a kernel lease through `--lock-state STATE_DIRECTORY`.
 The helper reports `locked`, waits for `prepare` after host compatibility checks,
