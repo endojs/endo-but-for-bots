@@ -2,4 +2,5 @@
 '@endo/compartment-mapper': patch
 ---
 
-Compartment Mapper now captures the `URL`, `Promise`, `Proxy`, `Map`, and `Set` intrinsics when its modules initialize, so replacing those globals afterward no longer changes module location resolution, import hook construction, the fallback file URL conversions of `makeReadPowers` without a `url` power, or the CommonJS export wrapper.
+The import hooks, the CommonJS export wrapper, and the read powers from `makeReadPowers` no longer depend on the global `URL`, `Promise`, `Proxy`, `Map`, or `Set` after the module initializes, so a host that later replaces those globals does not disturb loading through these paths.
+Other paths, including `mapNodeModules`, still consult the current globals.

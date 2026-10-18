@@ -42,7 +42,7 @@ import { encodeHex } from '@endo/hex';
 const { Promise, URL } = globalThis;
 
 /** @param {undefined} _value */
-const noop = _value => {};
+const doNothing = _value => {};
 
 /**
  * @type {FileURLToPathFn}
@@ -98,7 +98,7 @@ const makeReadPowersSloppy = ({
    */
   const read = async location => {
     const promise = readMutex;
-    let release = noop;
+    let release = doNothing;
     readMutex = new Promise(resolve => {
       release = resolve;
     });

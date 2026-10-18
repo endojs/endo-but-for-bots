@@ -108,6 +108,29 @@ test.serial('node-powers read ignores a replaced Promise', async t => {
   t.true(bytes.length > 0);
 });
 
+test.serial('node-powers read ignores a replaced Function', async t => {
+  const powers = makeReadPowers({ fs, url });
+  // `read` initializes its mutex release before its first `await`.
+  const bytes = await withPoisonedGlobals(['Function'], () =>
+    powers.read(import.meta.url),
+  );
+  t.true(bytes.length > 0);
+});
+
+test.serial(
+  'node-powers serializes reads started while Promise is replaced',
+  async t => {
+    const powers = makeReadPowers({ fs, url });
+    const [first, second] = withPoisonedGlobals(['Promise'], () => [
+      powers.read(import.meta.url),
+      powers.read(import.meta.url),
+    ]);
+    const [firstBytes, secondBytes] = await Promise.all([first, second]);
+    t.true(firstBytes.length > 0);
+    t.deepEqual(secondBytes, firstBytes);
+  },
+);
+
 test.serial('getModulePaths ignores a replaced URL', async t => {
   const readPowers = /** @type {any} */ ({
     fileURLToPath: url.fileURLToPath,
