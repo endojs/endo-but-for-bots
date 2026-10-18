@@ -23,6 +23,10 @@ tester.run('no-nonrelative-ts-import', rule, {
     "import { x } from '@endo/foo.ts-utils';",
     // Declaration files are erased with the import type that names them.
     "import type { T } from 'pkg/types.d.ts';",
+    "import type { T } from 'pkg/types.d.mts';",
+    "import type { T } from 'pkg/types.d.cts';",
+    "export type { T } from 'pkg/types.d.ts';",
+    "export type * from 'pkg/types.d.ts';",
     'const p = import(`./dyn.ts`);',
   ],
   invalid: [
@@ -52,6 +56,32 @@ tester.run('no-nonrelative-ts-import', rule, {
     },
     {
       code: 'const p = import(`pkg/dyn.ts`);',
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    // Only a type-only form may name a declaration file.
+    {
+      code: "import 'pkg/types.d.ts';",
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    {
+      code: "import { x } from 'pkg/types.d.ts';",
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    {
+      code: "export * from 'pkg/types.d.mts';",
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    {
+      code: "const p = import('pkg/types.d.cts');",
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    // Absolute paths and URLs are not relative to the package either.
+    {
+      code: "import { x } from '/abs/foo.ts';",
+      errors: [{ messageId: 'nonRelativeTs' }],
+    },
+    {
+      code: "import { x } from 'file:///abs/foo.ts';",
       errors: [{ messageId: 'nonRelativeTs' }],
     },
   ],

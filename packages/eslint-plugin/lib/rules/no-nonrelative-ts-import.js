@@ -41,11 +41,13 @@ module.exports = {
       return undefined;
     };
 
-    const check = sourceNode => {
+    // A declaration file names no runtime module, so only a type-only
+    // import or export may reach one; any other form still loads it.
+    const check = (sourceNode, typeOnly = false) => {
       const value = specifierOf(sourceNode);
       if (typeof value !== 'string') return;
       if (!TS_EXTENSION.test(value)) return;
-      if (DECLARATION_EXTENSION.test(value)) return;
+      if (typeOnly && DECLARATION_EXTENSION.test(value)) return;
       if (isRelative(value)) return;
       context.report({
         node: sourceNode,
@@ -55,9 +57,11 @@ module.exports = {
     };
 
     return {
-      ImportDeclaration: node => check(node.source),
-      ExportNamedDeclaration: node => check(node.source),
-      ExportAllDeclaration: node => check(node.source),
+      ImportDeclaration: node => check(node.source, node.importKind === 'type'),
+      ExportNamedDeclaration: node =>
+        check(node.source, node.exportKind === 'type'),
+      ExportAllDeclaration: node =>
+        check(node.source, node.exportKind === 'type'),
       ImportExpression: node => check(node.source),
     };
   },
