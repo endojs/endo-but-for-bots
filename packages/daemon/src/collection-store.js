@@ -177,6 +177,55 @@ export const makeCollectionStoreMaker = ({
   } = persistence;
 
   /**
+   * The persisted entries of a sorted store whose key ranks fall within both
+   * a pattern's rank cover and the optional scan bounds, in rank order.
+   * SQLite seeks a half-open interval that covers the bounds, and the exact
+   * inclusive/exclusive comparisons happen here, since no fixed suffix
+   * yields the immediate successor of an arbitrary rank. Callers must still
+   * match each decoded key, because rank covers are conservative.
+   *
+   * @param {FormulaNumber} formulaNumber
+   * @param {Pattern} pattern
+   * @param {{start?: Passable, end?: Passable, startInclusive?: boolean, endInclusive?: boolean} | undefined} bounds
+   */
+  const listScanCandidates = (formulaNumber, pattern, bounds) => {
+    mustMatch(pattern, M.pattern());
+    if (bounds !== undefined) {
+      mustMatch(bounds, ScanBoundsShape);
+    }
+    const [coverStart, coverEnd] = getRankCover(pattern, encodeKeyRank);
+    const {
+      start,
+      end,
+      startInclusive = true,
+      endInclusive = true,
+    } = bounds ?? {};
+    const startRank =
+      start === undefined ? undefined : encodeKeyRank(harden(start));
+    const endRank = end === undefined ? undefined : encodeKeyRank(harden(end));
+    const lowRank =
+      startRank !== undefined && startRank > coverStart
+        ? startRank
+        : coverStart;
+    // Every rank at or below `endRank` sorts strictly below this bound.
+    const endBound =
+      endRank === undefined || !endInclusive ? endRank : `${endRank}\u0001`;
+    const highRank =
+      endBound !== undefined && endBound < coverEnd ? endBound : coverEnd;
+    return listCollectionEntriesInRange(
+      formulaNumber,
+      lowRank,
+      highRank,
+    ).filter(
+      ({ keyRank }) =>
+        (startRank === undefined ||
+          (startInclusive ? keyRank >= startRank : keyRank > startRank)) &&
+        (endRank === undefined ||
+          (endInclusive ? keyRank <= endRank : keyRank < endRank)),
+    );
+  };
+
+  /**
    * The distinct local slot ids retained by a store's persisted entries.
    * Used to seed formula-graph retention edges at daemon start, before the
    * store exo is lazily constructed, so a stored remotable is not swept.
@@ -366,45 +415,11 @@ export const makeCollectionStoreMaker = ({
       unmarshalFromCapData({ body: entry.valueBody, slots: entry.valueSlots });
 
     /**
-     * Intersect a pattern rank cover with optional inclusive/exclusive bounds,
-     * then let SQLite seek the resulting half-open interval. Exact matching is
-     * still necessary because rank covers are intentionally conservative.
-     *
      * @param {Pattern} [pattern]
      * @param {{start?: Passable, end?: Passable, startInclusive?: boolean, endInclusive?: boolean} | undefined} bounds
      */
     const scan = async (pattern = M.any(), bounds = undefined) => {
-      mustMatch(pattern, M.pattern());
-      if (bounds !== undefined) {
-        mustMatch(bounds, ScanBoundsShape);
-      }
-      const [coverStart, coverEnd] = getRankCover(pattern, encodeKeyRank);
-      const {
-        start,
-        end,
-        startInclusive = true,
-        endInclusive = true,
-      } = bounds ?? {};
-      const startRank =
-        start === undefined
-          ? coverStart
-          : (() => {
-              const rank = rankOf(start);
-              if (rank < coverStart) return coverStart;
-              return startInclusive ? rank : `${rank}~`;
-            })();
-      const endRank =
-        end === undefined
-          ? coverEnd
-          : (() => {
-              const rank = endInclusive ? `${rankOf(end)}~` : rankOf(end);
-              return rank < coverEnd ? rank : coverEnd;
-            })();
-      const candidates = listCollectionEntriesInRange(
-        formulaNumber,
-        startRank,
-        endRank,
-      );
+      const candidates = listScanCandidates(formulaNumber, pattern, bounds);
       const entries = await Promise.all(
         candidates.map(async entry => {
           const key = await readKey({
@@ -680,37 +695,7 @@ export const makeCollectionStoreMaker = ({
      * @param {{start?: Passable, end?: Passable, startInclusive?: boolean, endInclusive?: boolean} | undefined} bounds
      */
     const scan = async (pattern = M.any(), bounds = undefined) => {
-      mustMatch(pattern, M.pattern());
-      if (bounds !== undefined) {
-        mustMatch(bounds, ScanBoundsShape);
-      }
-      const [coverStart, coverEnd] = getRankCover(pattern, encodeKeyRank);
-      const {
-        start,
-        end,
-        startInclusive = true,
-        endInclusive = true,
-      } = bounds ?? {};
-      const startRank =
-        start === undefined
-          ? coverStart
-          : (() => {
-              const rank = rankOf(start);
-              if (rank < coverStart) return coverStart;
-              return startInclusive ? rank : `${rank}~`;
-            })();
-      const endRank =
-        end === undefined
-          ? coverEnd
-          : (() => {
-              const rank = endInclusive ? `${rankOf(end)}~` : rankOf(end);
-              return rank < coverEnd ? rank : coverEnd;
-            })();
-      const candidates = listCollectionEntriesInRange(
-        formulaNumber,
-        startRank,
-        endRank,
-      );
+      const candidates = listScanCandidates(formulaNumber, pattern, bounds);
       const entries = await Promise.all(
         candidates.map(async entry => {
           const key = await readKey({

@@ -7657,6 +7657,43 @@ test('SortedMapStore orders arbitrary keys and filters bounded pattern scans', a
   t.false(detail.includes('SCAN collection_store_entry'));
 });
 
+test('SortedMapStore and SortedSetStore apply exact scan bounds', async t => {
+  const { host } = await prepareHost(t);
+  const map = await E(host).makeSortedMapStore('sorted-map');
+  const set = await E(host).makeSortedSetStore('sorted-set');
+  // Each `*a` key sorts immediately after its prefix, between the prefix's
+  // rank and any fixed-suffix approximation of that rank's successor.
+  for (const key of ['alpha', 'beta', 'betaa', 'gamma', 'gammaa']) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(map).init(key, key.toUpperCase());
+    // eslint-disable-next-line no-await-in-loop
+    await E(set).add(key);
+  }
+  await E(map).init(3n, 'THREE');
+
+  for (const store of [map, set]) {
+    t.deepEqual(
+      // eslint-disable-next-line no-await-in-loop
+      await E(store).keys(M.string(), {
+        start: 'beta',
+        startInclusive: false,
+      }),
+      ['betaa', 'gamma', 'gammaa'],
+    );
+    t.deepEqual(
+      // eslint-disable-next-line no-await-in-loop
+      await E(store).keys(M.string(), { start: 'beta', end: 'gamma' }),
+      ['beta', 'betaa', 'gamma'],
+    );
+  }
+  // A start bound below the pattern's rank cover is clamped to the cover.
+  t.deepEqual(await E(map).values(M.string(), { start: 0n, end: 'alpha' }), [
+    'ALPHA',
+  ]);
+  t.deepEqual(await E(map).keys(M.any(), { end: 3n }), [3n]);
+  await t.throwsAsync(() => E(map).keys(M.any(), { startInclusive: 'yes' }));
+});
+
 test('SortedMapStore persists its rank-ordered scans across restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
   const map = await E(host).makeSortedMapStore('sorted-map');
