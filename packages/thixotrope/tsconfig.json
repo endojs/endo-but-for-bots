@@ -5,6 +5,7 @@
     "bin/**/*.js",
     "examples/**/*.js",
     "src/**/*.js",
+    "src/mail/types.ts",
     "resources/**/*.js",
     "test"
   ]

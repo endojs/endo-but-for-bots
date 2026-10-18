@@ -447,11 +447,13 @@ thix send ./alice bob 'Try this counter' counter
 thix mail ./bob
 ```
 
-The last argument to `send` selects one capability from Alice's inventory.
+The CLI resolves contact names and inventory keys at its edge.
+Omit the inventory arguments for text-only mail, or append several keys; use
+`proposed-name=inventory-key` when the suggested name should differ from the key.
 For example, install the counter example; its root is in Alice's inventory under `counter`.
-Each message carries exactly one capability.
-Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
+Bob's mailbox view supports `r` to refresh, `take <id> <content-index> <inventory-key>`,
 `discard <id>`, and `q` to disconnect.
+For the example above, `take 1 1 shared` keeps the value at content index 1 under `shared`.
 `inbox`, `outbox`, and `contacts` provide the same descriptions as JSON for scripts.
 The administration keeps no mail or alarm methods: `thix` asks it for the selected workspace's
 address book with `getAddressBook()`, for the capability under an inventory key with
@@ -460,7 +462,7 @@ address book with `getAddressBook()`, for the capability under an inventory key 
 on a control connection does the same.
 A reference such a script exports itself and keeps in the inventory breaks when its connection
 closes.
-`take` copies a message's capability into the inventory; `discard` releases only the mailbox's reference.
+`take` copies the selected value into the inventory; `discard` releases only the mailbox's reference.
 The view renders descriptions rather than the capabilities and creates no guest subscriptions.
 Message text and contact labels are remote-controlled, so every command that prints them
 escapes terminal control characters, including the C1 controls and Unicode line separators
@@ -514,7 +516,61 @@ An interrupted introduction command can have an uncertain outcome; inspect `cont
 There, the daemon owns the mailbox, a message names several capabilities by pet name and stores
 them by formula identifier, and the pet store resolves names when the message is sent.
 Here, the mailbox lives in a guest vat, records retain the contact object and resolve labels
-only when read, and each message carries exactly one capability.
+only when displayed by the CLI or UI.
+A message contains ordered text and zero or more explicitly selected remotable values.
+
+### Mail API
+
+The mail API takes a contact reference, without resolving names or paths:
+
+```js
+const contact = inventory.get('contacts').get('bob');
+E(mail).send(contact, ['Hello']);
+E(mail).send(contact, [
+  'Try ',
+  { name: 'counter', value: counter },
+  ' and compare it with ',
+  { name: 'counter', value: anotherCounter },
+]);
+```
+
+A `NamedCapDescriptor` is `{ name: string, value: RemotableObject }`.
+The name is a suggestion for the recipient, never a destination or an inventory assignment.
+The array preserves order and may contain up to 64 parts; each string is at most 4,096
+characters, and each suggested name has 1–128 characters.
+`value` must be remotable; promises and copied data are rejected.
+`inbox()` and `outbox()` retain contact references in `from` and `to`.
+Their content arrays describe value parts as `{ name }`, without granting the value to a view.
+`take(id, index)` returns the value at that position in the received content array.
+It rejects text positions and out-of-range indices; repeated names are unambiguous by position.
+The caller decides whether and where to keep that value.
+Renaming or removing an address-book label does not change a held contact reference.
+
+### Confined browser mail
+
+With a supervisor already running, open the private URL printed by:
+
+```sh
+yarn workspace @endo/thixotrope mail-ui /absolute/path/to/state
+# Optionally grant inventory values that the composer may attach:
+yarn workspace @endo/thixotrope mail-ui --workspace default --port 8123 /absolute/path/to/state counter
+```
+
+The UI has Inbox, Sent, and Compose, with explicit refresh and plain-text rendering.
+Contacts are introduced with the CLI; the composer lists contacts that are ready.
+Messages may be text only or include one of the explicitly granted values.
+The grant values are captured at launch, so later inventory edits cannot widen them.
+The component runs in an SES compartment with only Preact hooks and a narrow mail facade,
+through `@endo/preact-container`'s confined renderer.
+The trusted browser shell owns DOM access and requests; the component receives neither.
+A local HTTP bridge holds the control connection and exposes only mail descriptions and sends.
+It binds loopback, requires the launch secret for every API request, refuses other origins and
+hostnames, and sends a restrictive Content Security Policy.
+The URL's fragment holds that secret; keep the URL private.
+Ctrl-C closes the bridge and its control connection, leaving the supervisor running.
+
+This prototype changes persisted mail factory implementations and message records.
+Use a fresh state directory for the new API; existing guest heaps retain their old code.
 
 ## Ironhorse demos and CI tests
 

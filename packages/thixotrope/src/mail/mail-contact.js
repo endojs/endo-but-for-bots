@@ -8,6 +8,7 @@ import { M } from '@endo/patterns';
 import { describeError } from '../describe-error.js';
 import { isRemotable } from '../is-remotable.js';
 
+/** @import { MailContent } from './types.js' */
 /** @import { Mailbox } from './mailbox.js' */
 
 /**
@@ -28,10 +29,16 @@ import { isRemotable } from '../is-remotable.js';
 export const makeMailContact = provideMailbox => {
   // Shipped by source: the guards travel with the factory, defined here.
   const CapabilityShape = M.remotable('capability');
-  const ContactInboxI = M.interface('ContactInbox', {
-    deliver: M.call(M.bigint(), M.string(), CapabilityShape).returns(
-      M.promise(),
+  const NameShape = M.and(M.string({ stringLengthLimit: 128 }), M.not(''));
+  const ContentShape = M.arrayOf(
+    M.or(
+      M.string({ stringLengthLimit: 4096 }),
+      M.splitRecord({ name: NameShape, value: M.remotable('capability') }, {}),
     ),
+    { arrayLengthLimit: 64 },
+  );
+  const ContactInboxI = M.interface('ContactInbox', {
+    deliver: M.call(M.bigint(), ContentShape).returns(M.promise()),
   });
   const MailboxInvitationI = M.interface('MailboxInvitation', {
     help: M.call().returns(M.string()),
@@ -45,7 +52,7 @@ export const makeMailContact = provideMailbox => {
     invite: M.call().optional(M.raw()).returns(M.remotable('invitation')),
     revokeInvitation: M.call().returns(M.boolean()),
     accept: M.call(CapabilityShape).returns(M.boolean()),
-    deliver: M.call(M.string(), CapabilityShape).returns(M.promise()),
+    deliver: M.call(ContentShape).returns(M.promise()),
   });
 
   /** @type {'pending' | 'ready' | 'failed' | 'cancelled'} */
@@ -66,15 +73,14 @@ export const makeMailContact = provideMailbox => {
   const receiver = makeExo('ContactInbox', ContactInboxI, {
     /**
      * @param {bigint} sequence
-     * @param {string} text
-     * @param {any} capability
+     * @param {MailContent} content
      */
-    deliver: (sequence, text, capability) =>
-      E(provideMailbox()).receive(contact, sequence, text, capability),
+    deliver: (sequence, content) =>
+      E(provideMailbox()).receive(contact, sequence, content),
   });
   const contact = makeExo('MailContact', MailContactI, {
     help: () =>
-      'A local contact for one correspondent: status(), invite(onRedeemed?), accept(invitation), revokeInvitation(), deliver(text, capability).',
+      'A local contact for one correspondent: status(), invite(onRedeemed?), accept(invitation), revokeInvitation(), deliver(content).',
     status: () => harden({ status, error }),
     /**
      * Refuse now if an introduction is already open or complete, so a caller
@@ -156,12 +162,12 @@ export const makeMailContact = provideMailbox => {
       remote = attempt;
       return true;
     },
-    deliver: (text, capability) => {
+    deliver: content => {
       status === 'ready' || Fail`Contact is not ready`;
       // Sequence ownership follows the reusable contact, not any one sending
       // mailbox. Several local mailboxes may share this contact.
       nextSent += 1n;
-      return E(remote).deliver(nextSent, text, capability);
+      return E(remote).deliver(nextSent, content);
     },
   });
   return contact;

@@ -46,7 +46,8 @@
     "test:ironhorse": "ava --config ava.ironhorse.config.mjs",
     "demo:ironhorse:counter": "node scripts/ironhorse-demo.mjs counter",
     "demo:ironhorse:promise": "node scripts/ironhorse-demo.mjs promise",
-    "thix": "node bin/thix.js"
+    "thix": "node bin/thix.js",
+    "mail-ui": "node scripts/mail-ui.mjs"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -63,17 +64,20 @@
     "@endo/ocapn": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@endo/preact-container": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
-    "@noble/hashes": "^2.4.0"
+    "@noble/hashes": "^2.4.0",
+    "preact": "^10.29.8",
+    "ses": "workspace:^"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
+    "esbuild": "^0.28.2",
     "eslint": "catalog:dev",
-    "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
   "files": [

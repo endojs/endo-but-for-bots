@@ -7,6 +7,7 @@ import { M } from '@endo/patterns';
 
 import { describeError } from '../describe-error.js';
 
+/** @import { MailContent } from './types.js' */
 /** @import { ObservableMap } from '../observable-map.js' */
 
 /**
@@ -25,21 +26,23 @@ import { describeError } from '../describe-error.js';
 export const makeMailbox = makeObservableMap => {
   // Shipped by source: the guards travel with the factory, defined here.
   const CapabilityShape = M.remotable('capability');
-  const TextShape = M.string({ stringLengthLimit: 4096 });
+  const NameShape = M.and(M.string({ stringLengthLimit: 128 }), M.not(''));
+  const ContentShape = M.arrayOf(
+    M.or(
+      M.string({ stringLengthLimit: 4096 }),
+      M.splitRecord({ name: NameShape, value: M.remotable('capability') }, {}),
+    ),
+    { arrayLengthLimit: 64 },
+  );
   const MailboxI = M.interface('Mailbox', {
     help: M.call().returns(M.string()),
-    receive: M.call(
-      CapabilityShape,
-      M.bigint(),
-      TextShape,
-      CapabilityShape,
-    ).returns(M.boolean()),
-    send: M.call(CapabilityShape, TextShape, CapabilityShape).returns(
-      M.string(),
+    receive: M.call(CapabilityShape, M.bigint(), ContentShape).returns(
+      M.boolean(),
     ),
+    send: M.call(CapabilityShape, ContentShape).returns(M.string()),
     inbox: M.call().returns(M.arrayOf(M.record())),
     outbox: M.call().returns(M.arrayOf(M.record())),
-    take: M.call(M.string()).returns(CapabilityShape),
+    take: M.call(M.string(), M.number()).returns(CapabilityShape),
     discard: M.call(M.string()).returns(M.boolean()),
     // Listeners are the observable map's to take, plain or remote.
     subscribeInbox: M.call(M.raw())
@@ -59,32 +62,34 @@ export const makeMailbox = makeObservableMap => {
   let nextSent = 0n;
   /** @type {Map<any, bigint>} */
   const accepted = new Map();
+  /** @param {MailContent} content */
+  const describeContent = content =>
+    harden(
+      content.map(part =>
+        typeof part === 'string' ? part : { name: part.name },
+      ),
+    );
   return makeExo('Mailbox', MailboxI, {
     help: () =>
-      'send(contact, text, capability), receive(contact, sequence, text, capability), inbox(), outbox(), take(id), discard(id), subscribeInbox(listener, ephemeral?), subscribeOutbox(listener, ephemeral?).',
+      'send(contact, content), receive(contact, sequence, content), inbox(), outbox(), take(id, index), discard(id), subscribeInbox(listener, ephemeral?), subscribeOutbox(listener, ephemeral?).',
     /**
      * @param {any} contact
      * @param {bigint} sequence
-     * @param {string} text
-     * @param {any} capability
+     * @param {MailContent} content
      */
-    receive: (contact, sequence, text, capability) => {
+    receive: (contact, sequence, content) => {
       sequence >= 1n || Fail`Invalid message sequence`;
       if (sequence <= (accepted.get(contact) ?? 0n)) return true;
       nextReceived += 1n;
-      inbox.set(
-        String(nextReceived),
-        harden({ from: contact, text, capability }),
-      );
+      inbox.set(String(nextReceived), harden({ from: contact, content }));
       accepted.set(contact, sequence);
       return true;
     },
     /**
      * @param {any} contact
-     * @param {string} text
-     * @param {any} capability
+     * @param {MailContent} content
      */
-    send: (contact, text, capability) => {
+    send: (contact, content) => {
       nextSent += 1n;
       const id = String(nextSent);
       /**
@@ -92,12 +97,21 @@ export const makeMailbox = makeObservableMap => {
        * @param {string | undefined} error
        */
       const record = (status, error) =>
-        outbox.set(id, harden({ id, to: contact, text, status, error }));
+        outbox.set(
+          id,
+          harden({
+            id,
+            to: contact,
+            content: describeContent(content),
+            status,
+            error,
+          }),
+        );
       record('sending', undefined);
       // Exactly one application invocation. The durable node outbox owns
       // delivery retries after admission; a reconnect never invokes send again.
       E(contact)
-        .deliver(text, capability)
+        .deliver(content)
         .then(
           () => record('delivered', undefined),
           reason => record('failed', describeError(reason)),
@@ -106,18 +120,26 @@ export const makeMailbox = makeObservableMap => {
     },
     inbox: () =>
       harden(
-        [...inbox.entries()].map(([id, { from, text }]) => ({
+        [...inbox.entries()].map(([id, { from, content }]) => ({
           id,
           from,
-          text,
+          content: describeContent(content),
         })),
       ),
     outbox: () => harden([...outbox.entries()].map(([, message]) => message)),
-    /** @param {string} id */
-    take: id => {
+    /** @param {string} id @param {number} index content array position */
+    take: (id, index) => {
+      /** @type {{content: MailContent} | undefined} */
       const message = inbox.get(id);
-      message !== undefined || Fail`Unknown message`;
-      return message.capability;
+      if (message === undefined) throw Fail`Unknown message`;
+      (Number.isInteger(index) &&
+        index >= 0 &&
+        index < message.content.length) ||
+        Fail`Invalid content index`;
+      const part = message.content[index];
+      if (typeof part === 'string')
+        throw Fail`Content part is text, not a capability`;
+      return part.value;
     },
     /** @param {string} id */
     discard: id => inbox.delete(id),

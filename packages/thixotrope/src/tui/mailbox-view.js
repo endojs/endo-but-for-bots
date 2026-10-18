@@ -29,14 +29,14 @@ export const showMailbox = async (session, logging, client) => {
   try {
     await refresh();
     logging.log(
-      'r: refresh; take <id> <inventory-key>; discard <id>; q: close',
+      'r: refresh; take <id> <content-index> <inventory-key>; discard <id>; q: close',
     );
     for await (const line of session.lines()) {
-      const [command, id, key] = line.trim().split(/\s+/);
+      const [command, id, index, key] = line.trim().split(/\s+/);
       if (command === 'q') break;
       try {
         if (command === 'take') {
-          await mail.take(id, key);
+          await mail.take(id, Number(index), key);
         } else if (command === 'discard') {
           await mail.discard(id);
         } else if (command !== 'r') {

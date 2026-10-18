@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-16 |
-| **Updated** | 2026-10-01 |
+| **Updated** | 2026-10-18 |
 | **Author** | Aaron Davis (prompted) |
 | **Status** | In Progress |
 
@@ -449,9 +449,14 @@ A separate address book in each workspace resolves names through the user's obse
 inventory entry by convention.
 The same identity can be kept in an ordinary variable and passed to `mailbox.send` without naming it.
 Incoming facets bind the local sender identity; peers cannot supply their own display labels.
-Inbox and outbox records retain identities, while the address book resolves current labels for the UI.
+Inbox and outbox records retain contact references; only CLI and UI adapters resolve display labels.
 Renaming a contact therefore does not rewrite mailbox records or replace remote references.
-An offer carries one explicitly selected capability; accepting it may retain it in the user's inventory.
+`E(mail).send(contact, content)` takes a contact reference and an ordered array of strings or
+`{ name, value }` descriptors, where `value` is remotable and `name` is a suggested local name.
+Text-only mail and multiple values are supported; suggested names never assign inventory keys.
+Listings preserve text and describe values by name, while `take(id, index)` retrieves a selected
+value by its position in the content array.
+The recipient decides whether and where to retain it.
 The recipient's terminal renders descriptions, a representation for a text view whose session ends
 with the connection rather than a confinement, and disconnects when closed.
 The node outbox handles delivery retries after admission; mailbox code does not resend on reconnect.

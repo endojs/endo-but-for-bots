@@ -140,8 +140,17 @@ try {
           'revoke-invite': ([text]) => mail.revokeInvitation(text),
           invite: ([name]) => mail.invite(name),
           accept: ([name, text]) => mail.accept(name, text),
-          send: ([name, text, key]) => mail.send(name, text, key),
-          take: ([id, key]) => mail.take(id, key),
+          send: ([name, text, ...keys]) =>
+            mail.send(name, [
+              text,
+              ...keys.map(key => {
+                const equals = key.indexOf('=');
+                return equals < 0
+                  ? { name: key, key }
+                  : { name: key.slice(0, equals), key: key.slice(equals + 1) };
+              }),
+            ]),
+          take: ([id, index, key]) => mail.take(id, Number(index), key),
           discard: ([id]) => mail.discard(id),
           contacts: () => mail.contacts(),
           inbox: () => mail.inbox(),

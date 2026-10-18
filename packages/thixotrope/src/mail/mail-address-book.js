@@ -5,9 +5,9 @@ import { E } from '@endo/far';
 import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
-import { isRemotable } from '../is-remotable.js';
 import { HEX128_PATTERN } from '../random-id.js';
 
+/** @import { MailContent } from './types.js' */
 /** @import { Mailbox } from './mailbox.js' */
 /** @import { MailContact } from './mail-contact.js' */
 /** @import { MailIntroductions } from './introductions.js' */
@@ -46,19 +46,24 @@ export const makeMailAddressBook = (
   introductions,
 ) => {
   // Shipped by source: the guards travel with the factory, defined here.
-  const NameShape = M.string({ stringLengthLimit: 128 });
+  const NameShape = M.and(M.string({ stringLengthLimit: 128 }), M.not(''));
+  const ContentShape = M.arrayOf(
+    M.or(
+      M.string({ stringLengthLimit: 4096 }),
+      M.splitRecord({ name: NameShape, value: M.remotable('capability') }, {}),
+    ),
+    { arrayLengthLimit: 64 },
+  );
   const MailAddressBookI = M.interface('MailAddressBook', {
     help: M.call().returns(M.string()),
     invite: M.call(NameShape).returns(M.promise()),
     accept: M.call(NameShape, M.string()).returns(M.promise()),
     revokeInvitation: M.call(M.string()).returns(M.promise()),
     contacts: M.call().returns(M.promise()),
-    // The capability is whatever the user keeps under the key: checked, not
-    // hardened on the way to being refused.
-    send: M.call(NameShape, M.string(), M.raw()).returns(M.promise()),
+    send: M.call(M.remotable('contact'), ContentShape).returns(M.promise()),
     inbox: M.call().returns(M.promise()),
     outbox: M.call().returns(M.promise()),
-    take: M.call(M.string()).returns(M.promise()),
+    take: M.call(M.string(), M.number()).returns(M.promise()),
     discard: M.call(M.string()).returns(M.promise()),
   });
 
@@ -99,8 +104,6 @@ export const makeMailAddressBook = (
     }
     return contact;
   };
-  /** @param {any} contact */
-  const label = contact => contacts.keyOf(contact) ?? '<unnamed>';
   /** @param {string} secret */
   const forget = secret => {
     invitations.delete(secret);
@@ -113,7 +116,7 @@ export const makeMailAddressBook = (
   };
   return makeExo('MailAddressBook', MailAddressBookI, {
     help: () =>
-      'Capability mail by pet name: invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), send(name, text, capability), inbox(), outbox(), take(id), discard(id). Contacts are the inventory contacts map.',
+      'Capability mail by pet name: invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), send(contact, content), inbox(), outbox(), take(id, index), discard(id). Contacts are the inventory contacts map.',
     /**
      * Reserve the name, open an invitation on its contact and publish it.
      * Returns the invitation text to hand to the correspondent.
@@ -182,30 +185,18 @@ export const makeMailAddressBook = (
         })),
       ),
     /**
-     * @param {string} name
-     * @param {string} text
-     * @param {any} capability
+     * @param {MailContact} contact
+     * @param {MailContent} content
      */
-    send: async (name, text, capability) => {
-      isRemotable(capability) || Fail`Expected a remotable capability`;
-      const contact = contacts.get(name);
-      (contact !== undefined &&
-        (await E(contact).status()).status === 'ready') ||
+    send: async (contact, content) => {
+      (await E(contact).status()).status === 'ready' ||
         Fail`Contact is not ready`;
-      return E(provideMailbox()).send(contact, text, capability);
+      return E(provideMailbox()).send(contact, content);
     },
-    inbox: async () =>
-      (await E(provideMailbox()).inbox()).map(message => ({
-        ...message,
-        from: label(message.from),
-      })),
-    outbox: async () =>
-      (await E(provideMailbox()).outbox()).map(message => ({
-        ...message,
-        to: label(message.to),
-      })),
-    /** @param {string} id */
-    take: id => E(provideMailbox()).take(id),
+    inbox: () => E(provideMailbox()).inbox(),
+    outbox: () => E(provideMailbox()).outbox(),
+    /** @param {string} id @param {number} index */
+    take: (id, index) => E(provideMailbox()).take(id, index),
     /** @param {string} id */
     discard: id => E(provideMailbox()).discard(id),
   });

@@ -92,6 +92,8 @@ export default defineConfig(
     ignores: [
       // The Node adapter layer: these modules exist to hold the built-ins.
       'packages/thixotrope/src/platform/node/**',
+      // The trusted browser shell owns DOM and fetch; the guest component does not.
+      'packages/thixotrope/src/platform/browser/**',
     ],
     rules: {
       'no-restricted-imports': [
@@ -234,6 +236,7 @@ export default defineConfig(
       'packages/space-whylip/**',
       'packages/space-workflow/**',
       'packages/spaces-util/**',
+      'packages/thixotrope/src/platform/browser/**',
     ],
     languageOptions: {
       globals: { ...hardenedGlobals, ...globals.browser },

@@ -45,31 +45,57 @@ export const makeWorkspaceClient = client => {
     revokeInvitation: invitationText =>
       withBook(held => E(held).revokeInvitation(invitationText)),
     contacts: () => withBook(held => E(held).contacts()),
-    inbox: () => withBook(held => E(held).inbox()),
-    outbox: () => withBook(held => E(held).outbox()),
+    inbox: () =>
+      withBook(async held => {
+        const contacts = await client.call('lookup', 'contacts');
+        return Promise.all(
+          (await E(held).inbox()).map(async message => ({
+            ...message,
+            from: (await E(contacts).keyOf(message.from)) ?? '<unnamed>',
+          })),
+        );
+      }),
+    outbox: () =>
+      withBook(async held => {
+        const contacts = await client.call('lookup', 'contacts');
+        return Promise.all(
+          (await E(held).outbox()).map(async message => ({
+            ...message,
+            to: (await E(contacts).keyOf(message.to)) ?? '<unnamed>',
+          })),
+        );
+      }),
     /**
-     * Send the capability kept under an inventory key: only that value
-     * crosses into the message, and only a remotable one leaves the
-     * workspace.
+     * CLI convenience: resolve local labels here, outside the mail protocol.
      * @param {string} name
-     * @param {string} text
-     * @param {string} key
+     * @param {readonly (string | {name: string, key: string})[]} content
      */
-    send: async (name, text, key) => {
-      assertKey(key);
-      const capability = await client.call('lookup', key);
-      return withBook(held => E(held).send(name, text, capability));
+    send: async (name, content) => {
+      const held = await book();
+      const contacts = await client.call('lookup', 'contacts');
+      const contact = await client.race(E(contacts).get(name));
+      contact !== undefined || Fail`Unknown contact ${name}`;
+      const parts = await Promise.all(
+        content.map(async part => {
+          if (typeof part === 'string') return part;
+          assertKey(part.key);
+          const capability = await client.call('lookup', part.key);
+          return harden({ name: part.name, value: capability });
+        }),
+      );
+      return client.race(E(held).send(contact, harden(parts)));
     },
     /**
      * Keep a message's capability under an inventory key. Taking is
      * idempotent until the message is discarded, so an interrupted take is
      * made again.
      * @param {string} id
+     * @param {number} index content array position
      * @param {string} key
      */
-    take: async (id, key) => {
+    take: async (id, index, key) => {
       assertKey(key);
-      const value = await withBook(held => E(held).take(id));
+      const value = await withBook(held => E(held).take(id, index));
       return client.call('keep', key, value);
     },
     /** @param {string} id */
