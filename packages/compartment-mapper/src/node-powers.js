@@ -9,6 +9,8 @@
  * @module
  */
 
+/* global globalThis */
+
 /**
  * @import {
  *   CryptoInterface,
@@ -36,6 +38,11 @@
 
 import { createRequire } from 'module';
 import { encodeHex } from '@endo/hex';
+
+const { Promise, URL } = globalThis;
+
+/** @param {undefined} _value */
+const doNothing = _value => {};
 
 /**
  * @type {FileURLToPathFn}
@@ -91,7 +98,7 @@ const makeReadPowersSloppy = ({
    */
   const read = async location => {
     const promise = readMutex;
-    let release = Function.prototype;
+    let release = doNothing;
     readMutex = new Promise(resolve => {
       release = resolve;
     });
