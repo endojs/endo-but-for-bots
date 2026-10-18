@@ -39,7 +39,7 @@
 import { createRequire } from 'module';
 import { encodeHex } from '@endo/hex';
 
-const { Function, Promise } = globalThis;
+const { Function, Promise, URL } = globalThis;
 
 /**
  * @type {FileURLToPathFn}
