@@ -3,11 +3,13 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/far';
 import harden from '@endo/harden';
 
+import { isRemotable } from '../is-remotable.js';
+
 /** @import { MailUiApi } from './mail-ui.js' */
 
 /**
  * Attenuate mail and inventory to descriptions, sends, and explicit adoption.
- * Values are captured at launch; editing the inventory cannot widen this UI.
+ * Inventory selections capture references when a snapshot is requested.
  * @param {object} options
  * @param {any} options.book
  * @param {any} options.contacts
@@ -26,6 +28,8 @@ export const makeMailUiService = ({
   adoptValue,
 }) => {
   const grants = new Map(attachments);
+  /** @type {Map<string, {name: string, value: any}>} */
+  const selections = new Map();
   // Tokens designate references in this connection, never inventory names.
   const tokens = new WeakMap();
   let nextToken = 0n;
@@ -78,13 +82,27 @@ export const makeMailUiService = ({
             ),
           })),
         );
+      const available = new Map(grants);
+      for (const [name, value] of await E(inventory).entries()) {
+        if (isRemotable(value)) available.set(name, value);
+      }
+      const attachmentOptions = [...available].map(([name, value]) => {
+        let token = tokens.get(value);
+        if (token === undefined) {
+          nextToken += 1n;
+          token = String(nextToken);
+          tokens.set(value, token);
+        }
+        selections.set(token, { name, value });
+        return { name, token };
+      });
       const result = harden({
         workspace,
         contacts: listedContacts,
         inbox: await describeMessages(inbox, 'inbox'),
         outbox: await describeMessages(outbox, 'outbox'),
         inventory: inventorySnapshot.entries,
-        attachments: [...grants.keys()],
+        attachments: attachmentOptions,
       });
       offered = currentOffers;
       return result;
@@ -103,22 +121,26 @@ export const makeMailUiService = ({
       // cannot cause an existing inventory name to be silently replaced.
       return adoptValue(name, value);
     },
-    send: async (name, text, attachment) => {
+    send: async (name, parts) => {
       (typeof name === 'string' && name.length > 0 && name.length <= 128) ||
         Fail`Expected a contact name`;
-      (typeof text === 'string' &&
-        text.trim().length > 0 &&
-        text.length <= 4096) ||
-        Fail`Expected a message of 1–4096 characters`;
-      (typeof attachment === 'string' &&
-        (attachment === '' || grants.has(attachment))) ||
-        Fail`Capability was not granted to this UI`;
+      (Array.isArray(parts) && parts.length > 0 && parts.length <= 256) ||
+        Fail`Expected message parts`;
+      let length = 0;
+      const content = parts.map(part => {
+        if (typeof part === 'string') {
+          length += part.length;
+          return part;
+        }
+        const selected = part && selections.get(part.token);
+        if (!selected) throw Fail`Value was not offered to this UI`;
+        return { name: selected.name, value: selected.value };
+      });
+      length <= 4096 || Fail`Expected at most 4096 text characters`;
+      content.some(part => typeof part !== 'string' || part.trim()) ||
+        Fail`Expected a nonempty message`;
       const contact = await E(contacts).get(name);
       contact !== undefined || Fail`Unknown contact ${name}`;
-      const content =
-        attachment === ''
-          ? [text]
-          : [text, { name: attachment, value: grants.get(attachment) }];
       return E(book).send(contact, harden(content));
     },
   });

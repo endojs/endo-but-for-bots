@@ -28,8 +28,7 @@ const api = harden({
   snapshot: () => request('/api/mail'),
   adopt: (valueToken, name) =>
     request('/api/adopt', { token: valueToken, name }),
-  send: (name, text, attachment) =>
-    request('/api/send', { name, text, attachment }),
+  send: (name, content) => request('/api/send', { name, content }),
 });
 
 const start = async () => {
@@ -57,7 +56,24 @@ const start = async () => {
       let dialog = null;
       /** @type {Element | null} */
       let returnFocus = null;
+      // Move into the text following an inserted value without exposing DOM
+      // focus or selection methods to the confined component.
+      let previousTextCount = 0;
       const syncDialog = () => {
+        const editor = root.querySelector('.draft-editor');
+        const texts = editor?.querySelectorAll('textarea');
+        const count = texts?.length ?? 0;
+        if (editor && count > previousTextCount) {
+          const index = editor.getAttribute('data-focus-text');
+          const target = editor.querySelector(
+            `textarea[data-text-index="${index}"]`,
+          );
+          if (target instanceof HTMLTextAreaElement) {
+            target.focus();
+            target.setSelectionRange(0, 0);
+          }
+        }
+        previousTextCount = count;
         const next = root.querySelector('[role="dialog"]');
         const content = root.querySelector('.mail-content');
         if (content instanceof HTMLElement) content.inert = next !== null;

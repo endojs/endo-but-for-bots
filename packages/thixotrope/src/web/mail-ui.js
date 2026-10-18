@@ -1,11 +1,12 @@
 // @ts-check
+/** @import { SafeEvent } from '@endo/preact-container/renderer' */
 /** @import { CompartmentEndowments } from '@endo/preact-container/compartment' */
 
 /** @typedef {{name: string, token: string, localName?: string}} ValuePart */
 /** @typedef {{id: string, content: readonly (string | ValuePart)[], from?: string, to?: string, status?: string, error?: string}} Message */
 /** @typedef {{name: string, status: string}} Contact */
-/** @typedef {{workspace: string, inbox: Message[], outbox: Message[], contacts: Contact[], attachments: string[], inventory: [string, string][]}} MailSnapshot */
-/** @typedef {{snapshot: () => Promise<MailSnapshot>, adopt: (token: string, name: string) => Promise<string>, send: (name: string, text: string, attachment: string) => Promise<string>}} MailUiApi */
+/** @typedef {{workspace: string, inbox: Message[], outbox: Message[], contacts: Contact[], attachments: ValuePart[], inventory: [string, string][]}} MailSnapshot */
+/** @typedef {{snapshot: () => Promise<MailSnapshot>, adopt: (token: string, name: string) => Promise<string>, send: (name: string, content: readonly (string | {token: string})[]) => Promise<string>}} MailUiApi */
 
 /**
  * Evaluated in a fresh SES compartment. Its only powers are the renderer's
@@ -21,8 +22,55 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api }) => {
   const [selected, setSelected] = useState('');
   const [composing, setComposing] = useState(false);
   const [recipient, setRecipient] = useState('');
-  const [attachment, setAttachment] = useState('');
-  const [text, setText] = useState('');
+  const [draft, setDraft] = useState(
+    /** @type {(string | ValuePart)[]} */ (['']),
+  );
+  const [completion, setCompletion] = useState(
+    /** @type {{index: number, start: number, end: number, query: string} | undefined} */ (
+      undefined
+    ),
+  );
+  const [focusText, setFocusText] = useState(-1);
+  const suggestions = (data?.attachments ?? []).filter(part =>
+    part.name.toLowerCase().includes(completion?.query.toLowerCase() ?? ''),
+  );
+  const text = draft
+    .map(part => (typeof part === 'string' ? part : part.name))
+    .join('');
+  /** @param {number} index @param {string} value @param {number} caret */
+  const edit = (index, value, caret) => {
+    setDraft(
+      draft.map((part, position) => (position === index ? value : part)),
+    );
+    const match = /(?:^|\s)@([^@\n]*)$/.exec(value.slice(0, caret));
+    setCompletion(
+      match
+        ? {
+            index,
+            start: caret - match[1].length - 1,
+            end: caret,
+            query: match[1],
+          }
+        : undefined,
+    );
+  };
+  /** @param {ValuePart} value */
+  const insert = value => {
+    if (!completion) return;
+    const part = draft[completion.index];
+    if (typeof part !== 'string') return;
+    const next = [...draft];
+    next.splice(
+      completion.index,
+      1,
+      part.slice(0, completion.start),
+      value,
+      part.slice(completion.end),
+    );
+    setDraft(next);
+    setFocusText(completion.index + 2);
+    setCompletion(undefined);
+  };
   const [busy, setBusy] = useState(false);
   const sending = useRef(false);
   const [adopting, setAdopting] = useState(
@@ -70,8 +118,14 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api }) => {
     setError('');
     setNotice('');
     try {
-      await api.send(recipient, text, attachment);
-      setText('');
+      await api.send(
+        recipient,
+        draft.map(part =>
+          typeof part === 'string' ? part : { token: part.token },
+        ),
+      );
+      setDraft(['']);
+      setCompletion(undefined);
       setComposing(false);
       setFolder('outbox');
       setSelected('');
@@ -263,40 +317,88 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api }) => {
                       'No ready contacts. Introduce a correspondent with thix invite / accept, then refresh.',
                     ),
                   h(
-                    'label',
-                    null,
-                    'Value (optional)',
-                    h(
-                      'select',
-                      {
-                        value: attachment,
-                        disabled: busy,
-                        onChange: event => setAttachment(event.target.value),
-                      },
-                      h('option', { value: '' }, 'Text only'),
-                      ...(data?.attachments ?? []).map(name =>
-                        h('option', { key: name, value: name }, name),
-                      ),
-                    ),
-                  ),
-                  h(
                     'p',
                     { class: 'hint' },
-                    'Send text on its own, or include a value you have explicitly granted.',
+                    'Type @ to insert a value from your inventory.',
                   ),
                   h(
-                    'label',
-                    null,
-                    'Message',
-                    h('textarea', {
-                      required: true,
-                      maxLength: 4096,
-                      rows: 10,
-                      value: text,
-                      disabled: busy,
-                      placeholder: 'Write a message…',
-                      onInput: event => setText(event.target.value),
-                    }),
+                    'div',
+                    {
+                      class: 'draft-editor',
+                      'aria-label': 'Message',
+                      'data-focus-text': focusText,
+                    },
+                    ...draft.map((part, index) =>
+                      typeof part === 'string'
+                        ? h('textarea', {
+                            'aria-label': `Message text ${index + 1}`,
+                            'data-text-index': index,
+                            rows: draft.length === 1 ? 8 : 2,
+                            value: part,
+                            disabled: busy,
+                            maxLength: 4096,
+                            placeholder: 'Write a message…',
+                            onInput: (/** @type {SafeEvent} */ event) =>
+                              edit(
+                                index,
+                                String(event.target?.value),
+                                event.target?.selectionStart ??
+                                  String(event.target?.value).length,
+                              ),
+                            onKeyDown: event => {
+                              if (event.key === 'Escape')
+                                setCompletion(undefined);
+                              if (
+                                completion &&
+                                event.key === 'Enter' &&
+                                suggestions.length
+                              ) {
+                                event.preventDefault();
+                                insert(suggestions[0]);
+                              }
+                            },
+                          })
+                        : h(
+                            'button',
+                            {
+                              type: 'button',
+                              class: 'value-pill known',
+                              'aria-label': `Remove ${part.name}`,
+                              onClick: () => {
+                                const next = [...draft];
+                                next.splice(
+                                  index - 1,
+                                  3,
+                                  `${draft[index - 1]}${draft[index + 1]}`,
+                                );
+                                setDraft(next);
+                                setCompletion(undefined);
+                              },
+                            },
+                            `${part.name} ×`,
+                          ),
+                    ),
+                    completion &&
+                      h(
+                        'div',
+                        {
+                          class: 'value-suggestions',
+                          'aria-label': 'Inventory suggestions',
+                        },
+                        ...suggestions.map(part =>
+                          h(
+                            'button',
+                            { type: 'button', onClick: () => insert(part) },
+                            part.name,
+                          ),
+                        ),
+                        !suggestions.length &&
+                          h(
+                            'p',
+                            { class: 'hint' },
+                            'No matching inventory values.',
+                          ),
+                      ),
                   ),
                   h(
                     'div',

@@ -44,11 +44,11 @@ test('the mail UI resolves labels at its edge and sends only granted values', as
     contacts: [{ name: 'Bob', status: 'ready' }],
     inbox: [{ id: '1', from: 'Bob', content: ['Hello'] }],
     outbox: [],
-    attachments: ['counter'],
+    attachments: [{ name: 'counter', token: '1' }],
     inventory: [],
   });
-  await service.send('Bob', 'Text alone', '');
-  await service.send('Bob', 'A counter', 'counter');
+  await service.send('Bob', ['Text alone']);
+  await service.send('Bob', ['A counter', { token: '1' }]);
   t.deepEqual(sent, [
     { recipient: contact, content: ['Text alone'] },
     {
@@ -56,17 +56,64 @@ test('the mail UI resolves labels at its edge and sends only granted values', as
       content: ['A counter', { name: 'counter', value: granted }],
     },
   ]);
-  await t.throwsAsync(() => service.send('Bob', 'No', 'admin'), {
-    message: /not granted/,
+  await t.throwsAsync(() => service.send('Bob', ['No', { token: 'admin' }]), {
+    message: /not offered/,
   });
-  await t.throwsAsync(() => service.send('Unknown', 'No', ''), {
+  await t.throwsAsync(() => service.send('Unknown', ['No']), {
     message: /Unknown contact/,
   });
-  await t.throwsAsync(() => service.send('Bob', 'x'.repeat(4097), ''), {
+  await t.throwsAsync(() => service.send('Bob', ['x'.repeat(4097)]), {
     message: /4096/,
   });
   t.is(sent.length, 2);
   t.deepEqual(Object.keys(service).sort(), ['adopt', 'send', 'snapshot']);
+});
+
+test('inventory autocomplete captures references and preserves interleaved message parts', async t => {
+  const inventory = makeObservableMap();
+  const original = Far('Original', {});
+  const replacement = Far('Replacement', {});
+  const contact = Far('Contact', {});
+  inventory.set('counter', original);
+  inventory.set('plain text', 'not a value reference');
+  const sent = [];
+  const service = makeMailUiService({
+    book: Far('Mail', {
+      contacts: () => [],
+      inbox: () => [],
+      outbox: () => [],
+      send: (to, content) => {
+        sent.push({ to, content });
+        return '1';
+      },
+    }),
+    contacts: Far('Contacts', { get: () => contact }),
+    inventory,
+    workspace: 'test',
+    attachments: new Map(),
+    adoptValue: async () => 'unused',
+  });
+  const { attachments } = await service.snapshot();
+  t.is(attachments.length, 1);
+  t.is(attachments[0].name, 'counter');
+  inventory.set('counter', replacement);
+  await service.send('Bob', [
+    'Before ',
+    { token: attachments[0].token },
+    ' after',
+  ]);
+  t.deepEqual(sent, [
+    {
+      to: contact,
+      content: ['Before ', { name: 'counter', value: original }, ' after'],
+    },
+  ]);
+  await t.throwsAsync(() => service.send('Bob', []), {
+    message: /message parts/,
+  });
+  await t.throwsAsync(() => service.send('Bob', [' ']), {
+    message: /nonempty/,
+  });
 });
 
 test.serial(
@@ -156,7 +203,7 @@ test.serial(
         await fetch(`${origin}/api/send`, {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
-          body: JSON.stringify({ name: 'Bob', text: 'Hello', attachment: '' }),
+          body: JSON.stringify({ name: 'Bob', content: ['Hello'] }),
         })
       ).status,
       200,

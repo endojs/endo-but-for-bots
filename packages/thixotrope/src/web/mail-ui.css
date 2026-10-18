@@ -475,3 +475,26 @@ input {
     flex-wrap: wrap;
   }
 }
+
+.draft-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0;
+}
+.draft-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.draft-editor .value-pill {
+  align-self: flex-start;
+}
+.value-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #cbd8cc;
+  border-radius: 8px;
+  background: #f2f7f0;
+}

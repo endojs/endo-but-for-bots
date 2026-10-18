@@ -101,7 +101,7 @@ export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
         const result =
           url === '/api/adopt'
             ? await mail.adopt(input.token, input.name)
-            : await mail.send(input.name, input.text, input.attachment);
+            : await mail.send(input.name, input.content);
         json(200, result);
       } else {
         json(404, { error: 'Not found' });
