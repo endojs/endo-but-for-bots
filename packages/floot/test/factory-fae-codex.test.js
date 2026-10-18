@@ -18,6 +18,9 @@ const world = (
     development = false,
     contextLength = 128_000,
     responseOutput = undefined,
+    responseUsage = /** @type {((request: any) => any) | undefined} */ (
+      undefined
+    ),
     shellOutput = 'ok',
     refuseCheckpoint = false,
     executeShell = undefined,
@@ -58,7 +61,7 @@ const world = (
             },
           ];
           const bytes = new TextEncoder().encode(
-            `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output, ...(responseUsage ? { usage: responseUsage(body) } : {}) } })}\n\n`,
           );
           return harden({
             status: 200,
@@ -505,8 +508,18 @@ test('automatic first-turn compaction preserves complete recent tools and cold r
   let effects = 0;
   const subject = world(t, {
     development: true,
-    contextLength: 120_000,
+    contextLength: 40_000,
     shellOutput: 'test log\n'.repeat(1500),
+    // Automatic compaction requires a provider token observation. Large
+    // serialized tool results alone must not act as a token count.
+    responseUsage: request => ({
+      input_tokens: Math.ceil(
+        (JSON.stringify(request.input).length +
+          JSON.stringify(request.tools ?? []).length) /
+          4,
+      ),
+      output_tokens: 10,
+    }),
     responseOutput: (request, ordinal) => {
       if (!request.tools?.length || effects >= 8) return undefined;
       effects += 1;

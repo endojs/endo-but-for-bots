@@ -235,6 +235,12 @@ the session registry, and is released with it.
 Set `FLOOT_MAX_SUBAGENT_DEPTH=0` to withhold the tools entirely.
 See [@endo/fae's SUBAGENTS.md](../fae/SUBAGENTS.md).
 
+Pending subagent requests consume their correlated replies automatically.
+Other replies remain in the mailbox for explicit inspection and capability
+adoption; they do not start model turns or generate automatic acknowledgments.
+This also applies after a restart, when a reply's original waiter may be gone.
+Send a new message or request to start new work.
+
 ## Provider credentials
 
 `floot-factory-setup.js` puts `ANTHROPIC_API_KEY` in the daemon's secret manager
