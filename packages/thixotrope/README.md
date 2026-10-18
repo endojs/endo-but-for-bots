@@ -581,9 +581,12 @@ through `@endo/preact-container`'s confined renderer.
 The trusted browser shell owns DOM access and requests; the component receives neither.
 A local HTTP bridge holds the control connection and exposes only inventory/mail descriptions,
 sends, and adoption of values shown in mail.
-It binds loopback, requires the launch secret for every API request, refuses other origins and
+It binds loopback, requires the workspace secret for every API request, refuses other origins and
 hostnames, and sends a restrictive Content Security Policy.
 The URL's fragment holds that secret; keep the URL private.
+The secret lives in the durable workspace heap, outside the inventory.
+Restarting the web bridge or supervisor reuses it, so a bookmark keeps working on the same port.
+Each workspace has its own secret; `getMailUiToken()` on the local administration provides it.
 Ctrl-C closes the bridge and its control connection, leaving the supervisor running.
 
 This prototype changes persisted mail factory implementations and message records.

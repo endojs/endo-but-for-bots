@@ -577,7 +577,7 @@ export const serveThixotrope = async (
       [...allocating].filter(id => daemon.listWorkerIds().includes(id));
     const daemonMethods = {
       help: () =>
-        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), lookup(key), keep(key, value), getAddressBook(), getInventory(), adopt(key, value), inventoryStatus(), watchInventory(listener).',
+        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), lookup(key), keep(key, value), getAddressBook(), getInventory(), getMailUiToken(), adopt(key, value), inventoryStatus(), watchInventory(listener).',
       stop: () => {
         timers.setTimer(requestStop, 0);
         return 'Stopping supervisor';
@@ -793,6 +793,20 @@ export const serveThixotrope = async (
         assertInstallationName(key);
         await E(workspace.inventory).set(key, value);
         return true;
+      },
+      /**
+       * The mail bridge's bearer secret belongs to the durable workspace,
+       * not the bridge process. First use chooses it in one guest crank;
+       * concurrent launches and supervisor restarts reuse that exact value.
+       * It stays out of the observable inventory and browser state stream.
+       */
+      getMailUiToken: () => {
+        const workspace = current();
+        assertWorkspace(workspace);
+        return workspace.worker.evaluate(
+          "(globalThis[Symbol.for('thixotrope.mailUiToken')] ??= candidate)",
+          { candidate: `${randomId()}${randomId()}` },
+        );
       },
       // The trusted client attenuates this map before presenting it to a UI.
       getInventory: () => {

@@ -1,6 +1,6 @@
 // @ts-check
+import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
-import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { clearInterval, setInterval } from 'node:timers';
 
@@ -9,15 +9,17 @@ import { clearInterval, setInterval } from 'node:timers';
 
 /**
  * A local browser bridge. The socket client and administration never cross
- * this boundary. Every API request needs the launch secret, and cross-origin
+ * this boundary. Every API request needs the workspace secret, and cross-origin
  * requests and rebinding hostnames are refused before touching mail.
  * @param {object} options
  * @param {MailUiService} options.mail
  * @param {Map<string, {type: string, body: string}>} options.assets
+ * @param {string} options.token the durable workspace bearer secret
  * @param {number} [options.port]
  */
-export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
-  const token = randomBytes(32).toString('hex');
+export const serveMailUi = async ({ mail, assets, token, port = 8123 }) => {
+  (typeof token === 'string' && /^[0-9a-f]{64}$/.test(token)) ||
+    Fail`Expected a 256-bit workspace mail token`;
   let origin = '';
   /** @type {Set<() => Promise<void>>} */
   const streams = new Set();
@@ -56,7 +58,7 @@ export const serveMailUi = async ({ mail, assets, port = 8123 }) => {
       return;
     }
     if (request.headers.authorization !== `Bearer ${token}`) {
-      json(403, { error: 'Open the private URL printed by mail-ui' });
+      json(403, { error: 'Open this workspace’s private mail URL' });
       request.resume();
       return;
     }

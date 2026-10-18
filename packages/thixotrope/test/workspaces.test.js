@@ -70,6 +70,18 @@ test.serial(
     // A connection speaks for one workspace: `default` until it selects
     // another, and the CLI's `--workspace` selects on connecting.
     const alice = await host.connect('alice');
+    const [webToken, sameWebToken] = await Promise.all([
+      admin.call('getMailUiToken'),
+      admin.call('getMailUiToken'),
+    ]);
+    t.regex(webToken, /^[0-9a-f]{64}$/);
+    t.is(sameWebToken, webToken);
+    const aliceWebToken = await alice.call('getMailUiToken');
+    t.not(aliceWebToken, webToken);
+    t.is(
+      await admin.call('evaluate', "inventory.has('thixotrope.mailUiToken')"),
+      'false',
+    );
     t.is((await alice.call('status')).workspace, created.workerId);
     t.is(await alice.call('evaluate', 'globalThis.who = "alice"'), "'alice'");
     t.is(await admin.call('evaluate', 'globalThis.who'), 'undefined');
@@ -151,11 +163,13 @@ test.serial(
     await host.supervisor.close();
     host = await serve(t, path);
     const restored = await host.connect('alice');
+    t.is(await restored.call('getMailUiToken'), aliceWebToken);
     t.is((await restored.call('status')).workspace, created.workerId);
     t.is(await restored.call('evaluate', 'who'), "'alice'");
     t.is(await restored.call('evaluate', "inventory.has('clock')"), 'true');
     t.is(await restored.call('evaluate', "inventory.has('mailbox')"), 'true');
     const again = await host.connect();
+    t.is(await again.call('getMailUiToken'), webToken);
     t.is(await again.call('evaluate', "inventory.get('mine')"), '1');
     t.is(await again.call('evaluate', "inventory.has('resource')"), 'true');
     // The clock each workspace holds is the one the registry holds, across

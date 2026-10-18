@@ -147,6 +147,7 @@ test.serial(
       },
     });
     const server = await serveMailUi({
+      token: 'a'.repeat(64),
       mail,
       assets: new Map([['/', { type: 'text/html', body: '<h1>Mail</h1>' }]]),
       port: 0,
@@ -417,6 +418,7 @@ test.serial(
       finish = resolve;
     });
     const server = await serveMailUi({
+      token: 'a'.repeat(64),
       mail: harden({
         snapshot: async () => {
           throw Error('stream must not poll');
@@ -494,3 +496,50 @@ test('failed subscription setup releases observers already acquired', async t =>
   t.true(released);
   t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
 });
+
+test.serial(
+  'the same durable token keeps a mail URL valid across web server restarts',
+  async t => {
+    t.timeout(10_000);
+    const token = 'b'.repeat(64);
+    const mail = harden({
+      snapshot: async () => ({
+        workspace: 'stable',
+        contacts: [],
+        inbox: [],
+        outbox: [],
+        inventory: [],
+        attachments: [],
+      }),
+      subscribe: async () => async () => {},
+      adopt: async () => '',
+      send: async () => '',
+    });
+    const first = await serveMailUi({
+      mail,
+      token,
+      assets: new Map(),
+      port: 0,
+    });
+    let current = first;
+    t.teardown(() => current.close());
+    const original = new URL(first.url);
+    await first.close();
+    current = await serveMailUi({
+      mail,
+      token,
+      assets: new Map(),
+      port: Number(original.port),
+    });
+    t.is(current.url, first.url);
+    const response = await fetch(`${original.origin}/api/mail`, {
+      headers: { authorization: `Bearer ${original.hash.slice(1)}` },
+    });
+    t.is(response.status, 200);
+    t.is((await response.json()).workspace, 'stable');
+    await t.throwsAsync(
+      () => serveMailUi({ mail, token: '', assets: new Map(), port: 0 }),
+      { message: /256-bit/ },
+    );
+  },
+);

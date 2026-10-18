@@ -94,7 +94,12 @@ try {
     adopt: (token, name) => client.race(service.adopt(token, name)),
     send: (name, content) => client.race(service.send(name, content)),
   });
-  const server = await serveMailUi({ mail, assets, port });
+  const server = await serveMailUi({
+    mail,
+    assets,
+    port,
+    token: await client.call('getMailUiToken'),
+  });
   console.error(`Mail (${values.workspace}): ${server.url}`);
   console.error(
     'Keep this private URL. Ctrl-C closes the browser bridge; the daemon keeps running.',
