@@ -112,7 +112,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MapStore, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, SetStore, Sha256, SortedMapStore, SortedSetStore, Specials, MarshalFormula, WeakMapStore, WeakMultimap, WeakSetStore, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -3057,8 +3057,8 @@ const makeDaemonCore = async (
     return messageHub;
   };
 
-  // The daemon-native persistent collection family (Phases 1-2: strong MapStore
-  // and SetStore).
+  // The daemon-native persistent collection family. Sorted variants use this
+  // same marshal body codec but scan SQLite by makeEncodePassable rank.
   // Its exos reuse the daemon's marshal codec for durable key/value
   // representation and a `makeEncodePassable` rank encoder for canonical keys,
   // and join the formula retention graph via the same pet-store edge hooks so
@@ -4053,6 +4053,8 @@ const makeDaemonCore = async (
             makeSetStore: disallowedFn,
             makeWeakMapStore: disallowedFn,
             makeWeakSetStore: disallowedFn,
+            makeSortedMapStore: disallowedFn,
+            makeSortedSetStore: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
             deliver: disallowedSyncFn,
@@ -4094,6 +4096,18 @@ const makeDaemonCore = async (
       }
       if (formula.kind === 'weak-map') {
         return collectionStoreMaker.makeIdentifiedWeakMapStore(
+          storeId,
+          formulaNumber,
+        );
+      }
+      if (formula.kind === 'sorted-map') {
+        return collectionStoreMaker.makeIdentifiedSortedMapStore(
+          storeId,
+          formulaNumber,
+        );
+      }
+      if (formula.kind === 'sorted-set') {
+        return collectionStoreMaker.makeIdentifiedSortedSetStore(
           storeId,
           formulaNumber,
         );
@@ -5535,7 +5549,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateCollectionStore']} */
   async function formulateCollectionStore(kind, deferredTasks, pin) {
-    return /** @type {FormulateResult<import('./types.js').MapStore | import('./types.js').SetStore>} */ (
+    return /** @type {FormulateResult<MapStore | SetStore | WeakMapStore | WeakSetStore | SortedMapStore | SortedSetStore>} */ (
       withFormulaGraphLock(async () => {
         const ownFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()

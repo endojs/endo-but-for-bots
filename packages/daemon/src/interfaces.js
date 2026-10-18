@@ -246,6 +246,8 @@ export const GuestInterface = M.interface('EndoGuest', {
   makeSetStore: M.call(NameOrPathShape).returns(M.promise()),
   makeWeakMapStore: M.call(NameOrPathShape).returns(M.promise()),
   makeWeakSetStore: M.call(NameOrPathShape).returns(M.promise()),
+  makeSortedMapStore: M.call(NameOrPathShape).returns(M.promise()),
+  makeSortedSetStore: M.call(NameOrPathShape).returns(M.promise()),
   // Submit values for a form
   submit: M.call(
     MessageNumberShape, // messageNumber
@@ -320,6 +322,8 @@ export const HostInterface = M.interface('EndoHost', {
   makeSetStore: M.call(NameOrPathShape).returns(M.promise()),
   makeWeakMapStore: M.call(NameOrPathShape).returns(M.promise()),
   makeWeakSetStore: M.call(NameOrPathShape).returns(M.promise()),
+  makeSortedMapStore: M.call(NameOrPathShape).returns(M.promise()),
+  makeSortedSetStore: M.call(NameOrPathShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's

@@ -1208,6 +1208,40 @@ export const makeHostMaker = ({
       return /** @type {any} */ (value);
     };
 
+    /** @type {EndoHost['makeSortedMapStore']} */
+    const makeSortedMapStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'sorted-map',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
+    /** @type {EndoHost['makeSortedSetStore']} */
+    const makeSortedSetStore = async petName => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        'sorted-set',
+        tasks,
+        pinTransient,
+      );
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
     /**
      * @param {NameOrPath} workerNamePath
      */
@@ -2491,6 +2525,8 @@ export const makeHostMaker = ({
       makeSetStore,
       makeWeakMapStore,
       makeWeakSetStore,
+      makeSortedMapStore,
+      makeSortedSetStore,
       storeTree,
       provideMount,
       provideScratchMount,
