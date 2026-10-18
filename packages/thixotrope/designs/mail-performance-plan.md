@@ -140,3 +140,21 @@ retain a 1,611 ms / 77-delivery outlier, so this does not establish improved tai
 Native unit and host integration tests cover finalization, budgets, restore, and legacy selection.
 The next proposals remain direct recipient references, grouped durable ownership commits, and
 classification of excess protocol activity; the 50–100 ms target remains unmet.
+
+## Reference selection and append-log experiments
+
+The UI now sends a captured recipient token instead of resolving its display name for every mail.
+A fresh nine-send comparison reduced the median from 362.057 ms to 228.682 ms and ordinary hub
+commits from 16 to ten.
+An opt-in disposable full-snapshot append log reached 181.643 ms with the same ten commits, by
+avoiding directory synchronization on each steady-state append.
+The first noisy reference run and all outliers remain in the
+[strategy comparison](mail-optimization-strategies.md), with raw traces and sunbursts.
+The append-log format is benchmark-only and has not been enabled for existing workspaces.
+
+Protocol tags identify a control outlier with 67 `gc-answers` and seven `gc-exports` frames,
+193 hub writes, and 80 native collector rounds.
+The next experiment should batch GC lists in both client and hub, rather than expanding each
+collected reference into a separately journaled native crank.
+Preserve call ordering, reference deltas, durable ownership, and replay identities in that design.
+The trigger that initiates reclamation bursts still needs tracing.

@@ -13,6 +13,8 @@ subscriptions, persistence, vat placement, and runtime overhead.
 [Fine-grained colocated mail latency](mail-latency-colocated.md) compares separate and combined
 native delivery and breaks a fresh 364 ms send into filesystem syscalls, VM phases, host
 serialization, and concurrent work.
+[Mail optimization strategies](mail-optimization-strategies.md) compares recipient references and a
+disposable hub append log, reaching 229 ms and 182 ms medians, and traces GC traffic in outliers.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing
