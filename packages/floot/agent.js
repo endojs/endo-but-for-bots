@@ -1897,6 +1897,21 @@ export const makeStreamingAgent = async (
             continue;
           }
 
+          // An unmatched reply is an observation, not a fresh request. In
+          // particular, a delegation may have ended or its owner restarted.
+          // Turning its late reply into a model turn and replying again makes
+          // two agents (or two error handlers) converse without a requester.
+          // Keep the message and its capability attachments in the mailbox for
+          // explicit inspection/adoption. Only pending delegations above may
+          // consume a reply automatically, including after an inbox restart.
+          if (message.replyTo !== undefined) {
+            console.error(
+              `[floot] unclaimed reply #${number} retained for explicit handling`,
+            );
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+
           let text;
           if (type === 'package' && Array.isArray(strings)) {
             const parts = [];

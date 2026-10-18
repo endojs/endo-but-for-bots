@@ -149,6 +149,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
    * @param {string} [options.replyTo]
    * @param {boolean} [options.done]
    * @param {bigint} [options.number]
+   * @param {string[]} [options.names]
+   * @param {string[]} [options.ids]
    */
   const deliver = ({
     from,
@@ -158,6 +160,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     number,
     type = 'package',
     description = '',
+    names = [],
+    ids = [],
   }) => {
     nextId += 1;
     const messageNumber = number === undefined ? nextNumber : number;
@@ -168,8 +172,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
       from,
       to: locatorFor(SELF),
       strings: harden([...strings]),
-      names: harden([]),
-      ids: harden([]),
+      names: harden([...names]),
+      ids: harden([...ids]),
       messageId: `in-${nextId}`,
       number: messageNumber,
       done,
@@ -272,6 +276,115 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   };
   return { ...mailbox, deliver, powers, resolved, replay };
 };
+
+for (const fail of [false, true]) {
+  test(`automatic ${fail ? 'error' : 'success'} replies cannot start an agent reply loop`, async t => {
+    t.timeout(5000);
+    let calls = 0;
+    let echoes = 0;
+    const mailbox = makeLiveMailbox({
+      onEcho(message, box) {
+        // Model another agent automatically answering our answer. Bound the
+        // old broken behavior so the negative control cannot run forever.
+        if (message.replyTo && echoes < 5) {
+          echoes += 1;
+          box.deliver({
+            from: locatorFor(CHILD),
+            strings: ['Peer reply, including a possible provider error.'],
+            replyTo: message.messageId,
+          });
+        }
+      },
+    });
+    const agent = await makeStreamingAgent(
+      mailbox.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () =>
+          harden({
+            async chatStream() {
+              calls += 1;
+              if (fail) throw Error('Input exceeds the model context window');
+              return { message: { role: 'assistant', content: 'Answer.' } };
+            },
+          }),
+      },
+      'test prompt',
+      { journalPowers: mailbox.powers },
+    );
+    t.teardown(async () => {
+      mailbox.close();
+      await agent.shutdown();
+    });
+    agent.startInbox();
+    mailbox.deliver({ from: locatorFor(HOST), strings: ['Initial task.'] });
+    t.true(await until(() => mailbox.dismissed.length > 0));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    t.is(calls, 1);
+    t.is(echoes, 1);
+    t.is((await agent.getTurns()).length, 1);
+    const reply = (await mailbox.powers.listMessages()).find(m => m.replyTo);
+    t.truthy(reply);
+    t.false(mailbox.dismissed.includes(reply.number));
+  });
+}
+
+test('unclaimed replies remain passive across restart and do not block fresh tasks', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let calls = 0;
+  /** @type {Parameters<typeof makeStreamingAgent>[2]} */
+  const config = {
+    kind: 'provider',
+    provideProvider: () =>
+      harden({
+        async chatStream() {
+          calls += 1;
+          return {
+            message: { role: 'assistant', content: 'Fresh task done.' },
+          };
+        },
+      }),
+  };
+  const open = () =>
+    makeStreamingAgent(mailbox.powers, undefined, config, 'test prompt', {
+      journalPowers: mailbox.powers,
+    });
+  let agent = await open();
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const reply = mailbox.deliver({
+    from: locatorFor(CHILD),
+    strings: ['Late result.'],
+    replyTo: 'old-request',
+    names: ['repository'],
+    ids: ['read-only-repository'],
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  t.is(calls, 0);
+  t.false(mailbox.dismissed.includes(reply.number));
+  mailbox.close();
+  await agent.shutdown();
+  mailbox.replay();
+  agent = await open();
+  agent.startInbox();
+  const task = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['Fresh task.'],
+  });
+  t.true(await until(() => mailbox.dismissed.includes(task.number)));
+  t.is(calls, 1);
+  t.false(mailbox.dismissed.includes(reply.number));
+  t.deepEqual(
+    (await mailbox.powers.listMessages()).find(m => m.number === reply.number)
+      .names,
+    ['repository'],
+  );
+});
 
 /** Timers that never fire, so a test asserts on the answer, not the deadline. */
 const inertTimers = /** @type {any} */ (
