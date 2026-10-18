@@ -42,7 +42,9 @@ Old durable interfaces use the shared legacy bridge; this does not upgrade their
 The workspace metadata version is unchanged because these optional interfaces are backward compatible.
 
 Outbox flushing commits an attached frame together with its sequence and combines accepted-prefix
-removal with the next frame's sequence commit, followed by a final removal commit.
+removal with the next frame's sequence commit.
+Ordinary adapters retain a final removal commit; journaled worker adapters now piggyback the
+accepted tail on the next necessary commit, as described in the durable transfer experiment.
 The incoming delivery commit also includes the first sequence for every attached destination with
 queued work, avoiding a separate file replacement before forwarding.
 Only the head is assigned early; unattempted tails retain the ordering needed for gift withdrawals.
@@ -174,3 +176,23 @@ The [GC-batching note](mail-gc-batching.md) retains the initial candidate, final
 and sunbursts, including the less favorable repeat outlier.
 Next investigate durable commit grouping, full-heap GC cost, and instruction attribution in guest
 execution; do not relax finalizer behavior or disk-before-delivery ordering to meet a target.
+
+
+## Completed-crank transfer batching
+
+The [durable transfer experiment](mail-durable-transfer-batching.md) carries each native crank's
+existing output array through the transport into one hub transaction, retaining individual replay IDs.
+It also defers final outbox cleanup for journaled worker receivers until the next necessary commit.
+The fresh seven-send sample median falls from 216.919 ms to 185.444 ms with atomic hub persistence;
+steady hub commits fall from ten to six, with one receiving journal append remaining.
+The experimental append log reduces the combined median further to 156.608 ms.
+These unstressed trials are separate from the previous forced-GC experiment and do not establish
+improved tail latency.
+
+The implementation keeps existing guest execution, finalizer behavior, persisted formats, and
+receiving journal cadence.
+Replay and failure tests cover the new transaction grouping and deferred accepted tail.
+Receiver-side journal batching is deferred: the selected path has only one append, so a new batch
+record format or partial-append recovery mechanism would add complexity without saving a write.
+Future proposals should state their expected saved operations and measured benefit alongside their
+additional state, interfaces, formats, and failure cases.

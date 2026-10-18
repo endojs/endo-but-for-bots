@@ -17,6 +17,8 @@ serialization, and concurrent work.
 disposable hub append log, reaching 229 ms and 182 ms medians, and traces GC traffic in outliers.
 [Ordered GC batching](mail-gc-batching.md) compares host-client, hub, and updated guest behavior
 under forced collection, preserving list payloads and tracing the remaining VM cost.
+[Durable transfer batching](mail-durable-transfer-batching.md) measures completed-crank hub
+transactions and piggybacked worker cleanup, with an explicit benefit-versus-complexity assessment.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing
