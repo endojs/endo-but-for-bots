@@ -175,3 +175,61 @@ test('printed JSON escapes every terminal control character and still parses', t
   t.is(terminalText('plain ☃ text 😀'), 'plain ☃ text 😀');
   t.is(terminalText('\u0085\u2029'), '\\u0085\\u2029');
 });
+
+test('entry subscriptions grant initial values and coalesce per-key changes without losing deletes', async t => {
+  t.timeout(5000);
+  const map = makeObservableMap();
+  const value = Far('GrantedValue', {});
+  map.set('first', value);
+  /** @type {any[]} */
+  const updates = [];
+  /** @type {(() => void) | undefined} */
+  let release;
+  const blocked = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const handle = map.subscribeEntries(
+    Far('EntryObserver', {
+      changed: update => {
+        updates.push(update);
+        if (updates.length === 1) return blocked;
+        return undefined;
+      },
+    }),
+    true,
+  );
+  t.teardown(() => E(handle).unsubscribe());
+  await flush();
+  t.deepEqual(updates[0], {
+    revision: 1n,
+    reset: true,
+    entries: [['first', value]],
+    deleted: [],
+  });
+  map.set('second', 1n);
+  map.set('second', 2n);
+  map.delete('first');
+  t.is(updates.length, 1);
+  release?.();
+  await flush();
+  t.deepEqual(updates[1], {
+    revision: 4n,
+    reset: false,
+    entries: [['second', 2n]],
+    deleted: ['first'],
+  });
+  map.clear();
+  map.set('third', value);
+  await flush();
+  const replica = new Map();
+  for (const update of updates) {
+    if (update.reset) replica.clear();
+    for (const key of update.deleted) replica.delete(key);
+    for (const [key, entry] of update.entries) replica.set(key, entry);
+  }
+  t.deepEqual([...replica], [['third', value]]);
+  await E(handle).unsubscribe();
+  map.set('after-close', true);
+  await flush();
+  t.deepEqual(map.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+});

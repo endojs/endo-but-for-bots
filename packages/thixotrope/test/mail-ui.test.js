@@ -543,3 +543,150 @@ test.serial(
     );
   },
 );
+
+test('incremental mail projection shares upstream streams and never rereads history', async t => {
+  t.timeout(10_000);
+  const { makeMailbox } = await import('../src/mail/mailbox.js');
+  const rawMailbox = makeMailbox(makeObservableMap);
+  const inventory = makeObservableMap();
+  const contacts = makeObservableMap();
+  const contact = Far('ConstantContact', {
+    status: () => harden({ status: 'ready' }),
+  });
+  contacts.set('Notes', contact);
+  const value = Far('Value', {});
+  inventory.set('mine', value);
+  for (let i = 1; i <= 100; i += 1) {
+    rawMailbox.receive(contact, BigInt(i), ['old', { name: 'theirs', value }]);
+  }
+  let inboxStreams = 0;
+  const mailbox = Far('PushOnlyMailbox', {
+    subscribeInboxEntries: (listener, ephemeral) => {
+      inboxStreams += 1;
+      return rawMailbox.subscribeInboxEntries(listener, ephemeral);
+    },
+    subscribeOutboxEntries: (listener, ephemeral) =>
+      rawMailbox.subscribeOutboxEntries(listener, ephemeral),
+    inbox: () => {
+      throw Error('Must not reread inbox');
+    },
+    outbox: () => {
+      throw Error('Must not reread outbox');
+    },
+    take: () => {
+      throw Error('Values must arrive in subscription data');
+    },
+  });
+  const service = makeMailUiService({
+    mailbox,
+    inventory,
+    contacts,
+    book: Far('NoReads', {}),
+    workspace: 'push',
+    attachments: new Map(),
+    adoptValue: async () => 'unused',
+  });
+  /** @type {any[]} */
+  const views = [];
+  /** @type {Error | undefined} */
+  let failure;
+  const closed = [];
+  for (let i = 0; i < 3; i += 1) {
+    closed.push(
+      // eslint-disable-next-line no-await-in-loop -- Exercise sequential browser connections.
+      await service.subscribe(
+        state => {
+          views[i] = state;
+        },
+        error => {
+          failure = error;
+        },
+      ),
+    );
+  }
+  t.teardown(() => Promise.all(closed.map(close => close())));
+  const flush = async () => {
+    await new Promise(resolve => setImmediate(resolve));
+    if (failure) throw failure;
+  };
+  await flush();
+  t.is(inboxStreams, 1);
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 1n });
+  t.is(views[0].inbox.length, 100);
+  t.is(views[0], views[2]);
+  rawMailbox.receive(contact, 101n, ['new', { name: 'theirs', value }]);
+  await flush();
+  t.is(views[0].inbox.length, 101);
+  t.like(views[0].inbox[100].content[1], { localName: 'mine' });
+  inventory.set('newest', value);
+  contacts.set('Self', contact);
+  await flush();
+  t.like(views[0].inbox[100], { from: 'Self' });
+  t.like(views[0].inbox[100].content[1], { localName: 'newest' });
+  inventory.delete('newest');
+  rawMailbox.discard('1');
+  await flush();
+  t.is(views[0].inbox.length, 100);
+  t.like(views[0].inbox[99].content[1], { localName: 'mine' });
+  await closed[0]();
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 1n });
+  await Promise.all(closed.slice(1).map(close => close()));
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+  t.deepEqual(contacts.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+  rawMailbox.receive(contact, 102n, ['while disconnected']);
+  const reopened = await service.subscribe(
+    state => {
+      views[0] = state;
+    },
+    error => {
+      failure = error;
+    },
+  );
+  t.teardown(reopened);
+  await flush();
+  t.is(inboxStreams, 2);
+  t.is(views[0].inbox.length, 101);
+  t.is(views[0].inbox[100].content[0], 'while disconnected');
+  await reopened();
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+});
+
+test('incremental setup failure releases concurrently acquired entry streams', async t => {
+  t.timeout(5000);
+  const inventory = makeObservableMap();
+  const contacts = makeObservableMap();
+  let closed = false;
+  const mailbox = Far('PartialEntryMailbox', {
+    subscribeInboxEntries: () =>
+      Far('OpenedEntries', {
+        unsubscribe: () => {
+          closed = true;
+        },
+      }),
+    subscribeOutboxEntries: () => {
+      throw Error('entry stream refused');
+    },
+  });
+  const service = makeMailUiService({
+    book: Far('UnusedBook', {}),
+    mailbox,
+    inventory,
+    contacts,
+    workspace: 'partial',
+    attachments: new Map(),
+    adoptValue: async () => 'unused',
+  });
+  await t.throwsAsync(
+    () =>
+      service.subscribe(
+        () => {},
+        () => {},
+      ),
+    {
+      message: /entry stream refused/,
+    },
+  );
+  t.true(closed);
+  t.deepEqual(inventory.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+  t.deepEqual(contacts.subscriptionCounts(), { durable: 0n, ephemeral: 0n });
+});

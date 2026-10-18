@@ -17,7 +17,8 @@ import { describeError } from '../describe-error.js';
  * the same way, as source evaluated in that vat.
  *
  * The inbox and outbox are observable maps of immutable message records, so
- * a view can subscribe to either and re-list on change. A delivery outcome
+ * a view can subscribe to either for descriptions or incremental entries.
+ * Entry subscriptions grant message values to the listener. A delivery outcome
  * replaces the outbox record rather than mutating it, which is what notifies
  * the outbox's subscribers.
  *
@@ -53,6 +54,12 @@ export const makeMailbox = makeObservableMap => {
     subscribeOutbox: M.call(M.raw())
       .optional(M.boolean())
       .returns(M.remotable('subscription')),
+    subscribeInboxEntries: M.call(M.raw())
+      .optional(M.boolean())
+      .returns(M.remotable('subscription')),
+    subscribeOutboxEntries: M.call(M.raw())
+      .optional(M.boolean())
+      .returns(M.remotable('subscription')),
     disconnectEphemeral: M.call().returns(M.undefined()),
   });
 
@@ -73,7 +80,7 @@ export const makeMailbox = makeObservableMap => {
     );
   return makeExo('Mailbox', MailboxI, {
     help: () =>
-      'send(contact, content), receive(contact, sequence, content), inbox(), outbox(), take(id, index), discard(id), subscribeInbox(listener, ephemeral?), subscribeOutbox(listener, ephemeral?).',
+      'send(contact, content), receive(contact, sequence, content), inbox(), outbox(), take(id, index), discard(id), subscribeInbox(listener, ephemeral?), subscribeOutbox(listener, ephemeral?), subscribeInboxEntries(listener, ephemeral?), subscribeOutboxEntries(listener, ephemeral?).',
     /**
      * @param {any} contact
      * @param {bigint} sequence
@@ -167,6 +174,18 @@ export const makeMailbox = makeObservableMap => {
      */
     subscribeOutbox: (listener, ephemeral = false) =>
       outbox.subscribe(listener, ephemeral),
+    /**
+     * @param {any} listener
+     * @param {boolean} [ephemeral]
+     */
+    subscribeInboxEntries: (listener, ephemeral = false) =>
+      inbox.subscribeEntries(listener, ephemeral),
+    /**
+     * @param {any} listener
+     * @param {boolean} [ephemeral]
+     */
+    subscribeOutboxEntries: (listener, ephemeral = false) =>
+      outbox.subscribeEntries(listener, ephemeral),
     // Supervisor restart is a lifetime boundary for all old UI connections.
     disconnectEphemeral: () => {
       inbox.disconnectEphemeral();

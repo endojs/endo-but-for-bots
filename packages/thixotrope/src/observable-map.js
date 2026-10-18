@@ -13,8 +13,9 @@ import { M } from '@endo/patterns';
  * separate lifetime regime — the workspace inventory and the conventional
  * `contacts` address book are both just instances of this.
  *
- * Notifications carry descriptions, never the values themselves, so an
- * observer can render the map without receiving the capabilities in it.
+ * The display subscription carries descriptions, never the values themselves.
+ * The explicit subscribeEntries endpoint grants stored values and sends an
+ * initial reset followed by per-key changes, coalesced while the listener is busy.
  *
  * `keyOf(value)` is the reverse lookup, kept as an index rather than a scan
  * so that labelling a row costs nothing proportional to the map. When the
@@ -44,6 +45,10 @@ export const makeObservableMap = () => {
     subscribe: M.call(M.raw())
       .optional(M.boolean())
       .returns(M.remotable('subscription')),
+    // Explicitly grants the stored values, unlike the display subscription.
+    subscribeEntries: M.call(M.raw())
+      .optional(M.boolean())
+      .returns(M.remotable('subscription')),
     disconnectEphemeral: M.call().returns(M.undefined()),
     subscriptionCounts: M.call().returns(M.record()),
   });
@@ -69,6 +74,13 @@ export const makeObservableMap = () => {
     if (typeof value === 'symbol') return '<symbol>';
     return String(value);
   };
+  // Preserve reverse-lookup precedence when an initial stream has aliases.
+  const initialEntries = () =>
+    new Map(
+      [...holders].flatMap(([value, keys]) =>
+        [...keys].map(key => [key, value]),
+      ),
+    );
   const snapshot = () =>
     harden({
       revision,
@@ -86,7 +98,14 @@ export const makeObservableMap = () => {
   /** @param {any} state */
   const pump = state => {
     if (!state.active || state.busy || state.pending === undefined) return;
-    const update = state.pending;
+    const update = state.entries
+      ? harden({
+          revision: state.pending.revision,
+          reset: state.pending.reset,
+          entries: [...state.pending.values],
+          deleted: [...state.pending.deleted],
+        })
+      : state.pending;
     state.pending = undefined;
     state.busy = true;
     void E(state.listener)
@@ -99,12 +118,41 @@ export const makeObservableMap = () => {
         () => cancel(state),
       );
   };
-  const changed = () => {
+  /** @param {string | undefined} [key] */
+  const changed = key => {
     revision += 1n;
     if (subscriptions.size === 0) return;
-    const update = snapshot();
+    let update;
     for (const state of subscriptions) {
-      state.pending = update;
+      if (state.entries) {
+        if (key === undefined) {
+          state.pending = {
+            revision,
+            reset: true,
+            values: initialEntries(),
+            deleted: new Set(),
+          };
+        } else {
+          state.pending ??= {
+            revision,
+            reset: false,
+            values: new Map(),
+            deleted: new Set(),
+          };
+          state.pending.revision = revision;
+          if (values.has(key)) {
+            state.pending.values.delete(key);
+            state.pending.values.set(key, values.get(key));
+            state.pending.deleted.delete(key);
+          } else {
+            state.pending.values.delete(key);
+            state.pending.deleted.add(key);
+          }
+        }
+      } else {
+        update ??= snapshot();
+        state.pending = update;
+      }
       pump(state);
     }
   };
@@ -132,7 +180,7 @@ export const makeObservableMap = () => {
   };
   const observableMap = makeExo('ObservableMap', ObservableMapI, {
     help: () =>
-      'Observable Map: get, has, set, delete, clear, keys, entries, getSize, keyOf(value); subscribe(listener, ephemeral?) sends display snapshots to listener.changed. Subscription.unsubscribe releases it.',
+      'Observable Map: get, has, set, delete, clear, keys, entries, getSize, keyOf(value); subscribe(listener, ephemeral?) sends display snapshots. subscribeEntries(listener, ephemeral?) grants values and sends an initial reset followed by coalesced entry changes to listener.changed. Subscription.unsubscribe releases it.',
     /** @param {string} key */
     get: key => values.get(key),
     /** @param {string} key */
@@ -146,7 +194,7 @@ export const makeObservableMap = () => {
         if (values.has(key)) release(key, values.get(key));
         values.set(key, value);
         hold(key, value);
-        changed();
+        changed(key);
       }
       return observableMap;
     },
@@ -155,7 +203,7 @@ export const makeObservableMap = () => {
       if (!values.has(key)) return false;
       release(key, values.get(key));
       values.delete(key);
-      changed();
+      changed(key);
       return true;
     },
     clear: () => {
@@ -195,6 +243,32 @@ export const makeObservableMap = () => {
         active: true,
         busy: false,
         pending: snapshot(),
+      };
+      subscriptions.add(state);
+      pump(state);
+      return makeExo('ObservableMapSubscription', ObservableMapSubscriptionI, {
+        unsubscribe: () => cancel(state),
+      });
+    },
+    /**
+     * Ordered initial entries followed by coalesced per-key changes.
+     * This endpoint grants values to the listener; subscribe() only describes them.
+     * @param {any} listener
+     * @param {boolean} [ephemeral]
+     */
+    subscribeEntries: (listener, ephemeral = false) => {
+      const state = {
+        listener,
+        ephemeral,
+        entries: true,
+        active: true,
+        busy: false,
+        pending: {
+          revision,
+          reset: true,
+          values: initialEntries(),
+          deleted: new Set(),
+        },
       };
       subscriptions.add(state);
       pump(state);
