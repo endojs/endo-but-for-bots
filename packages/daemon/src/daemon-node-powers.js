@@ -13,7 +13,6 @@ import { makeReaderRef } from './reader-ref.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
 import { makeSerialJobs } from './serial-jobs.js';
-import { makeAmaroExecArgv } from './amaro-exec-argv.js';
 
 /** @import { Reader, Writer } from '@endo/stream' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
@@ -497,7 +496,6 @@ export const makeDaemonicControlPowers = (
 
     const log = fs.openSync(logPath, 'a');
     const child = popen.fork(endoWorkerPath, [], {
-      execArgv: makeAmaroExecArgv(),
       stdio: ['ignore', log, log, 'pipe', 'pipe', 'ipc'],
       // @ts-ignore Stale Node.js type definition.
       windowsHide: true,

@@ -20,7 +20,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "^22.18.0 || >=23.6.0"
   },
   "exports": {},
   "scripts": {
@@ -48,7 +48,6 @@
     "@endo/promise-kit": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/where": "workspace:^",
-    "amaro": "^1.1.9",
     "commander": "^5.0.0",
     "open": "^9.1.0"
   },

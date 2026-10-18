@@ -5,10 +5,10 @@ authored in `.ts` with only erasable type syntax (no `enum`, `namespace`,
 `const enum`, or parameter properties). This lets the same source work:
 
 - **At development time** — imported directly as `.ts`, stripped by Node's
-  built-in type stripping (on by default from Node.js 22.18 and 23.6; earlier
-  22.x releases need `--experimental-strip-types`). `@endo/cli` registers the
-  `amaro/strip` hook, and `@endo/daemon` adds it to the `execArgv` of the
-  processes it forks.
+  built-in type stripping, which is on by default from Node.js 22.18 and 23.6.
+  The workspace therefore declares `engines.node` `^22.18.0 || >=23.6.0`, and
+  the `endo` command exits with an error when type stripping is unavailable.
+  Processes the daemon forks inherit the same built-in stripping.
 - **At bundle time** — `@endo/bundle-source` strips types from `.ts` modules
   that a bundle reaches through workspace packages. Code that calls
   `@endo/compartment-mapper` directly on workspace sources must supply a

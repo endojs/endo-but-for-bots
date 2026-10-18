@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /* global process */
 (async () => {
-  // amaro/strip, which loads the `.ts` sources, requires Node.js 22 or later.
-  const [nodeMajor] = process.versions.node.split('.');
-  if (Number(nodeMajor) < 22) {
+  // Endo loads `.ts` sources from its workspace packages, which needs
+  // Node.js type stripping: on by default from 22.18 and 23.6.
+  if (!process.features.typescript) {
     throw Error(
-      `endo requires Node.js >=22, but this is Node.js ${process.version}`,
+      `endo requires Node.js type stripping (^22.18.0 || >=23.6.0), but it is unavailable in Node.js ${process.version}`,
     );
   }
-  await import('amaro/strip');
   const { main } = await import('../src/endo.js');
   await main(process.argv.slice(2));
 })().catch(error => {
