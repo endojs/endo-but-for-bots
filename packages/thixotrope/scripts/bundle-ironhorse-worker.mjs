@@ -9,7 +9,9 @@ import { readCodecPolyfill } from '@endo/ironhorse-prelude/codec-polyfill.js';
 
 const readPowers = makeReadPowers({ fs, url, crypto, path });
 const root = new URL('../', import.meta.url);
-const dist = new URL('dist-ironhorse/', root);
+const dist = process.argv[2]
+  ? url.pathToFileURL(`${path.resolve(process.argv[2])}${path.sep}`)
+  : new URL('dist-ironhorse/', root);
 fs.mkdirSync(dist, { recursive: true });
 const ses = await makeBundle(readPowers, import.meta.resolve('ses'));
 // The Ironhorse repairs the shim needs, shared with `@endo/test262-runner`'s

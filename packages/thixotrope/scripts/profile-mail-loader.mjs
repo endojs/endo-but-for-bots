@@ -66,10 +66,28 @@ const replace = (source, from, to) => {
 registerHooks({
   load(url, context, next) {
     const result = next(url, context);
+    if (url.endsWith('/packages/ocapn/src/client/ocapn.js')) {
+      const source = result.source?.toString();
+      if (source === undefined) return result;
+      return {
+        ...result,
+        source: replace(
+          source,
+          'const gcBatching = true;',
+          `const gcBatching = ${process.env.THIX_MAIL_GC !== 'off'};`,
+        ),
+      };
+    }
     if (!url.includes('/packages/thixotrope/src/')) return result;
     let source = result.source?.toString();
     if (source === undefined) return result;
-    if (url.endsWith('/net/hub-state.js')) {
+    if (url.endsWith('/net/hub.js')) {
+      source = replace(
+        source,
+        'const gcBatching = true;',
+        `const gcBatching = ${!['off', 'client'].includes(process.env.THIX_MAIL_GC)};`,
+      );
+    } else if (url.endsWith('/net/hub-state.js')) {
       source = replace(
         source,
         '  /** @type {any} */\n  const state = {',

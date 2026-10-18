@@ -30,7 +30,10 @@ const workerBinary =
   join(packagePath, '../../target/release/thixotrope-ironhorse-worker');
 const bootPaths = harden(
   ['boot.js', 'worker-peer.js'].map(name =>
-    join(packagePath, 'dist-ironhorse', name),
+    join(
+      process.env.THIXOTROPE_BOOT_DIR ?? join(packagePath, 'dist-ironhorse'),
+      name,
+    ),
   ),
 );
 // Fail at module load, never turn missing CI artifacts into skipped tests.

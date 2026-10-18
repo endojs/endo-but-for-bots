@@ -11,6 +11,8 @@ import { pathToFileURL } from 'node:url';
 
 import { connectLocalControl } from '../src/control/local-control.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
+import { makeIronhorseEngine } from '../src/ironhorse/ironhorse-engine.js';
+import { readIronhorseLimits } from '../src/ironhorse/ironhorse-limits.js';
 import { makeMailbox } from '../src/mail/mailbox.js';
 import { makeObservableMap } from '../src/observable-map.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
@@ -30,6 +32,16 @@ if (!['name', 'reference'].includes(recipientStrategy))
   throw Error('Expected name or reference recipient strategy');
 if (!['atomic', 'log'].includes(hubStrategy))
   throw Error('Expected atomic or log hub strategy');
+const gcStrategy = process.env.THIX_MAIL_GC ?? 'both';
+if (!['off', 'client', 'both'].includes(gcStrategy))
+  throw Error('Expected off, client, or both GC strategy');
+if (gcStrategy !== 'both' && !globalThis[Symbol.for('thixotrope.mailProfile')])
+  throw Error('GC ablation requires profile-mail-loader.mjs');
+const gcPressure = Number(process.env.THIX_MAIL_GC_PRESSURE ?? 0);
+if (!Number.isInteger(gcPressure) || gcPressure < 0 || gcPressure > 256)
+  throw Error('Expected 0–256 GC-pressure reads');
+if (gcPressure && typeof globalThis.gc !== 'function')
+  throw Error('GC pressure requires --expose-gc');
 const trialCount = Number(process.env.THIX_MAIL_TRIALS ?? 3);
 if (!Number.isInteger(trialCount) || trialCount < 1 || trialCount > 1000)
   throw Error('Expected 1–1000 measured trials');
@@ -81,7 +93,27 @@ const clients = [];
 /** @type {any[]} */
 const results = [];
 try {
-  supervisor = await serveThixotrope(harden({ ...powers, syncFiles }), root, {
+  const daemonPowers = harden({ ...powers, syncFiles });
+  const bootDirectory = process.env.THIX_MAIL_BOOT_DIR;
+  const engine = bootDirectory
+    ? makeIronhorseEngine(daemonPowers, {
+        ...readIronhorseLimits(powers.environment),
+        workerBinary:
+          process.env.THIXOTROPE_IRONHORSE_WORKER ??
+          powers.paths.fileURLToPath(
+            new URL(
+              '../../../target/release/thixotrope-ironhorse-worker',
+              import.meta.url,
+            ),
+          ),
+        bootPaths: ['boot.js', 'worker-peer.js'].map(name =>
+          join(bootDirectory, name),
+        ),
+        storePath: join(root, 'heaps'),
+      })
+    : undefined;
+  supervisor = await serveThixotrope(daemonPowers, root, {
+    ...(engine ? { engine } : {}),
     idleSleepMs: 3_600_000,
     snapshotEveryDeliveries: 1_000_000,
   });
@@ -191,11 +223,25 @@ try {
       );
       for (let trial = 0; trial < trialCount; trial += 1) {
         const marker = `${mode} ${trial}`;
+        if (gcPressure) {
+          // Preparatory RPCs are excluded; collection and the resulting traffic
+          // are included in the measured interval. Report this as stress load.
+          await Promise.all(
+            Array.from({ length: gcPressure }, () => E(counter).read()),
+          );
+          await new Promise(resolve => setImmediate(resolve));
+          await new Promise(resolve => setImmediate(resolve));
+        }
         const before = await client.call('status');
         const index = writes.length;
         const epoch = Date.now();
         const window = profiling?.begin(trial);
         const start = performance.now();
+        if (gcPressure) {
+          globalThis.gc();
+          await new Promise(resolve => setImmediate(resolve));
+          await new Promise(resolve => setImmediate(resolve));
+        }
         await service.send(
           recipientStrategy === 'name'
             ? 'Notes'
@@ -251,6 +297,9 @@ try {
         strategy: {
           recipient: recipientStrategy,
           hub: hubStrategy,
+          gc: gcStrategy,
+          gcPressure,
+          boot: process.env.THIX_MAIL_BOOT_DIR ? 'override' : 'default',
         },
         results,
       },
