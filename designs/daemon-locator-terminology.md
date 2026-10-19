@@ -126,7 +126,7 @@ endo://{peerKey}/{formulaAddress}@{hint1}@{hint2}?type={formulaType}
 
 Invitation locator:
 ```
-endo://{peerKey}/{invitationAddress}@{hint1}@{hint2}?type=invitation&from={handleAddress}
+endo://{peerKey}/{invitationAddress}@{hint1}@{hint2}?type=invitation&from={handleAddress}[&fromNode={handlePeerKey}]
 ```
 
 The URL path is a sequence of `@`-delimited components.
@@ -137,8 +137,10 @@ connection hints of the form `<transport-prefix>:<transport-payload>`
 Each component is URL-encoded with `encodeURIComponent` so that `@`, `/`,
 and `?` inside a hint do not collide with the path syntax.
 
-The `from` parameter on an invitation contains only the handle's formula
-address (peer key is the same as the hostname).
+The `from` parameter on an invitation carries the handle's formula address.
+When the handle's peer key differs from the locator's hostname (the handle
+uses an agent key), a `fromNode` parameter carries the handle's peer key;
+otherwise the handle's peer key is the hostname and `fromNode` is omitted.
 
 ### New Types (types.d.ts)
 
