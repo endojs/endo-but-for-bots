@@ -6,7 +6,12 @@ import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
-import { mainHttp, parseBearer, startMcpHttpGateway } from '../src/http.js';
+import {
+  mainHttp,
+  makeMcpHttpHandler,
+  parseBearer,
+  startMcpHttpGateway,
+} from '../src/http.js';
 import { makeAgentTools } from '../src/agent-interface.js';
 
 const FORMULA_ID = 'ab'.repeat(32);
@@ -126,6 +131,52 @@ const startGateway = async ({ penaltyMs = 0, allowedOrigins } = {}) => {
   };
   return { url, rpc, calls, close: gateway.close };
 };
+
+test('the handler refuses a body longer than maxBodyBytes', async t => {
+  // Driven without a socket: over a real connection the server's early
+  // refusal races the client's upload, which surfaces as a client-side
+  // error rather than the 413.
+  /** @type {string[]} */
+  const handled = [];
+  const handler = makeMcpHttpHandler({
+    resolveServer: async () => ({
+      handleLine: async line => {
+        handled.push(line);
+        return undefined;
+      },
+    }),
+    maxBodyBytes: 8,
+  });
+  const request = /** @type {any} */ ({
+    url: '/mcp',
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${FORMULA_ID}`,
+      'content-type': 'application/json',
+    },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from('{"jsonrp');
+      yield Buffer.from('c":"2.0"}');
+    },
+  });
+  /** @type {{ status?: number, body?: string }} */
+  const sent = {};
+  const response = /** @type {any} */ ({
+    writeHead: status => {
+      sent.status = status;
+    },
+    end: body => {
+      sent.body = body;
+    },
+  });
+  t.true(await handler(request, response));
+  t.is(sent.status, 413);
+  t.deepEqual(JSON.parse(sent.body || ''), {
+    error: 'Request body too large',
+  });
+  t.deepEqual(handled, []);
+});
 
 test('parseBearer accepts only a formula identifier', t => {
   t.is(parseBearer(`Bearer ${FORMULA_ID}`), FORMULA_ID);
@@ -295,13 +346,6 @@ test.serial(
         body: '{}',
       });
       t.is(text.status, 415);
-
-      const oversized = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: ' '.repeat(4 * 1024 * 1024 + 1),
-      });
-      t.is(oversized.status, 413);
     } finally {
       await close();
     }
