@@ -211,6 +211,28 @@ export const table = [
       answerPositions: [1n],
     },
   },
+  {
+    // <op:ping epoch      ; non-negative integer
+    //          sequence>  ; non-negative integer
+    name: 'op:ping',
+    value: {
+      type: 'op:ping',
+      epoch: 0n,
+      sequence: 7n,
+    },
+  },
+  {
+    // <op:pong epoch                   ; non-negative integer
+    //          sequence                ; non-negative integer
+    //          last-acked-recv-nonce>  ; non-negative integer
+    name: 'op:pong',
+    value: {
+      type: 'op:pong',
+      epoch: 1n,
+      sequence: 0n,
+      lastAckedRecvNonce: 18_446_744_073_709_551_615n,
+    },
+  },
   // Below are messages observed in the ocapn python test suite.
   {
     name: 'python op:deliver fetch 1',
