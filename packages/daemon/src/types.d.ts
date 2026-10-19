@@ -1675,6 +1675,18 @@ export interface EndoNetwork {
   supports: (network: string) => boolean;
   addresses: () => Array<string>;
   connect: (address: string, farContext: FarContext) => Promise<EndoGateway>;
+  /**
+   * Optional. Informs the network that the local agent `agentId` answers to
+   * `publicKey`, so the network can accept connections on behalf of every
+   * persona it carries. The daemon registers an agent only with the
+   * networks in that agent's own `@nets`.
+   */
+  registerAgentKey?: (
+    publicKey: string,
+    agentId: FormulaIdentifier,
+  ) => Promise<void> | void;
+  /** Optional. Reverses `registerAgentKey`. */
+  unregisterAgentKey?: (publicKey: string) => Promise<void> | void;
 }
 
 export interface EndoAgent

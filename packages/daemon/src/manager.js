@@ -3925,6 +3925,8 @@ const makeDaemonCore = async (
         platformNames,
         context,
       );
+      // eslint-disable-next-line no-use-before-define
+      registerAgentWithNetworks(id, agentNodeNumber, networksId, context);
       const handle = /** @type {any} */ (agent).handle();
       agentIdForHandle.set(handle, id);
       return agent;
@@ -3979,6 +3981,13 @@ const makeDaemonCore = async (
         planesDirectoryId,
         guestPinsDirectoryId,
         hostPinsDirectoryId,
+        context,
+      );
+      // eslint-disable-next-line no-use-before-define
+      registerAgentWithNetworks(
+        id,
+        agentNodeNumber,
+        networksDirectoryId,
         context,
       );
       const handle = /** @type {any} */ (agent).handle();
@@ -4301,6 +4310,10 @@ const makeDaemonCore = async (
                     provide(/** @type {FormulaIdentifier} */ (id)),
                   ),
                 );
+                // Agents incarnated before their networks came up register
+                // now that the networks are live.
+                // eslint-disable-next-line no-use-before-define
+                await syncAllAgentNetworkRegistrations();
               },
               revivePins: async () => {
                 const pinsDirectory = await provide(pinsId, 'directory');
@@ -6618,8 +6631,177 @@ const makeDaemonCore = async (
     return readyNetworks;
   };
 
+  // Network registration (designs/daemon-agent-network-identity.md).
+  // Each incarnated agent's public key is registered with the networks in
+  // that agent's own `@nets`, so a network knows every persona it carries
+  // and can recognize an inbound peer that names one of them. An agent
+  // whose `@nets` is empty is registered with no network, which keeps the
+  // anonymizing-persona default: no network can disclose that this daemon
+  // hosts it. Networks that lack `registerAgentKey`/`unregisterAgentKey`
+  // are skipped.
+
+  /**
+   * @typedef {object} AgentNetworkRegistration
+   * @property {NodeNumber} publicKey
+   * @property {FormulaIdentifier} networksDirectoryId
+   * @property {Map<EndoNetwork, Promise<void>>} networks - the networks
+   *   holding the key, each with its settling registration call
+   */
+
+  /** @type {Map<FormulaIdentifier, AgentNetworkRegistration>} */
+  const networkRegistrationForAgent = new Map();
+
+  /** @type {WeakMap<EndoNetwork, Promise<boolean>>} */
+  const networkAcceptsAgentKeys = new WeakMap();
+
+  /**
+   * @param {EndoNetwork} network
+   * @returns {Promise<boolean>}
+   */
+  const provideNetworkAcceptsAgentKeys = network => {
+    let accepts = networkAcceptsAgentKeys.get(network);
+    if (accepts === undefined) {
+      /** @type {Promise<string[]>} */
+      // eslint-disable-next-line no-underscore-dangle
+      const methodNamesPromise = E(
+        /** @type {any} */ (network),
+      ).__getMethodNames__();
+      accepts = methodNamesPromise.then(
+        /** @param {string[]} methodNames */
+        methodNames =>
+          methodNames.includes('registerAgentKey') &&
+          methodNames.includes('unregisterAgentKey'),
+        () => false,
+      );
+      networkAcceptsAgentKeys.set(network, accepts);
+    }
+    return accepts;
+  };
+
+  /**
+   * @param {EndoNetwork} network
+   * @param {NodeNumber} publicKey
+   */
+  const unregisterAgentKeyFromNetwork = async (network, publicKey) => {
+    if (await provideNetworkAcceptsAgentKeys(network)) {
+      await E(network).unregisterAgentKey?.(publicKey);
+    }
+  };
+
+  /**
+   * Bring the networks holding an agent's key in line with the networks
+   * currently in the agent's `@nets`: register with networks added since
+   * the last sync and unregister from networks since removed. Settles
+   * once every registration call for a current network has settled,
+   * including calls an earlier sync started.
+   *
+   * @param {FormulaIdentifier} agentId
+   */
+  const syncAgentNetworkRegistration = async agentId => {
+    const registration = networkRegistrationForAgent.get(agentId);
+    if (registration === undefined) {
+      return;
+    }
+    const {
+      publicKey,
+      networksDirectoryId,
+      networks: registered,
+    } = registration;
+    const current = new Set(await getAllNetworks(networksDirectoryId));
+    for (const network of [...registered.keys()]) {
+      if (!current.has(network)) {
+        registered.delete(network);
+        unregisterAgentKeyFromNetwork(network, publicKey).catch(() => {});
+      }
+    }
+    for (const network of current) {
+      if (!registered.has(network)) {
+        const registering = (async () => {
+          if (await provideNetworkAcceptsAgentKeys(network)) {
+            await E(network).registerAgentKey?.(publicKey, agentId);
+          }
+        })().catch(error => {
+          // Forget the network so the next sync retries.
+          registered.delete(network);
+          console.error(
+            `Endo daemon failed to register agent key ${publicKey.slice(0, 8)} with a network`,
+            error,
+          );
+        });
+        registered.set(network, registering);
+      }
+    }
+    await Promise.all(registered.values());
+  };
+
+  /**
+   * @param {FormulaIdentifier} agentId
+   * @param {NodeNumber} publicKey
+   * @param {FormulaIdentifier} networksDirectoryId
+   * @param {Context} context - the agent's context; cancelling it
+   *   unregisters the key from every network that holds it.
+   */
+  const registerAgentWithNetworks = (
+    agentId,
+    publicKey,
+    networksDirectoryId,
+    context,
+  ) => {
+    /** @type {AgentNetworkRegistration} */
+    const registration = {
+      publicKey,
+      networksDirectoryId,
+      networks: new Map(),
+    };
+    networkRegistrationForAgent.set(agentId, registration);
+    context.cancelled.catch(async () => {
+      // A reincarnation may already have replaced this registration.
+      if (networkRegistrationForAgent.get(agentId) !== registration) {
+        return;
+      }
+      networkRegistrationForAgent.delete(agentId);
+      await Promise.allSettled(
+        [...registration.networks.keys()].map(network =>
+          unregisterAgentKeyFromNetwork(network, publicKey),
+        ),
+      );
+    });
+    syncAgentNetworkRegistration(agentId).catch(error =>
+      console.error(
+        `Endo daemon failed to register agent key ${publicKey.slice(0, 8)} with its networks`,
+        error,
+      ),
+    );
+  };
+
+  const syncAllAgentNetworkRegistrations = async () => {
+    await Promise.allSettled(
+      [...networkRegistrationForAgent.keys()].map(syncAgentNetworkRegistration),
+    );
+  };
+
+  /**
+   * Sync every agent that shares `networksDirectoryId`. Runs before an
+   * agent advertises addresses from that directory, so a network added to
+   * `@nets` holds the agent's key before any locator naming it leaves the
+   * daemon.
+   *
+   * @param {FormulaIdentifier} networksDirectoryId
+   */
+  const syncNetworkRegistrationsForDirectory = async networksDirectoryId => {
+    await Promise.allSettled(
+      [...networkRegistrationForAgent.entries()]
+        .filter(
+          ([_agentId, registration]) =>
+            registration.networksDirectoryId === networksDirectoryId,
+        )
+        .map(([agentId]) => syncAgentNetworkRegistration(agentId)),
+    );
+  };
+
   /** @type {DaemonCore['getAllNetworkAddresses']} */
   const getAllNetworkAddresses = async networksDirectoryId => {
+    await syncNetworkRegistrationsForDirectory(networksDirectoryId);
     const networksDirectory = await provide(networksDirectoryId, 'directory');
     const networkIds = await networksDirectory.listIdentifiers();
     const readyNetworks = networkIds
