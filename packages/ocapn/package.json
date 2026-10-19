@@ -69,7 +69,9 @@
   },
   "devDependencies": {
     "@endo/chacha12": "workspace:^",
+    "@endo/exo": "workspace:^",
     "@endo/lockdown": "workspace:^",
+    "@endo/patterns": "workspace:^",
     "@endo/random": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@types/ws": "^8",

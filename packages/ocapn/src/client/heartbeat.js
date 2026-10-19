@@ -12,9 +12,10 @@
  * earlier than the current one are stragglers from an obsolete
  * transport instance and are dropped without counting as liveness.
  *
- * Phase 1 runs on a single transport instance, so the epoch stays at
- * zero and loss tears the session down. Later phases advance the
- * epoch on reconnect instead.
+ * The epoch is the session's (see `send-queue.js`), read through
+ * `getEpoch`. Until reconnect lands the session has a single transport
+ * instance, so the epoch stays at zero and loss tears the session
+ * down. Later phases advance the epoch on reconnect instead.
  */
 
 import harden from '@endo/harden';
@@ -114,6 +115,8 @@ const makeDefaultTimer = () => {
  * @param {() => bigint} [params.getLastAckedRecvNonce] highest receive
  *   nonce this side has decrypted, for `op:pong`. Defaults to 0n where
  *   the cipher state is not visible (the CapTP layer above a network).
+ * @param {() => bigint} [params.getEpoch] the session's current epoch.
+ *   Defaults to 0n, a session with a single transport instance.
  * @returns {Heartbeat}
  */
 export const makeHeartbeat = ({
@@ -121,12 +124,11 @@ export const makeHeartbeat = ({
   send,
   onLoss,
   getLastAckedRecvNonce = () => 0n,
+  getEpoch = () => 0n,
 }) => {
   const { intervalMs, timeoutMs } = validateHeartbeatOptions(options);
   const { timer = makeDefaultTimer() } = options;
 
-  // A single transport instance per session until reconnect lands.
-  const epoch = 0n;
   let pingSequence = 0n;
   let pongSequence = 0n;
   let peerAckedRecvNonce = 0n;
@@ -172,6 +174,7 @@ export const makeHeartbeat = ({
     emitHandle = undefined;
     if (!running) return;
     const lastAckedRecvNonce = getLastAckedRecvNonce();
+    const epoch = getEpoch();
     /** @param {object} message */
     const trySend = message => {
       try {
@@ -206,7 +209,7 @@ export const makeHeartbeat = ({
   const observe = message => {
     const { type } = message;
     if (type === 'op:ping' || type === 'op:pong') {
-      if (/** @type {bigint} */ (message.epoch) < epoch) return false;
+      if (/** @type {bigint} */ (message.epoch) < getEpoch()) return false;
       if (type === 'op:pong') {
         // Take the max so a replayed or reordered pong cannot rewind
         // the acknowledgment.
@@ -222,7 +225,7 @@ export const makeHeartbeat = ({
     start,
     stop,
     observe,
-    getEpoch: () => epoch,
+    getEpoch,
     getPeerAckedRecvNonce: () => peerAckedRecvNonce,
     getConfig: () => harden({ intervalMs, timeoutMs }),
   });

@@ -1,7 +1,6 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
-import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 
@@ -11,46 +10,7 @@ import {
 } from '../src/client/heartbeat.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { makeTestClientPair, test as netTest, waitUntilTrue } from './_util.js';
-
-/**
- * A manually advanced clock satisfying `HeartbeatTimer`.
- */
-const makeManualTimer = () => {
-  let now = 0;
-  let nextId = 0;
-  /** @type {Map<number, { at: number, callback: () => void }>} */
-  const pending = new Map();
-  const timer = harden({
-    setTimeout: (callback, delayMs) => {
-      nextId += 1;
-      pending.set(nextId, { at: now + delayMs, callback });
-      return nextId;
-    },
-    clearTimeout: handle => {
-      pending.delete(handle);
-    },
-  });
-  /** @param {number} ms */
-  const advance = ms => {
-    const end = now + ms;
-    for (;;) {
-      let dueId;
-      let due;
-      for (const [id, entry] of pending) {
-        if (entry.at <= end && (!due || entry.at < due.at)) {
-          dueId = id;
-          due = entry;
-        }
-      }
-      if (!due) break;
-      pending.delete(/** @type {number} */ (dueId));
-      now = due.at;
-      due.callback();
-    }
-    now = end;
-  };
-  return { timer, advance, pendingCount: () => pending.size };
-};
+import { makeManualTimer } from './_manual-timer.js';
 
 const makeUnitKit = (options = {}) => {
   const clock = makeManualTimer();

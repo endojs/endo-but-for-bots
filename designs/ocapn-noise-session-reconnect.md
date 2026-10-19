@@ -667,6 +667,22 @@ sequenceDiagram
    while remaining the structural prerequisite for Phase 3's
    reconnect-with-rekey path.
 
+   *Status (2026-10-19): implemented.* The queue and epoch live in
+   `packages/ocapn/src/client/send-queue.js`. Every serialized operation
+   a session sends passes through it; it is transparent while the
+   transport's `write` completes synchronously, and holds later
+   operations in order behind a `write` that returns a pending promise
+   (a stall), draining them when it settles. The heartbeat reads the
+   session epoch from the queue, which stays at 0 until reconnect.
+   `advanceEpoch(write)` binds the next transport instance and replays
+   every operation not known to have left, the in-flight one included
+   (at-least-once), for Phase 3 to call. The fault injector is
+   `packages/ocapn/test/_stall-injector.js`, interposed through the
+   session's debug `sendQueue.interposeWriter`; the
+   `send-queue.test.js` integration tests cover a 20 s stall that
+   queues and replays without loss, and a 35 s stall that the
+   heartbeat declares lost.
+
 3. **Phase 3: Reconnect with Rekey.** Implement transparent reconnect
    using a fresh Noise handshake on the new TCP transport. This is
    simpler than Resume and exercises the queue/epoch/tiebreaker logic
