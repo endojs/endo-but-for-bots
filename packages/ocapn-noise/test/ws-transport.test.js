@@ -48,13 +48,13 @@ test('ws transport: peer round-trip exchanges binary frames in both directions',
   const serverTransport = makeWebSocketTransport({
     WebSocket,
     WebSocketServer,
-    host: '127.0.0.1',
-    port: 0,
   });
   t.teardown(() => serverTransport.shutdown());
   const listen = serverTransport.listen;
   if (!listen) throw Error('ws transport must expose listen');
-  const listener = await listen(stream => resolveServerStream(stream));
+  const listener = await listen({ host: '127.0.0.1', port: 0 }, stream =>
+    resolveServerStream(stream),
+  );
   t.teardown(() => listener.close());
 
   const clientTransport = makeWebSocketTransport({
@@ -123,16 +123,14 @@ test('ws transport: calling listen twice throws', async t => {
   const transport = makeWebSocketTransport({
     WebSocket,
     WebSocketServer,
-    host: '127.0.0.1',
-    port: 0,
   });
   t.teardown(() => transport.shutdown());
   const listen = transport.listen;
   if (!listen) throw Error('ws transport must expose listen');
 
-  const listener = await listen(noopHandler);
+  const listener = await listen({ host: '127.0.0.1', port: 0 }, noopHandler);
   t.teardown(() => listener.close());
-  await t.throwsAsync(() => listen(noopHandler), {
+  await t.throwsAsync(() => listen({}, noopHandler), {
     message: /listen called more than once/,
   });
 });
@@ -141,13 +139,11 @@ test('ws transport: listening on 0.0.0.0 advertises 127.0.0.1 in the url hint', 
   const transport = makeWebSocketTransport({
     WebSocket,
     WebSocketServer,
-    host: '0.0.0.0',
-    port: 0,
   });
   t.teardown(() => transport.shutdown());
   const listen = transport.listen;
   if (!listen) throw Error('ws transport must expose listen');
-  const listener = await listen(noopHandler);
+  const listener = await listen({ host: '0.0.0.0', port: 0 }, noopHandler);
   t.teardown(() => listener.close());
   const url = new URL(listener.hints.url);
   t.is(url.hostname, '127.0.0.1', 'wildcard host substituted with loopback');

@@ -167,9 +167,16 @@ const network = makeOcapnNoiseNetwork({ codec: cborCodec });
 const keys = network.generateSigningKeys();
 const keyId = network.addSigningKeys(keys);
 
-// Register one or more transports. Adding a transport that supports
-// `listen` immediately starts accepting inbound sessions.
-await network.addTransport(makeTcpTransport());
+// Register one or more dial adapters without opening listeners.
+const tcp = makeTcpTransport();
+network.addTransport(tcp);
+
+// Listening is explicit and returns a handle. Closing the handle withdraws
+// this transport's hints without unregistering its dial adapter.
+const tcpListener = await network.listen(tcp, {
+  host: '127.0.0.1',
+  port: 0,
+});
 
 // Hand peers our location; they reach us at
 // `ocapn://<keyId>.np?tcp:host=...&tcp:port=...`.
@@ -180,6 +187,8 @@ const session = await network.provideSession(peerLocation, {
   localKeyId: keyId,
 });
 await session.writer.next(new TextEncoder().encode('hello'));
+
+tcpListener.close();
 ```
 
 Both peers must share the same OCapN wire codec; the Noise handshake

@@ -221,7 +221,8 @@ const withTimeout = (promise, ms, label, stream) => {
 /**
  * Create an OCapN-Noise network. The network starts empty: add signing
  * keys and transports at any point with `addSigningKeys` and
- * `addTransport`.
+ * `addTransport`. Opening an inbound listener is a separate `listen`
+ * operation.
  *
  * The network loads its own Noise WASM module internally (via the
  * `./wasm/node.js` platform adapter) and hard-codes the one CapTP
@@ -256,6 +257,8 @@ export const makeOcapnNoiseNetwork = ({
   const registeredTransports = new Set();
   /** @type {Map<OcapnNoiseTransport, TransportListener>} */
   const listenersByTransport = new Map();
+  /** @type {Set<OcapnNoiseTransport>} */
+  const listeningTransports = new Set();
 
   /**
    * Crossed-hello state. A pair of peers may independently dial each
@@ -1287,8 +1290,7 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   /** @type {OcapnNoiseNetwork['addTransport']} */
-  const addTransport = async transport => {
-    await null;
+  const addTransport = transport => {
     if (registeredTransports.has(transport)) return;
     // Refuse a second transport with the same scheme: outgoing
     // dial selection iterates `registeredTransports` and returns the
@@ -1302,24 +1304,72 @@ export const makeOcapnNoiseNetwork = ({
         );
       }
     }
-    if (transport.listen) {
-      // Call `listen` first so a failure can't leave a half-registered
-      // transport behind; only add to the set once the listener is
-      // live.
-      const listener = await transport.listen(stream => handleIncoming(stream));
-      registeredTransports.add(transport);
-      listenersByTransport.set(transport, listener);
-    } else {
-      registeredTransports.add(transport);
+    registeredTransports.add(transport);
+  };
+
+  /** @type {OcapnNoiseNetwork['listen']} */
+  const listen = async (transport, options = undefined) => {
+    await null;
+    if (!registeredTransports.has(transport)) {
+      throw makeError(
+        X`ocapn-noise: transport must be registered before listening`,
+      );
     }
+    if (!transport.listen) {
+      throw makeError(
+        X`ocapn-noise: transport with scheme ${q(transport.scheme)} does not support listening`,
+      );
+    }
+    if (
+      listenersByTransport.has(transport) ||
+      listeningTransports.has(transport)
+    ) {
+      throw makeError(
+        X`ocapn-noise: transport with scheme ${q(transport.scheme)} is already listening`,
+      );
+    }
+
+    // The transport only returns after binding succeeds. Until then the
+    // network publishes no hints, so a failed bind changes no advertised
+    // location.
+    listeningTransports.add(transport);
+    /** @type {TransportListener} */
+    let transportListener;
+    try {
+      transportListener = await transport.listen(options, stream =>
+        handleIncoming(stream),
+      );
+    } finally {
+      listeningTransports.delete(transport);
+    }
+    if (isShutdown) {
+      transportListener.close();
+      throw makeError(X`ocapn-noise: network shutdown while listening`);
+    }
+    let isClosed = false;
+    /** @type {TransportListener} */
+    const listener = harden({
+      hints: transportListener.hints,
+      close: () => {
+        if (isClosed) return;
+        isClosed = true;
+        listenersByTransport.delete(transport);
+        transportListener.close();
+      },
+    });
+    listenersByTransport.set(transport, listener);
+    return listener;
   };
 
   /** @type {OcapnNoiseNetwork['removeTransport']} */
   const removeTransport = transport => {
-    const listener = listenersByTransport.get(transport);
-    if (listener) {
-      listener.close();
-      listenersByTransport.delete(transport);
+    if (
+      listenersByTransport.has(transport) ||
+      listeningTransports.has(transport)
+    ) {
+      throw makeError(
+        X`ocapn-noise: cannot remove transport with scheme ${q(transport.scheme)} while it is listening`,
+      );
     }
     registeredTransports.delete(transport);
   };
@@ -1475,8 +1525,9 @@ export const makeOcapnNoiseNetwork = ({
       const s = pendingInbound.shift();
       if (s) s.close();
     }
-    for (const [, listener] of listenersByTransport) listener.close();
+    for (const listener of [...listenersByTransport.values()]) listener.close();
     listenersByTransport.clear();
+    listeningTransports.clear();
     for (const transport of registeredTransports) transport.shutdown();
     registeredTransports.clear();
     registeredKeys.clear();
@@ -1533,6 +1584,7 @@ export const makeOcapnNoiseNetwork = ({
     removeSigningKeys,
     listSigningKeys: () => [...registeredKeys.keys()],
     addTransport,
+    listen,
     removeTransport,
     listTransports: () => [...registeredTransports],
     locations,

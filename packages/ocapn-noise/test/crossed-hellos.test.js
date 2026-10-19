@@ -6,6 +6,7 @@ import harden from '@endo/harden';
 import { cborCodec } from '@endo/ocapn/cbor';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockMeshFabric } from './_fabric.js';
+import { registerListeningTransport } from './_transport.js';
 
 /**
  * @param {ReturnType<typeof makeOcapnNoiseNetwork>} network
@@ -25,8 +26,8 @@ test('crossed hellos: both peers end on the same session with a stable session i
   const keyA = addFreshKey(netA);
   const keyB = addFreshKey(netB);
 
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
 
   // Synthesize locations that route through the mesh fabric.
   const locA = {
@@ -102,7 +103,7 @@ const runLateCrossedHello = async (t, i) => {
     const keyA = addFreshKey(netA);
     const keyB = addFreshKey(netB);
 
-    await netA.addTransport(fabric.transportFor('A'));
+    await registerListeningTransport(netA, fabric.transportFor('A'));
 
     /** @type {(value?: unknown) => void} */
     let releaseGate = () => {};
@@ -118,7 +119,7 @@ const runLateCrossedHello = async (t, i) => {
         return baseB.connect(hints);
       },
     });
-    await netB.addTransport(gatedB);
+    await registerListeningTransport(netB, gatedB);
 
     const locA = {
       ...netA.locationFor(keyA),

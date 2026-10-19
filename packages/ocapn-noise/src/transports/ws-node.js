@@ -129,15 +129,11 @@ const adaptWebSocket = ws => {
  * @param {object} [options]
  * @param {typeof globalThis.WebSocket} [options.WebSocket]
  * @param {{ new (options: { port?: number, host?: string }): any } | undefined} [options.WebSocketServer]
- * @param {number} [options.port]
- * @param {string} [options.host]
  * @returns {OcapnNoiseTransport}
  */
 export const makeWebSocketTransport = ({
   WebSocket = /** @type {any} */ (globalThis).WebSocket,
   WebSocketServer,
-  port = 0,
-  host = '127.0.0.1',
 } = {}) => {
   if (!WebSocket) {
     throw Error('makeWebSocketTransport: no WebSocket constructor available');
@@ -162,29 +158,39 @@ export const makeWebSocketTransport = ({
 
   /** @type {OcapnNoiseTransport['listen']} */
   const listen = WebSocketServer
-    ? async handler => {
+    ? async (options, accept) => {
+        await null;
         if (server) {
           throw Error('ocapn-noise ws transport: listen called more than once');
         }
-        server = new WebSocketServer({ port, host });
-        await new Promise(resolve => {
-          server.on('listening', () => resolve(undefined));
-        });
-        server.on(
+        const { port = 0, host = '127.0.0.1' } =
+          /** @type {{ port?: number, host?: string }} */ (options ?? {});
+        const listeningServer = new WebSocketServer({ port, host });
+        server = listeningServer;
+        try {
+          await new Promise((resolve, reject) => {
+            listeningServer.once('listening', resolve);
+            listeningServer.once('error', reject);
+          });
+        } catch (error) {
+          if (server === listeningServer) server = undefined;
+          throw error;
+        }
+        listeningServer.on(
           'connection',
           /** @param {any} ws */ ws => {
-            handler(adaptWebSocket(ws));
+            accept(adaptWebSocket(ws));
           },
         );
-        const addr = server.address();
+        const addr = listeningServer.address();
         /** @type {TransportListener} */
         const listener = harden({
           hints: { url: `ws://${advertisedHost(addr.address)}:${addr.port}` },
           close: () => {
             try {
-              server.close();
+              listeningServer.close();
             } finally {
-              server = undefined;
+              if (server === listeningServer) server = undefined;
             }
           },
         });

@@ -123,12 +123,13 @@ export const makeMockTransportPair = () => {
         accept(incoming);
         return outgoing;
       },
-      listen: async handler => {
-        const designator = 'default';
+      listen: async (options, accept) => {
+        const { designator = 'default' } =
+          /** @type {{ designator?: string }} */ (options ?? {});
         if (myListeners.has(designator)) {
           throw Error(`mock transport: listener already registered`);
         }
-        myListeners.set(designator, handler);
+        myListeners.set(designator, accept);
         /** @type {TransportListener} */
         const listener = harden({
           hints: { to: designator },

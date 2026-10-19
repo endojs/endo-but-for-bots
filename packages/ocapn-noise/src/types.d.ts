@@ -32,8 +32,8 @@ export interface ByteStream {
 }
 
 /**
- * Handle returned by `OcapnNoiseTransport.listen`. The network calls
- * `close()` when the transport is removed.
+ * Handle returned by `OcapnNoiseTransport.listen`. The network closes it
+ * during shutdown; callers close it before removing the transport.
  */
 export interface TransportListener {
   /**
@@ -59,10 +59,14 @@ export interface OcapnNoiseTransport {
    */
   connect(hints: Record<string, string>): Promise<ByteStream>;
   /**
-   * Start listening for inbound streams. Optional; a transport that
-   * supports only outgoing connections omits `listen`.
+   * Start listening for inbound streams with transport-specific options.
+   * Optional; a transport that supports only outgoing connections omits
+   * `listen`.
    */
-  listen?(handler: (stream: ByteStream) => void): Promise<TransportListener>;
+  listen?(
+    options: unknown,
+    accept: (stream: ByteStream) => void,
+  ): Promise<TransportListener>;
   /**
    * Release any resources held for outgoing connections. Inbound
    * listeners are torn down via their own `TransportListener.close`.
@@ -133,7 +137,13 @@ export interface OcapnNoiseNetwork {
   addSigningKeys(keys: SigningKeys): KeyIdHex;
   removeSigningKeys(keyId: KeyIdHex): void;
   listSigningKeys(): KeyIdHex[];
-  addTransport(transport: OcapnNoiseTransport): Promise<void>;
+  /** Register a dial adapter without opening a listener. */
+  addTransport(transport: OcapnNoiseTransport): void;
+  /** Open one explicit listener for a registered transport. */
+  listen(
+    transport: OcapnNoiseTransport,
+    options?: unknown,
+  ): Promise<TransportListener>;
   removeTransport(transport: OcapnNoiseTransport): void;
   listTransports(): OcapnNoiseTransport[];
   /**

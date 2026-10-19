@@ -15,6 +15,7 @@ import test from '@endo/ses-ava/test.js';
 import { cborCodec } from '@endo/ocapn/cbor';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeFragmentingMockMeshFabric } from './_fabric-fragmenting.js';
+import { registerListeningTransport } from './_transport.js';
 
 /**
  * @param {ReturnType<typeof makeOcapnNoiseNetwork>} network
@@ -37,8 +38,8 @@ test('fragmenting mock fabric: handshake completes and message round-trips', asy
   t.teardown(() => netB.shutdown());
   const keyA = addFreshKey(netA).keyId;
   const keyB = addFreshKey(netB).keyId;
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
   const locB = { ...netB.locationFor(keyB), hints: { 'frag:to': 'B' } };
 
   const [sessionA, sessionB] = await Promise.all([
@@ -78,8 +79,8 @@ test('fragmenting mock fabric: crossed hellos resolve to one session per side', 
   t.teardown(() => netB.shutdown());
   const keyA = addFreshKey(netA).keyId;
   const keyB = addFreshKey(netB).keyId;
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
   const locA = { ...netA.locationFor(keyA), hints: { 'frag:to': 'A' } };
   const locB = { ...netB.locationFor(keyB), hints: { 'frag:to': 'B' } };
 

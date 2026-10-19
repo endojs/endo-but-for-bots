@@ -8,6 +8,7 @@ import { cborCodec } from '@endo/ocapn/cbor';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeTcpTransport } from '../src/transports/tcp.js';
 import { netListenAllowed } from './_net-permission.js';
+import { registerListeningTransport } from './_transport.js';
 
 // `test.serial` because every test in this file binds an OS port via
 // `makeTcpTransport()` and shares filesystem and socket state. A
@@ -31,8 +32,8 @@ test('two noise peers exchange encrypted messages over TCP', async t => {
   t.teardown(() => netB.shutdown());
   const { keyId: keyA } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
-  await netA.addTransport(makeTcpTransport());
-  await netB.addTransport(makeTcpTransport());
+  await registerListeningTransport(netA, makeTcpTransport());
+  await registerListeningTransport(netB, makeTcpTransport());
 
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(netB.locationFor(keyB)),
@@ -61,7 +62,7 @@ test('noise network rejects a tcp-testing-only location that has no tcp-scheme h
   const network = makeOcapnNoiseNetwork({ codec: cborCodec });
   t.teardown(() => network.shutdown());
   addFreshKey(network);
-  await network.addTransport(makeTcpTransport());
+  network.addTransport(makeTcpTransport());
   await t.throwsAsync(
     async () =>
       network.provideSession({
@@ -73,6 +74,42 @@ test('noise network rejects a tcp-testing-only location that has no tcp-scheme h
       }),
     { message: /no registered transport matches hints/ },
   );
+});
+
+test('failed TCP bind publishes no hints and can be retried', async t => {
+  const occupiedServer = rawNet.createServer();
+  await new Promise((resolve, reject) => {
+    occupiedServer.once('error', reject);
+    occupiedServer.listen(0, '127.0.0.1', () => resolve(undefined));
+  });
+  const occupiedAddress = occupiedServer.address();
+  if (!occupiedAddress || typeof occupiedAddress === 'string') {
+    throw Error(`tcp transport test: unexpected occupied address`);
+  }
+
+  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => network.shutdown());
+  const { keyId } = addFreshKey(network);
+  const transport = makeTcpTransport();
+  network.addTransport(transport);
+
+  await t.throwsAsync(
+    () =>
+      network.listen(transport, {
+        host: '127.0.0.1',
+        port: occupiedAddress.port,
+      }),
+    { code: 'EADDRINUSE' },
+  );
+  t.is(network.locationFor(keyId).hints, false);
+
+  await new Promise(resolve => occupiedServer.close(resolve));
+  const listener = await network.listen(transport, {
+    host: '127.0.0.1',
+    port: 0,
+  });
+  t.truthy(network.locationFor(keyId).hints);
+  listener.close();
 });
 
 test('tcp transport with framing:none delivers raw socket bytes', async t => {
@@ -87,7 +124,7 @@ test('tcp transport with framing:none delivers raw socket bytes', async t => {
   /* eslint-disable-next-line no-use-before-define -- we capture the listen handler into a promise */
   const { listen } = transport;
   if (!listen) throw Error('tcp transport must expose listen');
-  const listener = await listen(stream => {
+  const listener = await listen({}, stream => {
     resolveStream(stream);
   });
 

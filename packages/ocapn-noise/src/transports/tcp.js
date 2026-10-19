@@ -55,16 +55,10 @@ const MAX_FRAME_LENGTH = 65_551;
  *   into something that frames messages itself.
  *
  * @param {object} [options]
- * @param {number} [options.port] - Listen port. `0` = OS-assigned.
- * @param {string} [options.host] - Listen host. Default `'127.0.0.1'`.
  * @param {'netstring' | 'none'} [options.framing] - Default `'netstring'`.
  * @returns {OcapnNoiseTransport}
  */
-export const makeTcpTransport = ({
-  port = 0,
-  host = '127.0.0.1',
-  framing = 'netstring',
-} = {}) => {
+export const makeTcpTransport = ({ framing = 'netstring' } = {}) => {
   if (framing !== 'netstring' && framing !== 'none') {
     throw Error(
       `tcp transport: \`framing\` must be 'netstring' or 'none', got ${JSON.stringify(framing)}`,
@@ -127,16 +121,27 @@ export const makeTcpTransport = ({
       });
       return wrap(socket);
     },
-    listen: async handler => {
-      const srv = net.createServer(socket => handler(wrap(socket)));
+    listen: async (options, accept) => {
+      await null;
+      const { port = 0, host = '127.0.0.1' } =
+        /** @type {{ port?: number, host?: string }} */ (options ?? {});
+      if (server) {
+        throw Error('tcp transport: listen called more than once');
+      }
+      const srv = net.createServer(socket => accept(wrap(socket)));
       server = srv;
-      await new Promise((resolve, reject) => {
-        srv.once('error', reject);
-        srv.listen(port, host, () => {
-          srv.removeListener('error', reject);
-          resolve(undefined);
+      try {
+        await new Promise((resolve, reject) => {
+          srv.once('error', reject);
+          srv.listen(port, host, () => {
+            srv.removeListener('error', reject);
+            resolve(undefined);
+          });
         });
-      });
+      } catch (error) {
+        if (server === srv) server = undefined;
+        throw error;
+      }
       const addr = srv.address();
       if (!addr || typeof addr === 'string') {
         throw Error(`tcp transport: unexpected address ${addr}`);
@@ -149,6 +154,7 @@ export const makeTcpTransport = ({
         },
         close: () => {
           srv.close();
+          if (server === srv) server = undefined;
         },
       });
       return listener;
