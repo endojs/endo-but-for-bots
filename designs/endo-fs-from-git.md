@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-28 |
-| **Updated** | 2026-07-17 |
+| **Updated** | 2026-10-19 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
@@ -14,7 +14,8 @@
 
 ## Status
 
-Phase 1 + 2 + 3 + a slice of Phase 4 landed on `claude/adoring-planck-GmRX2`, rebased on `claude/keen-bell-W1acD`:
+Phases 1–4 have landed on `llm`; Phase 5's SHA-256-repo sub-item and Phase 6 remain deferred.
+Phase 1 + 2 + 3 + a slice of Phase 4 first landed on `claude/adoring-planck-GmRX2`, rebased on `claude/keen-bell-W1acD`:
 
 - `Git.filesystemAt(ref)` exposed on `EndoGit` (`packages/daemon/src/interfaces.js`, `packages/daemon/src/types.d.ts`).
 - `GitBackend` contract extended with `resolveTree`, `lsTree`, `readBlobBytes`, `streamBlobBytes` (`packages/daemon/src/git.js`); native git backend exposes the same as public methods (`packages/daemon/src/native-git-backend.js`).
@@ -40,12 +41,15 @@ anticipated), landed on `llm`:
    still falls back to the path-hash `synthQid(path, kind)`. Two paths (or
    two refs) that resolve to the same blob therefore report the same QID
    again — content-address equivalence is preserved.
-2. **`BlobRef.algorithm` is `'git-sha1'` for the git-tree backend (restored).**
+2. **`BlobRef.algorithm` is `'git-sha1'` for the git-tree backend (restored, then superseded).**
    `wrapBackend`'s `File.snapshot()` probes the optional `blobInfoFor(path)`
    hook; the git backend returns `{ algorithm: 'git-sha1', hash: <blobOid> }`,
    so the `BlobRef` carries the git blob OID (git hashes the framed payload
    `blob <size>\0<bytes>`). Backends without the hook keep the default
    SHA-256-over-captured-bytes `BlobRef`.
+   *Superseded:* the `ReadableBlob` range-attenuation change (`0668baf85`) removed the `blobInfoFor` hook.
+   The `BlobRef` is now a `ReadableBlob` whose `sha256()` reports the SHA-256 of the raw blob bytes, not the git OID; only the QID still carries the OID.
+   That uniform key is what lets `withCachedReads` (Phase 4) cache git blobs alongside every other backend's.
 
 The hook is ~40 lines on the git side plus a small probe on the wrap-backend
 side — far less than the ~200 lines of bespoke exo plumbing a hand-rolled
@@ -147,7 +151,7 @@ const info = await E(blob).getInfo();
 // { algorithm: 'git-sha1', hash: '<40-hex-oid>', size: <bytes> }
 
 // Compose with a writable layer in endo-fs.
-const layered = compose([fs, scratchFs]);
+const layered = compose(scratchFs, fs);
 ```
 
 ### Lazy resolution
@@ -343,10 +347,14 @@ The daemon package takes a new dependency on `@endo/endo-fs` to import its inter
 
 ### Phase 4: Compose interop and integration
 
-- [ ] Verify `compose([gitFs, scratchFs])` works end-to-end.
-- [ ] Verify `withCachedReads(gitFs, cas)` short-circuits on second read of the same blob.
-- [ ] Cross-FS `rename` throws `EXDEV` from brand mismatch.
-- [ ] Document the integration patterns in the package README or DESIGN.
+`compose` takes `(layer, backing)` rather than an array, so the composition reads `compose(scratchFs, gitFs)`.
+Tests live in `packages/daemon/test/git.test.js` under the Phase 4 heading.
+
+- [x] Verify `compose(scratchFs, gitFs)` works end-to-end: reads fall through to the tree, new files and copied-up writes land in the layer, and the historical tree is unchanged. `compose(gitFs, gitFs)` is refused.
+- [x] Daemon Mount integration: `compose(mountAsFilesystem(scratchMount), gitFs)` writes into the Mount's directory on disk, and reads of historical blobs do not copy up.
+- [x] Verify `withCachedReads(gitFs, cas)` serves the second read of the same blob from the CAS (proved by planting a same-length impostor under the blob's key).
+- [x] Cross-FS `rename` from a scratch Directory into the git tree throws `EXDEV`. The reverse direction throws `EACCES`, because the read-only boundary refuses before the brand check runs.
+- [x] Document the integration patterns in the `@endo/exo-git` README.
 
 ### Phase 5: Content-address QID/hash hook + SHA-256 repo support
 
@@ -465,8 +473,8 @@ In `packages/daemon/test/git.test.js`:
 
 ### Compose interop
 
-- `compose([gitFs, scratchFs]).root()` works.
-- Cross-FS `rename` from a git-FS Directory to a scratch-FS Directory throws `EXDEV`.
+- `compose(scratchFs, gitFs).root()` works.
+- Cross-FS `rename` from a scratch-FS Directory into a git-FS Directory throws `EXDEV`; the git-to-scratch direction throws `EACCES`.
 
 ## Prompt
 
