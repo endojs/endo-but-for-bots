@@ -303,7 +303,7 @@ export const extractUnifiedDiff = payload => {
   }
 
   const match = /(?:^|\n)(--- [^\n]+\n\+\+\+ [^\n]+\n@@ )/u.exec(source);
-  if (!match || match.index === undefined) return null;
+  if (!match) return null;
   const start = match.index + (match[0].startsWith('\n') ? 1 : 0);
   return harden({
     summary: source.slice(0, start).trimEnd(),
