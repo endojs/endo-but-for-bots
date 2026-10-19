@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 import { q } from '@endo/errors';
-import { makeNetstringCapTP } from './connection.js';
+import { makeSniffingCapTP } from './connection.js';
 
 /** @import { CapTpConnectionRegistrar } from './types.js' */
 
@@ -61,7 +61,9 @@ export const servePrivatePath = (
           `Endo daemon received domain connection ${connectionNumber} at ${new Date().toISOString()}`,
         );
 
-        const { closed: capTpClosed } = makeNetstringCapTP(
+        // The client picks the framing (netstring or cbor-frame); the
+        // daemon classifies it from the first byte and mirrors it.
+        const { closed: capTpClosed } = makeSniffingCapTP(
           'Endo',
           writer,
           reader,

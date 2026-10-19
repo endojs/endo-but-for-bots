@@ -5,12 +5,18 @@ import { makeCapTP } from '@endo/captp';
 import { isPassable, passableAsJustin } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader } from '@endo/stream';
-import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
+import {
+  makeFrameReader,
+  makeFrameWriter,
+  makeGatedFrameWriter,
+  makeSniffingFrameReader,
+} from './framing.js';
 
 /** @import { Stream, Reader, Writer } from '@endo/stream' */
 /** @import { CapTpConnectionRegistrar } from './types.js' */
+/** @import { FramingName } from './framing.js' */
 
 /**
  * Sentinel marker for an Error encoded as a plain object on the
@@ -271,6 +277,104 @@ export const bytesToMessage = bytes => {
 };
 
 /**
+ * CapTP over a byte stream in one chosen framing.
+ *
+ * @template TBootstrap
+ * @param {FramingName} framing
+ * @param {string} name
+ * @param {Writer<Uint8Array>} bytesWriter
+ * @param {Reader<Uint8Array>} bytesReader
+ * @param {Promise<void>} cancelled
+ * @param {TBootstrap} bootstrap
+ * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
+ * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
+ */
+export const makeFramedCapTP = (
+  framing,
+  name,
+  bytesWriter,
+  bytesReader,
+  cancelled,
+  bootstrap,
+  capTpOptions = undefined,
+  capTpConnectionRegistrar = undefined,
+) => {
+  const messageWriter = mapWriter(
+    makeFrameWriter(bytesWriter, { framing, name }),
+    messageToBytes,
+  );
+  const messageReader = mapReader(
+    makeFrameReader(bytesReader, { framing, name }),
+    bytesToMessage,
+  );
+  return makeMessageCapTP(
+    name,
+    messageWriter,
+    messageReader,
+    cancelled,
+    bootstrap,
+    capTpOptions,
+    capTpConnectionRegistrar,
+  );
+};
+
+/**
+ * Accept-side CapTP that speaks whichever framing the initiator chose.
+ * The framing is classified from the first byte the peer sends, and
+ * outbound frames mirror it. Outbound writes wait for that
+ * classification (or for cancellation), so an eager write cannot guess
+ * the framing wrong.
+ *
+ * @template TBootstrap
+ * @param {string} name
+ * @param {Writer<Uint8Array>} bytesWriter
+ * @param {Reader<Uint8Array>} bytesReader
+ * @param {Promise<void>} cancelled
+ * @param {TBootstrap} bootstrap
+ * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
+ * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
+ */
+export const makeSniffingCapTP = (
+  name,
+  bytesWriter,
+  bytesReader,
+  cancelled,
+  bootstrap,
+  capTpOptions = undefined,
+  capTpConnectionRegistrar = undefined,
+) => {
+  const { framingChosen, reader } = makeSniffingFrameReader(bytesReader, {
+    name,
+  });
+  /** @type {Promise<FramingName>} */
+  const gate = Promise.race([
+    framingChosen,
+    cancelled.then(() => {
+      throw Error(`Connection ${name} cancelled before its first frame`);
+    }),
+  ]);
+  const messageWriter = mapWriter(
+    makeGatedFrameWriter(bytesWriter, gate, { name }),
+    messageToBytes,
+  );
+  const messageReader = mapReader(reader, bytesToMessage);
+  const capTp = makeMessageCapTP(
+    name,
+    messageWriter,
+    messageReader,
+    cancelled,
+    bootstrap,
+    capTpOptions,
+    capTpConnectionRegistrar,
+  );
+  return { ...capTp, framingChosen };
+};
+
+/**
+ * CapTP over netstring framing. An alias for
+ * `makeFramedCapTP('netstring', ...)`, kept until every call site
+ * chooses its framing explicitly.
+ *
  * @template TBootstrap
  * @param {string} name
  * @param {Writer<Uint8Array>} bytesWriter
@@ -288,22 +392,14 @@ export const makeNetstringCapTP = (
   bootstrap,
   capTpOptions = undefined,
   capTpConnectionRegistrar = undefined,
-) => {
-  const messageWriter = mapWriter(
-    makeNetstringWriter(bytesWriter, { chunked: true }),
-    messageToBytes,
-  );
-  const messageReader = mapReader(
-    makeNetstringReader(bytesReader),
-    bytesToMessage,
-  );
-  return makeMessageCapTP(
+) =>
+  makeFramedCapTP(
+    'netstring',
     name,
-    messageWriter,
-    messageReader,
+    bytesWriter,
+    bytesReader,
     cancelled,
     bootstrap,
     capTpOptions,
     capTpConnectionRegistrar,
   );
-};

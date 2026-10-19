@@ -7,6 +7,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import url from 'url';
 import os from 'os';
+import net from 'net';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -29,7 +30,9 @@ import { ZipReader } from '@endo/zip/reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
+import { makeFramedCapTP } from '../src/connection.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 import { makeContentDataPlaneRegistry } from '../src/content-data-plane.js';
@@ -536,6 +539,40 @@ test('lifecycle', async t => {
   await closed.catch(() => {});
 
   t.pass();
+});
+
+// The private socket classifies each connection's framing from its first
+// byte and mirrors it (designs/daemon-cbor-frame-migration.md, Phase 1), so
+// netstring and cbor-frame clients share one daemon.
+test('private socket accepts netstring and cbor-frame clients', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @param {'netstring' | 'cbor-frame'} framing */
+  const connect = async framing => {
+    const conn = net.connect(config.sockPath);
+    await new Promise((resolve, reject) => {
+      conn.on('connect', resolve);
+      conn.on('error', reject);
+    });
+    return makeFramedCapTP(
+      framing,
+      `client-${framing}`,
+      makeNodeWriter(conn),
+      makeNodeReader(conn),
+      cancelled,
+      undefined,
+    );
+  };
+
+  const netstringClient = await connect('netstring');
+  const cborFrameClient = await connect('cbor-frame');
+  const netstringNames = await E(
+    E(netstringClient.getBootstrap()).host(),
+  ).list();
+  const cborFrameNames = await E(
+    E(cborFrameClient.getBootstrap()).host(),
+  ).list();
+  t.deepEqual(cborFrameNames, netstringNames);
 });
 
 test('failure to start', async t => {
