@@ -25,11 +25,21 @@ import {
 } from '@endo/exo-git';
 
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import {
+  compose,
+  makeInMemoryFilesystem,
+  makeMemoryCas,
+  mountAsFilesystem,
+  withCachedReads,
+} from '@endo/platform/fs/extended';
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { lineageOf, makeMount } from '../src/mount.js';
 import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
 
 /** @import { GitRebaseInput } from '@endo/exo-git' */
+/** @import { ExecutionContext } from 'ava' */
 
 const execFileAsync = nodePromisify(execFile);
 
@@ -4205,8 +4215,6 @@ test('Git.filesystemAt: Directory.list yields entries in tree order', async t =>
 
   const cursor = /** @type {any} */ (await E(root).list());
   const readerRef = await E(cursor).stream();
-  // eslint-disable-next-line global-require
-  const { iterateReader } = await import('@endo/exo-stream/iterate-reader.js');
   /** @type {any[]} */
   const collected = [];
   for await (const value of iterateReader(readerRef)) {
@@ -4374,8 +4382,6 @@ test('Git.filesystemAt: an empty tree exposes an empty root', async t => {
   // `list()` returns a Cursor that yields zero entries.
   const cursor = /** @type {any} */ (await E(root).list());
   const readerRef = await E(cursor).stream();
-  // eslint-disable-next-line global-require
-  const { iterateReader } = await import('@endo/exo-stream/iterate-reader.js');
   const collected = [];
   for await (const value of iterateReader(readerRef)) {
     collected.push(value);
@@ -4464,6 +4470,192 @@ const collectReader = async readerRef => {
   }
   return out;
 };
+
+// ---------------------------------------------------------------------------
+// Git.filesystemAt(ref) — Phase 4: composition with the rest of the
+// `@endo/platform/fs/extended` algebra and with the daemon's own Mount.
+// See designs/endo-fs-from-git.md § Phase 4.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {any} root
+ * @param {string} name
+ * @param {string} text
+ */
+const createTextFile = async (root, name, text) => {
+  const opener = await E(root).create(name, {});
+  const writer = iterateBytesWriter(await E(opener).write(0n));
+  await writer.next(Buffer.from(text, 'utf8'));
+  await writer.return(undefined);
+  await E(opener).close();
+};
+
+/**
+ * @param {any} root
+ * @param {string} name
+ */
+const readTextFile = async (root, name) => {
+  const file = await E(root).lookup(name);
+  const opener = await E(file).open({ read: true });
+  const bytes = await collectReader(await E(opener).read(0n, 4096n));
+  await E(opener).close();
+  return Buffer.from(bytes).toString('utf8');
+};
+
+/**
+ * @param {any} root
+ */
+const listNames = async root => {
+  const cursor = await E(root).list();
+  const names = [];
+  for await (const entry of iterateReader(await E(cursor).stream())) {
+    names.push(entry.name);
+  }
+  return names.sort();
+};
+
+/**
+ * @param {ExecutionContext} t
+ * @param {string} fileName
+ * @param {string} content
+ */
+const makeGitFsAtHead = async (t, fileName, content) => {
+  const fixture = await provisionGitWorktreeWithFile(t, fileName, content);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({
+    rootPath: fixture.repoRoot,
+    readOnly: false,
+    filePowers,
+  });
+  const backend = makeNativeGitBackend({ repoRoot: fixture.repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
+  return { ...fixture, git, gitFs, filePowers };
+};
+
+test('Git.filesystemAt: compose(scratchFs, gitFs) layers writes over the historical tree', async t => {
+  const { git, gitFs } = await makeGitFsAtHead(t, 'README.md', 'historic\n');
+  const scratchFs = makeInMemoryFilesystem();
+
+  const layered = compose(scratchFs, gitFs);
+  const root = await E(layered).root();
+
+  t.is(await readTextFile(root, 'README.md'), 'historic\n');
+
+  // New entries land in the writable layer.
+  await createTextFile(root, 'NOTES.md', 'scratch\n');
+  t.deepEqual(await listNames(root), ['NOTES.md', 'README.md']);
+  t.deepEqual(await listNames(await E(scratchFs).root()), ['NOTES.md']);
+
+  // Opening a historical blob for write copies it up into the layer.
+  const readme = await E(root).lookup('README.md');
+  const opener = await E(readme).open({ write: true });
+  const writer = iterateBytesWriter(await E(opener).write(0n));
+  await writer.next(Buffer.from('revised!\n', 'utf8'));
+  await writer.return(undefined);
+  await E(opener).close();
+  t.is(await readTextFile(root, 'README.md'), 'revised!\n');
+
+  // The historical tree is untouched, through this cap and a fresh one.
+  t.is(await readTextFile(await E(gitFs).root(), 'README.md'), 'historic\n');
+  const again = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
+  t.is(await readTextFile(await E(again).root(), 'README.md'), 'historic\n');
+});
+
+test('Git.filesystemAt: compose refuses the same git Filesystem as layer and backing', async t => {
+  const { git, gitFs } = await makeGitFsAtHead(t, 'README.md', 'x\n');
+  t.throws(() => compose(gitFs, gitFs), { message: /differ/ });
+
+  // filesystemAt memoizes by canonical tree OID, so a second call for the
+  // same ref is the same cap and carries the same brand.
+  const again = await E(git).filesystemAt('HEAD');
+  t.deepEqual(await E(again).brands(), await E(gitFs).brands());
+});
+
+test('Git.filesystemAt: a daemon Mount layered over the git tree receives the writes', async t => {
+  const { gitFs, filePowers } = await makeGitFsAtHead(
+    t,
+    'README.md',
+    'historic\n',
+  );
+  const scratchPath = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'git-fs-scratch-'),
+  );
+  t.teardown(() => fs.promises.rm(scratchPath, { recursive: true }));
+  const scratchMount = makeMount({
+    rootPath: scratchPath,
+    readOnly: false,
+    filePowers,
+  });
+
+  const layered = compose(mountAsFilesystem(scratchMount), gitFs);
+  const root = await E(layered).root();
+
+  t.is(await readTextFile(root, 'README.md'), 'historic\n');
+  await createTextFile(root, 'NOTES.md', 'scratch\n');
+
+  t.is(
+    await fs.promises.readFile(path.join(scratchPath, 'NOTES.md'), 'utf8'),
+    'scratch\n',
+  );
+  // Reading the historical blob does not copy it up into the Mount.
+  t.deepEqual(await fs.promises.readdir(scratchPath), ['NOTES.md']);
+});
+
+test('Git.filesystemAt: withCachedReads serves a second read of the same blob from the CAS', async t => {
+  const content = 'cache me\n';
+  const { gitFs } = await makeGitFsAtHead(t, 'data.txt', content);
+  const cas = makeMemoryCas();
+  const cached = withCachedReads(gitFs, cas);
+  const root = await E(cached).root();
+
+  t.is(await readTextFile(root, 'data.txt'), content);
+  // The first read populates the CAS in the background.
+  for (let attempt = 0; attempt < 100 && cas.size === 0; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  t.is(cas.size, 1);
+
+  // Replace the cached bytes with a same-length impostor. A read that
+  // consulted the git tree would still see `content`; seeing the impostor
+  // proves the CAS answered.
+  const blobRef = await E(
+    await E(await E(gitFs).root()).lookup('data.txt'),
+  ).snapshot();
+  const hash = await E(blobRef).sha256();
+  const impostor = 'IMPOSTOR\n';
+  t.is(impostor.length, content.length);
+  cas.put(
+    { algorithm: 'sha256', hash, size: BigInt(content.length) },
+    Buffer.from(impostor, 'utf8'),
+  );
+
+  t.is(await readTextFile(root, 'data.txt'), impostor);
+});
+
+test('Git.filesystemAt: cross-Filesystem rename between git and scratch trees is refused', async t => {
+  const { gitFs } = await makeGitFsAtHead(t, 'README.md', 'historic\n');
+  const gitRoot = await E(gitFs).root();
+  const scratchFs = makeInMemoryFilesystem();
+  const scratchRoot = await E(scratchFs).root();
+  await createTextFile(scratchRoot, 'NOTES.md', 'scratch\n');
+
+  // Into the git tree: the scratch Filesystem does not recognize the
+  // destination Directory, so the move crosses a brand boundary.
+  await t.throwsAsync(E(scratchRoot).rename('NOTES.md', gitRoot, 'NOTES.md'), {
+    message: /EXDEV/,
+  });
+  // Out of the git tree: the read-only boundary refuses before the brand
+  // check runs.
+  await t.throwsAsync(
+    E(gitRoot).rename('README.md', scratchRoot, 'README.md'),
+    {
+      message: /EACCES/,
+    },
+  );
+  t.deepEqual(await listNames(scratchRoot), ['NOTES.md']);
+});
 
 test('Git.stashPop applies and drops in one step', async t => {
   const repoRoot = await provisionGitWorktree(t);

@@ -9,15 +9,45 @@ The package is intentionally Node-free and portable across SES realms — it kno
 - `makeGitRemote({ git, operations, credential, name, policy })` — remote-git companion (fetch / pull / push) bound to a credential cap; requires the writable `git` facet it composes with and the paired `operations` capability the same composing code minted.
 - `normalizeGitRemotePolicy({ name, policy })` — the canonical parser, validator, and normalizer for the policy accepted by `makeGitRemote`.
 - `makeBasicCredential`, `makeBearerCredential`, `makeUnavailableGitCredential` — credential capabilities.  Each carries a host-private `GitCredentialController` accessible via `getGitCredentialController(cred)`.
-- `makeGitFsBackend({ backend, treeOid })` — `FsBackend` adapter for an immutable git tree.  Composes with `@endo/endo-fs` `wrapBackend(...)`.
+- `makeGitFsBackend({ backend, treeOid })` — `FsBackend` adapter for an immutable git tree.  Composes with `wrapBackend(...)` from `@endo/platform/fs/extended`.
 - Interface guards: `GitReaderInterface`, `GitWriterInterface`, `GitRewriterInterface` (one per kit facet, generated from the shared `GIT_METHOD_GUARDS` table in `src/interfaces.js`), `GitInterface` (compatibility export equivalent to `GitRewriterInterface`, used by `@endo/agent-tools`'s JSON-tool and code-mode prompt generation), `GitTreeInterface`, `GitRemoteInterface`, `GitRemoteControllerInterface`, `GitCredentialControllerInterface`, `BasicCredentialInterface`, `BearerCredentialInterface`.
 
 Sister packages:
 
 - `@endo/git` — the Node-side `NativeGitBackend` (subprocess wrapper over the installed `git` binary).
-- `@endo/endo-fs` — the `Filesystem` / `FsBackend` seam this package targets.
+- `@endo/platform/fs/extended` (formerly `@endo/endo-fs`) — the `Filesystem` / `FsBackend` seam this package targets.
 
 The split mirrors `@endo/exo-stream` / underlying stream sources: the exo layer is portable; the host-specific backing lives elsewhere.
+
+## Composing `filesystemAt(ref)`
+
+`E(git).filesystemAt(ref)` returns a read-only `Filesystem` over the tree at `ref`.
+It works with the rest of the `@endo/platform/fs/extended` algebra:
+
+```js
+import {
+  compose,
+  makeInMemoryFilesystem,
+  makeMemoryCas,
+  mountAsFilesystem,
+  withCachedReads,
+} from '@endo/platform/fs/extended';
+
+const historyFs = await E(git).filesystemAt('v1.0.0');
+
+// Copy-on-write scratch space over a historical tree.
+const scratch = compose(makeInMemoryFilesystem(), historyFs);
+
+// The same, with writes landing in a daemon Mount.
+const onDisk = compose(mountAsFilesystem(scratchMount), historyFs);
+
+// Repeated reads of the same blob come from the CAS.
+const cached = withCachedReads(historyFs, makeMemoryCas());
+```
+
+- `compose(layer, backing)` reads through to the git tree and puts new files and copied-up writes in `layer`. The tree itself never changes.
+- `File.snapshot()` reports the SHA-256 of the raw blob bytes, which is the key `withCachedReads` uses. The QID `pathId` is the git object OID.
+- Moving a file from another `Filesystem` into the tree rejects with `EXDEV`, and moving one out rejects with `EACCES`. Copy the bytes across.
 
 ## Remote policy normalization
 
