@@ -116,6 +116,7 @@ export const makeShell = ({
     timeoutMs: policyTimeoutMs,
     maxOutputBytes,
     env = {},
+    engine = 'host',
   } = policy;
   if (
     !Array.isArray(allowedCommands) ||
@@ -132,6 +133,11 @@ export const makeShell = ({
   if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw makeError(
       X`makeShell: policy.maxOutputBytes must be a positive integer`,
+    );
+  }
+  if (engine !== 'host' && engine !== 'sandbox') {
+    throw makeError(
+      X`makeShell: policy.engine must be 'host' or 'sandbox', got ${q(engine)}`,
     );
   }
   if (!Number.isInteger(killGraceMs) || killGraceMs <= 0) {
@@ -154,6 +160,7 @@ export const makeShell = ({
         allowedCommands: allowedList,
         timeoutMs: policyTimeoutMs,
         maxOutputBytes,
+        engine,
       });
     },
 
@@ -178,10 +185,15 @@ export const makeShell = ({
       // Argv only — the program name is argv[0], never a shell string, and
       // `shell: false` forbids the spawner from wrapping it in `/bin/sh -c`.
       const argv = harden([command, ...args]);
+      // The timeout and cap are this exo's to enforce.  They also go to the
+      // spawner so an engine with its own limits (a sandbox slice) can back
+      // them; the hard deadline is the SIGKILL escalation's.
       const proc = await spawner(argv, {
         cwd,
         env: childEnv,
         shell: false,
+        timeoutMs: effectiveTimeoutMs + killGraceMs,
+        maxOutputBytes,
       });
 
       let timedOut = false;

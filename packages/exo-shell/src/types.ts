@@ -4,12 +4,21 @@ export type ShellPolicy = {
   maxOutputBytes: number;
   env?: Record<string, string>;
   searchPath?: string;
+  engine?: ShellEngine;
 };
+
+/**
+ * Which engine runs the children: `'host'` (ordinary host processes) or
+ * `'sandbox'` (an `@endo/sandbox` slice).  Revealed by `inspect()` so a holder
+ * can see the confinement it was granted.
+ */
+export type ShellEngine = 'host' | 'sandbox';
 
 export type ShellInspectResult = {
   allowedCommands: readonly string[];
   timeoutMs: number;
   maxOutputBytes: number;
+  engine: ShellEngine;
 };
 
 export type ShellResult = {
@@ -28,7 +37,13 @@ export type ShellResult = {
  */
 export type Spawner = (
   argv: string[],
-  opts?: { cwd?: string; env?: Record<string, string>; shell?: boolean },
+  opts?: {
+    cwd?: string;
+    env?: Record<string, string>;
+    shell?: boolean;
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+  },
 ) => Promise<{
   pid: number;
   stdout?: AsyncIterable<Uint8Array> | null;
