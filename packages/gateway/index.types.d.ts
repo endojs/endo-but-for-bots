@@ -5,7 +5,14 @@ export type {
   Gateway,
   GatewayConfig,
   GatewayPowers,
+  KeySigner,
+  UserDaemon,
+  UserDaemonPublication,
+  UserDaemonPublisher,
+  UserDaemonRequest,
+  UserDaemonResponse,
   VirtualHostEntry,
+  WebletHandler,
 } from './src/types.js';
 export {
   bindAddressFromEnv,

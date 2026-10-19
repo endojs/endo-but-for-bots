@@ -208,3 +208,65 @@ export declare function makeGateway(args?: {
   powers?: GatewayPowers;
   config?: Partial<GatewayConfig>;
 }): Gateway;
+
+/**
+ * An Ed25519 identity held by a per-user daemon. The private key
+ * stays behind `sign`; only signatures cross to the gateway.
+ */
+export type KeySigner = {
+  getPublicKey(): Uint8Array | Promise<Uint8Array>;
+  sign(message: Uint8Array): Uint8Array | Promise<Uint8Array>;
+};
+
+export type UserDaemonRequest = {
+  method: string;
+  path: string;
+  headers: ReadonlyArray<readonly [string, string]>;
+  body: Uint8Array;
+};
+
+export type UserDaemonResponse = {
+  status: number;
+  headers: ReadonlyArray<readonly [string, string]>;
+  body: Uint8Array;
+};
+
+/**
+ * Serves one weblet inside a per-user daemon. The gateway never holds
+ * this object; it reaches it only through the daemon's `UserDaemon`
+ * exo, which routes by `webletId`.
+ */
+export type WebletHandler = {
+  handleHttp(
+    request: UserDaemonRequest,
+  ): UserDaemonResponse | Promise<UserDaemonResponse>;
+  handleWebSocketUpgrade(request: UserDaemonRequest): unknown;
+  fetchContentTree(root: string): unknown;
+};
+
+export type UserDaemonPublication = WebletDescriptor & {
+  handler: WebletHandler;
+};
+
+/** The callback exo a per-user daemon hands the gateway at `register`. */
+export type UserDaemon = {
+  handleHttp(
+    webletId: string,
+    request: UserDaemonRequest,
+  ): Promise<UserDaemonResponse>;
+  handleWebSocketUpgrade(
+    webletId: string,
+    request: UserDaemonRequest,
+  ): Promise<unknown>;
+  fetchContentTree(root: string): Promise<unknown>;
+};
+
+/** The daemon-local handle returned by `registerUserDaemon`. */
+export type UserDaemonPublisher = {
+  publishWeblet(publication: UserDaemonPublication): Promise<void>;
+  unpublishWeblet(webletId: string): Promise<void>;
+  addPublicKey(signer: KeySigner): Promise<void>;
+  listWeblets(): Promise<ReadonlyArray<WebletDescriptor>>;
+  getRegistration(): Promise<Registration>;
+  deregister(): Promise<void>;
+};

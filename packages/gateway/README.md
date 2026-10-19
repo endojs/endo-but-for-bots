@@ -57,6 +57,10 @@ Implemented:
   TTL, single-use semantics, constant-time signature comparison
   helper, and a Node-backed `CryptoPowers` adapter
   (`src/node-crypto-powers.js`).
+- Daemon side of the bootstrap (`src/user-daemon.js`):
+  `registerUserDaemon` and `proveKeyPossession`, through which a
+  per-user daemon registers with the host gateway and publishes
+  weblets (Feature 4).
 - Gateway registrar sock path resolution is provided by `@endo/where`'s
   `whereEndoGatewayRegistrarSock`.
 
@@ -200,6 +204,55 @@ await E(registration).publishWeblet({
   webletId: 'weblet-abc',
   contentTreeRoot: 'a'.repeat(64),
   hasWebSocket: true,
+});
+```
+
+### Host gateway and per-user daemons
+
+A multi-user host runs one gateway service and one daemon per user.
+Each side owns a distinct set of responsibilities:
+
+| Host gateway service (`bootstrap.js`)              | Per-user daemon (`user-daemon.js`)                       |
+| -------------------------------------------------- | -------------------------------------------------------- |
+| Public listener and `Host`-header routing          | Ed25519 private keys (signing stays local)               |
+| Nonce issue and proof-of-possession checks         | Weblet content and request handling                      |
+| Registration table (public key to daemon, weblets) | Which weblets are published, and when they are withdrawn |
+| Pruning a registration when its connection closes  | Deciding which gateway requests to answer                |
+
+```mermaid
+sequenceDiagram
+  participant D as Per-user daemon
+  participant G as Host gateway
+  D->>G: challenge()
+  G-->>D: nonce, hashedNonce
+  Note over D: recompute the domain-separated hash, then sign it
+  D->>G: register({ publicKey, nonce, signature, daemon, cancelled })
+  G-->>D: Registration
+  D->>G: publishWeblet({ webletId, contentTreeRoot, hasWebSocket })
+  G->>D: daemon.handleHttp(webletId, request)
+```
+
+`registerUserDaemon` runs this handshake from the daemon's side.
+The daemon recomputes the hash of the nonce it received rather than
+signing the gateway-supplied `hashedNonce`, so a process listening
+on the bootstrap socket cannot make the daemon sign arbitrary bytes.
+The `UserDaemon` exo the gateway receives answers only for weblets
+published through that registration:
+
+```js
+import { registerUserDaemon } from '@endo/gateway/src/user-daemon.js';
+
+const publisher = await registerUserDaemon({
+  bootstrap, // the gateway's bootstrap, reached over the registrar sock
+  crypto, // needs only sha256
+  signer, // remotable with getPublicKey() and sign(message)
+  cancelled, // settles when the sock connection closes
+});
+await E(publisher).publishWeblet({
+  webletId: 'weblet-abc',
+  contentTreeRoot: 'a'.repeat(64),
+  hasWebSocket: false,
+  handler, // remotable with handleHttp, handleWebSocketUpgrade, fetchContentTree
 });
 ```
 
