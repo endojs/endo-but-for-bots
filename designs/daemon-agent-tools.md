@@ -544,10 +544,10 @@ Run on a Linux runner with `bwrap`, skipped with a recorded reason where
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| host → `shell` formula | daemon `provideShell` | host-supplied `ShellPolicy` (allowlist, env, limits, engine) | the formula record (mount id, sandbox-factory id, policy) | the daemon: formula incarnation and cancellation | a writable `EndoMount` capability, an optional `SandboxFactory` capability, and the policy record |
-| `shell` formula → engine | `Spawner` (`makeHostSpawner` / `makeSandboxSpawner`) | none: the engine enforces the limits the formula passes | none | the formula: it creates and disposes the slice per incarnation | argv, sanitized env, cwd, limits |
-| engine → slice | `@endo/sandbox` `SandboxHandle` | the slice profile (`network: 'none'`, seccomp) | none (scratch only) | the slice handle: dropping it kills the process tree | a `ProcessHandle` |
-| guest → `Shell` | `exo-shell` `exec` / `inspect` | allowlist check before spawn | none | per call: an execution result (`ShellResult`), never a commit | argv and an optional narrower timeout; a `ShellResult` back |
+| host -> `shell` formula | daemon `provideShell` | host-supplied `ShellPolicy` (allowlist, env, limits, engine) | the formula record (mount id, sandbox-factory id, policy) | the daemon: formula incarnation and cancellation | a writable `EndoMount` capability, an optional `SandboxFactory` capability, and the policy record |
+| `shell` formula -> engine | `Spawner` (`makeHostSpawner` / `makeSandboxSpawner`) | none: the engine enforces the limits the formula passes | none | the formula: it creates and disposes the slice per incarnation | argv, sanitized env, cwd, limits |
+| engine -> slice | `@endo/sandbox` `SandboxHandle` | the slice profile (`network: 'none'`, seccomp) | none (scratch only) | the slice handle: dropping it kills the process tree | a `ProcessHandle` |
+| guest -> `Shell` | `exo-shell` `exec` / `inspect` | allowlist check before spawn | none | per call: an execution result (`ShellResult`), never a commit | argv and an optional narrower timeout; a `ShellResult` back |
 
 Answers to the four ownership questions: the daemon formula owns the
 persistent state (the policy). Nothing in the shell commits or discards;
