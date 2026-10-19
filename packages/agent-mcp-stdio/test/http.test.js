@@ -32,28 +32,32 @@ const NODE = '12'.repeat(32);
 const httpRequest = (url, { method = 'GET', headers = {}, body } = {}) =>
   /** @type {Promise<{ status: number, headers: { get: (name: string) => string | undefined }, text: () => Promise<string>, json: () => Promise<any> }>} */ (
     new Promise((resolve, reject) => {
-      const req = http.request(url, { method, headers, agent: false }, res => {
-        let text = '';
-        res.setEncoding('utf-8');
-        res.on('data', chunk => {
-          text += chunk;
-        });
-        res.on('end', () =>
-          resolve({
-            status: res.statusCode || 0,
-            headers: {
-              get: name => {
-                const value = res.headers[name.toLowerCase()];
-                return Array.isArray(value) ? value.join(', ') : value;
+      const request = http.request(
+        url,
+        { method, headers, agent: false },
+        response => {
+          let text = '';
+          response.setEncoding('utf-8');
+          response.on('data', chunk => {
+            text += chunk;
+          });
+          response.on('end', () =>
+            resolve({
+              status: response.statusCode || 0,
+              headers: {
+                get: name => {
+                  const value = response.headers[name.toLowerCase()];
+                  return Array.isArray(value) ? value.join(', ') : value;
+                },
               },
-            },
-            text: async () => text,
-            json: async () => JSON.parse(text),
-          }),
-        );
-      });
-      req.on('error', reject);
-      req.end(body);
+              text: async () => text,
+              json: async () => JSON.parse(text),
+            }),
+          );
+        },
+      );
+      request.on('error', reject);
+      request.end(body);
     })
   );
 
