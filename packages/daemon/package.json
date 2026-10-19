@@ -63,6 +63,7 @@
     "@endo/bytes": "workspace:^",
     "@endo/cancel": "workspace:^",
     "@endo/captp": "workspace:^",
+    "@endo/cbor-frame": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/crc32": "workspace:^",
     "@endo/daemon-cas": "workspace:^",
