@@ -946,7 +946,13 @@ export const makeOcapnHub = ({
               session.queue.length = 0;
               session.queueSequences.length = 0;
               dirty = true;
-              session.onAbort?.(error);
+              try {
+                session.onAbort?.(error);
+              } catch (hookError) {
+                // One observer's close failure must not strand other committed
+                // outboxes. Their own before-wire persist still gates delivery.
+                logError(`onAbort for ${sessionKey} threw:`, hookError);
+              }
               return;
             }
           }

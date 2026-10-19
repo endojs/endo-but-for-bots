@@ -229,3 +229,20 @@ the measured interval.
 The atomic and SQLite figures were rendered and inspected, and an earlier figure still reproduces
 byte-for-byte with the updated analyzer.
 Normal native and guest-bundle hashes are unchanged.
+
+## Adversarial review follow-up
+
+The review reproduced a liveness failure when a disposable observer's abort hook throws.
+The source watermark and remaining receiver queue were durable, but the exception interrupted
+flushing unrelated receivers until another operation or restart.
+Abort-hook failures are now logged and contained, matching the existing frame-error path.
+Receiver publication still requires its own successful before-wire persistence.
+Three regression cases cover a throwing hook, a one-shot cleanup persistence failure, and
+persistent cleanup refusal followed by retry with the original delivery identity.
+The new cases failed before the fix; the five focused suites pass afterward in all three SES
+configurations (30 tests per configuration).
+
+The review found no demonstrated native lifetime violation from buffered input before process
+exit: the documented incarnation remains live until `onExit`.
+Deferred or rejected termination remains a useful adapter coverage addition, especially for
+pre-exit input acceptance, post-exit rejection, and isolation of the next incarnation.
