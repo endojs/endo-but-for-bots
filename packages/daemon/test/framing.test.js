@@ -225,15 +225,21 @@ test('frame reader and writer reject an unknown framing', t => {
 
 test('sniffing reader propagates a byte-stream error to the reader and the choice', async t => {
   await null;
-  const failing = /** @type {import('@endo/stream').Reader<Uint8Array>} */ (
-    harden(
-      (async function* failingReader() {
-        await null;
-        yield* [];
-        throw Error('socket reset');
-      })(),
-    )
-  );
+  /** @type {import('@endo/stream').Reader<Uint8Array>} */
+  const failing = harden({
+    async next() {
+      throw Error('socket reset');
+    },
+    async return() {
+      return harden({ done: true, value: undefined });
+    },
+    async throw() {
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]() {
+      return failing;
+    },
+  });
   const { framingChosen, reader } = makeSniffingFrameReader(failing, {
     name: 'specimen',
   });
