@@ -103,16 +103,21 @@ const sendError = (response, status, message, headers = {}) =>
 /**
  * Read a request body as text, refusing one longer than `maxBytes`.
  *
+ * An oversize body is still read to its end, and discarded. Leaving the loop
+ * early would destroy the socket before the 413 is written, and replying
+ * while the client is still sending lets the close reset its upload, which
+ * can discard the reply before the client reads it.
+ *
  * @param {IncomingMessage} request
  * @param {number} maxBytes
+ * @param {boolean} [refuse] - discard the body unread, already known to be
+ *   over the limit.
  * @returns {Promise<string | undefined>} `undefined` when over the limit.
  */
-const readBody = async (request, maxBytes) => {
+const readBody = async (request, maxBytes, refuse = false) => {
   /** @type {Buffer[]} */
   const chunks = [];
-  let length = 0;
-  // Leaving the loop early would destroy the socket before the 413 is
-  // written, so an oversize body is read to its end and discarded.
+  let length = refuse ? Infinity : 0;
   for await (const chunk of request) {
     length += chunk.length;
     if (length <= maxBytes) {
@@ -242,21 +247,12 @@ export const makeMcpHttpHandler = ({
       sendError(response, 415, 'Content-Type must be application/json');
       return true;
     }
-    const tooLarge = () =>
+    const declared = Number(request.headers['content-length']);
+    const body = await readBody(request, maxBodyBytes, declared > maxBodyBytes);
+    if (body === undefined) {
       sendError(response, 413, 'Request body too large', {
         Connection: 'close',
       });
-    const declared = Number(request.headers['content-length']);
-    if (declared > maxBodyBytes) {
-      // Drain what the client still sends, so it reads the 413 rather than
-      // a reset.
-      request.resume();
-      tooLarge();
-      return true;
-    }
-    const body = await readBody(request, maxBodyBytes);
-    if (body === undefined) {
-      tooLarge();
       return true;
     }
 
