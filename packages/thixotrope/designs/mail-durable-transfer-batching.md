@@ -139,6 +139,7 @@ Run from `packages/thixotrope`, using separately built native and guest artifact
 THIXOTROPE_IRONHORSE_WORKER=/tmp/mail-combined-worker \
 THIX_MAIL_BOOT_DIR=/tmp/mail-gc-batched-boot-final \
 THIX_MAIL_TRANSFERS=both \
+THIX_MAIL_OBSERVER=durable-progress \
 THIX_MAIL_TRIALS=7 \
 THIX_MAIL_PROFILE=/tmp/mail-transfer-trace.json \
 THIX_MAIL_PROFILE_WORKER=/tmp/mail-combined-profile-worker \
@@ -146,6 +147,8 @@ node --import ./scripts/profile-mail-loader.mjs scripts/measure-mail.mjs colocat
 ```
 
 Use `THIX_MAIL_TRANSFERS=off`, `cleanup`, `batch`, or `both` for the four ablations.
+Keep `THIX_MAIL_OBSERVER=durable-progress` when reproducing these historical comparisons after the
+subsequent disposable-observer optimization.
 Use `THIX_MAIL_HUB=log` only on disposable state for the additional append-log comparison.
 Generate the selected median chart from its retained trace with:
 

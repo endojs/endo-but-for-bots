@@ -196,3 +196,26 @@ Receiver-side journal batching is deferred: the selected path has only one appen
 record format or partial-append recovery mechanism would add complexity without saving a write.
 Future proposals should state their expected saved operations and measured benefit alongside their
 additional state, interfaces, formats, and failure cases.
+
+
+## Disposable observers and storage backends
+
+The [observer outbox experiment](mail-observer-outbox.md) identifies four remaining hub commits as
+progress records for a disposable, nonresumable native observer.
+An explicit discard-on-restart policy retains commit-before-publication and ends ambiguous observer
+delivery, while keeping progress in memory until the next necessary commit.
+It applies to unique transient clients and native adapter sessions; worker and resumable peer
+outboxes retain their existing replay behavior.
+
+The fresh atomic-store median falls from 190.458 ms to 145.162 ms, with two steady hub commits and
+one journal append instead of six hub commits and an append.
+The disposable append log reaches 132.561 ms and SQLite WAL with FULL synchronization and macOS
+fullfsync reaches 136.389 ms.
+An initial 122.868 ms SQLite result is excluded as a durability-equivalent comparison because it
+omitted the separate fullfsync setting that matches Node/libuv's requested sync strength on Darwin.
+Neither storage prototype is promoted into the normal daemon.
+
+The retained runtime policy reaches three host durability commits without a new persisted format.
+A shared transactional hub/inbox store could remove the remaining approximately 4 ms journal sync,
+but adds transaction and recovery coupling; it is deferred in favor of the much larger remaining
+VM execution and collector costs.
