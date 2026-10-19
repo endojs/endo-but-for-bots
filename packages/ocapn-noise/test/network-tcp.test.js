@@ -112,6 +112,22 @@ test('failed TCP bind publishes no hints and can be retried', async t => {
   listener.close();
 });
 
+test('tcp transport refuses a second listen until the first closes', async t => {
+  const transport = makeTcpTransport();
+  t.teardown(() => transport.shutdown());
+  const { listen } = transport;
+  if (!listen) throw Error('tcp transport must expose listen');
+  const accept = () => {};
+  const listener = await listen({ port: 0 }, accept);
+  await t.throwsAsync(() => listen({ port: 0 }, accept), {
+    message: /listen called more than once/,
+  });
+  listener.close();
+  const relistener = await listen({ port: 0 }, accept);
+  t.truthy(relistener.hints);
+  relistener.close();
+});
+
 test('tcp transport with framing:none delivers raw socket bytes', async t => {
   const transport = makeTcpTransport({ framing: 'none' });
   t.teardown(() => transport.shutdown());

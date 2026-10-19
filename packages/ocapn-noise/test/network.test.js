@@ -136,6 +136,57 @@ test('concurrent listen calls cannot open two listeners for one transport', asyn
   listener.close();
 });
 
+test('listen rejects a transport that supports only outgoing connections', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const transport = makeStallingTransport();
+  network.addTransport(transport);
+  await t.throwsAsync(() => network.listen(transport), {
+    message: /does not support listening/,
+  });
+  t.notThrows(() => network.removeTransport(transport));
+});
+
+test('listen closes a listener that binds after network shutdown', async t => {
+  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  /** @type {(listener: import('../src/types.js').TransportListener) => void} */
+  let bind = () => {};
+  /** @type {() => void} */
+  let entered = () => {};
+  const listenEntered = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  let closed = 0;
+  /** @type {import('../src/types.js').OcapnNoiseTransport} */
+  const transport = harden({
+    scheme: 'late',
+    connect: async () => {
+      throw Error('late transport: connect unsupported');
+    },
+    listen: () =>
+      new Promise(resolve => {
+        bind = resolve;
+        entered();
+      }),
+    shutdown: () => {},
+  });
+  network.addTransport(transport);
+  const listening = network.listen(transport);
+  await listenEntered;
+  network.shutdown();
+  bind(
+    harden({
+      hints: { to: 'late' },
+      close: () => {
+        closed += 1;
+      },
+    }),
+  );
+  await t.throwsAsync(() => listening, {
+    message: /network shutdown while listening/,
+  });
+  t.is(closed, 1);
+});
+
 test('two peers handshake and exchange encrypted messages via mock transport', async t => {
   const netA = makeNetworkForTest(t, { codec: cborCodec });
   const netB = makeNetworkForTest(t, { codec: cborCodec });
