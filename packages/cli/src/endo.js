@@ -550,6 +550,16 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('write <mount-name> <path...>')
+    .description('writes stdin to a file in a mount')
+    .option(...commonOptions.as)
+    .action(async (mountName, filePath, options) => {
+      const { as: agentNames } = options;
+      const { write } = await import('./commands/write.js');
+      return write({ mountName, filePath, agentNames });
+    });
+
+  program
     .command('store')
     .description('stores a blob or structured value')
     .option(...commonOptions.as)
@@ -1001,6 +1011,7 @@ export const main = async rawArgs => {
         'list',
         'show',
         'cat',
+        'write',
         'follow',
         'store',
         'checkin',

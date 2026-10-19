@@ -3,13 +3,20 @@
 | | |
 |---|---|
 | **Created** | 2026-03-20 |
-| **Updated** | 2026-05-27 |
+| **Updated** | 2026-10-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Complete |
 
 ## Status
 
-**In Progress** (Phases 1-3 + 5 shipped 2026-03-21 via commit
+**Complete.** Phase 6 (`endo write`, with `endo ls` and `endo cat`
+reaching into mounts through pet-name paths) landed 2026-10-19,
+closing the last open phase.
+Further mount extensions (revocation, deny patterns, glob/grep, live
+entry-name streams) are tracked by their own designs and PRs, not as
+phases of this one.
+
+History: (Phases 1-3 + 5 shipped 2026-03-21 via commit
 `e22f71327` on `llm`; Phases 4 and beyond open as PRs #135 / #127 /
 #277; partial Phase 6 absorbed by PR #153, commit `8a8e872d4`
 2026-05-18).
@@ -105,7 +112,6 @@ partially absorbed by the CLI verb reshape in
 
 - GC cleanup for scratch mount backing directories — extracted to
   [daemon-content-store-gc](daemon-content-store-gc.md)
-- CLI commands: `endo ls`, `endo cat`, `endo write` (Phase 6)
 
 ## What is the Problem Being Solved?
 
@@ -511,7 +517,7 @@ Creates a daemon-managed scratch mount.
 $ endo mkscratch workspace
 ```
 
-### `endo ls <mountName> [path...]`
+### `endo ls <mountName>[/<path>]`
 
 Lists entries in a mount.
 
@@ -521,22 +527,23 @@ src/
 package.json
 README.md
 
-$ endo ls project-dir src
+$ endo ls project-dir/src
 index.js
 utils.js
 ```
 
-### `endo cat <mountName> <path...>`
+### `endo cat <mountName>/<path>`
 
 Reads file content from a mount.
 
 ```
-$ endo cat project-dir package.json
+$ endo cat project-dir/package.json
 ```
 
 ### `endo write <mountName> <path...>`
 
 Writes stdin to a file in a mount.
+The path may be separate segments or one slash-delimited path.
 
 ```
 $ echo "hello" | endo write workspace notes.txt
@@ -678,12 +685,17 @@ GC cleanup of scratch-mount backing directories is covered by
 1. ~~Implement directory and file transient exos returned by `lookup()`~~
 2. ~~Tests: navigation, file read/write through lookup~~
 
-### Phase 6: CLI commands for mount interaction — Not Started
+### Phase 6: CLI commands for mount interaction — **Complete**
 
-1. `endo ls <mountName> [path...]` — list entries via CLI
-2. `endo cat <mountName> <path...>` — read file content via CLI
-3. `endo write <mountName> <path...>` — write stdin to a file via CLI
-4. Tests for each command
+1. ~~`endo ls <mountName> [path...]` — list entries via CLI~~ (served
+   by `endo ls <mountName>/<path>`: the pet-name path walks into the
+   mount)
+2. ~~`endo cat <mountName> <path...>` — read file content via CLI~~
+   (served by `endo cat <mountName>/<path>`)
+3. ~~`endo write <mountName> <path...>` — write stdin to a file via
+   CLI~~ (`packages/cli/src/commands/write.js`; streams stdin bytes to
+   `EndoMount.write`, creating missing parents)
+4. ~~Tests for each command~~ (`packages/cli/test/demo/mount-files.js`)
 
 ## Design Decisions
 
