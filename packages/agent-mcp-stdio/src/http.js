@@ -10,8 +10,10 @@
 // (optionally `:<64-hex node>`). The bearer resolves through `resolveGuest`,
 // so a formula that is not a guest facet (a host, in particular) is refused
 // exactly as a formula that does not exist, and the reply does not tell them
-// apart. Failed authentications advance the daemon gateway's per-address rate
-// limiter.
+// apart. Failed authentications advance a per-client rate limiter of this
+// listener's own, built from the daemon gateway's `makeRateLimiter`. The
+// client is the socket's peer address, or, behind a trusted reverse proxy,
+// the address the proxy appended to `X-Forwarded-For`.
 //
 // The transport is stateless (design § Decision 8): `POST /mcp` carries one
 // JSON-RPC message and is answered with `application/json`; no
@@ -101,14 +103,38 @@ const readBody = async (request, maxBytes) => {
   /** @type {Buffer[]} */
   const chunks = [];
   let length = 0;
+  // Leaving the loop early would destroy the socket before the 413 is
+  // written, so an oversize body is read to its end and discarded.
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > maxBytes) {
-      return undefined;
+    if (length <= maxBytes) {
+      chunks.push(chunk);
     }
-    chunks.push(chunk);
+  }
+  if (length > maxBytes) {
+    return undefined;
   }
   return Buffer.concat(chunks).toString('utf-8');
+};
+
+/**
+ * The rate-limiter key for a request: the socket's peer address, or, when the
+ * listener trusts a reverse proxy, the last `X-Forwarded-For` entry (the one
+ * that proxy appended; a client can forge every entry before it).
+ *
+ * @param {IncomingMessage} request
+ * @param {boolean} trustProxy
+ * @returns {string}
+ */
+const clientAddress = (request, trustProxy) => {
+  const peer = request.socket.remoteAddress || '';
+  if (!trustProxy) {
+    return peer;
+  }
+  const header = request.headers['x-forwarded-for'];
+  const forwarded = Array.isArray(header) ? header.join(',') : header;
+  const last = (forwarded || '').split(',').pop()?.trim();
+  return last || peer;
 };
 
 /**
@@ -124,6 +150,10 @@ const readBody = async (request, maxBytes) => {
  *   values accepted from a browser. A request with any other `Origin` is
  *   refused (the transport's DNS-rebinding guard); a request with none, as
  *   from every non-browser MCP client, is accepted.
+ * @param {boolean} [options.trustProxy] - key the rate limiter on the last
+ *   `X-Forwarded-For` entry rather than the socket's peer. Set it only when
+ *   every request arrives through a reverse proxy that appends that header;
+ *   without it, every client behind one proxy shares one limiter key.
  * @param {string} [options.path]
  * @param {number} [options.maxBodyBytes]
  * @returns {(request: IncomingMessage, response: ServerResponse) => Promise<boolean>}
@@ -132,6 +162,7 @@ export const makeMcpHttpHandler = ({
   resolveServer,
   rateLimiter = makeRateLimiter(DEFAULT_PENALTY_MS),
   allowedOrigins = [],
+  trustProxy = false,
   path = MCP_HTTP_PATH,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 }) => {
@@ -151,7 +182,7 @@ export const makeMcpHttpHandler = ({
       return true;
     }
 
-    const address = request.socket.remoteAddress || '';
+    const address = clientAddress(request, trustProxy);
     const retryIn = rateLimiter.check(address);
     if (retryIn > 0) {
       sendError(response, 429, 'Too many failed authentications', {
@@ -185,15 +216,28 @@ export const makeMcpHttpHandler = ({
       sendError(response, 415, 'Content-Type must be application/json');
       return true;
     }
+    const tooLarge = () =>
+      sendError(response, 413, 'Request body too large', {
+        Connection: 'close',
+      });
+    const declared = Number(request.headers['content-length']);
+    if (declared > maxBodyBytes) {
+      // Drain what the client still sends, so it reads the 413 rather than
+      // a reset.
+      request.resume();
+      tooLarge();
+      return true;
+    }
     const body = await readBody(request, maxBodyBytes);
     if (body === undefined) {
-      sendError(response, 413, 'Request body too large');
+      tooLarge();
       return true;
     }
 
     const reply = await server.handleLine(body);
     if (reply === undefined) {
-      // A notification or a response: accepted, no body (transport § POST).
+      // A notification or a response: accepted, no body (the 2025-06-18
+      // MCP streamable-HTTP transport, § Sending Messages to the Server).
       send(response, 202, {});
       return true;
     }
@@ -258,6 +302,7 @@ harden(makeGuestServerResolver);
  * @param {string} [options.host]
  * @param {number} [options.port]
  * @param {ReadonlyArray<string>} [options.allowedOrigins]
+ * @param {boolean} [options.trustProxy]
  * @param {ReadonlyArray<ToolDeclaration<any>>} [options.tools]
  * @param {number} [options.penaltyMs]
  * @returns {{ started: Promise<string>, close: () => Promise<void> }}
@@ -268,6 +313,7 @@ export const startMcpHttpGateway = ({
   host = '127.0.0.1',
   port = MCP_HTTP_DEFAULT_PORT,
   allowedOrigins,
+  trustProxy,
   tools,
   penaltyMs = DEFAULT_PENALTY_MS,
 }) => {
@@ -275,6 +321,7 @@ export const startMcpHttpGateway = ({
     resolveServer: makeGuestServerResolver({ connection, version, tools }),
     rateLimiter: makeRateLimiter(penaltyMs),
     allowedOrigins,
+    trustProxy,
   });
   const server = http.createServer((request, response) => {
     handle(request, response).then(
@@ -322,7 +369,9 @@ const isLoopback = host =>
 /**
  * Process entry for `endo-mcp-http`. Configuration is by environment:
  * `ENDO_MCP_HTTP_HOST` (default `127.0.0.1`), `ENDO_MCP_HTTP_PORT` (default
- * 8921), and `ENDO_MCP_HTTP_ALLOWED_ORIGINS` (comma-separated).
+ * 8921), `ENDO_MCP_HTTP_ALLOWED_ORIGINS` (comma-separated), and
+ * `ENDO_MCP_HTTP_TRUST_PROXY` (`1` to key the rate limiter on the last
+ * `X-Forwarded-For` entry).
  *
  * @param {object} powers
  * @param {Record<string, string | undefined>} powers.env
@@ -346,6 +395,7 @@ export const mainHttp = async ({ env, connect, log, version, stop }) => {
     .split(',')
     .map(origin => origin.trim())
     .filter(origin => origin !== '');
+  const trustProxy = env.ENDO_MCP_HTTP_TRUST_PROXY === '1';
 
   /** @type {DaemonConnection} */
   let connection;
@@ -363,6 +413,7 @@ export const mainHttp = async ({ env, connect, log, version, stop }) => {
     host,
     port,
     allowedOrigins,
+    trustProxy,
   });
   let url;
   try {

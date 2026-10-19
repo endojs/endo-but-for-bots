@@ -115,8 +115,13 @@ const makeFakeGuest = (label, calls) =>
  * @param {object} [options]
  * @param {number} [options.penaltyMs]
  * @param {string[]} [options.allowedOrigins]
+ * @param {boolean} [options.trustProxy]
  */
-const startGateway = async ({ penaltyMs = 0, allowedOrigins } = {}) => {
+const startGateway = async ({
+  penaltyMs = 0,
+  allowedOrigins,
+  trustProxy,
+} = {}) => {
   /** @type {unknown[][]} */
   const calls = [];
   const closed = makePromiseKit();
@@ -148,6 +153,7 @@ const startGateway = async ({ penaltyMs = 0, allowedOrigins } = {}) => {
     port: 0,
     penaltyMs,
     allowedOrigins,
+    trustProxy,
   });
   const url = await gateway.started;
   let nextId = 1;
@@ -175,9 +181,8 @@ const startGateway = async ({ penaltyMs = 0, allowedOrigins } = {}) => {
 };
 
 test('the handler refuses a body longer than maxBodyBytes', async t => {
-  // Driven without a socket: over a real connection the server's early
-  // refusal races the client's upload, which surfaces as a client-side
-  // error rather than the 413.
+  // Driven without a socket, so the limit is small and the body arrives in
+  // chunks that straddle it.
   /** @type {string[]} */
   const handled = [];
   const handler = makeMcpHttpHandler({
@@ -321,6 +326,76 @@ test.serial(
     }
   },
 );
+
+test.serial(
+  'behind a trusted proxy, the limiter keys on the appended address',
+  async t => {
+    const { url, close } = await startGateway({
+      penaltyMs: 60_000,
+      trustProxy: true,
+    });
+    /**
+     * @param {string} forwardedFor
+     * @param {string} bearer
+     */
+    const ping = (forwardedFor, bearer) =>
+      httpRequest(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': forwardedFor,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      });
+    try {
+      const failed = await ping('198.51.100.7, 203.0.113.1', 'nope');
+      t.is(failed.status, 401);
+      // The penalized client is limited, whatever it claims to be upstream.
+      const limited = await ping('198.51.100.8, 203.0.113.1', FORMULA_ID);
+      t.is(limited.status, 429);
+      // Another client behind the same proxy is not.
+      const other = await ping('203.0.113.2', FORMULA_ID);
+      t.is(other.status, 200);
+    } finally {
+      await close();
+    }
+  },
+);
+
+test.serial('an oversize body gets a 413 over a real connection', async t => {
+  const { url, close } = await startGateway();
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'ping',
+    params: { pad: 'x'.repeat(5 * 1024 * 1024) },
+  });
+  const headers = {
+    Authorization: `Bearer ${FORMULA_ID}`,
+    'Content-Type': 'application/json',
+  };
+  try {
+    // Refused on the declared length, before the body is read.
+    const declared = await httpRequest(url, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(declared.status, 413);
+    t.is(declared.headers.get('connection'), 'close');
+    // Refused while reading a body of undeclared length.
+    const chunked = await httpRequest(url, {
+      method: 'POST',
+      headers: { ...headers, 'Transfer-Encoding': 'chunked' },
+      body,
+    });
+    t.is(chunked.status, 413);
+    t.deepEqual(await chunked.json(), { error: 'Request body too large' });
+  } finally {
+    await close();
+  }
+});
 
 test.serial(
   'the transport refuses what a stateless JSON endpoint does not serve',
