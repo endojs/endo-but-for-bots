@@ -189,6 +189,58 @@ test('gated writer rejects writes when the choice rejects', async t => {
   await t.throwsAsync(gated.next(hello), { message: 'no first frame' });
 });
 
+test('gated writer aborts without waiting for a choice that never comes', async t => {
+  const { writer, isClosed } = makeCollectingWriter();
+  const gated = makeGatedFrameWriter(writer, new Promise(() => {}));
+  await gated.throw(Error('abort'));
+  t.true(isClosed());
+});
+
+for (const method of /** @type {const} */ (['return', 'throw'])) {
+  test(`gated writer delegates ${method} to the chosen framing's writer`, async t => {
+    const { writer, bytes, isClosed } = makeCollectingWriter();
+    const gated = makeGatedFrameWriter(writer, Promise.resolve('netstring'));
+    t.is(gated[Symbol.asyncIterator](), gated);
+    await gated.next(hello);
+    await (method === 'return'
+      ? gated.return(undefined)
+      : gated.throw(Error('abort')));
+    t.deepEqual([...bytes()], [...specimens.netstring]);
+    t.true(isClosed());
+  });
+}
+
+test('frame reader and writer reject an unknown framing', t => {
+  const { writer } = makeCollectingWriter();
+  const framing = /** @type {FramingName} */ (/** @type {unknown} */ ('json'));
+  t.throws(() => makeFrameWriter(writer, { framing }), {
+    instanceOf: TypeError,
+    message: 'Unknown framing json',
+  });
+  t.throws(() => makeFrameReader(makeChunkReader([]), { framing }), {
+    instanceOf: TypeError,
+    message: 'Unknown framing json',
+  });
+});
+
+test('sniffing reader propagates a byte-stream error to the reader and the choice', async t => {
+  await null;
+  const failing = /** @type {import('@endo/stream').Reader<Uint8Array>} */ (
+    harden(
+      (async function* failingReader() {
+        await null;
+        yield* [];
+        throw Error('socket reset');
+      })(),
+    )
+  );
+  const { framingChosen, reader } = makeSniffingFrameReader(failing, {
+    name: 'specimen',
+  });
+  await t.throwsAsync(collect(reader), { message: 'socket reset' });
+  await t.throwsAsync(framingChosen, { message: 'socket reset' });
+});
+
 // Matrix: each initiator framing against the bilingual accepter, and
 // against a same-framing accepter as the control. The initiator's reader
 // expects its own framing, so a session completes only if the accepter
