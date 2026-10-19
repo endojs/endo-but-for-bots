@@ -36,6 +36,7 @@ import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
 import { makeGrantDetails } from './grant-tracker.js';
+import { makeHeartbeat } from './heartbeat.js';
 
 /**
  * @typedef {any} LocalResolver
@@ -722,6 +723,11 @@ const makeBootstrapObject = (
  *   embedders: export- and import-slot assignment, resolver
  *   obligations taken on (with the durable name of their target), and
  *   resolver obligations settled (record can be dropped)
+ * @param {import('./heartbeat.js').HeartbeatOptions | false} [heartbeatOptions]
+ *   if set, emit `op:ping` / `op:pong` and abort the session when the
+ *   peer is silent for longer than the session timeout. Default: off,
+ *   so peers that predate the heartbeat extension are not sent
+ *   operations they cannot decode.
  * @returns {Ocapn}
  */
 export const makeOcapn = (
@@ -742,7 +748,11 @@ export const makeOcapn = (
   enableImportCollection = true,
   debugMode = false,
   sessionHooks = undefined,
+  heartbeatOptions = false,
 ) => {
+  /** @type {import('./heartbeat.js').Heartbeat | undefined} */
+  let heartbeat;
+
   const onReject = reason => {
     logger.info(`onReject`, reason);
   };
@@ -752,6 +762,7 @@ export const makeOcapn = (
    */
   const abort = reason => {
     logger.info(`client received abort`, reason);
+    if (heartbeat) heartbeat.stop();
     const disconnectError = harden(
       reason
         ? Error('Session disconnected', { cause: reason })
@@ -1066,6 +1077,11 @@ export const makeOcapn = (
         ocapnTable.dropSlot(slot, 1);
       }
     },
+    // Liveness bookkeeping happens in `dispatchMessageData` through
+    // `heartbeat.observe`; the operations themselves carry no CapTP
+    // state, and are absorbed even when this side runs no heartbeat.
+    'op:ping': () => {},
+    'op:pong': () => {},
     'op:abort': message => {
       const { reason } = message;
       abort(reason);
@@ -1369,9 +1385,26 @@ export const makeOcapn = (
         connection.end();
         throw err;
       }
+      if (heartbeat && !heartbeat.observe(message)) {
+        // Stale-epoch heartbeat from an obsolete transport instance.
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       dispatch(message);
     }
   };
+
+  if (heartbeatOptions) {
+    heartbeat = makeHeartbeat({
+      options: heartbeatOptions,
+      send,
+      onLoss: reason => {
+        logger.info(`heartbeat loss`, reason);
+        abort(reason);
+      },
+    });
+    heartbeat.start();
+  }
 
   const localBootstrapSlot = makeSlot('o', true, ZERO_N);
   const bootstrapObj = makeBootstrapObject(

@@ -45,6 +45,34 @@ export const NonNegativeIntegerCodec = makeCodec('NonNegativeInteger', {
   },
 });
 
+const UINT64_MAX = 2n ** 64n - 1n;
+
+/**
+ * @param {unknown} value
+ */
+const assertUint64 = value => {
+  if (typeof value !== 'bigint') {
+    throw Error('value must be a bigint');
+  }
+  if (value < ZERO_N || value > UINT64_MAX) {
+    throw Error('value must be a uint64');
+  }
+};
+
+// Allows integers in [0, 2**64 - 1]: heartbeat epochs, sequences, and
+// Noise nonces, all of which the spec bounds to 64 bits.
+export const Uint64Codec = makeCodec('Uint64', {
+  write: (value, syrupWriter) => {
+    assertUint64(value);
+    syrupWriter.writeInteger(value);
+  },
+  read: syrupReader => {
+    const value = syrupReader.readInteger();
+    assertUint64(value);
+    return value;
+  },
+});
+
 /** @type {SyrupCodec} */
 export const NonNegativeIntegerListCodec = makeListCodecFromEntryCodec(
   'NonNegativeIntegerList',

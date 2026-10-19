@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-05-19 |
+| **Updated** | 2026-10-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress (Phase 1 implemented) |
 | **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md). |
 
 ## What is the Problem Being Solved?
@@ -641,6 +641,17 @@ sequenceDiagram
    tcp-test-only transport. Verify that an idle session is detected
    as lost in seconds rather than hours, and that both codecs round-trip
    `op:ping` and `op:pong` identically.
+
+   *Status (2026-10-19): implemented.* The `op:ping` / `op:pong` record
+   codecs live in `packages/ocapn/src/codecs/operations.js` with
+   uint64-bounded fields, so the syrup and CBOR codecs share one
+   definition. The heartbeat itself is `packages/ocapn/src/client/heartbeat.js`,
+   enabled per client by `makeOcapn({ heartbeat })` and off by default
+   so that peers without the extension are not sent operations they
+   cannot decode. It sits in the CapTP client rather than in
+   `packages/ocapn-noise`, because Phase 1 needs no CipherState; it
+   therefore covers every network. The `op:pong` acknowledgment carries
+   `0` until the network exposes its receive nonce (Phase 4).
 
 2. **Phase 2: Session epoch and queue.** Introduce the session-level
    queue of outbound operations and the per-session epoch counter,
