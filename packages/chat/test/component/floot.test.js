@@ -894,6 +894,66 @@ test.serial("a turn's tool calls collapse into one group", async t => {
   );
 });
 
+test.serial('an edit action renders its unified diff as line rows', async t => {
+  const { parent, turns, send } = await setup(t);
+  await send('edit the answer');
+  await waitFor(() => turns.length === 1);
+  const { channel } = turns[0];
+  channel.push(
+    harden({
+      type: 'tool_call',
+      id: 'edit-a',
+      name: 'editText',
+      ...Object.fromEntries([['args', '{"fileName":"answer.js"}']]),
+    }),
+  );
+  channel.push(
+    harden({
+      type: 'tool_result',
+      id: 'edit-a',
+      result: JSON.stringify({
+        applied: 1,
+        diff: [
+          '--- a/answer.js',
+          '+++ b/answer.js',
+          '@@ -1,1 +1,1 @@',
+          '-export const answer = 41;',
+          '+export const answer = 42;',
+          '',
+        ].join('\n'),
+      }),
+    }),
+  );
+  await waitFor(() => parent.querySelector('.floot-actions-head'));
+  must(
+    parent.querySelector('.floot-actions-head'),
+    'action group header',
+  ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => parent.querySelector('.floot-action-head'));
+  must(
+    parent.querySelector('.floot-action-head'),
+    'action header',
+  ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => parent.querySelector('.floot-diff'));
+
+  const diff = must(parent.querySelector('.floot-diff'), 'diff preview');
+  t.is(diff.querySelectorAll('.floot-diff-line').length, 5);
+  t.is(
+    must(diff.querySelector('.removed'), 'removed line').textContent,
+    '-export const answer = 41;',
+  );
+  t.is(
+    must(diff.querySelector('.added'), 'added line').textContent,
+    '+export const answer = 42;',
+  );
+  t.true(
+    must(
+      parent.querySelector('.floot-diff-summary'),
+      'result summary',
+    ).textContent.includes('"applied": 1'),
+  );
+});
+
 // ── Screen wake lock ─────────────────────────────────────────────────────────
 
 /**
