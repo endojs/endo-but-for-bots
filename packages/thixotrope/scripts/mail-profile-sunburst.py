@@ -55,7 +55,7 @@ for lo, hi in zip(bounds, bounds[1:]):
     events = [e for e in active_events if e['start'] <= mid < e['end']]
     fs = [e for e in events if e['kind'] == 'filesystem']
     calls = [e for e in events if e['kind'] == 'syscall']
-    vm = [e for e in events if e['kind'] == 'vm']
+    vm = [e for e in events if e['kind'] == 'vm' and e['request'] != 'detail']
     host = [e for e in events if e['kind'] == 'host']
     stage = next((e['name'] for e in events if e['kind'] == 'stage'), 'bridge-completion')
     stage_totals[stage] += hi - lo
@@ -104,7 +104,7 @@ for path, ms in leaves.items():
 clock_violations = []
 unmatched_phases = 0
 for event in active_events:
-    if event['kind'] != 'vm':
+    if event['kind'] != 'vm' or event['request'] == 'detail':
         continue
     envelopes = [e for e in data['events'] if e['kind'] == 'worker-request'
                  and e.get('pid') == event.get('pid') and e['name'] == event['request']
@@ -141,6 +141,8 @@ summary = {
         'High-resolution cross-process epoch clocks are checked against host request envelopes; interpret sub-millisecond differences cautiously.',
     ],
 }
+if any(e['kind'] == 'vm' and e['request'] == 'detail' for e in active_events):
+    summary['notes'].append('Detail VM diagnostics nest inside coarse VM phases; the exclusive wall partition ignores nested spans. Use mail-vm-detail.py for exclusive subphase attribution.')
 sqlite_intervals = any(e['kind'] == 'filesystem' and e['name'].startswith('sqlite-') for e in active_events)
 if sqlite_intervals:
     summary['notes'].append('SQLite transaction intervals include native SQL and I/O; individual SQLite filesystem syscalls are not instrumented.')

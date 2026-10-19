@@ -53,6 +53,9 @@ const trace = {
         end: event.start + event.ms,
         pid: event.pid,
         worker,
+        ...(event.count === undefined
+          ? {}
+          : { count: event.count, secondary: event.secondary }),
       });
   },
 };

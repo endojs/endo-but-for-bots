@@ -1,0 +1,291 @@
+diff --git a/rust/engine/ironhorse-vm/src/gc.rs b/rust/engine/ironhorse-vm/src/gc.rs
+index 6012b2d73..de968b0b2 100644
+--- a/rust/engine/ironhorse-vm/src/gc.rs
++++ b/rust/engine/ironhorse-vm/src/gc.rs
+@@ -173,6 +173,7 @@ pub fn collect_full(
+     let chunk_bytes_before = chunks.byte_size();
+ 
+     // --- mark (worklist trace, cycle-safe via the mark bit) ---
++    let root_span = crate::mail_profile::Span::new("gc-clear-seed");
+     slots.clear_marks();
+     let mut worklist: Vec<SlotIndex> = Vec::new();
+     for &r in roots {
+@@ -180,12 +181,16 @@ pub fn collect_full(
+             worklist.push(r);
+         }
+     }
++    drop(root_span);
+     loop {
++        let mut mark_span = crate::mail_profile::Span::new("gc-mark-edges");
+         while let Some(idx) = worklist.pop() {
+             // Collect edges first (immutable borrow), then mark (mutable).
++            mark_span.count += 1;
+             let mut edges: Vec<SlotIndex> = Vec::new();
+             slots.get(idx).each_ref_slot(|e| edges.push(e));
+             hooks.extra_edges(idx, &mut |e| edges.push(e));
++            mark_span.secondary += edges.len() as u64;
+             for e in edges {
+                 if slots.mark(e) {
+                     worklist.push(e);
+@@ -197,8 +202,11 @@ pub fn collect_full(
+         // key, a symbol-key id on a marked record). Terminates: each
+         // productive round marks at least one new slot, and marks
+         // only grow.
++        drop(mark_span);
++        let mut ephemeron_span = crate::mail_profile::Span::new("gc-ephemerons");
+         let mut newly: Vec<SlotIndex> = Vec::new();
+         hooks.ephemeron_edges(&*slots, &mut |e| newly.push(e));
++        ephemeron_span.count = newly.len() as u64;
+         let mut progressed = false;
+         for e in newly {
+             if slots.mark(e) {
+@@ -206,20 +214,28 @@ pub fn collect_full(
+                 progressed = true;
+             }
+         }
++        drop(ephemeron_span);
+         if !progressed {
+             break;
+         }
+     }
+     // Dead-keyed weak state goes BEFORE the sweep, so the entries are
+     // gone by the time their targets are reclaimed.
++    let weak_span = crate::mail_profile::Span::new("gc-prune-weak");
+     hooks.prune_dead_keyed(&*slots);
++    drop(weak_span);
+ 
+     // --- sweep ---
++    let mut sweep_span = crate::mail_profile::Span::new("gc-sweep-slots");
+     let slots_reclaimed = slots.sweep_each(&mut |idx| hooks.swept(idx));
++    sweep_span.count = slots_reclaimed as u64;
++    sweep_span.secondary = slots.capacity() as u64;
++    drop(sweep_span);
+ 
+     // --- compact chunks: gather the offsets the surviving string
+     // slots AND the machine's external holders reference, reclaim within
+     // extents, and rewrite the holders of blocks that actually moved. ---
++    let mut chunk_roots_span = crate::mail_profile::Span::new("gc-chunk-roots");
+     let mut live_offsets: Vec<ChunkOffset> = Vec::new();
+     for i in 0..slots.capacity() {
+         let idx = SlotIndex(i);
+@@ -230,7 +246,13 @@ pub fn collect_full(
+         }
+     }
+     hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| live_offsets.push(*off));
++    chunk_roots_span.count = live_offsets.len() as u64;
++    drop(chunk_roots_span);
++    let compact_span = crate::mail_profile::Span::new("gc-compact-chunks");
+     let remap = chunks.compact_local(&live_offsets);
++    drop(compact_span);
++    let mut rewrite_span = crate::mail_profile::Span::new("gc-rewrite-chunks");
++    rewrite_span.count = remap.len() as u64;
+     // A no-movement collection needs no second arena scan or holder walk.
+     // The compactor emits entries only for offsets that actually changed.
+     if !remap.is_empty() {
+@@ -251,6 +273,7 @@ pub fn collect_full(
+         });
+     }
+ 
++    drop(rewrite_span);
+     GcStats {
+         slots_reclaimed,
+         slots_live: slots.live_count(),
+diff --git a/rust/engine/ironhorse-vm/src/interp.rs b/rust/engine/ironhorse-vm/src/interp.rs
+index 74a6fd2c2..907bf63ff 100644
+--- a/rust/engine/ironhorse-vm/src/interp.rs
++++ b/rust/engine/ironhorse-vm/src/interp.rs
+@@ -3112,6 +3112,7 @@ impl Interp {
+         // `is_quiescent` (a re-entrant host, a panic-recovery path) is
+         // told so. It is re-established from the engine's own halt.
+         self.last_crank_completed = false;
++        let initial_span = crate::mail_profile::Span::new("run-initial-script");
+         let mut step = if execute_script {
+             self.dispatch(code)
+         } else if self.id_space_exhausted {
+@@ -3121,6 +3122,7 @@ impl Interp {
+             // An empty public pump, like an empty post-script drain, is free.
+             Step::Returned
+         };
++        drop(initial_span);
+         // Pump-loop latch: after the script settles, drain the promise job
+         // queue with metering still accumulating — the host-driven microtask
+         // drain the ironhorse embedding performs after a crank (design § promises).
+diff --git a/rust/engine/ironhorse-vm/src/interp/gc.rs b/rust/engine/ironhorse-vm/src/interp/gc.rs
+index b2d341de9..0514c7dc0 100644
+--- a/rust/engine/ironhorse-vm/src/interp/gc.rs
++++ b/rust/engine/ironhorse-vm/src/interp/gc.rs
+@@ -108,24 +108,39 @@ impl Interp {
+     /// as such, so an operator whose snapshots must carry none notifies
+     /// before it snapshots.
+     pub fn collect_garbage(&mut self) -> Result<crate::gc::GcStats, crate::gc::GcAdmissionError> {
++        let admission = crate::mail_profile::Span::new("gc-admission");
+         self.admit_collection()?;
++        drop(admission);
+         self.gc_failed = true;
+         self.snapshot_dirt.mark_all();
+         use crate::value::SlotIndex;
+ 
++        let mut root_span = crate::mail_profile::Span::new("gc-roots");
+         let roots = self.gc_roots();
++        root_span.count = roots.len() as u64;
++        drop(root_span);
+ 
++        let hooks_span = crate::mail_profile::Span::new("gc-borrow-tables");
+         let mut hooks = gc_tables!(borrow_gc_tables, self);
++        drop(hooks_span);
+         let stats = crate::gc::collect_full(&mut self.slots, &mut self.chunks, &roots, &mut hooks);
++        let prune_span = crate::mail_profile::Span::new("gc-prune-late");
+         let swept = std::mem::take(&mut hooks.swept);
+         let dead: std::collections::HashSet<SlotIndex> = swept.into_iter().collect();
+         hooks.prune_late(&dead);
+         drop(hooks);
++        drop(prune_span);
+ 
++        let code_span = crate::mail_profile::Span::new("gc-compact-code");
+         self.compact_code_segments();
++        drop(code_span);
++        let reactions_span = crate::mail_profile::Span::new("gc-compact-reactions");
+         self.compact_reaction_arenas();
++        drop(reactions_span);
+         // Dropped rows and pruned weak entries release their side storage.
++        let ledger_span = crate::mail_profile::Span::new("gc-side-ledger");
+         self.rederive_side_reserved();
++        drop(ledger_span);
+ 
+         self.gc_failed = false;
+         Ok(stats)
+diff --git a/rust/engine/ironhorse-vm/src/interp/natives/promise.rs b/rust/engine/ironhorse-vm/src/interp/natives/promise.rs
+index 8ba5ac691..0ee4eaa7e 100644
+--- a/rust/engine/ironhorse-vm/src/interp/natives/promise.rs
++++ b/rust/engine/ironhorse-vm/src/interp/natives/promise.rs
+@@ -859,6 +859,7 @@ impl Interp {
+     /// continues until the queue empties. Metering accumulates through the
+     /// reactions, matching the oracle shim's post-`fxRunScript` drain.
+     pub(in crate::interp) fn drain_promise_jobs(&mut self, code: &[u8]) -> Result<(), Step> {
++        let mut jobs_span = crate::mail_profile::Span::new("run-promise-jobs");
+         // An empty drain is not a meter checkpoint: returning a straight-line
+         // script to the host historically does not consult the meter. Once a
+         // drain starts, retain the final check after its last native-only job.
+@@ -878,6 +879,8 @@ impl Interp {
+             let Some(job) = self.promise_jobs.pop_front() else {
+                 return Ok(());
+             };
++            jobs_span.count += 1;
++            if matches!(&job, PromiseJob::Thenable { .. }) { jobs_span.secondary += 1; }
+             self.run_promise_job(code, job)?;
+         }
+     }
+diff --git a/rust/engine/ironhorse-vm/src/lib.rs b/rust/engine/ironhorse-vm/src/lib.rs
+index 95261b955..8ae89f248 100644
+--- a/rust/engine/ironhorse-vm/src/lib.rs
++++ b/rust/engine/ironhorse-vm/src/lib.rs
+@@ -24,6 +24,7 @@
+ #[cfg(all(feature = "consensus", feature = "cost-calibration"))]
+ compile_error!("consensus and cost-calibration are mutually exclusive");
+ 
++pub mod mail_profile;
+ mod intl_profile;
+ mod math;
+ pub use math::MATH_PROVIDER;
+diff --git a/rust/thixotrope-ironhorse-worker/src/main.rs b/rust/thixotrope-ironhorse-worker/src/main.rs
+index bf7e363fd..fea41c710 100644
+--- a/rust/thixotrope-ironhorse-worker/src/main.rs
++++ b/rust/thixotrope-ironhorse-worker/src/main.rs
+@@ -118,7 +118,21 @@ impl SourceCompiler for Compiler {
+ /// Compile and execute a source unit, including its promise jobs. The caller
+ /// chooses the collection boundary; outbound extraction is a trusted read that
+ /// allocates only unregistered bridge temporaries, reclaimed by the next crank.
++
++fn mail_trace_start() -> (std::time::Instant, f64) {
++    (std::time::Instant::now(), std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() * 1000.0)
++}
++fn mail_trace_end(phase: &str, request: &str, started: (std::time::Instant, f64)) {
++    let duration_ms = started.0.elapsed().as_secs_f64() * 1000.0;
++    eprintln!("{}", json!({"kind":"mail.vm", "pid":std::process::id(),
++        "phase":phase, "request":request, "start":started.1, "ms":duration_ms}));
++}
++
+ fn run_source(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {
++    let extracting = source == "JSON.stringify(thixotropeTakeOutbound())";
++    let request = if source.starts_with("thixotropeDispatch(") || extracting { "deliver" } else { "other" };
++    let compile_started = mail_trace_start();
+     let m = session.machine_mut();
+     let ceiling = (m.meter_index() >> 16).saturating_add(budget);
+     m.rearm_meter(
+@@ -175,7 +189,10 @@ fn run_source(session: &mut StoreSession, source: &str, budget: u64) -> Result<S
+         m.relink_crank(&code, &names)
+             .map_err(|e| format!("relink: {e:?}"))?
+     };
++    mail_trace_end(if extracting { "extraction-compilation" } else { "compile-and-relink" }, request, compile_started);
++    let run_started = mail_trace_start();
+     let outcome = m.run(&code);
++    mail_trace_end(if extracting { "outbound-extraction" } else { "execution-and-jobs" }, request, run_started);
+     if !outcome.completed {
+         return Err(crank_halted(&outcome.halt));
+     }
+@@ -185,7 +202,8 @@ fn run_source(session: &mut StoreSession, source: &str, budget: u64) -> Result<S
+ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {
+     let result = run_source(session, source, budget)?;
+     // Never collect after a halt. Recovery replays from the last image.
+-    sweep_and_notify(session.machine_mut(), budget)?;
++    let request = if source.starts_with("thixotropeDispatch(") { "deliver" } else { "other" };
++    sweep_and_notify(session.machine_mut(), budget, request)?;
+     Ok(result)
+ }
+ 
+@@ -237,11 +255,13 @@ fn crank_halted(halt: &ironhorse_vm::Halt) -> String {
+ /// would; and since the sweep itself is unmetered, the rounds are counted too,
+ /// so a cascade of callbacks too cheap to spend the budget cannot buy itself a
+ /// collection per round for long.
+-fn sweep_and_notify(m: &mut Interp, budget: u64) -> Result<(), String> {
++fn sweep_and_notify(m: &mut Interp, budget: u64, request: &str) -> Result<(), String> {
+     let mut armed = false;
+     for round in 0.. {
++        let gc_started = mail_trace_start();
+         m.collect_garbage()
+             .map_err(|e| format!("guest crank halted: {e}"))?;
++        mail_trace_end("garbage-collection", request, gc_started);
+         if !m.finalization_cleanup_pending() {
+             return Ok(());
+         }
+@@ -258,7 +278,9 @@ fn sweep_and_notify(m: &mut Interp, budget: u64) -> Result<(), String> {
+             );
+             armed = true;
+         }
++        let finalize_started = mail_trace_start();
+         let outcome = m.notify_finalizations();
++        mail_trace_end("finalizer-callbacks", request, finalize_started);
+         if !outcome.completed {
+             return Err(crank_halted(&outcome.halt));
+         }
+diff --git a/rust/engine/ironhorse-vm/src/mail_profile.rs b/rust/engine/ironhorse-vm/src/mail_profile.rs
+new file mode 100644
+index 000000000..c35af5f68
+--- /dev/null
++++ b/rust/engine/ironhorse-vm/src/mail_profile.rs
+@@ -0,0 +1,24 @@
++//! Experimental wall-clock profiling. Injected only by the mail profiling patch.
++use std::sync::OnceLock;
++use std::time::{Instant, SystemTime, UNIX_EPOCH};
++static ENABLED: OnceLock<bool> = OnceLock::new();
++pub struct Span {
++    name: &'static str,
++    clock: Option<(Instant, f64)>,
++    pub count: u64,
++    pub secondary: u64,
++}
++impl Span {
++    pub fn new(name: &'static str) -> Self {
++        let enabled = *ENABLED.get_or_init(|| std::env::var_os("THIX_MAIL_VM_DETAIL").is_some());
++        Self { name, clock: enabled.then(|| (Instant::now(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64()*1000.0)), count: 0, secondary: 0 }
++    }
++}
++impl Drop for Span {
++    fn drop(&mut self) {
++        if let Some((clock, start)) = self.clock {
++            let ms = clock.elapsed().as_secs_f64()*1000.0;
++            eprintln!("{{\"kind\":\"mail.vm\",\"pid\":{},\"phase\":\"{}\",\"request\":\"detail\",\"start\":{},\"ms\":{},\"count\":{},\"secondary\":{}}}", std::process::id(), self.name, start, ms, self.count, self.secondary);
++        }
++    }
++}

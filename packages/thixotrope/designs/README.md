@@ -21,6 +21,8 @@ under forced collection, preserving list payloads and tracing the remaining VM c
 transactions and piggybacked worker cleanup, with an explicit benefit-versus-complexity assessment.
 [Disposable observer outboxes](mail-observer-outbox.md) reaches three host durability commits and
 compares atomic replacements, an append log, and SQLite with matched macOS synchronization.
+[Inside native GC and promise jobs](mail-vm-detail.md) partitions collector rounds, reports job
+counts, and measures fine-profiler overhead without changing runtime schedules.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing

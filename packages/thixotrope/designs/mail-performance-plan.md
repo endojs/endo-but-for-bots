@@ -219,3 +219,16 @@ The retained runtime policy reaches three host durability commits without a new 
 A shared transactional hub/inbox store could remove the remaining approximately 4 ms journal sync,
 but adds transaction and recovery coupling; it is deferred in favor of the much larger remaining
 VM execution and collector costs.
+
+## Detailed native phase evidence
+
+The [isolated VM profiling experiment](mail-vm-detail.md) keeps production sources unchanged and
+subdivides the 156 ms median sample into per-round GC phases and initial script versus promise jobs.
+The initial script takes 5.7 ms and 51 reaction jobs take 53.5 ms.
+Two GC rounds take 67.4 ms, primarily marking (34.6 ms), sweeping (14.8 ms), and chunk compaction
+(14.0 ms); roots, weak/ephemeron processing, and side-ledger work are small in this sample.
+The two collector rounds traverse nearly the same live graph but reclaim different garbage.
+No GC schedule change is justified by that observation alone.
+Fine tracing has no detectable overall median increase in this small same-source enabled/disabled
+comparison; subgroup noise prevents a tight overhead bound.
+Native builtin versus interpreter time inside promise handlers remains unpartitioned.
