@@ -156,6 +156,13 @@ test('registers a daemon that the gateway routes to by webletId', async t => {
     await E(registeredDaemon(handle)).fetchContentTree(rootA),
     'alice-tree-aaaa',
   );
+
+  t.deepEqual(await E(publisher).listWeblets(), [
+    { webletId: 'alice-app', contentTreeRoot: rootA, hasWebSocket: true },
+  ]);
+  const registration = await E(publisher).getRegistration();
+  await E(registration).unpublishWeblet('alice-app');
+  t.deepEqual(handle.listRegisteredPeers()[0].weblets, []);
 });
 
 test('a daemon answers only for weblets it published', async t => {
