@@ -1245,6 +1245,7 @@ __metadata:
     eslint: "catalog:dev"
     typescript: "catalog:dev"
   bin:
+    endo-mcp-http: ./bin/endo-mcp-http.js
     endo-mcp-stdio: ./bin/endo-mcp-stdio.js
   languageName: unknown
   linkType: soft
