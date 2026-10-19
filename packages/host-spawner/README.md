@@ -26,6 +26,26 @@ const spawn = makeHostSpawner({ searchPath: '/usr/bin:/bin', defaultEnv: {} });
 const proc = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
 ```
 
+`makeSandboxSpawner(slice)` is the other engine. It runs each spawn inside an
+`@endo/sandbox` slice (a `SandboxHandle`) and adapts the slice's process handle
+to `ProcessLike`. It refuses `shell: true`, and it hands the caller's
+`timeoutMs` and `maxOutputBytes` to the slice as its kernel-side timeout and
+byte limits. A kill, or a termination by one of those limits, settles `wait()`
+with `{ code: null, signal }` as a killed host process would. The daemon's Shell
+formula uses it for `engine: 'sandbox'`.
+
+```js
+import { makeSandboxSpawner } from '@endo/host-spawner/src/sandbox-spawner.js';
+
+const slice = await E(sandboxFactory).make({
+  rootfs: { kind: 'host-bind' },
+  mounts: [{ cap: worktree, innerPath: '/work', mode: 'rw' }],
+  network: 'none',
+});
+const spawn = makeSandboxSpawner(slice);
+const proc = await spawn(['make', 'test'], { cwd: '/work', timeoutMs: 60_000 });
+```
+
 An agent host that already speaks the `Spawner` seam can re-export
 `makeHostSpawner` from here, so its own command tools reach the same engine as
 the daemon without duplicating the process-execution logic.

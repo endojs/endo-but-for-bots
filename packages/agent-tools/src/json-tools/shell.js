@@ -115,7 +115,8 @@ const shellToolSchemas = harden({
   inspect: {
     description:
       'Report the shell policy bounds: the command allowlist, timeout, and ' +
-      'output cap. Reveals no host path.',
+      "output cap, plus the engine ('host' or 'sandbox') commands run under. " +
+      'Reveals no host path.',
     parameters: {
       type: 'object',
       properties: {},

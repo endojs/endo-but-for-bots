@@ -373,6 +373,35 @@ export type ShellPolicy = {
   maxOutputBytes: number;
   env?: Record<string, string>;
   searchPath?: string;
+  /**
+   * The execution engine: `'host'` runs children as ordinary host processes;
+   * `'sandbox'` runs them inside an `@endo/sandbox` slice that sees only the
+   * shell's mount.  Absent means `'host'`, so formulas persisted before the
+   * field existed reconstitute unchanged.
+   */
+  engine?: ShellEngine;
+};
+
+export type ShellEngine = 'host' | 'sandbox';
+
+/**
+ * The policy `EndoHost.provideShell` accepts: a `ShellPolicy` plus, for
+ * `engine: 'sandbox'`, the `SandboxFactory` capability (the `@endo/sandbox`
+ * plugin's `make` result) the shell mints its slice from.  The factory is
+ * recorded as a formula dependency, never persisted inside the policy.
+ */
+export type ShellProvisionPolicy = ShellPolicy & {
+  sandbox?: ERef<SandboxFactoryLike>;
+};
+
+/**
+ * The part of an `@endo/sandbox` `SandboxFactory` the shell formula uses.
+ */
+export type SandboxFactoryLike = {
+  listBackends(): Promise<
+    Array<{ name: string; available: boolean; reason?: string }>
+  >;
+  make(options: object): Promise<unknown>;
 };
 
 export type ShellResult = {
@@ -387,6 +416,8 @@ export type ShellFormula = {
   type: 'shell';
   mountId: FormulaIdentifier;
   policy: ShellPolicy;
+  /** The `SandboxFactory` a `'sandbox'`-engine shell mints its slice from. */
+  sandboxId?: FormulaIdentifier;
 };
 
 /**
@@ -400,6 +431,7 @@ export interface EndoShell {
     allowedCommands: string[];
     timeoutMs: number;
     maxOutputBytes: number;
+    engine: ShellEngine;
   }>;
   exec(
     command: string,
@@ -1939,12 +1971,15 @@ export interface EndoHost extends EndoAgent {
    * (never guest-visible) and the `policy` — allowlist, sanitized-env passlist,
    * timeout, and output cap — is baked into the formula so it survives restart.
    * Rejects a read-only mount: a child process holds OS-level write authority a
-   * read-only mount cannot bound.  Host-only; not exposed to guests.
+   * read-only mount cannot bound.  With `engine: 'sandbox'` the children run
+   * in a slice minted from `policy.sandbox`; it rejects when that factory
+   * reports no usable backend rather than falling back to the host engine.
+   * Host-only; not exposed to guests.
    */
   provideShell(
     mountCap: EndoMount,
     petName: string | string[],
-    policy: ShellPolicy,
+    policy: ShellProvisionPolicy,
   ): Promise<EndoShell>;
   /**
    * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
@@ -3064,6 +3099,7 @@ export interface DaemonCore {
   formulateShell: (
     mountId: FormulaIdentifier,
     policy: ShellPolicy,
+    sandboxId: FormulaIdentifier | undefined,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
 
