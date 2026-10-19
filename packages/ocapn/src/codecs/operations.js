@@ -19,6 +19,7 @@ import {
   FalseCodec,
   PositiveIntegerCodec,
   PositiveIntegerListCodec,
+  Uint64Codec,
   makeOcapnFalseForOptionalCodec,
 } from './subtypes.js';
 import {
@@ -66,6 +67,27 @@ const OpGcAnswersCodec = makeOcapnRecordCodecFromDefinition(
     answerPositions: NonNegativeIntegerListCodec,
   },
 );
+
+// Session-liveness heartbeat, proposed in
+// designs/ocapn-noise-session-reconnect.md (pending OCapN-org review).
+// Each side emits `op:ping` on its own clock; receipt of any operation
+// resets the peer's liveness timeout. `epoch` names the transport
+// instance within the session and `sequence` counts this side's pings
+// in that epoch.
+const OpPingCodec = makeOcapnRecordCodecFromDefinition('OpPing', 'op:ping', {
+  epoch: Uint64Codec,
+  sequence: Uint64Codec,
+});
+
+// `op:pong` carries the explicit acknowledgment of the highest receive
+// nonce this side has decrypted on the current cipher state, which a
+// resumption handshake reads to pick a safe next-to-send nonce. Its
+// `sequence` is independent of the `op:ping` sequence.
+const OpPongCodec = makeOcapnRecordCodecFromDefinition('OpPong', 'op:pong', {
+  epoch: Uint64Codec,
+  sequence: Uint64Codec,
+  lastAckedRecvNonce: Uint64Codec,
+});
 
 export const OcapnPreSessionOperationsCodecs = makeRecordUnionCodec(
   'OcapnPreSessionOperations',
@@ -233,6 +255,8 @@ export const makeOcapnOperationsCodecs = (
     OpListenCodec,
     OpGcExportsCodec,
     OpGcAnswersCodec,
+    OpPingCodec,
+    OpPongCodec,
   });
 
   /**

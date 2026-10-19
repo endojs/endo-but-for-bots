@@ -45,6 +45,28 @@ export const NonNegativeIntegerCodec = makeCodec('NonNegativeInteger', {
   },
 });
 
+const UINT64_MAX = 2n ** 64n - 1n;
+
+// Allows integers in the unsigned 64-bit range [0, 2^64 - 1].
+export const Uint64Codec = makeCodec('Uint64', {
+  write: (value, syrupWriter) => {
+    if (typeof value !== 'bigint') {
+      throw Error('value must be a bigint');
+    }
+    if (value < ZERO_N || value > UINT64_MAX) {
+      throw Error('value must be an unsigned 64-bit integer');
+    }
+    syrupWriter.writeInteger(value);
+  },
+  read: syrupReader => {
+    const value = syrupReader.readInteger();
+    if (value < ZERO_N || value > UINT64_MAX) {
+      throw Error('value must be an unsigned 64-bit integer');
+    }
+    return value;
+  },
+});
+
 /** @type {SyrupCodec} */
 export const NonNegativeIntegerListCodec = makeListCodecFromEntryCodec(
   'NonNegativeIntegerList',

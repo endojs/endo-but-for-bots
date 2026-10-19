@@ -211,6 +211,34 @@ export const table = [
       answerPositions: [1n],
     },
   },
+  {
+    // <op:ping epoch sequence>  ; proposed, both uint64
+    name: 'op:ping',
+    value: {
+      type: 'op:ping',
+      epoch: 0n,
+      sequence: 7n,
+    },
+  },
+  {
+    // <op:ping epoch sequence> at the uint64 ceiling
+    name: 'op:ping uint64 max',
+    value: {
+      type: 'op:ping',
+      epoch: 2n ** 64n - 1n,
+      sequence: 2n ** 64n - 1n,
+    },
+  },
+  {
+    // <op:pong epoch sequence last-acked-recv-nonce>  ; proposed, all uint64
+    name: 'op:pong',
+    value: {
+      type: 'op:pong',
+      epoch: 1n,
+      sequence: 3n,
+      lastAckedRecvNonce: 42n,
+    },
+  },
   // Below are messages observed in the ocapn python test suite.
   {
     name: 'python op:deliver fetch 1',
@@ -478,6 +506,42 @@ runTableTestsAllCodecs(
 
 // Error validation tests run with all codec formats
 for (const codec of AllCodecs) {
+  test(`op:ping rejects a sequence beyond uint64 [${codec.name}]`, t => {
+    const testKit = makeCodecTestKit();
+    const writer = codec.makeWriter({ name: 'op:ping out of range' });
+    const error = t.throws(() => {
+      testKit.OcapnMessageUnionCodec.write(
+        { type: 'op:ping', epoch: 0n, sequence: 2n ** 64n },
+        writer,
+      );
+    });
+    const cause1 = /** @type {Error} */ (error.cause);
+    const cause2 = /** @type {Error} */ (cause1.cause);
+    t.regex(cause2.message, /OpPing: write failed for field sequence/);
+  });
+
+  test(`op:pong rejects a negative nonce [${codec.name}]`, t => {
+    const testKit = makeCodecTestKit();
+    const writer = codec.makeWriter({ name: 'op:pong negative nonce' });
+    const error = t.throws(() => {
+      testKit.OcapnMessageUnionCodec.write(
+        {
+          type: 'op:pong',
+          epoch: 0n,
+          sequence: 0n,
+          lastAckedRecvNonce: -1n,
+        },
+        writer,
+      );
+    });
+    const cause1 = /** @type {Error} */ (error.cause);
+    const cause2 = /** @type {Error} */ (cause1.cause);
+    t.regex(
+      cause2.message,
+      /OpPong: write failed for field lastAckedRecvNonce/,
+    );
+  });
+
   test(`op:get rejects integer fieldName [${codec.name}]`, t => {
     const testKit = makeCodecTestKit();
     const writer = codec.makeWriter({

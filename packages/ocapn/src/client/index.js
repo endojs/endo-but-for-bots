@@ -195,6 +195,11 @@ const makeSessionManager = () => {
  *   observation hooks for durable-session embedders: e.g. `onExport`
  *   fires whenever a session assigns a local export slot. Netlayers
  *   that do not provide durability are unaffected.
+ * @param {import('./heartbeat.js').HeartbeatOptions} [options.heartbeat] -
+ *   **EXPERIMENTAL**: enable the proposed `op:ping`/`op:pong` session
+ *   heartbeat. Each session emits a heartbeat every `intervalMs` and
+ *   aborts when the peer sends nothing for `timeoutMs`. Both peers must
+ *   understand the proposed operations. Default: off.
  * @param {Logger} [options.logger] - If provided, overrides the default console-based logger. When omitted, defaults to a console-based logger labelled with `debugLabel`; `info` is suppressed unless `verbose` is true.
  * @returns {Promise<Client>}
  */
@@ -209,6 +214,7 @@ export const makeOcapn = async ({
   enableImportCollection = true,
   debugMode = false,
   sessionHooks = undefined,
+  heartbeat = undefined,
   logger: providedLogger,
 }) => {
   if (!codec) {
@@ -645,6 +651,7 @@ export const makeOcapn = async ({
                 )(connection, resolverSlot)),
           }
         : undefined,
+      heartbeat,
     );
   };
 

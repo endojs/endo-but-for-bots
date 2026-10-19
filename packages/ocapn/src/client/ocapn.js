@@ -13,6 +13,7 @@
  * @import { SturdyRefTracker } from './sturdyrefs.js'
  * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.js'
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
+ * @import { Heartbeat, HeartbeatOptions } from './heartbeat.js'
  */
 
 import harden from '@endo/harden';
@@ -36,6 +37,7 @@ import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
 import { makeGrantDetails } from './grant-tracker.js';
+import { makeHeartbeat } from './heartbeat.js';
 
 /**
  * @typedef {any} LocalResolver
@@ -668,6 +670,7 @@ const makeBootstrapObject = (
  * @property {OcapnTable} ocapnTable
  * @property {(message: object) => void} sendMessage
  * @property {(observer: MessageObserver) => () => void} subscribeMessages
+ * @property {Heartbeat | undefined} heartbeat
  */
 
 /**
@@ -722,6 +725,9 @@ const makeBootstrapObject = (
  *   embedders: export- and import-slot assignment, resolver
  *   obligations taken on (with the durable name of their target), and
  *   resolver obligations settled (record can be dropped)
+ * @param {HeartbeatOptions} [heartbeatOptions] - When provided, the
+ *   session emits `op:ping`/`op:pong` on a fixed cadence and aborts when
+ *   the peer is silent for longer than the session timeout. Default: off.
  * @returns {Ocapn}
  */
 export const makeOcapn = (
@@ -742,16 +748,23 @@ export const makeOcapn = (
   enableImportCollection = true,
   debugMode = false,
   sessionHooks = undefined,
+  heartbeatOptions = undefined,
 ) => {
   const onReject = reason => {
     logger.info(`onReject`, reason);
   };
+
+  // Incoming frames processed so far; the default `lastAckedRecvNonce`
+  // carried in `op:pong` when the network supplies no cipher nonce.
+  let receivedFrameCount = 0n;
 
   /**
    * @param {Error} [reason]
    */
   const abort = reason => {
     logger.info(`client received abort`, reason);
+    // eslint-disable-next-line no-use-before-define
+    heartbeat?.stop();
     const disconnectError = harden(
       reason
         ? Error('Session disconnected', { cause: reason })
@@ -1070,6 +1083,13 @@ export const makeOcapn = (
       const { reason } = message;
       abort(reason);
     },
+    // Receipt alone is the liveness signal (noted in
+    // dispatchMessageData); a ping carries nothing further.
+    'op:ping': _message => {},
+    'op:pong': message => {
+      // eslint-disable-next-line no-use-before-define
+      heartbeat?.notePong(message);
+    },
   });
 
   /**
@@ -1347,6 +1367,8 @@ export const makeOcapn = (
    * @param {Uint8Array} data
    */
   const dispatchMessageData = data => {
+    receivedFrameCount += 1n;
+    heartbeat?.noteActivity();
     const reader = codec.makeReader(data);
     while (reader.index < data.length) {
       let message;
@@ -1372,6 +1394,34 @@ export const makeOcapn = (
       dispatch(message);
     }
   };
+
+  /**
+   * @param {Record<string, any>} message
+   */
+  const sendHeartbeatMessage = message => {
+    try {
+      send(message);
+    } catch (err) {
+      logger.error(`heartbeat send failed`, err);
+    }
+  };
+
+  /** @type {Heartbeat | undefined} */
+  const heartbeat =
+    heartbeatOptions === undefined
+      ? undefined
+      : makeHeartbeat({
+          options: heartbeatOptions,
+          sendPing: sendHeartbeatMessage,
+          sendPong: sendHeartbeatMessage,
+          getLastAckedRecvNonce:
+            heartbeatOptions.getLastAckedRecvNonce ||
+            (() => receivedFrameCount),
+          onLoss: reason => {
+            logger.info(`session lost`, reason);
+            abort(reason);
+          },
+        });
 
   const localBootstrapSlot = makeSlot('o', true, ZERO_N);
   const bootstrapObj = makeBootstrapObject(
@@ -1433,6 +1483,7 @@ export const makeOcapn = (
       ocapnTable,
       sendMessage: send,
       subscribeMessages,
+      heartbeat,
     };
   }
   return harden(ocapn);
