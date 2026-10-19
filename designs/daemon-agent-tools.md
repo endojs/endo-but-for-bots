@@ -3,11 +3,36 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-08-06 |
+| **Updated** | 2026-10-19 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
 | **Status** | In Progress |
 
 ## Status
+
+**2026-10-19 re-sweep.** Checked against `llm` at `ca5aaefb23`. Since
+the 2026-08-06 sweep, more of the plan has landed than this record showed.
+The daemon `provideHttpClient` formula and `makeHttpTool` landed on
+2026-07-10 (`38b6274d81`, Phase 3.6). The `@endo/fetch` unconfined plugin
+landed on 2026-07-25. Capability-based workspace provisioning and the worked
+version-controlled-filesystem loop landed in #707 (Phase 4). The
+`@endo/agent-tools` MCP adapter and the single-guest stdio MCP server
+`@endo/agent-mcp-stdio` landed in #1336. The confined in-guest agent
+[endo-claude](endo-claude.md) has also landed as `@endo/claude`, with its
+confinement flags and the CLI and Agent SDK inference backends (#1357).
+Four items remain open, sequenced in § Next Slice and § Implementation
+Plan:
+
+1. the **sandbox shell engine** (Phase 2c), now the minimal next slice,
+   because a host-engine `Shell` granted to a confined `endo-claude` guest
+   would let that guest escape its OS slice (§ Relationship to Neighboring
+   Designs);
+2. the **endo-claude acceptance loop** (Phase 7): the Phase 4 worked loop
+   run by a confined guest through its MCP surface;
+3. the **reconciliation of the two HTTP provisioning paths** (Phase 8, Open
+   Question 4);
+4. the grant-sensitive package-manager projection (#950, open).
+
+The rest of this section is the 2026-08-06 record, kept for provenance.
 
 This document began as a pre-trio sketch (2026-03-02) whose own revision
 note (2026-05-18) deferred to the then-unwritten mount and git designs.
@@ -110,9 +135,9 @@ What this document owns is the remainder:
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); plugin provisioning and `makeHttpTool` remaining |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); daemon `provideHttpClient` + `makeHttpTool` landed (2026-07-10); `@endo/fetch` plugin landed (2026-07-25); choosing between the two provisioning paths is open (Phase 8) |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
-| Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
+| Search | `grep` / `glob` on `Dir` | daemon mount `glob` / `grep` (eager, daemon-capped), reached in code mode and through `@endo/agent-mcp-stdio`'s static catalog; the Shell group's allowlisted `grep` remains a fallback | mount methods landed; streaming search is [mount-stream-glob-grep](mount-stream-glob-grep.md) (Not Started) |
 
 > **The JSON tool-wrapper surface is parked — see #731.** The `ToolRecord`
 > wrappers the Status column names (`makeGitTool`, `makeGitRemoteTool`,
@@ -401,11 +426,148 @@ Form-based provisioning
 shape; the `capabilities: 'fs,shell,git'` field of the sketch becomes
 the host running the derivation flow above and binding the petnames.
 
+## Next Slice: The Sandbox Shell Engine
+
+This is the minimal first slice of the remaining work: one engine
+adapter, one policy field, and the tests that prove the boundary. It adds
+no new capability, tool, wire schema, or formula type. It only fills the
+engine row that § Execution engine already reserves.
+
+### Why this slice first
+
+The other open items consume something this slice provides, or are
+decisions rather than builds. The [endo-claude](endo-claude.md) guest
+runs inside a required `@endo/claude-sandbox` OS slice, but a `Shell`
+granted to that guest runs children through the daemon's host spawner,
+on the host, outside that slice. Any allowlisted command that reads files
+(`grep`, `node`, `sed`) then reads with the daemon user's authority. That
+is exactly the escape § The honest boundary describes. Until a `Shell`
+can run under the sandbox engine, the only safe grant to a confined
+agent is no shell at all, and the endo-claude acceptance loop (Phase 7)
+cannot include its build step.
+
+### Shape
+
+- **Spawner adapter.** `makeSandboxSpawner(slice)` in
+  `@endo/host-spawner`, beside `makeHostSpawner`. It returns a `Spawner`
+  whose `spawn(argv, opts)` calls `E(slice).spawn(argv, sandboxOpts)` and
+  adapts the resulting `ProcessHandle` to `ProcessLike`: `pid()` to
+  `pid`, the `stdout()` / `stderr()` `PassableBytesReader`s to
+  `AsyncIterable<Uint8Array>`, and `wait` / `kill` forwarded. The
+  `host-spawner.js` doc comment already describes this adapter. It maps
+  the `Shell` policy's `timeoutMs` and `maxOutputBytes` onto the slice's
+  `SpawnOpts.timeoutMs` / `stdoutByteLimit` / `stderrByteLimit`, so the
+  kernel-side limits and the `exo-shell` buffer caps agree. It rejects
+  `opts.shell === true`: the `Shell` capability never sets it, and the
+  adapter has no reason to wrap argv in `/bin/sh -c`.
+- **Policy field.** `ShellPolicy` gains `engine: 'host' | 'sandbox'`,
+  defaulting to `'host'` so existing formulas reconstitute unchanged. The
+  field is formula-owned like the rest of the policy, so a sandboxed
+  shell stays sandboxed across restart. `inspect()` reports the engine,
+  which makes the confinement posture visible to the holder.
+- **Slice construction.** For `engine: 'sandbox'`, the host passes a
+  `SandboxFactory` capability as `policy.sandbox`. The factory is the
+  capability that the `@endo/sandbox` plugin's unconfined `make` entry
+  returns, and the host already holds it. The daemon does not reach for
+  it ambiently, and the formula records the factory's identifier beside
+  the mount's. The shell formula's maker calls `E(factory).make` with an
+  explicit `network: 'none'` and the factory's default seccomp profile. It then
+  binds the shell's own writable mount into the slice with
+  `E(slice).mount(mountCap, '/work', 'rw')` and sets the per-spawn `cwd`
+  to `/work`. The slice belongs to the shell formula's incarnation: it is
+  disposed on cancellation and re-made on reincarnation, so no slice state
+  is durable. The shell does not require a `SandboxHandle.policy()`
+  attestation, because today only the hosted-agent profile has one (Open
+  Question 5).
+- **Unavailable backend fails closed.** If `listBackends()` reports no
+  usable driver (for example, macOS or a kernel without user namespaces),
+  `provideShell(..., { engine: 'sandbox' })` rejects with a structured
+  error. It never falls back to the host engine.
+
+### Tests
+
+Run on a Linux runner with `bwrap`, skipped with a recorded reason where
+`listBackends()` reports no driver:
+
+- a sandboxed `cat` of a host path outside the mount (for example the
+  daemon's state directory) fails, while the same call under the host
+  engine succeeds (a negative test paired with a positive one);
+- a write under `/work` is visible through `mountAsFilesystem(mount)`;
+- a network attempt from an allowlisted `node -e` fails;
+- timeout and output-cap truncation behave identically across engines,
+  sharing one table of cases with the existing `exo-shell` tests;
+- restart reconstitutes `engine: 'sandbox'`, and `inspect()` reports it;
+- an unavailable backend rejects at `provideShell`.
+
+## Relationship to Neighboring Designs
+
+- **[daemon-mount](daemon-mount.md) and
+  [daemon-mount-capabilities](daemon-mount-capabilities.md).** The mount is
+  the root authority for every tool group except the network tier (§ The
+  Mount Is the Root Authority). This design adds no mount methods. The
+  sandbox engine is a second consumer of the same writable mount
+  capability: the host engine reaches the physical directory through
+  `provideHostPath`, while the sandbox engine binds the capability into
+  the slice with `SandboxHandle.mount`. Search uses the mount's `glob` /
+  `grep`. The sub-mount and capability-VFS work still open under
+  `daemon-mount` Phase 4 would let a host grant a shell over a
+  subdirectory without a separate host path, but this design does not
+  depend on it.
+- **[endo-agent-tools](endo-agent-tools.md) and
+  [endo-claude](endo-claude.md).** `endo-claude` depends on
+  `endo-agent-tools` for the MCP-adapter projection, which landed in
+  #1336. The confined `claude -p` has no built-in tools (`--tools ""`), so
+  its coding capabilities are exactly the capabilities this design
+  provisions into its guest's petstore. It reaches them through
+  `@endo/agent-mcp-stdio`'s static catalog: `evaluate` in code mode over
+  the petnamed `Filesystem`, `Git`, `GitRemote`, `Shell`, and
+  `HttpClient`, plus the mount search methods. The JSON `ToolRecord`
+  wrappers stay parked (#731). Code mode is the surface `endo-claude`
+  uses, so Phase 7 needs no new JSON tool. Two consequences follow. A
+  guest's catalog stays static while its grant decides which calls
+  succeed, and the § Granting conditional-composition rule applies to
+  code-mode declarations, not to the MCP tool list. And a `Shell` granted
+  to an `endo-claude` guest must be `engine: 'sandbox'` (§ Next Slice).
+- **[fs-interface-reconciliation](fs-interface-reconciliation.md) and
+  [fs-interface-consolidation](fs-interface-consolidation.md).** These own
+  the one `Filesystem` method catalog (`lookup`, `write`, `move`,
+  `remove`, `makeDirectory`, and the rest) that the file tools,
+  `mountAsFilesystem`, `Git.filesystemAt`, and the `@endo/fetch` policy
+  store all target. This design consumes that catalog and adds no verbs.
+  The file tools follow the reconciled names as the catalog's migration
+  phases land; a renamed verb is a follow-up edit to
+  `json-tools/fs.js` and the generated code-mode declarations, not a
+  change to this design. The sandbox engine sits beside the catalog
+  rather than on it: a child process sees the mount as a POSIX directory,
+  not as a `Filesystem`.
+
+## Ownership Map
+
+| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
+|---|---|---|---|---|---|
+| host -> `shell` formula | daemon `provideShell` | host-supplied `ShellPolicy` (allowlist, env, limits, engine) | the formula record (mount id, sandbox-factory id, policy) | the daemon: formula incarnation and cancellation | a writable `EndoMount` capability, an optional `SandboxFactory` capability, and the policy record |
+| `shell` formula -> engine | `Spawner` (`makeHostSpawner` / `makeSandboxSpawner`) | none: the engine enforces the limits the formula passes | none | the formula: it creates and disposes the slice per incarnation | argv, sanitized env, cwd, limits |
+| engine -> slice | `@endo/sandbox` `SandboxHandle` | the slice profile (`network: 'none'`, seccomp) | none (scratch only) | the slice handle: dropping it kills the process tree | a `ProcessHandle` |
+| guest -> `Shell` | `exo-shell` `exec` / `inspect` | allowlist check before spawn | none | per call: an execution result (`ShellResult`), never a commit | argv and an optional narrower timeout; a `ShellResult` back |
+
+The table answers the four ownership questions as follows:
+
+- **Persistent state.** The daemon formula owns it (the policy).
+- **Commit authority.** Nothing in the shell commits or discards. `exec`
+  returns an execution result, and mount writes are immediate, as with
+  any writer.
+- **Restart.** The formula reconstitutes the shell, with a fresh slice.
+- **Execution classification.** The host decides it (host versus
+  sandbox) once, at `provideShell`.
+
 ## Implementation Plan
 
 Phases are ordered by what gates the M3 exit pillar. Phase 0 records
 the landed substrate; Phases 1–3 are dispatchable builder work; Phase 4
-is the integration pass that demonstrates the pillar. As of 2026-08-06,
+is the integration pass that demonstrates the pillar. As of 2026-10-19,
+Phase 3.6 (`makeHttpTool`, 2026-07-10) and Phase 4 (#707) have also
+landed. The remaining builder work, in order, is Phase 2c (§ Next Slice),
+Phase 7, and Phase 8. The 2026-08-06 record follows: as of 2026-08-06,
 Phase 1 (#614), Phase 2a/2b (#615), the local mount-bridged git
 tools (#616, Phase 3.5), and the push tier (#705, Phase 3) have landed on
 `llm`; the remaining builder work is the network tool wiring (Phase 3.6),
@@ -418,7 +580,7 @@ document's Phases 3 and 4, and its Phase 4 dispatches this document's
 Phases 5–6. This section stays normative for each tool-layer
 deliverable's shape.
 
-### Phase 0: Substrate (landed — record only)
+### Phase 0: Substrate (landed, record only)
 
 - [x] `EndoMount` completion — descriptors, snapshot, `provideHostPath`
   ([daemon-mount-capabilities](daemon-mount-capabilities.md), all phases).
@@ -429,7 +591,7 @@ deliverable's shape.
   `makeMountReadTool` on the canonical `ToolRecord` (#523); code-mode
   declaration renderer (#524).
 
-### Phase 1: Complete the file-tool set — landed (#614)
+### Phase 1: Complete the file-tool set (landed, #614)
 
 - [x] `list`, `edit` (write), and `stat` tools over the `Filesystem`
   interface, as separate makers so a read-only deployment composes only
@@ -448,9 +610,9 @@ deliverable's shape.
   path authenticated at the boundary, per the § Granting petname rule
   (paths are not petnamed).
 
-### Phase 2: Shell capability and command tools — 2a / 2b landed (#615)
+### Phase 2: Shell capability and command tools (2a / 2b landed, #615)
 
-- [x] 2a — the daemon `shell` formula and `provideShell` per § Shell
+- [x] 2a: the daemon `shell` formula and `provideShell` per § Shell
   Capability: writable-mount derivation via `provideHostPath`,
   formula-owned policy, host-spawner engine, hardening tests
   (allowlist enforcement, env sanitization — assert no host env
@@ -460,19 +622,21 @@ deliverable's shape.
   formula plus `host.provideShell`, the `@endo/exo-shell` engine, and
   the `@endo/host-spawner` spawner; hardening asserted across
   `packages/daemon/test/shell.test.js` and `packages/exo-shell/test/`.
-- [x] 2b — `makeShellTool` in `@endo/agent-tools`: `ToolRecord` plus
+- [x] 2b: `makeShellTool` in `@endo/agent-tools`: `ToolRecord` plus
   hand-authored wire schema and divergence gate; port genie's policy
   closures (`rejectPatterns`, `rejectFlags`) as policy inputs. Landed in
   `packages/agent-tools/src/json-tools/shell.js` (`exec` / `inspect` records,
   schema ⟷ guard divergence gate, `makeAdvisoryVeto`).
-- [ ] 2c — the sandbox-spawner engine behind a `provideShell` option,
-  gated on [endo-posix-sandbox](endo-posix-sandbox.md) phase progress.
+- [ ] 2c: the sandbox-spawner engine behind a `provideShell` option.
+  Specified in § Next Slice (2026-10-19); `@endo/sandbox`'s Linux `bwrap`
+  driver with `network: 'none'` (its Phase 1) is all this needs from
+  [endo-posix-sandbox](endo-posix-sandbox.md).
   Optional for the M3 exit; required before granting shells to
   less-trusted agents (§ The honest boundary). The `@endo/host-spawner`
   `Spawner` interface is shaped to accept a sandbox `DriverProcess`
   adapter, but only the host `child_process` engine ships today.
 
-### Phase 3: Push tier — landed (#705)
+### Phase 3: Push tier (landed, #705)
 
 - [x] `makeGitRemoteTool(remoteCap)` per
   [endo-agent-tools](endo-agent-tools.md) § Git authority tiers:
@@ -485,7 +649,7 @@ deliverable's shape.
   makes a git branch usable as a transactional ledger
   ([daemon-git-remotes](daemon-git-remotes.md) § Force-with-lease).
 
-### Phase 3.5: Local mount-bridged git tools — landed (#616)
+### Phase 3.5: Local mount-bridged git tools (landed, #616)
 
 - [x] `makeGitMountTools(gitCap)` in `packages/agent-tools/src/json-tools/git-mount.js`:
   `status`, `add`, and `checkoutConflict` tools over the *local* `Git`
@@ -519,18 +683,23 @@ document's scope.
   policy persistence and restart reconstitution; #286's formula shape is
   superseded outright and its CLI intent survives as the `endo http` eventual
   surface sketched there.
-- [ ] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
+- [x] `makeHttpTool` in `@endo/agent-tools` (landed 2026-07-10 with the
+  daemon `provideHttpClient` formula, `38b6274d81`; the `@endo/fetch`
+  plugin followed on 2026-07-25, so two provisioning paths now exist; see
+  Phase 8): `ToolRecord` plus
   hand-authored wire schema and divergence gate, mirroring `makeGitTool`
   / `makeShellTool`; bounds come entirely from the granted `HttpClient`
   ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
   plugin-provisioned client).
 
-### Phase 4: Provisioning and the worked loop
+### Phase 4: Provisioning and the worked loop (landed, #707)
 
-- [ ] Wire the § Granting and Provisioning flow end to end for one
+- [x] Wire the § Granting and Provisioning flow end to end for one
   agent harness (lal front-loaded binding first; fae's `adopt` accretion
   follows).
-- [ ] Run the worked reference flow of
+  Landed as `makeWorkspaceTools` / `provisionWorkspaceTools` /
+  `provisionHistoryTools` in `packages/agent-tools/src/workspace.js`.
+- [x] Run the worked reference flow of
   [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
   acceptance test: branch → edit via file tools → status / diff / commit
   via git tools → push via the remote tool → inspect the pushed ref via
@@ -584,6 +753,35 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
   conflict-side lineage, index semantics, closed rebase controls, and
   conflict-recovery descriptions.
 
+### Phase 7: The endo-claude acceptance loop
+
+- [ ] Provision an [endo-claude](endo-claude.md) guest with a workspace
+  mount, `Git`, `GitRemote` (against a local bare-repo endpoint), and an
+  `engine: 'sandbox'` `Shell` bound into its petstore.
+- [ ] Drive the Phase 4 loop through `@endo/agent-mcp-stdio`'s `evaluate`
+  tool against those petnames, scripted rather than model-driven so the
+  test is deterministic: edit, then the build step, then status and
+  commit, then push, then `filesystemAt` on the pushed ref.
+- [ ] Negative leg: the `endo-claude` session provisioner refuses to
+  bind a `Shell` whose `inspect()` reports `engine: 'host'`. The check
+  reads the held capability's own posture; it does not consult a list of
+  guests.
+- [ ] Gated on Phase 2c and on the `endo-claude` confinement core.
+  This is the M3 pillar demonstrated from inside a confined guest, which
+  is the "confined in-guest agent" half of the milestone's client-side
+  bridge.
+
+### Phase 8: One HTTP provisioning path
+
+- [ ] Choose between the daemon `provideHttpClient` formula and the
+  `@endo/fetch` plugin (Open Question 4). Remove or deprecate the other,
+  and update § Granting and Provisioning plus
+  [endo-fetch](endo-fetch.md) to match.
+- [ ] Add an `http` group to `makeWorkspaceTools` /
+  `provisionWorkspaceTools`, composed only when an `HttpClient` is
+  granted, so the network tier reaches the same provisioning helper as
+  the other groups. (Code mode already declares `HttpClient` globals.)
+
 ## Dependencies
 
 | Design | Relationship |
@@ -600,6 +798,8 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 | [trust-on-first-bind](trust-on-first-bind.md) | TOFU policy for allowlist-bearing caps; the `makeTrustOnFirstBindPolicyAdapter` the HTTP capability composes. |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | Kernel-confinement engine for the Shell (Phase 2c). Supersedes the sketch's [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) dependency. |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | The version-controlled-filesystem-loop milestone Phase 4 demonstrates. |
+| [endo-claude](endo-claude.md) | Consumer: the confined in-guest agent whose petstore receives these capabilities; Phase 7 is its acceptance loop. |
+| [fs-interface-reconciliation](fs-interface-reconciliation.md) | Owns the `Filesystem` method catalog the file tools target; see § Relationship to Neighboring Designs. |
 | [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Provisioning UI shape for capability grants. |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | Historical `Dir` / `File` sketch (Reference); superseded for this surface by the mount trio and `Filesystem`. |
 
@@ -650,7 +850,8 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 ## Open Questions
 
 1. **Should the daemon-hosted `Shell` ship before the sandbox engine
-   (Phase 2a before 2c), or wait for slices?** Recommendation: ship 2a
+   (Phase 2a before 2c), or wait for slices?** Resolved: it shipped first
+   (#615). Recommendation at the time: ship 2a
    with the host engine and the honest-boundary posture — the same
    staging [endo-agent-tools](endo-agent-tools.md) accepted for genie's
    unconfined command tools — so the tool surface, wire schemas, and
@@ -664,12 +865,37 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
    host-path FTS5 memory tools) deserve its own design? The interim
    answer here is Shell-based; a real agent transcript showing the
    interim failing would promote the follow-up, to be filed as its own
-   design if promoted.
+   design if promoted. (2026-10-19: the daemon mount's eager `glob` /
+   `grep` have since landed and are what `@endo/agent-mcp-stdio` exposes;
+   the open part is only streaming search,
+   [mount-stream-glob-grep](mount-stream-glob-grep.md).)
 3. **Streaming / interactive processes.** Which consumer first needs a
    long-running process (a dev server, a REPL, a watch task) rather
    than bounded `exec`? That consumer decides when the exo-stream
    sibling methods land and whether they need pty semantics that
    `@endo/host-shell`'s pipe shapes do not cover.
+4. **Which HTTP provisioning path is canonical: the daemon
+   `provideHttpClient` formula or the `@endo/fetch` plugin?** Both are on
+   `llm`. The formula landed on 2026-07-10, three days before
+   [endo-fetch](endo-fetch.md) redirected the tier to unconfined plugins
+   (the maintainer's direction on PR #609), and was not removed. The
+   plugin landed on 2026-07-25. This document has followed the redirect
+   since 2026-07-13, which points to the plugin, but the formula is the one
+   `provideShell` / `provideGit` resemble, and the one the daemon's
+   `getHttpClientControl` serves. Phase 8 removes whichever is not chosen.
+5. **Should a sandboxed shell require an attested slice?**
+   `SandboxHandle.policy()` attests only the hosted-agent profile
+   (rootless podman, `broker-only` network). The § Next Slice shape
+   relies on the factory honoring an explicit `network: 'none'` and proves
+   it with a test, not an attestation. Should a general-purpose attestation
+   for `bwrap` slices be added to `@endo/sandbox` before shells are
+   granted to confined guests, or does the test suffice?
+6. **One slice per shell, or one slice per `exec`?** § Next Slice gives
+   each shell incarnation one long-lived slice, which is cheap and keeps
+   the `/work` bind stable. The cost is that a background process left by
+   one `exec` can outlive that call inside the slice. A slice per `exec` removes
+   that at the price of a namespace setup per call. Which does the first
+   consumer need?
 
 ## Prompt
 
@@ -682,3 +908,9 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 > `Git` capabilities scoped through mount descriptors) and correcting
 > the design record's status, so a subsequent builder can deliver M3's
 > "Claw-like coding capabilities available to agents" pillar.
+
+> 2026-10-19 re-scope (design step for M3): take `daemon-agent-tools`
+> and produce a scoped design. Cover the minimal first slice, how it
+> relates to `daemon-mount`, `endo-claude` (which depends on
+> `endo-agent-tools`), and the fs-interface reconciliation, and a phased
+> build plan. Do not start a build.
