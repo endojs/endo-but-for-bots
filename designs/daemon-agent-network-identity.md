@@ -3,10 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-03-02 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
-| **Updated** | 2026-03-18 |
+| **Updated** | 2026-10-19 |
 
 ## What is the Problem Being Solved?
 
@@ -31,18 +30,22 @@ system:
    with the agent's key; `internalizeLocator` normalizes any local key back
    to LOCAL_NODE. Pet store repair handles old-format identifiers on startup.
 
-3. **Per-agent networks (NETS).** Each agent should have its own NETS
+3. **~~Per-agent networks (NETS).~~** *(Done)* Each agent has its own NETS
    special name pointing to a networks directory that determines which
    network addresses appear as connection hints in locators produced by
-   `locate()`, `locateForSharing()`, and `invite()`. Currently only the
-   root host has NETS, and all child hosts share it. See "Per-Agent
-   Networks" section below.
+   `locate()`, `locateForSharing()`, and `invite()`. A guest gets a fresh,
+   empty networks directory unless its creator supplies one. See
+   "Per-Agent Networks" section below.
 
-4. **Network registration.** Installed networks do not know about agent
-   keypairs. When a remote peer connects targeting a specific agent's public
-   key, the network layer cannot route the connection to the correct agent.
-   This depends on per-agent NETS (#3) and the OCapN network transport
-   separation design.
+4. **~~Network registration.~~** *(Done)* The daemon registers each
+   incarnated agent's public key with the networks in that agent's own
+   NETS, and unregisters it when the agent's context is cancelled or the
+   network leaves the agent's NETS. The OCapN-Noise network keeps the
+   registered keys and answers `servesAgent(publicKey)` on its peer entry
+   point. See "Network Registration" below.
+
+The per-agent connection hints (relay requirements, transport preferences)
+remain unbuilt; see "Per-Agent Connection Hints" below.
 
 ## Design
 
@@ -54,12 +57,24 @@ negotiate connections on behalf of any persona.
 
 **Registration flow:**
 
-1. When a new agent with a keypair is created, the daemon registers that
-   agent's public key with every installed network.
-2. Each agent tracks its own set of retained agents (via its pet store) and
-   maintains the list of known keys for each installed network incrementally.
-3. When a network receives an inbound connection, it can identify which local
+1. When an agent with a keypair is incarnated, the daemon registers that
+   agent's public key with every network in the agent's own NETS. An agent
+   with an empty NETS is registered with no network, so no network can
+   disclose that the daemon hosts it (see "Persona privacy" below).
+2. Before an agent reads its network addresses (`locate`, `getPeerInfo`,
+   invitations), the daemon reconciles the registrations of every agent
+   sharing that NETS directory: it registers with networks added since the
+   last reconciliation and unregisters from networks since removed. A
+   network added to an agent's NETS therefore holds the agent's key before
+   any locator advertising that network leaves the daemon. Reviving the
+   root networks on startup reconciles every incarnated agent, covering
+   agents incarnated before their networks.
+3. When the agent's context is cancelled (collection, or daemon shutdown),
+   the daemon unregisters its key from every network that holds it.
+4. When a network receives an inbound connection, it can identify which local
    agent the remote peer is trying to reach by matching the target public key.
+   The OCapN-Noise network exposes this as `servesAgent(publicKey)` on its
+   peer entry point.
 
 **Interface:**
 
@@ -71,8 +86,10 @@ interface EndoNetwork {
 }
 ```
 
-This is additive — networks that do not support multi-key registration simply
-ignore the calls. The daemon root keypair is always registered as the default.
+This is additive. Both methods are optional; the daemon checks a network's
+method names and skips networks that lack them. The daemon root keypair is
+always registered as the default: the OCapN-Noise network serves its own node
+from startup and refuses to unregister it.
 
 ### Per-Agent Networks (NETS)
 

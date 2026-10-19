@@ -1054,6 +1054,51 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
   });
 }
 
+test('agents register their keys only with the networks in their own @nets', async t => {
+  const { host } = await prepareHost(t);
+
+  const networkLocation = url.pathToFileURL(
+    path.join(dirname, 'test', 'fixtures', 'recording-network.js'),
+  ).href;
+  const network = await E(host).makeUnconfined('@main', networkLocation, {
+    powersName: '@agent',
+    resultName: 'recording-network',
+  });
+  await E(host).move(['recording-network'], ['@nets', 'recording']);
+  const networkId = await E(host).identify('@nets', 'recording');
+
+  const reachableNets = await E(host).makeDirectory('reachable-nets');
+  await E(reachableNets).storeIdentifier(['recording'], networkId);
+  const reachable = await E(host).provideGuest('reachable', {
+    agentName: 'reachable-agent',
+    networks: reachableNets,
+  });
+  const hidden = await E(host).provideGuest('hidden', {
+    agentName: 'hidden-agent',
+  });
+
+  // `locate` reads the agent's network addresses, which first brings the
+  // agent's registrations up to date.
+  const agentKey = async agent =>
+    parseLocator(await E(agent).locate('@self')).node;
+  const hostKey = await agentKey(host);
+  const reachableKey = await agentKey(reachable);
+  const hiddenKey = await agentKey(hidden);
+
+  const registered = new Set(await E(network).registeredAgentKeys());
+  t.true(registered.has(hostKey));
+  t.true(registered.has(reachableKey));
+  // A guest with an empty `@nets` stays undisclosed to every network.
+  t.false(registered.has(hiddenKey));
+
+  // Removing the network from the guest's `@nets` unregisters its key.
+  await E(reachableNets).remove('recording');
+  await agentKey(reachable);
+  const afterRemoval = new Set(await E(network).registeredAgentKeys());
+  t.false(afterRemoval.has(reachableKey));
+  t.true(afterRemoval.has(hostKey));
+});
+
 test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
 
