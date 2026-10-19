@@ -30,8 +30,16 @@ const recipientStrategy =
 const hubStrategy = process.env.THIX_MAIL_HUB ?? 'atomic';
 if (!['name', 'reference'].includes(recipientStrategy))
   throw Error('Expected name or reference recipient strategy');
-if (!['atomic', 'log'].includes(hubStrategy))
-  throw Error('Expected atomic or log hub strategy');
+if (!['atomic', 'log', 'sqlite'].includes(hubStrategy))
+  throw Error('Expected atomic, log, or sqlite hub strategy');
+const observerStrategy = process.env.THIX_MAIL_OBSERVER ?? 'disposable';
+if (!['disposable', 'durable-progress'].includes(observerStrategy))
+  throw Error('Expected disposable or durable-progress observer strategy');
+if (
+  observerStrategy !== 'disposable' &&
+  !globalThis[Symbol.for('thixotrope.mailProfile')]
+)
+  throw Error('Observer ablation requires profile-mail-loader.mjs');
 const transferStrategy = process.env.THIX_MAIL_TRANSFERS ?? 'both';
 if (!['off', 'cleanup', 'batch', 'both'].includes(transferStrategy))
   throw Error('Expected off, cleanup, batch, or both transfer strategy');
@@ -67,6 +75,20 @@ const profiling = process.env.THIX_MAIL_PROFILE
     )
   : undefined;
 const profiledPowers = profiling?.powers ?? basePowers;
+const sqliteBackend =
+  hubStrategy === 'sqlite'
+    ? (await import('./mail-hub-sqlite.mjs')).makeMailHubSqlite(
+        profiledPowers.syncFiles,
+        {
+          onStorage: (name, start, end) => {
+            const trace = globalThis[Symbol.for('thixotrope.mailProfile')];
+            trace?.span('filesystem', name, start, end, { file: 'hub' });
+            // Native SQLite I/O is not visible to the JS filesystem wrappers.
+            // Label its whole transaction interval, without inventing fsync timings.
+          },
+        },
+      )
+    : undefined;
 const powers =
   hubStrategy === 'log'
     ? harden({
@@ -75,7 +97,9 @@ const powers =
           profiledPowers.syncFiles,
         ),
       })
-    : profiledPowers;
+    : sqliteBackend
+      ? harden({ ...profiledPowers, syncFiles: sqliteBackend.syncFiles })
+      : profiledPowers;
 const root = await mkdtemp(join(tmpdir(), 'thix-measure-mail-'));
 /** @type {{epoch: number, ms: number, hub: boolean}[]} */
 const writes = [];
@@ -307,6 +331,7 @@ try {
           hub: hubStrategy,
           gc: gcStrategy,
           transfers: transferStrategy,
+          observer: observerStrategy,
           gcPressure,
           boot: process.env.THIX_MAIL_BOOT_DIR ? 'override' : 'default',
         },
@@ -318,7 +343,14 @@ try {
   );
 } finally {
   for (const client of clients) client.close();
-  await supervisor?.close();
-  await profiling?.dump(results);
-  await rm(root, { recursive: true, force: true });
+  try {
+    await supervisor?.close();
+  } finally {
+    try {
+      sqliteBackend?.close();
+      await profiling?.dump(results);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
 }

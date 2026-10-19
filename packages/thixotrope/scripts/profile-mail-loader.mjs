@@ -81,7 +81,18 @@ registerHooks({
     if (!url.includes('/packages/thixotrope/src/')) return result;
     let source = result.source?.toString();
     if (source === undefined) return result;
-    if (url.endsWith('/core/daemon.js')) {
+    if (
+      url.endsWith('/net/transient-hub-client.js') ||
+      url.endsWith('/native/adapters.js')
+    ) {
+      if (process.env.THIX_MAIL_OBSERVER === 'durable-progress') {
+        source = replace(
+          source,
+          'discardOnRestart: true,',
+          'discardOnRestart: false,',
+        );
+      }
+    } else if (url.endsWith('/core/daemon.js')) {
       if (
         process.env.THIX_MAIL_TRANSFERS === 'off' ||
         process.env.THIX_MAIL_TRANSFERS === 'cleanup'

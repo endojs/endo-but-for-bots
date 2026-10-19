@@ -37,7 +37,7 @@ phases = {'compile-and-relink': 'Compile / relink', 'execution-and-jobs': 'Execu
           'garbage-collection': 'GC', 'finalizer-callbacks': 'Finalizers', 'extraction-compilation': 'Extraction compile',
           'outbound-extraction': 'Extract frames'}
 requests = {'deliver': 'Native delivery', 'dispatch': 'Dispatch', 'drain': 'Outbound drain', 'other': 'Other evaluation'}
-ops = {'file-fsync': 'File fsync', 'directory-fsync': 'Directory fsync', 'writeFile': 'Write bytes',
+ops = {'sqlite-commit': 'SQLite transaction', 'sqlite-read': 'SQLite read', 'file-fsync': 'File fsync', 'directory-fsync': 'Directory fsync', 'writeFile': 'Write bytes',
        'open': 'Open', 'close': 'Close', 'rename': 'Rename', 'rm': 'Remove scratch'}
 root_colors = {'Filesystem only': '#2563eb', 'VM only': '#7c3aed',
                'Filesystem + VM': '#0d9488', 'Host JS only': '#d97706',
@@ -63,7 +63,8 @@ for lo, hi in zip(bounds, bounds[1:]):
     # run in separate processes, so overlap gets its own sector.
     if fs or calls:
         file = files.get((fs or calls)[-1].get('file'), 'Other files')
-        operation = ops.get(calls[-1]['name'], calls[-1]['name']) if calls else 'Filesystem setup'
+        operation = (ops.get(calls[-1]['name'], calls[-1]['name']) if calls
+                     else ops.get(fs[-1]['name'], 'Filesystem setup'))
         if vm:
             vm_label = phases.get(vm[0]['name'], vm[0]['name']) if len(vm) == 1 else 'Parallel VM phases'
             path = ('Filesystem + VM', file, f'{operation} + {vm_label}')
@@ -140,6 +141,9 @@ summary = {
         'High-resolution cross-process epoch clocks are checked against host request envelopes; interpret sub-millisecond differences cautiously.',
     ],
 }
+sqlite_intervals = any(e['kind'] == 'filesystem' and e['name'].startswith('sqlite-') for e in active_events)
+if sqlite_intervals:
+    summary['notes'].append('SQLite transaction intervals include native SQL and I/O; individual SQLite filesystem syscalls are not instrumented.')
 args.output.with_suffix('.json').write_text(json.dumps(summary, indent=2)+'\n')
 
 # Three rings: mutually exclusive wall owner, subsystem/request, fine operation.
@@ -217,7 +221,7 @@ for root in order:
     y += 17
 text(44,837,'Read the rings outward: wall-time owner → subsystem / request → operation.',17)
 text(44,869,'Filesystem + VM sectors are simultaneous work, not extra time added to either total.',16,'#64748b')
-text(44,899,'Other includes IPC, scheduling, instrumentation and host work not covered by explicit spans.',16,'#64748b')
+text(44,899,('SQLite transaction time includes native SQL and I/O; its individual fsyncs are not instrumented.' if sqlite_intervals else 'Other includes IPC, scheduling, instrumentation and host work not covered by explicit spans.'),16,'#64748b')
 text(44,929,'Execution includes promise jobs. Finalizer callbacks are separate from garbage collection.',16,'#64748b')
 text(44,959,'Service endpoint only: HTTP, browser rendering and screen presentation are excluded.',16,'#64748b')
 parts.append('</g></svg>')
