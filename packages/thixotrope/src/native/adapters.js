@@ -210,6 +210,7 @@ export const makeNativeAdapters = (
                 throw Error('Native adapter stopped during startup');
               sink = hub.attachSession(id, {
                 durable: false,
+                discardOnRestart: true,
                 send: child.send,
                 onAbort: () => {
                   void end().catch(error => cleanupFailure.record(error));

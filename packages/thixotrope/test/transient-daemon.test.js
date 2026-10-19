@@ -99,7 +99,9 @@ test.serial(
     const transientKey = Object.keys(crashImage.sessions).find(key =>
       key.startsWith('transient:'),
     );
-    t.truthy(transientKey);
+    if (transientKey === undefined) throw Error('Missing transient session');
+    crashImage.sessions[transientKey].queue = ['00'];
+    crashImage.sessions[transientKey].queueSequences = [''];
     await first.shutdown();
     // Save the session image from before orderly cleanup. No worker ran in this
     // fixture, so only the hub has state to recover; the native test uses SIGKILL.

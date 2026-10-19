@@ -104,7 +104,9 @@ export const makeInProcessHubSession = async ({
       sink = hub.attachSession(sessionKey, {
         ...options,
         send: (/** @type {Uint8Array} */ bytes) => {
-          if (!isClosed()) handlers.handleMessageData(connection, bytes);
+          if (isClosed()) return false;
+          handlers.handleMessageData(connection, bytes);
+          return true;
         },
       });
       for (const bytes of outbound.splice(0)) sink.deliver(bytes);

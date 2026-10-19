@@ -236,6 +236,7 @@ export const makeOcapnHub = ({
    *   send: (bytes: Uint8Array, deliverySequence?: string) => unknown,
    *   requireAcceptance: boolean,
    *   deferCleanup: boolean,
+   *   discardOnRestart: boolean,
    *   attached: boolean,
    *   remote: boolean,
    *   onAbort: ((error: unknown) => void) | undefined,
@@ -391,6 +392,7 @@ export const makeOcapnHub = ({
         },
         requireAcceptance: false,
         deferCleanup: false,
+        discardOnRestart: false,
         attached: false,
         remote: false,
         onAbort: undefined,
@@ -875,7 +877,11 @@ export const makeOcapnHub = ({
 
   /** @param {any} session */
   const prepareOutboxHead = session => {
-    if (session.attached && session.queueSequences[0] === '') {
+    if (
+      session.attached &&
+      !session.discardOnRestart &&
+      session.queueSequences[0] === ''
+    ) {
       session.nextDelivery += 1n;
       session.queueSequences[0] = String(session.nextDelivery);
       dirty = true;
@@ -919,6 +925,34 @@ export const makeOcapnHub = ({
     if (deliveryDepth > 0 || session.flushing || !session.attached) return;
     session.flushing = true;
     try {
+      if (session.discardOnRestart) {
+        while (session.queue.length > 0 && session.attached) {
+          // Commit all routing effects before publishing this prefix. Sends
+          // can reenter the hub and append more work; commit that work before
+          // offering the next prefix, never merely because a send returned.
+          persist();
+          const frames = session.queue.splice(0);
+          session.queueSequences.length = 0;
+          dirty = true;
+          for (const frame of frames) {
+            if (!session.attached) break;
+            try {
+              const accepted = session.send(decodeHex(frame));
+              accepted !== false || Fail`Disposable observer closed`;
+            } catch (error) {
+              // This observer cannot resume. An ambiguous send ends its
+              // incarnation rather than replaying a possibly observed prefix.
+              session.attached = false;
+              session.queue.length = 0;
+              session.queueSequences.length = 0;
+              dirty = true;
+              session.onAbort?.(error);
+              return;
+            }
+          }
+        }
+        return;
+      }
       while (session.queue.length > 0 && session.attached) {
         // The destination journals the stable sequence with the bytes. A
         // crash after send but before removal resends the same sequence.
@@ -948,7 +982,7 @@ export const makeOcapnHub = ({
       // Replay-safe receivers have durably journaled the stable identities.
       // Keep removals dirty until the next necessary commit; a crash replays
       // already-owned identities, which that receiver must deduplicate.
-      if (!session.deferCleanup) persist();
+      if (!session.deferCleanup && !session.discardOnRestart) persist();
     }
   }
 
@@ -1979,6 +2013,10 @@ export const makeOcapnHub = ({
      * @param {boolean} [powers.durable] frames toward this session
      *   queue in the tables while it is detached, instead of breaking
      *   to their senders
+     * @param {boolean} [powers.discardOnRestart] disposable observer outbox:
+     *   publish only after routing commits, but keep progress in memory.
+     *   Requires a unique transient key that is never resumed or reused, and
+     *   an abort handler that closes the observer on ambiguous delivery.
      * @param {boolean} [powers.remote] a bad frame aborts this session
      *   instead of being dropped (the policy for sessions from beyond
      *   the process boundary)
@@ -1996,11 +2034,18 @@ export const makeOcapnHub = ({
         durable = false,
         requireAcceptance = false,
         deferCleanup = false,
+        discardOnRestart = false,
         remote = false,
         onAbort = undefined,
         identity = undefined,
       },
     ) => {
+      !discardOnRestart ||
+        (sessionKey.startsWith('transient:') &&
+          !durable &&
+          !requireAcceptance &&
+          onAbort !== undefined) ||
+        Fail`disposable observer requires a unique transient session and abort handler`;
       const session = provideSessionState(sessionKey);
       session.send = send;
       !deferCleanup ||
@@ -2008,6 +2053,7 @@ export const makeOcapnHub = ({
         Fail`deferred outbox cleanup requires durable acceptance`;
       session.requireAcceptance = requireAcceptance;
       session.deferCleanup = deferCleanup;
+      session.discardOnRestart = discardOnRestart;
       session.attached = true;
       session.retired = false;
       session.durable = durable;

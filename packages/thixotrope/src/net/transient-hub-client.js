@@ -61,7 +61,11 @@ export const makeTransientHubClient = async (
   };
   try {
     hubSession.resume();
-    hubSession.attach({ durable: false, onAbort: close });
+    hubSession.attach({
+      durable: false,
+      discardOnRestart: true,
+      onAbort: close,
+    });
     const session = await client.provideSession(
       hubSession.resumption.peerLocation,
     );
