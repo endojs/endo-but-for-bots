@@ -15,6 +15,7 @@ import {
 } from './framing.js';
 
 /** @import { Stream, Reader, Writer } from '@endo/stream' */
+/** @import { CapTPOptions } from '@endo/captp' */
 /** @import { CapTpConnectionRegistrar } from './types.js' */
 /** @import { FramingName } from './framing.js' */
 
@@ -74,7 +75,7 @@ harden(renderRejection);
  * @param {string} name
  * @param {(reason?: Error) => Promise<void>} close
  * @param {Promise<void>} closed
- * @returns {import('@endo/captp').CapTPOptions}
+ * @returns {CapTPOptions}
  */
 const registerCapTpConnection = (registrar, name, close, closed) => {
   if (registrar === undefined) {
@@ -96,7 +97,7 @@ const registerCapTpConnection = (registrar, name, close, closed) => {
  * @param {Stream<any, undefined, undefined, undefined>} reader
  * @param {Promise<void>} cancelled
  * @param {TBootstrap} bootstrap
- * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
+ * @param {CapTPOptions} [capTpOptions]
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
  */
 export const makeMessageCapTP = (
@@ -286,7 +287,7 @@ export const bytesToMessage = bytes => {
  * @param {Reader<Uint8Array>} bytesReader
  * @param {Promise<void>} cancelled
  * @param {TBootstrap} bootstrap
- * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
+ * @param {CapTPOptions} [capTpOptions]
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
  */
 export const makeFramedCapTP = (
@@ -331,7 +332,7 @@ export const makeFramedCapTP = (
  * @param {Reader<Uint8Array>} bytesReader
  * @param {Promise<void>} cancelled
  * @param {TBootstrap} bootstrap
- * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
+ * @param {CapTPOptions} [capTpOptions]
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
  */
 export const makeSniffingCapTP = (
@@ -381,7 +382,7 @@ export const makeSniffingCapTP = (
  * @param {Reader<Uint8Array>} bytesReader
  * @param {Promise<void>} cancelled
  * @param {TBootstrap} bootstrap
- * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
+ * @param {CapTPOptions} [capTpOptions]
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
  */
 export const makeNetstringCapTP = (

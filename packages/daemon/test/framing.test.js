@@ -7,7 +7,9 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { makeExo } from '@endo/exo';
+import { encodeHex } from '@endo/hex';
+import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
 import { concatBytes } from '@endo/bytes/concat.js';
@@ -22,6 +24,7 @@ import {
 } from '../src/framing.js';
 import { makeFramedCapTP, makeSniffingCapTP } from '../src/connection.js';
 
+/** @import { Reader } from '@endo/stream' */
 /** @import { FramingName } from '../src/framing.js' */
 
 /** @type {FramingName[]} */
@@ -67,7 +70,7 @@ const makeCollectingWriter = () => {
 
 /** @param {Uint8Array[]} chunks */
 const makeChunkReader = chunks =>
-  /** @type {import('@endo/stream').Reader<Uint8Array>} */ (
+  /** @type {Reader<Uint8Array>} */ (
     harden(
       (async function* chunkReader() {
         yield* chunks;
@@ -91,7 +94,7 @@ test('classifier: digits are netstring, 0xd8 is cbor-frame, all else fails by na
     } else if (byte === 0xd8) {
       t.is(classifyFirstByte(byte), 'cbor-frame');
     } else {
-      const hex = byte.toString(16).padStart(2, '0');
+      const hex = encodeHex(Uint8Array.of(byte));
       t.throws(() => classifyFirstByte(byte, 'specimen'), {
         message: `Unrecognized framing: first byte 0x${hex} is neither a netstring length digit nor the cbor-frame tag-24 prefix at offset 0 of specimen`,
       });
@@ -225,7 +228,7 @@ test('frame reader and writer reject an unknown framing', t => {
 
 test('sniffing reader propagates a byte-stream error to the reader and the choice', async t => {
   await null;
-  /** @type {import('@endo/stream').Reader<Uint8Array>} */
+  /** @type {Reader<Uint8Array>} */
   const failing = harden({
     async next() {
       throw Error('socket reset');
@@ -261,7 +264,11 @@ for (const framing of framings) {
       const [serverToClient, clientFromServer] = makePipe();
       /** @type {Promise<void>} */
       const cancelled = new Promise(() => {});
-      const bootstrap = Far('bootstrap', { hello: () => 'hi' });
+      const bootstrap = makeExo(
+        'bootstrap',
+        M.interface('bootstrap', { hello: M.call().returns(M.string()) }),
+        { hello: () => 'hi' },
+      );
 
       /** @type {Promise<FramingName> | undefined} */
       let framingChosen;

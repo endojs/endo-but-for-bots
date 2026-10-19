@@ -16,8 +16,10 @@ import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 import { makeCborFrameReader, makeCborFrameWriter } from '@endo/cbor-frame';
+import { encodeHex } from '@endo/hex';
 
 /** @import { Reader, Writer } from '@endo/stream' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
 
 /** @typedef {'netstring' | 'cbor-frame'} FramingName */
 
@@ -37,7 +39,7 @@ export const classifyFirstByte = (byte, name = '<unknown>') => {
   if (byte === CBOR_FRAME_INITIAL) {
     return 'cbor-frame';
   }
-  const hex = byte.toString(16).padStart(2, '0');
+  const hex = encodeHex(Uint8Array.of(byte));
   throw Error(
     `Unrecognized framing: first byte 0x${hex} is neither a netstring length digit nor the cbor-frame tag-24 prefix at offset 0 of ${name}`,
   );
@@ -110,7 +112,7 @@ export const makeSniffingFrameReader = (
   bytesReader,
   { name = '<unknown>', maxMessageLength = undefined } = {},
 ) => {
-  /** @type {import('@endo/promise-kit').PromiseKit<FramingName>} */
+  /** @type {PromiseKit<FramingName>} */
   const {
     promise: framingChosen,
     resolve: resolveFraming,
