@@ -42,7 +42,9 @@ The scene runs in a sandboxed iframe with no network access.`;
 
 /**
  * @typedef {object} AddSpaceModalAPI
- * @property {() => void} show - Show the modal
+ * @property {(options?: { mode?: 'new-agent' }) => void} show - Show the
+ *   modal, on the space-type chooser or, with `mode: 'new-agent'`, directly
+ *   on the new-profile form (the gutter's "Add agent" button)
  * @property {() => void} hide - Hide the modal
  * @property {() => boolean} isVisible - Check if modal is visible
  */
@@ -2574,8 +2576,11 @@ export const createAddSpaceModal = ({
 
   /**
    * Show the modal.
+   *
+   * @param {object} [options]
+   * @param {'new-agent'} [options.mode] - open directly on this step
    */
-  const show = () => {
+  const show = ({ mode: initialMode } = {}) => {
     visible = true;
     mode = 'choose';
     selectedIcon = '🐈‍⬛';
@@ -2600,7 +2605,11 @@ export const createAddSpaceModal = ({
     isSubmitting = false;
     schemePicker = null;
 
-    render();
+    if (initialMode === 'new-agent') {
+      handlers.selectMode('new-agent');
+    } else {
+      render();
+    }
     $container.style.display = 'flex';
   };
 

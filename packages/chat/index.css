@@ -352,11 +352,13 @@ body.gutter-hidden #spaces-gutter {
   display: block;
 }
 
-.space-item.add-space-item {
+.space-item.add-space-item,
+.space-item.add-agent-item {
   cursor: default;
 }
 
-.add-space-button {
+.add-space-button,
+.add-agent-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -373,7 +375,12 @@ body.gutter-hidden #spaces-gutter {
   transition: all var(--transition-fast);
 }
 
-.add-space-button:hover {
+.add-agent-button {
+  font-size: 15px;
+}
+
+.add-space-button:hover,
+.add-agent-button:hover {
   background: var(--bg-primary);
   border-color: var(--accent-primary);
   color: var(--accent-primary);
@@ -5448,6 +5455,25 @@ button.btn-spinner::after {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+/* MCP client configuration (mcp-config-modal.js) */
+.mcp-config-block {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  white-space: pre;
+  user-select: all;
+}
+
+.mcp-config-warning {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 /* Error message */
