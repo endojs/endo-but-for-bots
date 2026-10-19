@@ -823,6 +823,45 @@
 .floot-action-section.result .floot-tool-pre {
   color: #bbf7d0;
 }
+.floot-diff-result {
+  display: grid;
+  gap: 0.5rem;
+}
+.floot-diff-summary {
+  max-height: none;
+}
+.floot-diff {
+  max-height: 360px;
+  padding: 0.35rem 0;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+  color: #d8d8f0;
+  background: #111120;
+  border: 1px solid #2a2a3e;
+  border-radius: 4px;
+}
+.floot-diff-line {
+  display: block;
+  min-height: 1.25em;
+  padding: 0 0.6rem;
+}
+.floot-diff-line.header {
+  color: #a5b4fc;
+  font-weight: 600;
+}
+.floot-diff-line.hunk {
+  color: #c4b5fd;
+  background: #1e1e36;
+}
+.floot-diff-line.added {
+  color: #bbf7d0;
+  background: rgb(20 83 45 / 35%);
+}
+.floot-diff-line.removed {
+  color: #fecaca;
+  background: rgb(127 29 29 / 35%);
+}
 
 /* JavaScript tokens for the exec-family entries. */
 .floot-code {

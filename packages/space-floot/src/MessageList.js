@@ -269,6 +269,63 @@ export const formatPayload = payload => {
 harden(formatPayload);
 
 /**
+ * Find a unified diff carried by a tool result. Edit tools use both of the
+ * result shapes this accepts: a plain summary followed by the diff, and a JSON
+ * record whose `diff` field contains it. The non-diff part is retained so the
+ * renderer does not hide result metadata such as the applied-edit count.
+ *
+ * @param {string | null | undefined} payload
+ * @returns {{ summary: string, diff: string } | null}
+ */
+export const extractUnifiedDiff = payload => {
+  const source = `${payload == null ? '' : payload}`;
+  const trimmed = source.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        typeof parsed.diff === 'string'
+      ) {
+        const diff = parsed.diff;
+        if (/^--- [^\n]+\n\+\+\+ [^\n]+\n@@ /u.test(diff)) {
+          const { diff: _diff, ...metadata } = parsed;
+          const summary = Object.keys(metadata).length
+            ? JSON.stringify(metadata, null, 2)
+            : '';
+          return harden({ summary, diff });
+        }
+      }
+    } catch {
+      // A non-JSON result may still contain a plain unified diff below.
+    }
+  }
+
+  const match = /(?:^|\n)(--- [^\n]+\n\+\+\+ [^\n]+\n@@ )/u.exec(source);
+  if (!match || match.index === undefined) return null;
+  const start = match.index + (match[0].startsWith('\n') ? 1 : 0);
+  return harden({
+    summary: source.slice(0, start).trimEnd(),
+    diff: source.slice(start),
+  });
+};
+harden(extractUnifiedDiff);
+
+/**
+ * @param {string} line
+ * @returns {'header' | 'hunk' | 'added' | 'removed' | 'context'}
+ */
+export const classifyUnifiedDiffLine = line => {
+  if (line.startsWith('--- ') || line.startsWith('+++ ')) return 'header';
+  if (line.startsWith('@@ ')) return 'hunk';
+  if (line.startsWith('+')) return 'added';
+  if (line.startsWith('-')) return 'removed';
+  return 'context';
+};
+harden(classifyUnifiedDiffLine);
+
+/**
  * The JavaScript an `exec`-family call actually runs. Its args are a JSON
  * record whose `code` field holds the source; showing that source directly
  * (rather than the JSON envelope with its escaped newlines) is what makes the
@@ -391,6 +448,32 @@ const CodeBlock = ({ code, language }) => {
 };
 
 /**
+ * A unified diff whose rows remain text nodes, with line classes supplying the
+ * preview's colour and signposting.
+ *
+ * @param {{ diff: string }} props
+ * @returns {VNode}
+ */
+const DiffBlock = ({ diff }) =>
+  h(
+    'pre',
+    { class: 'floot-tool-pre floot-diff' },
+    ...diff
+      .replace(/\n$/u, '')
+      .split('\n')
+      .map((line, index) =>
+        h(
+          'span',
+          {
+            key: `diff-${index}`,
+            class: `floot-diff-line ${classifyUnifiedDiffLine(line)}`,
+          },
+          line,
+        ),
+      ),
+  );
+
+/**
  * One agent action — the call and its result as a single entry, collapsed by
  * default.
  *
@@ -409,6 +492,10 @@ const ActionEntry = ({ msg }) => {
   );
   const preview = useMemo(() => actionPreview(argsText), [argsText]);
   const hasResult = msg.result != null;
+  const diffResult = useMemo(
+    () => (hasResult ? extractUnifiedDiff(msg.result) : null),
+    [hasResult, msg.result],
+  );
   return h(
     'div',
     { class: `floot-action${open ? ' open' : ''}` },
@@ -453,11 +540,24 @@ const ActionEntry = ({ msg }) => {
                 'div',
                 { class: 'floot-action-section result' },
                 h('div', { class: 'floot-tool-label' }, 'result'),
-                h(
-                  'pre',
-                  { class: 'floot-tool-pre' },
-                  formatPayload(msg.result),
-                ),
+                diffResult
+                  ? h(
+                      'div',
+                      { class: 'floot-diff-result' },
+                      diffResult.summary
+                        ? h(
+                            'pre',
+                            { class: 'floot-tool-pre floot-diff-summary' },
+                            diffResult.summary,
+                          )
+                        : null,
+                      h(DiffBlock, { diff: diffResult.diff }),
+                    )
+                  : h(
+                      'pre',
+                      { class: 'floot-tool-pre' },
+                      formatPayload(msg.result),
+                    ),
               )
             : null,
         )
