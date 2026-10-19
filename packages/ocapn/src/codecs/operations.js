@@ -9,6 +9,7 @@
 
 import {
   makeCodec,
+  makeExpectedLengthBytestringCodec,
   makeRecordUnionCodec,
   makeTypeHintUnionCodec,
 } from '../syrup/codec.js';
@@ -88,6 +89,55 @@ export const OcapnHeartbeatOperationsCodecs = makeRecordUnionCodec(
     OpPong: OpPongCodec,
   },
 );
+
+// Proposed, pending OCapN-org review; see
+// designs/ocapn-noise-session-reconnect.md § 7. The OCapN-Noise network
+// consumes these records: they never reach a CapTP session.
+const OpSessionHelloCodec = makeOcapnRecordCodecFromDefinition(
+  'OpSessionHello',
+  'op:session-hello',
+  {
+    features: NonNegativeIntegerCodec,
+    epoch: NonNegativeIntegerCodec,
+    session: makeExpectedLengthBytestringCodec('SessionToken', 32),
+    received: NonNegativeIntegerCodec,
+  },
+);
+
+const OpSessionEndCodec = makeOcapnRecordCodecFromDefinition(
+  'OpSessionEnd',
+  'op:session-end',
+  {
+    epoch: NonNegativeIntegerCodec,
+  },
+);
+
+export const OcapnSessionControlCodecs = makeRecordUnionCodec(
+  'OcapnSessionControl',
+  {
+    OpSessionHello: OpSessionHelloCodec,
+    OpSessionEnd: OpSessionEndCodec,
+  },
+);
+
+/**
+ * @param {OcapnReader} reader
+ * @returns {any}
+ */
+export const readOcapnSessionControlMessage = reader => {
+  return OcapnSessionControlCodecs.read(reader);
+};
+
+/**
+ * @param {any} message
+ * @param {OcapnCodec} codec
+ * @returns {Uint8Array}
+ */
+export const writeOcapnSessionControlMessage = (message, codec) => {
+  const writer = codec.makeWriter();
+  OcapnSessionControlCodecs.write(message, writer);
+  return writer.getBytes();
+};
 
 /**
  * @param {OcapnReader} reader

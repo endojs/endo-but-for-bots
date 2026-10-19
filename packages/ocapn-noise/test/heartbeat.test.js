@@ -66,18 +66,17 @@ for (const [codecName, codec] of /** @type {const} */ ([
 
     const livenessA = sessionA.getLiveness();
     const livenessB = sessionB.getLiveness();
+    const receivedA = /** @type {bigint} */ (livenessA.lastAckedRecvNonce);
+    const receivedB = /** @type {bigint} */ (livenessB.lastAckedRecvNonce);
     t.true(livenessA.heartbeat);
     t.is(livenessA.epoch, 0n);
     // Each side has decrypted the peer's identity greeting plus many
     // heartbeats, and has heard the peer acknowledge some of its own.
-    t.true(livenessA.lastAckedRecvNonce > 4n);
-    t.true(livenessB.lastAckedRecvNonce > 4n);
+    t.true(receivedA > 4n);
+    t.true(receivedB > 4n);
     t.not(livenessA.peerAckedRecvNonce, undefined);
     t.not(livenessB.peerAckedRecvNonce, undefined);
-    t.true(
-      /** @type {bigint} */ (livenessA.peerAckedRecvNonce) <=
-        livenessB.lastAckedRecvNonce,
-    );
+    t.true(/** @type {bigint} */ (livenessA.peerAckedRecvNonce) <= receivedB);
   });
 }
 
@@ -125,8 +124,9 @@ test('a peer without heartbeats receives op:ping and op:pong frames', async t =>
       type: 'op:pong',
       epoch: 0n,
       sequence: 0n,
-      // A has decrypted only B's identity greeting, nonce 0.
-      lastAckedRecvNonce: 0n,
+      // A has decrypted only B's identity greeting and session hello,
+      // nonces 0 and 1.
+      lastAckedRecvNonce: 1n,
     });
   }
   sessionA.close();

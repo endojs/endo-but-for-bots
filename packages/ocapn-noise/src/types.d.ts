@@ -122,13 +122,40 @@ export interface HeartbeatOptions {
   sessionTimeoutMs?: number;
 }
 
+/**
+ * Session reconnect settings, per
+ * `designs/ocapn-noise-session-reconnect.md` §§ 3 and 5. Requires
+ * heartbeats, and takes effect for a session only when the peer's
+ * `op:session-hello` advertises reconnect too. When a transport instance
+ * is lost, the side that opened the session dials a fresh Noise IK
+ * handshake (Rekey) on a new transport instance, the session epoch
+ * advances, and the frames the lost instance did not deliver are
+ * replayed exactly once. The session aborts if no new instance is up
+ * within `hardTimeoutMs`.
+ */
+export interface ReconnectOptions {
+  /** `RECONNECT_BACKOFF_INITIAL`. Default 250. */
+  backoffInitialMs?: number;
+  /** `RECONNECT_BACKOFF_MAX`. Default 30000, capped by `hardTimeoutMs` and raised to `backoffInitialMs`. */
+  backoffMaxMs?: number;
+  /** `SESSION_HARD_TIMEOUT`. Default 600000. */
+  hardTimeoutMs?: number;
+}
+
 export interface SessionLiveness {
   /** Whether this session sends and absorbs heartbeats. */
   heartbeat: boolean;
-  /** The transport instance number; 0 until reconnect exists. */
+  /** Whether this session resumes after losing its transport instance. */
+  reconnect: boolean;
+  /** Whether this session has lost its transport instance and not yet resumed. */
+  reconnecting: boolean;
+  /** The transport instance number: 0, advancing by one per reconnect. */
   epoch: bigint;
-  /** The highest Noise nonce this side has decrypted. */
-  lastAckedRecvNonce: bigint;
+  /**
+   * The highest Noise nonce this side has decrypted on the current
+   * transport instance, or `undefined` while reconnecting.
+   */
+  lastAckedRecvNonce: bigint | undefined;
   /**
    * The highest of this side's send nonces the peer has acknowledged
    * by `op:pong`, or `undefined` before the first `op:pong`.
@@ -145,6 +172,12 @@ export interface SessionLiveness {
    * the transport stalls; drains in order when it recovers.
    */
   queuedFrames: number;
+  /**
+   * Session frames handed to the current transport instance that the
+   * peer has not acknowledged by `op:pong`, kept for replay should the
+   * instance be lost. Always 0 without reconnect.
+   */
+  unackedFrames: number;
 }
 
 /**
