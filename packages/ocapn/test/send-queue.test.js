@@ -111,6 +111,36 @@ test('a failed write during a drain closes the queue once', async t => {
   t.is(calls, 1, 'a closed queue refuses further writes');
 });
 
+test('a synchronous write failure during a drain closes the queue once', async t => {
+  /** @type {Error[]} */
+  const errors = [];
+  let resolve = () => {};
+  let calls = 0;
+  const queue = makeSendQueue({
+    write: () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise(res => {
+          resolve = () => res(undefined);
+        });
+      }
+      throw Error('socket closed');
+    },
+    onError: error => errors.push(error),
+  });
+  queue.write(bytesOf(1));
+  queue.write(bytesOf(2));
+  queue.write(bytesOf(3));
+  resolve();
+  await flush();
+  t.is(calls, 2, 'the drain stops at the throwing write');
+  t.is(errors.length, 1);
+  t.is(errors[0].message, 'socket closed');
+  t.is(queue.getPendingCount(), 0);
+  queue.write(bytesOf(4));
+  t.is(calls, 2, 'a closed queue refuses further writes');
+});
+
 test('close drops pending operations and ignores the late settlement', async t => {
   const { written, errors, injector, queue } = makeUnitKit();
   injector.stall();
