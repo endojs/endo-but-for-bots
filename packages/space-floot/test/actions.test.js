@@ -2,7 +2,9 @@
 import test from 'ava';
 
 import {
+  classifyUnifiedDiffLine,
   extractExecCode,
+  extractUnifiedDiff,
   formatPayload,
   isJsTool,
   projectTranscript,
@@ -36,6 +38,46 @@ test('JSON payloads are pretty-printed and other text is left alone', t => {
   t.is(formatPayload('plain text'), 'plain text');
   t.is(formatPayload('{ broken'), '{ broken');
   t.is(formatPayload(null), '');
+});
+
+test('edit results expose plain and structured unified diffs', t => {
+  const diff = [
+    '--- a/example.js',
+    '+++ b/example.js',
+    '@@ -1,1 +1,1 @@',
+    '-const answer = 41;',
+    '+const answer = 42;',
+    '',
+  ].join('\n');
+  t.deepEqual(extractUnifiedDiff(`Applied 1 edit to example.js\n\n${diff}`), {
+    summary: 'Applied 1 edit to example.js',
+    diff,
+  });
+  t.deepEqual(extractUnifiedDiff(JSON.stringify({ applied: 1, diff })), {
+    summary: '{\n  "applied": 1\n}',
+    diff,
+  });
+  t.is(extractUnifiedDiff('ordinary tool result'), null);
+  t.is(extractUnifiedDiff('{"diff":"not a unified diff"}'), null);
+  t.is(extractUnifiedDiff(null), null);
+  t.is(extractUnifiedDiff(undefined), null);
+  t.deepEqual(extractUnifiedDiff(JSON.stringify({ diff })), {
+    summary: '',
+    diff,
+  });
+  t.deepEqual(extractUnifiedDiff(`{ not json\n${diff}`), {
+    summary: '{ not json',
+    diff,
+  });
+});
+
+test('unified diff rows have distinct presentation classes', t => {
+  t.is(classifyUnifiedDiffLine('--- a/example.js'), 'header');
+  t.is(classifyUnifiedDiffLine('+++ b/example.js'), 'header');
+  t.is(classifyUnifiedDiffLine('@@ -1,1 +1,1 @@'), 'hunk');
+  t.is(classifyUnifiedDiffLine('-const answer = 41;'), 'removed');
+  t.is(classifyUnifiedDiffLine('+const answer = 42;'), 'added');
+  t.is(classifyUnifiedDiffLine(' const unchanged = true;'), 'context');
 });
 
 test('a run of actions summarises as a total plus a per-tool tally', t => {
