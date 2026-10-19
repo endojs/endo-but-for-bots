@@ -1,6 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import http from 'node:http';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
@@ -18,6 +19,43 @@ const FORMULA_ID = 'ab'.repeat(32);
 const OTHER_ID = 'cd'.repeat(32);
 const HOST_ID = 'ef'.repeat(32);
 const NODE = '12'.repeat(32);
+
+// A node:http client with keep-alive disabled (`agent: false`), shaped
+// like the slice of `fetch` these tests use. The global `fetch` (undici)
+// pools keep-alive sockets against the gateway; closing the gateway in
+// teardown then rejects them with a `ClientDestroyedError`, which SES
+// surfaces as a fatal unhandled rejection on Node 24.
+/**
+ * @param {string | URL} url
+ * @param {{ method?: string, headers?: Record<string, string>, body?: string }} [init]
+ */
+const httpRequest = (url, { method = 'GET', headers = {}, body } = {}) =>
+  /** @type {Promise<{ status: number, headers: { get: (name: string) => string | undefined }, text: () => Promise<string>, json: () => Promise<any> }>} */ (
+    new Promise((resolve, reject) => {
+      const req = http.request(url, { method, headers, agent: false }, res => {
+        let text = '';
+        res.setEncoding('utf-8');
+        res.on('data', chunk => {
+          text += chunk;
+        });
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode || 0,
+            headers: {
+              get: name => {
+                const value = res.headers[name.toLowerCase()];
+                return Array.isArray(value) ? value.join(', ') : value;
+              },
+            },
+            text: async () => text,
+            json: async () => JSON.parse(text),
+          }),
+        );
+      });
+      req.on('error', reject);
+      req.end(body);
+    })
+  );
 
 /**
  * A fake daemon facet: an exo whose methods take and return passables.
@@ -118,7 +156,7 @@ const startGateway = async ({ penaltyMs = 0, allowedOrigins } = {}) => {
   const rpc = async (method, params, { bearer = FORMULA_ID } = {}) => {
     const id = nextId;
     nextId += 1;
-    const response = await fetch(url, {
+    const response = await httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${bearer}`,
@@ -246,7 +284,7 @@ test.serial(
   async t => {
     const { url, rpc, close } = await startGateway({ penaltyMs: 60_000 });
     try {
-      const missing = await fetch(url, {
+      const missing = await httpRequest(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
@@ -291,33 +329,33 @@ test.serial(
       'Content-Type': 'application/json',
     };
     try {
-      const get = await fetch(url, {
+      const get = await httpRequest(url, {
         headers: { ...headers, Accept: 'text/event-stream' },
       });
       t.is(get.status, 405);
       t.is(get.headers.get('allow'), 'POST');
 
-      const other = await fetch(new URL('/elsewhere', url), {
+      const other = await httpRequest(new URL('/elsewhere', url), {
         method: 'POST',
         headers,
         body: '{}',
       });
       t.is(other.status, 404);
 
-      const foreign = await fetch(url, {
+      const foreign = await httpRequest(url, {
         method: 'POST',
         headers: { ...headers, Origin: 'https://evil.example' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
       });
       t.is(foreign.status, 403);
-      const allowed = await fetch(url, {
+      const allowed = await httpRequest(url, {
         method: 'POST',
         headers: { ...headers, Origin: 'https://chat.example' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
       });
       t.is(allowed.status, 200);
 
-      const notification = await fetch(url, {
+      const notification = await httpRequest(url, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -328,11 +366,15 @@ test.serial(
       t.is(notification.status, 202);
       t.is(await notification.text(), '');
 
-      const garbled = await fetch(url, { method: 'POST', headers, body: '{' });
+      const garbled = await httpRequest(url, {
+        method: 'POST',
+        headers,
+        body: '{',
+      });
       t.is(garbled.status, 400);
       t.is((await garbled.json()).error.code, -32_700);
 
-      const batch = await fetch(url, {
+      const batch = await httpRequest(url, {
         method: 'POST',
         headers,
         body: JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'ping' }]),
@@ -340,7 +382,7 @@ test.serial(
       t.is(batch.status, 400);
       t.is((await batch.json()).error.code, -32_600);
 
-      const text = await fetch(url, {
+      const text = await httpRequest(url, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'text/plain' },
         body: '{}',
