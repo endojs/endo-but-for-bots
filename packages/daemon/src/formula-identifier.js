@@ -5,17 +5,22 @@
 
 import { makeError, q } from '@endo/errors';
 
+// A formula identifier is a *formula key*: `{formulaAddress}:{peerKey}`.
+// The `number` field of an `IdRecord` is the formula address and the `node`
+// field is the peer key (see `designs/daemon-locator-terminology.md`).
+// Field and function names predate that terminology and are kept stable.
+
 const numberPattern = /^[0-9a-f]{64}$/;
 const idPattern = /^(?<number>[0-9a-f]{64}):(?<node>[0-9a-f]{64})$/;
 
 /**
- * @param {string} allegedNumber - The formula number or node identifier to test.
+ * @param {string} allegedNumber - The formula address or peer key to test.
  */
 export const isValidNumber = allegedNumber =>
   typeof allegedNumber === 'string' && numberPattern.test(allegedNumber);
 
 /**
- * @param {string} allegedNumber - The formula number or node identifier to test.
+ * @param {string} allegedNumber - The formula address or peer key to test.
  */
 export const assertValidNumber = allegedNumber => {
   if (!isValidNumber(allegedNumber)) {
@@ -24,6 +29,8 @@ export const assertValidNumber = allegedNumber => {
 };
 
 /**
+ * Assert a formula address (a 64-char hex content or capability address).
+ *
  * @param {string} allegedFormulaNumber
  * @returns {asserts allegedFormulaNumber is FormulaNumber}
  */
@@ -34,6 +41,8 @@ export const assertFormulaNumber = allegedFormulaNumber => {
 };
 
 /**
+ * Assert a peer key (a 64-char hex Ed25519 public key).
+ *
  * @param {string} allegedNodeNumber
  * @returns {asserts allegedNodeNumber is NodeNumber}
  */
@@ -44,6 +53,8 @@ export const assertNodeNumber = allegedNodeNumber => {
 };
 
 /**
+ * Assert a formula key, `{formulaAddress}:{peerKey}`.
+ *
  * @param {string} id
  * @param {string} [petName]
  * @returns {asserts id is FormulaIdentifier}
@@ -59,6 +70,9 @@ export const assertValidId = (id, petName) => {
 };
 
 /**
+ * Split a formula key into its formula address (`number`) and peer key
+ * (`node`).
+ *
  * @param {string} id
  * @returns {ParseIdRecord}
  */
@@ -88,6 +102,8 @@ export const parseId = id => {
 };
 
 /**
+ * Join a formula address (`number`) and peer key (`node`) into a formula key.
+ *
  * @param {IdRecord} formulaRecord
  * @returns {FormulaIdentifier}
  */
