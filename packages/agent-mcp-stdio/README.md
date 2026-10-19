@@ -46,6 +46,78 @@ environment. Claude Code merges its own environment into a stdio server's
 `claude`'s environment would reach the MCP child. `@endo/claude`'s
 `runConfinedTurn` composes the two.
 
+## Streamable HTTP (`endo-mcp-http`)
+
+`endo-mcp-http` is the multi-tenant shape, the Model Context Protocol
+termination of [designs/endo-gateway-mcp.md](../../designs/endo-gateway-mcp.md).
+It holds one daemon connection and serves `POST /mcp` for every guest reachable
+from the root host, selecting the guest per request by its bearer:
+
+```json
+{
+  "mcpServers": {
+    "<agent-pet-name>": {
+      "url": "https://<gateway-host>/mcp",
+      "headers": { "Authorization": "Bearer <64-hex formula id>" }
+    }
+  }
+}
+```
+
+The bearer is the guest's formula id, in the same forms
+`ENDO_GUEST_FORMULA_ID` accepts. Knowledge of it is the authorization: treat it
+like an SSH key. The bearer resolves through `resolveGuest` on every request,
+so a formula that is not a guest facet (a host in particular) is refused exactly
+as an unknown one, with `401`, and deleting a guest revokes its bearer at once.
+Failed authentications advance a rate limiter of the listener's own, made by
+the daemon gateway's `makeRateLimiter` (`@endo/daemon/rate-limiter.js`) but not
+shared with it. Each failure holds that client off for one more second,
+counted from the end of any hold already running. A held-off client gets `429`
+with `Retry-After`, even with a good bearer, and a refused attempt is not
+counted, so serial guessing is held to one attempt per second. The limiter is
+consulted before the bearer is resolved, so requests sent in parallel all pass
+it before any of them fails; their failures then add up, holding the client off
+for one second per failure.
+
+The limiter keys on the socket's peer address. Behind a reverse proxy that is
+the proxy's address, so one failing client would hold back every client of the
+proxy. When every request arrives through a proxy that appends the client to
+`X-Forwarded-For`, set `ENDO_MCP_HTTP_TRUST_PROXY=1` to key on that header's
+last entry instead. Do not set it when clients can reach the listener directly,
+since they could then name any address they like.
+
+The transport is stateless. Each `POST` carries one JSON-RPC message, and no
+`Mcp-Session-Id` is issued. A browser page served from an origin listed in
+`ENDO_MCP_HTTP_ALLOWED_ORIGINS` can call it: every reply to that origin carries
+`Access-Control-Allow-Origin`, and its preflight is answered. The replies are:
+
+- `200` with an `application/json` JSON-RPC reply, including a JSON-RPC error
+  for a well-formed request;
+- `202` with no body for a notification or a response;
+- `400` with a JSON-RPC error whose `id` is `null`: a body that does not
+  parse, a batch, or a malformed request whose `id` is missing or invalid (a
+  malformed request with a valid `id` gets its error with `200`);
+- `401` for a missing, malformed, or unknown bearer;
+- `204` with CORS headers for a browser's `OPTIONS` preflight from an allowed
+  `Origin`;
+- `403` for a request whose `Origin` is not listed in
+  `ENDO_MCP_HTTP_ALLOWED_ORIGINS` (a request with no `Origin` is accepted);
+- `404` for any path but `/mcp`;
+- `405` for any other method, `GET` included;
+- `413` with `Connection: close` for a body over 4 MiB;
+- `415` for a `Content-Type` other than `application/json`;
+- `429` with `Retry-After` for a rate-limited client.
+
+To run it, start the daemon (`endo start`), then run `endo-mcp-http` as the
+same user. It finds the daemon the way `endo` does, honoring `ENDO_SOCK`, and
+exits `1` when it cannot connect or when the daemon connection drops. It
+listens on `ENDO_MCP_HTTP_HOST` (default `127.0.0.1`) and `ENDO_MCP_HTTP_PORT`
+(default `8921`), and stops on `SIGINT` or `SIGTERM`. The listener speaks
+plaintext HTTP. Put a TLS-terminating reverse proxy in front of it before
+exposing it beyond loopback. `makeMcpHttpHandler` is the same route as a
+`(request, response) => Promise<boolean>` handler, for mounting beside other
+routes.
+
 ## Tool catalog
 
 The catalog is static: `makeAgentTools()` in `src/agent-interface.js` declares

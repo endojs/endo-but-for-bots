@@ -16,6 +16,7 @@
   },
   "type": "module",
   "bin": {
+    "endo-mcp-http": "./bin/endo-mcp-http.js",
     "endo-mcp-stdio": "./bin/endo-mcp-stdio.js"
   },
   "exports": {
