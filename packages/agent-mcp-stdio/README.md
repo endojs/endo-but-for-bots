@@ -46,6 +46,42 @@ environment. Claude Code merges its own environment into a stdio server's
 `claude`'s environment would reach the MCP child. `@endo/claude`'s
 `runConfinedTurn` composes the two.
 
+## Streamable HTTP (`endo-mcp-http`)
+
+`endo-mcp-http` is the multi-tenant shape, the Model Context Protocol
+termination of [designs/endo-gateway-mcp.md](../../designs/endo-gateway-mcp.md).
+It holds one daemon connection and serves `POST /mcp` for every guest reachable
+from the root host, selecting the guest per request by its bearer:
+
+```json
+{
+  "mcpServers": {
+    "<agent-pet-name>": {
+      "url": "https://<gateway-host>/mcp",
+      "headers": { "Authorization": "Bearer <64-hex formula id>" }
+    }
+  }
+}
+```
+
+The bearer is the guest's formula id, in the same forms
+`ENDO_GUEST_FORMULA_ID` accepts. Knowledge of it is the authorization: treat it
+like an SSH key. The bearer resolves through `resolveGuest`, so a formula that
+is not a guest facet (a host in particular) is refused exactly as an unknown
+one, with `401`. Failed authentications advance the daemon gateway's per-address
+rate limiter (`@endo/daemon/rate-limiter.js`), and a limited address gets `429`
+with `Retry-After`.
+
+The transport is stateless. Each `POST` carries one JSON-RPC message and gets
+one `application/json` reply, or `202` for a notification. No `Mcp-Session-Id`
+is issued, `GET` gets `405`, and a request whose `Origin` is not listed in
+`ENDO_MCP_HTTP_ALLOWED_ORIGINS` gets `403`. The listener speaks plaintext HTTP
+on `ENDO_MCP_HTTP_HOST` (default `127.0.0.1`) and `ENDO_MCP_HTTP_PORT`
+(default `8921`). Put a TLS-terminating reverse proxy in front of it before
+exposing it beyond loopback. `makeMcpHttpHandler` is the same route as a
+`(request, response) => Promise<boolean>` handler, for mounting beside other
+routes.
+
 ## Tool catalog
 
 The catalog is static: `makeAgentTools()` in `src/agent-interface.js` declares

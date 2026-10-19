@@ -67,7 +67,7 @@ export const FORMULA_ID_ENV = 'ENDO_GUEST_FORMULA_ID';
  * @param {unknown} value
  * @returns {value is string}
  */
-const isFormulaIdentifier = value => {
+export const isFormulaIdentifier = value => {
   if (typeof value !== 'string') {
     return false;
   }
@@ -81,6 +81,7 @@ const isFormulaIdentifier = value => {
     return false;
   }
 };
+harden(isFormulaIdentifier);
 
 /**
  * Read and validate the guest formula identifier from an environment.

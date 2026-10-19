@@ -3,9 +3,39 @@
 | | |
 |---|---|
 | **Created** | 2026-05-29 |
-| **Updated** | 2026-05-29 |
+| **Updated** | 2026-10-19 |
 | **Author** | kriscendobot (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
+
+## Status
+
+In progress. Phase 1 has landed in a different shape: `@endo/agent-tools` is
+the provider-independent catalog, and its transport-free MCP projection
+(`src/adapters/mcp.js`) answers JSON-RPC against one bound guest. The
+guest-agent tool declarations live in `@endo/agent-mcp-stdio`
+([endo-guest-stdio-mcp](endo-guest-stdio-mcp.md)).
+
+Phase 3 has landed as `endo-mcp-http` in `@endo/agent-mcp-stdio`
+(`src/http.js`). It serves `POST /mcp` over the stateless streamable-HTTP
+transport. The bearer is the guest's formula id, resolved per request through
+`resolveGuest`, which refuses any facet that is not a guest. Failed
+authentications advance the daemon gateway's per-address rate limiter, now
+`@endo/daemon/rate-limiter.js`. Two deviations from the text below:
+
+- **Its own listener, not the daemon gateway's port.** The guest declarations
+  live in `@endo/agent-mcp-stdio`, which depends on `@endo/daemon`. So
+  `packages/daemon/src/gateway-mcp.js` cannot import them without a package
+  cycle. `endo-mcp-http` holds an ordinary daemon session and listens on its
+  own port (default 8921, beside the gateway's 8920). The reverse proxy routes
+  `/mcp` to it. `makeMcpHttpHandler` is a mountable route, so it can move onto
+  the shared port once the declarations move below the daemon.
+- **No bearer table (Phase 2).** The daemon already resolves a formula id to
+  its facet, so no `publishAgent` table is needed while the termination is
+  per-user. The table belongs with the per-host Gateway of
+  [gateway-package](gateway-package.md), which is still Proposed.
+
+Not yet built: SSE streaming and `notifications/progress` /
+`notifications/cancelled`, and the Chat-side UI (Phase 4).
 
 ## What is the Problem Being Solved?
 

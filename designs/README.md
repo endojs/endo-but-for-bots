@@ -519,7 +519,7 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | In Progress |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
-| [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
+| [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-10-19 | In Progress |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | In Progress |
 | [endo-claude-inference-backends](endo-claude-inference-backends.md) | 2026-09-28 | 2026-09-30 | Draft |
 | [endo-guest-stdio-mcp](endo-guest-stdio-mcp.md) | 2026-09-08 | 2026-09-24 | In Progress |
