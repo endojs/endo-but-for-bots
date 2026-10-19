@@ -381,7 +381,7 @@ LLM-agent stack).*
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | 2026-07-10 | 2026-07-10 | In Progress |
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
-| [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
+| [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-10-19 | Complete |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |

@@ -14,6 +14,7 @@ import * as sendingMessages from './sending-messages.js';
 import * as namesInTransit from './names-in-transit.js';
 import * as mailboxesAreSymmetric from './mailboxes-are-symmetric.js';
 import * as inspectFormula from './inspect-formula.js';
+import * as mountFiles from './mount-files.js';
 
 const testSerial = netListenAllowed ? test.serial : test.serial.skip;
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'endo-cli-'));
@@ -107,4 +108,9 @@ testSerial(
     execaDemo,
     withContext(daemonContext, counterExample.context)(inspectFormula.section),
   ),
+);
+
+testSerial(
+  'mount-files',
+  makeSectionTest(execaDemo, withContext(daemonContext)(mountFiles.section)),
 );
