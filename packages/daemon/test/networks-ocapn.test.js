@@ -8,6 +8,10 @@ import test from 'ava';
 import crypto from 'crypto';
 import { E, Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
+import { makeOcapn } from '@endo/ocapn';
+import { cborCodec } from '@endo/ocapn/cbor';
+import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
+import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
 
 import {
   make as makeOcapnNetwork,
@@ -452,4 +456,58 @@ test('agent identity persists across transport restart, even though OCapN sessio
     locA1.designator,
     'OCapN designator is ephemeral and rotates across restart',
   );
+});
+
+/**
+ * Dial `address` with a bare OCapN-Noise client and fetch the remote
+ * daemon's peer entry-point object, the way `connect` does before the
+ * agent-binding check.
+ *
+ * @param {string} address
+ */
+const fetchPeerEntry = async address => {
+  const codec = cborCodec;
+  const network = makeOcapnNoiseNetwork({ codec });
+  network.addSigningKeys(network.generateSigningKeys());
+  await network.addTransport(makeTcpTransport({ host: '127.0.0.1', port: 0 }));
+  const client = await makeOcapn({
+    codec,
+    network,
+    locator: new Map(),
+    debugLabel: 'peer-entry-dialer',
+  });
+  const remoteLocation = JSON.parse(new URL(address).searchParams.get('loc'));
+  const peerEntry = await client.enlivenSturdyRef(
+    client.makeSturdyRef(remoteLocation, 'endo-peer-entry'),
+  );
+  return { peerEntry, shutdown: () => client.shutdown() };
+};
+
+test('registered agent keys are served through the peer entry point', async t => {
+  t.timeout(60_000);
+  const context = makeMockContext();
+  t.teardown(() => context.cancel());
+  const { powers, nodeId } = makeMockPowers('A');
+  const service = await makeOcapnNetwork(powers, context);
+  const [address] = await E(service).addresses();
+
+  const { peerEntry, shutdown } = await fetchPeerEntry(address);
+  t.teardown(shutdown);
+
+  const guestKey = toHex(generateEd25519Keypair().publicKey);
+
+  // The daemon's own node is served by default; other agents only once
+  // registered.
+  t.true(await E(peerEntry).servesAgent(nodeId));
+  t.false(await E(peerEntry).servesAgent(guestKey));
+
+  await E(service).registerAgentKey(guestKey, 'guest-formula-id');
+  t.true(await E(peerEntry).servesAgent(guestKey));
+
+  await E(service).unregisterAgentKey(guestKey);
+  t.false(await E(peerEntry).servesAgent(guestKey));
+
+  // The daemon's own node cannot be unregistered.
+  await E(service).unregisterAgentKey(nodeId);
+  t.true(await E(peerEntry).servesAgent(nodeId));
 });

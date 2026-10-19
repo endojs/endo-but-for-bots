@@ -49,9 +49,9 @@ import { fromHex, toHex } from '../hex.js';
  * application protocol — `EndoGreeter.hello`, `EndoGateway.provide`,
  * `EndoGateway.followRetentionSet` — rides on top of the OCapN session
  * unchanged, exactly as it rode on CapTP before. This module conforms
- * to the existing `EndoNetwork` interface (`addresses`, `supports`,
- * `connect`) and needs no daemon-core changes to be discovered through
- * `@nets`.
+ * to the `EndoNetwork` interface (`addresses`, `supports`, `connect`,
+ * and the optional `registerAgentKey`/`unregisterAgentKey`) and is
+ * discovered through `@nets`.
  */
 
 // The well-known OCapN swissnum under which a daemon publishes its peer
@@ -172,6 +172,7 @@ const EndoPeerEntryInterface = M.interface('EndoPeerEntry', {
   getNodeId: M.call().returns(M.string()),
   getAgentBinding: M.call().returns(M.promise()),
   getGreeter: M.call().returns(M.any()),
+  servesAgent: M.call(M.string()).returns(M.boolean()),
   help: M.call().returns(M.string()),
 });
 
@@ -236,6 +237,14 @@ export const make = async (powers, context) => {
     signature: bindingSignature,
   });
 
+  // Public keys of the local agents this network carries, registered by
+  // the daemon for every agent whose `@nets` holds this network. The
+  // daemon's own node is always served. A peer that holds a locator
+  // naming an agent key can ask `servesAgent` whether this daemon hosts
+  // that agent; agents whose `@nets` omits this network stay undisclosed.
+  /** @type {Map<string, string | undefined>} */
+  const agentIdForKey = new Map([[String(localNodeId), undefined]]);
+
   // The daemon's peer entry-point capability: the single object a remote
   // peer reaches over an OCapN session by fetching PEER_ENTRY_SWISSNUM
   // through the peer's bootstrap. It reports this daemon's node identity,
@@ -246,8 +255,9 @@ export const make = async (powers, context) => {
     getNodeId: () => localNodeId,
     getAgentBinding: async () => agentBinding,
     getGreeter: () => localGreeter,
+    servesAgent: publicKey => agentIdForKey.has(publicKey),
     help: () =>
-      `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
+      `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake; servesAgent(publicKey) reports whether this daemon carries the agent with that public key on this network.`,
   });
 
   // The OCapN locator (a "nonce locator"): the table of local
@@ -416,10 +426,27 @@ export const make = async (powers, context) => {
     );
   };
 
+  /**
+   * @param {string} publicKey
+   * @param {string} agentId
+   */
+  const registerAgentKey = (publicKey, agentId) => {
+    agentIdForKey.set(publicKey, agentId);
+  };
+
+  /** @param {string} publicKey */
+  const unregisterAgentKey = publicKey => {
+    if (publicKey !== String(localNodeId)) {
+      agentIdForKey.delete(publicKey);
+    }
+  };
+
   return Far('OcapnNoiseService', {
     addresses: () => harden([address]),
     supports,
     connect,
+    registerAgentKey,
+    unregisterAgentKey,
   });
 };
 harden(make);
