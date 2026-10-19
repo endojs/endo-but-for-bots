@@ -24,6 +24,8 @@ const { document: testDocument } = createDOM();
  *   storedValues: Map<string, unknown>,
  * }}
  */
+const WORK_AGENT_ID = `${'a'.repeat(64)}:${'b'.repeat(64)}`;
+
 const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
   /** @type {Array<{method: string, args: unknown[]}>} */
   const calls = [];
@@ -69,6 +71,10 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
   });
 
   const powers = Far('MockPowers', {
+    identify(...path) {
+      calls.push({ method: 'identify', path });
+      return path.join('/') === 'work-agent' ? WORK_AGENT_ID : undefined;
+    },
     lookup(pathOrFirst, ...rest) {
       let path;
       if (Array.isArray(pathOrFirst)) {
@@ -273,6 +279,9 @@ test.serial('right-click home space shows Edit but not Delete', async t => {
   t.is($edit.style.display, '', 'edit is visible');
   // Delete should be hidden (data-menu-scope="delible")
   t.is($delete.style.display, 'none', 'delete is hidden for home');
+  // The host is not an MCP agent: the termination refuses host bearers.
+  const $mcp = $menu.querySelector('[data-action="mcp"]');
+  t.is($mcp.style.display, 'none', 'MCP is hidden for home');
 });
 
 // ── setActivePath: navigation that did not come from the gutter ──
@@ -379,6 +388,66 @@ test.serial('right-click regular space shows both Edit and Delete', async t => {
 
   t.is($edit.style.display, '', 'edit is visible for regular space');
   t.is($delete.style.display, '', 'delete is visible for regular space');
+  t.is(
+    $menu.querySelector('[data-action="mcp"]').style.display,
+    '',
+    'MCP is visible for regular space',
+  );
+});
+
+test.serial('the MCP menu item shows the agent bearer config', async t => {
+  const storedValues = new Map();
+  storedValues.set(
+    'spaces/1',
+    harden({
+      id: '1',
+      name: 'Work',
+      icon: '🧙',
+      profilePath: ['work-agent'],
+      mode: 'inbox',
+    }),
+  );
+  const { $container, $editModalContainer, calls } = await setupGutter({
+    storedValues,
+  });
+  const $mcpModalContainer = $editModalContainer.nextElementSibling;
+
+  const event = new Event('contextmenu', { bubbles: true });
+  // @ts-expect-error
+  event.clientX = 50;
+  // @ts-expect-error
+  event.clientY = 50;
+  $container
+    .querySelector('.space-item[data-space-id="1"]')
+    .dispatchEvent(event);
+  await waitFor(
+    () => !!$container.querySelector('.space-context-menu.visible'),
+  );
+  $container.querySelector('[data-action="mcp"]').click();
+
+  await waitFor(() => !!$mcpModalContainer.querySelector('.mcp-config-block'));
+  t.deepEqual(
+    calls.filter(c => c.method === 'identify').map(c => c.path),
+    [['work-agent']],
+  );
+  const config = JSON.parse(
+    $mcpModalContainer.querySelector('.mcp-config-block').textContent,
+  );
+  t.is(
+    config.mcpServers['work-agent'].headers.Authorization,
+    `Bearer ${WORK_AGENT_ID}`,
+  );
+  t.true(config.mcpServers['work-agent'].url.endsWith('/mcp'));
+});
+
+test.serial('the Add agent button opens the new-profile form', async t => {
+  const { $container, $modalContainer } = await setupGutter();
+  const $button = $container.querySelector('.add-agent-button');
+  t.truthy($button, 'Add agent button exists');
+  $button.click();
+  await waitFor(() => !!$modalContainer.querySelector('#handle-name'));
+  t.truthy($modalContainer.querySelector('#handle-name'));
+  t.is($modalContainer.style.display, 'flex');
 });
 
 // ── Test 3: Edit home space modal omits Name field ──

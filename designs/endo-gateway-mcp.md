@@ -5,11 +5,11 @@
 | **Created** | 2026-05-29 |
 | **Updated** | 2026-10-19 |
 | **Author** | kriscendobot (prompted) |
-| **Status** | In Progress |
+| **Status** | Complete |
 
 ## Status
 
-In progress. Phase 1 has landed in a different shape: `@endo/agent-tools` is
+Complete. Phase 1 has landed in a different shape: `@endo/agent-tools` is
 the provider-independent catalog, and its transport-free MCP projection
 (`src/adapters/mcp.js`) answers JSON-RPC against one bound guest. The
 guest-agent tool declarations live in `@endo/agent-mcp-stdio`
@@ -34,8 +34,26 @@ authentications advance the daemon gateway's per-address rate limiter, now
   per-user. The table belongs with the per-host Gateway of
   [gateway-package](gateway-package.md), which is still Proposed.
 
-Not yet built: SSE streaming and `notifications/progress` /
-`notifications/cancelled`, and the Chat-side UI (Phase 4).
+Phase 4 has landed in `@endo/chat`, with two deviations of its own:
+
+- **"+ Add agent"** is a 🤖 button under the gutter's "+". It opens the
+  add-space modal directly on its "New Profile" form, which creates a guest
+  and its space. It does not route to the Lal manager's form: an MCP client
+  brings its own model, so the agent it drives is a bare guest, and a Lal
+  agent would add an inference loop the client never uses. The fuller
+  creation wizard is [chat-inventory-create-menu](chat-inventory-create-menu.md),
+  which subsumes this affordance.
+- **"MCP" is an item on each space's context menu**, not a tab: the
+  space-home view has no tabs to add one to. It opens a modal
+  (`mcp-config-modal.js`) that looks the agent up with
+  `E(powers).identify(...profilePath)` and shows the `mcpServers` block
+  (`url` is the page origin plus `/mcp`), a Copy button, and the warning
+  below. The home space hides the item, since the termination refuses the
+  host's bearer. `test/e2e/mcp-config.spec.ts` is the Playwright smoke test.
+
+Streaming is out of scope (see § Streaming, cancellation, and
+concurrency). The handler stays on its own listener for the package-cycle
+reason above.
 
 ## What is the Problem Being Solved?
 
@@ -301,6 +319,20 @@ adapter, which calls the cancel API on the underlying eventual-send
 (the daemon already exposes a `cancel` channel for outstanding sends;
 the adapter wires it through).
 
+**Revised (2026-10-19): streaming and cancellation are out of scope.**
+Neither has anything to carry today. A `tools/call` is one eventual send
+that settles once, so there is no intermediate state to report as
+`notifications/progress`. The daemon has no API that cancels an
+outstanding send: its `cancel` tears down a formula (and its worker), which
+is far more than "stop this call". And under Decision 8 each `POST` is
+stateless, so a `notifications/cancelled` arriving on a later `POST` has no
+session to find the earlier request in. The termination therefore answers
+every request with one `application/json` body, acknowledges
+`notifications/cancelled` with `202` like any notification, and refuses
+`GET /mcp` with `405`. Streaming becomes worth building when a tool can
+report progress or a send can be cancelled, and it then needs the session
+table Decision 8 sets aside; both are separate designs.
+
 ## The MCP Adapter (Refactor vs. Export Recommendation)
 
 The MCP adapter is the piece that takes a JSON-RPC `tools/call` and
@@ -561,7 +593,8 @@ MCP while keeping the agent alive".
 Add `packages/daemon/src/gateway-mcp.js` and wire it into the
 Gateway's HTTP router on `/mcp`.
 Implement the JSON-RPC initialize / tools/list / tools/call surface
-and the SSE event stream.
+and the SSE event stream. (Revised: no SSE stream; see § Streaming,
+cancellation, and concurrency.)
 Reuse the per-IP rate limiter from `web-server-node.js`.
 Add `packages/daemon/test/gateway-mcp.test.js`, `test.serial` per the
 gateway-test convention, exercising auth failure, tool listing, a

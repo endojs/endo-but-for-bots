@@ -18,6 +18,7 @@ import {
 } from './setup-preact-container.js';
 import { createAddSpaceModal } from './add-space-modal.js';
 import { createEditSpaceModal } from './edit-space-modal.js';
+import { createMcpConfigModal, mcpUrlForOrigin } from './mcp-config-modal.js';
 
 /** @type {ReadonlySet<string>} */
 const KNOWN_MODES = new Set([
@@ -280,6 +281,10 @@ harden(readBootDefaultSpace);
  * @property {(id: string, on: boolean) => void} setDeviceDefault
  * @property {(id: string, on: boolean) => void} setSystemDefault
  * @property {() => void} addSpace
+ * @property {() => void} addAgent - open the add-space modal on the
+ *   new-profile form
+ * @property {(id: string) => void} showMcp - show the space's MCP client
+ *   configuration
  */
 
 /**
@@ -333,12 +338,14 @@ harden(SpaceItem);
  * @param {(id: string) => void} props.onDelete
  * @param {(id: string, on: boolean) => void} props.onSetDeviceDefault
  * @param {(id: string, on: boolean) => void} props.onSetSystemDefault
+ * @param {(id: string) => void} props.onShowMcp
  */
 const SpaceContextMenu = ({
   menu,
   onClose,
   onEdit,
   onDelete,
+  onShowMcp,
   onSetDeviceDefault,
   onSetSystemDefault,
 }) =>
@@ -422,6 +429,21 @@ const SpaceContextMenu = ({
         },
         h('span', { class: 'context-menu-icon' }, '✏️'),
         h('span', null, 'Edit Space'),
+      ),
+      h(
+        'button',
+        {
+          class: 'context-menu-item',
+          'data-action': 'mcp',
+          // The home space is the host, which the MCP termination refuses.
+          style: menu.isHome ? 'display: none;' : '',
+          onClick: () => {
+            onClose();
+            onShowMcp(menu.spaceId);
+          },
+        },
+        h('span', { class: 'context-menu-icon' }, '🔌'),
+        h('span', null, 'MCP'),
       ),
       h(
         'button',
@@ -511,6 +533,19 @@ const SpacesGutterView = ({ controller }) => {
             '+',
           ),
         ),
+        h(
+          'div',
+          { class: 'space-item add-agent-item', title: 'Add agent' },
+          h(
+            'button',
+            {
+              class: 'add-agent-button',
+              'aria-label': 'Add agent',
+              onClick: () => controller.addAgent(),
+            },
+            '🤖',
+          ),
+        ),
       ),
     ),
     menu
@@ -521,6 +556,7 @@ const SpacesGutterView = ({ controller }) => {
           onDelete: controller.deleteSpace,
           onSetDeviceDefault: controller.setDeviceDefault,
           onSetSystemDefault: controller.setSystemDefault,
+          onShowMcp: controller.showMcp,
         })
       : null,
   );
@@ -1008,6 +1044,15 @@ export const createSpacesGutter = ({
     setDeviceDefault: setDeviceDefaultSpace,
     setSystemDefault: setSystemDefaultSpace,
     addSpace: () => showAddSpaceDialog(),
+    addAgent: () => addSpaceModal.show({ mode: 'new-agent' }),
+    showMcp: id => {
+      const space = spacesMap.get(id);
+      if (space) {
+        mcpConfigModal
+          .show({ name: space.name, profilePath: space.profilePath })
+          .catch(window.reportError);
+      }
+    },
   };
 
   /**
@@ -1147,6 +1192,16 @@ export const createSpacesGutter = ({
     onClose: () => {
       // Modal closed
     },
+  });
+
+  // The MCP modal gets its own overlay container for the same reason.
+  const $mcpModalContainer = document.createElement('div');
+  $mcpModalContainer.className = 'spaces-modal-overlay';
+  $editModalContainer.after($mcpModalContainer);
+  const mcpConfigModal = createMcpConfigModal({
+    $container: $mcpModalContainer,
+    identify: (...path) => E(powers).identify(...path),
+    url: mcpUrlForOrigin(window.location.origin),
   });
 
   /**
