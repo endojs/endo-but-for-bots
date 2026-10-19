@@ -18,7 +18,8 @@ guest-agent tool declarations live in `@endo/agent-mcp-stdio`
 Phase 3 has landed as `endo-mcp-http` in `@endo/agent-mcp-stdio`
 (`src/http.js`). It serves `POST /mcp` over the stateless streamable-HTTP
 transport. The bearer is the guest's formula id, resolved per request through
-`resolveGuest`, which refuses any facet that is not a guest. Failed
+`resolveGuest`, which refuses any facet that is not a guest; nothing is
+cached, so deleting the agent revokes its bearer on the next request. Failed
 authentications advance a per-client rate limiter of the listener's own, made
 by the daemon gateway's `makeRateLimiter` (now `@endo/daemon/rate-limiter.js`)
 but not shared with it. Behind a trusted proxy (`ENDO_MCP_HTTP_TRUST_PROXY=1`)
