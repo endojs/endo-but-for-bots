@@ -37,6 +37,7 @@ import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
 import { makeGrantDetails } from './grant-tracker.js';
 import { makeHeartbeat } from './heartbeat.js';
+import { makeSendQueue } from './send-queue.js';
 
 /**
  * @typedef {any} LocalResolver
@@ -669,6 +670,8 @@ const makeBootstrapObject = (
  * @property {OcapnTable} ocapnTable
  * @property {(message: object) => void} sendMessage
  * @property {(observer: MessageObserver) => () => void} subscribeMessages
+ * @property {import('./send-queue.js').SendQueue} sendQueue the session's
+ *   outbound queue and epoch, for fault injection
  */
 
 /**
@@ -753,6 +756,17 @@ export const makeOcapn = (
   /** @type {import('./heartbeat.js').Heartbeat | undefined} */
   let heartbeat;
 
+  // Outbound operations pass through the session's queue, which holds
+  // them while the transport instance's write is stalled.
+  const sendQueue = makeSendQueue({
+    write: bytes => connection.write(bytes),
+    onError: error => {
+      logger.info(`send queue write failed`, error);
+      // eslint-disable-next-line no-use-before-define
+      abort(error);
+    },
+  });
+
   const onReject = reason => {
     logger.info(`onReject`, reason);
   };
@@ -763,6 +777,7 @@ export const makeOcapn = (
   const abort = reason => {
     logger.info(`client received abort`, reason);
     if (heartbeat) heartbeat.stop();
+    sendQueue.close();
     const disconnectError = harden(
       reason
         ? Error('Session disconnected', { cause: reason })
@@ -1352,7 +1367,7 @@ export const makeOcapn = (
   function serializeAndSendMessage(message) {
     try {
       const bytes = writeOcapnMessage(message);
-      connection.write(bytes);
+      sendQueue.write(bytes);
     } catch (error) {
       logger.info(`Message serialization error`, error);
       throw error;
@@ -1398,6 +1413,7 @@ export const makeOcapn = (
     heartbeat = makeHeartbeat({
       options: heartbeatOptions,
       send,
+      getEpoch: sendQueue.getEpoch,
       onLoss: reason => {
         logger.info(`heartbeat loss`, reason);
         abort(reason);
@@ -1466,6 +1482,7 @@ export const makeOcapn = (
       ocapnTable,
       sendMessage: send,
       subscribeMessages,
+      sendQueue,
     };
   }
   return harden(ocapn);
