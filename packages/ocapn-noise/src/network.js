@@ -780,6 +780,8 @@ export const makeOcapnNoiseNetwork = ({
    * @param {ByteStream} params.stream
    * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
    * @param {(bytes: Uint8Array) => Uint8Array} params.decrypt
+   * @param {Uint8Array} params.handshakeHash - Noise transcript hash,
+   *   mixed into `sessionId` so each connection gets a fresh id
    * @param {() => void} params.onClose - Called when the session closes
    *   (peer disconnect, local `close()`, or stream end). Used by the
    *   network to forget the entry from `active` so a future
@@ -797,6 +799,7 @@ export const makeOcapnNoiseNetwork = ({
     stream,
     encrypt,
     decrypt,
+    handshakeHash,
     onClose,
   }) => {
     let closed = false;
@@ -877,9 +880,14 @@ export const makeOcapnNoiseNetwork = ({
     });
 
     const peerEd25519Buffer = peerEd25519.slice();
+    // The long-term keys double as session keys here, so the peer ids
+    // alone would give every connection between the same two peers the
+    // same id. Handoff replay state (`nextHandoffCount`,
+    // `usedGiftHandoffs`) is per connection, so the id must be too.
     const sessionId = makeSessionId(
       localKey.keyPair.publicKey.id,
       cryptography.makeOcapnPublicKey(peerEd25519Buffer).id,
+      handshakeHash,
     );
 
     return harden({
@@ -999,6 +1007,7 @@ export const makeOcapnNoiseNetwork = ({
         stream,
         encrypt,
         decrypt,
+        handshakeHash,
         onClose: () => {
           if (candidate) forgetActive(peerId, candidate);
         },
@@ -1196,6 +1205,7 @@ export const makeOcapnNoiseNetwork = ({
         stream,
         encrypt,
         decrypt,
+        handshakeHash,
         onClose: () => {
           if (candidate) forgetActive(initiatorKeyHex, candidate);
         },
