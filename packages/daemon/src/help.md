@@ -23,12 +23,13 @@ Check if a pet name exists in this directory.
 
 Get the formula identifier for a pet name path.
 Returns undefined if the name doesn't exist.
-Formula identifiers are internal references used by Endo.
+A formula identifier is a formula key, `{formulaAddress}:{peerKey}`, an internal reference used by Endo.
 
 ## locate(...petNamePath) -> Promise<string | undefined>
 
 Get a locator string for a pet name path.
-Locators include the formula type and can be used for reverse lookups.
+A locator is an `endo://{peerKey}/{formulaAddress}` URL carrying the formula type and the agent's current connection hints.
+Locators can be shared with remote peers and used for reverse lookups.
 
 ## reverseLocate(locator) -> Promise<string[]>
 
@@ -854,8 +855,8 @@ options.followSymlinks: boolean — Let `**` descend through directory symlinks 
 (default false). This is `rg -L`, and like it, the sweep can become very large: in a
 workspace checkout every node_modules link points back into the tree, so the walk
 enumerates every route to every package rather than every file.
-Example: glob("**/*.js") → all JavaScript files at any depth.
-Example: glob("src/*") → the immediate children of src.
+Example: glob("**/*.js") -> all JavaScript files at any depth.
+Example: glob("src/*") -> the immediate children of src.
 
 ## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -874,8 +875,8 @@ Each matching line yields one { file, line, text } record: file is the mount-fac
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
 (CRLF normalization). A path that is denied, escapes the mount, resolves into a denied
 directory, is a directory, or cannot be read is skipped silently.
-Example: grep("TODO", await glob("src/**/*.js")) → every TODO line under src.
-Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+Example: grep("TODO", await glob("src/**/*.js")) -> every TODO line under src.
+Example: grep("^export") -> up to 1000 exported-symbol lines across the whole mount.
 
 ## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -892,7 +893,7 @@ options.maxResults: number — Non-negative safe-integer cap on match records (d
 options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
 receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Example: glorp("src/**/*.js", "TODO") → every TODO line in a .js file under src.
+Example: glorp("src/**/*.js", "TODO") -> every TODO line in a .js file under src.
 
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 

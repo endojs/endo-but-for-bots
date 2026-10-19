@@ -12,9 +12,9 @@ export const helpTextEntries = harden([
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("lookup") returns documentation for the lookup method',
       has: 'has(...petNamePath) -> Promise<boolean>\nCheck if a pet name exists in this directory.\n- has("counter") checks if "counter" exists\n- has("subdir", "value") checks if "value" exists in subdirectory "subdir"',
       identify:
-        "identify(...petNamePath) -> Promise<string | undefined>\nGet the formula identifier for a pet name path.\nReturns undefined if the name doesn't exist.\nFormula identifiers are internal references used by Endo.",
+        "identify(...petNamePath) -> Promise<string | undefined>\nGet the formula identifier for a pet name path.\nReturns undefined if the name doesn't exist.\nA formula identifier is a formula key, `{formulaAddress}:{peerKey}`, an internal reference used by Endo.",
       locate:
-        'locate(...petNamePath) -> Promise<string | undefined>\nGet a locator string for a pet name path.\nLocators include the formula type and can be used for reverse lookups.',
+        "locate(...petNamePath) -> Promise<string | undefined>\nGet a locator string for a pet name path.\nA locator is an `endo://{peerKey}/{formulaAddress}` URL carrying the formula type and the agent's current connection hints.\nLocators can be shared with remote peers and used for reverse lookups.",
       reverseLocate:
         'reverseLocate(locator) -> Promise<string[]>\nFind all pet names that refer to a given locator.\nReturns an array of names (may be empty if no names exist).',
       followLocatorNameChanges:
