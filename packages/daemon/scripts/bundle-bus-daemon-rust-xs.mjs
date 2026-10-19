@@ -42,15 +42,21 @@ const EXCLUDED_PACKAGES = new Set([
   // never executes at runtime — it only needs to be elided from
   // the bundle's compartment graph.
   'better-sqlite3',
-  // @endo/git shells out to `git` and @endo/host-spawner spawns
-  // commands, so both statically import node:child_process (and git
-  // eight more node: builtins) that XS cannot resolve, and neither
-  // could run under XS anyway.  bus-manager-rust-xs.js supplies no
-  // `hostTools` power, so manager.js/host.js reach refusing stand-ins
-  // instead of these imports and the packages only need eliding from
-  // the compartment graph.
+  // @endo/git shells out to `git`, so it statically imports
+  // node:child_process (and eight more node: builtins) that XS cannot
+  // resolve, and it could not run under XS anyway.
+  // bus-manager-rust-xs.js supplies no `hostTools` power, so
+  // manager.js/host.js reach refusing stand-ins instead of its import
+  // and the package only needs eliding from the compartment graph.
+  //
+  // @endo/host-spawner is deliberately NOT excluded: its host engine
+  // (`src/host-spawner.js`, node:child_process) reaches the daemon only
+  // through the injected `hostTools` power, but the sandbox engine
+  // (`src/sandbox-spawner.js`) is platform-neutral and shell-engine.js
+  // imports it directly, so the package must stay on the graph.  The
+  // bundle only follows modules that are actually imported, so the
+  // node: half never enters it.
   '@endo/git',
-  '@endo/host-spawner',
   'ses',
   'ws',
 ]);
