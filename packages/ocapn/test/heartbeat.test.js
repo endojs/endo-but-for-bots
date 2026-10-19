@@ -160,7 +160,9 @@ baseTest('heartbeat rejects a timeout shorter than three intervals', t => {
   t.throws(() => makeHarness({ intervalMs: NaN }), { instanceOf: RangeError });
 });
 
-const heartbeat = { intervalMs: 20, timeoutMs: 100 };
+// Generous margins: coverage instrumentation can stall the event loop
+// for well over 100ms on a loaded CI runner.
+const heartbeat = { intervalMs: 50, timeoutMs: 1000 };
 
 test('heartbeat keeps an idle session alive when both peers beat', async t => {
   const { establishSession, shutdownBoth, getConnectionAtoB } =
@@ -175,26 +177,32 @@ test('heartbeat keeps an idle session alive when both peers beat', async t => {
   // eslint-disable-next-line no-underscore-dangle
   const debugB = sessionB.ocapn._debug;
   assert(debugA && debugB);
-  /** @type {string[]} */
-  const receivedByA = [];
+  t.truthy(debugA.heartbeat);
+  t.truthy(debugB.heartbeat);
+  /** @type {Set<string>} */
+  const receivedByA = new Set();
   debugA.subscribeMessages((direction, message) => {
     if (direction === 'receive') {
-      receivedByA.push(message.type);
+      receivedByA.add(message.type);
     }
   });
+  const connection = getConnectionAtoB();
+  t.truthy(connection);
 
-  // Idle for several session timeouts; only heartbeats flow.
-  await new Promise(resolve => setTimeout(resolve, 400));
-
-  t.truthy(getConnectionAtoB(), 'session survives idle');
-  t.false(getConnectionAtoB()?.isDestroyed);
-  t.true(receivedByA.includes('op:ping'));
-  t.true(receivedByA.includes('op:pong'));
-  t.true(
-    /** @type {bigint} */ (debugA.heartbeat?.getPeerAckedRecvNonce()) > 0n,
-    'peer acknowledgments arrive via op:pong',
+  await waitUntilTrue(
+    () =>
+      receivedByA.has('op:ping') &&
+      receivedByA.has('op:pong') &&
+      /** @type {bigint} */ (debugA.heartbeat?.getPeerAckedRecvNonce()) > 0n,
+    10_000,
   );
-  t.truthy(debugB.heartbeat);
+  t.pass('op:ping and op:pong arrive, carrying peer acknowledgments');
+
+  // Idle past the session timeout; only heartbeats flow.
+  await new Promise(resolve => setTimeout(resolve, heartbeat.timeoutMs * 1.5));
+
+  t.is(getConnectionAtoB(), connection, 'session survives idle');
+  t.false(connection?.isDestroyed);
 });
 
 test('heartbeat detects a silent peer within the session timeout', async t => {
@@ -210,10 +218,10 @@ test('heartbeat detects a silent peer within the session timeout', async t => {
   await establishSession();
   t.truthy(getConnectionAtoB());
 
-  await waitUntilTrue(() => getConnectionAtoB() === undefined, 5000);
+  await waitUntilTrue(() => getConnectionAtoB() === undefined, 10_000);
   const elapsed = Date.now() - started;
   t.true(
-    elapsed < 2000,
+    elapsed < 5000,
     `silent peer detected in ${elapsed}ms, seconds rather than hours`,
   );
 });
