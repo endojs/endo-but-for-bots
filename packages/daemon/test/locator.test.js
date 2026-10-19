@@ -59,13 +59,13 @@ test('assertValidLocator - invalid', t => {
     [undefined, /Invalid URL.$/u],
     [{}, /Invalid URL.$/u],
     [makeLocator({ protocol: 'foobar://' }), /Invalid protocol.$/u],
-    [makeLocator({ host: 'foobar' }), /Invalid node identifier.$/u],
-    [`endo://${validNode}/?type=${validType}`, /Missing formula number.$/u],
+    [makeLocator({ host: 'foobar' }), /Invalid peer key.$/u],
+    [`endo://${validNode}/?type=${validType}`, /Missing formula address.$/u],
     [
       `endo://${validNode}/${validId}?type=${validType}&foo=bar`,
       /Invalid search params.$/u,
     ],
-    [makeLocator({ number: 'foobar' }), /Invalid id.$/u],
+    [makeLocator({ number: 'foobar' }), /Invalid formula address.$/u],
     [makeLocator({ type: 'foobar' }), /Invalid type.$/u],
   ];
   for (const [locator, reason] of cases) {
@@ -256,6 +256,34 @@ test('internalizeLocator extracts connection hints', t => {
   t.deepEqual(result.addresses, hints);
 });
 
+test('formatLocatorWithHints - multiple transports round-trip', t => {
+  const id = formatId({ number: validId, node: validNode });
+  const hints = [
+    'ws-relay+captp0://example.com:8920',
+    'libp2p+captp0:///ip4/127.0.0.1/tcp/4001/p2p/peer?x=1',
+    'tor:abc123def456.onion:443',
+  ];
+  const locator = formatLocatorWithHints(id, validType, hints);
+  t.deepEqual(parseLocator(locator).hints, hints);
+});
+
+test('dehydrate / hydrate round-trip yields the original locator', t => {
+  const id = formatId({ number: validId, node: validNode });
+  const hints = ['tcp+captp0://127.0.0.1:8940', 'tcp:user@example.com:8920'];
+  const original = formatLocatorWithHints(id, validType, hints);
+  // Dehydrate: separate the stable formula key from the ephemeral hints.
+  const {
+    id: formulaKey,
+    formulaType,
+    hints: storedHints,
+  } = internalizeLocator(original);
+  // Hydrate: recombine the formula key with the peer's unchanged hints.
+  const hydrated = externalizeId(formulaKey, formulaType, validNode, [
+    ...storedHints,
+  ]);
+  t.is(hydrated, original);
+});
+
 // --- Format verification ---
 
 test('formatLocator produces path-based format', t => {
@@ -277,10 +305,10 @@ test('formatLocator round-trips through parseLocator', t => {
   t.deepEqual(parsed.hints, []);
 });
 
-test('parseLocator - rejects locator with no formula number', t => {
+test('parseLocator - rejects locator with no formula address', t => {
   const badLocator = `endo://${validNode}/?type=${validType}`;
   t.throws(() => parseLocator(badLocator), {
-    message: /Missing formula number/,
+    message: /Missing formula address/,
   });
 });
 
