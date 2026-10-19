@@ -18,8 +18,9 @@ version-controlled-filesystem loop landed in #707 (Phase 4). The
 `@endo/agent-tools` MCP adapter and the single-guest stdio MCP server
 `@endo/agent-mcp-stdio` landed in #1336. The confined in-guest agent
 [endo-claude](endo-claude.md) has also landed as `@endo/claude`, with its
-confinement flags and the CLI and Agent SDK inference backends (#1357). Four items remain open, sequenced in
-§ Next Slice and § Implementation Plan:
+confinement flags and the CLI and Agent SDK inference backends (#1357).
+Four items remain open, sequenced in § Next Slice and § Implementation
+Plan:
 
 1. the **sandbox shell engine** (Phase 2c), now the minimal next slice,
    because a host-engine `Shell` granted to a confined `endo-claude` guest
@@ -27,7 +28,7 @@ confinement flags and the CLI and Agent SDK inference backends (#1357). Four ite
    Designs);
 2. the **endo-claude acceptance loop** (Phase 7): the Phase 4 worked loop
    run by a confined guest through its MCP surface;
-3. **reconciling the two HTTP provisioning paths** (Phase 8, Open
+3. the **reconciliation of the two HTTP provisioning paths** (Phase 8, Open
    Question 4);
 4. the grant-sensitive package-manager projection (#950, open).
 
@@ -425,7 +426,7 @@ Form-based provisioning
 shape; the `capabilities: 'fs,shell,git'` field of the sketch becomes
 the host running the derivation flow above and binding the petnames.
 
-## Next Slice: the Sandbox Shell Engine
+## Next Slice: The Sandbox Shell Engine
 
 This is the minimal first slice of the remaining work: one engine
 adapter, one policy field, and the tests that prove the boundary. It adds
@@ -466,17 +467,17 @@ cannot include its build step.
   which makes the confinement posture visible to the holder.
 - **Slice construction.** For `engine: 'sandbox'`, the host passes a
   `SandboxFactory` capability as `policy.sandbox`. The factory is the
-  `@endo/sandbox` plugin's make-unconfined product, which the host already
-  holds. The daemon does not reach for it ambiently, and the formula
-  records the factory's identifier beside the mount's. The shell
-  formula's maker calls `E(factory).make` with an explicit
-  `network: 'none'` and the factory's default seccomp profile. It then
+  capability that the `@endo/sandbox` plugin's unconfined `make` entry
+  returns, and the host already holds it. The daemon does not reach for
+  it ambiently, and the formula records the factory's identifier beside
+  the mount's. The shell formula's maker calls `E(factory).make` with an
+  explicit `network: 'none'` and the factory's default seccomp profile. It then
   binds the shell's own writable mount into the slice with
   `E(slice).mount(mountCap, '/work', 'rw')` and sets the per-spawn `cwd`
   to `/work`. The slice belongs to the shell formula's incarnation: it is
   disposed on cancellation and re-made on reincarnation, so no slice state
-  is durable. `SandboxHandle.policy()` attestations exist today only for
-  the hosted-agent profile, so the shell does not require one (Open
+  is durable. The shell does not require a `SandboxHandle.policy()`
+  attestation, because today only the hosted-agent profile has one (Open
   Question 5).
 - **Unavailable backend fails closed.** If `listBackends()` reports no
   usable driver (for example, macOS or a kernel without user namespaces),
@@ -549,12 +550,15 @@ Run on a Linux runner with `bwrap`, skipped with a recorded reason where
 | engine -> slice | `@endo/sandbox` `SandboxHandle` | the slice profile (`network: 'none'`, seccomp) | none (scratch only) | the slice handle: dropping it kills the process tree | a `ProcessHandle` |
 | guest -> `Shell` | `exo-shell` `exec` / `inspect` | allowlist check before spawn | none | per call: an execution result (`ShellResult`), never a commit | argv and an optional narrower timeout; a `ShellResult` back |
 
-Answers to the four ownership questions: the daemon formula owns the
-persistent state (the policy). Nothing in the shell commits or discards;
-`exec` returns an execution result, and mount writes are immediate, as
-with any writer. Restart is reconstitution from the formula, with a fresh
-slice. Execution classification (host versus sandbox) is decided once,
-at `provideShell`, by the host.
+The table answers the four ownership questions as follows:
+
+- **Persistent state.** The daemon formula owns it (the policy).
+- **Commit authority.** Nothing in the shell commits or discards. `exec`
+  returns an execution result, and mount writes are immediate, as with
+  any writer.
+- **Restart.** The formula reconstitutes the shell, with a fresh slice.
+- **Execution classification.** The host decides it (host versus
+  sandbox) once, at `provideShell`.
 
 ## Implementation Plan
 
@@ -576,7 +580,7 @@ document's Phases 3 and 4, and its Phase 4 dispatches this document's
 Phases 5–6. This section stays normative for each tool-layer
 deliverable's shape.
 
-### Phase 0: Substrate (landed — record only)
+### Phase 0: Substrate (landed, record only)
 
 - [x] `EndoMount` completion — descriptors, snapshot, `provideHostPath`
   ([daemon-mount-capabilities](daemon-mount-capabilities.md), all phases).
@@ -587,7 +591,7 @@ deliverable's shape.
   `makeMountReadTool` on the canonical `ToolRecord` (#523); code-mode
   declaration renderer (#524).
 
-### Phase 1: Complete the file-tool set — landed (#614)
+### Phase 1: Complete the file-tool set (landed, #614)
 
 - [x] `list`, `edit` (write), and `stat` tools over the `Filesystem`
   interface, as separate makers so a read-only deployment composes only
@@ -606,9 +610,9 @@ deliverable's shape.
   path authenticated at the boundary, per the § Granting petname rule
   (paths are not petnamed).
 
-### Phase 2: Shell capability and command tools — 2a / 2b landed (#615)
+### Phase 2: Shell capability and command tools (2a / 2b landed, #615)
 
-- [x] 2a — the daemon `shell` formula and `provideShell` per § Shell
+- [x] 2a: the daemon `shell` formula and `provideShell` per § Shell
   Capability: writable-mount derivation via `provideHostPath`,
   formula-owned policy, host-spawner engine, hardening tests
   (allowlist enforcement, env sanitization — assert no host env
@@ -618,12 +622,12 @@ deliverable's shape.
   formula plus `host.provideShell`, the `@endo/exo-shell` engine, and
   the `@endo/host-spawner` spawner; hardening asserted across
   `packages/daemon/test/shell.test.js` and `packages/exo-shell/test/`.
-- [x] 2b — `makeShellTool` in `@endo/agent-tools`: `ToolRecord` plus
+- [x] 2b: `makeShellTool` in `@endo/agent-tools`: `ToolRecord` plus
   hand-authored wire schema and divergence gate; port genie's policy
   closures (`rejectPatterns`, `rejectFlags`) as policy inputs. Landed in
   `packages/agent-tools/src/json-tools/shell.js` (`exec` / `inspect` records,
   schema ⟷ guard divergence gate, `makeAdvisoryVeto`).
-- [ ] 2c — the sandbox-spawner engine behind a `provideShell` option.
+- [ ] 2c: the sandbox-spawner engine behind a `provideShell` option.
   Specified in § Next Slice (2026-10-19); `@endo/sandbox`'s Linux `bwrap`
   driver with `network: 'none'` (its Phase 1) is all this needs from
   [endo-posix-sandbox](endo-posix-sandbox.md).
@@ -632,7 +636,7 @@ deliverable's shape.
   `Spawner` interface is shaped to accept a sandbox `DriverProcess`
   adapter, but only the host `child_process` engine ships today.
 
-### Phase 3: Push tier — landed (#705)
+### Phase 3: Push tier (landed, #705)
 
 - [x] `makeGitRemoteTool(remoteCap)` per
   [endo-agent-tools](endo-agent-tools.md) § Git authority tiers:
@@ -645,7 +649,7 @@ deliverable's shape.
   makes a git branch usable as a transactional ledger
   ([daemon-git-remotes](daemon-git-remotes.md) § Force-with-lease).
 
-### Phase 3.5: Local mount-bridged git tools — landed (#616)
+### Phase 3.5: Local mount-bridged git tools (landed, #616)
 
 - [x] `makeGitMountTools(gitCap)` in `packages/agent-tools/src/json-tools/git-mount.js`:
   `status`, `add`, and `checkoutConflict` tools over the *local* `Git`
@@ -688,7 +692,7 @@ document's scope.
   ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
   plugin-provisioned client).
 
-### Phase 4: Provisioning and the worked loop — landed (#707)
+### Phase 4: Provisioning and the worked loop (landed, #707)
 
 - [x] Wire the § Granting and Provisioning flow end to end for one
   agent harness (lal front-loaded binding first; fae's `adopt` accretion
@@ -845,8 +849,8 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 
 ## Open Questions
 
-1. Resolved: **should the daemon-hosted `Shell` ship before the sandbox
-   engine (Phase 2a before 2c), or wait for slices?** It shipped first
+1. **Should the daemon-hosted `Shell` ship before the sandbox engine
+   (Phase 2a before 2c), or wait for slices?** Resolved: it shipped first
    (#615). Recommendation at the time: ship 2a
    with the host engine and the honest-boundary posture — the same
    staging [endo-agent-tools](endo-agent-tools.md) accepted for genie's
@@ -870,7 +874,6 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
    than bounded `exec`? That consumer decides when the exo-stream
    sibling methods land and whether they need pty semantics that
    `@endo/host-shell`'s pipe shapes do not cover.
-
 4. **Which HTTP provisioning path is canonical: the daemon
    `provideHttpClient` formula or the `@endo/fetch` plugin?** Both are on
    `llm`. The formula landed on 2026-07-10, three days before
@@ -890,7 +893,7 @@ is the `stack-surgery` scenario in `designs/agentry-git-eval-scenarios.md`
 6. **One slice per shell, or one slice per `exec`?** § Next Slice gives
    each shell incarnation one long-lived slice, which is cheap and keeps
    the `/work` bind stable. The cost is that a background process left by
-   one `exec` can outlive it inside the slice. A slice per `exec` removes
+   one `exec` can outlive that call inside the slice. A slice per `exec` removes
    that at the price of a namespace setup per call. Which does the first
    consumer need?
 
