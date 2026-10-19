@@ -177,7 +177,7 @@ const startGateway = async ({
     });
     return { status: response.status, body: await response.json() };
   };
-  return { url, rpc, calls, close: gateway.close };
+  return { url, rpc, calls, facets, close: gateway.close };
 };
 
 test('the handler refuses a body longer than maxBodyBytes', async t => {
@@ -238,7 +238,7 @@ test('parseBearer accepts only a formula identifier', t => {
 test.serial(
   'a bearer selects its guest for initialize, tools/list, and tools/call',
   async t => {
-    const { url, rpc, calls, close } = await startGateway();
+    const { url, rpc, calls, facets, close } = await startGateway();
     t.true(url.endsWith('/mcp'));
     try {
       const init = await rpc('initialize', { protocolVersion: '2025-06-18' });
@@ -272,11 +272,16 @@ test.serial(
           ['other', 'has', ['present']],
         ],
       );
-      // Each guest is resolved once and then reused.
+      // Every request resolves its bearer afresh.
       t.deepEqual(
         calls.filter(([label]) => label === 'host').map(([, , id]) => id),
-        [FORMULA_ID, OTHER_ID],
+        [FORMULA_ID, FORMULA_ID, FORMULA_ID, OTHER_ID],
       );
+
+      // Deleting the guest revokes its bearer at once.
+      delete facets[OTHER_ID];
+      const revoked = await rpc('ping', undefined, { bearer: OTHER_ID });
+      t.is(revoked.status, 401);
 
       // An unknown method is a JSON-RPC error on a successful exchange.
       const unknown = await rpc('resources/list');
@@ -433,6 +438,42 @@ test.serial(
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
       });
       t.is(allowed.status, 200);
+      t.is(
+        allowed.headers.get('access-control-allow-origin'),
+        'https://chat.example',
+      );
+      t.is(allowed.headers.get('vary'), 'Origin');
+      t.is(foreign.headers.get('access-control-allow-origin'), undefined);
+
+      // A browser asks leave in a preflight before its POST.
+      const preflight = await httpRequest(url, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'https://chat.example',
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'authorization, content-type',
+        },
+      });
+      t.is(preflight.status, 204);
+      t.is(
+        preflight.headers.get('access-control-allow-origin'),
+        'https://chat.example',
+      );
+      t.is(preflight.headers.get('access-control-allow-methods'), 'POST');
+      t.regex(
+        preflight.headers.get('access-control-allow-headers') || '',
+        /Authorization.*Content-Type/,
+      );
+      const foreignPreflight = await httpRequest(url, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'https://evil.example',
+          'Access-Control-Request-Method': 'POST',
+        },
+      });
+      t.is(foreignPreflight.status, 403);
+      const bareOptions = await httpRequest(url, { method: 'OPTIONS' });
+      t.is(bareOptions.status, 405);
 
       const notification = await httpRequest(url, {
         method: 'POST',

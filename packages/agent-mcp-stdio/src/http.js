@@ -13,12 +13,15 @@
 // apart. Failed authentications advance a per-client rate limiter of this
 // listener's own, built from the daemon gateway's `makeRateLimiter`. The
 // client is the socket's peer address, or, behind a trusted reverse proxy,
-// the address the proxy appended to `X-Forwarded-For`.
+// the address the proxy appended to `X-Forwarded-For`. The bearer is
+// resolved afresh on every request, so deleting the guest revokes it.
 //
 // The transport is stateless (design § Decision 8): `POST /mcp` carries one
 // JSON-RPC message and is answered with `application/json`; no
 // `Mcp-Session-Id` is issued, and `GET /mcp` (the server-initiated event
-// stream) is refused with 405, which the 2025-06-18 transport permits.
+// stream) is refused with 405, which the 2025-06-18 transport permits. A
+// browser `Origin` listed in `allowedOrigins` is answered with CORS headers,
+// preflight included; any other `Origin` is refused with 403.
 //
 // The listener speaks plaintext HTTP. Confidentiality of the bearer on the
 // wire is the job of the TLS-terminating reverse proxy in front of it.
@@ -47,6 +50,11 @@ export const MCP_HTTP_DEFAULT_PORT = 8921;
 
 const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 const DEFAULT_PENALTY_MS = 1000;
+
+// The request headers an MCP client sends that a browser treats as
+// non-simple, and so asks leave for in a preflight.
+const CORS_ALLOW_HEADERS =
+  'Authorization, Content-Type, Mcp-Protocol-Version, Mcp-Session-Id';
 
 /**
  * Extract the bearer from an `Authorization` header, or `undefined` when the
@@ -147,7 +155,9 @@ const clientAddress = (request, trustProxy) => {
  *   bearer names no guest.
  * @param {{ check: (key: string) => number, recordFailure: (key: string) => void }} [options.rateLimiter]
  * @param {ReadonlyArray<string>} [options.allowedOrigins] - the `Origin`
- *   values accepted from a browser. A request with any other `Origin` is
+ *   values accepted from a browser. Their requests, and the `OPTIONS`
+ *   preflight a browser sends first, are answered with the CORS headers that
+ *   let the page read the reply. A request with any other `Origin` is
  *   refused (the transport's DNS-rebinding guard); a request with none, as
  *   from every non-browser MCP client, is accepted.
  * @param {boolean} [options.trustProxy] - key the rate limiter on the last
@@ -175,6 +185,22 @@ export const makeMcpHttpHandler = ({
     const { origin } = request.headers;
     if (origin !== undefined && !origins.has(origin)) {
       sendError(response, 403, 'Origin not allowed');
+      return true;
+    }
+    if (origin !== undefined) {
+      response.setHeader('Access-Control-Allow-Origin', origin);
+      response.setHeader('Vary', 'Origin');
+      response.setHeader(
+        'Access-Control-Expose-Headers',
+        'WWW-Authenticate, Retry-After',
+      );
+    }
+    if (request.method === 'OPTIONS' && origin !== undefined) {
+      send(response, 204, {
+        'Access-Control-Allow-Methods': 'POST',
+        'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
+        'Access-Control-Max-Age': '600',
+      });
       return true;
     }
     if (request.method !== 'POST') {
@@ -257,8 +283,10 @@ export const makeMcpHttpHandler = ({
 harden(makeMcpHttpHandler);
 
 /**
- * Bind guests to MCP servers on demand, once per formula identifier. A failed
- * resolution is not remembered, so a guest created later is served.
+ * Bind a guest to an MCP server for one request. Nothing is remembered: the
+ * bearer is resolved through the daemon every time, so a guest deleted since
+ * the last request is refused and a guest created since is served. The MCP
+ * server holds no session state, so building one per request loses nothing.
  *
  * @param {object} options
  * @param {DaemonConnection} options.connection
@@ -270,24 +298,15 @@ export const makeGuestServerResolver = ({
   version,
   tools = makeAgentTools(),
 }) => {
-  /** @type {Map<string, Promise<ReturnType<typeof makeGuestMcpServer>>>} */
-  const servers = new Map();
   /** @param {string} formulaId */
-  return formulaId => {
-    let serverP = servers.get(formulaId);
-    if (serverP === undefined) {
-      serverP = resolveGuest(connection.host, formulaId).then(guest =>
-        makeGuestMcpServer({
-          guest,
-          version,
-          tools,
-          connectionClosed: connection.closed,
-        }),
-      );
-      servers.set(formulaId, serverP);
-      serverP.catch(() => servers.delete(formulaId));
-    }
-    return serverP;
+  return async formulaId => {
+    const guest = await resolveGuest(connection.host, formulaId);
+    return makeGuestMcpServer({
+      guest,
+      version,
+      tools,
+      connectionClosed: connection.closed,
+    });
   };
 };
 harden(makeGuestServerResolver);
