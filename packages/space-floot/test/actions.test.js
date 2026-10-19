@@ -59,6 +59,16 @@ test('edit results expose plain and structured unified diffs', t => {
   });
   t.is(extractUnifiedDiff('ordinary tool result'), null);
   t.is(extractUnifiedDiff('{"diff":"not a unified diff"}'), null);
+  t.is(extractUnifiedDiff(null), null);
+  t.is(extractUnifiedDiff(undefined), null);
+  t.deepEqual(extractUnifiedDiff(JSON.stringify({ diff })), {
+    summary: '',
+    diff,
+  });
+  t.deepEqual(extractUnifiedDiff(`{ not json\n${diff}`), {
+    summary: '{ not json',
+    diff,
+  });
 });
 
 test('unified diff rows have distinct presentation classes', t => {
