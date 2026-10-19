@@ -3,17 +3,58 @@
 | | |
 |---|---|
 | **Created** | 2026-02-24 |
-| **Updated** | 2026-05-10 |
+| **Updated** | 2026-10-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Complete |
 
-## Current State
+## Implementation Status
+
+Implemented on `llm`:
+
+- Types: `PeerKey`, `FormulaAddress`, `FormulaKey`, `ConnectionHint`,
+  `PeerLocator`, and `FormulaLocator` in `packages/daemon/src/types.d.ts`.
+- Locator format: `@`-delimited, URL-encoded path components
+  (5bd2f09d69, closes #34); `parseLocator` returns `hints`;
+  `formatLocatorWithHints` and `hintsFromLocator` exist, with the earlier
+  names `formatLocatorForSharing` and `addressesFromLocator` kept as
+  deprecated aliases (24b8dcb688).
+- `locate` hydrates the agent's current connection hints from its
+  network addresses; `EndoHost.locateWithHints` is the explicit name for
+  the same operation.
+  `adoptFromLocator` dehydrates hints into the peer's `PeerInfo`.
+- Documentation and diagnostics: `formula-identifier.js`, `locator.js`,
+  the `locate`/`identify` help text, and the `endo locate` CLI description
+  use the new terms; locator parse errors name the peer key and formula
+  address.
+
+The method and field names that predate the terminology (`parseId`,
+`formatId`, the `number`/`node` fields of `IdRecord`, `FormulaNumber`,
+`NodeNumber`, `FormulaIdentifier`) keep their names, per the invariant
+below that no existing signature changes.
+
+Two questions other designs defer to this one are settled:
+
+- The user-facing locator keeps the `endo://` scheme, including for OCapN
+  peers ([daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md)
+  § Resolved Decisions).
+- The invitation methods `invite`, `accept`, and `correspondentName` keep
+  their names (see [Invitation Methods](#invitation-methods-endohost));
+  [guest-native-invitations](guest-native-invitations.md) can treat those
+  spellings as final.
+
+The LOCAL_NODE normalization this design originally specified was
+superseded by the SQLite migration (d0ce26b327); see
+[Formula Keys Carry Real Peer Keys](#formula-keys-carry-real-peer-keys).
+
+## Starting State
+
+The rest of this section records the state this design started from.
 
 This document describes terminology and format changes for the daemon's
 identifier and locator system, building on the 256-bit identifier migration
 from `designs/daemon-256-bit-identifiers.md`.
 
-### Current Terminology
+### Starting Terminology
 
 | Term | Definition |
 |------|------------|
@@ -22,25 +63,7 @@ from `designs/daemon-256-bit-identifiers.md`.
 | Formula Identifier | `{formulaNumber}:{nodeNumber}` |
 | Locator | `endo://{peerKey}/{formulaAddress}?type={type}` |
 
-### Current Locator Format
-
-Standard locator (locator.js):
-```
-endo://{peerKey}/{formulaAddress}?type={formulaType}
-```
-
-Invitation locator (daemon.js):
-```
-endo://{peerKey}/{invitationAddress}@{hint1}@{hint2}?type=invitation&from={handleAddress}
-```
-
-The URL path is a sequence of `@`-delimited components.
-The first component is the formula address; subsequent components are
-connection hints in the form `<transport-prefix>:<transport-payload>`.
-Each component is URL-encoded so that `@`, `/`, and `?` inside a hint
-round-trip cleanly.
-
-### Current Types (types.d.ts)
+### Starting Types (types.d.ts)
 
 ```typescript
 /** A 64-character hex string identifying a formula within a node */
@@ -56,23 +79,23 @@ export type FormulaIdentifier = string & { [FormulaIdentifierBrand]: true };
 Connection hints are stored in `PeerFormula.addresses: Array<string>`
 (types.d.ts:233).
 
-### Current Methods
+### Starting Methods
 
-The daemon already has parallel identifier and locator methods:
+The daemon already had parallel identifier and locator methods:
 
 | Method | Location | Purpose |
 |--------|----------|---------|
-| `parseId(id)` | formula-identifier.js | Parse identifier → `{number, node}` |
-| `formatId({number, node})` | formula-identifier.js | Format `{number, node}` → identifier |
-| `parseLocator(locator)` | locator.js | Parse locator → `{formulaType, node, number}` |
-| `formatLocator(id, type)` | locator.js | Format identifier + type → locator |
+| `parseId(id)` | formula-identifier.js | Parse identifier -> `{number, node}` |
+| `formatId({number, node})` | formula-identifier.js | Format `{number, node}` -> identifier |
+| `parseLocator(locator)` | locator.js | Parse locator -> `{formulaType, node, number}` |
+| `formatLocator(id, type)` | locator.js | Format identifier + type -> locator |
 | `idFromLocator(locator)` | locator.js | Extract identifier from locator |
-| `identify(...path)` | NameHub | Resolve pet name path → identifier |
-| `locate(...path)` | NameHub | Resolve pet name path → locator |
-| `reverseIdentify(id)` | EndoAgent | Identifier → pet names |
-| `reverseLocate(locator)` | NameHub | Locator → pet names |
+| `identify(...path)` | NameHub | Resolve pet name path -> identifier |
+| `locate(...path)` | NameHub | Resolve pet name path -> locator |
+| `reverseIdentify(id)` | EndoAgent | Identifier -> pet names |
+| `reverseLocate(locator)` | NameHub | Locator -> pet names |
 | `listIdentifiers(...path)` | NameHub | List identifiers in directory |
-| `lookupById(id)` | EndoAgent | Identifier → value |
+| `lookupById(id)` | EndoAgent | Identifier -> value |
 
 ---
 
@@ -153,122 +176,60 @@ locator-with-hints operations.
 
 | Current Method | Signature | Change |
 |----------------|-----------|--------|
-| `parseId(id)` | `string → {number, node}` | Unchanged |
-| `formatId(record)` | `{number, node} → string` | Unchanged |
-| `parseLocator(locator)` | `string → {formulaType, node, number}` | Returns additional `hints` field |
-| `formatLocator(id, type)` | `(string, string) → string` | Unchanged (no hints) |
-| `idFromLocator(locator)` | `string → string` | Unchanged |
+| `parseId(id)` | `string -> {number, node}` | Unchanged |
+| `formatId(record)` | `{number, node} -> string` | Unchanged |
+| `parseLocator(locator)` | `string -> {formulaType, node, number}` | Returns additional `hints` field |
+| `formatLocator(id, type)` | `(string, string) -> string` | Unchanged (no hints) |
+| `idFromLocator(locator)` | `string -> string` | Unchanged |
 
 | New Method | Signature | Purpose |
 |------------|-----------|---------|
-| `formatLocatorWithHints(id, type, hints)` | `(string, string, string[]) → string` | Format locator with connection hints |
+| `formatLocatorWithHints(id, type, hints)` | `(string, string, string[]) -> string` | Format locator with connection hints |
 
 ### High-Level Methods (NameHub, EndoAgent, EndoHost)
 
 | Current Method | Signature | Change |
 |----------------|-----------|--------|
-| `identify(...path)` | `...string[] → Promise<string?>` | Unchanged |
-| `locate(...path)` | `...string[] → Promise<string?>` | Internal format change only |
-| `reverseIdentify(id)` | `string → Name[]` | Unchanged |
-| `reverseLocate(locator)` | `string → Promise<Name[]>` | Unchanged |
-| `listIdentifiers(...path)` | `...string[] → Promise<string[]>` | Unchanged |
-| `lookupById(id)` | `string → Promise<unknown>` | Unchanged |
+| `identify(...path)` | `...string[] -> Promise<string?>` | Unchanged |
+| `locate(...path)` | `...string[] -> Promise<string?>` | Internal format change only |
+| `reverseIdentify(id)` | `string -> Name[]` | Unchanged |
+| `reverseLocate(locator)` | `string -> Promise<Name[]>` | Unchanged |
+| `listIdentifiers(...path)` | `...string[] -> Promise<string[]>` | Unchanged |
+| `lookupById(id)` | `string -> Promise<unknown>` | Unchanged |
 
 | New Method | Signature | Purpose |
 |------------|-----------|---------|
-| `locateWithHints(...path)` | `...string[] → Promise<string?>` | Resolve path → locator with current hints |
+| `locateWithHints(...path)` | `...string[] -> Promise<string?>` | Resolve path -> locator with current hints |
 
 ### Invitation Methods (EndoHost)
 
 | Current Method | Signature | Change |
 |----------------|-----------|--------|
-| `invite(guestName)` | `string → Promise<Invitation>` | Unchanged; `Invitation.locate()` returns new format |
-| `accept(locator, guestName)` | `(string, string) → Promise<void>` | Parses new format internally |
+| `invite(guestName)` | `string -> Promise<Invitation>` | Unchanged; `Invitation.locate()` returns new format |
+| `accept(locator, guestName)` | `(string, string) -> Promise<void>` | Parses new format internally |
 
 ---
 
-## LOCAL_NODE Normalization
+## Formula Keys Carry Real Peer Keys
 
-### Motivation
+This design originally specified a LOCAL_NODE sentinel (`0` x 64) that
+replaced every local agent's public key inside stored formula keys, with
+`internalizeLocator` normalizing local keys to the sentinel and
+`externalizeId` stamping the presenting agent's key back on.
+The SQLite migration (d0ce26b327) removed that normalization.
+Stored formula keys now carry the real peer key of the agent or daemon
+that owns the formula, so:
 
-Each EndoAgent (Host, Guest) on a daemon has its own Ed25519 keypair.
-When an agent produces a locator, it stamps the locator with its own
-public key as the node identifier. When formulas are stored internally,
-all local formula identifiers use a sentinel **LOCAL_NODE** (`0` × 64)
-in place of any agent's public key. This ensures:
+- `internalizeLocator(locator)` preserves the peer key as-is and returns
+  `{ id, formulaType, hints }`.
+- `externalizeId(id, formulaType, agentNodeNumber, hints)` formats the
+  stored key directly; `agentNodeNumber` is unused and kept only for
+  signature stability.
+- The round-trip invariant holds trivially for local and remote formulas:
+  `internalizeLocator(externalizeId(id, type, key)).id === id`.
 
-1. **One copy per formula**: Regardless of which agent created or views a
-   formula, the internal identifier is the same.
-2. **Agent-independent storage**: Agents can come and go without creating
-   duplicate formula entries.
-3. **Per-agent externalization**: Each agent stamps outgoing locators with
-   its own public key, so recipients know which peer to contact.
-
-### LOCAL_NODE Sentinel
-
-```js
-// 64-char hex string of all zeros — never a valid Ed25519 public key
-const LOCAL_NODE = '0'.repeat(64);
-```
-
-### Local Keys Registry
-
-The daemon maintains a `localKeys` set of known local agent public keys,
-initialized with `localNodeNumber` (the daemon's root key) and extended
-with each agent's keypair public key as agents are incarnated. The
-predicate `isLocalKey(node)` returns true for any key in this set. All
-agents share the same predicate so that locators from sibling agents on
-the same daemon are correctly internalized to LOCAL_NODE.
-
-### Internalization (ingesting a locator)
-
-When an agent receives a locator (e.g., from a message or user input),
-`internalizeLocator` replaces any recognized local key with LOCAL_NODE:
-
-```js
-const internalizeLocator = (locator, isLocalKey) => {
-  const { number, node, formulaType } = parseLocator(locator);
-  const normalizedNode = isLocalKey(node) ? LOCAL_NODE : node;
-  const id = formatId({ number, node: normalizedNode });
-  return { id, formulaType, addresses: addressesFromLocator(locator) };
-};
-```
-
-### Externalization (producing a locator)
-
-When an agent produces a locator for sharing, `externalizeId` replaces
-LOCAL_NODE with the agent's public key:
-
-```js
-const externalizeId = (id, formulaType, agentNodeNumber) => {
-  const { number, node } = parseId(id);
-  const peerKey = node === LOCAL_NODE ? agentNodeNumber : node;
-  return formatLocator(formatId({ number, node: peerKey }), formulaType);
-};
-```
-
-### Round-trip Invariant
-
-For local formulas:
-
-```
-internalId  (abc:LOCAL_NODE)
-  → externalizeId(id, type, agentKey) → locator with agentKey
-  → internalizeLocator(locator, isLocalKey) → abc:LOCAL_NODE = internalId  ✓
-```
-
-For remote formulas, the node is preserved through both operations.
-
-### Database Repair
-
-On daemon startup, pet store entries created before the LOCAL_NODE
-migration may still contain `{number}:{localNodeNumber}` identifiers.
-The daemon runs a repair pass (`repairIds`) that normalizes these to
-`{number}:{LOCAL_NODE}`, updating both in-memory state and on-disk files.
-
-The `normalizeId` function in daemon.js also transparently handles
-old-format identifiers encountered in formula dependency references,
-ensuring backward compatibility without requiring formula file rewrites.
+`LOCAL_NODE` survives in `locator.js` only as an all-zeros peer key no
+daemon can own, for tests.
 
 ---
 
@@ -283,8 +244,8 @@ formula key and store it. Separately, update the peer's connection hints in
 transient.
 
 ```js
-const { peerKey, formulaAddress, hints, formulaType } = parseLocator(locator);
-const formulaKey = formatId({ number: formulaAddress, node: peerKey });
+const { id: formulaKey, formulaType, hints } = internalizeLocator(locator);
+const { node: peerKey } = parseId(formulaKey);
 
 // Store the stable reference
 await petStore.write(petName, formulaKey);
@@ -310,7 +271,10 @@ original.
 
 ---
 
-## Files to Modify
+## Planned File Changes
+
+As planned in 2026-02; `daemon.js` has since been renamed `manager.js`,
+so the line numbers below are historical.
 
 **`packages/daemon/src/types.d.ts`**
 - Add `PeerKey`, `FormulaAddress`, `FormulaKey` type aliases
@@ -348,14 +312,12 @@ original.
 - `locateWithHints` returns locator with current peer hints
 - Dehydration/hydration round-trip invariant
 - Integration: invitation creation and acceptance
-- LOCAL_NODE normalization:
-  - `internalizeLocator` normalizes local keys to LOCAL_NODE
-  - `internalizeLocator` preserves remote node keys
-  - `externalizeId` replaces LOCAL_NODE with agent key
-  - `externalizeId` preserves remote node keys
-  - Round-trip: LOCAL_NODE id → externalize → internalize = original id
-  - Round-trip: remote id → externalize → internalize = original id
-  - Message externalization uses agent's key for LOCAL_NODE replacement
-  - Pet store repair normalizes old-format identifiers on startup
-  - Integration: host and guest present different locators for the same value
-  - Integration: cross-agent locator internalization (agent A's locator recognized as local by agent B)
+- Peer-key preservation (replacing the superseded LOCAL_NODE items):
+  - `internalizeLocator` preserves local and remote peer keys
+  - `externalizeId` preserves local and remote peer keys
+  - Round-trip: id -> externalize -> internalize = original id
+
+These cases live in `packages/daemon/test/locator.test.js`; invitation
+and `locateWithHints` integration coverage lives in
+`packages/daemon/test/endo.test.js` and
+`packages/daemon/test/channel-relay.test.js`.
