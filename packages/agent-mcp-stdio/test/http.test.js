@@ -295,6 +295,13 @@ test.serial(
         body: '{}',
       });
       t.is(text.status, 415);
+
+      const oversized = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: ' '.repeat(4 * 1024 * 1024 + 1),
+      });
+      t.is(oversized.status, 413);
     } finally {
       await close();
     }
