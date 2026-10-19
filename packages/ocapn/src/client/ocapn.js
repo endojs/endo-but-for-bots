@@ -13,6 +13,7 @@
  * @import { SturdyRefTracker } from './sturdyrefs.js'
  * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.js'
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
+ * @import { SendQueue } from './send-queue.js'
  */
 
 import harden from '@endo/harden';
@@ -670,7 +671,7 @@ const makeBootstrapObject = (
  * @property {OcapnTable} ocapnTable
  * @property {(message: object) => void} sendMessage
  * @property {(observer: MessageObserver) => () => void} subscribeMessages
- * @property {import('./send-queue.js').SendQueue} sendQueue the session's
+ * @property {SendQueue} sendQueue the session's
  *   outbound queue and epoch, for fault injection
  */
 

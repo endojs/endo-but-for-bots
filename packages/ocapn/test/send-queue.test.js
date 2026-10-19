@@ -1,8 +1,12 @@
 // @ts-check
 
+/** @import { ExecutionContext } from 'ava' */
+
 import test from '@endo/ses-ava/test.js';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/marshal';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeSendQueue } from '../src/client/send-queue.js';
 import { encodeSwissnum } from '../src/client/util.js';
@@ -89,20 +93,18 @@ test('operations enqueued while draining keep their order', async t => {
 test('a failed write during a drain closes the queue once', async t => {
   /** @type {Error[]} */
   const errors = [];
-  let reject = /** @type {(e: Error) => void} */ (() => {});
+  const stalled = makePromiseKit();
   let calls = 0;
   const queue = makeSendQueue({
     write: () => {
       calls += 1;
-      return new Promise((_resolve, rej) => {
-        reject = rej;
-      });
+      return stalled.promise;
     },
     onError: error => errors.push(error),
   });
   queue.write(bytesOf(1));
   queue.write(bytesOf(2));
-  reject(Error('socket reset'));
+  stalled.reject(Error('socket reset'));
   await flush();
   t.is(errors.length, 1);
   t.is(errors[0].message, 'socket reset');
@@ -114,15 +116,13 @@ test('a failed write during a drain closes the queue once', async t => {
 test('a synchronous write failure during a drain closes the queue once', async t => {
   /** @type {Error[]} */
   const errors = [];
-  let resolve = () => {};
+  const stalled = makePromiseKit();
   let calls = 0;
   const queue = makeSendQueue({
     write: () => {
       calls += 1;
       if (calls === 1) {
-        return new Promise(res => {
-          resolve = () => res(undefined);
-        });
+        return stalled.promise;
       }
       throw Error('socket closed');
     },
@@ -131,7 +131,7 @@ test('a synchronous write failure during a drain closes the queue once', async t
   queue.write(bytesOf(1));
   queue.write(bytesOf(2));
   queue.write(bytesOf(3));
-  resolve();
+  stalled.resolve(undefined);
   await flush();
   t.is(calls, 2, 'the drain stops at the throwing write');
   t.is(errors.length, 1);
@@ -202,9 +202,15 @@ const makeGreeterTable = () =>
   new Map([
     [
       'Greeter',
-      Far('Greeter', {
-        greet: name => `Hello ${name}`,
-      }),
+      makeExo(
+        'Greeter',
+        M.interface('Greeter', {
+          greet: M.call(M.string()).returns(M.string()),
+        }),
+        {
+          greet: name => `Hello ${name}`,
+        },
+      ),
     ],
   ]);
 
@@ -225,7 +231,7 @@ const advanceAll = async (clocks, ms) => {
   }
 };
 
-/** @param {import('ava').ExecutionContext} t */
+/** @param {ExecutionContext} t */
 const makeStalledPair = async t => {
   const clockA = makeManualTimer();
   const clockB = makeManualTimer();
