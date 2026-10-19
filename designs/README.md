@@ -156,6 +156,20 @@ a shared golden-vector fixture; ocapn keeps its `CborWriter` /
 drops its private copy post-#124, daemon `envelope.js` is an optional
 third adopter; follow-up to kriskowal's review of
 endojs/endo-but-for-bots#124),
+[platform-dimension-packages](platform-dimension-packages.md) (added
+2026-07-10; split the `@endo/platform` monolith into focused
+per-dimension endo/exo package pairs derived from source: the
+snapshot tier as `@endo/fs` + `@endo/exo-fs` + `@endo/fs-node`, the
+extended `Filesystem` as `@endo/fs-backend` + `@endo/exo-filesystem` +
+`@endo/fs-backend-node` along the seam endo-fs-backend-seam already
+built, the consolidated CAS surface as `@endo/cas` + `@endo/cas-node` +
+`@endo/exo-cas`, and `@endo/proc-node` standing alone (Node-bound, so it carries the
+`-node` suffix); the endo/exo boundary rule is "guards
+and exo makers live only in the exo package," mirroring
+http-confine / exo-http-client; `@endo/platform` becomes a
+deprecated umbrella of one-line re-export shims per the
+inter-package-plain-re-exports staging, removed at next major; runs
+as a serial five-child orchestration with green gates per child),
 [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md)
 (added 2026-07-08, revised 2026-07-09 and 2026-07-17; distilled git-rebase-session
 evidence into a trimmed three-scenario `@endo/agentry` git code-mode
@@ -390,6 +404,7 @@ LLM-agent stack).*
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | **Complete** (consolidated into `@endo/exo-npm`) |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | **Complete** |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
+| [platform-dimension-packages](platform-dimension-packages.md) | 2026-07-10 | 2026-09-05 | Not Started |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
 | [fs-interface-consolidation](fs-interface-consolidation.md) | 2026-06-18 | 2026-07-15 | **Complete** |
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | In Progress |
@@ -588,6 +603,13 @@ The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-i
 The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**Proposed**: the B5 plan with its spike); it joins the M4 table, the dependency graph (between the base Cloudflare design and its addendum) and the estimates table. Its Phases 0b–4 add about 12 days of M4 work that waits on nothing else in M4 and can run beside it, so M4's projected duration and the timeline are unchanged; its Phase 5 waits on the Cloudflare review's blockers 7–11, like the two Cloudflare designs, and is not placed on the timeline.
 
 **Current totals (2026-10-16, re-derived from the summary table):** 77 Complete/Implemented, 83 In Progress, 18 Not Started, 30 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**249 indexed records**). The bucket sum is 249. A qualified cell folds by its leading status (an `In Progress (PR #284)` is In Progress, a `Superseded by …` is Superseded, a `Proposed (exploratory)` is Proposed). The 2026-10-07 paragraph's totals (245 records, 26 Proposed, 84 In Progress, 2 Draft, with the later one-row increments) were incremented rather than re-derived and had drifted from the table by three rows; this count replaces them. The 2026-10-16 pass adds [ironhorse-intrinsic-fault-in](ironhorse-intrinsic-fault-in.md) (Proposed) to the summary table, the M11 table, the dependency graph and the estimates table (Proposed 29 -> 30, records 248 -> 249), unestimated. The raw corpus is 252 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files are excluded (this README, `ARCHIVE.md`, `AGENTS.md`, `CLAUDE.md`, and the two package design-directory indexes), four already-indexed channel-thread research records lie outside those globs, and one design file, [daemon-mount-visible-roots](daemon-mount-visible-roots.md) (Proposed, 2026-09-30), is in the corpus but not yet in the summary table; indexing it is left to the next grooming pass, since this pass changes no other row.
+
+The 2026-09-04 rebase adds
+[platform-dimension-packages](platform-dimension-packages.md) (Not Started)
+to M3, increasing Not Started by one and the design count by one. (The absolute
+running totals are left unstated here: the 2026-09-03 `daemon-secret-manager`
+entry did not restate them, so the series' last reliable count is the
+2026-09-01 `endo-workflow` line.)
 
 ## Roadmap
 
@@ -842,6 +864,7 @@ flowchart TD
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
         pfs[platform-fs<br/><i>COMPLETE</i>]
+        pdimpkg[platform-dimension-packages]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]
@@ -869,6 +892,7 @@ flowchart TD
         dsqli[daemon-endor-sqlite-iterate-streaming<br/><i>PROPOSED</i>]
         egitcas[endor-git-bindings<br/><i>IN PROGRESS</i>]
         errun[endor-run-expanded<br/><i>IN PROGRESS</i>]
+        pfs --> pdimpkg
         pfs --> dfs
         pfs --> dmount
         dmount --> dmcap
@@ -1119,6 +1143,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | agentry-git-verb-gaps | In Progress | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | In Progress | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
+| platform-dimension-packages | Not Started | Explode `@endo/platform` into per-dimension endo/exo package pairs: `@endo/fs` + `@endo/exo-fs` + `@endo/fs-node` (snapshot tier), `@endo/fs-backend` + `@endo/exo-filesystem` + `@endo/fs-backend-node` (the extended `Filesystem` and its Node binding, promoting the endo-fs-backend-seam layers to a package boundary), `@endo/cas` + `@endo/cas-node` + `@endo/exo-cas` (consolidating the smeared CAS contract, powers, and `BlobRef`), and `@endo/proc-node`; `@endo/platform` survives as a deprecated umbrella of one-line re-export shims (per the inter-package-plain-re-exports staging) removed at next major; executes as a serial five-child orchestration |
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
@@ -1882,6 +1907,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | exo-git-follow-root-advancement | M-L | 1-1.5 weeks | 3 | `@endo/platform/fs` tree identity, snapshots, atomic mutators, change/latest followers, high-level patching, and conformance across in-memory/native/composed adapters; `GitStage` tentative metadata, mutable roots, explicit commit, stale-base checks, matching Git followers, declarations, attenuation, and recovery |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
+| platform-dimension-packages | L | 1-2 weeks | 3 | Split `@endo/platform` into ten focused endo/exo packages plus a deprecated re-export umbrella; mostly mechanical moves along the endo-fs-backend-seam layers, run as a serial five-child orchestration (proc, fs trio, cas trio, extended trio, consumer repoint sweep) with repo-wide build/lint/test green per child |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
