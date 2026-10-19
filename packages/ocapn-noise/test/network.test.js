@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { OcapnNoiseTransport, TransportListener } from '../src/types.js' */
+
 import test from '@endo/ses-ava/test.js';
 import { makeQueue } from '@endo/stream';
 import harden from '@endo/harden';
@@ -148,7 +150,7 @@ test('listen rejects a transport that supports only outgoing connections', async
 
 test('listen closes a listener that binds after network shutdown', async t => {
   const network = makeOcapnNoiseNetwork({ codec: cborCodec });
-  /** @type {(listener: import('../src/types.js').TransportListener) => void} */
+  /** @type {(listener: TransportListener) => void} */
   let bind = () => {};
   /** @type {() => void} */
   let entered = () => {};
@@ -156,7 +158,7 @@ test('listen closes a listener that binds after network shutdown', async t => {
     entered = () => resolve(undefined);
   });
   let closed = 0;
-  /** @type {import('../src/types.js').OcapnNoiseTransport} */
+  /** @type {OcapnNoiseTransport} */
   const transport = harden({
     scheme: 'late',
     connect: async () => {
@@ -390,7 +392,7 @@ test('provideSession rejects when an active session under a different local key 
  * bytes (a slow-loris peer) used to exercise the handshake-timeout and
  * shutdown paths.
  *
- * @returns {import('../src/types.js').OcapnNoiseTransport}
+ * @returns {OcapnNoiseTransport}
  */
 const makeStallingTransport = () => {
   const queue = makeQueue();

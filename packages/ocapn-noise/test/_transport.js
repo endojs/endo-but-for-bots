@@ -1,10 +1,12 @@
 // @ts-check
 
+/** @import { OcapnNoiseNetwork, OcapnNoiseTransport } from '../src/types.js' */
+
 /**
  * Register a transport and explicitly open its inbound listener.
  *
- * @param {import('../src/types.js').OcapnNoiseNetwork} network
- * @param {import('../src/types.js').OcapnNoiseTransport} transport
+ * @param {OcapnNoiseNetwork} network
+ * @param {OcapnNoiseTransport} transport
  * @param {unknown} [options]
  */
 export const registerListeningTransport = async (

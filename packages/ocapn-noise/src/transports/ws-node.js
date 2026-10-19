@@ -147,13 +147,17 @@ export const makeWebSocketTransport = ({
    * wildcard host. The hint is what we advertise to peers; `0.0.0.0` /
    * `::` / unspecified addresses are not connect targets.
    *
-   * @param {string} addr
+   * @param {string} address
    */
-  const advertisedHost = addr => {
-    if (addr === '0.0.0.0' || addr === '::' || addr === '::ffff:0.0.0.0') {
+  const advertisedHost = address => {
+    if (
+      address === '0.0.0.0' ||
+      address === '::' ||
+      address === '::ffff:0.0.0.0'
+    ) {
       return '127.0.0.1';
     }
-    return addr;
+    return address;
   };
 
   /** @type {OcapnNoiseTransport['listen']} */
@@ -182,10 +186,12 @@ export const makeWebSocketTransport = ({
             accept(adaptWebSocket(ws));
           },
         );
-        const addr = listeningServer.address();
+        const boundAddress = listeningServer.address();
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { url: `ws://${advertisedHost(addr.address)}:${addr.port}` },
+          hints: {
+            url: `ws://${advertisedHost(boundAddress.address)}:${boundAddress.port}`,
+          },
           close: () => {
             try {
               listeningServer.close();
