@@ -5,6 +5,7 @@ import { makeQueue } from '@endo/stream';
 import harden from '@endo/harden';
 
 import { cborCodec } from '@endo/ocapn/cbor';
+import { makeSessionId } from '@endo/ocapn/cryptography';
 import { getRandomValues, wasmModule } from '@endo/ocapn-noise/platform';
 import { makeOcapnNoiseNetwork } from '../index.js';
 import {
@@ -126,6 +127,54 @@ test('two peers handshake and exchange encrypted messages via mock transport', a
   sessionB.close();
   netA.shutdown();
   netB.shutdown();
+});
+
+test('each connection between the same two peers gets a fresh sessionId', async t => {
+  // Handoff replay state (`nextHandoffCount`, `usedGiftHandoffs`) lives
+  // for one connection. If the sessionId were derived from the
+  // long-term keys alone, a `HandoffReceive` signed in one connection
+  // would name the same sessionId and count as one in the next, and
+  // would pass the next connection's duplicate check. Binding the id
+  // to the Noise handshake hash makes it per connection.
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA } = addFreshKey(netA);
+  const { keyId: keyB } = addFreshKey(netB);
+
+  const { transportA, transportB } = makeMockTransportPair();
+  await netA.addTransport(transportA);
+  await netB.addTransport(transportB);
+
+  const connect = () =>
+    Promise.all([
+      netA.provideSession(netB.locationFor(keyB)),
+      netB.waitForInboundSession(keyA),
+    ]);
+  const bytesOf = sessionId => [...new Uint8Array(sessionId)];
+
+  const [firstA, firstB] = await connect();
+  t.deepEqual(bytesOf(firstA.sessionId), bytesOf(firstB.sessionId));
+  firstA.close();
+  firstB.close();
+
+  const [secondA, secondB] = await connect();
+  t.deepEqual(bytesOf(secondA.sessionId), bytesOf(secondB.sessionId));
+  t.notDeepEqual(bytesOf(secondA.sessionId), bytesOf(firstA.sessionId));
+
+  // The key-only id, which every connection shared before this
+  // binding, is the same for both connections.
+  const keyOnlyId = (sessionA, sessionB) =>
+    bytesOf(
+      makeSessionId(
+        sessionA.selfIdentity.keyPair.publicKey.id,
+        sessionB.selfIdentity.keyPair.publicKey.id,
+      ),
+    );
+  t.deepEqual(keyOnlyId(firstA, firstB), keyOnlyId(secondA, secondB));
+  t.notDeepEqual(keyOnlyId(firstA, firstB), bytesOf(firstA.sessionId));
+
+  secondA.close();
+  secondB.close();
 });
 
 test('provideSession rejects without any registered signing keys', async t => {

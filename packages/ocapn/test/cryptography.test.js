@@ -117,3 +117,30 @@ test('makeOcapnKeyPair', t => {
   t.is(key.publicKey.bytes.byteLength, 32);
   t.is(key.publicKey.id.byteLength, 32);
 });
+
+test('makeSessionId mixes an optional channel binding into the id', t => {
+  const key1 = makeOcapnKeyPair();
+  const key2 = makeOcapnKeyPair();
+  const bytesOf = sessionId => [...new Uint8Array(sessionId)];
+  const bindingOne = new Uint8Array(32).fill(1);
+  const bindingTwo = new Uint8Array(32).fill(2);
+
+  const unbound = makeSessionId(key1.publicKey.id, key2.publicKey.id);
+  const boundOne = makeSessionId(
+    key1.publicKey.id,
+    key2.publicKey.id,
+    bindingOne,
+  );
+
+  // Both peers derive the same id regardless of argument order.
+  t.deepEqual(
+    bytesOf(boundOne),
+    bytesOf(makeSessionId(key2.publicKey.id, key1.publicKey.id, bindingOne)),
+  );
+  // A different binding, or none, yields a different id.
+  t.notDeepEqual(
+    bytesOf(boundOne),
+    bytesOf(makeSessionId(key1.publicKey.id, key2.publicKey.id, bindingTwo)),
+  );
+  t.notDeepEqual(bytesOf(boundOne), bytesOf(unbound));
+});

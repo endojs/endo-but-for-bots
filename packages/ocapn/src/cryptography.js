@@ -70,11 +70,22 @@ const makePublicKeyDescriptor = publicKeyBytes => {
 };
 
 /**
+ * Derive the session id that two peers agree on.
+ *
+ * Without `channelBinding` the id depends only on the two peer ids, so
+ * every session between the same pair of keys gets the same id. A
+ * netlayer that reuses long-term keys as session keys (the Noise `np`
+ * netlayer) must pass a per-connection value, such as the Noise
+ * handshake hash, so that handoff replay state scoped to one session
+ * cannot be bypassed by replaying into a later session.
+ *
  * @param {Uint8Array} peerIdOne
  * @param {Uint8Array} peerIdTwo
+ * @param {Uint8Array} [channelBinding] - per-connection value both peers
+ *   share, mixed into the id after the sorted peer ids
  * @returns {SessionId}
  */
-export const makeSessionId = (peerIdOne, peerIdTwo) => {
+export const makeSessionId = (peerIdOne, peerIdTwo, channelBinding) => {
   const peerIdOneBytes = thawedBytes(peerIdOne);
   const peerIdTwoBytes = thawedBytes(peerIdTwo);
   const result = compareUint8Arrays(peerIdOneBytes, peerIdTwoBytes);
@@ -82,7 +93,11 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
     result < 0
       ? [peerIdOneBytes, peerIdTwoBytes]
       : [peerIdTwoBytes, peerIdOneBytes];
-  const sessionIdBytes = concatBytes([sessionIdHashPrefixBytes, ...peerIds]);
+  const sessionIdBytes = concatBytes([
+    sessionIdHashPrefixBytes,
+    ...peerIds,
+    ...(channelBinding === undefined ? [] : [thawedBytes(channelBinding)]),
+  ]);
   const hash1 = sha256(sessionIdBytes);
   const hash2 = sha256(hash1);
   // @ts-expect-error - Branded type: SessionId is ArrayBufferLike at runtime
