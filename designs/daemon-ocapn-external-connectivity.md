@@ -321,7 +321,8 @@ removed; `ocapn.provideSession` subsumes them.
 Today a transport is an unconfined caplet in `NETS/` implementing
 `{ supports, addresses, connect }`.
 After this design the daemon's OCapN-Noise network owns its
-transports internally (`addTransport` for TCP and WebSocket).
+transports internally: `addTransport` registers the TCP and WebSocket
+dial adapters, and `listen` opens each inbound listener.
 The `NETS/` directory and the per-agent NETS concept from
 [`daemon-agent-network-identity`](daemon-agent-network-identity.md)
 keep their role — governing *which addresses an agent advertises in

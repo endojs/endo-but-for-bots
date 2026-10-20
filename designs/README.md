@@ -491,10 +491,10 @@ LLM-agent stack).*
 | [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-03-05 | In Progress |
 | [ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) | 2026-07-13 | 2026-07-13 | **Complete** |
 | [slots-ocapn-op-lanes](slots-ocapn-op-lanes.md) | 2026-09-16 | - | In Progress |
-| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-02-24 | In Progress |
+| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-10-20 | In Progress |
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Deprecated (superseded by [ocapn-noise-network](ocapn-noise-network.md)) |
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
-| [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
+| [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-10-20 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
 | [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
