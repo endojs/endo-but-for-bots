@@ -12,11 +12,12 @@ import { makeNodeReader } from '@endo/stream-node/reader.js';
 import { makeNodeWriter } from '@endo/stream-node/writer.js';
 import { makeGracefulReader } from '@endo/stream-node/graceful-reader.js';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
+import { makeCborFrameReader, makeCborFrameWriter } from '@endo/cbor-frame';
 
 const { isNaN } = Number;
 
 /**
- * Hard cap on netstring frame length. Sized to the largest plausible
+ * Hard cap on netstring and CBOR byte-string frame length. Sized to the largest plausible
  * single Noise/OCapN message (Noise's 65535-byte ciphertext + auth tag
  * + a small framing header). Keeps a hostile peer who sends
  * `999999999:` from causing a ~1 GiB allocation in the netstring
@@ -42,6 +43,15 @@ const MAX_FRAME_LENGTH = 65_551;
  *   bytes. This is what OCapN-Noise needs once its own handshake is
  *   complete and session messages start flowing.
  *
+ * - `'cbor'`: every message is one definite-length CBOR byte string
+ *   (`@endo/cbor-frame`), the `tcp+cbor` wire combination of
+ *   `designs/ocapn-network-transport-separation.md`. Declared lengths
+ *   above the frame cap are rejected before allocation. A `'cbor'`
+ *   transport registers under the scheme `'tcp+cbor'`, so it can sit
+ *   beside a netstring `'tcp'` transport on one network: the two are
+ *   not wire compatible and must never be selected interchangeably.
+ *   Prefer `makeTcpCborTransport`.
+ *
  * - `'none'`: raw bytes in, raw bytes out. Each `reader.next()` value
  *   is whatever the kernel happened to deliver (possibly a fragment,
  *   possibly multiple messages concatenated). This mode exists to let
@@ -57,7 +67,7 @@ const MAX_FRAME_LENGTH = 65_551;
  * @param {object} [options]
  * @param {number} [options.port] - Listen port. `0` = OS-assigned.
  * @param {string} [options.host] - Listen host. Default `'127.0.0.1'`.
- * @param {'netstring' | 'none'} [options.framing] - Default `'netstring'`.
+ * @param {'netstring' | 'cbor' | 'none'} [options.framing] - Default `'netstring'`.
  * @returns {OcapnNoiseTransport}
  */
 export const makeTcpTransport = ({
@@ -65,11 +75,12 @@ export const makeTcpTransport = ({
   host = '127.0.0.1',
   framing = 'netstring',
 } = {}) => {
-  if (framing !== 'netstring' && framing !== 'none') {
+  if (framing !== 'netstring' && framing !== 'cbor' && framing !== 'none') {
     throw Error(
-      `tcp transport: \`framing\` must be 'netstring' or 'none', got ${JSON.stringify(framing)}`,
+      `tcp transport: \`framing\` must be 'netstring', 'cbor', or 'none', got ${JSON.stringify(framing)}`,
     );
   }
+  const scheme = framing === 'cbor' ? 'tcp+cbor' : 'tcp';
 
   /** @type {Set<net.Socket>} */
   const openSockets = new Set();
@@ -96,6 +107,25 @@ export const makeTcpTransport = ({
         writer: /** @type {any} */ (rawWriter),
       });
     }
+    if (framing === 'cbor') {
+      const reader = /** @type {any} */ (
+        makeGracefulReader(
+          /** @type {any} */ (
+            makeCborFrameReader(rawReader, {
+              name: 'tcp+cbor',
+              maxMessageLength: MAX_FRAME_LENGTH,
+            })
+          ),
+        )
+      );
+      const writer = /** @type {any} */ (
+        makeCborFrameWriter(rawWriter, {
+          name: 'tcp+cbor',
+          maxMessageLength: MAX_FRAME_LENGTH,
+        })
+      );
+      return harden({ reader, writer });
+    }
     const reader = /** @type {any} */ (
       makeGracefulReader(
         /** @type {any} */ (
@@ -109,16 +139,16 @@ export const makeTcpTransport = ({
 
   /** @type {OcapnNoiseTransport} */
   const transport = harden({
-    scheme: 'tcp',
+    scheme,
     connect: async hints => {
       const hintHost = hints.host ?? '127.0.0.1';
       const portStr = hints.port;
       if (portStr === undefined) {
-        throw Error(`tcp transport: missing 'port' hint`);
+        throw Error(`${scheme} transport: missing 'port' hint`);
       }
       const portNum = Number.parseInt(portStr, 10);
       if (isNaN(portNum)) {
-        throw Error(`tcp transport: invalid 'port' hint ${portStr}`);
+        throw Error(`${scheme} transport: invalid 'port' hint ${portStr}`);
       }
       const socket = net.createConnection({ host: hintHost, port: portNum });
       await new Promise((resolve, reject) => {
@@ -161,3 +191,18 @@ export const makeTcpTransport = ({
   });
   return transport;
 };
+
+/**
+ * TCP byte-stream transport framing each message as one definite-length
+ * CBOR byte string (`@endo/cbor-frame`): the `tcp+cbor` combination of
+ * `designs/ocapn-network-transport-separation.md`. It registers under the
+ * scheme `'tcp+cbor'`, distinct from the netstring `'tcp'` transport, whose
+ * wire format it does not share.
+ *
+ * @param {object} [options]
+ * @param {number} [options.port] - Listen port. `0` = OS-assigned.
+ * @param {string} [options.host] - Listen host. Default `'127.0.0.1'`.
+ * @returns {OcapnNoiseTransport}
+ */
+export const makeTcpCborTransport = ({ port, host } = {}) =>
+  makeTcpTransport({ port, host, framing: 'cbor' });

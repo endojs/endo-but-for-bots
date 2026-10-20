@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../cbor-frame/tsconfig.composite.json"
+    },
+    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
