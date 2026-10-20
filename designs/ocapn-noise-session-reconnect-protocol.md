@@ -225,9 +225,9 @@ satisfy this rule, and slice B3 pins it with a test.
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| Transport ↔ network | transport plugin moves bytes for one instance | none | none | network opens and closes instances | encrypted frames |
-| Network ↔ CapTP client | network session state machine (epoch, queue, retention, frame index, tiebreak) | network options (`heartbeat`, `reconnect`) | none: in memory only | network decides attach, replay, discard, and abort; CapTP sees only end or error | plaintext CapTP messages, each exactly once |
-| Daemon ↔ network | daemon constructs the network | daemon chooses whether heartbeat and reconnect are on, and the timeouts | none | daemon owns network lifetime through its `cancelled` context | options record |
+| Transport <-> network | transport plugin moves bytes for one instance | none | none | network opens and closes instances | encrypted frames |
+| Network <-> CapTP client | network session state machine (epoch, queue, retention, frame index, tiebreak) | network options (`heartbeat`, `reconnect`) | none: in memory only | network decides attach, replay, discard, and abort; CapTP sees only end or error | plaintext CapTP messages, each exactly once |
+| Daemon <-> network | daemon constructs the network | daemon chooses whether heartbeat and reconnect are on, and the timeouts | none | daemon owns network lifetime through its `cancelled` context | options record |
 
 - **Persistent state:** none. A process restart loses the session, and
   R4 turns that into an immediate abort at the peer.
