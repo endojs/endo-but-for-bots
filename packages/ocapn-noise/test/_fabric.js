@@ -107,11 +107,11 @@ export const makeMockMeshFabric = () => {
         accept(incoming);
         return outgoing;
       },
-      listen: async handler => {
+      listen: async (_options, accept) => {
         if (listeners.has(name)) {
           throw Error(`mesh transport: ${name} already listening`);
         }
-        listeners.set(name, handler);
+        listeners.set(name, accept);
         closers.add(() => listeners.delete(name));
         /** @type {TransportListener} */
         const listener = harden({

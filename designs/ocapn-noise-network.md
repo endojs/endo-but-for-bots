@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-05-18 |
+| **Updated** | 2026-10-20 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 
@@ -37,6 +37,12 @@ OCapN.
     `1874c9002` browser-portable netlayer, `f0677cf85` integration
     tests, all under PR #59; merged into `llm` via PR #137 /
     `6a5aecd01` the same day).
+
+> **See also**: [ocapn-network-transport-separation](ocapn-network-transport-separation.md)
+> amends the transport plugin interface below: `addTransport` now only
+> registers a dial adapter, and inbound listening is the separate
+> `network.listen(transport, options)` call, which hands the transport
+> `listen(options, accept)`.
 
 > **See also**: [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md)
 > amends this design with a meta-TCP session layer (heartbeat, transparent
@@ -87,8 +93,9 @@ subsequent encrypted messaging.
  * @property {string} scheme - Transport scheme (e.g., 'ws', 'tcp')
  * @property {(hints: Record<string, string>) => Promise<ByteStream>} connect
  *   Open an outgoing byte stream to a peer using transport-specific hints.
- * @property {(options: ListenOptions) => Promise<TransportListener>} listen
- *   Start listening for incoming byte stream connections.
+ * @property {(options: ListenOptions, accept: (stream: ByteStream) => void) => Promise<TransportListener>} [listen]
+ *   Start listening for incoming byte stream connections. Called by
+ *   `network.listen`, never by `addTransport`.
  * @property {() => void} shutdown
  */
 

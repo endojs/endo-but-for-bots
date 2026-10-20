@@ -259,8 +259,9 @@ export const make = async (powers, context) => {
   const locator = new Map();
   locator.set(PEER_ENTRY_SWISSNUM, peerEntry);
 
-  const tcpTransport = makeTcpTransport({ host, port });
-  await network.addTransport(tcpTransport);
+  const tcpTransport = makeTcpTransport();
+  network.addTransport(tcpTransport);
+  await network.listen(tcpTransport, { host, port });
 
   const client = await makeOcapn({
     codec,

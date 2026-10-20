@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-10-20 |
 | **Author** | Kris Kowal (prompted), Kriscendo Bot (prompted) |
 | **Status** | In Progress |
 
@@ -242,6 +242,21 @@ same responder path; the cleartext intended-responder-key prefix chooses the
 registered signing key. Thus TCP and WebSocket can terminate sessions for the
 same `.np` designator without either listener possessing a special identity or
 without a transport becoming part of the identity.
+
+## Implementation Status
+
+| Step | State |
+|---|---|
+| 1. Normalize to composite `<transport>+<codec>` hints | Not started |
+| 2. `@endo/cbor-frame` and `makeTcpCborTransport` | Partial: `@endo/cbor-frame` exists; `makeTcpCborTransport` not started |
+| 3. `listen(options, accept)` and registration-only `addTransport` | Done ([#1507](https://github.com/endojs/endo-but-for-bots/pull/1507)) |
+| 4. `OcapnNoiseNetwork.listen` and lifecycle | Partial: `network.listen`, bind rollback, listener withdrawal, and removal refusal while listening landed in [#1507](https://github.com/endojs/endo-but-for-bots/pull/1507); composite-key hint aggregation, duplicate-combination rejection, ordered fallback, and the `(network, designator)` session key ([#1477](https://github.com/endojs/endo-but-for-bots/pull/1477)) remain |
+| 5. Migrate fixtures, dual-listener tests | Partial: fixtures obtain locations after `listen`; dual-listener and fallback tests remain |
+| 6. Resume PR #684 | Blocked on steps 1, 2, 4, and 5 |
+
+Steps 3 and 4 landed ahead of steps 1 and 2 because the listener lifecycle
+does not depend on the hint grammar or the CBOR frame.
+TCP still publishes `host`/`port` hints over netstring framing, and WebSocket still publishes a `url` hint.
 
 ## Migration Plan
 

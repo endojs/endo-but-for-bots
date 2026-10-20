@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { OcapnNoiseTransport, TransportListener } from '../src/types.js' */
+
 import test from '@endo/ses-ava/test.js';
 import { makeQueue } from '@endo/stream';
 import harden from '@endo/harden';
@@ -13,6 +15,7 @@ import {
 } from '../src/bindings.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
 import { makeMockMeshFabric } from './_fabric.js';
+import { registerListeningTransport } from './_transport.js';
 
 /**
  * Register a freshly-minted Ed25519 key on the network and return the
@@ -73,19 +76,117 @@ test('addSigningKeys returns the 64-char keyId and registers a locator', async t
   network.shutdown();
 });
 
-test('addTransport picks up transport hints in subsequent locations()', async t => {
+test('listen picks up transport hints in subsequent locations()', async t => {
   const network = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId } = addFreshKey(network);
   t.is(network.locationFor(keyId).hints, false);
 
   const { transportA } = makeMockTransportPair();
-  await network.addTransport(transportA);
+  network.addTransport(transportA);
+  t.is(network.locationFor(keyId).hints, false);
+  const listener = await network.listen(transportA);
   const loc = network.locationFor(keyId);
   t.deepEqual(loc.hints, { 'mock:to': 'default' });
 
+  listener.close();
+  t.is(network.locationFor(keyId).hints, false);
+  const reboundListener = await network.listen(transportA, {
+    designator: 'rebound',
+  });
+  t.deepEqual(network.locationFor(keyId).hints, {
+    'mock:to': 'rebound',
+  });
+  reboundListener.close();
   network.removeTransport(transportA);
   t.is(network.locationFor(keyId).hints, false);
   network.shutdown();
+});
+
+test('listen requires registration and removeTransport requires listener withdrawal', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId } = addFreshKey(network);
+  const { transportA } = makeMockTransportPair();
+
+  await t.throwsAsync(() => network.listen(transportA), {
+    message: /must be registered before listening/,
+  });
+
+  network.addTransport(transportA);
+  const listener = await network.listen(transportA);
+  t.deepEqual(network.locationFor(keyId).hints, {
+    'mock:to': 'default',
+  });
+  t.throws(() => network.removeTransport(transportA), {
+    message: /cannot remove.*while it is listening/,
+  });
+
+  listener.close();
+  t.is(network.locationFor(keyId).hints, false);
+  t.notThrows(() => network.removeTransport(transportA));
+});
+
+test('concurrent listen calls cannot open two listeners for one transport', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const { transportA } = makeMockTransportPair();
+  network.addTransport(transportA);
+
+  const firstListener = network.listen(transportA);
+  await t.throwsAsync(() => network.listen(transportA), {
+    message: /already listening/,
+  });
+  const listener = await firstListener;
+  listener.close();
+});
+
+test('listen rejects a transport that supports only outgoing connections', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const transport = makeStallingTransport();
+  network.addTransport(transport);
+  await t.throwsAsync(() => network.listen(transport), {
+    message: /does not support listening/,
+  });
+  t.notThrows(() => network.removeTransport(transport));
+});
+
+test('listen closes a listener that binds after network shutdown', async t => {
+  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  /** @type {(listener: TransportListener) => void} */
+  let bind = () => {};
+  /** @type {() => void} */
+  let entered = () => {};
+  const listenEntered = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  let closed = 0;
+  /** @type {OcapnNoiseTransport} */
+  const transport = harden({
+    scheme: 'late',
+    connect: async () => {
+      throw Error('late transport: connect unsupported');
+    },
+    listen: () =>
+      new Promise(resolve => {
+        bind = resolve;
+        entered();
+      }),
+    shutdown: () => {},
+  });
+  network.addTransport(transport);
+  const listening = network.listen(transport);
+  await listenEntered;
+  network.shutdown();
+  bind(
+    harden({
+      hints: { to: 'late' },
+      close: () => {
+        closed += 1;
+      },
+    }),
+  );
+  await t.throwsAsync(() => listening, {
+    message: /network shutdown while listening/,
+  });
+  t.is(closed, 1);
 });
 
 test('two peers handshake and exchange encrypted messages via mock transport', async t => {
@@ -95,8 +196,8 @@ test('two peers handshake and exchange encrypted messages via mock transport', a
   const { keyId: keyB } = addFreshKey(netB);
 
   const { transportA, transportB } = makeMockTransportPair();
-  await netA.addTransport(transportA);
-  await netB.addTransport(transportB);
+  await registerListeningTransport(netA, transportA);
+  await registerListeningTransport(netB, transportB);
 
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(netB.locationFor(keyB)),
@@ -131,7 +232,7 @@ test('two peers handshake and exchange encrypted messages via mock transport', a
 test('provideSession rejects without any registered signing keys', async t => {
   const network = makeNetworkForTest(t, { codec: cborCodec });
   const { transportA } = makeMockTransportPair();
-  await network.addTransport(transportA);
+  network.addTransport(transportA);
   await t.throwsAsync(
     async () =>
       network.provideSession({
@@ -150,7 +251,7 @@ test('provideSession rejects locations with a short designator', async t => {
   const network = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(network);
   const { transportA } = makeMockTransportPair();
-  await network.addTransport(transportA);
+  network.addTransport(transportA);
   await t.throwsAsync(
     async () =>
       network.provideSession({
@@ -169,7 +270,7 @@ test('provideSession rejects a non-hex designator', async t => {
   const network = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(network);
   const { transportA } = makeMockTransportPair();
-  await network.addTransport(transportA);
+  network.addTransport(transportA);
   // 64 non-hex chars: the old length-only check accepted this, and
   // `hexToBytes` turned it into 32 zero bytes (a small-order key).
   await t.throwsAsync(
@@ -190,7 +291,7 @@ test('provideSession rejects an uppercase spelling of a peer designator', async 
   const network = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId } = addFreshKey(network);
   const { transportA } = makeMockTransportPair();
-  await network.addTransport(transportA);
+  network.addTransport(transportA);
   // The raw designator string keys `active`/`inProgress`/`waiters`, so
   // an uppercase spelling of a peer we already hold would once open a
   // second, duplicate session instead of reusing the first.
@@ -228,8 +329,8 @@ test('multiple keys on one network route inbound sessions to the right local key
   const { keyId: keyA2 } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
   const { transportA, transportB } = makeMockTransportPair();
-  await netA.addTransport(transportA);
-  await netB.addTransport(transportB);
+  await registerListeningTransport(netA, transportA);
+  await registerListeningTransport(netB, transportB);
 
   // B initiates to A using keyA2 as the intended responder.
   const [sessionB, sessionA] = await Promise.all([
@@ -254,8 +355,8 @@ test('provideSession rejects when an active session under a different local key 
   const { keyId: keyA2 } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
   const { transportA, transportB } = makeMockTransportPair();
-  await netA.addTransport(transportA);
-  await netB.addTransport(transportB);
+  await registerListeningTransport(netA, transportA);
+  await registerListeningTransport(netB, transportB);
 
   // First session: A reaches B as A1.
   const [sessionA, sessionB] = await Promise.all([
@@ -291,7 +392,7 @@ test('provideSession rejects when an active session under a different local key 
  * bytes (a slow-loris peer) used to exercise the handshake-timeout and
  * shutdown paths.
  *
- * @returns {import('../src/types.js').OcapnNoiseTransport}
+ * @returns {OcapnNoiseTransport}
  */
 const makeStallingTransport = () => {
   const queue = makeQueue();
@@ -326,8 +427,8 @@ test('active session is preserved when a second inbound handshake arrives', asyn
   const netB = makeNetworkForTest(t, { codec: cborCodec });
   const keyA = addFreshKey(netA).keyId;
   const keyB = addFreshKey(netB).keyId;
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
   const locB = { ...netB.locationFor(keyB), hints: { 'mesh:to': 'B' } };
 
@@ -368,8 +469,8 @@ test('impostor SYN claiming a peer identity cannot displace that peer session', 
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
   const { keyId: keyV, publicKey: publicKeyV } = addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   // The victim V dials A, and A settles the session.  Nothing takes it
@@ -420,8 +521,8 @@ test('replayed genuine SYN cannot displace the peer unclaimed session', async t 
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
   const victim = addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   // V dials A; A settles an unclaimed inbound session (nothing takes it
@@ -549,8 +650,8 @@ test('a sustained SYN replay cannot block settlement of an outbound dial', async
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { publicKey: publicKeyA } = addFreshKey(netA);
   const victim = addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locV = { ...netV.locationFor(victim.keyId), hints: { 'mesh:to': 'V' } };
 
   // A captured genuine SYN from V to A, re-sent faster than A's handshake
@@ -577,8 +678,8 @@ test('a sustained SYN replay cannot block settlement of an inbound dial', async 
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
   const victim = addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 150);
@@ -605,7 +706,7 @@ test('a sustained SYN replay cannot hang an outbound dial that fails', async t =
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { publicKey: publicKeyA } = addFreshKey(netA);
   const victim = addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
   // V is not listening, so A's own dial fails. Replays claiming V never
   // produce a proven handshake, so nothing else can settle A's waiter.
   const locV = {
@@ -634,8 +735,8 @@ test('a genuine re-dial is not refused while a replay is in flight', async t => 
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
   const victim = addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 150);
@@ -663,7 +764,8 @@ test('a replay that fails fast cannot fail a slow outbound dial', async t => {
   // A's outbound connect is slower than the handshake timeout; the dial
   // is still healthy, since each handshake step has its own budget.
   const base = fabric.transportFor('A');
-  await netA.addTransport(
+  await registerListeningTransport(
+    netA,
     harden({
       ...base,
       connect: async hints => {
@@ -672,7 +774,7 @@ test('a replay that fails fast cannot fail a slow outbound dial', async t => {
       },
     }),
   );
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locV = { ...netV.locationFor(victim.keyId), hints: { 'mesh:to': 'V' } };
 
   const dial = netA.provideSession(locV);
@@ -704,9 +806,9 @@ test('shutdown closes every candidate still awaiting settlement', async t => {
     privateKey: victim.privateKey,
     publicKey: victim.publicKey,
   });
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV1.addTransport(fabric.transportFor('V1'));
-  await netV2.addTransport(fabric.transportFor('V2'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV1, fabric.transportFor('V1'));
+  await registerListeningTransport(netV2, fabric.transportFor('V2'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 60_000);
@@ -740,7 +842,7 @@ test('when the per-identity cap is full, the oldest unproven handshake is evicte
   });
   const { publicKey: publicKeyA } = addFreshKey(netA);
   const { publicKey: publicKeyA2 } = addFreshKey(netA);
-  await netA.addTransport(fabric.transportFor('A'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
   const dialer = fabric.transportFor('dialer');
   /** @type {import('../src/types.js').ByteStream[]} */
   const streams = [];
@@ -815,8 +917,8 @@ test('a flood of stalled handshakes cannot lock a genuine peer out', async t => 
   const netV = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
   addFreshKey(netV);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netV.addTransport(fabric.transportFor('V'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netV, fabric.transportFor('V'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
   const dialer = fabric.transportFor('dialer');
   /** @type {import('../src/types.js').ByteStream[]} */
@@ -855,7 +957,7 @@ test('provideSession rejects a weak designator before opening a connection', asy
   addFreshKey(net);
   let connects = 0;
   const base = fabric.transportFor('A');
-  await net.addTransport(
+  net.addTransport(
     harden({
       ...base,
       connect: async hints => {
@@ -884,7 +986,7 @@ test('provideSession rejects after handshake timeout', async t => {
     handshakeTimeoutMs: 50,
   });
   addFreshKey(net);
-  await net.addTransport(makeStallingTransport());
+  net.addTransport(makeStallingTransport());
 
   // A real, strong peer key so the dial reaches the stalling transport
   // and times out, rather than being rejected up front by the weak-key
@@ -911,7 +1013,7 @@ test('provideSession with multiple keys demands an explicit localKeyId', async t
   addFreshKey(net);
   addFreshKey(net);
   const { transportA } = makeMockTransportPair();
-  await net.addTransport(transportA);
+  net.addTransport(transportA);
   await t.throwsAsync(
     async () =>
       net.provideSession({
@@ -930,7 +1032,7 @@ test('provideSession rejects an unknown localKeyId', async t => {
   const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   const { transportA } = makeMockTransportPair();
-  await net.addTransport(transportA);
+  net.addTransport(transportA);
   await t.throwsAsync(
     async () =>
       net.provideSession(
@@ -948,7 +1050,7 @@ test('provideSession rejects an unknown localKeyId', async t => {
   net.shutdown();
 });
 
-test('addTransport rolls back when listen fails', async t => {
+test('listen failure leaves the registered transport without published hints', async t => {
   const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   const broken = harden({
@@ -961,18 +1063,19 @@ test('addTransport rolls back when listen fails', async t => {
     },
     shutdown: () => {},
   });
-  await t.throwsAsync(
-    async () => net.addTransport(/** @type {any} */ (broken)),
-    { message: /synthetic listen failure/ },
-  );
-  t.deepEqual(net.listTransports(), []);
+  net.addTransport(/** @type {any} */ (broken));
+  await t.throwsAsync(async () => net.listen(/** @type {any} */ (broken)), {
+    message: /synthetic listen failure/,
+  });
+  t.deepEqual(net.listTransports(), [broken]);
+  t.is(net.locationFor(net.listSigningKeys()[0]).hints, false);
   net.shutdown();
 });
 
 test('shutdown rejects pending provideSession waiters', async t => {
   const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
-  await net.addTransport(makeStallingTransport());
+  net.addTransport(makeStallingTransport());
   // A real, strong peer key (a fresh keyId is a valid prime-order
   // Ed25519 point) so the dial reaches the stalling transport rather
   // than being rejected up front by the weak-key guard.
@@ -1009,8 +1112,8 @@ test('SYN addressed to an unknown local key is silently dropped', async t => {
   const netB = makeNetworkForTest(t, { codec: cborCodec });
   const keyA = addFreshKey(netA).keyId;
   addFreshKey(netB);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   // Remove A's key before B dials. B's SYN will be addressed to a
@@ -1076,8 +1179,8 @@ test('addSigningKeys rejects mismatched (privateKey, publicKey) pair', t => {
 test('addTransport rejects a second transport with the same scheme', async t => {
   const net = makeNetworkForTest(t, { codec: cborCodec });
   const fabric = makeFabricForTest(t);
-  await net.addTransport(fabric.transportFor('A'));
-  await t.throwsAsync(async () => net.addTransport(fabric.transportFor('B')), {
+  await registerListeningTransport(net, fabric.transportFor('A'));
+  t.throws(() => net.addTransport(fabric.transportFor('B')), {
     message: /scheme.*already registered/,
   });
   net.shutdown();
@@ -1090,8 +1193,8 @@ test('inboundSessions.return closes queued sessions that nobody consumed', async
   const netB = makeNetworkForTest(t, { codec: cborCodec });
   const keyA = addFreshKey(netA).keyId;
   addFreshKey(netB);
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
   // B initiates; A should buffer the session in its inboundSessions
@@ -1121,8 +1224,8 @@ test('active session is forgotten after close so a fresh dial starts new', async
   const netB = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(netA);
   const keyB = addFreshKey(netB).keyId;
-  await netA.addTransport(fabric.transportFor('A'));
-  await netB.addTransport(fabric.transportFor('B'));
+  await registerListeningTransport(netA, fabric.transportFor('A'));
+  await registerListeningTransport(netB, fabric.transportFor('B'));
   const locB = { ...netB.locationFor(keyB), hints: { 'mesh:to': 'B' } };
 
   const first = await netA.provideSession(locB);

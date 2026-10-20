@@ -1,9 +1,17 @@
 // @ts-check
 
 /**
- * @typedef {import('../types.js').ByteStream} ByteStream
- * @typedef {import('../types.js').OcapnNoiseTransport} OcapnNoiseTransport
- * @typedef {import('../types.js').TransportListener} TransportListener
+ * @import { AsyncQueue, Reader, Writer } from '@endo/stream';
+ * @import {
+ *   ByteStream,
+ *   OcapnNoiseTransport as GenericTransport,
+ *   TransportListener,
+ * } from '../types.js';
+ */
+
+/**
+ * @typedef {{ designator?: string }} MockListenOptions
+ * @typedef {GenericTransport<MockListenOptions>} OcapnNoiseTransport
  */
 
 import harden from '@endo/harden';
@@ -19,15 +27,15 @@ import { makeQueue } from '@endo/stream';
  * deadlock the Noise handshake's interleaved sends.)
  *
  * @template T
- * @returns {[import('@endo/stream').Writer<T>, import('@endo/stream').Reader<T>]}
+ * @returns {[Writer<T>, Reader<T>]}
  */
 const makeBufferedPipe = () => {
-  /** @type {import('@endo/stream').AsyncQueue<IteratorResult<T, undefined>>} */
+  /** @type {AsyncQueue<IteratorResult<T, undefined>>} */
   const queue = makeQueue();
   const ack = harden({ done: false, value: undefined });
   let closed = false;
 
-  const writer = /** @type {import('@endo/stream').Writer<T>} */ (
+  const writer = /** @type {Writer<T>} */ (
     harden({
       /** @param {T} value */
       async next(value) {
@@ -51,7 +59,7 @@ const makeBufferedPipe = () => {
       },
     })
   );
-  const reader = /** @type {import('@endo/stream').Reader<T>} */ (
+  const reader = /** @type {Reader<T>} */ (
     harden({
       next: () => queue.get(),
       return: async () => {
@@ -123,12 +131,12 @@ export const makeMockTransportPair = () => {
         accept(incoming);
         return outgoing;
       },
-      listen: async handler => {
-        const designator = 'default';
+      listen: async (options, accept) => {
+        const { designator = 'default' } = options ?? {};
         if (myListeners.has(designator)) {
           throw Error(`mock transport: listener already registered`);
         }
-        myListeners.set(designator, handler);
+        myListeners.set(designator, accept);
         /** @type {TransportListener} */
         const listener = harden({
           hints: { to: designator },

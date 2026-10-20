@@ -1,17 +1,17 @@
 // @ts-check
 
 /**
- * @typedef {import('../types.js').ByteStream} ByteStream
- * @typedef {import('../types.js').OcapnNoiseTransport} OcapnNoiseTransport
- * @typedef {import('../types.js').TransportListener} TransportListener
+ * @import { AsyncQueue, Reader, Writer } from '@endo/stream';
+ * @import {
+ *   ByteStream,
+ *   OcapnNoiseTransport as GenericTransport,
+ *   TransportListener,
+ * } from '../types.js';
  */
+
 /**
- * @template T
- * @typedef {import('@endo/stream').Reader<T>} Reader
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Writer<T>} Writer
+ * @typedef {{ port?: number, host?: string }} WebSocketListenOptions
+ * @typedef {GenericTransport<WebSocketListenOptions>} OcapnNoiseTransport
  */
 
 import harden from '@endo/harden';
@@ -29,7 +29,7 @@ import { makeQueue } from '@endo/stream';
 const adaptWebSocket = ws => {
   if ('binaryType' in ws) ws.binaryType = 'arraybuffer';
 
-  /** @type {import('@endo/stream').AsyncQueue<IteratorResult<Uint8Array, undefined>>} */
+  /** @type {AsyncQueue<IteratorResult<Uint8Array, undefined>>} */
   const incoming = makeQueue();
   let closed = false;
 
@@ -129,15 +129,11 @@ const adaptWebSocket = ws => {
  * @param {object} [options]
  * @param {typeof globalThis.WebSocket} [options.WebSocket]
  * @param {{ new (options: { port?: number, host?: string }): any } | undefined} [options.WebSocketServer]
- * @param {number} [options.port]
- * @param {string} [options.host]
  * @returns {OcapnNoiseTransport}
  */
 export const makeWebSocketTransport = ({
   WebSocket = /** @type {any} */ (globalThis).WebSocket,
   WebSocketServer,
-  port = 0,
-  host = '127.0.0.1',
 } = {}) => {
   if (!WebSocket) {
     throw Error('makeWebSocketTransport: no WebSocket constructor available');
@@ -151,40 +147,55 @@ export const makeWebSocketTransport = ({
    * wildcard host. The hint is what we advertise to peers; `0.0.0.0` /
    * `::` / unspecified addresses are not connect targets.
    *
-   * @param {string} addr
+   * @param {string} address
    */
-  const advertisedHost = addr => {
-    if (addr === '0.0.0.0' || addr === '::' || addr === '::ffff:0.0.0.0') {
+  const advertisedHost = address => {
+    if (
+      address === '0.0.0.0' ||
+      address === '::' ||
+      address === '::ffff:0.0.0.0'
+    ) {
       return '127.0.0.1';
     }
-    return addr;
+    return address;
   };
 
   /** @type {OcapnNoiseTransport['listen']} */
   const listen = WebSocketServer
-    ? async handler => {
+    ? async (options, accept) => {
+        await null;
         if (server) {
-          throw Error('ocapn-noise ws transport: listen called more than once');
+          throw Error('ocapn-noise ws transport: already listening');
         }
-        server = new WebSocketServer({ port, host });
-        await new Promise(resolve => {
-          server.on('listening', () => resolve(undefined));
-        });
-        server.on(
+        const { port = 0, host = '127.0.0.1' } = options ?? {};
+        const listeningServer = new WebSocketServer({ port, host });
+        server = listeningServer;
+        try {
+          await new Promise((resolve, reject) => {
+            listeningServer.once('listening', resolve);
+            listeningServer.once('error', reject);
+          });
+        } catch (error) {
+          if (server === listeningServer) server = undefined;
+          throw error;
+        }
+        listeningServer.on(
           'connection',
           /** @param {any} ws */ ws => {
-            handler(adaptWebSocket(ws));
+            accept(adaptWebSocket(ws));
           },
         );
-        const addr = server.address();
+        const boundAddress = listeningServer.address();
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { url: `ws://${advertisedHost(addr.address)}:${addr.port}` },
+          hints: {
+            url: `ws://${advertisedHost(boundAddress.address)}:${boundAddress.port}`,
+          },
           close: () => {
             try {
-              server.close();
+              listeningServer.close();
             } finally {
-              server = undefined;
+              if (server === listeningServer) server = undefined;
             }
           },
         });

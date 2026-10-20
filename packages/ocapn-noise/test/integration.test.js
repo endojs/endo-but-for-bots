@@ -10,6 +10,7 @@ import { cborCodec } from '@endo/ocapn/cbor';
 
 import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeMockMeshFabric } from './_fabric.js';
+import { registerListeningTransport } from './_transport.js';
 
 /**
  * Spin up one `@endo/ocapn` instance backed by a noise network wired
@@ -27,7 +28,7 @@ const makeNoisePeer = async ({ fabric, name, locator = new Map() }) => {
   const network = makeOcapnNoiseNetwork({ codec: cborCodec });
   const signingKeys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(signingKeys);
-  await network.addTransport(fabric.transportFor(name));
+  await registerListeningTransport(network, fabric.transportFor(name));
   const location = network.locationFor(keyId);
 
   // `makeOcapn` takes the codec and network at construction; the
