@@ -129,12 +129,19 @@ const save = async (files, path, value) => {
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {PlatformPowers} platform
  * @param {string} statePath
- * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number}} [options]
+ * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number, mailboxPlacement?: 'workspace' | 'separate'}} [options]
+ *   Mailbox placement is selected for fresh state and persisted for ordinary
+ *   restarts. Omission retains separate mailboxes for existing state.
  */
 export const serveThixotrope = async (
   platform,
   statePath,
-  { engine, idleSleepMs = 30_000, snapshotEveryDeliveries = 256 } = {},
+  {
+    engine,
+    idleSleepMs = 30_000,
+    snapshotEveryDeliveries = 256,
+    mailboxPlacement,
+  } = {},
 ) => {
   const {
     timers,
@@ -316,6 +323,20 @@ export const serveThixotrope = async (
               config.version,
               WORKSPACE_VERSION,
             );
+          if (
+            config?.mailboxPlacement !== undefined &&
+            config.mailboxPlacement !== 'workspace' &&
+            config.mailboxPlacement !== 'separate'
+          )
+            throw Error('Invalid mailbox placement in workspace metadata');
+          if (
+            config !== undefined &&
+            mailboxPlacement !== undefined &&
+            (config.mailboxPlacement ?? 'separate') !== mailboxPlacement
+          )
+            throw Error(
+              'Changing mailbox placement requires a fresh state directory',
+            );
           const atom = makeFileSyncStringAtom(
             syncFiles,
             paths.join(statePath, 'installations.json'),
@@ -404,7 +425,11 @@ export const serveThixotrope = async (
     );
 
     if (config === undefined) {
-      config = { version: WORKSPACE_VERSION, workspaces: {} };
+      config = {
+        version: WORKSPACE_VERSION,
+        workspaces: {},
+        ...(mailboxPlacement === undefined ? {} : { mailboxPlacement }),
+      };
       await save(files, configPath, config);
     }
     if (

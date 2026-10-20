@@ -17,9 +17,11 @@ const powers = makeNodePowers();
 /**
  * @param {import('ava').ExecutionContext} t
  * @param {string} path
+ * @param {{mailboxPlacement?: 'workspace' | 'separate'}} [options]
  */
-const serve = async (t, path) => {
+const serve = async (t, path, options = {}) => {
   const supervisor = await serveThixotrope(powers, path, {
+    ...options,
     engine: harden({
       ...makePeerJournalReplayEngine(powers),
       acquireStore: async () => async () => {},
@@ -38,6 +40,80 @@ const serve = async (t, path) => {
   };
   return { supervisor, connect };
 };
+
+test.serial(
+  'workspace mailbox placement and history survive an ordinary restart',
+  async t => {
+    t.timeout(120_000);
+    const path = await mkdtemp('/tmp/thix-workspace-mail-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    let host = await serve(t, path, { mailboxPlacement: 'workspace' });
+    let admin = await host.connect();
+    await admin.call('createWorkspace', 'alice');
+    const alice = await host.connect('alice');
+    const setup = `(() => {
+    const mailbox = inventory.get('mailbox');
+    if (mailbox !== globalThis.workspaceMailbox) throw Error('Mailbox is outside workspace');
+    const sender = Far('Sender', {});
+    return E(mailbox).receive(sender, 1n, ['kept through restart']);
+  })()`;
+    t.is(await alice.call('evaluate', setup), 'true');
+    t.is(
+      await admin.call(
+        'evaluate',
+        "E(inventory.get('mailbox')).inbox().then(messages => messages.length)",
+      ),
+      '0',
+    );
+    const before = await admin.call('status');
+    t.false(before.workers.some(worker => worker.debugLabel === 'app:mailbox'));
+    t.false(
+      (await admin.call('installations')).some(
+        entry => entry.name === 'mailbox',
+      ),
+    );
+    const token = await alice.call('getMailUiToken');
+    await host.supervisor.close();
+    // No placement option on restart: the durable profile selects it.
+    host = await serve(t, path);
+    admin = await host.connect();
+    const restored = await host.connect('alice');
+    t.is(await restored.call('getMailUiToken'), token);
+    t.is(
+      await restored.call(
+        'evaluate',
+        "inventory.get('mailbox') === globalThis.workspaceMailbox",
+      ),
+      'true',
+    );
+    t.is(
+      await restored.call(
+        'evaluate',
+        "E(inventory.get('mailbox')).inbox().then(messages => messages[0].content[0])",
+      ),
+      "'kept through restart'",
+    );
+    t.is(
+      await admin.call(
+        'evaluate',
+        "E(inventory.get('mailbox')).inbox().then(messages => messages.length)",
+      ),
+      '0',
+    );
+    t.false(
+      (await admin.call('status')).workers.some(
+        worker => worker.debugLabel === 'app:mailbox',
+      ),
+    );
+    await host.supervisor.close();
+    await t.throwsAsync(
+      () => serve(t, path, { mailboxPlacement: 'separate' }),
+      {
+        message: /requires a fresh state directory/,
+      },
+    );
+  },
+);
 
 test.serial(
   'a daemon serves many workspaces, each with its own inventory and mailbox and the one clock',

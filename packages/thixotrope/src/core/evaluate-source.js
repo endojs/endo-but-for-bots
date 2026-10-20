@@ -17,7 +17,7 @@ import harden from '@endo/harden';
  * @param {{evaluate: (source: string, endowments?: Record<string, unknown>) => Promise<any>}} worker
  * @param {string} source an expression yielding a function of the endowments
  * @param {Record<string, unknown>} endowments
- * @param {{ slot?: 'thixotrope.installSource' | 'thixotrope.mailSource' }} [options]
+ * @param {{ slot?: 'thixotrope.installSource' | 'thixotrope.mailSource' | 'thixotrope.workspaceMailboxSource' }} [options]
  *   the staging slot, a name this module's callers agree on rather than
  *   anything user-derived
  */

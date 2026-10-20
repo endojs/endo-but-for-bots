@@ -10,13 +10,14 @@ import harden from '@endo/harden';
 import { evaluateSource } from '../core/evaluate-source.js';
 import { makeMailAddressBook } from '../mail/mail-address-book.js';
 import { makeMailContact } from '../mail/mail-contact.js';
+import { makeMailbox } from '../mail/mailbox.js';
 import { makeObservableMap } from '../observable-map.js';
 import { assertWorkspaceName } from './names.js';
 import { makeWorkspaceAccess } from './workspace-access.js';
 
 /**
  * A workspace: a vat of its own, published as a retention root, with an
- * inventory, an access object for the registry, a provided mailbox and,
+ * inventory, an access object for the registry, its mailbox and,
  * on first use, an address book. One per name, `default` always.
  *
  * @typedef {object} Workspace
@@ -36,6 +37,7 @@ import { makeWorkspaceAccess } from './workspace-access.js';
  * @typedef {object} WorkspaceTable
  * @property {number} version
  * @property {Record<string, { workerId: string }>} workspaces
+ * @property {'workspace' | 'separate'} [mailboxPlacement] persisted placement for fresh mailboxes
  */
 
 /** The workspace every state directory serves, under this name. */
@@ -44,7 +46,8 @@ export const DEFAULT_WORKSPACE = 'default';
 /**
  * The workspaces a state directory serves: the table of their names, each
  * opened under the allocation key derived from its name, provided its
- * mailbox and handed the daemon's clock, and made by name on request. What
+ * mailbox in its persisted placement and handed the daemon's clock, and made
+ * by name on request. What
  * this module ships into a vat by source (the inventory, the workspace
  * access object, the mail address book) is frozen in that vat's heap at
  * first evaluation: a change to it is a `WORKSPACE_VERSION` bump in
@@ -335,7 +338,8 @@ export const makeWorkspaces = ({
   };
   /**
    * What every workspace is provided: the daemon's clock under `clock`,
-   * and a mailbox of its own, in a vat of its own, under `mailbox`.
+   * and a mailbox of its own under `mailbox`. Fresh state can opt into
+   * a workspace-owned mailbox; existing state retains its original placement.
    * @param {Workspace} workspace
    */
   const provideInto = async workspace => {
@@ -347,6 +351,23 @@ export const makeWorkspaces = ({
     }
     const clock = clockFacet();
     if (clock !== undefined) await handOut(workspace, 'clock', clock);
+    if (config.mailboxPlacement === 'workspace') {
+      const existing = await workspace.worker.evaluate(
+        'globalThis.workspaceMailbox',
+      );
+      if (existing === undefined) {
+        await evaluateSource(
+          workspace.worker,
+          `(() => (globalThis.workspaceMailbox ??= (${makeMailbox.toString()})((${makeObservableMap.toString()}))))`,
+          {},
+          { slot: 'thixotrope.workspaceMailboxSource' },
+        );
+      }
+      await workspace.worker.evaluate(
+        "(inventory.has('mailbox') || inventory.set('mailbox', globalThis.workspaceMailbox), true)",
+      );
+      return;
+    }
     await provide('mailbox', shipMailbox, {
       into: { workspace: workspace.name, access: workspace.access },
     });

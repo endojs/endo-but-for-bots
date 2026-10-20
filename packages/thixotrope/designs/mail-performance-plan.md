@@ -68,6 +68,37 @@ The [saved projection measurements](mail-live-legacy-projection.json) retain the
 The old stored objects still need an explicit migration strategy to gain incremental streams and
 the newer guest runtime while retaining history, references, and replay compatibility.
 
+### Cleared demo on the new runtime
+
+At the user's request, the live demo was reset on 20 October 2026.
+The previous state was moved out of the active directory before initializing fresh state.
+The native worker and guest bundle were rebuilt from the current source.
+The current private URL secret was explicitly retained in the new workspace's durable storage.
+The inventory now contains the built-in clock, workspace-owned mailbox, contacts, and mail;
+the only initial contact is `Notes`, a local loopback for self-mail.
+
+`serveThixotrope` now accepts `mailboxPlacement: 'workspace'` when creating fresh state.
+The placement is recorded in `workspace.json` and an ordinary CLI restart reuses it.
+Existing directories without the setting retain their separate mailbox vats.
+Changing a directory's existing placement is refused rather than silently replacing references.
+The workspace retains its mailbox directly, with no installation registry entry or separate vat.
+This adds one persisted choice and one bootstrap branch; it avoids a live object or history migration.
+
+After an ordinary CLI restart, three sends through the actual HTTP bridge reached pushed inbox
+state in 150.253, 235.893, and 242.107 ms.
+The [saved results](mail-demo-reset-results.json) retain acceptance and inbox-push timings.
+The UI was connected during the capture, and the messages were subsequently verified in its inbox.
+These three text-only samples include HTTP and the default idle/snapshot policies, exclude browser
+paint, and do not establish typical or tail latency or a like-for-like history-loaded comparison.
+The demo retains those three verification messages.
+
+The placement regression test covers workspace isolation, absence of separate mailbox workers and
+installations, history and secret retention through an ordinary restart, and refusal of a placement
+change on existing state.
+All five workspace tests pass in each of three SES configurations.
+Package lint and the clean declaration build pass.
+The repository docs build reports 92 errors and 173 warnings outside the changed Thixotrope sources.
+
 Outbox flushing commits an attached frame together with its sequence and combines accepted-prefix
 removal with the next frame's sequence commit.
 Ordinary adapters retain a final removal commit; journaled worker adapters now piggyback the
