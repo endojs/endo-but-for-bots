@@ -2,12 +2,59 @@
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
+import { once } from 'node:events';
+import { request as httpRequest } from 'node:http';
+
+/** @import { ExecutionContext } from 'ava' */
+/** @import { IncomingMessage } from 'node:http' */
 
 import { makeObservableMap } from '../src/observable-map.js';
 import { makeWorkspaceAccess } from '../src/control/workspace-access.js';
 
 import { makeMailUiService } from '../src/web/mail-ui-service.js';
 import { serveMailUi } from '../src/platform/node/mail-ui-server.js';
+
+// Node 24's pooled fetch client mutates error messages during cleanup, which
+// fails under SES lockdown. Use fresh HTTP requests, including for the stream.
+/**
+ * @param {ExecutionContext} t
+ * @param {string} url
+ * @param {{method?: string, headers?: Record<string, string>, body?: string}} [options]
+ * @returns {Promise<IncomingMessage>}
+ */
+const openHttp = (t, url, { method = 'GET', headers, body } = {}) =>
+  new Promise((resolve, reject) => {
+    const outgoing = httpRequest(
+      url,
+      { method, headers, agent: false },
+      response => {
+        response.once('error', reject);
+        resolve(response);
+      },
+    );
+    t.teardown(() => outgoing.destroy());
+    outgoing.once('error', reject);
+    outgoing.end(body);
+  });
+
+/**
+ * @param {ExecutionContext} t
+ * @param {string} url
+ * @param {{method?: string, headers?: Record<string, string>, body?: string}} [options]
+ */
+const request = async (t, url, options) => {
+  const response = await openHttp(t, url, options);
+  response.setEncoding('utf8');
+  let body = '';
+  for await (const chunk of response) {
+    body += /** @type {string} */ (chunk);
+  }
+  return {
+    status: response.statusCode,
+    headers: response.headers,
+    json: () => JSON.parse(body),
+  };
+};
 
 test('the mail UI resolves labels at its edge and sends only granted values', async t => {
   const contact = Far('Contact', {});
@@ -215,10 +262,10 @@ test.serial(
     const url = new URL(server.url);
     const headers = harden({ authorization: `Bearer ${url.hash.slice(1)}` });
     const origin = url.origin;
-    t.is((await fetch(`${origin}/api/mail`)).status, 403);
+    t.is((await request(t, `${origin}/api/mail`)).status, 403);
     for (const endpoint of ['mail', 'events']) {
       // eslint-disable-next-line no-await-in-loop -- Check each refused endpoint before reading mail.
-      const refused = await fetch(`${origin}/api/${endpoint}`, {
+      const refused = await request(t, `${origin}/api/${endpoint}`, {
         headers: { authorization: `Bearer ${'b'.repeat(64)}` },
       });
       t.is(refused.status, 403);
@@ -230,24 +277,22 @@ test.serial(
     }
     t.is(
       (
-        await fetch(`${origin}/api/mail`, {
+        await request(t, `${origin}/api/mail`, {
           headers: { ...headers, origin: 'https://attacker.example' },
         })
       ).status,
       403,
     );
     t.is(reads, 0);
-    const response = await fetch(`${origin}/api/mail`, { headers });
+    const response = await request(t, `${origin}/api/mail`, { headers });
     t.is(response.status, 200);
     t.is((await response.json()).workspace, 'test');
-    t.is(response.headers.get('access-control-allow-origin'), null);
-    t.regex(
-      response.headers.get('content-security-policy') ?? '',
-      /form-action 'none'/,
-    );
+    t.is(response.headers['access-control-allow-origin'], undefined);
+    const policy = response.headers['content-security-policy'];
+    t.regex(typeof policy === 'string' ? policy : '', /form-action 'none'/);
     t.is(
       (
-        await fetch(`${origin}/api/send`, {
+        await request(t, `${origin}/api/send`, {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
           body: 'null',
@@ -257,7 +302,7 @@ test.serial(
     );
     t.is(
       (
-        await fetch(`${origin}/api/send`, {
+        await request(t, `${origin}/api/send`, {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
           body: '{',
@@ -267,7 +312,7 @@ test.serial(
     );
     t.is(
       (
-        await fetch(`${origin}/api/send`, {
+        await request(t, `${origin}/api/send`, {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
           body: ' '.repeat(33 * 1024),
@@ -278,7 +323,7 @@ test.serial(
     t.is(sends, 0);
     t.is(
       (
-        await fetch(`${origin}/api/send`, {
+        await request(t, `${origin}/api/send`, {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -290,15 +335,15 @@ test.serial(
       200,
     );
     t.is(sends, 1);
-    const adoption = await fetch(`${origin}/api/adopt`, {
+    const adoption = await request(t, `${origin}/api/adopt`, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify({ token: '1', name: 'kept' }),
     });
     t.is(adoption.status, 200);
     t.is(await adoption.json(), 'kept');
-    t.is((await fetch(`${origin}/api/evaluate`, { headers })).status, 404);
-    t.is((await fetch(`${origin}/`)).status, 200);
+    t.is((await request(t, `${origin}/api/evaluate`, { headers })).status, 404);
+    t.is((await request(t, `${origin}/`)).status, 200);
   },
 );
 
@@ -512,24 +557,19 @@ test.serial(
     });
     t.teardown(() => server.close());
     const url = new URL(server.url);
-    const abort = new AbortController();
-    t.teardown(() => abort.abort());
-    t.is((await fetch(`${url.origin}/api/events`)).status, 403);
-    const response = await fetch(`${url.origin}/api/events`, {
+    t.is((await request(t, `${url.origin}/api/events`)).status, 403);
+    const response = await openHttp(t, `${url.origin}/api/events`, {
       headers: { authorization: `Bearer ${url.hash.slice(1)}` },
-      signal: abort.signal,
     });
-    t.is(response.headers.get('content-type'), 'text/event-stream');
-    const reader = response.body?.getReader();
-    t.truthy(reader);
-    const pending = reader?.read();
+    t.is(response.headers['content-type'], 'text/event-stream');
+    const pending = once(response, 'data');
     publish?.({ workspace: 'pushed' });
-    const chunk = await pending;
+    const [chunk] = await pending;
     t.is(
-      new TextDecoder().decode(chunk?.value),
+      new TextDecoder().decode(/** @type {Uint8Array} */ (chunk)),
       'data: {"workspace":"pushed"}\n\n',
     );
-    abort.abort();
+    response.destroy();
     await closed;
     t.is(closes, 1);
   },
@@ -606,7 +646,7 @@ test.serial(
       port: Number(original.port),
     });
     t.is(current.url, first.url);
-    const response = await fetch(`${original.origin}/api/mail`, {
+    const response = await request(t, `${original.origin}/api/mail`, {
       headers: { authorization: `Bearer ${original.hash.slice(1)}` },
     });
     t.is(response.status, 200);
