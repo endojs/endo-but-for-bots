@@ -106,8 +106,8 @@ for (const [codecName, codec] of /** @type {const} */ ([
     t.true(stalled.queuedFrames >= 3, `queued ${stalled.queuedFrames}`);
     t.true(stalled.queuedFrames <= 6, `queued ${stalled.queuedFrames}`);
     t.is(injector.getHeldWrites(), 1);
-    // B's heartbeats still reach A, so A does not take the stall for a
-    // loss.
+    // Frames queued behind the held write are not yet encrypted, so
+    // A's send nonce holds.
     t.is(stalled.lastSentNonce, /** @type {bigint} */ (sentBefore));
 
     injector.resume();
@@ -235,8 +235,6 @@ test('writers waiting for room settle as done when the session is lost', async t
   }
   // The stall outlasts the session timeout while writers wait for room.
   const results = await Promise.all(writes);
-  // The writes that found room were accepted; the writes still waiting
-  // when the session ended, in call order after them, were not.
   const accepted = results.filter(({ done }) => !done).length;
   t.true(accepted >= 62 && accepted <= 64, `accepted ${accepted}`);
   t.deepEqual(
@@ -432,8 +430,6 @@ test('a queued Buffer frame is copied, not aliased', async t => {
   injector.stall();
   await sessionA.writer.next(Uint8Array.of(0));
   await until(() => injector.getHeldWrites() === 1);
-  // `Buffer.prototype.slice` is a view, so a `.slice()` copy would let
-  // the caller's reuse of the buffer reach the queued frame.
   const buffer = Buffer.from([1, 2, 3]);
   await sessionA.writer.next(buffer);
   buffer.fill(9);
@@ -484,7 +480,6 @@ test('writer.throw tears the session down even when the transport throw rejects'
   await t.throwsAsync(() => sessionA.writer.throw(Error('local abort')), {
     message: 'transport throw failed',
   });
-  // The writers still waiting for room learn of the end.
   const results = await Promise.all(writes);
   t.true(results.some(({ done }) => done));
   t.is(sessionA.getLiveness().queuedFrames, 0);

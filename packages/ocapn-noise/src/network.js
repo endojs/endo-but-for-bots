@@ -919,10 +919,11 @@ export const makeOcapnNoiseNetwork = ({
     let writeStallTimer;
 
     // The session-level outbound queue: plaintext frames the session
-    // has accepted but the transport has not. `writer.next` resolves on
-    // acceptance, so a stalled transport holds a writer back only once
-    // the queue reaches its high-water mark; awaiting one in-flight
-    // write instead would hold every writer for the whole stall.
+    // has accepted but the transport has not. It holds plaintext rather
+    // than a chain of `stream.writer.next` calls because the reconnect
+    // phases of designs/ocapn-noise-session-reconnect.md must carry
+    // accepted frames across transport instances, encrypting each one
+    // for whichever transport finally takes it.
     /**
      * @typedef {{ heartbeat: boolean, render: () => Uint8Array }} OutboundFrame
      */
