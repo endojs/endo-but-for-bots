@@ -6,8 +6,19 @@ import '../index.js';
 // Ensure TextEncoder/TextDecoder are available on the global (Node.js host).
 const hasTextCodecs =
   typeof TextEncoder === 'function' && typeof TextDecoder === 'function';
+const initialTextEncoder = globalThis.TextEncoder;
+const initialTextDecoder = globalThis.TextDecoder;
 
 lockdown();
+
+test('unaffected host codec constructors are retained', t => {
+  if (!hasTextCodecs) {
+    t.pass('skipped: host does not provide TextEncoder/TextDecoder');
+    return;
+  }
+  t.is(TextEncoder, initialTextEncoder);
+  t.is(TextDecoder, initialTextDecoder);
+});
 
 // ---------------------------------------------------------------------------
 // 1. Presence on universals
