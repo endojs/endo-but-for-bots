@@ -746,16 +746,36 @@ const waitForGcExportsForPosition = async (
 };
 
 /**
- * Sum up all wireDelta values from gc-export messages.
- * @param {Array<{wireDeltas: bigint[]}>} gcMessages
+ * Sum wire deltas for one export, including repeated positions in a batch.
+ * @param {Array<{exportPositions: bigint[], wireDeltas: bigint[]}>} gcMessages
+ * @param {bigint} exportPosition
  * @returns {bigint}
  */
-const sumWireDelta = gcMessages => {
+const sumWireDelta = (gcMessages, exportPosition) => {
   return gcMessages.reduce(
-    (sum, msg) => sum + msg.wireDeltas.reduce((s, d) => s + d, 0n),
+    (sum, msg) =>
+      sum +
+      msg.exportPositions.reduce(
+        (delta, position, index) =>
+          delta + (position === exportPosition ? msg.wireDeltas[index] : 0n),
+        0n,
+      ),
     0n,
   );
 };
+
+test('GC wire deltas exclude other exports batched with the target', t => {
+  t.is(
+    sumWireDelta(
+      [
+        { exportPositions: [0n, 7n, 0n], wireDeltas: [1n, 8n, 2n] },
+        { exportPositions: [7n, 0n], wireDeltas: [4n, 3n] },
+      ],
+      0n,
+    ),
+    6n,
+  );
+});
 
 test('ocapn-test-suite: op:gc-exports emitted for single object', async t => {
   // Mirrors test_gc_export_emitted_single_object from op_gc.py
@@ -819,7 +839,7 @@ test('ocapn-test-suite: op:gc-exports emitted for single object', async t => {
 
     t.true(gcMessages.length > 0, 'B should have sent op:gc-exports');
     t.is(
-      sumWireDelta(gcMessages),
+      sumWireDelta(gcMessages, exportPosition),
       1n,
       'wire-delta should be 1 for single reference',
     );
