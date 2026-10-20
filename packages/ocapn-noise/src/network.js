@@ -1329,9 +1329,6 @@ export const makeOcapnNoiseNetwork = ({
       );
     }
 
-    // The transport only returns after binding succeeds. Until then the
-    // network publishes no hints, so a failed bind changes no advertised
-    // location.
     listeningTransports.add(transport);
     /** @type {TransportListener} */
     let transportListener;

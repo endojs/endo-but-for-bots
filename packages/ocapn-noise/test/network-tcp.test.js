@@ -120,7 +120,7 @@ test('tcp transport refuses a second listen until the first closes', async t => 
   const accept = () => {};
   const listener = await listen({ port: 0 }, accept);
   await t.throwsAsync(() => listen({ port: 0 }, accept), {
-    message: /listen called more than once/,
+    message: /already listening/,
   });
   listener.close();
   const relistener = await listen({ port: 0 }, accept);

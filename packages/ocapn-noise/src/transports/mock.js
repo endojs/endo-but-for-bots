@@ -2,7 +2,8 @@
 
 /**
  * @typedef {import('../types.js').ByteStream} ByteStream
- * @typedef {import('../types.js').OcapnNoiseTransport} OcapnNoiseTransport
+ * @typedef {{ designator?: string }} MockListenOptions
+ * @typedef {import('../types.js').OcapnNoiseTransport<MockListenOptions>} OcapnNoiseTransport
  * @typedef {import('../types.js').TransportListener} TransportListener
  */
 
@@ -124,8 +125,7 @@ export const makeMockTransportPair = () => {
         return outgoing;
       },
       listen: async (options, accept) => {
-        const { designator = 'default' } =
-          /** @type {{ designator?: string }} */ (options ?? {});
+        const { designator = 'default' } = options ?? {};
         if (myListeners.has(designator)) {
           throw Error(`mock transport: listener already registered`);
         }

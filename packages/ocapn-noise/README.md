@@ -171,8 +171,7 @@ const keyId = network.addSigningKeys(keys);
 const tcp = makeTcpTransport();
 network.addTransport(tcp);
 
-// Listening is explicit and returns a handle. Closing the handle withdraws
-// this transport's hints without unregistering its dial adapter.
+// Closing the listener withdraws its hints; `tcp` stays registered for dialing.
 const tcpListener = await network.listen(tcp, {
   host: '127.0.0.1',
   port: 0,

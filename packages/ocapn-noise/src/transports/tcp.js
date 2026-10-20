@@ -2,7 +2,8 @@
 
 /**
  * @typedef {import('../types.js').ByteStream} ByteStream
- * @typedef {import('../types.js').OcapnNoiseTransport} OcapnNoiseTransport
+ * @typedef {{ port?: number, host?: string }} TcpListenOptions
+ * @typedef {import('../types.js').OcapnNoiseTransport<TcpListenOptions>} OcapnNoiseTransport
  * @typedef {import('../types.js').TransportListener} TransportListener
  */
 
@@ -123,10 +124,9 @@ export const makeTcpTransport = ({ framing = 'netstring' } = {}) => {
     },
     listen: async (options, accept) => {
       await null;
-      const { port = 0, host = '127.0.0.1' } =
-        /** @type {{ port?: number, host?: string }} */ (options ?? {});
+      const { port = 0, host = '127.0.0.1' } = options ?? {};
       if (server) {
-        throw Error('tcp transport: listen called more than once');
+        throw Error('tcp transport: already listening');
       }
       const srv = net.createServer(socket => accept(wrap(socket)));
       server = srv;

@@ -47,10 +47,12 @@ export interface TransportListener {
 
 /**
  * A pluggable transport the network uses to move encrypted bytes.
+ * `ListenOptions` is the transport's own bind-option shape, which
+ * `OcapnNoiseNetwork.listen` forwards unchanged.
  * Transports speak `Uint8Array` chunks and have no knowledge of OCapN
  * or the Noise protocol.
  */
-export interface OcapnNoiseTransport {
+export interface OcapnNoiseTransport<ListenOptions = unknown> {
   /** e.g. `'mock'`, `'tcp'`, `'ws'`. Used as a prefix on hint keys. */
   scheme: string;
   /**
@@ -64,7 +66,7 @@ export interface OcapnNoiseTransport {
    * `listen`.
    */
   listen?(
-    options: unknown,
+    options: ListenOptions | undefined,
     accept: (stream: ByteStream) => void,
   ): Promise<TransportListener>;
   /**
@@ -139,11 +141,20 @@ export interface OcapnNoiseNetwork {
   listSigningKeys(): KeyIdHex[];
   /** Register a dial adapter without opening a listener. */
   addTransport(transport: OcapnNoiseTransport): void;
-  /** Open one explicit listener for a registered transport. */
-  listen(
-    transport: OcapnNoiseTransport,
-    options?: unknown,
+  /**
+   * Bind an inbound listener on a registered transport, passing
+   * `options` through to the transport's own `listen`. The listener's
+   * hints appear in `locations()` only once the bind succeeds; a failed
+   * bind publishes nothing and leaves the transport registered. Rejects
+   * if the transport is not registered, cannot listen, or already has a
+   * listener (bound or still binding). Closing the returned handle
+   * withdraws its hints and keeps the dial adapter registered.
+   */
+  listen<ListenOptions>(
+    transport: OcapnNoiseTransport<ListenOptions>,
+    options?: ListenOptions,
   ): Promise<TransportListener>;
+  /** Unregister a dial adapter. Throws while the transport has a listener. */
   removeTransport(transport: OcapnNoiseTransport): void;
   listTransports(): OcapnNoiseTransport[];
   /**

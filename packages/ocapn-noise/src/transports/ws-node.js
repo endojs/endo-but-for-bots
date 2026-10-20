@@ -2,7 +2,8 @@
 
 /**
  * @typedef {import('../types.js').ByteStream} ByteStream
- * @typedef {import('../types.js').OcapnNoiseTransport} OcapnNoiseTransport
+ * @typedef {{ port?: number, host?: string }} WebSocketListenOptions
+ * @typedef {import('../types.js').OcapnNoiseTransport<WebSocketListenOptions>} OcapnNoiseTransport
  * @typedef {import('../types.js').TransportListener} TransportListener
  */
 /**
@@ -165,10 +166,9 @@ export const makeWebSocketTransport = ({
     ? async (options, accept) => {
         await null;
         if (server) {
-          throw Error('ocapn-noise ws transport: listen called more than once');
+          throw Error('ocapn-noise ws transport: already listening');
         }
-        const { port = 0, host = '127.0.0.1' } =
-          /** @type {{ port?: number, host?: string }} */ (options ?? {});
+        const { port = 0, host = '127.0.0.1' } = options ?? {};
         const listeningServer = new WebSocketServer({ port, host });
         server = listeningServer;
         try {

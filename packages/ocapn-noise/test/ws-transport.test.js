@@ -131,7 +131,7 @@ test('ws transport: calling listen twice throws', async t => {
   const listener = await listen({ host: '127.0.0.1', port: 0 }, noopHandler);
   t.teardown(() => listener.close());
   await t.throwsAsync(() => listen({}, noopHandler), {
-    message: /listen called more than once/,
+    message: /already listening/,
   });
 });
 
