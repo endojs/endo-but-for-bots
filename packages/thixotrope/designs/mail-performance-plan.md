@@ -41,6 +41,33 @@ Message values and names are resolved locally from these pushed references.
 Old durable interfaces use the shared legacy bridge; this does not upgrade their stored code.
 The workspace metadata version is unchanged because these optional interfaces are backward compatible.
 
+### Existing demo follow-up, 20 October 2026
+
+The user observed roughly six seconds from a self-send to inbox visibility in the running demo.
+That daemon still uses the original pinned native worker (`519bc301…`) and guest (`126928aa…`),
+with a separate mailbox vat.
+Introspection confirms that its maps lack `subscribeEntries` and its mailbox lacks
+`subscribeInboxEntries`/`subscribeOutboxEntries`, so the bridge selects legacy invalidation and
+full-history projection.
+The newer 156 ms isolated measurement does not describe this existing workspace.
+
+A read-only projection of its 12 inbox and 12 sent messages took 2,918 ms, with 45 worker deliveries,
+24 contact reverse lookups, 12 attached-value fetches, and three inventory reverse lookups.
+No worker wake or snapshot occurred inside that measured interval.
+Notifications received during a projection schedule another full pass, so multiple projections
+can plausibly account for the reported delay; the original send itself was not captured.
+RPC durations overlap and must not be summed as exclusive wall time.
+
+The legacy projection now resolves each distinct contact once per snapshot and uses its existing
+inventory entries to name known values.
+These caches last only one snapshot, preserving subsequent renames and deletions.
+The same read-only probe then took 1,417 ms and 19 worker deliveries: one contact reverse lookup,
+the same 12 value fetches, and no inventory reverse lookups.
+This is one before/after sample, not a typical or tail-latency claim, and it still rereads history.
+The [saved projection measurements](mail-live-legacy-projection.json) retain the RPC spans and counts.
+The old stored objects still need an explicit migration strategy to gain incremental streams and
+the newer guest runtime while retaining history, references, and replay compatibility.
+
 Outbox flushing commits an attached frame together with its sequence and combines accepted-prefix
 removal with the next frame's sequence commit.
 Ordinary adapters retain a final removal commit; journaled worker adapters now piggyback the

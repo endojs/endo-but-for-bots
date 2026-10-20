@@ -229,56 +229,73 @@ export const makeMailUiService = ({
   /** @type {MailUiService} */
   const service = harden({
     snapshot: async () => {
-      const [listedContacts, inbox, outbox, inventorySnapshot] =
-        await Promise.all([
-          E(book).contacts(),
-          E(mailbox).inbox(),
-          E(mailbox).outbox(),
-          E(inventory).snapshot(),
-        ]);
+      const [
+        listedContacts,
+        inbox,
+        outbox,
+        inventorySnapshot,
+        inventoryEntries,
+      ] = await Promise.all([
+        E(book).contacts(),
+        E(mailbox).inbox(),
+        E(mailbox).outbox(),
+        E(inventory).snapshot(),
+        E(inventory).entries(),
+      ]);
       /** @type {Map<string, any>} */
       const currentOffers = new Map();
       /** @type {Map<object, Promise<string | undefined>>} */
       const localNames = new Map();
+      for (const [name, value] of inventoryEntries) {
+        if (!localNames.has(value))
+          localNames.set(value, Promise.resolve(name));
+      }
+      /** @type {Map<object, Promise<string | undefined>>} */
+      const contactNames = new Map();
       /**
        * @param {any[]} messages
        * @param {'inbox' | 'outbox'} box
        */
       const describeMessages = async (messages, box) =>
         Promise.all(
-          messages.map(async message => ({
-            ...message,
-            [box === 'inbox' ? 'from' : 'to']:
-              (await E(contacts).keyOf(
-                box === 'inbox' ? message.from : message.to,
-              )) ?? '<unnamed>',
-            content: await Promise.all(
-              message.content.map(async (part, index) => {
-                if (typeof part === 'string') return part;
-                const value = await E(mailbox).take(message.id, index, box);
-                let token = tokens.get(value);
-                if (token === undefined) {
-                  nextToken += 1n;
-                  token = String(nextToken);
-                  tokens.set(value, token);
-                }
-                currentOffers.set(token, value);
-                const local =
-                  localNames.get(value) ??
-                  Promise.resolve(E(inventory).keyOf(value));
-                localNames.set(value, local);
-                const localName = await local;
-                return harden({
-                  name: part.name,
-                  token,
-                  ...(localName === undefined ? {} : { localName }),
-                });
-              }),
-            ),
-          })),
+          messages.map(async message => {
+            const ref = box === 'inbox' ? message.from : message.to;
+            let name = contactNames.get(ref);
+            if (name === undefined) {
+              name = Promise.resolve(E(contacts).keyOf(ref));
+              contactNames.set(ref, name);
+            }
+            return {
+              ...message,
+              [box === 'inbox' ? 'from' : 'to']: (await name) ?? '<unnamed>',
+              content: await Promise.all(
+                message.content.map(async (part, index) => {
+                  if (typeof part === 'string') return part;
+                  const value = await E(mailbox).take(message.id, index, box);
+                  let token = tokens.get(value);
+                  if (token === undefined) {
+                    nextToken += 1n;
+                    token = String(nextToken);
+                    tokens.set(value, token);
+                  }
+                  currentOffers.set(token, value);
+                  const local =
+                    localNames.get(value) ??
+                    Promise.resolve(E(inventory).keyOf(value));
+                  localNames.set(value, local);
+                  const localName = await local;
+                  return harden({
+                    name: part.name,
+                    token,
+                    ...(localName === undefined ? {} : { localName }),
+                  });
+                }),
+              ),
+            };
+          }),
         );
       const available = new Map(grants);
-      for (const [name, value] of await E(inventory).entries()) {
+      for (const [name, value] of inventoryEntries) {
         if (isRemotable(value)) available.set(name, value);
       }
       const attachmentOptions = [...available].map(([name, value]) => {

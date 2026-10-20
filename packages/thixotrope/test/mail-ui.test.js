@@ -121,6 +121,64 @@ test('inventory autocomplete captures references and preserves interleaved messa
   });
 });
 
+test('legacy mail projection resolves each contact once and reuses current inventory names', async t => {
+  const contact = Far('Contact', {});
+  const value = Far('Value', {});
+  let contactName = 'Bob';
+  let contactReads = 0;
+  let valueReads = 0;
+  const inventory = makeObservableMap();
+  inventory.set('our value', value);
+  const book = Far('Mail', {
+    contacts: () => [],
+    inbox: () =>
+      harden(
+        Array.from({ length: 12 }, (_, index) => ({
+          id: String(index),
+          from: contact,
+          content: [{ name: 'their value' }],
+        })),
+      ),
+    outbox: () => harden([{ id: 'sent', to: contact, content: ['hello'] }]),
+    take: () => value,
+  });
+  const service = makeMailUiService({
+    book,
+    contacts: Far('Contacts', {
+      keyOf: () => {
+        contactReads += 1;
+        return contactName;
+      },
+    }),
+    inventory: Far('Inventory', {
+      snapshot: () => inventory.snapshot(),
+      entries: () => inventory.entries(),
+      keyOf: () => {
+        valueReads += 1;
+        return inventory.keyOf(value);
+      },
+    }),
+    workspace: 'test',
+    attachments: new Map(),
+    adoptValue: async () => 'unused',
+  });
+  const first = await service.snapshot();
+  t.is(contactReads, 1);
+  t.is(valueReads, 0);
+  t.is(first.inbox[0].from, 'Bob');
+  t.like(first.inbox[0].content[0], { localName: 'our value' });
+  t.is(first.outbox[0].to, 'Bob');
+
+  contactName = 'Robert';
+  inventory.delete('our value');
+  inventory.set('renamed value', value);
+  const next = await service.snapshot();
+  t.is(contactReads, 2);
+  t.is(valueReads, 0);
+  t.is(next.inbox[0].from, 'Robert');
+  t.like(next.inbox[0].content[0], { localName: 'renamed value' });
+});
+
 test.serial(
   'the local mail bridge requires its secret and refuses cross-origin requests',
   async t => {
