@@ -134,6 +134,19 @@ export interface SessionLiveness {
    * by `op:pong`, or `undefined` before the first `op:pong`.
    */
   peerAckedRecvNonce: bigint | undefined;
+  /**
+   * The highest Noise send nonce this side has encrypted, counted at
+   * each `encrypt`. A frame the transport is still taking counts,
+   * since it has consumed its nonce; a frame still in the queue does
+   * not.
+   */
+  lastSentNonce: bigint;
+  /**
+   * Frames the session has accepted from its writer (or its own
+   * heartbeats) that the transport has not yet taken. Zero once the
+   * session has ended, because frames still queued then are dropped.
+   */
+  queuedFrames: number;
 }
 
 /**
