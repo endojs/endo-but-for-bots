@@ -1,10 +1,16 @@
 // @ts-check
 
 /**
- * @typedef {import('../types.js').ByteStream} ByteStream
+ * @import {
+ *   ByteStream,
+ *   OcapnNoiseTransport as GenericTransport,
+ *   TransportListener,
+ * } from '../types.js';
+ */
+
+/**
  * @typedef {{ port?: number, host?: string }} TcpListenOptions
- * @typedef {import('../types.js').OcapnNoiseTransport<TcpListenOptions>} OcapnNoiseTransport
- * @typedef {import('../types.js').TransportListener} TransportListener
+ * @typedef {GenericTransport<TcpListenOptions>} OcapnNoiseTransport
  */
 
 import net from 'node:net';

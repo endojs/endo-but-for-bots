@@ -1,10 +1,17 @@
 // @ts-check
 
 /**
- * @typedef {import('../types.js').ByteStream} ByteStream
+ * @import { AsyncQueue, Reader, Writer } from '@endo/stream';
+ * @import {
+ *   ByteStream,
+ *   OcapnNoiseTransport as GenericTransport,
+ *   TransportListener,
+ * } from '../types.js';
+ */
+
+/**
  * @typedef {{ designator?: string }} MockListenOptions
- * @typedef {import('../types.js').OcapnNoiseTransport<MockListenOptions>} OcapnNoiseTransport
- * @typedef {import('../types.js').TransportListener} TransportListener
+ * @typedef {GenericTransport<MockListenOptions>} OcapnNoiseTransport
  */
 
 import harden from '@endo/harden';
@@ -20,15 +27,15 @@ import { makeQueue } from '@endo/stream';
  * deadlock the Noise handshake's interleaved sends.)
  *
  * @template T
- * @returns {[import('@endo/stream').Writer<T>, import('@endo/stream').Reader<T>]}
+ * @returns {[Writer<T>, Reader<T>]}
  */
 const makeBufferedPipe = () => {
-  /** @type {import('@endo/stream').AsyncQueue<IteratorResult<T, undefined>>} */
+  /** @type {AsyncQueue<IteratorResult<T, undefined>>} */
   const queue = makeQueue();
   const ack = harden({ done: false, value: undefined });
   let closed = false;
 
-  const writer = /** @type {import('@endo/stream').Writer<T>} */ (
+  const writer = /** @type {Writer<T>} */ (
     harden({
       /** @param {T} value */
       async next(value) {
@@ -52,7 +59,7 @@ const makeBufferedPipe = () => {
       },
     })
   );
-  const reader = /** @type {import('@endo/stream').Reader<T>} */ (
+  const reader = /** @type {Reader<T>} */ (
     harden({
       next: () => queue.get(),
       return: async () => {

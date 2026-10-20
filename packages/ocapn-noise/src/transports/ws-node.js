@@ -1,18 +1,17 @@
 // @ts-check
 
 /**
- * @typedef {import('../types.js').ByteStream} ByteStream
+ * @import { AsyncQueue, Reader, Writer } from '@endo/stream';
+ * @import {
+ *   ByteStream,
+ *   OcapnNoiseTransport as GenericTransport,
+ *   TransportListener,
+ * } from '../types.js';
+ */
+
+/**
  * @typedef {{ port?: number, host?: string }} WebSocketListenOptions
- * @typedef {import('../types.js').OcapnNoiseTransport<WebSocketListenOptions>} OcapnNoiseTransport
- * @typedef {import('../types.js').TransportListener} TransportListener
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Reader<T>} Reader
- */
-/**
- * @template T
- * @typedef {import('@endo/stream').Writer<T>} Writer
+ * @typedef {GenericTransport<WebSocketListenOptions>} OcapnNoiseTransport
  */
 
 import harden from '@endo/harden';
@@ -30,7 +29,7 @@ import { makeQueue } from '@endo/stream';
 const adaptWebSocket = ws => {
   if ('binaryType' in ws) ws.binaryType = 'arraybuffer';
 
-  /** @type {import('@endo/stream').AsyncQueue<IteratorResult<Uint8Array, undefined>>} */
+  /** @type {AsyncQueue<IteratorResult<Uint8Array, undefined>>} */
   const incoming = makeQueue();
   let closed = false;
 
