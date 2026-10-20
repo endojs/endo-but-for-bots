@@ -158,6 +158,18 @@ test.serial(
     const headers = harden({ authorization: `Bearer ${url.hash.slice(1)}` });
     const origin = url.origin;
     t.is((await fetch(`${origin}/api/mail`)).status, 403);
+    for (const endpoint of ['mail', 'events']) {
+      // eslint-disable-next-line no-await-in-loop -- Check each refused endpoint before reading mail.
+      const refused = await fetch(`${origin}/api/${endpoint}`, {
+        headers: { authorization: `Bearer ${'b'.repeat(64)}` },
+      });
+      t.is(refused.status, 403);
+      // eslint-disable-next-line no-await-in-loop -- Consume this response before the next request.
+      t.deepEqual(await refused.json(), {
+        error:
+          'Invalid or missing mail URL secret. Open this workspace’s private mail URL.',
+      });
+    }
     t.is(
       (
         await fetch(`${origin}/api/mail`, {

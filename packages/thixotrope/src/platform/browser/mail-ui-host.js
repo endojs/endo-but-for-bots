@@ -9,6 +9,8 @@ import { makeMailEditor } from './mail-editor.js';
 /** @import { MailUiApi, MailEditor, MailSnapshot } from '../../web/mail-ui.js' */
 
 const token = location.hash.slice(1);
+// Opening a corrected private URL may change only the fragment in this tab.
+window.addEventListener('hashchange', () => location.reload());
 /** @param {string} path @param {unknown} [body] */
 const request = async (path, body = undefined) => {
   const response = await fetch(path, {
@@ -42,6 +44,14 @@ const api = harden({
           credentials: 'omit',
           redirect: 'error',
         });
+        if (response.status === 403) {
+          const error = Error(
+            'Invalid or missing mail URL secret. Open the private URL printed by the mail-ui command.',
+          );
+          error.name = 'MailAccessError';
+          onError(error);
+          return;
+        }
         if (!response.ok || !response.body)
           throw Error(
             'Mail subscription refused. Open the current private URL.',

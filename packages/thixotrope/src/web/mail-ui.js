@@ -55,6 +55,7 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
   const adoptPending = useRef(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [accessDenied, setAccessDenied] = useState(false);
 
   const [connected, setConnected] = useState(false);
   useEffect(
@@ -64,10 +65,12 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
           setData(state);
           setConnected(true);
           setError('');
+          setAccessDenied(false);
         },
         reason => {
           setConnected(false);
           setError(reason.message);
+          setAccessDenied(reason.name === 'MailAccessError');
         },
       ),
     [],
@@ -139,6 +142,12 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
     setSelected('');
     setComposing(false);
   };
+  if (accessDenied)
+    return h(
+      'main',
+      { class: 'mail-access-error' },
+      h('p', { role: 'alert', class: 'error' }, error),
+    );
   return h(
     'main',
     { class: 'mail' },
@@ -181,18 +190,22 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
           h(
             'div',
             { class: 'header-actions' },
-            h('span', { class: 'workspace' }, data?.workspace ?? 'Connecting…'),
+            h(
+              'span',
+              { class: 'workspace' },
+              data?.workspace ?? (error ? 'Unavailable' : 'Connecting…'),
+            ),
             h(
               'span',
               { class: 'hint', role: 'status' },
-              connected ? 'Live' : 'Connecting…',
+              connected ? 'Live' : error ? 'Disconnected' : 'Connecting…',
             ),
             h(
               'button',
               {
                 type: 'button',
                 class: 'primary',
-                disabled: busy,
+                disabled: busy || !data,
                 onClick: () => {
                   setComposing(true);
                   setNotice('');
@@ -349,7 +362,9 @@ export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
                         ? folder === 'inbox'
                           ? 'Your inbox is empty.'
                           : 'No sent messages yet.'
-                        : 'Loading mail…',
+                        : error
+                          ? 'Mail could not be loaded.'
+                          : 'Loading mail…',
                     ),
                   ...[...messages].reverse().map(item =>
                     h(

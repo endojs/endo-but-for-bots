@@ -58,7 +58,10 @@ export const serveMailUi = async ({ mail, assets, token, port = 8123 }) => {
       return;
     }
     if (request.headers.authorization !== `Bearer ${token}`) {
-      json(403, { error: 'Open this workspace’s private mail URL' });
+      json(403, {
+        error:
+          'Invalid or missing mail URL secret. Open this workspace’s private mail URL.',
+      });
       request.resume();
       return;
     }

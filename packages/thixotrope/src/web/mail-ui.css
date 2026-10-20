@@ -236,6 +236,11 @@ textarea {
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+.mail-access-error {
+  max-width: 540px;
+  margin: 56px auto;
+  padding: 0 24px;
+}
 @media (max-width: 760px) {
   .mail {
     margin: 24px auto;
