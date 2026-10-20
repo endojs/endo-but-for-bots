@@ -152,7 +152,12 @@ Transport plugins:
 
 - `@endo/ocapn-noise/transport/mock`: in-process pair for tests.
 - `@endo/ocapn-noise/transport/tcp`: Node `net` via
-  `@endo/stream-node`.
+  `@endo/stream-node`. `makeTcpTransport()` frames messages as
+  netstrings under the scheme `tcp`; `makeTcpCborTransport()` frames
+  each message as one definite-length CBOR byte string
+  (`@endo/cbor-frame`) under the scheme `tcp+cbor`. The two are not wire
+  compatible, so a network may register both and a peer only dials the
+  one whose hints a location carries.
 - `@endo/ocapn-noise/transport/ws`: `WebSocket`; resolves to a Node
   variant today, with a browser variant planned via the same subpath.
 
