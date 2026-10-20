@@ -46,3 +46,14 @@ export const normalizePending = value => {
   });
 };
 harden(normalizePending);
+
+/**
+ * The sidebar contains conversations the user started. Older factories omit
+ * userInitiated; their root sessions remain visible, while recorded delegates
+ * are hidden even when their parent has since been deleted.
+ *
+ * @param {{ userInitiated?: boolean, parentSessionId?: string }} session
+ */
+export const isUserSession = session =>
+  session.userInitiated !== false && !session.parentSessionId;
+harden(isUserSession);

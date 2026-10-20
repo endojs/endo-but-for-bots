@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { make } from '../agent.js';
 
@@ -415,4 +416,40 @@ test('failed obsolete-snapshot pruning never rolls back a committed snapshot', a
   t.true(store.has(journalName(5n)));
   t.true(store.has(journalName(0n)));
   t.is((await E(make(makeHost(store))).listSessions())[0].title, 'Durable');
+});
+
+test('workflow provenance is watched and survives factory reconstruction', async t => {
+  t.timeout(5000);
+  const store = new Map([[journalName(0n), snapshot()]]);
+  const host = makeHost(store);
+  const factory = make(host);
+  /** @type {ReturnType<typeof iterateReader<any>>} */
+  const view = iterateReader(await E(factory).watchSessions());
+  t.teardown(() => view.return());
+  const initial = (await view.next()).value;
+  t.true(initial.sessions[0].userInitiated, 'legacy roots stay visible');
+  await E(factory).setSessionUserInitiated('saved', false);
+  const changed = (await view.next()).value;
+  t.is(changed.type, 'session');
+  t.false(changed.session.userInitiated);
+  const restored = make(host);
+  t.false((await E(restored).listSessions())[0].userInitiated);
+  t.is((await E(restored).listSessions())[0].id, 'saved');
+  await E(restored).setSessionUserInitiated('saved', true);
+  t.true((await E(make(host)).listSessions())[0].userInitiated);
+  await t.throwsAsync(E(restored).setSessionUserInitiated('missing', false), {
+    message: /Unknown session/,
+  });
+});
+
+test('a delegated session is never projected as user initiated', async t => {
+  const child = {
+    ...entries[0],
+    parentSessionId: 'deleted-parent',
+    userInitiated: true,
+  };
+  const factory = make(
+    makeHost(new Map([[journalName(0n), snapshot(harden([child]))]])),
+  );
+  t.false((await E(factory).listSessions())[0].userInitiated);
 });

@@ -71,7 +71,13 @@ that make it a hands-free voice assistant.
   `{ version, base, keep, append }`: keep the first `keep` messages, append the
   rest. It holds settled turns only; a running turn is rendered from its own
   `watch()`. `factory.watchSessions()` does the same for the session list, where
-  each session carries an `activity` of `passive`, `working` or `error`. A
+  the operator API includes every session. The UI lists only user-initiated
+  roots: the UI passes `createSession({ userInitiated: true, ... })`.
+  Programmatic creation defaults to internal, and subagents are always hidden.
+  `setSessionUserInitiated(id, false)` corrects existing workflow sessions;
+  the flag survives restart and changes the list without stopping their work.
+  Older root records default to user initiated.
+  Each session carries an `activity` of `passive`, `working` or `error`. A
   read that fails or never answers is retried while someone is watching, and
   closing a stream detaches that viewer only. `help('watch')` has the wire format.
 - **Voice caplets** (`voice/`) — two independent, swappable daemon objects,
@@ -340,8 +346,8 @@ newly provisioned workflows, not existing factories or runs.
 The participants here are guest **controls** used only during setup. A Floot
 factory host holds them under `session-agent-<session-id>`; the public session
 facet returned by `createSession` is not a guest control. Create dedicated
-implementation/reviewer sessions, obtain their guest controls through the
-provisioning host, and pass those to setup. Use a dedicated implementation
+implementation/reviewer sessions with `userInitiated: false`, obtain their guest
+controls through the provisioning host, and pass those to setup. Use a dedicated implementation
 worktree. This helper does not allocate a new worktree or new agents per run.
 If running multiple projects concurrently, give each a separate worktree and
 participant sessions rather than changing the same project grant mid-run.
