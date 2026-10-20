@@ -76,8 +76,8 @@ const eventually = async (predicate, timeoutMs = 8000) => {
 const makeHelloTamperingCodec = (codec, tamper) =>
   harden({
     ...codec,
-    makeWriter: (...args) => {
-      const writer = codec.makeWriter(...args);
+    makeWriter: (...writerArguments) => {
+      const writer = codec.makeWriter(...writerArguments);
       return new Proxy(writer, {
         get: (target, key) => {
           const value = Reflect.get(target, key);
