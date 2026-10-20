@@ -14,7 +14,7 @@ import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
 import { makeFlootNetwork } from './floot-network.js';
 import { makeFlootExecution } from './floot-execution.js';
-import { normalizePending } from './floot-session-state.js';
+import { isUserSession, normalizePending } from './floot-session-state.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -791,6 +791,7 @@ export const flootComponent = (
     const facet = await E(factory).createSession({
       title: title || DEFAULT_TITLE,
       spoken: true,
+      userInitiated: true,
       ...(presetId ? { presetId } : {}),
       ...(selected?.backendId
         ? {
@@ -2880,11 +2881,12 @@ export const flootComponent = (
   }
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  // Subscribe to the factory's session list (most-recent first), seeding a
-  // default session if the factory has none, then open the active session.
+  // Subscribe to the factory's session list (most-recent first), selecting a
+  // user session if there is one, then open the active session.
   // The list stays subscribed: a session made elsewhere (another page, an agent
-  // spawning a subagent), a rename, a deletion and each session's activity all
-  // arrive here without being asked for.
+  // starting workflow participants), a rename, a deletion and activity all
+  // arrive here without being asked for. Only user-initiated roots enter the
+  // view, so hidden work is never auto-selected or opened.
   /** @param {any} m a session record as the factory reports it */
   const adoptSessionMeta = m => {
     const existing = sessions.find(s => s.id === m.id);
@@ -2931,6 +2933,10 @@ export const flootComponent = (
   /** @param {any} event */
   const applyListEvent = event => {
     if (event.type === 'session' && event.session) {
+      if (!isUserSession(event.session)) {
+        applyListEvent({ type: 'removed', id: event.session.id });
+        return;
+      }
       const known = sessions.some(s => s.id === event.session.id);
       const wasReady = sessions.find(s => s.id === event.session.id)?.lifecycle;
       const session = adoptSessionMeta(event.session);
@@ -2984,10 +2990,9 @@ export const flootComponent = (
           if (cancelled) return;
           heard = true;
           if (event.type === 'snapshot' && Array.isArray(event.sessions)) {
-            const listed = new Set(
-              event.sessions.map((/** @type {any} */ m) => m.id),
-            );
-            for (const meta of event.sessions) adoptSessionMeta(meta);
+            const visible = event.sessions.filter(isUserSession);
+            const listed = new Set(visible.map((/** @type {any} */ m) => m.id));
+            for (const meta of visible) adoptSessionMeta(meta);
             for (const gone of sessions.filter(s => !listed.has(s.id))) {
               applyListEvent({ type: 'removed', id: gone.id });
             }
@@ -3142,7 +3147,9 @@ export const flootComponent = (
       // retained too: hiding them would hide recovery work.
       const first = /** @type {any} */ ((await list.next()).value);
       const metas = /** @type {any[]} */ (
-        first && first.type === 'snapshot' ? first.sessions : []
+        first && first.type === 'snapshot'
+          ? first.sessions.filter(isUserSession)
+          : []
       );
       for (const meta of metas) adoptSessionMeta(meta);
       sortSessions();

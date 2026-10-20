@@ -213,6 +213,9 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   listModelCatalogs: M.callWhen().returns(M.arrayOf(M.record())),
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
+  setSessionUserInitiated: M.callWhen(M.string(), M.boolean()).returns(
+    M.undefined(),
+  ),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
   refreshCredentials: M.callWhen().returns(M.undefined()),
   getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
@@ -3333,7 +3336,7 @@ export const make = async (
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, userInitiated?: boolean, presetId?: string, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3633,8 +3636,10 @@ export const make = async (
       // id it was pinned to when it was created.
       subscription: entry.subscription || 'auto',
       lifecycle: lifecycle || 'ready',
-      // Empty for a session the user opened; set for one an agent
-      // spawned, so a client can group or hide the delegated tree.
+      // Legacy roots default to visible; dedicated workflow sessions opt out.
+      // A delegate is never a user-initiated conversation.
+      userInitiated: !parentSessionId && entry.userInitiated !== false,
+      // Parentage remains available for operator inspection of the tree.
       parentSessionId: parentSessionId || '',
       subagentName: subagentName || '',
       activity: activityOf(entry),
@@ -5134,6 +5139,12 @@ export const make = async (
         'createSession option "model" is unsupported; use backendId and modelId',
       );
     }
+    if (
+      options.userInitiated !== undefined &&
+      typeof options.userInitiated !== 'boolean'
+    ) {
+      throw Error('createSession userInitiated must be a boolean');
+    }
     await loadRegistry();
     const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
     if (preset.id === DEVELOPMENT_PRESET_ID) {
@@ -5341,6 +5352,7 @@ export const make = async (
       id,
       title: options.title || 'New chat',
       createdAt: Date.now(),
+      userInitiated: !delegated && options.userInitiated === true,
       presetId: preset.id,
       systemPrompt: sessionPrompt,
       // Creation context is descriptive metadata, not a migration recipe.
@@ -5800,7 +5812,7 @@ export const make = async (
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, parentSessionId: string, subagentName: string, effectiveModelId: string, activity: 'passive' | 'working' | 'error', pendingCount: number }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, userInitiated: boolean, parentSessionId: string, subagentName: string, effectiveModelId: string, activity: 'passive' | 'working' | 'error', pendingCount: number }>>}
      */
     async listSessions() {
       return harden(await projectSessions());
@@ -5948,6 +5960,23 @@ export const make = async (
     },
 
     /**
+     * Correct the provenance of an existing session without changing its work
+     * or authority. Delegates always remain outside the user's session list.
+     *
+     * @param {string} id
+     * @param {boolean} userInitiated
+     */
+    async setSessionUserInitiated(id, userInitiated) {
+      await loadRegistry();
+      assertPublished(id);
+      const reg = registry || [];
+      const idx = reg.findIndex(s => s.id === id);
+      if (idx === -1) throw new Error(`Unknown session "${id}".`);
+      reg[idx] = harden({ ...reg[idx], userInitiated });
+      await saveRegistry();
+    },
+
+    /**
      * @param {string} id
      */
     async deleteSession(id) {
@@ -6057,15 +6086,15 @@ export const make = async (
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken,userInitiated}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); setSessionUserInitiated(id,boolean); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
       }
       const docs = {
         createSession:
-          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), spoken, and userInitiated (defaults to false; the UI passes true for conversations the user starts). The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:
-          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, subscription, lifecycle, activity, pendingCount}] for all sessions. `subscription` is "auto" or the id the session was pinned to. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
+          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, subscription, lifecycle, activity, pendingCount}] for all sessions, including workflow participants and subagents. `userInitiated` is false for internal sessions; the UI lists only user-initiated roots. `subscription` is "auto" or the id the session was pinned to. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:
@@ -6083,6 +6112,8 @@ export const make = async (
           'refreshAccounts() — Ask each account’s provider once for its current figures. For a person who pressed refresh; nothing calls this on a timer.',
         watchSessions:
           'watchSessions() — A disposable stream of the session list: { type: "snapshot", sessions }, then { type: "session", session } for each session added or changed (including its `activity`: passive | working | error) and { type: "removed", id }. Subscribe rather than calling listSessions() on a timer.',
+        setSessionUserInitiated:
+          'setSessionUserInitiated(id, boolean) — Record whether a session was initiated by the user. Set false for dedicated workflow participants; this updates the UI list without stopping or deleting the session. Delegates remain hidden regardless.',
         renameSession: 'renameSession(id, title) — Rename a session.',
         deleteSession:
           'deleteSession(id) — Delete a session, its backing guest, and every subagent session beneath it.',

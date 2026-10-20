@@ -194,6 +194,7 @@ test.serial(
     t.false('reasoningEffort' in created[0][0]);
     t.false('networkPolicy' in created[0][0]);
     t.is(created[0][0].spoken, true);
+    t.is(created[0][0].userInitiated, true);
     await tick();
     parent
       .querySelector('[aria-label="New session"]')
@@ -3213,5 +3214,94 @@ test.serial(
         .querySelector('.floot-session-item')
         ?.classList.contains('active') ?? false,
     );
+  },
+);
+
+test.serial(
+  'only user-initiated roots are listed and opened across list updates',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const list = makeBufferedReader();
+    const opened = [];
+    const user = {
+      id: 'user',
+      title: 'My conversation',
+      createdAt: 1,
+      userInitiated: true,
+    };
+    const reviewer = {
+      id: 'reviewer',
+      title: 'Workflow reviewer',
+      createdAt: 9,
+      userInitiated: false,
+      lifecycle: 'error',
+    };
+    const child = {
+      id: 'child',
+      title: 'Delegate',
+      createdAt: 10,
+      parentSessionId: 'removed-parent',
+    };
+    const facet = farSession('VisibleSession', {
+      getInfo: () => harden(user),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = Far('UserSessionListFactory', {
+      watchSessions: () => {
+        list.push(
+          harden({ type: 'snapshot', sessions: [child, reviewer, user] }),
+        );
+        return list.reader;
+      },
+      listPresets: () => harden([]),
+      listBackends: () => harden([]),
+      listModels: () => harden([]),
+      listModelCatalogs: () => harden([]),
+      getSession: id => {
+        opened.push(id);
+        return facet;
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      list.close();
+      parent.remove();
+    });
+    const titles = () =>
+      [...parent.querySelectorAll('.floot-session-name')].map(
+        el => el.textContent,
+      );
+    await waitFor(() => opened.length > 0 && titles().length === 1);
+    t.deepEqual(titles(), ['My conversation']);
+    t.deepEqual(opened, ['user']);
+    t.false(parent.textContent.includes('could not be recovered'));
+
+    // A correction to existing top-level metadata removes the active session.
+    list.push(
+      harden({ type: 'session', session: { ...user, userInitiated: false } }),
+    );
+    await waitFor(() => titles().length === 0);
+    list.push(harden({ type: 'session', session: reviewer }));
+    list.push(harden({ type: 'session', session: child }));
+    // A snapshot also reconciles hidden sessions, and legacy user roots remain.
+    list.push(
+      harden({
+        type: 'snapshot',
+        sessions: [child, reviewer, { ...user, userInitiated: undefined }],
+      }),
+    );
+    await waitFor(() => titles().length === 1);
+    t.deepEqual(titles(), ['My conversation']);
+    t.true(opened.every(id => id === 'user'));
+    // Snapshot-only correction must remove a previously visible row too.
+    list.push(harden({ type: 'snapshot', sessions: [child, reviewer] }));
+    await waitFor(() => titles().length === 0);
+    t.deepEqual(titles(), []);
+    t.true(opened.every(id => id === 'user'));
   },
 );

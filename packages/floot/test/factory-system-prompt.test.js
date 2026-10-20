@@ -386,10 +386,12 @@ test('a caller cannot make a subagent spoken by asking', async t => {
   const session = await E(world.factory).createSession({
     ...hosted,
     parentSessionId: 'someone-else',
+    userInitiated: true,
     spoken: true,
   });
   const [entry] = await E(world.factory).listSessions();
   t.is(entry.parentSessionId, '');
+  t.true(entry.userInitiated);
   t.true((await world.promptOf(session)).includes('spoken aloud'));
 });
 
@@ -1193,4 +1195,20 @@ test('a hosted session records the environment it was composed for', async t => 
   const [listed] = await E(world.factory).listSessions();
   t.false('promptContext' in listed);
   t.false('systemPrompt' in listed);
+});
+
+test('workflow sessions are explicitly created outside the user list', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  await E(world.factory).createSession({ ...hosted });
+  const [entry] = await E(world.factory).listSessions();
+  t.false(entry.userInitiated);
+  t.is(entry.parentSessionId, '');
+  await t.throwsAsync(
+    E(world.factory).createSession({ ...hosted, userInitiated: 'false' }),
+    {
+      message: /userInitiated must be a boolean/,
+    },
+  );
 });
