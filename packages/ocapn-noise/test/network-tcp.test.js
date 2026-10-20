@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { ByteStream } from '../src/types.js' */
+
 import rawNet from 'node:net';
 
 import baseTest from '@endo/ses-ava/test.js';
@@ -81,9 +83,9 @@ test('noise network rejects a tcp-testing-only location that has no tcp-scheme h
 test('tcp transport with framing:none delivers raw socket bytes', async t => {
   const transport = makeTcpTransport({ framing: 'none' });
   t.teardown(() => transport.shutdown());
-  /** @type {(s: import('../src/types.js').ByteStream) => void} */
+  /** @type {(s: ByteStream) => void} */
   let resolveStream = () => {};
-  /** @type {Promise<import('../src/types.js').ByteStream>} */
+  /** @type {Promise<ByteStream>} */
   const serverStreamPromise = new Promise(resolve => {
     resolveStream = resolve;
   });
@@ -156,15 +158,15 @@ test('two noise peers exchange encrypted messages over tcp+cbor', async t => {
   t.is(sessionA.remoteLocation.designator, keyB);
   t.is(sessionB.remoteLocation.designator, keyA);
 
-  await sessionA.writer.next(new TextEncoder().encode('hello-cbor-A'));
-  await sessionB.writer.next(new TextEncoder().encode('hello-cbor-B'));
+  await sessionA.writer.next(Uint8Array.of(0x41, 0x01, 0x02));
+  await sessionB.writer.next(Uint8Array.of(0x42, 0x03, 0x04));
   const a = await sessionA.reader.next(undefined);
   const b = await sessionB.reader.next(undefined);
   t.false(a.done);
   t.false(b.done);
   if (!a.done && !b.done) {
-    t.is(new TextDecoder().decode(a.value), 'hello-cbor-B');
-    t.is(new TextDecoder().decode(b.value), 'hello-cbor-A');
+    t.deepEqual(Array.from(a.value), [0x42, 0x03, 0x04]);
+    t.deepEqual(Array.from(b.value), [0x41, 0x01, 0x02]);
   }
 
   sessionA.close();
@@ -217,9 +219,9 @@ test('tcp+cbor frames each message as one CBOR byte string', async t => {
   const transport = makeTcpCborTransport();
   t.teardown(() => transport.shutdown());
   t.is(transport.scheme, 'tcp+cbor');
-  /** @type {(s: import('../src/types.js').ByteStream) => void} */
+  /** @type {(s: ByteStream) => void} */
   let resolveStream = () => {};
-  /** @type {Promise<import('../src/types.js').ByteStream>} */
+  /** @type {Promise<ByteStream>} */
   const serverStreamPromise = new Promise(resolve => {
     resolveStream = resolve;
   });
@@ -258,9 +260,9 @@ test('tcp+cbor frames each message as one CBOR byte string', async t => {
 test('tcp+cbor rejects an oversized declared length before allocation', async t => {
   const transport = makeTcpCborTransport();
   t.teardown(() => transport.shutdown());
-  /** @type {(s: import('../src/types.js').ByteStream) => void} */
+  /** @type {(s: ByteStream) => void} */
   let resolveStream = () => {};
-  /** @type {Promise<import('../src/types.js').ByteStream>} */
+  /** @type {Promise<ByteStream>} */
   const serverStreamPromise = new Promise(resolve => {
     resolveStream = resolve;
   });
