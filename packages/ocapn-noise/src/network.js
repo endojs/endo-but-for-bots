@@ -197,19 +197,20 @@ const DEFAULT_SESSION_TIMEOUT_INTERVALS = 6;
 const MIN_SESSION_TIMEOUT_INTERVALS = 3;
 
 /**
- * @param {HeartbeatOptions | undefined} heartbeat
+ * @param {HeartbeatOptions | false | undefined} heartbeat - Heartbeats are
+ *   on by default; `false` turns them off.
  * @returns {{ intervalMs: number, sessionTimeoutMs: number } | undefined}
  */
 const normalizeHeartbeatOptions = heartbeat => {
-  if (heartbeat === undefined) return undefined;
-  const { intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS } = heartbeat;
+  if (heartbeat === false) return undefined;
+  const { intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS } = heartbeat ?? {};
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     throw makeError(
       X`ocapn-noise: heartbeat.intervalMs must be a positive number, got ${q(intervalMs)}`,
     );
   }
   const { sessionTimeoutMs = DEFAULT_SESSION_TIMEOUT_INTERVALS * intervalMs } =
-    heartbeat;
+    heartbeat ?? {};
   if (
     !Number.isFinite(sessionTimeoutMs) ||
     sessionTimeoutMs < MIN_SESSION_TIMEOUT_INTERVALS * intervalMs
@@ -350,7 +351,7 @@ const withTimeout = (promise, ms, label, stream) => {
  *   codec: OcapnCodec,
  *   handshakeTimeoutMs?: number,
  *   maxInProgressPerLocalKey?: number,
- *   heartbeat?: HeartbeatOptions,
+ *   heartbeat?: HeartbeatOptions | false,
  *   reconnect?: ReconnectOptions | boolean,
  * }} options
  * @returns {OcapnNoiseNetwork}
@@ -1053,6 +1054,15 @@ export const makeOcapnNoiseNetwork = ({
     onClose,
   }) => {
     let closed = false;
+    // The heartbeat runs only when both sides advertise it, so a peer
+    // that predates it (or opted out) never receives a frame it does
+    // not expect (designs/ocapn-noise-session-reconnect.md § Upgrade
+    // Considerations).
+    const sessionHeartbeat =
+      heartbeatSettings !== undefined &&
+      hasFeature(peerFeatures, FEATURE_HEARTBEAT)
+        ? heartbeatSettings
+        : undefined;
     const winsCrossedHellos = initiatesOnCrossedHellos(
       localEphemeral,
       peerEphemeral,
@@ -1078,10 +1088,10 @@ export const makeOcapnNoiseNetwork = ({
     const deferenceLapsed = () =>
       deferringSince !== undefined &&
       Date.now() - deferringSince >=
-        /** @type {{ sessionTimeoutMs: number }} */ (heartbeatSettings)
+        /** @type {{ sessionTimeoutMs: number }} */ (sessionHeartbeat)
           .sessionTimeoutMs;
     const reconnectSettings =
-      heartbeatSettings !== undefined &&
+      sessionHeartbeat !== undefined &&
       hasFeature(peerFeatures, FEATURE_RECONNECT)
         ? localReconnectSettings
         : undefined;
@@ -1218,7 +1228,7 @@ export const makeOcapnNoiseNetwork = ({
     /** @type {Reconnector | undefined} */
     let reconnector;
 
-    if (heartbeatSettings === undefined) {
+    if (sessionHeartbeat === undefined) {
       const { stream, decrypt } = firstInstance;
       reader = harden({
         next: async () => {
@@ -1256,7 +1266,7 @@ export const makeOcapnNoiseNetwork = ({
         },
       });
     } else {
-      const { intervalMs, sessionTimeoutMs } = heartbeatSettings;
+      const { intervalMs, sessionTimeoutMs } = sessionHeartbeat;
 
       /**
        * @typedef {{ done: true } | { done: false, value: Uint8Array } | { error: Error }} InboundItem
@@ -1729,7 +1739,7 @@ export const makeOcapnNoiseNetwork = ({
       next: async value => {
         await null;
         if (closed) return harden({ done: true, value: undefined });
-        if (heartbeatSettings !== undefined) {
+        if (sessionHeartbeat !== undefined) {
           // Fail fast in the last stretch of the reconnect budget rather
           // than accept a frame that will only be rejected with the
           // session (designs/ocapn-noise-session-reconnect.md § 5).
@@ -1755,7 +1765,7 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         // Deliver what the session already accepted before ending the
         // stream, unless the session is lost first.
-        if (heartbeatSettings !== undefined && outbound.length > 0) {
+        if (sessionHeartbeat !== undefined && outbound.length > 0) {
           await Promise.race([
             new Promise(resolve => drainWaiters.push(() => resolve(undefined))),
             closedPromise,
@@ -1796,7 +1806,7 @@ export const makeOcapnNoiseNetwork = ({
       writer,
       getLiveness: () =>
         harden({
-          heartbeat: heartbeatSettings !== undefined,
+          heartbeat: sessionHeartbeat !== undefined,
           reconnect: reconnectSettings !== undefined,
           reconnecting: !closed && current === undefined,
           epoch,
@@ -1804,7 +1814,7 @@ export const makeOcapnNoiseNetwork = ({
             current === undefined ? undefined : current.getReceivedCount() - 1n,
           peerAckedRecvNonce,
           lastSentNonce:
-            heartbeatSettings === undefined || current === undefined
+            sessionHeartbeat === undefined || current === undefined
               ? undefined
               : current.sentCount - 1n,
           queuedFrames: outbound.length,

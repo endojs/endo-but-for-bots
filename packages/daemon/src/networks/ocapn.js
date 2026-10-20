@@ -204,7 +204,11 @@ export const make = async (powers, context) => {
   }
 
   const codec = cborCodec;
-  const network = makeOcapnNoiseNetwork({ codec });
+  // Heartbeats (designs/ocapn-noise-session-reconnect.md) detect a dead
+  // peer within SESSION_TIMEOUT (30 s by default) rather than the hours
+  // or days TCP alone takes. A session runs them only when the peer's
+  // network advertises them too.
+  const network = makeOcapnNoiseNetwork({ codec, heartbeat: {} });
 
   // The OCapN-Noise session uses an ephemeral Ed25519 keypair, freshly
   // minted on every install. The daemon's persistent agent identity
