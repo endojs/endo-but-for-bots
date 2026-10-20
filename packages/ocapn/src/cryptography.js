@@ -104,6 +104,7 @@ export const randomGiftId = () => {
 
 /**
  * @typedef {object} Cryptography
+ * @property {() => Uint8Array} randomGiftId
  * @property {(publicKeyBytes: Uint8Array) => OcapnPublicKey} makeOcapnPublicKey
  * @property {(publicKeyDescriptor: OcapnPublicKeyDescriptor) => OcapnPublicKey} publicKeyDescriptorToPublicKey
  * @property {(privateKeyBytes: Uint8Array) => OcapnKeyPair} makeOcapnKeyPairFromPrivateKey
@@ -125,9 +126,13 @@ export const randomGiftId = () => {
  * produced by the codec's writer, so both peers must agree on the codec.
  *
  * @param {OcapnCodec} codec
+ * @param {(length: number) => Uint8Array} [randomBytes] Explicit entropy source.
  * @returns {Cryptography}
  */
-export const makeCryptography = codec => {
+export const makeCryptography = (
+  codec,
+  randomBytes = length => crypto.getRandomValues(new Uint8Array(length)),
+) => {
   /**
    * @param {OcapnPublicKeyDescriptor} publicKeyDescriptor
    * @returns {PublicKeyId}
@@ -192,7 +197,7 @@ export const makeCryptography = codec => {
   };
 
   const makeOcapnKeyPair = () => {
-    const privateKeyBytes = ed25519.utils.randomSecretKey();
+    const privateKeyBytes = randomBytes(32);
     return makeOcapnKeyPairFromPrivateKey(privateKeyBytes);
   };
 
@@ -204,7 +209,7 @@ export const makeCryptography = codec => {
    * @returns {{ keyPair: OcapnKeyPair, privateKeyBytes: Uint8Array }}
    */
   const makeOcapnKeyPairWithPrivateBytes = () => {
-    const privateKeyBytes = ed25519.utils.randomSecretKey();
+    const privateKeyBytes = randomBytes(32);
     return {
       keyPair: makeOcapnKeyPairFromPrivateKey(privateKeyBytes),
       privateKeyBytes,
@@ -413,6 +418,7 @@ export const makeCryptography = codec => {
   };
 
   return harden({
+    randomGiftId: () => frozenBytes(randomBytes(16)),
     makeOcapnPublicKey,
     makeOcapnKeyPairWithPrivateBytes,
     publicKeyDescriptorToPublicKey,

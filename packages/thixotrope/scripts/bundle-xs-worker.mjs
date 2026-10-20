@@ -8,7 +8,7 @@
  *     copy of xsnap's committed polyfills: TextEncoder/TextDecoder plus
  *     freeze-based harden and assert shims)
  *   packages/thixotrope/dist-xs/worker-peer.js — bundle of
- *     src/worker-peer-xs.js (the OCapN worker peer wired to the
+ *     src/core/worker-peer-xs.js (the OCapN worker peer wired to the
  *     thixotropeSend host function)
  *   rust/endo/xsnap/src/{ses_boot,worker_bootstrap,daemon_bootstrap}.js —
  *     stubs, written ONLY if absent: they satisfy xsnap's include_str!
@@ -66,7 +66,7 @@ const packageDependenciesHook = ({ canonicalName, dependencies }) => {
 const polyfillsPath = path.join(xsnapSrcDir, 'polyfills.js');
 const immutableShimPath = path.resolve(
   dirname,
-  '../src/boot-immutable-arraybuffer-xs.js.txt',
+  '../src/ironhorse/boot-immutable-arraybuffer-xs.js.txt',
 );
 const bootScript = `${fs.readFileSync(polyfillsPath, 'utf8')}
 ${fs.readFileSync(immutableShimPath, 'utf8')}
@@ -80,7 +80,7 @@ console.log(`Wrote ${bootDist} (${bootScript.length} bytes)`);
 
 // --- OCapN worker peer bundle ---
 const peerUrl = url.pathToFileURL(
-  path.resolve(dirname, '../src/worker-peer-xs.js'),
+  path.resolve(dirname, '../src/core/worker-peer-xs.js'),
 ).href;
 const peerBundle = await makeBundle(readPowers, peerUrl, {
   packageDependenciesHook,

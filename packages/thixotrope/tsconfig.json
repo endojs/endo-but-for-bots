@@ -3,7 +3,9 @@
   "include": [
     "*.js",
     "bin/**/*.js",
+    "examples/**/*.js",
     "src/**/*.js",
+    "resources/**/*.js",
     "test"
   ]
   // do not use `exclude` here; it will be overridden by tsconfig.build.json

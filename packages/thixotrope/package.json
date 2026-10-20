@@ -26,7 +26,10 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./native-adapter.js": "./native-adapter.js",
+    "./node-powers.js": "./node-powers.js",
+    "./guest.js": "./guest.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -50,12 +53,17 @@
     "@endo/compartment-mapper": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/hex": "workspace:^",
     "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ironhorse-prelude": "workspace:^",
     "@endo/ocapn": "workspace:^",
+    "@endo/pass-style": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.4.0"
   },
@@ -75,6 +83,7 @@
     "LICENSE*",
     "SECURITY*",
     "src",
+    "resources",
     "bin"
   ],
   "publishConfig": {

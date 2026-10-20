@@ -15,13 +15,19 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../../src/bundle-application.js';
-import { connectLocalControl } from '../../src/local-control.js';
+import { connectLocalControl } from '../../src/control/local-control.js';
+
+import { makeNodePowers } from '../../src/platform/node/powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import { ExecutionContext } from 'ava' */
 const cli = fileURLToPath(new URL('../../bin/thix.js', import.meta.url));
 
-/** @param {ExecutionContext} t @param {string} path */
+/**
+ * @param {ExecutionContext} t @param {string} path
+ * @param path
+ */
 const start = async (t, path) => {
   const child = spawn(process.execPath, [cli, 'serve', path], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -48,9 +54,15 @@ const start = async (t, path) => {
   return { child, exited, diagnostic: () => diagnostic };
 };
 
-/** @param {ExecutionContext} t @param {string} path */
+/**
+ * @param {ExecutionContext} t @param {string} path
+ * @param path
+ */
 const connect = async (t, path) => {
-  const client = await connectLocalControl(join(path, 'control.sock'));
+  const client = await connectLocalControl(
+    nodePowers,
+    join(path, 'control.sock'),
+  );
   t.teardown(() => client.close());
   return client;
 };
@@ -59,7 +71,9 @@ for (const phase of ['subscribe', 'unsubscribe']) {
   test.serial(
     `supervisor stop is bounded when inventory ${phase} stalls`,
     async t => {
-      t.timeout(30_000);
+      // Three starts, each restoring the workspace and its provided
+      // installations, on top of the bounded stop under test.
+      t.timeout(60_000);
       const path = await mkdtemp('/tmp/thix-stalled-view-');
       t.teardown(() => rm(path, { recursive: true, force: true }));
       const first = await start(t, path);
@@ -141,15 +155,24 @@ test.serial(
     const publications = JSON.parse(
       await readFile(hubPath, 'utf8'),
     ).publications;
-    t.is(Object.keys(publications).length, 1);
+    // The workspace root, the registry vat, and the clock and control
+    // managers' start notices: both are native resources, and a native
+    // manager's lifecycle facet is published privately for its notices.
+    t.is(Object.keys(publications).length, 4);
 
-    // A worker allocation exists, but its selection record did not commit.
+    // The workspace's vat exists, but the table that names it did not
+    // commit: the vat is found again under the key derived from the name.
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    t.is(config.workspaces.default.workerId, workerId);
     await rm(configPath);
     const second = await start(t, path);
     const recoveredSelection = await connect(t, path);
     const status = await recoveredSelection.call('status');
     t.is(status.workspace, workerId);
-    t.is(status.workers.length, 1);
+    t.deepEqual(status.workspaces, { default: workerId });
+    // The workspace, the registry, and the provided clock, control socket
+    // and mailbox.
+    t.is(status.workers.length, 5);
     t.is(await recoveredSelection.call('evaluate', 'retained'), '91');
     await recoveredSelection.call('stop');
     t.is((await second.exited)[0], 0);
@@ -157,27 +180,33 @@ test.serial(
       JSON.parse(await readFile(hubPath, 'utf8')).publications,
       publications,
     );
+    t.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), config);
 
-    // The root publication committed, but initialization completion did not.
-    const config = JSON.parse(await readFile(configPath, 'utf8'));
-    config.initialized = false;
-    await writeFile(configPath, JSON.stringify(config));
+    // A table naming a vat that is gone is a stale cache: the vat under the
+    // name's key serves, and the table is repaired.
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...config,
+        workspaces: { default: { workerId: 'f'.repeat(32) } },
+      }),
+    );
     const third = await start(t, path);
-    const recoveredPublication = await connect(t, path);
-    t.is((await recoveredPublication.call('status')).workspace, workerId);
-    t.is(await recoveredPublication.call('evaluate', 'retained'), '91');
-    await recoveredPublication.call('stop');
+    const recoveredTable = await connect(t, path);
+    t.is((await recoveredTable.call('status')).workspace, workerId);
+    t.is(await recoveredTable.call('evaluate', 'retained'), '91');
+    await recoveredTable.call('stop');
     t.is((await third.exited)[0], 0);
+    t.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), config);
     t.deepEqual(
       JSON.parse(await readFile(hubPath, 'utf8')).publications,
       publications,
     );
-    t.is(JSON.parse(await readFile(configPath, 'utf8')).initialized, true);
   },
 );
 
 test.serial(
-  'failed socket removal still parks workers and releases ownership',
+  'failed socket removal still sleeps workers and releases ownership',
   async t => {
     t.timeout(120_000);
     const path = await mkdtemp('/tmp/thix-unlink-');
@@ -235,8 +264,8 @@ test.serial(
     t.is((await restored.call('status')).workspace, before.workspace);
     t.is(await restored.call('evaluate', 'E(counter).incr()'), '3n');
     const after = await restored.call('status');
-    t.is(after.workers.length, 2);
-    t.not(after.timings.delivery.count, '0');
+    t.is(after.workers.length, 6);
+    t.not(after.timings.delivery.count, 0);
     // Only the supervisor reads the store; client access is confined to socket.
     // eslint-disable-next-line no-bitwise
     t.is((await stat(join(path, 'control.sock'))).mode & 0o777, 0o600);
@@ -268,7 +297,7 @@ test.serial(
     const config = JSON.parse(
       await readFile(join(path, 'workspace.json'), 'utf8'),
     );
-    t.is(config.workerId, workerId);
+    t.is(config.workspaces.default.workerId, workerId);
     await next.call('stop');
     t.is((await second.exited)[0], 0);
   },
@@ -318,7 +347,7 @@ test.serial(
     t.is(good.output, '40\n42\n');
     const status = await transcript(t, path, '', 'status');
     t.is(status.code, 0);
-    t.is(typeof JSON.parse(status.output).timings.delivery.count, 'string');
+    t.is(typeof JSON.parse(status.output).timings.delivery.count, 'number');
     const bad = await transcript(
       t,
       path,
@@ -387,7 +416,15 @@ test.serial(
         nextUpdate = resolve;
       });
     }
-    t.deepEqual(updates[0].entries, [['counter', '<object / capability>']]);
+    t.deepEqual(
+      updates[0].entries.filter(([name]) => name === 'counter'),
+      [['counter', '<object / capability>']],
+    );
+    t.deepEqual(
+      updates[0].entries.map(([name]) => name).sort(),
+      ['clock', 'counter', 'mailbox'],
+      'the provided clock and mailbox are inventory entries like any other',
+    );
     t.deepEqual(await admin.call('inventoryStatus'), {
       durable: 1n,
       ephemeral: 1n,
@@ -432,7 +469,7 @@ test.serial(
     });
     // Let the actual idle policy snapshot both kinds of subscription while
     // the UI remains connected. status is read-only and does not wake the vat.
-    // The 30-second idle timer only starts parking. Snapshot completion also
+    // The 30-second idle timer only starts sleeping. Snapshot completion also
     // closes SQLite, copies and syncs the heap, and relaunches the worker.
     // Allow another engine-watchdog interval (60 seconds) for that work on CI;
     // this is a test allowance, not an upper bound on filesystem latency.
@@ -596,31 +633,34 @@ test.serial(
       'evaluate',
       "inventory.set('counter', Far('GrantedCounter', { read: () => 42n })); undefined",
     );
-    const { bundle, digest } = await bundleApplication(file);
+    const { bundle, digest } = await nodePowers.bundler.bundle(file);
     const installed = await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
     t.is(installed.digest, digest);
     t.is(installed.status, 'ready');
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter-app')).incr()"),
+      await admin.call('evaluate', "E(inventory.get('counter-app')).incr()"),
       '1n',
     );
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter-app')).granted()"),
+      await admin.call('evaluate', "E(inventory.get('counter-app')).granted()"),
       '42n',
     );
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter-app')).confined()"),
+      await admin.call(
+        'evaluate',
+        "E(inventory.get('counter-app')).confined()",
+      ),
       "'undefined:undefined'",
     );
-    t.is((await admin.call('status')).workers.length, 2);
+    t.is((await admin.call('status')).workers.length, 6);
     await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
     t.is(
       (await admin.call('status')).workers.length,
-      2,
+      6,
       'repeat installation reuses its vat',
     );
     await t.throwsAsync(
@@ -635,28 +675,30 @@ test.serial(
         admin.call('install', 'missing-grant', bundle, [['counter', 'absent']]),
       { message: /Unknown inventory grant/ },
     );
-    t.is((await admin.call('applications')).length, 1);
+    const userInstalled = entries =>
+      entries.filter(entry => !entry.digest.startsWith('builtin:'));
+    t.is(userInstalled(await admin.call('installations')).length, 1);
     await admin.call('stop');
     t.is((await first.exited)[0], 0);
     await rm(file);
     const second = await start(t, path);
     const restored = await connect(t, path);
     t.is(
-      await restored.call('evaluate', "E(E(apps).get('counter-app')).incr()"),
+      await restored.call('evaluate', "E(inventory.get('counter-app')).incr()"),
       '2n',
     );
     t.is(
       await restored.call(
         'evaluate',
-        "E(E(apps).get('counter-app')).granted()",
+        "E(inventory.get('counter-app')).granted()",
       ),
       '42n',
     );
-    t.is((await restored.call('applications'))[0].digest, digest);
+    t.is(userInstalled(await restored.call('installations'))[0].digest, digest);
     await restored.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
-    t.is((await restored.call('status')).workers.length, 2);
+    t.is((await restored.call('status')).workers.length, 6);
     await restored.call('stop');
     t.is((await second.exited)[0], 0);
   },
@@ -695,18 +737,20 @@ test.serial(
     if (code !== 0) t.log(await check.call('status'));
     t.is(code, 0, diagnostic);
     t.is(JSON.parse(output).status, 'ready');
-    const listed = await transcript(t, path, '', 'applications');
+    const listed = await transcript(t, path, '', 'installations');
     t.is(listed.code, 0);
-    t.is(JSON.parse(listed.output)[0].name, 'counter');
+    t.truthy(JSON.parse(listed.output).find(entry => entry.name === 'counter'));
     const graph = await transcript(t, path, '', 'reachability');
     t.is(graph.code, 0);
-    t.is(JSON.parse(graph.output).workers.length, 2);
+    // The workspace, the counter, the registry, and the provided clock,
+    // control socket and mailbox.
+    t.is(JSON.parse(graph.output).workers.length, 6);
     const collection = await transcript(t, path, '', 'collect');
     t.is(collection.code, 0);
     t.deepEqual(JSON.parse(collection.output), []);
     const admin = await connect(t, path);
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter')).incr()"),
+      await admin.call('evaluate', "E(inventory.get('counter')).incr()"),
       '1n',
     );
     await admin.call('stop');
@@ -742,21 +786,40 @@ test.serial(
       }
     }
     t.true(entered);
-    t.is((await admin.call('applications'))[0].status, 'pending');
+    const pendingEntry = entries =>
+      entries.find(entry => entry.name === 'pending');
+    t.is(pendingEntry(await admin.call('installations')).status, 'pending');
     await admin.call('stop');
     t.is((await first.exited)[0], 0);
     await handled;
     const second = await start(t, path);
     const restored = await connect(t, path);
     await restored.call('evaluate', 'resolveGate(); undefined');
+    // The factory's result reaches the workspace as a guest-to-guest
+    // message; the root takes the name in the inventory when it lands.
+    let ready = false;
+    for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const has = await restored.call('evaluate', "inventory.has('pending')");
+      ready = has === 'true';
+    }
+    t.true(ready);
     t.is(
-      await restored.call('evaluate', "E(E(apps).get('pending')).read()"),
+      await restored.call('evaluate', "E(inventory.get('pending')).read()"),
       '8n',
     );
-    t.is((await restored.call('applications'))[0].status, 'ready');
-    await t.throwsAsync(
-      () => restored.call('install', 'oversized', ' '.repeat(16 * 1024), []),
-      { message: /16 KiB/ },
+    t.is(pendingEntry(await restored.call('installations')).status, 'ready');
+    // A bundle well past the old 16 KiB request cap is staged into its vat in
+    // bounded messages rather than refused.
+    await restored.call(
+      'install',
+      'large',
+      `({ make: () => Far('Large', { read: () => 1n }) })\n// ${'x'.repeat(40_000)}`,
+      [],
+    );
+    t.is(
+      await restored.call('evaluate', "E(inventory.get('large')).read()"),
+      '1n',
     );
     await restored.call(
       'evaluate',
@@ -767,12 +830,12 @@ test.serial(
         restored.call('install', 'copy-grant', '({make: () => 0})', [
           ['data', 'large-copy'],
         ]),
-      { message: /remotable capabilities/ },
+      { message: /must be a remotable capability/ },
     );
     t.is(
       await restored.call('evaluate', '2 + 2'),
       '4',
-      'oversized requests never enter the workspace',
+      'copy-data grants never enter the workspace',
     );
     await restored.call('stop');
     t.is((await second.exited)[0], 0);

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-16 |
-| **Updated** | 2026-09-08 |
+| **Updated** | 2026-10-01 |
 | **Author** | Aaron Davis (prompted) |
 | **Status** | In Progress |
 
@@ -21,8 +21,9 @@ An inventory of named objects is a user convenience, not a prerequisite for pers
 mechanism that determines object lifetime.
 
 This document describes the main design and current implementation boundaries.
-[Package designs](../packages/thixotrope/designs/README.md) contain potential mechanisms and
-experiments; they are not additional guarantees of the current runtime.
+[Package designs](../packages/thixotrope/designs/README.md) hold the implementation notes behind
+contracts that are implemented, and potential mechanisms and experiments; only this document
+states guarantees of the current runtime.
 The [package README](../packages/thixotrope/README.md) provides commands and operational details.
 
 ## Architecture
@@ -59,7 +60,7 @@ Guest-to-guest references, answers, and promise settlements route through the hu
 | Ironhorse VM, snapshot, and SQLite store crates | JavaScript execution, supported machine-state encoding, integrity validation, and heap storage. |
 | `rust/thixotrope-xs-worker` | The alternative XS worker engine. |
 
-The comms hub is internal to Thixotrope at `packages/thixotrope/src/hub.js`.
+The comms hub is internal to Thixotrope at `packages/thixotrope/src/net/hub.js`.
 Its persistence transactions and session lifecycle belong to the host design.
 OCapN no longer exports a hub implementation.
 
@@ -68,6 +69,40 @@ snapshot and process mechanics.
 Ironhorse and XS implement this interface.
 Internal replay engines exercise host behavior without a native worker; they are test doubles,
 not evidence of native heap persistence.
+
+## Vocabulary
+
+One word for one thing, throughout the code, the README and this document:
+
+| Word | Meaning |
+|---|---|
+| vat | One guest heap behind one OCapN endpoint, run by a worker. A **durable** vat has a heap image and journal and survives sleep and restart; an **ephemeral** vat or worker has no recovery baseline and is discarded at startup. |
+| session | A logical protocol relationship in the hub, with reference tables, answer routes and lifecycle; never a socket. A **durable session** belongs to a worker, a remote peer or the host endpoint itself and outlives sockets, processes and the daemon. A **transient session** (`transient:` key prefix) belongs to a transient client, a native adapter process or a peer connection without a resume token, and is discarded at startup. |
+| transient client | A disposable host-side OCapN client with a transient session, for embedders; `daemon.openTransientClient()`. |
+| resource | A host capability bound to a worker, a key, both or neither, reconstructed through a registered factory at the host endpoint and retired when its meaning ends or with the worker it is bound to (`makeResource`, `retireResource`): introductions, worker facades, adapter launchers. |
+| native resource | A directory with `durable.js` and `ephemeral.js`, installed by name; its **manager** runs the durable module in a dedicated vat and its **adapter** runs the ephemeral module in a Node process. |
+| manager | The durable half of a native resource: keeps desired registrations in its heap, holds one adapter incarnation through a **keeper**, and is notified at every start. |
+| adapter | The ephemeral half of a native resource: one incarnation per Node process, restored from the manager's desired state; the only sense of the word in this package's code and documents. Platform ports have implementations, not adapters. |
+| registration | One desired entry a manager keeps under a key, and the **handle** a caller holds for it, with `status()` and `close()`. The public object a native resource installs into the inventory is its **facet**. |
+| subscription | A listener on an observable map. A **durable** subscription is a guest's and survives restart; an **ephemeral** subscription is a view's, bridged by the running supervisor, and is discarded at restart. |
+| workspace | One user's vat in a state directory, allocated under a key derived from its name, with an inventory and an address book of its own and a mailbox provided to it in a vat of its own; `serve` makes `default`, and a control connection speaks for one at a time. The hub, the registry, the clock and the control socket are the daemon's, shared by every workspace. |
+| registry | The daemon's vat of installations, allocated under a fixed key and published under a name only the host knows, with the host's index, `installations.json`, beside it. |
+| installation | One name in the registry, in a workspace or the daemon's: an application or a native resource, with its code digest, grant mapping, allocation key, vat and outcome. |
+| grant | A user handing an inventory value to an installation under a power name. Host-provided services are **provided**, not granted. |
+| publication | A swissnum-to-capability mapping in the hub, fetched through the bootstrap; also a retention root. |
+| introduction | The exchange of contact inboxes that an **invitation** grants once; `invite`, `accept`, `revokeInvitation`. Dialling a peer is **connecting**, never introduction. |
+| message | One mailbox record, sent to a contact or received from one; the CLI area for this is **mail**. |
+| identity | An OCapN key pair and the node location it signs; a **contact** is a local object for one correspondent, and a contact name is a label, not an identity. |
+| guest prelude | The globals every vat has beside the language: `E`, `Far`, `harden`, `makeExo`, `M` and the rest, typed as `GuestGlobals`. |
+| administration | The operator's authority over the daemon and its workspaces: host code, the `control-admin` resource, reached through the control socket. A **connection facet** is one connection's hold on it, speaking for one workspace at a time. |
+| view | A terminal client with a connection and ephemeral subscriptions of its own, rendering descriptions of what it watches; it ends with its connection. |
+| shell | The evaluator every vat publishes under the swissnum `shell`, through which the host evaluates source in it. |
+| allocation key | The idempotent key a vat is found again under: derived from its name for a workspace, fixed for the registry, random and indexed for an installation. |
+| incarnation | One process of a worker or an adapter, from a start to an exit; references into it break with it, and its successor restores from durable state. |
+| spec | The passable record a manager registers under a key and an adapter binds: what a registration desires. |
+| launcher | The host resource bound to a manager's vat that starts its adapter processes, keyed by the ephemeral bundle digest. |
+| lifecycle | A manager's private facet for the host's notices, `started()` and `exited()`. |
+| power | What a factory receives as a property of its one argument: a capability the host provides or the user grants. |
 
 ## Guest state, identity, and authority
 
@@ -90,6 +125,23 @@ Orthogonal persistence preserves the guest's heap relationships.
 It does not make an operating-system resource persistent, repair incompatible code, or guarantee
 that an external operation can safely be repeated.
 Those capabilities cross the host endpoint and have their own failure contracts.
+
+### The guest prelude
+
+Every vat has the same globals beside the language and the shared intrinsics: `E`, `Far`,
+`harden`, `makeExo`, `defineExoClass`, `defineExoClassKit`, `M`, `matches`, `mustMatch`,
+`passStyleOf`, `Fail`, `q`, `makeError`, `makePromiseKit`, `makeSerialQueue`, `describeError`,
+`isRemotable`, the 128-bit hex pattern `HEX128_PATTERN`, and the name validators
+`assertWorkspaceName` and `assertInstallationName`.
+The prelude is one hardened record installed on the compartment of every worker peer on every
+engine, so source evaluated in a vat, a bundle installed into one, and a factory the supervisor
+ships into one by its source text all see one vocabulary, and guest code is held to the same
+conventions as host code: exos with interface guards, patterns for shapes, `Fail` for assertions.
+Bundled guest code reads the names it wants off `globalThis` in one destructure typed as
+`GuestGlobals` from `@endo/thixotrope/guest.js`; it bundles nothing the prelude provides.
+A factory shipped by source may import only what the prelude provides, under those names, and
+defines everything else inside itself, since a binding beside it at module level is present in the
+host and `undefined` in the vat; a test evaluates each such factory with only the prelude in scope.
 
 ## Sleep, restore, and message recovery
 
@@ -125,11 +177,20 @@ not execute.
 The Rust worker opens or restores one SQLite heap, runs trusted bootstrap code for a fresh heap,
 and accepts evaluation requests from the supervisor.
 A successful execution step, including its promise jobs, commits before the worker publishes its result.
-Guest outbound frames remain in the heap until the adapter drains them through a committed step.
+Guest outbound frames remain in the heap until the worker transport drains them through a committed
+step.
 A deterministic VM halt produces a fatal result and quarantines the vat; it does not commit the
 failed execution step or repeatedly replay it into service.
 
-The host pins the worker executable, bootstrap bytes, execution budget, and protocol profile.
+The host pins the worker executable, bootstrap bytes, and protocol profile.
+Execution and heap limits are configurable daemon-wide defaults, reported by `thix status`.
+Runtime manifest version 2 refuses a decrease of the slot or chunk ceiling across restart, since a
+restored heap may already exceed a lower ceiling; budgets and the request watchdog timeout may
+change in either direction, and a manifest from a newer version is reported as such.
+The crank meter resets for each evaluation; heap ceilings apply across the vat's lifetime, with
+collection between completed cranks.
+Per-vat overrides remain a follow-up, and raising limits does not clear a vat's failure metadata.
+See [Ironhorse limits](../packages/thixotrope/designs/ironhorse-limits.md) for exact settings.
 Incompatible or unversioned stored state is refused.
 A closed SQLite image is copied only after successful worker shutdown folds in its WAL.
 Snapshot references are file digests and are checked before restore.
@@ -167,7 +228,7 @@ handshake identity and output.
 Ordinary socket loss preserves references, listeners, and delivery obligations.
 
 Peers advertise whether acceptance survives restart or only the current process.
-A peer without a persistence adapter supplies the weaker process-lifetime contract explicitly.
+A peer without session resumption supplies the weaker process-lifetime contract explicitly.
 The protocol refuses an acceptance-profile change within an incarnation and rejects receipt-only
 version 1 envelopes; old version 1 session records are not automatically migrated.
 This resumption envelope is Thixotrope-specific, not an OCapN standard.
@@ -182,7 +243,13 @@ establish hardware power-loss behavior.
 
 ## Host resources and persistence boundaries
 
-Host capabilities have durable descriptions and are reconstructed through registered factories.
+Host capabilities are bound to a worker, a key, both or neither, and are reconstructed through
+registered factories at the export slots their bindings were recorded against.
+A resource whose meaning has ended is retired: the host forgets its instance and nulls its recorded
+exports, so a restart seats tombstones for it rather than re-running the factory, and the guest's
+release of an export drops that export's record.
+Retiring a worker retires every resource bound to it and releases the host state keyed by it, such
+as the adapter processes it launched.
 Host-origin nondeterministic results enter guest state as journaled protocol replies.
 The host endpoint treats unrecoverable pending host-operation answers as at-most-once obligations:
 restart rejects them rather than blindly repeating an external effect.
@@ -197,13 +264,143 @@ Bounded cleanup prevents a stalled guest cancellation from holding the superviso
 Removing a subscription makes its state eligible for ordinary collection; it does not prove physical
 heap reclamation has already happened.
 
+### Native resources
+
+A native resource is a directory with `durable.js` and `ephemeral.js`, installed by name into the
+registry the way an application is: `thix install-native STATE NAME DIRECTORY`.
+The two modules are the two halves of one thing.
+The **manager**, the durable module's kit, runs in a dedicated vat whose heap persists.
+The **adapter**, the ephemeral module's root, runs in a Node process that owns the operating-system
+resource and is expected to die.
+The split is a persistence barrier before it is a division of labour: orthogonal persistence is
+indiscriminate, so a durable vat holding live sockets, buffers and request closures would persist
+what must not survive, and running all of that in a process makes "everything here dies"
+structurally true instead of a case-by-case judgement.
+
+The manager holds policy and desired state; the adapter holds mechanism and no memory of who asked
+for what.
+Consumers hold references only to the manager's facet, never to the adapter, so the authority over
+the host resource is concentrated in a thing with no policy, and when an incarnation is retired the
+only holder of dangling references is the manager, which is the one thing equipped to re-establish.
+Retirement is generation identity: the hub tombstones a retired session's rows, so a stale reference
+breaks rather than reaching a successor.
+A manager holding a consumer's handler retains that consumer's vat, which is correct: a vat being
+served is reachable, and withdrawing the registration releases it: a closed handle no longer
+names the handler it was made with.
+
+`durable.js` exports a synchronous `make(powers)` that receives `{ makeManager }` together with
+whatever the installation was granted or provided, such as the control socket's `admin`, with the
+guest prelude in scope, and returns `{ facet, lifecycle }`.
+`makeManager({ label, same, replaces, decorate })` writes the manager's bookkeeping once: it keeps
+the desired registrations, holds one adapter incarnation through a keeper, reconciles each
+registration against it, answers `register` with the handle and the status reconciling found,
+hands out per-registration handles whose `status()` and `close()` act only on their own
+generation, reports every status as one record, `{ key, status, error? }` with `bound`,
+`inactive` or `closed` and whatever fields the optional `decorate` adds, withdraws desired state
+durably before telling the adapter, retires an incarnation whose unbinding is uncertain, and
+rebuilds the adapter at startup and after its own exit when anything is desired.
+`ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, bind,
+unbind, resolve })` from `@endo/thixotrope/native-adapter.js`, which serializes operations, keeps
+the bindings, replaces a registration the manager replaced, and restores a set of registrations
+one at a time, reporting each failure without giving up on the rest.
+The two speak one protocol: `bind(key, spec, epoch)`, `unbind(key)` and
+`restore([[key, spec, epoch], …])`, where `spec` is whatever passable record the author registers
+under a key and `epoch` names the registration, new for each one the manager makes or replaces.
+A registration may resolve at bind time, when binding settles something the spec left open (a
+relative delay becomes an absolute deadline; a port of zero becomes the port the listener got):
+the optional `resolve(binding, spec)` says what it became, a bind answers that resolved spec
+(`undefined` when the registration is as sent), a restore reports it, and the manager adopts it as
+the desired spec, so `same`, `decorate` and the next restore all see the resolved form.
+Sameness of a registration is the author's to state once, to the manager, and only for a key that
+may be registered again (a record crosses the wire as a fresh copy each time, so identity would
+refuse the same registration made twice); by default a key registered again is refused.
+The adapter compares epochs: the same epoch is the binding it holds, another a replacement.
+An adapter forgets a binding only once its release succeeds, so a failed release is retried by a
+later unbind and reaches the manager's retirement path; after a replacement the adapter did not
+take, the manager asks it to unbind the key, and only when that fails too retires the incarnation,
+so a replaced binding whose release failed goes with its process and a fresh incarnation restores
+every registration.
+`src/native/contract.js` states the contract as types.
+
+Only the facet enters the named inventory slot; applications receive it through grants.
+The lifecycle facet is published privately for the manager's own notices: `started()`, which the
+daemon delivers at every start after every vat is seated, to every manager in parallel and within
+one bound, and `exited()`, which the daemon delivers on the launcher's report when an adapter
+process ends on its own rather than through retirement or shutdown.
+A manager with anything desired rebuilds its adapter on either; the backoff is the host's, since
+it owns the timers a vat lacks: the first exit after a life of ten seconds or more is reported at
+once, and consecutive quicker exits double the delay from one second up to thirty.
+Each adapter incarnation has one transient session, shared by its requests; retiring the process
+retires that session and breaks its references.
+Both modules are bundled at installation, each with what it imports frozen in, and the pair of
+bundle digests is the installation's identity; the ephemeral bundle is stored under its digest and
+verified by the process that loads it, so the directory may be edited or removed afterwards, and
+changed source is a new installation.
+Removing an installation retires the manager vat first, which closes the processes it launched and
+withdraws its start notice, and only then forgets the name.
+
+HTTP is the first native resource a user installs, `resources/http`; the clock, `resources/clock`,
+is the first the supervisor provides itself, at every start.
+Its facet registers a handler on a port with an optional origin policy and returns the handle;
+registration succeeds even when binding fails, and `status()` retries the binding and reports an
+inactive listener with its error, so a caller can always withdraw desired state.
+The adapter owns the server, sockets, request buffers, deadlines and response handling, copies only
+method, path and text body into the guest, bounds bodies, concurrency and duration, and rejects
+cross-origin browser access by exact Host and Origin or Fetch Metadata checks.
+These checks do not authenticate local processes; the guest HTTP interface is available to local
+clients.
+A replacement adapter restores registrations, never pending requests, and an already accepted guest
+invocation may complete after the HTTP client is gone.
+
+### The clock
+
+The supervisor provides a clock as a native resource, one for the daemon, found again at every start
+and installed when missing, and hands its facet to every workspace under `clock`, so it has its own
+budget and failure lifetime and removing it drops every workspace's alarms.
+It exposes `at(deadline)`, `after(delay)` and `arm({ at } | { after })`, the last with a per-alarm
+cancellation capability, and no `now()`: a program that only needs a delay never learns the time.
+The deadlines live in the clock's manager vat, durable for free; the timers live in its adapter
+process, which owns a clock of its own, arms one timer per alarm and reports each firing to the
+manager's sink.
+A delay is resolved to a deadline in the adapter when the alarm is bound, and the manager adopts
+the resolved registration, so a restart restores the deadline, never the delay counted again.
+A restart, or the adapter ending on its own, rebuilds the adapter and re-arms every armed alarm;
+one whose deadline passed meanwhile fires at once, and a firing the manager never recorded is
+reported again and settles once, since settlement is idempotent per key.
+There is no host ledger, no acknowledgement protocol and no host control facet that enumerates
+guest alarms; `alarms` reports counts, of the pending alarms and of the armed ones.
+Arming is a round trip to the adapter, so an alarm whose registration has not answered when the
+host or the adapter ends is rejected rather than retried; only an armed one is restored.
+
+The initial profile uses absolute bigint Unix milliseconds in the nonnegative signed 64-bit range
+and delays up to 2^53 milliseconds.
+A deadline that passes during downtime settles after restart, preserving downstream guest listeners.
+Wall-clock adjustments affect when deadlines become due; this is not a real-time scheduling guarantee.
+Cancellation is supported; recurring scheduling remains application work.
+
 ## Workspace and installed applications
 
-The local supervisor owns a persistent workspace and exposes administration over a private Unix socket.
+The local supervisor owns a table of persistent workspaces, `default` among them, and exposes
+administration over a private Unix socket; a connection speaks for one workspace at a time.
+The socket is served by a native resource the supervisor provides, whose adapter process listens
+and starts each client's session from a facet of the administration, which stays host code.
+Each workspace is a vat allocated under a key derived from its name, published as a retention root,
+with an inventory and an address book of its own and a mailbox provided to it in a vat of its own;
+the hub, the registry, the clock and the control socket are the daemon's.
 Terminal attachment does not own the workspace lifetime.
 Disconnecting a terminal leaves guest state available for later attachment.
 The socket carries local administrative authority and is protected by the state directory's ownership
 and permissions.
+
+Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
+shape; the current version includes dedicated native managers, the mail address book with its
+introductions resource, manager-owned adapter launchers, the one installation registry, the clock
+and mailbox provided through it, the clock as a native resource, the registry in a vat of the
+daemon's own with the host's index beside it, the table of workspaces, and host resources bound to
+a worker and a key.
+Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
+workers, because their heap-persisted registry and clock closures cannot be replaced by loading
+new source.
 
 The workspace supplies a worker controller and an observable inventory backed by an ordinary Map.
 Guest code can retain capabilities in normal variables and closures without using the inventory.
@@ -212,18 +409,118 @@ separate garbage-collection regime.
 
 An application module exports `make(powers)`.
 The CLI bundles its static module graph and grants only explicitly selected inventory capabilities.
-A persistent application registry retains the pending or completed factory result together with the
-bundle digest and grant mapping.
+One persistent registry, in a vat of the daemon's own, records every installation, application or
+native resource: its name, code digest, grant mapping, the vat the host allocated for it under an
+idempotent allocation key, and its pending, ready, or failed outcome; the installed value takes the
+name in the inventory of the workspace that asked for it.
+The registry vat drives each installation as one durable function, so an interrupted installation
+resumes by itself at the next start without allocating a second vat or running a factory twice: a
+host answer broken by the restart is made again under the same allocation key.
+The bundle goes into the host's store under its digest, the registry vat handles the digest only,
+and the host stages the bundle into the new vat in bounded messages; the registry obtains that
+vat's guest evaluator directly so an asynchronous factory result survives host restart as a
+guest-to-guest promise.
+The host keeps an index of its own beside the vat, so listing and removal work while the registry
+vat cannot answer, and the workspace does no more than resolve grants and hold the installed
+values.
 Reinstalling the same name, code, and grant mapping reuses the existing result.
-The workspace obtains the guest evaluator directly so an asynchronous factory result can survive
-host restart as a guest-to-guest promise.
 
 Installation captures code and powers; it does not reload changed source files or upgrade an existing
 application's heap.
-The current admission profile limits serialized installation requests to 16 KiB and grants to
-remotable capabilities.
-Interrupted host allocation or evaluator acquisition can require an explicit retry.
-Removing a registry entry releases its reference; it does not revoke references held elsewhere.
+Grants are limited to remotable capabilities and checked before any vat exists.
+Removing an installation retires its vat first and then forgets the name; a removal interrupted
+between the two resumes where it stopped.
+
+## Contacts and capability offers
+
+Local supervisors communicate through private, same-user Unix sockets with durable session recovery.
+The transport fragments large logical messages without imposing a smaller limit after durable admission.
+Publication imports and third-party gift redemptions share one outgoing session per exporter, preserving
+its routing alias and dial location across restart.
+An invitation grants one reciprocal exchange of contact inbox capabilities.
+Contact labels are local names, not authenticated human identities.
+The mailbox owner can cancel an invitation and withdraw its publication without revoking an
+established contact.
+
+Each mailbox lives in a guest vat, separate from the workspace and shared application vats.
+Received offers and delivery listeners persist as ordinary mailbox guest state.
+The mailbox accepts correspondent capabilities directly and has no pet-name registry.
+A separate address book in each workspace resolves names through the user's observable `contacts`
+inventory entry by convention.
+The same identity can be kept in an ordinary variable and passed to `mailbox.send` without naming it.
+Incoming facets bind the local sender identity; peers cannot supply their own display labels.
+Inbox and outbox records retain identities, while the address book resolves current labels for the UI.
+Renaming a contact therefore does not rewrite mailbox records or replace remote references.
+An offer carries one explicitly selected capability; accepting it may retain it in the user's inventory.
+The recipient's terminal renders descriptions, a representation for a text view whose session ends
+with the connection rather than a confinement, and disconnects when closed.
+The node outbox handles delivery retries after admission; mailbox code does not resend on reconnect.
+
+## Platform powers and service atoms
+
+Core factories receive their platform powers explicitly.
+Node module imports and ambient host authority are confined to the Node power factory and host
+composition entrypoints; the XS worker bootstrap is a separate platform perimeter.
+Core lint rejects built-in module imports and re-exports, dynamic module acquisition, and ambient
+I/O, randomness, clocks, and scheduling.
+Tests exercise the effective lint configuration with negative authority probes.
+
+The powers include storage, scheduling, entropy, process launch, network listeners, and terminal I/O.
+Calling a core factory does not construct default Node powers or fetch a shared platform singleton.
+An alternative host can supply these capabilities explicitly.
+The current Unix transport and Node worker implementations still implement platform-specific
+behavior; the boundary makes those dependencies replaceable, rather than claiming they already run
+on every operating system.
+
+Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` returns a string or
+`undefined`, and a successful `write(string)` durably replaces the slot before the next effect.
+The file-backed atom is one implementation.
+HTTP registrations and the clock's alarms live in their manager vats' heaps.
+The manual persistence boundary is confined to host state that cannot rely on a durable guest heap.
+Platform implementations return plain data, iterator facades, and opaque tokens rather than Node
+streams,
+servers, or timer objects; callbacks likewise do not receive native objects as their receiver.
+
+## Publications and host observation sessions
+
+`daemon.publish(value, secret?)` records a durable swissnum-to-capability mapping in the hub.
+Together, the node location and swissnum form an OCapN sturdy reference: a remote peer fetches
+that swissnum from the node bootstrap to obtain the capability.
+Publication is also a retention root.
+`unpublish(secret)` removes the locator and its root; it does not revoke capabilities already fetched.
+Importing a publication reuses the canonical outgoing peer session, including one previously
+established for a third-party gift.
+An existing connection or in-flight connection attempt is reused rather than handshaken again.
+
+A session is a logical protocol relationship with reference tables, answer routes, and lifecycle
+state; it is not synonymous with a socket.
+Durable peer sessions survive socket loss and daemon restart.
+The host endpoint is a reifying session used by host resources and administration.
+Worker sessions connect the hub to persistent guest heaps.
+
+A transient client is a short-lived, reifying host client with its own transient hub session,
+keyed under the `transient:` prefix to mark that it cannot be restored.
+Nothing in the supervisor opens one today.
+Administration goes through the endpoint's durable session, and the inventory view holds a
+control-socket connection whose subscription the supervisor releases.
+The mechanism remains for embedders.
+Native adapter processes instead have one transient hub session per incarnation; HTTP shares that
+session across requests, and the clock's adapter reports firings over it.
+Closing a client retires its session and releases its references and answer routes.
+The daemon tracks both clients being opened and clients already open, so shutdown cannot miss
+an opening that completes concurrently.
+After a crash, startup removes orphaned transient sessions before resuming ordinary work.
+This cleanup does not retire durable peer sessions or reject their unsettled guest promises.
+
+At the host endpoint, an unresolved computation can become unreachable even while a guest retains
+its separate result promise.
+The guest result does not point back to the host computation or its reaction closures.
+The current restart-abort policy explicitly retains the guest resolver route until settlement,
+so a subsequent host restart can reject that abandoned operation.
+This root retains a protocol obligation, not the original host computation.
+It is specific to ephemeral host operations and does not apply to guest-to-guest pending promises.
+There is currently no caller-abandonment notification to release a never-settling host obligation
+before the endpoint lifetime ends.
 
 ## Retention and retirement
 
@@ -250,11 +547,13 @@ Retirement cannot undo external effects already performed.
 The main integration examples each use two guest vats connected through comms: a caller invokes a
 counter in another vat, and a promise listener survives restart before receiving settlement.
 Tests also exercise process-crash boundaries, reference retention, quarantine, runtime ownership,
-workspace restart, installation, and ephemeral UI cleanup.
+workspace restart, many workspaces in one state directory, installation and its resumption, the
+host's own control listener when the registry vat is quarantined, the retirement of resources with
+their worker, and ephemeral UI cleanup.
 Process-crash tests do not establish hardware power-loss safety or exactly-once effects in an
 arbitrary external service.
 
-Other present limitations include unbounded remote retransmission buffers, indefinite parked durable
+Other present limitations include unbounded remote retransmission buffers, indefinitely dormant durable
 sessions, whole-image copying for sleep/wake, and no live heap/code upgrade.
 The engine does not persist suspended async generators or `Array.fromAsync` operations.
 Protocol limits include rejection of a listen on the sender's own export and pipelining onto an
