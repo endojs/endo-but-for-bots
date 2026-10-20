@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-10-16 |
+| **Updated** | 2026-10-20 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -197,6 +197,115 @@ way to version the protocol. No post-quantum protection is provided: someone
 who records traffic now and later breaks X25519 could decrypt it. Name a
 hybrid suite as a future `/2` (Q3) rather than leave room in `/1`.
 
+### 8. Transport nonces, replay, and failure handling
+
+Sections 1 to 7 cover the handshake. This section covers what happens to
+transport messages once the handshake is done.
+
+- **Nonces are implicit and ordered.** Each direction uses a Noise
+  `CipherState` with a 64-bit counter that the wire never carries
+  (`encrypt` and `decrypt` in `rust/ocapn_noise`). Every transport the netlayer
+  supports (TCP, WebSocket, mock) is reliable and ordered. A dropped,
+  reordered, duplicated, or replayed frame therefore fails AEAD
+  verification. Within one connection, the counter is the whole replay
+  defense, and it is sufficient. Under R3, every connection gets fresh
+  keys, so no `(key, nonce)` pair is ever used on two connections. Counter
+  exhaustion (2^64 messages) cannot happen in practice. If it did, the
+  crate's assertion would trap the WASM instance, and the session would
+  fail closed.
+- **Replayed SYNs are already handled.** IK message 1 is replayable (§1, R5).
+  `network.js` caps unproven inbound handshakes for each *local* key, not for
+  each claimed peer. It also waits for `exchangeIdentity` before it settles a
+  crossed hello or displaces an existing session, so a replayed SYN can tie
+  up a slot until the handshake timeout but cannot take over a session. This
+  review ratifies that design. R1 makes the ordering normative.
+- **F1. A failed decryption does not end the session.** The session reader in
+  `buildSession` returns `decrypt(result.value)`. When the tag fails to
+  verify, `decrypt` throws "decryption failed", but the reader leaves
+  `closed` false, does not close the stream, and does not call `onClose`. The
+  WASM keeps its `DECRYPT` state as well. A consumer that catches the error
+  and reads again keeps a session open after an active attacker has
+  tampered with it. Whether the next read can succeed depends on whether the
+  `noise-protocol` crate advances the receive nonce after a failure, and the
+  protocol should not depend on that. Noise §5.1 leaves failure handling to
+  the application. WireGuard and the Noise-based TLS replacements treat any
+  authentication failure as fatal, and `np` should too (R6).
+- **F2. The handshake keys outlive the handshake.** After
+  `responder_write_synack` and `initiator_read_synack` take the cipher
+  states, `HS` stays `Some`. It holds the static and ephemeral X25519 private
+  keys for the life of the WASM instance, which is the life of the session.
+  The Ed25519 seed also stays at `BUFFER[64..96]` until a transport message
+  of at least 96 bytes overwrites it. The impact is small: anyone who can read
+  a live instance's memory already has that session's `CipherState` keys, and
+  the static key is long-lived anyway. Still, keeping the ephemeral key
+  breaks the usual rule that ephemerals die with the handshake. The fix is
+  cheap (R7).
+- **F3. The initiator accepts any encoding the responder picks.**
+  `initiatorReadSynack` returns `buffer[ACCEPTED_ENCODING_OFFSET]` without
+  checking that the initiator offered that value. The byte is authenticated,
+  so only the genuine responder can choose it, and an attacker cannot use it
+  to downgrade the session. But a buggy or hostile responder can push the
+  initiator onto a codec the initiator never offered, and the initiator will
+  not notice (R7).
+
+### 9. The session layer above the tunnel
+
+The heartbeat, session-hello, and session-id changes now landing add
+negotiation and reconnect state on top of the tunnel:
+[#1476](https://github.com/endojs/endo-but-for-bots/pull/1476) adds
+`op:ping` and `op:pong`,
+[#1481](https://github.com/endojs/endo-but-for-bots/pull/1481) adds
+`op:session-hello` and Rekey reconnect,
+[#1483](https://github.com/endojs/endo-but-for-bots/pull/1483) adds the
+heartbeat capability bit, and
+[#1506](https://github.com/endojs/endo-but-for-bots/pull/1506) adds the
+handshake-bound `sessionId`. This section reviews that layer as those PRs
+specify it.
+
+- **Negotiation cannot be downgraded from outside.** The `features` bitset,
+  `epoch`, and session token travel in `op:session-hello`. That message is
+  encrypted, comes after key confirmation, and is authenticated by the
+  tunnel. An on-path attacker cannot strip the heartbeat bit. Only the peer
+  itself can decline a feature, and declining is allowed. Two requirements
+  should be stated explicitly. A receiver ignores feature bits it does not
+  know. The feature set is fixed for each transport instance and is never
+  renegotiated in the middle of a connection.
+- **F4. The session token is public.** #1481 uses the Noise handshake hash of
+  the session's first connection as the 32-byte reconnect token. The hash `h`
+  is built only from public inputs: the protocol name, the prologue (which
+  contains the responder key in the clear), the ephemeral public keys, and
+  the handshake *ciphertexts*. Anyone who recorded the first handshake can
+  compute it. Noise §11.2 offers `h` for channel binding, not as a secret.
+  #1481 is safe as specified, because the responder accepts a token only
+  "for that peer", that is, for the initiator key the new handshake just
+  authenticated. The protocol must keep that rule. Looking up a session by
+  token alone would let any peer who has seen the first handshake take the
+  session over (R8).
+- **Retransmission after reconnect.** Phases 2 and 3 replay unacknowledged
+  frames from the other side's `received` count. Those frames must be kept as
+  plaintext and re-encrypted under the new connection's `CipherState`.
+  Re-sending old ciphertext would fail verification anyway, and keeping the
+  old `CipherState` is exactly what R3 rules out. Exactly-once delivery then
+  belongs to the session layer. The receiver drops any frame below its
+  `received` count, and that count only increases across epochs. That
+  includes the retry case, where the responder re-attaches the epoch it last
+  attached. The counts are carried inside the new tunnel, so they are
+  authenticated (R9). `op:pong` exposes `lastAckedRecvNonce`. Noise counters
+  are not secret, and #1476 already rejects an acknowledgment beyond the
+  sender's sent count. This review ratifies both.
+- **F5. Which handshake hash should `sessionId` use?** #1506 closes §5 by
+  mixing "the" handshake hash into `makeSessionId`. Once reconnect is
+  transparent, a logical session spans several connections, and each
+  connection has its own `h`. The handoff replay state (`nextHandoffCount`,
+  `usedGiftHandoffs`) belongs to the CapTP session object, which survives a
+  reconnect. If `sessionId` came from the current connection's `h`, it would
+  change in the middle of a session while the counters kept running, and
+  signed handoffs would name an ID that the session no longer answers to.
+  This review recommends deriving `sessionId` from the session token, the
+  first connection's `h`. That value stays the same for the whole logical
+  session and differs between sessions, so it still closes the
+  cross-session replay of §5 (R10, Q4).
+
 ## Recommendations (before stabilization)
 
 1. **R1. Make key confirmation normative.** The specification should say that
@@ -229,6 +338,31 @@ hybrid suite as a future `/2` (Q3) rather than leave room in `/1`.
    limited to the initiator key and the encoding offer. Do not introduce 0-RTT
    `op:start-session`.
 
+6. **R6. Treat every authentication failure as fatal.** When `decrypt` fails,
+   the session reader sets `closed`, closes the stream, and fires `onClose`
+   before it rethrows. The WASM `decrypt` also clears `DECRYPT` (and
+   `ENCRYPT`) on failure, so the instance cannot be used again. Add a test
+   that flips one byte of one transport frame and checks that the session
+   closes and no later plaintext arrives.
+7. **R7. Tighten handshake hygiene.** After `get_ciphers()`, set `HS = None`
+   and zero the signing-key and payload regions of `BUFFER` (F2). In
+   `initiatorReadSynack`, reject an accepted encoding the initiator did not
+   offer (F3). Neither change touches the wire.
+8. **R8. Key reconnect lookups on the authenticated peer.** The
+   session-reconnect specification should say that the token is a public
+   identifier. A responder looks a session up by the pair
+   (authenticated initiator key, token) and never by the token alone. `h`
+   must never be used as key material or as a credential. Add a test in which
+   peer C presents peer A's token and receives a refusal hello.
+9. **R9. Make exactly-once retransmission explicit.** Unacknowledged frames
+   are kept as plaintext and re-encrypted under the new connection's keys.
+   The receiver drops frames below its `received` count, and that count never
+   decreases, including on the same-epoch retry path.
+10. **R10. Derive the `np` `sessionId` from the session token.** For R2, use
+    the first connection's handshake hash, so the ID stays fixed across Rekey
+    reconnects and handoff replay state stays consistent (F5). This is a
+    one-line change to #1506's `buildSession` call site, once #1481 lands.
+
 ## Design Decisions
 
 1. **Keep IK and do not adopt XK.** The cost of IK is initiator identity hiding
@@ -251,6 +385,13 @@ hybrid suite as a future `/2` (Q3) rather than leave room in `/1`.
 - [ ] R3: amend the session-reconnect design (to be filed as a follow-up after
   this review is accepted).
 - [ ] R4: wire contract in `packages/ocapn-noise`.
+- [ ] R6: fatal authentication failure, with a tampered-frame test.
+- [ ] R7: clear `HS` and key regions after the handshake; the initiator checks
+  the accepted encoding.
+- [ ] R8: reconnect lookup keyed on (authenticated peer, token), with a
+  foreign-token test (amends #1481).
+- [ ] R9: exactly-once retransmission rules in the session-reconnect design.
+- [ ] R10: `sessionId` from the session token (amends #1506).
 
 ## Open questions
 
@@ -262,13 +403,17 @@ hybrid suite as a future `/2` (Q3) rather than leave room in `/1`.
   each stable `sessionId`?
 - **Q3.** Should a hybrid post-quantum `np/2` suite (for example X25519 plus
   ML-KEM) be scheduled now, or deferred until upstream OCapN takes a position?
+- **Q4.** For R10, should the `np` `sessionId` stay fixed for a whole logical
+  session across Rekey reconnects (bound to the first connection's handshake
+  hash), or change with every connection? If it changes, the handoff counters
+  must reset with it.
 
 ## Dependencies
 
 | Design | Relationship |
 |---|---|
 | [ocapn-noise-network](ocapn-noise-network.md) | Implements the reviewed protocol; its stale XX text is corrected alongside this review. |
-| [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | C1 is answered here (R3). |
+| [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | C1 is answered here (R3). Its heartbeat, `op:session-hello`, and retransmission layer is reviewed in §9 (R8 to R10). |
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | Relies on the cleartext responder-key prefix that §1 assumes. |
 
 ## Prompt
