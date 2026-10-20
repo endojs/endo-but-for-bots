@@ -293,3 +293,20 @@ test('tcp+cbor rejects an oversized declared length before allocation', async t 
   // hanging.
   await t.throwsAsync(() => serverStream.writer.return(undefined));
 });
+
+test('tcp+cbor connect rejects a missing port hint', async t => {
+  const transport = makeTcpCborTransport();
+  t.teardown(() => transport.shutdown());
+  await t.throwsAsync(() => transport.connect({ host: '127.0.0.1' }), {
+    message: /tcp\+cbor transport: missing 'port' hint/,
+  });
+});
+
+test('tcp+cbor connect rejects a non-numeric port hint', async t => {
+  const transport = makeTcpCborTransport();
+  t.teardown(() => transport.shutdown());
+  await t.throwsAsync(
+    () => transport.connect({ host: '127.0.0.1', port: 'x' }),
+    { message: /tcp\+cbor transport: invalid 'port' hint x/ },
+  );
+});
