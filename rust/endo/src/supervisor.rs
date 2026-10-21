@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -40,6 +40,10 @@ pub struct Supervisor {
     suspended: RwLock<HashMap<Handle, SuspendedWorker>>,
     /// Per-worker metering state.
     meters: RwLock<HashMap<Handle, MeterState>>,
+    /// Handles that should resume with the XS debugger enabled
+    /// (designs/daemon-debug-worker-restart.md).  Set by the
+    /// `debug-flag` control verb, consumed by the next resume.
+    debug_flags: RwLock<HashSet<Handle>>,
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
@@ -57,6 +61,7 @@ impl Supervisor {
             pending_syncs: Mutex::new(HashMap::new()),
             suspended: RwLock::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
+            debug_flags: RwLock::new(HashSet::new()),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
@@ -243,6 +248,18 @@ impl Supervisor {
         }
     }
 
+    /// Mark a worker to resume with the XS debugger enabled.
+    pub fn set_debug_flag(&self, handle: Handle) {
+        self.debug_flags.write().unwrap_or_else(|e| e.into_inner()).insert(handle);
+    }
+
+    /// Atomically remove a worker's debug flag, returning whether it
+    /// was set.  Called once per resume so the flag applies to exactly
+    /// one restart.
+    pub fn take_debug_flag(&self, handle: Handle) -> bool {
+        self.debug_flags.write().unwrap_or_else(|e| e.into_inner()).remove(&handle)
+    }
+
     /// Set quota mode for a worker.
     pub fn set_meter_quota(&self, handle: Handle, hard_limit: u64, budget: u64) {
         let mut meters = self.meters.write().unwrap_or_else(|e| e.into_inner());
@@ -426,6 +443,20 @@ pub fn is_debug_public() -> bool {
 mod tests {
     use super::*;
     use std::time::SystemTime;
+
+    #[test]
+    fn debug_flag_is_taken_once() {
+        let (sup, _outbox_rx) = Supervisor::new();
+        let handle = sup.alloc_handle();
+        let other = sup.alloc_handle();
+        assert!(!sup.take_debug_flag(handle));
+        sup.set_debug_flag(handle);
+        // Setting twice is idempotent.
+        sup.set_debug_flag(handle);
+        assert!(!sup.take_debug_flag(other));
+        assert!(sup.take_debug_flag(handle));
+        assert!(!sup.take_debug_flag(handle));
+    }
 
     #[test]
     fn suspend_resume_preserves_platform() {
