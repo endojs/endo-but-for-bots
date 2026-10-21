@@ -1,7 +1,7 @@
 //! CAS-backed archive ingestion and loading.
 //!
-//! Provides functions to ingest a compartment-map ZIP archive
-//! into the content-addressed store and load it back by root hash.
+//! Provides functions to ingest a compartment-map archive into the
+//! content-addressed store and load it back by root hash.
 //!
 //! Three input forms are supported:
 //!
@@ -10,8 +10,9 @@
 //! - [`ingest_entry_point`] takes a single source file path and
 //!   synthesises a one-compartment, one-module archive around it
 //!   (Form 3 § Phase 4, no-dependency case).
-//! - The directory form (Form 2 / Phase 3) ships separately on PR
-//!   #278 and is not present on this branch.
+//! - [`ingest_directory`] takes an unpacked compartment-map
+//!   directory (Form 2 § Phase 3) and produces the same CAS layout
+//!   as [`ingest_archive`] would for a ZIP of the same files.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
@@ -141,6 +142,137 @@ pub fn ingest_archive<R: Read + Seek>(
     Ok(IngestedArchive {
         root_hash,
         archive: reader2,
+    })
+}
+
+/// Ingest an unpacked compartment-map directory into the CAS and
+/// return the root hash.
+///
+/// This is Form 2 (Phase 3) of `designs/endor-run-expanded.md`. The
+/// directory must hold `compartment-map.json` at its root and one
+/// subdirectory per compartment. The CAS layout mirrors
+/// [`ingest_archive`] exactly: every top-level regular file becomes a
+/// root blob entry, each top-level subdirectory becomes a compartment
+/// sub-tree, and every regular file beneath a compartment becomes a
+/// blob in that sub-tree keyed by its `/`-joined path relative to the
+/// compartment directory (the same key a ZIP entry name yields). A
+/// directory and a ZIP with the same files therefore converge on the
+/// same root hash, and [`load_archive_from_cas`] (or `endor run --cas
+/// <hash>`) reads either interchangeably.
+///
+/// Symbolic links and other non-regular files are skipped, so an
+/// input directory cannot pull content from outside itself into the
+/// store. Entries whose names are not valid UTF-8 are rejected with
+/// `InvalidData`, since the tree manifest keys are strings.
+///
+/// Errors:
+/// - `NotFound` if `dir` is not a directory.
+/// - `InvalidData` if `compartment-map.json` is missing at the
+///   directory root (checked before any CAS write, so a malformed
+///   input does not populate the store with an unrunnable root).
+/// - I/O errors from the walk, file reads, and CAS writes.
+pub fn ingest_directory(cas: &ContentStore, dir: &Path) -> io::Result<IngestedArchive> {
+    if !dir.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("not a directory: {}", dir.display()),
+        ));
+    }
+    let map_path = dir.join("compartment-map.json");
+    if !std::fs::symlink_metadata(&map_path)
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("compartment-map.json not found at {}", map_path.display()),
+        ));
+    }
+
+    let mut root_entries: BTreeMap<String, TreeEntry> = BTreeMap::new();
+
+    for child in std::fs::read_dir(dir)? {
+        let child = child?;
+        let name = utf8_file_name(&child)?;
+        let file_type = child.file_type()?;
+        if file_type.is_file() {
+            root_entries.insert(name, store_file_blob(cas, &child.path())?);
+        } else if file_type.is_dir() {
+            let mut entries: BTreeMap<String, TreeEntry> = BTreeMap::new();
+            collect_compartment_blobs(cas, &child.path(), "", &mut entries)?;
+            // A ZIP never records an empty compartment directory (its
+            // directory entries are skipped), so neither do we.
+            if entries.is_empty() {
+                continue;
+            }
+            let tree_json = serde_json::to_vec(&TreeManifest { entries })
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            root_entries.insert(
+                name,
+                TreeEntry {
+                    entry_type: "tree".to_string(),
+                    hash: cas.store_tree(&tree_json)?,
+                    size: None,
+                },
+            );
+        }
+        // Symlinks and other non-regular files are skipped.
+    }
+
+    let root_json = serde_json::to_vec(&TreeManifest {
+        entries: root_entries,
+    })
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let root_hash = cas.store_tree(&root_json)?;
+
+    let archive = load_archive_from_cas(cas, &root_hash)?;
+
+    Ok(IngestedArchive { root_hash, archive })
+}
+
+/// Recursively store every regular file under `dir` as a CAS blob,
+/// inserting it into `out` keyed by `prefix` + its `/`-joined
+/// relative path.
+fn collect_compartment_blobs(
+    cas: &ContentStore,
+    dir: &Path,
+    prefix: &str,
+    out: &mut BTreeMap<String, TreeEntry>,
+) -> io::Result<()> {
+    for child in std::fs::read_dir(dir)? {
+        let child = child?;
+        let name = utf8_file_name(&child)?;
+        let rel = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let file_type = child.file_type()?;
+        if file_type.is_file() {
+            out.insert(rel, store_file_blob(cas, &child.path())?);
+        } else if file_type.is_dir() {
+            collect_compartment_blobs(cas, &child.path(), &rel, out)?;
+        }
+        // Symlinks and other non-regular files are skipped.
+    }
+    Ok(())
+}
+
+fn utf8_file_name(entry: &std::fs::DirEntry) -> io::Result<String> {
+    entry.file_name().into_string().map_err(|raw| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("non-UTF-8 file name: {}", Path::new(&raw).display()),
+        )
+    })
+}
+
+fn store_file_blob(cas: &ContentStore, path: &Path) -> io::Result<TreeEntry> {
+    let contents = std::fs::read(path)?;
+    Ok(TreeEntry {
+        entry_type: "blob".to_string(),
+        hash: cas.store(&contents, "blob")?,
+        size: Some(contents.len() as u64),
     })
 }
 
@@ -721,7 +853,7 @@ mod tests {
     #[test]
     fn ingest_entry_point_rejects_directory_input() {
         // A directory is not a valid entry-point file. Phase 3
-        // (directory form) lives on PR #278 and follows its own
+        // (directory form) is `ingest_directory` and follows its own
         // CLI dispatch path; the entry-point helper refuses
         // directory inputs at the helper boundary so a CLI bug
         // that mis-routes a directory here still surfaces a
@@ -1139,5 +1271,212 @@ mod tests {
                 panic!("expected File descriptor; got {other:?} (schema drift would land here)",)
             }
         }
+    }
+
+    // Phase 3: directory input.
+
+    const DIR_TEST_MAP: &str = r#"{
+        "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+        "compartments": {
+            "app-v1.0.0": {
+                "name": "app",
+                "modules": {
+                    "./index.js": {"parser": "mjs", "location": "index.js"}
+                }
+            }
+        }
+    }"#;
+
+    /// Files (path relative to the archive root, contents) shared by
+    /// the ZIP and directory equivalence tests. Includes a nested
+    /// compartment file so the `/`-joined key convention is pinned.
+    fn dir_test_files() -> Vec<(&'static str, &'static [u8])> {
+        vec![
+            ("compartment-map.json", DIR_TEST_MAP.as_bytes()),
+            ("app-v1.0.0/index.js", b"export default 42;"),
+            ("app-v1.0.0/lib/util.js", b"export const x = 1;"),
+        ]
+    }
+
+    fn write_dir(files: &[(&str, &[u8])]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (rel, bytes) in files {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        dir
+    }
+
+    fn write_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (rel, bytes) in files {
+                zip.start_file(*rel, options).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    #[test]
+    fn ingest_directory_and_load_from_cas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let dir = write_dir(&dir_test_files());
+
+        let ingested = ingest_directory(&cas, dir.path()).unwrap();
+        assert!(!ingested.root_hash.is_empty());
+        assert_eq!(ingested.archive.map.entry.compartment, "app-v1.0.0");
+        assert_eq!(
+            ingested
+                .archive
+                .sources
+                .get(&("app-v1.0.0".to_string(), "./index.js".to_string()))
+                .map(String::as_str),
+            Some("export default 42;"),
+        );
+
+        // A later `endor run --cas <hash>` reloads the same archive.
+        let reloaded = load_archive_from_cas(&cas, &ingested.root_hash).unwrap();
+        assert_eq!(reloaded.sources, ingested.archive.sources);
+    }
+
+    #[test]
+    fn ingest_directory_matches_zip_root_hash() {
+        // The convergence contract: a directory and a ZIP holding the
+        // same files produce the same root hash, so `--cas <hash>` is
+        // agnostic to which form ingested the archive.
+        let files = dir_test_files();
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let dir = write_dir(&files);
+        let from_dir = ingest_directory(&cas, dir.path()).unwrap();
+        let zip_bytes = write_zip(&files);
+        let from_zip = ingest_archive(&cas, io::Cursor::new(&zip_bytes)).unwrap();
+
+        assert_eq!(from_dir.root_hash, from_zip.root_hash);
+    }
+
+    #[test]
+    fn ingest_directory_root_tree_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let dir = write_dir(&dir_test_files());
+
+        let ingested = ingest_directory(&cas, dir.path()).unwrap();
+        let root = cas.read_tree(&ingested.root_hash).unwrap();
+        let keys: Vec<&str> = root.entries.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["app-v1.0.0", "compartment-map.json"]);
+        assert_eq!(root.entries["compartment-map.json"].entry_type, "blob");
+        assert_eq!(root.entries["app-v1.0.0"].entry_type, "tree");
+
+        let compartment = cas.read_tree(&root.entries["app-v1.0.0"].hash).unwrap();
+        let keys: Vec<&str> = compartment.entries.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["index.js", "lib/util.js"]);
+        assert_eq!(
+            compartment.entries["lib/util.js"].size,
+            Some(b"export const x = 1;".len() as u64),
+        );
+    }
+
+    #[test]
+    fn ingest_directory_is_deterministic_across_stores() {
+        let dir = write_dir(&dir_test_files());
+        let tmp_a = tempfile::tempdir().unwrap();
+        let tmp_b = tempfile::tempdir().unwrap();
+        let a = ingest_directory(&ContentStore::open(tmp_a.path()).unwrap(), dir.path()).unwrap();
+        let b = ingest_directory(&ContentStore::open(tmp_b.path()).unwrap(), dir.path()).unwrap();
+        assert_eq!(a.root_hash, b.root_hash);
+    }
+
+    #[test]
+    fn ingest_directory_skips_empty_compartment_dirs() {
+        // A ZIP never records an empty directory, so an empty
+        // subdirectory must not perturb the root hash.
+        let files = dir_test_files();
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let plain = ingest_directory(&cas, write_dir(&files).path()).unwrap();
+
+        let with_empty = write_dir(&files);
+        std::fs::create_dir_all(with_empty.path().join("empty/nested")).unwrap();
+        let ingested = ingest_directory(&cas, with_empty.path()).unwrap();
+        assert_eq!(ingested.root_hash, plain.root_hash);
+    }
+
+    #[test]
+    fn ingest_directory_rejects_missing_compartment_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let dir = write_dir(&[("app-v1.0.0/index.js", b"export default 1;")]);
+
+        let err = match ingest_directory(&cas, dir.path()) {
+            Ok(_) => panic!("expected InvalidData for missing compartment-map.json"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("compartment-map.json"), "{err}");
+    }
+
+    #[test]
+    fn ingest_directory_rejects_non_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("archive.zip");
+        std::fs::write(&file, b"x").unwrap();
+
+        for path in [file, dir.path().join("missing")] {
+            let err = match ingest_directory(&cas, &path) {
+                Ok(_) => panic!("expected NotFound for {}", path.display()),
+                Err(e) => e,
+            };
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ingest_directory_skips_symlinks() {
+        // A symlink must not import content from outside the input
+        // directory: the result matches the same directory without it.
+        let files = dir_test_files();
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let plain = ingest_directory(&cas, write_dir(&files).path()).unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, b"outside").unwrap();
+        let dir = write_dir(&files);
+        std::os::unix::fs::symlink(&secret, dir.path().join("app-v1.0.0/leak.txt")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-v1.0.0")).unwrap();
+
+        let ingested = ingest_directory(&cas, dir.path()).unwrap();
+        assert_eq!(ingested.root_hash, plain.root_hash);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ingest_directory_rejects_symlinked_compartment_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let real_map = outside.path().join("compartment-map.json");
+        std::fs::write(&real_map, DIR_TEST_MAP).unwrap();
+        let dir = write_dir(&[("app-v1.0.0/index.js", b"export default 42;")]);
+        std::os::unix::fs::symlink(&real_map, dir.path().join("compartment-map.json")).unwrap();
+
+        let err = match ingest_directory(&cas, dir.path()) {
+            Ok(_) => panic!("expected InvalidData for symlinked compartment-map.json"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

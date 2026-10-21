@@ -3,14 +3,15 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-08-27 |
+| **Updated** | 2026-10-21 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phases 1-2 and Phase 4 (no-dependency case) are implemented; Phase 3
-is in review on PR #278. Phase 5's local-`node_modules` walk and its
+Phases 1-4 are implemented (Phase 4 for the no-dependency case);
+Phase 3 (directory input) was rebuilt on current `llm`, superseding
+the stale PR #278. Phase 5's local-`node_modules` walk and its
 fixture-parity ratchet are implemented on this PR (stacked on PR #279).
 The Rust walker now covers CommonJS and statically analyzable dynamic
 edges, conditional and subpath exports/imports, dependency-kind
@@ -40,6 +41,18 @@ walk).
   `endor run --cas <hash>` re-runs from CAS. `--no-cas` preserves
   legacy behavior. `run_xs_archive_loaded` added to xsnap for
   executing pre-loaded archives.
+- **Phase 3**: `cas_archive::ingest_directory` walks an unpacked
+  compartment-map directory into the CAS with the same layout
+  `ingest_archive` produces (root blobs, one sub-tree per top-level
+  compartment directory, `/`-joined relative keys), so a directory
+  and a ZIP of the same files converge on the same root hash.
+  `classify_run_input` returns `RunInput::Directory` for any
+  directory, and `endor run <dir/>` ingests and runs it; `--no-cas`
+  is rejected (exit 2) for directory input. Symbolic links are not
+  followed, and a missing (or symlinked) `compartment-map.json` is
+  rejected before any CAS write. Sorted manifest serialization,
+  which PR #278 added as `encode_manifest_sorted`, is now inherent:
+  `TreeManifest.entries` is a `BTreeMap`.
 - **Phase 4** (no-dependency case):
   `rust/endo/src/cas_archive.rs` — `ingest_entry_point(cas, path)`
   synthesises a one-compartment, one-module archive around a
