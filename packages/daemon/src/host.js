@@ -301,6 +301,7 @@ harden(normalizeHttpClientPolicy);
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
  * @param {HostToolPowers['gitClone']} [args.gitClone]
+ * @param {(id: FormulaIdentifier) => ReturnType<EndoHost['debugWorker']>} [args.debugWorker]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
