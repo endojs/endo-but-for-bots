@@ -8,6 +8,7 @@ pub mod archive;
 pub mod cesu8;
 pub mod envelope;
 pub mod ffi;
+pub mod mapper;
 pub mod powers;
 pub mod worker_io;
 
@@ -889,6 +890,29 @@ pub const MANAGER_BOOTSTRAP: &str = include_str!("daemon_bootstrap.js");
 // in the `endo` crate calls into these from its subcommand dispatch.
 // --------------------------------------------------------------------
 
+/// Replaces `TextEncoder`/`TextDecoder` with wrappers over the
+/// `hostEncodeUtf8`/`hostDecodeUtf8` worker-I/O host functions. XS's
+/// built-in codec is extremely slow for large strings (>100KB). Must be
+/// evaluated before SES lockdown.
+pub(crate) const NATIVE_TEXT_CODEC: &str =
+    "(function() { \
+        var OrigEncoder = globalThis.TextEncoder; \
+        var OrigDecoder = globalThis.TextDecoder; \
+        function NativeTextEncoder() {} \
+        NativeTextEncoder.prototype.encode = function(s) { \
+            return new Uint8Array(hostEncodeUtf8(s)); \
+        }; \
+        globalThis.TextEncoder = NativeTextEncoder; \
+        function NativeTextDecoder() {} \
+        NativeTextDecoder.prototype.decode = function(buf) { \
+            if (buf instanceof ArrayBuffer) { \
+                return hostDecodeUtf8(new Uint8Array(buf)); \
+            } \
+            return hostDecodeUtf8(buf); \
+        }; \
+        globalThis.TextDecoder = NativeTextDecoder; \
+    })();";
+
 /// Machine creation parameters sized for the ~1MB worker bundle.
 pub const WORKER_CREATION: ffi::XsCreation = ffi::XsCreation {
     initial_chunk_size: 1024 * 1024,
@@ -1514,25 +1538,7 @@ pub fn run_xs_program(
         // lockdown so that the bundled `new TextEncoder()` picks up the
         // fast native implementation instead of XS's built-in which is
         // extremely slow for large strings (>100KB).
-        machine.eval(
-            "(function() { \
-                var OrigEncoder = globalThis.TextEncoder; \
-                var OrigDecoder = globalThis.TextDecoder; \
-                function NativeTextEncoder() {} \
-                NativeTextEncoder.prototype.encode = function(s) { \
-                    return new Uint8Array(hostEncodeUtf8(s)); \
-                }; \
-                globalThis.TextEncoder = NativeTextEncoder; \
-                function NativeTextDecoder() {} \
-                NativeTextDecoder.prototype.decode = function(buf) { \
-                    if (buf instanceof ArrayBuffer) { \
-                        return hostDecodeUtf8(new Uint8Array(buf)); \
-                    } \
-                    return hostDecodeUtf8(buf); \
-                }; \
-                globalThis.TextDecoder = NativeTextDecoder; \
-            })();",
-        );
+        machine.eval(NATIVE_TEXT_CODEC);
 
         // Bootstrap: polyfills → SES boot → role-specific program
         bootstrap_ses(&machine, label);

@@ -18,6 +18,9 @@ manager bundle, kept under its legacy filename to minimize bundler
 churn — and `worker_bootstrap.js`) that must be generated first via
 `packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` and
 `packages/daemon/scripts/bundle-bus-worker-xs.mjs`.
+`endor run <entry.js>` also embeds the compartment mapper bundle
+`endor_run_mapper.js`, generated with
+`packages/daemon/scripts/bundle-endor-run-mapper-xs.mjs`.
 
 The binary lands at `target/release/endor`.
 
@@ -51,7 +54,7 @@ documented here for completeness):
 ```sh
 endor manager [-e xs]               # supervised manager child
 endor worker  [-e xs]               # supervised worker child
-endor run     [-e xs] <archive.zip> # standalone archive runner
+endor run     [-e xs] <archive.zip|dir/|entry.js> # standalone runner
 ```
 
 XS is the default engine for every child-facing subcommand, so `-e xs`
@@ -89,15 +92,15 @@ CapTP traffic is bridged as `deliver` envelopes.
 
 | Verb | Direction | Purpose |
 |------|-----------|---------|
-| `spawn` | manager → daemon | Request worker spawn |
-| `spawned` | daemon → manager | Worker spawn response |
-| `listen` | manager → daemon | Request socket bind |
-| `listening` | daemon → manager | Socket bound |
-| `connect` | daemon → manager | New client connection |
-| `disconnect` | daemon → manager | Client disconnected |
+| `spawn` | manager -> daemon | Request worker spawn |
+| `spawned` | daemon -> manager | Worker spawn response |
+| `listen` | manager -> daemon | Request socket bind |
+| `listening` | daemon -> manager | Socket bound |
+| `connect` | daemon -> manager | New client connection |
+| `disconnect` | daemon -> manager | Client disconnected |
 | `deliver` | bidirectional | CapTP message payload |
-| `exited` | daemon → manager | Worker exited |
-| `ready` | manager → daemon | Manager initialization complete |
+| `exited` | daemon -> manager | Worker exited |
+| `ready` | manager -> daemon | Manager initialization complete |
 
 ## Integration tests
 
