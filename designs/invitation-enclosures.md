@@ -25,6 +25,17 @@ already holds, the invitation retains and names their formula identifiers, and
 its `endo://` locator transports those identifiers as bearer authority.
 The receiving application decides whether an enclosure name means anything.
 
+**Bearer authority** means that possession is the whole permission: whoever
+reads a formula identifier or a locator can use the capability it names, with
+no further identity check.
+Holding authority is not the same as keeping a formula alive, though.
+A daemon's collector may delete any formula that no durable reference reaches,
+and an identifier stored as plain data, such as a string in a URL or a record,
+is not such a reference (section *Retention model*).
+That is why a locator can delegate a coupon yet, by itself, cannot keep the
+coupon in existence: the invitation formula must also hold a durable reference
+to the enclosed formula while the invitation is pending.
+
 The existing seams are:
 
 - `EndoHost.invite` and `EndoGuest.invite` in `host.js` and `guest.js` formulate
@@ -63,7 +74,8 @@ The mechanism must:
 - retain local enclosed formulas while the invitation is pending, and stop
   retaining them when the invitation is consumed, canceled, or superseded;
 - return the same record from parsing, inspection, and successful acceptance;
-- preserve the current one-argument `invite` and two-argument `accept` calls; and
+- preserve the current one-argument `invite` and two-argument `accept` calls,
+  and keep unenclosed invitations working between old and new daemons; and
 - work for host and guest agents, on one daemon or across daemons.
 
 An enclosure is not confidential, identity-bound, or coupled to invitation
@@ -128,7 +140,14 @@ EndoHost.accept(invitationLocator, correspondentName):
 EndoGuest.accept(invitationLocator, correspondentName):
   Promise<InvitationAcceptance>
 
-Invitation.enclosures(): InvitationEnclosures
+Invitation.enclosures(): Promise<InvitationEnclosures>
+```
+
+Like `locate`, `enclosures` is a remotable method, so callers reach it with
+eventual send:
+
+```js
+const enclosures = await E(invitation).enclosures();
 ```
 
 The optional `options` argument is an exact passable copy record; unknown option
@@ -143,7 +162,8 @@ field, using an empty hardened record for a legacy or unenclosed invitation.
 Outcomes that did not join this agent return no enclosure field.
 
 Existing callers remain compatible: their argument lists and invitation side
-effects do not change, and JavaScript callers may continue to ignore the
+effects do not change (cross-version daemons are covered under
+*Mixed-version peers*), and JavaScript callers may continue to ignore the
 fulfilled value of `accept`.
 The CLI prints the status required by the guest-native design but never prints
 the authority-bearing enclosure record.
@@ -201,6 +221,12 @@ Holding a remote identifier means holding bearer authority whose formula,
 lifetime, and collection belong to the daemon that hosts it.
 That is why the invitation retains local enclosures below and only records
 remote ones.
+
+The **correspondent slot** is the inviting agent's durable pet-store binding
+from the correspondent name to the pending invitation formula.
+Writing a new invitation into the slot does two things at once: it roots the
+new invitation, giving it its first retaining edge, and it supersedes
+(cancels) whatever pending invitation the slot held before.
 
 Creation is all-or-nothing, and its single commit point is the correspondent
 slot write.
@@ -362,13 +388,42 @@ Invitation.accept(handleLocator, expectedEnclosures?): Promise<AcceptOutcome>
 
 In the same synchronous formula-store transaction as its consume check, the
 inviter compares `expectedEnclosures` exactly with its authoritative record.
-For a `pending` invitation that is the formula's snapshot; for an `accepted`
-invitation it is the acceptance receipt below.
+For a `pending` invitation, the authoritative record is the formula's snapshot;
+for an `accepted` invitation, it is the acceptance receipt below.
 Missing keys, extra keys, or different identifiers reject the call with
 `enclosure mismatch` and change no state.
 The rejection reveals neither record.
-An older acceptor that omits the argument skips the comparison; it cannot see
-enclosures, so there is nothing for it to check.
+
+The comparison is unconditional.
+An omitted `expectedEnclosures` means the empty record, and it is compared like
+any other: it matches an unenclosed invitation and mismatches an enclosed one.
+No caller can skip the check by leaving the argument out.
+
+**Mixed-version peers.**
+Enclosures are deliberately incompatible with pre-enclosure daemons, in both
+directions, and every incompatible combination fails closed before any state
+changes:
+
+- *Older acceptor, enclosed locator.*
+  The older strict `parseLocator` rejects the `enc.*` parameter as unknown, so
+  `accept` fails at step 1 below, before any namespace or routing write.
+  An enclosed locator therefore requires an enclosure-aware acceptor; the
+  inviter learns nothing, and the invitation stays pending.
+- *Newer acceptor, older inviter.*
+  Only an enclosure-aware daemon mints `enc.*` parameters, so an older inviter's
+  locators always parse to the empty record.
+  For an empty record the newer acceptor calls `Invitation.accept` with one
+  argument, exactly as today, which the older inviter's interface guard
+  accepts.
+  It passes the second argument only for a non-empty record, and that case
+  implies an enclosure-aware inviter.
+- *Unenclosed locators* parse identically on both versions and use the
+  one-argument call, so invitations that use no enclosures keep working across
+  every version pair.
+
+There is no protocol-version negotiation.
+An inviter that must reach older acceptors omits enclosures, and a consumer such
+as minion.town keeps its fragment-envelope path for those peers.
 
 The shared `acceptInvitation` path performs these steps:
 
@@ -378,7 +433,9 @@ The shared `acceptInvitation` path performs these steps:
    `acceptInvitation` already adds to provision an unenclosed invitation, and no
    other route.
 3. Provision the invitation, bind the correspondent speculatively, and call
-   `E(invitation).accept(handleLocator, parsedEnclosures)`.
+   `E(invitation).accept(handleLocator, parsedEnclosures)`, or
+   `E(invitation).accept(handleLocator)` when `parsedEnclosures` is empty (see
+   *Mixed-version peers*).
    Apply the existing rollback and ambiguous-timeout rules; an
    `enclosure mismatch` rolls back the bind and the speculative route like any
    other rejection.
@@ -488,7 +545,7 @@ the authority boundary for redemption.
 
 A fresh visitor has no peer routes and needs none for this step.
 The coupon is an `eval` formula over the coupon-issuer caplet that
-minion.town's root host runs, air-dropped into the inviting guest's coupon book,
+minion.town's root host runs, placed into the inviting guest's coupon book,
 so its identifier names the minion.town daemon that also serves the
 unauthenticated `redeemCoupon` bootstrap.
 The visitor reaches that bootstrap over minion.town's own entry channel, the
@@ -652,7 +709,15 @@ cross-daemon combinations.
 They assert exact records on success, no peer write for same-daemon acceptance,
 and rollback for a locator whose enclosure is added, removed, or changed, both
 on a first acceptance and on a same-agent re-drive after consumption.
-An older acceptor that omits the record still joins.
+Mixed-version tests use an acceptor whose parser and guard match the
+pre-enclosure daemon.
+It rejects an enclosed locator at parsing, with no namespace or route write, and
+the invitation stays pending; it still accepts an unenclosed locator from a newer
+inviter.
+A newer acceptor accepts an older inviter's locator through the one-argument
+call.
+A direct `Invitation.accept(handleLocator)` call with the argument omitted
+mismatches an enclosed invitation and leaves it pending.
 An unrecognized valid enclosure round-trips and does not trigger a lookup or
 method call.
 
@@ -682,8 +747,8 @@ The existing-agent branch ignores the coupon and still accepts.
 ## Dependencies and phased implementation
 
 - [Guest-Native Invitation and Acceptance](guest-native-invitations.md)
-  supplies the shared host/guest formulation and acceptance paths, and the
-  durable invitation state record, that this design extends.
+  supplies the shared host/guest formulation and acceptance paths, along with
+  the durable invitation state record that this design extends.
 - The daemon locator and formula-graph code supply the existing identifier
   grammar, strict locator parser, persistence, and retention edges.
 - [minion.town guest coupons](https://github.com/kriscendobot/minion.town/pull/144)
@@ -715,8 +780,9 @@ work.
 4. Unknown valid names round-trip.
    A registry would make every new consumer a daemon compatibility change.
 5. The inviter compares the locator's record inside its consume step.
-   A modified URL cannot masquerade as the locator that invitation minted, on a
-   first acceptance or a re-drive.
+   A modified URL cannot masquerade as the locator that the invitation minted,
+   on a first acceptance or a re-drive, and omitting the record cannot skip the
+   comparison.
 6. Acceptance returns but does not bind enclosures.
    Ignoring a capability is safe and backward-compatible; inventing pet names is
    an ambient effect.
