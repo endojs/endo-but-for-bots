@@ -46,7 +46,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
-import { makeError, X } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 
 import { makeDaemon } from './manager.js';
 import { makeDaemonicPersistencePowers } from './manager-persistence-powers.js';
@@ -65,10 +65,11 @@ import {
 } from './bus-manager-rust-xs-powers.js';
 import { makeDebugSession } from './debug-session.js';
 import { makeDebugger } from './debugger.js';
+import { makeDebugWorkerRestarter } from './debug-worker-restart.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, DaemonWorkerFacet, WorkerDaemonFacet } from './types.js' */
+/** @import { CapTpConnectionRegistrar, Config, Debugger, DaemonWorkerFacet, WorkerDaemonFacet } from './types.js' */
 
 // ---------------------------------------------------------------------------
 // Console polyfill for XS (daemon.js uses console.log/error extensively)
@@ -370,6 +371,22 @@ const pendingDebugAttach = new Map();
 
 let nextNonce = 1;
 
+// Bus handle of each live worker, keyed by worker formula id, so the
+// host can name a worker for `debugWorker`.
+/** @type {Map<string, number>} */
+const workerHandlesById = new Map();
+
+const debugRestarter = makeDebugWorkerRestarter({
+  sendEnvelope: (handle, verb, payload, nonce) =>
+    sendEnvelope(handle, verb, payload, nonce),
+  allocNonce: () => {
+    const nonce = nextNonce;
+    nextNonce += 1;
+    return nonce;
+  },
+  debugSessions,
+});
+
 // Minimal CBOR helpers for spawn payloads (same as bus-daemon-node-powers.js)
 const CBOR_UINT = 0;
 const CBOR_TEXT = 3;
@@ -518,6 +535,7 @@ const makeWorker = async (
   const [captpReadFrom, captpWriteTo] = makePipe();
 
   workerWriters.set(workerHandle, { writer: captpWriteTo });
+  workerHandlesById.set(workerId, workerHandle);
 
   /** @type {import('@endo/stream').Writer<Uint8Array>} */
   const envelopeBytesWriter = harden({
@@ -559,6 +577,9 @@ const makeWorker = async (
 
   capTpClosed.finally(() => {
     workerWriters.delete(workerHandle);
+    if (workerHandlesById.get(workerId) === workerHandle) {
+      workerHandlesById.delete(workerId);
+    }
     hostTrace(
       `Endo worker connection closed for handle=${workerHandle} id=${workerId}`,
     );
@@ -578,7 +599,7 @@ const makeWorker = async (
  * acknowledge. Returns a Debugger exo remotable over CapTP.
  *
  * @param {number} workerHandle
- * @returns {Promise<import('./types.js').Debugger>}
+ * @returns {Promise<Debugger>}
  */
 const attachDebugger = workerHandle => {
   if (debugSessions.has(workerHandle)) {
@@ -620,7 +641,32 @@ const detachDebugger = workerHandle => {
 };
 harden(detachDebugger);
 
-const controlPowers = harden({ makeWorker, attachDebugger, detachDebugger });
+/**
+ * Restart a running worker under the XS debugger: set its debug flag,
+ * suspend it, and resume it paused at `<login>`.  Only shared
+ * (in-process) XS workers honor the debug flag; the supervisor refuses
+ * any other worker, and the call rejects before suspending it
+ * (designs/daemon-debug-worker-restart.md).
+ *
+ * @param {string} workerId
+ * @returns {Promise<Debugger>}
+ */
+const debugWorker = async workerId => {
+  const workerHandle = workerHandlesById.get(workerId);
+  if (workerHandle === undefined) {
+    throw makeError(X`debugWorker: worker ${q(workerId)} is not running`);
+  }
+  hostTrace(`daemon-xs: debug restart handle=${workerHandle}`);
+  return debugRestarter.debugWorker(workerHandle);
+};
+harden(debugWorker);
+
+const controlPowers = harden({
+  makeWorker,
+  attachDebugger,
+  detachDebugger,
+  debugWorker,
+});
 
 // ---------------------------------------------------------------------------
 // Assemble DaemonicPowers
@@ -863,6 +909,22 @@ const setupPeerSession = connectionHandle => {
 globalThis.handleCommand = harden(bytes => {
   const data = bytes;
   const env = decodeEnvelope(data);
+
+  // Supervisor replies for a debug restart.
+  if (
+    (env.verb === 'debug-flagged' ||
+      env.verb === 'suspended' ||
+      env.verb === 'suspend-error' ||
+      env.verb === 'error') &&
+    env.nonce > 0 &&
+    debugRestarter.handleReply(env, decodeUtf8)
+  ) {
+    return;
+  }
+  if (env.verb === 'suspended' || env.verb === 'suspend-error') {
+    hostTrace(`daemon-xs: ${env.verb} from handle=${env.handle}`);
+    return;
+  }
 
   // Worker spawn responses.
   if (env.verb === 'spawned' && env.nonce > 0) {

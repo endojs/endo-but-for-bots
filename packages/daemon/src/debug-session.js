@@ -185,6 +185,8 @@ export const makeDebugSession = sendToWorker => {
   let title;
   /** @type {string | undefined} */
   let tag;
+  /** Whether `<login>` has arrived; its attributes are optional. */
+  let loggedIn = false;
   /** @type {boolean} */
   let broken = false;
   /** @type {BreakEvent | null} */
@@ -351,6 +353,7 @@ export const makeDebugSession = sendToWorker => {
         case 'login':
           title = el.attrs.name;
           tag = el.attrs.value;
+          loggedIn = true;
           resolvePending('login', harden({ name: title, tag }));
           break;
         case 'log':
@@ -425,6 +428,17 @@ export const makeDebugSession = sendToWorker => {
 
   /** @type {DebugSession} */
   const session = {
+    waitForLogin() {
+      if (loggedIn) {
+        return Promise.resolve(harden({ name: title, tag }));
+      }
+      const { promise, resolve, reject } = /** @type {PromiseKit<any>} */ (
+        makePromiseKit()
+      );
+      pending.set('login', { resolve, reject });
+      return promise;
+    },
+
     feedXml(bytes) {
       const text = decodeUtf8(bytes);
       parser.feed(text);

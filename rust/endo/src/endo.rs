@@ -331,6 +331,7 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
         "spawn" => {
+            sup.set_manager(msg.from);
             match codec::decode_spawn_request(&msg.envelope.payload) {
                 Ok((platform, command, args)) => {
                     let engine = engine::engine_for_spawn_request(&platform, &command, &args, &msg);
@@ -452,6 +453,13 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 &sha256[..sha256.len().min(16)]
             );
             sup.mark_suspended(worker_handle, sha256, cas_dir.to_path_buf());
+            forward_to_manager(sup, msg);
+        }
+        "debug" | "debug-attached" | "debug-detached" | "suspend-error" => {
+            // Worker replies on the debug and suspend paths are
+            // addressed to the supervisor; the manager awaits them
+            // (designs/daemon-debug-worker-restart.md).
+            forward_to_manager(sup, msg);
         }
         "meter-report" => {
             // Worker reports steps consumed after a crank.
@@ -495,12 +503,44 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
         "debug-flag" => {
-            // Payload: CBOR map {"handle": <worker_handle>}.  Fire and
-            // forget: the next resume of that handle enables the XS
-            // debugger before machine restoration
-            // (designs/daemon-debug-worker-restart.md).
+            // Payload: CBOR map {"handle": <worker_handle>}.  The next
+            // resume of that handle enables the XS debugger before
+            // machine restoration (designs/daemon-debug-worker-restart.md).
+            // Without a nonce this is fire and forget.  With a nonce the
+            // supervisor sets the flag only for a worker that can honor
+            // it and answers `debug-flagged` or `error`, so a caller can
+            // refuse an unsupported worker before suspending it.
+            let nonce = msg.envelope.nonce;
+            if nonce == 0 {
+                if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
+                    sup.set_debug_flag(target);
+                }
+                return;
+            }
+            let outcome = codec::decode_handle_request(&msg.envelope.payload)
+                .map_err(|e| e.to_string())
+                .and_then(|target| sup.arm_debug_flag(target));
+            let (verb, payload) = match outcome {
+                Ok(()) => ("debug-flagged", Vec::new()),
+                Err(reason) => ("error", format!("debug-flag: {reason}").into_bytes()),
+            };
+            sup.deliver(Message {
+                from: 0,
+                to: msg.from,
+                envelope: Envelope {
+                    handle: 0,
+                    verb: verb.to_string(),
+                    payload,
+                    nonce,
+                },
+                response_tx: None,
+            });
+        }
+        "debug-unflag" => {
+            // Payload: CBOR map {"handle": <worker_handle>}.  Withdraw a
+            // debug flag whose restart was abandoned before the resume.
             if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
-                sup.set_debug_flag(target);
+                sup.take_debug_flag(target);
             }
         }
         "meter-set-quota" => {
@@ -712,6 +752,26 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
     }
+}
+
+/// Forward a worker's handle-0 reply to the manager, naming the
+/// worker in the envelope handle and keeping the request nonce.
+fn forward_to_manager(supervisor: &Arc<Supervisor>, message: Message) {
+    let manager = supervisor.manager();
+    if manager == 0 || message.from == manager {
+        return;
+    }
+    supervisor.deliver(Message {
+        from: 0,
+        to: manager,
+        envelope: Envelope {
+            handle: message.from,
+            verb: message.envelope.verb,
+            payload: message.envelope.payload,
+            nonce: message.envelope.nonce,
+        },
+        response_tx: None,
+    });
 }
 
 /// Resume a suspended worker, dispatching based on platform.

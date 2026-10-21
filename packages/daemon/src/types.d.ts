@@ -2117,6 +2117,15 @@ export interface EndoHost extends EndoAgent {
   gateway(): Promise<EndoGateway>;
   sign(hexBytes: string): Promise<string>;
   getPeerInfo(): Promise<PeerInfo>;
+  /**
+   * Restart a worker in debug mode: suspend it, then resume it with the
+   * XS debugger active from the first instruction.  The returned
+   * Debugger is connected and the worker is paused at `<login>`.
+   * Only shared (in-process) XS workers under the Rust supervisor can
+   * restart this way; for any other worker the promise rejects before
+   * the worker is suspended.
+   */
+  debugWorker(workerNameOrPath: NameOrPath): Promise<Debugger>;
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
@@ -2729,6 +2738,11 @@ export type DaemonicControlPowers = {
    * Detach a debugger from a running worker (Rust supervisor only).
    */
   detachDebugger?: (workerHandle: number) => void;
+  /**
+   * Restart a running worker, named by formula number, paused under
+   * the XS debugger (Rust supervisor only).
+   */
+  debugWorker?: (workerId: string) => Promise<Debugger>;
 };
 
 /**
@@ -3388,6 +3402,11 @@ export interface Property {
 }
 
 export interface DebugSession {
+  /** Resolves once the worker's `<login>` arrives (at once if it has). */
+  waitForLogin(): Promise<{
+    name: string | undefined;
+    tag: string | undefined;
+  }>;
   feedXml(bytes: Uint8Array): void;
   go(): void;
   step(): Promise<BreakEvent>;

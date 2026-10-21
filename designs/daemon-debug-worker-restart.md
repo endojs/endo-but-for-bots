@@ -5,7 +5,7 @@
 | **Created** | 2026-04-17 |
 | **Updated** | 2026-10-21 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress — Phase 1 implemented |
+| **Status** | In Progress — Phases 1–2 implemented |
 
 ## What is the Problem Being Solved?
 
@@ -328,14 +328,26 @@ and carrying it across the process boundary is follow-up work.
 
 ### Phase 2: JS manager `debugWorker`
 
+**Implemented** in `packages/daemon/src/debug-worker-restart.js`.
+The supervisor now forwards worker replies addressed to it (handle 0)
+on the debug and suspend paths to the manager that first spawned,
+naming the worker in the envelope handle.
+As in Phase 1, only shared (in-process) XS workers honor the flag, so
+a `debug-flag` carrying a nonce is acknowledged: the supervisor arms
+the flag and answers `debug-flagged` only for such a worker, and
+otherwise answers `error`, letting `debugWorker` reject before it
+suspends anything.
+A restart abandoned after arming withdraws the flag with
+`debug-unflag`.
+
 1. Add `debugWorker` to `HostInterface` guard.
-2. Implement `debugWorker` async function: suspend → set
-   debug flag → create debug session → trigger resume →
-   wait for login → return debugger exo.
+2. Implement `debugWorker` async function: set debug flag
+   (acknowledged) -> suspend -> create debug session -> trigger
+   resume -> wait for login -> return debugger exo.
 3. Add to host object assembly and `makeExo` wrapper.
 4. Add help text.
-5. Add `debugFlag` to `controlPowers` in
-   `daemon_bootstrap.js`.
+5. Wire `debugWorker` into `controlPowers` in
+   `daemon_bootstrap.js`, keeping the flag primitive private.
 6. **Test**: call `debugWorker` on a running worker, verify
    the returned `Debugger` is connected and the worker is
    paused.

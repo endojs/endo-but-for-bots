@@ -44,6 +44,10 @@ pub struct Supervisor {
     /// (designs/daemon-debug-worker-restart.md).  Set by the
     /// `debug-flag` control verb, consumed by the next resume.
     debug_flags: RwLock<HashSet<Handle>>,
+    /// Handle of the manager that issues control requests, recorded
+    /// on its first `spawn` so worker replies addressed to the
+    /// supervisor (handle 0) can be forwarded to it.
+    manager: AtomicI64,
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
@@ -62,6 +66,7 @@ impl Supervisor {
             suspended: RwLock::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
             debug_flags: RwLock::new(HashSet::new()),
+            manager: AtomicI64::new(0),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
@@ -260,6 +265,51 @@ impl Supervisor {
         self.debug_flags.write().unwrap_or_else(|e| e.into_inner()).remove(&handle)
     }
 
+    /// Set a worker's debug flag only if its platform can honor it on
+    /// resume: the debugger runs in the supervisor's process, so only a
+    /// shared (in-process) XS worker qualifies.  Returns the refusal
+    /// reason otherwise, leaving no flag set.
+    pub fn arm_debug_flag(&self, handle: Handle) -> Result<(), String> {
+        let live = self
+            .workers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&handle)
+            .map(|w| (w.platform.clone(), false));
+        let target = live.or_else(|| {
+            self.suspended
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&handle)
+                .map(|s| (s.info.platform.clone(), s.heap_store.is_some()))
+        });
+        match target {
+            None => Err(format!("no worker with handle {handle}")),
+            Some((_, true)) => Err(format!(
+                "worker {handle} is store-backed; only shared XS workers support debug restart"
+            )),
+            Some((platform, false)) if platform == "shared" || platform.is_empty() => {
+                self.set_debug_flag(handle);
+                Ok(())
+            }
+            Some((platform, false)) => Err(format!(
+                "worker {handle} runs on the {platform} platform; only shared XS workers support debug restart"
+            )),
+        }
+    }
+
+    /// Record the manager handle.  Only the first caller wins, so a
+    /// worker that sends its own control request cannot redirect
+    /// replies meant for the manager.
+    pub fn set_manager(&self, handle: Handle) {
+        let _ = self.manager.compare_exchange(0, handle, Ordering::SeqCst, Ordering::SeqCst);
+    }
+
+    /// The recorded manager handle, or 0 when none has spawned yet.
+    pub fn manager(&self) -> Handle {
+        self.manager.load(Ordering::SeqCst)
+    }
+
     /// Set quota mode for a worker.
     pub fn set_meter_quota(&self, handle: Handle, hard_limit: u64, budget: u64) {
         let mut meters = self.meters.write().unwrap_or_else(|e| e.into_inner());
@@ -456,6 +506,53 @@ mod tests {
         assert!(!sup.take_debug_flag(other));
         assert!(sup.take_debug_flag(handle));
         assert!(!sup.take_debug_flag(handle));
+    }
+
+    #[test]
+    fn arm_debug_flag_requires_a_shared_worker() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let register = |platform: &str| {
+                let handle = sup.alloc_handle();
+                let info = WorkerInfo {
+                    handle,
+                    platform: platform.to_string(),
+                    cmd: "<test>".to_string(),
+                    args: Vec::new(),
+                    pid: 0,
+                    started: SystemTime::now(),
+                };
+                (handle, sup.register(handle, Some(info)))
+            };
+            let (shared, _shared_inbox) = register("shared");
+            let (separate, _separate_inbox) = register("separate");
+            let (node, _node_inbox) = register("node");
+
+            assert_eq!(sup.arm_debug_flag(shared), Ok(()));
+            assert!(sup.take_debug_flag(shared));
+
+            for handle in [separate, node] {
+                let reason = sup.arm_debug_flag(handle).unwrap_err();
+                assert!(reason.contains("only shared XS workers"), "{reason}");
+                assert!(!sup.take_debug_flag(handle));
+            }
+
+            let unknown = sup.alloc_handle();
+            assert!(sup.arm_debug_flag(unknown).is_err());
+            assert!(!sup.take_debug_flag(unknown));
+
+            // A suspended shared worker is judged by its preserved info.
+            sup.mark_suspended(
+                shared,
+                "abc123".to_string(),
+                std::path::PathBuf::from("/tmp/cas"),
+            );
+            assert_eq!(sup.arm_debug_flag(shared), Ok(()));
+            assert!(sup.take_debug_flag(shared));
+        });
     }
 
     #[test]

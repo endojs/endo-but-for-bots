@@ -286,62 +286,63 @@ export const normalizeHttpClientPolicy = policy => {
 harden(normalizeHttpClientPolicy);
 
 /**
- * @param {object} args
- * @param {DaemonCore['provide']} args.provide
- * @param {DaemonCore['provideStoreController']} args.provideStoreController
- * @param {DaemonCore['cancelValue']} args.cancelValue
- * @param {DaemonCore['formulateWorker']} args.formulateWorker
- * @param {DaemonCore['formulateHost']} args.formulateHost
- * @param {DaemonCore['formulateGuest']} args.formulateGuest
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulateEval']} args.formulateEval
- * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateArchive']} args.formulateArchive
- * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
- * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
- * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
- * @param {HostToolPowers['gitClone']} [args.gitClone]
- * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['checkinTree']} args.checkinTree
- * @param {DaemonCore['formulateMount']} args.formulateMount
- * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
- * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
- * @param {DaemonCore['formulateGit']} args.formulateGit
- * @param {DaemonCore['formulateShell']} args.formulateShell
- * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
- * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
+ * @param {object} options
+ * @param {DaemonCore['provide']} options.provide
+ * @param {DaemonCore['provideStoreController']} options.provideStoreController
+ * @param {DaemonCore['cancelValue']} options.cancelValue
+ * @param {DaemonCore['formulateWorker']} options.formulateWorker
+ * @param {DaemonCore['formulateHost']} options.formulateHost
+ * @param {DaemonCore['formulateGuest']} options.formulateGuest
+ * @param {DaemonCore['formulateMarshalValue']} options.formulateMarshalValue
+ * @param {DaemonCore['formulateEval']} options.formulateEval
+ * @param {DaemonCore['formulateUnconfined']} options.formulateUnconfined
+ * @param {DaemonCore['formulateArchive']} options.formulateArchive
+ * @param {DaemonCore['formulateFromTree']} options.formulateFromTree
+ * @param {(id: FormulaIdentifier) => string} options.getScratchMountPath
+ * @param {(id: FormulaIdentifier) => string} options.getMountHostPath
+ * @param {HostToolPowers['gitClone']} [options.gitClone]
+ * @param {(id: FormulaIdentifier) => ReturnType<EndoHost['debugWorker']>} [options.debugWorker]
+ * @param {(ref: unknown) => FormulaIdentifier | undefined} options.getIdForRef
+ * @param {DaemonCore['formulateReadableBlob']} options.formulateReadableBlob
+ * @param {DaemonCore['checkinTree']} options.checkinTree
+ * @param {DaemonCore['formulateMount']} options.formulateMount
+ * @param {DaemonCore['formulateScratchMount']} options.formulateScratchMount
+ * @param {DaemonCore['formulateSubMount']} options.formulateSubMount
+ * @param {DaemonCore['formulateGit']} options.formulateGit
+ * @param {DaemonCore['formulateShell']} options.formulateShell
+ * @param {DaemonCore['formulateHttpClient']} options.formulateHttpClient
+ * @param {(client: unknown) => unknown} options.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
  *   retained `HttpClientControl`, populated by the `http-client` maker.
- * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
- * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
- * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
- * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
- * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
- * @param {DaemonCore['formulateChannel']} args.formulateChannel
- * @param {DaemonCore['formulateTimer']} args.formulateTimer
- * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
- * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
- * @param {ContentLoadable['loadContent']} args.loadContent
- * @param {DaemonCore['getTypeForId']} args.getTypeForId
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
- * @param {MakeMailbox} args.makeMailbox
- * @param {MakeDirectoryNode} args.makeDirectoryNode
- * @param {NodeNumber} args.localNodeNumber
- * @param {(node: string) => boolean} args.isLocalKey
- * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
- * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
- * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
- * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
- * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
+ * @param {DaemonCore['formulateGitCredential']} options.formulateGitCredential
+ * @param {DaemonCore['formulateGitRemote']} options.formulateGitRemote
+ * @param {DaemonCore['formulateInvitation']} options.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} options.acceptInvitation
+ * @param {DaemonCore['formulateDirectoryForStore']} options.formulateDirectoryForStore
+ * @param {DaemonCore['getPeerIdForNodeIdentifier']} options.getPeerIdForNodeIdentifier
+ * @param {DaemonCore['formulateChannel']} options.formulateChannel
+ * @param {DaemonCore['formulateTimer']} options.formulateTimer
+ * @param {DaemonCore['getAllNetworkAddresses']} options.getAllNetworkAddresses
+ * @param {DaemonCore['getAllContentSources']} options.getAllContentSources
+ * @param {ContentLoadable['loadContent']} options.loadContent
+ * @param {DaemonCore['getTypeForId']} options.getTypeForId
+ * @param {DaemonCore['getFormulaForId']} options.getFormulaForId
+ * @param {MakeMailbox} options.makeMailbox
+ * @param {MakeDirectoryNode} options.makeDirectoryNode
+ * @param {NodeNumber} options.localNodeNumber
+ * @param {(node: string) => boolean} options.isLocalKey
+ * @param {DaemonCore['getAgentIdForHandleId']} options.getAgentIdForHandleId
+ * @param {DaemonCore['pinTransient']} [options.pinTransient]
+ * @param {DaemonCore['unpinTransient']} [options.unpinTransient]
+ * @param {DaemonCore['getFormulaGraphSnapshot']} [options.getFormulaGraphSnapshot]
+ * @param {DaemonCore['listRetentionPaths']} [options.listRetentionPaths]
+ * @param {DaemonCore['followRetentionPaths']} [options.followRetentionPaths]
+ * @param {ReturnType<typeof makeTraceAggregator>} [options.traceAggregator]
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
- * @param {ReturnType<typeof makeSecretManager>} args.secretManager
- * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
+ * @param {ReturnType<typeof makeSecretManager>} options.secretManager
+ * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} options.formulateSecretLookup
  */
 export const makeHostMaker = ({
   provide,
@@ -383,6 +384,10 @@ export const makeHostMaker = ({
   localNodeNumber,
   isLocalKey,
   getAgentIdForHandleId,
+  debugWorker:
+    debugWorkerById = /** @param {FormulaIdentifier} _id */ async _id => {
+      throw makeError(X`debugWorker is not supported on this platform`);
+    },
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
   },
@@ -2270,6 +2275,19 @@ export const makeHostMaker = ({
       return E(endoBootstrap).followPeerChanges();
     };
 
+    /** @type {EndoHost['debugWorker']} */
+    const debugWorker = async workerNameOrPath => {
+      const namePath = namePathFrom(workerNameOrPath);
+      const workerId = await E(directory).identify(...namePath);
+      if (workerId === undefined) {
+        throw makeError(X`Unknown pet name: ${q(namePath.join('/'))}`);
+      }
+      // Incarnates the worker if it is not yet running, and refuses a
+      // name that does not designate a worker.
+      await provide(/** @type {FormulaIdentifier} */ (workerId), 'worker');
+      return debugWorkerById(/** @type {FormulaIdentifier} */ (workerId));
+    };
+
     /** @type {EndoHost['getPeerInfo']} */
     const getPeerInfo = async () => {
       const addresses = await getAllNetworkAddresses(networksDirectoryId);
@@ -2729,6 +2747,7 @@ export const makeHostMaker = ({
       greeter,
       sign,
       getPeerInfo,
+      debugWorker,
       addPeerInfo,
       listKnownPeers,
       followPeerChanges,
