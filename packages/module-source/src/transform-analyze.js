@@ -9,7 +9,10 @@
 
 import { generate as generateBabel } from '@babel/generator';
 import { parse as parseBabel } from '@babel/parser';
-import babelTraverse from '@babel/traverse';
+import babelTraverse, {
+  Hub as BabelHub,
+  NodePath as BabelNodePath,
+} from '@babel/traverse';
 import { makeModuleAnalysisContext } from './analyzer.js';
 import * as h from './hidden.js';
 
@@ -21,15 +24,10 @@ import * as h from './hidden.js';
  * @import {NodePath} from '@babel/traverse'
  */
 
-// `Hub` and `NodePath` are *named* exports of `@babel/traverse`, alongside
-// the callable default `traverse` function.  Under the ESM/CJS interop shape
-// where `babelTraverse.default` is the function, the named exports remain on
-// the module namespace itself, so we read them from the namespace.
-const {
-  default: traverseBabel,
-  Hub: BabelHub,
-  NodePath: BabelNodePath,
-} = babelTraverse;
+// Node's ESM/CJS interop binds the default import to `module.exports`, whose
+// `default` is the traverse function. Bun honors `__esModule` and binds the
+// default import to the traverse function itself.
+const traverseBabel = babelTraverse.default || babelTraverse;
 
 /**
  * Builds a synthetic `parentPath` carrying a Babel `Hub`.

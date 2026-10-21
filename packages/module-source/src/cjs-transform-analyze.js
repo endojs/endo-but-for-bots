@@ -18,7 +18,7 @@ import { makeCjsModuleAnalysisContext } from './cjs-analyzer.js';
  * @import {AnalysisOptions} from './types/analyzer.js'
  */
 
-const { default: traverseBabel } = babelTraverse;
+const traverseBabel = babelTraverse.default || babelTraverse;
 
 /**
  * Creates a CJS module analyzer function. Call the returned function with CJS

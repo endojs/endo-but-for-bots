@@ -4,7 +4,7 @@ import babelTraverse from '@babel/traverse';
 import { generate as generateBabel } from '@babel/generator';
 import { makeCjsModuleAnalysisContext } from '../src/cjs-analyzer.js';
 
-const { default: traverseBabel } = babelTraverse;
+const traverseBabel = babelTraverse.default || babelTraverse;
 
 test('analyzeCjs returns context with analyzePass, transformPass, buildRecord', t => {
   const ctx = makeCjsModuleAnalysisContext();

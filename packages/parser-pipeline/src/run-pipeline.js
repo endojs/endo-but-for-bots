@@ -17,7 +17,7 @@ import { LANGUAGES } from './languages.js';
  * @import { BabelParseError, PipelineLanguage, PipelineRecord, VisitorPass } from './types/pipeline.js'
  */
 
-const { default: traverseBabel } = traverse;
+const traverseBabel = traverse.default || traverse;
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
