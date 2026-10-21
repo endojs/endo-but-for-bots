@@ -114,7 +114,7 @@ test('proxied exports is not a function', t => {
     () => {
       exportsProxy();
     },
-    { message: /is not a function$/ },
+    { instanceOf: TypeError },
     'proxied exports must not be callable',
   );
 });
@@ -127,7 +127,7 @@ test('proxied exports is not a constructor', t => {
       const Constructor = exportsProxy;
       return new Constructor();
     },
-    { message: /is not a constructor$/ },
+    { instanceOf: TypeError },
     'proxied exports must not be constructable',
   );
 });

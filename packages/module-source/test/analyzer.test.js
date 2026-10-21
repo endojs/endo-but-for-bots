@@ -5,7 +5,7 @@ import babelTraverse from '@babel/traverse';
 import { generate as generateBabel } from '@babel/generator';
 import { makeModuleAnalysisContext } from '../src/analyzer.js';
 
-const { default: traverseBabel } = babelTraverse;
+const traverseBabel = babelTraverse.default || babelTraverse;
 
 // --- ESM (analyzeModule) ---
 

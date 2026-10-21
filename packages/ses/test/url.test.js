@@ -245,3 +245,36 @@ test('URLSearchParams built from an iterable stores only string copies', t => {
   t.is(typeof params.get('a'), 'string');
   t.is(typeof params.get('b'), 'string');
 });
+
+test('Bun-only URLSearchParams.prototype.length is frozen and toJSON is removed', t => {
+  if (!hasURLSearchParams) {
+    t.pass('host does not provide URLSearchParams');
+    return;
+  }
+  const prototype = URLSearchParams.prototype;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(prototype, 'length');
+  t.false(
+    Object.hasOwn(prototype, 'toJSON'),
+    'lockdown must remove the nonstandard URLSearchParams.prototype.toJSON',
+  );
+  if (globalThis.Bun === undefined && lengthDescriptor === undefined) {
+    t.pass('host does not add Bun-only URLSearchParams members');
+    return;
+  }
+  // On Bun, lockdown must keep the undeletable `length` accessor rather than
+  // throw, so its absence there means the permit regressed.
+  if (lengthDescriptor === undefined) {
+    t.fail('Bun must expose URLSearchParams.prototype.length after lockdown');
+    return;
+  }
+  const getLength = lengthDescriptor.get;
+  if (getLength === undefined) {
+    t.fail('URLSearchParams.prototype.length must be an accessor');
+    return;
+  }
+  const searchParameters = new URLSearchParams('x=1&x=2&y=3');
+  t.is(lengthDescriptor.set, undefined);
+  t.true(Object.isFrozen(getLength));
+  t.is(Reflect.apply(getLength, searchParameters, []), searchParameters.size);
+  t.throws(() => Reflect.apply(getLength, {}, []), { instanceOf: TypeError });
+});

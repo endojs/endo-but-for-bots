@@ -188,6 +188,101 @@ jobs:
       - name: Run yarn test:c8
         run: yarn test:c8
 
+  test-bun:
+    name: test (Bun)
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Use Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run yarn build
+        run: yarn build
+
+      # Packages that pass every configuration under Bun. A regression here
+      # fails the job; extend the list as packages turn green.
+      - name: Run Bun tests (passing packages)
+        run: >-
+          yarn test:bun
+          --package @endo/base64
+          --package @endo/bytes
+          --package @endo/cache-map
+          --package @endo/chacha12
+          --package @endo/chacha12-fast-check-test
+          --package @endo/check-bundle
+          --package @endo/cjs-module-analyzer
+          --package @endo/common
+          --package @endo/errors
+          --package @endo/evasive-transform
+          --package @endo/eventual-send
+          --package @endo/exo
+          --package @endo/far
+          --package @endo/goblin-chat
+          --package @endo/hex
+          --package @endo/immutable-arraybuffer
+          --package @endo/import-bundle
+          --package @endo/init
+          --package @endo/lp32
+          --package @endo/marshal
+          --package @endo/memoize
+          --package @endo/module-source
+          --package @endo/nat
+          --package @endo/netstring
+          --package @endo/ocapn-noise
+          --package @endo/panic
+          --package @endo/pass-style
+          --package @endo/path-compare
+          --package @endo/patterns
+          --package @endo/random
+          --package @endo/stream
+          --package @endo/syrup-frame
+          --package @endo/trampoline
+          --package @endo/where
+          --package @endo/zip
+
+      # Packages whose whole suites do not yet pass under Bun, gated on the
+      # test files that cover the Bun compatibility fixes in those packages.
+      - name: Run Bun tests (targeted files)
+        run: >-
+          yarn test:bun
+          --file ses:test/url.test.js
+          --file @endo/parser-pipeline:test/async-parser.test.js
+          --file @endo/parser-pipeline:test/languages.test.js
+          --file @endo/parser-pipeline:test/pipeline-config.test.js
+          --file @endo/parser-pipeline:test/sync-parser.test.js
+          --file @endo/parser-pipeline:test/worker-runner.test.js
+
+      # A selection that matches no AVA suite must fail rather than pass
+      # untested; these tests run the runner against stub packages.
+      - name: Test the Bun runner's selections
+        run: yarn exec ava scripts/test-bun.test.mjs
+
+      # Every supported package except @endo/skel, including those that fail
+      # for engine and harness reasons tracked on the Bun probe; report them
+      # without failing the job.
+      - name: Run Bun tests (all supported packages, advisory)
+        continue-on-error: true
+        run: yarn test:bun
+
   test262:
     name: test262
 

@@ -19,10 +19,7 @@ test('memoize', t => {
   t.is(memoIncr(arg2), 4);
 
   t.is(incr('not a weakmap key'), 5);
-  t.throws(() => memoIncr('not a weakmap key'), {
-    // Beware fragile golden. This error message comes from the engine
-    message: 'Invalid value used as weak map key',
-  });
+  t.throws(() => memoIncr('not a weakmap key'), { instanceOf: TypeError });
   // Verifies that the invalid weakmap key above caused rejection
   // *before* `incr` would have been called the first time with that argument
   // within `memoIncr`.

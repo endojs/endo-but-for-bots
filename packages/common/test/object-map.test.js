@@ -18,5 +18,5 @@ test('test objectMap', async t => {
   );
 
   // @ts-expect-error
-  t.throws(() => objectMap({ a: 1 }), { message: 'mapFn is not a function' });
+  t.throws(() => objectMap({ a: 1 }), { instanceOf: TypeError });
 });

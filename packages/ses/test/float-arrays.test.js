@@ -33,9 +33,7 @@ test('float arrays in compartments', t => {
     () => {
       c1.evaluate(`new Float64Array()`);
     },
-    {
-      message: 'Float64Array is not a constructor',
-    },
+    { instanceOf: TypeError },
   );
   t.true(c1.evaluate('new Int32Array()') instanceof Int32Array);
   t.true(c2.evaluate('new Float64Array()') instanceof Float64Array);

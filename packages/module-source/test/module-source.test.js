@@ -291,7 +291,6 @@ export const abc = 123;
       ),
     {
       instanceOf: ReferenceError,
-      message: "Cannot access 'abc' before initialization",
     },
   );
 });
@@ -308,7 +307,6 @@ export let abc = 123;
       ),
     {
       instanceOf: ReferenceError,
-      message: `Cannot access 'abc' before initialization`,
     },
   );
 });

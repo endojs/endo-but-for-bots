@@ -262,13 +262,29 @@ export const confirmRecursivelyPassableErrorPropertyDesc = (
   const { value } = desc;
   switch (propName) {
     case 'message':
-    case 'stack': {
+    case 'stack':
+    case 'sourceURL': {
       return (
         typeof value === 'string' ||
         (reject &&
           reject`Passable Error ${q(
             propName,
           )} own property must be a string: ${value}`)
+      );
+    }
+    // JavaScriptCore adds source-location data properties to Error instances.
+    // Bun additionally adds the two original-source coordinates. These are
+    // diagnostic primitives, like `stack`, and are not carried by marshal.
+    case 'line':
+    case 'column':
+    case 'originalLine':
+    case 'originalColumn': {
+      return (
+        typeof value === 'number' ||
+        (reject &&
+          reject`Passable Error ${q(
+            propName,
+          )} own property must be a number: ${value}`)
       );
     }
     case 'cause': {
