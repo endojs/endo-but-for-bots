@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
+| **Updated** | 2026-10-21 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress — Phase 1 implemented |
 
 ## What is the Problem Being Solved?
 
@@ -307,6 +307,13 @@ used from Chat/Familiar.
 ## Implementation phases
 
 ### Phase 1: Rust supervisor debug flag
+
+**Implemented.**
+The flag is honored for shared (in-process) workers.
+A process-based (`separate`/`node`) worker consumes the flag and
+resumes without the debugger, logging that debug restart is not
+yet supported: `debug_enable()` is thread-local to the XS machine,
+and carrying it across the process boundary is follow-up work.
 
 1. Add `debug_flags: RwLock<HashSet<Handle>>` to `Supervisor`.
 2. Add `set_debug_flag(handle)` and `take_debug_flag(handle)`

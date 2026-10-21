@@ -494,6 +494,15 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 });
             }
         }
+        "debug-flag" => {
+            // Payload: CBOR map {"handle": <worker_handle>}.  Fire and
+            // forget: the next resume of that handle enables the XS
+            // debugger before machine restoration
+            // (designs/daemon-debug-worker-restart.md).
+            if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
+                sup.set_debug_flag(target);
+            }
+        }
         "meter-set-quota" => {
             if let Ok((target, hard_limit, budget)) =
                 codec::decode_meter_set_quota(&msg.envelope.payload)
@@ -766,9 +775,10 @@ fn handle_resume(
         sup.restore_meter(handle, meter);
     }
 
+    let debug = sup.take_debug_flag(handle);
     match info.platform.as_str() {
-        "shared" | "" => resume_shared(sup, handle, info, cas_file_path, pending_msg),
-        _ => resume_process(sup, handle, info, cas_file_path, pending_msg),
+        "shared" | "" => resume_shared(sup, handle, info, cas_file_path, pending_msg, debug),
+        _ => resume_process(sup, handle, info, cas_file_path, pending_msg, debug),
     }
 }
 
@@ -779,6 +789,7 @@ fn resume_shared(
     info: WorkerInfo,
     cas_file_path: std::path::PathBuf,
     pending_msg: Message,
+    debug: bool,
 ) {
     // Re-register the handle with a fresh inbox.
     let mut inbox = sup.register(
@@ -884,6 +895,11 @@ fn resume_shared(
         .name(format!("resumed-worker-{handle}"))
         .stack_size(32 * 1024 * 1024);
     let _ = thread_builder.spawn(move || {
+        if debug {
+            // Before restoration, so fxConnect opens the debug
+            // connection and XS pauses at <login>.
+            xsnap::powers::debug::debug_enable();
+        }
         let transport: Box<dyn xsnap::worker_io::WorkerTransport> =
             Box::new(xsnap::worker_io::ChannelTransport::new(
                 sup_to_machine_rx,
@@ -907,7 +923,18 @@ fn resume_process(
     info: WorkerInfo,
     cas_file_path: std::path::PathBuf,
     pending_msg: Message,
+    debug: bool,
 ) {
+    if debug {
+        // debug_enable() is thread-local to the XS machine, which here
+        // lives in a child process; carrying the flag across the
+        // process boundary is not built yet.
+        eprintln!(
+            "endor: resume_process: debug restart not supported for {} worker {handle}; \
+             resuming without debugger",
+            info.platform
+        );
+    }
     let platform = info.platform.clone();
     let command = info.cmd;
     let args = info.args;
@@ -1069,4 +1096,44 @@ pub fn ensure_running() -> Result<EndoPaths, EndoError> {
         return Err(EndoError::NotRunning);
     }
     Ok(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn control_message(verb: &str, payload: Vec<u8>) -> Message {
+        Message {
+            from: 0,
+            to: 0,
+            envelope: Envelope {
+                handle: 0,
+                verb: verb.to_string(),
+                payload,
+                nonce: 0,
+            },
+            response_tx: None,
+        }
+    }
+
+    #[test]
+    fn debug_flag_verb_marks_target_for_next_resume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = Arc::new(ContentStore::open(tmp.path()).unwrap());
+        let (sup, _outbox_rx) = Supervisor::new();
+        let target = sup.alloc_handle();
+        assert!(target < 24, "payload below encodes the handle as a tiny CBOR int");
+
+        // CBOR map {"handle": target}.
+        let mut payload = vec![0xa1, 0x66];
+        payload.extend_from_slice(b"handle");
+        payload.push(target as u8);
+        handle_control_message(&sup, &sup, &cas, control_message("debug-flag", payload));
+        assert!(sup.take_debug_flag(target));
+        assert!(!sup.take_debug_flag(target));
+
+        // A malformed payload is ignored rather than flagging anything.
+        handle_control_message(&sup, &sup, &cas, control_message("debug-flag", vec![0xa0]));
+        assert!(!sup.take_debug_flag(target));
+    }
 }
