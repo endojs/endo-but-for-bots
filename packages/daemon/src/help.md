@@ -490,6 +490,14 @@ Get the gateway for providing values to remote peers.
 
 Get this node's peer information for sharing with others.
 
+## debugWorker(petNamePath) -> Promise<Debugger>
+
+Restart a worker in debug mode.
+Suspends the worker, then resumes it with the XS debugger
+active from the first instruction. Returns a Debugger
+capability. The worker is paused until the debugger issues
+a go() or step() command.
+
 ## addPeerInfo(peerInfo) -> Promise<void>
 
 Add information about a remote peer.

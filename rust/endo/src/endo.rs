@@ -331,6 +331,7 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
         "spawn" => {
+            sup.set_manager(msg.from);
             match codec::decode_spawn_request(&msg.envelope.payload) {
                 Ok((platform, command, args)) => {
                     let engine = engine::engine_for_spawn_request(&platform, &command, &args, &msg);
@@ -452,6 +453,13 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 &sha256[..sha256.len().min(16)]
             );
             sup.mark_suspended(worker_handle, sha256, cas_dir.to_path_buf());
+            forward_to_manager(sup, msg);
+        }
+        "debug" | "debug-attached" | "debug-detached" | "suspend-error" => {
+            // Worker replies on the debug and suspend paths are
+            // addressed to the supervisor; the manager awaits them
+            // (designs/daemon-debug-worker-restart.md).
+            forward_to_manager(sup, msg);
         }
         "meter-report" => {
             // Worker reports steps consumed after a crank.
@@ -712,6 +720,26 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
     }
+}
+
+/// Forward a worker's handle-0 reply to the manager, naming the
+/// worker in the envelope handle and keeping the request nonce.
+fn forward_to_manager(sup: &Arc<Supervisor>, msg: Message) {
+    let manager = sup.manager();
+    if manager == 0 || msg.from == manager {
+        return;
+    }
+    sup.deliver(Message {
+        from: 0,
+        to: manager,
+        envelope: Envelope {
+            handle: msg.from,
+            verb: msg.envelope.verb,
+            payload: msg.envelope.payload,
+            nonce: msg.envelope.nonce,
+        },
+        response_tx: None,
+    });
 }
 
 /// Resume a suspended worker, dispatching based on platform.

@@ -549,6 +549,8 @@ export const HostInterface = M.interface('EndoHost', {
   sign: M.call(M.string()).returns(M.promise()),
   // Get peer info
   getPeerInfo: M.call().returns(M.promise()),
+  // Restart a worker paused under the XS debugger
+  debugWorker: M.call(NameOrPathShape).returns(M.promise()),
   // Add peer info
   addPeerInfo: M.call(M.record()).returns(M.promise()),
   // List all known remote peers

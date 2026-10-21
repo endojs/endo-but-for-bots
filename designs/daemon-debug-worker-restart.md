@@ -5,7 +5,7 @@
 | **Created** | 2026-04-17 |
 | **Updated** | 2026-10-21 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress — Phase 1 implemented |
+| **Status** | In Progress — Phases 1–2 implemented |
 
 ## What is the Problem Being Solved?
 
@@ -327,6 +327,22 @@ and carrying it across the process boundary is follow-up work.
    true once and false thereafter.
 
 ### Phase 2: JS manager `debugWorker`
+
+**Implemented.**
+The sequencing lives in `packages/daemon/src/debug-worker-restart.js`
+(the XS manager bundled as `daemon_bootstrap.js` wires it into
+`controlPowers` as `debugWorker` and `debugFlag`).
+The worker is named to the supervisor by its bus handle, which the
+manager now records per worker formula.
+The supervisor previously dropped worker replies addressed to it
+(handle 0) on the debug and suspend paths; it now records the
+manager's handle at its first `spawn` and forwards `debug`,
+`debug-attached`, `debug-detached`, `suspended`, and
+`suspend-error` to it, so `debugWorker` can await the suspend and
+the resumed worker's `<login>`.
+As in Phase 1, only shared (in-process) XS workers honor the flag;
+a process worker resumes without the debugger and the call does not
+settle.
 
 1. Add `debugWorker` to `HostInterface` guard.
 2. Implement `debugWorker` async function: suspend → set

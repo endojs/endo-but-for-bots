@@ -383,6 +383,9 @@ export const makeHostMaker = ({
   localNodeNumber,
   isLocalKey,
   getAgentIdForHandleId,
+  debugWorker: debugWorkerById = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`debugWorker is not supported on this platform`);
+  },
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
   },
@@ -2270,6 +2273,19 @@ export const makeHostMaker = ({
       return E(endoBootstrap).followPeerChanges();
     };
 
+    /** @type {EndoHost['debugWorker']} */
+    const debugWorker = async workerNameOrPath => {
+      const namePath = namePathFrom(workerNameOrPath);
+      const workerId = await E(directory).identify(...namePath);
+      if (workerId === undefined) {
+        throw makeError(X`Unknown pet name: ${q(namePath.join('/'))}`);
+      }
+      // Incarnates the worker if it is not yet running, and refuses a
+      // name that does not designate a worker.
+      await provide(/** @type {FormulaIdentifier} */ (workerId), 'worker');
+      return debugWorkerById(/** @type {FormulaIdentifier} */ (workerId));
+    };
+
     /** @type {EndoHost['getPeerInfo']} */
     const getPeerInfo = async () => {
       const addresses = await getAllNetworkAddresses(networksDirectoryId);
@@ -2729,6 +2745,7 @@ export const makeHostMaker = ({
       greeter,
       sign,
       getPeerInfo,
+      debugWorker,
       addPeerInfo,
       listKnownPeers,
       followPeerChanges,

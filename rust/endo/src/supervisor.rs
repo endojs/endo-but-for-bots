@@ -44,6 +44,10 @@ pub struct Supervisor {
     /// (designs/daemon-debug-worker-restart.md).  Set by the
     /// `debug-flag` control verb, consumed by the next resume.
     debug_flags: RwLock<HashSet<Handle>>,
+    /// Handle of the manager that issues control requests, recorded
+    /// on its first `spawn` so worker replies addressed to the
+    /// supervisor (handle 0) can be forwarded to it.
+    manager: AtomicI64,
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
@@ -62,6 +66,7 @@ impl Supervisor {
             suspended: RwLock::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
             debug_flags: RwLock::new(HashSet::new()),
+            manager: AtomicI64::new(0),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
@@ -258,6 +263,18 @@ impl Supervisor {
     /// one restart.
     pub fn take_debug_flag(&self, handle: Handle) -> bool {
         self.debug_flags.write().unwrap_or_else(|e| e.into_inner()).remove(&handle)
+    }
+
+    /// Record the manager handle.  Only the first caller wins, so a
+    /// worker that sends its own control request cannot redirect
+    /// replies meant for the manager.
+    pub fn set_manager(&self, handle: Handle) {
+        let _ = self.manager.compare_exchange(0, handle, Ordering::SeqCst, Ordering::SeqCst);
+    }
+
+    /// The recorded manager handle, or 0 when none has spawned yet.
+    pub fn manager(&self) -> Handle {
+        self.manager.load(Ordering::SeqCst)
     }
 
     /// Set quota mode for a worker.

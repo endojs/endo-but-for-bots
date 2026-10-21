@@ -8203,7 +8203,22 @@ const makeDaemonCore = async (
     return getMountHostPath(scratchMountId);
   };
 
+  /**
+   * Restart a worker under the XS debugger (Rust supervisor only).
+   *
+   * @param {FormulaIdentifier} workerId
+   */
+  const debugWorkerById = async workerId => {
+    if (controlPowers.debugWorker === undefined) {
+      throw makeError(
+        X`debugWorker requires a platform with an XS worker supervisor`,
+      );
+    }
+    return controlPowers.debugWorker(parseId(workerId).number);
+  };
+
   const makeHost = makeHostMaker({
+    debugWorker: debugWorkerById,
     gitClone,
     provide,
     provideStoreController,

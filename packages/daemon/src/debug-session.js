@@ -425,6 +425,17 @@ export const makeDebugSession = sendToWorker => {
 
   /** @type {DebugSession} */
   const session = {
+    waitForLogin() {
+      if (title !== undefined) {
+        return Promise.resolve(harden({ name: title, tag }));
+      }
+      const { promise, resolve, reject } = /** @type {PromiseKit<any>} */ (
+        makePromiseKit()
+      );
+      pending.set('login', { resolve, reject });
+      return promise;
+    },
+
     feedXml(bytes) {
       const text = decodeUtf8(bytes);
       parser.feed(text);

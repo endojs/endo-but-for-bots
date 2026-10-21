@@ -151,6 +151,8 @@ export const helpTextEntries = harden([
         'gateway() -> Promise<EndoGateway>\nGet the gateway for providing values to remote peers.',
       getPeerInfo:
         "getPeerInfo() -> Promise<{node: string, addresses: string[]}>\nGet this node's peer information for sharing with others.",
+      debugWorker:
+        'debugWorker(petNamePath) -> Promise<Debugger>\nRestart a worker in debug mode.\nSuspends the worker, then resumes it with the XS debugger\nactive from the first instruction. Returns a Debugger\ncapability. The worker is paused until the debugger issues\na go() or step() command.',
       addPeerInfo:
         'addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }',
       locateWithHints:
