@@ -259,9 +259,26 @@ jobs:
           --package @endo/where
           --package @endo/zip
 
-      # The remaining packages fail for engine and harness reasons tracked on
-      # the Bun probe; report them without failing the job.
-      - name: Run Bun tests (all packages, advisory)
+      # Packages whose whole suites do not yet pass under Bun, gated on the
+      # test files that cover the Bun compatibility fixes in those packages.
+      - name: Run Bun tests (targeted files)
+        run: >-
+          yarn test:bun
+          --file ses:test/url.test.js
+          --file @endo/parser-pipeline:test/async-parser.test.js
+          --file @endo/parser-pipeline:test/languages.test.js
+          --file @endo/parser-pipeline:test/pipeline-config.test.js
+          --file @endo/parser-pipeline:test/sync-parser.test.js
+          --file @endo/parser-pipeline:test/worker-runner.test.js
+
+      # An unmatched package selection must fail rather than pass untested.
+      - name: Check Bun runner rejects unknown packages
+        run: '! yarn test:bun --package @endo/does-not-exist'
+
+      # Every supported package except @endo/skel, including those that fail
+      # for engine and harness reasons tracked on the Bun probe; report them
+      # without failing the job.
+      - name: Run Bun tests (all supported packages, advisory)
         continue-on-error: true
         run: yarn test:bun
 
