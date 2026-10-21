@@ -414,7 +414,7 @@ LLM-agent stack).*
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | 2026-04-15 | 2026-04-16 | In Progress |
 | [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | 2026-04-16 | 2026-04-16 | Active |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | 2026-04-17 | 2026-04-17 | **Complete** |
-| [daemon-debug-worker-restart](daemon-debug-worker-restart.md) | 2026-04-17 | 2026-04-17 | Not Started |
+| [daemon-debug-worker-restart](daemon-debug-worker-restart.md) | 2026-04-17 | 2026-10-21 | In Progress |
 | [daemon-cas-management](daemon-cas-management.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-git-bindings](endor-git-bindings.md) | 2026-07-15 | 2026-08-14 | In Progress |
 | [endor-bytecode-precompile-cache](endor-bytecode-precompile-cache.md) | 2026-08-06 | — | Not Started |
