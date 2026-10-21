@@ -342,8 +342,8 @@ A restart abandoned after arming withdraws the flag with
 
 1. Add `debugWorker` to `HostInterface` guard.
 2. Implement `debugWorker` async function: set debug flag
-   (acknowledged) → suspend → create debug session → trigger
-   resume → wait for login → return debugger exo.
+   (acknowledged) -> suspend -> create debug session -> trigger
+   resume -> wait for login -> return debugger exo.
 3. Add to host object assembly and `makeExo` wrapper.
 4. Add help text.
 5. Wire `debugWorker` into `controlPowers` in
