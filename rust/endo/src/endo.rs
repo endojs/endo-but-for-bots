@@ -503,12 +503,44 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
         "debug-flag" => {
-            // Payload: CBOR map {"handle": <worker_handle>}.  Fire and
-            // forget: the next resume of that handle enables the XS
-            // debugger before machine restoration
-            // (designs/daemon-debug-worker-restart.md).
+            // Payload: CBOR map {"handle": <worker_handle>}.  The next
+            // resume of that handle enables the XS debugger before
+            // machine restoration (designs/daemon-debug-worker-restart.md).
+            // Without a nonce this is fire and forget.  With a nonce the
+            // supervisor sets the flag only for a worker that can honor
+            // it and answers `debug-flagged` or `error`, so a caller can
+            // refuse an unsupported worker before suspending it.
+            let nonce = msg.envelope.nonce;
+            if nonce == 0 {
+                if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
+                    sup.set_debug_flag(target);
+                }
+                return;
+            }
+            let outcome = codec::decode_handle_request(&msg.envelope.payload)
+                .map_err(|e| e.to_string())
+                .and_then(|target| sup.arm_debug_flag(target));
+            let (verb, payload) = match outcome {
+                Ok(()) => ("debug-flagged", Vec::new()),
+                Err(reason) => ("error", format!("debug-flag: {reason}").into_bytes()),
+            };
+            sup.deliver(Message {
+                from: 0,
+                to: msg.from,
+                envelope: Envelope {
+                    handle: 0,
+                    verb: verb.to_string(),
+                    payload,
+                    nonce,
+                },
+                response_tx: None,
+            });
+        }
+        "debug-unflag" => {
+            // Payload: CBOR map {"handle": <worker_handle>}.  Withdraw a
+            // debug flag whose restart was abandoned before the resume.
             if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
-                sup.set_debug_flag(target);
+                sup.take_debug_flag(target);
             }
         }
         "meter-set-quota" => {
@@ -724,19 +756,19 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
 
 /// Forward a worker's handle-0 reply to the manager, naming the
 /// worker in the envelope handle and keeping the request nonce.
-fn forward_to_manager(sup: &Arc<Supervisor>, msg: Message) {
-    let manager = sup.manager();
-    if manager == 0 || msg.from == manager {
+fn forward_to_manager(supervisor: &Arc<Supervisor>, message: Message) {
+    let manager = supervisor.manager();
+    if manager == 0 || message.from == manager {
         return;
     }
-    sup.deliver(Message {
+    supervisor.deliver(Message {
         from: 0,
         to: manager,
         envelope: Envelope {
-            handle: msg.from,
-            verb: msg.envelope.verb,
-            payload: msg.envelope.payload,
-            nonce: msg.envelope.nonce,
+            handle: message.from,
+            verb: message.envelope.verb,
+            payload: message.envelope.payload,
+            nonce: message.envelope.nonce,
         },
         response_tx: None,
     });

@@ -2121,6 +2121,9 @@ export interface EndoHost extends EndoAgent {
    * Restart a worker in debug mode: suspend it, then resume it with the
    * XS debugger active from the first instruction.  The returned
    * Debugger is connected and the worker is paused at `<login>`.
+   * Only shared (in-process) XS workers under the Rust supervisor can
+   * restart this way; for any other worker the promise rejects before
+   * the worker is suspended.
    */
   debugWorker(workerNameOrPath: NameOrPath): Promise<Debugger>;
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
@@ -2740,11 +2743,6 @@ export type DaemonicControlPowers = {
    * the XS debugger (Rust supervisor only).
    */
   debugWorker?: (workerId: string) => Promise<Debugger>;
-  /**
-   * Fire-and-forget: the next resume of the worker handle enables the
-   * XS debugger (Rust supervisor only).
-   */
-  debugFlag?: (workerHandle: number) => void;
 };
 
 /**

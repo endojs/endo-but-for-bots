@@ -642,10 +642,11 @@ const detachDebugger = workerHandle => {
 harden(detachDebugger);
 
 /**
- * Restart a running worker under the XS debugger: suspend it, set its
- * debug flag, and resume it paused at `<login>`.  Only shared
- * (in-process) XS workers honor the debug flag; see
- * designs/daemon-debug-worker-restart.md.
+ * Restart a running worker under the XS debugger: set its debug flag,
+ * suspend it, and resume it paused at `<login>`.  Only shared
+ * (in-process) XS workers honor the debug flag; the supervisor refuses
+ * any other worker, and the call rejects before suspending it
+ * (designs/daemon-debug-worker-restart.md).
  *
  * @param {string} workerId
  * @returns {Promise<Debugger>}
@@ -660,14 +661,11 @@ const debugWorker = async workerId => {
 };
 harden(debugWorker);
 
-const { debugFlag } = debugRestarter;
-
 const controlPowers = harden({
   makeWorker,
   attachDebugger,
   detachDebugger,
   debugWorker,
-  debugFlag,
 });
 
 // ---------------------------------------------------------------------------
@@ -912,13 +910,14 @@ globalThis.handleCommand = harden(bytes => {
   const data = bytes;
   const env = decodeEnvelope(data);
 
-  // Suspend replies for a debug restart.
+  // Supervisor replies for a debug restart.
   if (
-    (env.verb === 'suspended' ||
+    (env.verb === 'debug-flagged' ||
+      env.verb === 'suspended' ||
       env.verb === 'suspend-error' ||
       env.verb === 'error') &&
     env.nonce > 0 &&
-    debugRestarter.handleSuspendReply(env, decodeUtf8)
+    debugRestarter.handleReply(env, decodeUtf8)
   ) {
     return;
   }
