@@ -17,6 +17,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { makeDebugSession } from './debug-session.js';
 import { makeDebugger } from './debugger.js';
 
+/** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { DebugSession, Debugger } from './types.js' */
 /** @import { Envelope } from './envelope.js' */
 
@@ -85,10 +86,9 @@ export const makeDebugWorkerRestarter = ({
    */
   const requestSuspend = workerHandle => {
     const nonce = allocNonce();
-    const { promise, resolve, reject } =
-      /** @type {import('@endo/promise-kit').PromiseKit<void>} */ (
-        makePromiseKit()
-      );
+    const { promise, resolve, reject } = /** @type {PromiseKit<void>} */ (
+      makePromiseKit()
+    );
     pendingSuspends.set(nonce, { resolve, reject });
     sendEnvelope(0, 'suspend', encodeHandleRequest(workerHandle), nonce);
     return promise;

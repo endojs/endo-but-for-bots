@@ -17,6 +17,8 @@ import {
   makeDebugWorkerRestarter,
 } from '../src/debug-worker-restart.js';
 
+/** @import { DebugSession } from '../src/types.js' */
+
 const WORKER = 7;
 
 /**
@@ -25,7 +27,7 @@ const WORKER = 7;
 const makeFakeSupervisor = ({ suspendReply = 'suspended' } = {}) => {
   /** @type {Array<{ handle: number, verb: string, payload?: Uint8Array, nonce?: number }>} */
   const sent = [];
-  /** @type {Map<number, import('../src/types.js').DebugSession>} */
+  /** @type {Map<number, DebugSession>} */
   const debugSessions = new Map();
   /** @type {Set<number>} */
   const flagged = new Set();

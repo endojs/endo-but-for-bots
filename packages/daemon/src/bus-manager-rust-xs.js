@@ -69,7 +69,7 @@ import { makeDebugWorkerRestarter } from './debug-worker-restart.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, DaemonWorkerFacet, WorkerDaemonFacet } from './types.js' */
+/** @import { CapTpConnectionRegistrar, Config, Debugger, DaemonWorkerFacet, WorkerDaemonFacet } from './types.js' */
 
 // ---------------------------------------------------------------------------
 // Console polyfill for XS (daemon.js uses console.log/error extensively)
@@ -599,7 +599,7 @@ const makeWorker = async (
  * acknowledge. Returns a Debugger exo remotable over CapTP.
  *
  * @param {number} workerHandle
- * @returns {Promise<import('./types.js').Debugger>}
+ * @returns {Promise<Debugger>}
  */
 const attachDebugger = workerHandle => {
   if (debugSessions.has(workerHandle)) {
@@ -648,7 +648,7 @@ harden(detachDebugger);
  * designs/daemon-debug-worker-restart.md.
  *
  * @param {string} workerId
- * @returns {Promise<import('./types.js').Debugger>}
+ * @returns {Promise<Debugger>}
  */
 const debugWorker = async workerId => {
   const workerHandle = workerHandlesById.get(workerId);
