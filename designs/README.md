@@ -334,6 +334,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [invitation-enclosures](invitation-enclosures.md) | 2026-10-21 | - | Proposed |
 | [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-10-02 | In Progress |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
@@ -596,6 +597,20 @@ The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**
 The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), bringing Proposed to 31 and the indexed records to 250 after the totals above.
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
+
+The 2026-10-21 pass adds
+[invitation-enclosures](invitation-enclosures.md) (Proposed) to the summary,
+M8 plan, dependency graph, and estimates table.
+Re-deriving the summary table gives 77 Complete/Implemented, 83 In Progress,
+18 Not Started, 33 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft,
+5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved.
+Those twelve buckets sum to 250
+(77 + 83 + 18 + 33 + 3 + 21 + 4 + 3 + 5 + 1 + 1 + 1); the two qualified
+retrospective rows
+([cbor-codec](cbor-codec.md) and [genie-integration](genie-integration.md))
+fold into no bucket and bring the total to **252 indexed records**.
+The invitation-enclosures estimate of 2-3 days fits within M8's existing
+2-3 week range, so the milestone timeline does not move.
 
 
 
@@ -946,11 +961,15 @@ flowchart TD
 
     subgraph App Sharing Cut
         aship[app-sharing-milestone<br/><i>PROPOSED</i>]
-        adeep[familiar-deep-link-invitations<br/><i>PROPOSED</i>]
+        adeep[familiar-deep-link-invitations<br/><i>IN PROGRESS</i>]
+        ginvite[guest-native-invitations<br/><i>IN PROGRESS</i>]
+        ienc[invitation-enclosures<br/><i>PROPOSED</i>]
         ashare[endo-app-sharing<br/><i>PROPOSED</i>]
         auihost[familiar-app-ui-hosting<br/><i>PROPOSED</i>]
         onoise --> adeep
         dnet --> adeep
+        dloc --> ienc
+        ginvite --> ienc
         adeep --> aship
         exozip --> ashare
         dci --> ashare
@@ -1453,6 +1472,7 @@ deep-link -> P2 app + sandboxed UI -> P3 clone).
 | app-sharing-milestone | Proposed | — | Milestone roadmap doc; verified current state + P0-P3 plan |
 | familiar-deep-link-invitations | In Progress | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete) |
 | guest-native-invitations | In Progress | 2 — connect peers | `invite`/`accept` on `EndoGuest` landed (#1305, #1310; host `accept` converged, no minted guest); remaining: durable invitation state machine in the formula store, returned `{ status }` outcomes, collection-driven revocation, newcomer guest provisioning |
+| invitation-enclosures | Proposed | 2: connect peers | Generic bounded capability record on invitation formulas and `endo://` locators; first consumer is minion.town guest coupons |
 | endo-app-sharing | In Progress | 3 — make & share apps | New: app handle (source + exec + ui + `cloneable`); cross-daemon clone as a single streamed tree-archive into a pluggable durable backing (default zip) vs remote reference — no per-blob hashing |
 | familiar-app-ui-hosting | Proposed | 3 — sandboxed UI | New: app UI manifest + sandbox tiers (`isolated`/`connected`/`trusted`) over the weblet substrate |
 | ~~familiar-electron-shell~~ | **Complete** | 1 — distributable | The shell being distributed (counted under M1) |
@@ -1472,7 +1492,7 @@ peer, then receives a shared app — opening it either as a live remote
 reference or, when the author marked it cloneable, as their own
 independent copy — with the app's UI running in a partial sandbox.
 
-**Estimated added effort (the three new designs; existing
+**Estimated added effort (the four new designs; existing
 constituents counted under their home milestones):** ~2-3 weeks, plus
 the P0 release-hardening track (signing/notarization/auto-update/
 Windows-CI) which is operational rather than a design item.
@@ -2001,6 +2021,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
 | app-sharing-milestone | — | — | 8 | Roadmap doc; no implementation of its own (reference for the P0-P3 sequencing) |
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
+| invitation-enclosures | S-M | 2-3 days | 8 | Bounded enclosure grammar, invitation retention, checked acceptance round trips, and host/guest multiplayer coverage |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
 | familiar-app-ui-hosting | M | 4-5 days | 8 | App UI manifest + sandbox tiers over the existing weblet substrate (1.2x bump) |
 
