@@ -1097,3 +1097,43 @@ pub fn ensure_running() -> Result<EndoPaths, EndoError> {
     }
     Ok(paths)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn control_message(verb: &str, payload: Vec<u8>) -> Message {
+        Message {
+            from: 0,
+            to: 0,
+            envelope: Envelope {
+                handle: 0,
+                verb: verb.to_string(),
+                payload,
+                nonce: 0,
+            },
+            response_tx: None,
+        }
+    }
+
+    #[test]
+    fn debug_flag_verb_marks_target_for_next_resume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = Arc::new(ContentStore::open(tmp.path()).unwrap());
+        let (sup, _outbox_rx) = Supervisor::new();
+        let target = sup.alloc_handle();
+        assert!(target < 24, "payload below encodes the handle as a tiny CBOR int");
+
+        // CBOR map {"handle": target}.
+        let mut payload = vec![0xa1, 0x66];
+        payload.extend_from_slice(b"handle");
+        payload.push(target as u8);
+        handle_control_message(&sup, &sup, &cas, control_message("debug-flag", payload));
+        assert!(sup.take_debug_flag(target));
+        assert!(!sup.take_debug_flag(target));
+
+        // A malformed payload is ignored rather than flagging anything.
+        handle_control_message(&sup, &sup, &cas, control_message("debug-flag", vec![0xa0]));
+        assert!(!sup.take_debug_flag(target));
+    }
+}
