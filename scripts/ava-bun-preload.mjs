@@ -9,13 +9,13 @@ v8.takeCoverage = () => {};
 
 // The shared AVA configurations select export conditions with Node's `-C`
 // short flag, which Bun rejects. Bun accepts the long `--conditions` form.
-const translateExecArgv = execArgv => {
+const translateExecutionArguments = executionArguments => {
   const translated = [];
-  for (let index = 0; index < execArgv.length; index += 1) {
-    const argument = execArgv[index];
-    if (argument === '-C' && index + 1 < execArgv.length) {
+  for (let index = 0; index < executionArguments.length; index += 1) {
+    const argument = executionArguments[index];
+    if (argument === '-C' && index + 1 < executionArguments.length) {
       index += 1;
-      translated.push(`--conditions=${execArgv[index]}`);
+      translated.push(`--conditions=${executionArguments[index]}`);
     } else {
       translated.push(argument);
     }
@@ -28,7 +28,7 @@ childProcess.fork = (modulePath, argumentList, options) => {
   if (options?.execArgv) {
     return fork(modulePath, argumentList, {
       ...options,
-      execArgv: translateExecArgv(options.execArgv),
+      execArgv: translateExecutionArguments(options.execArgv),
     });
   }
   return fork(modulePath, argumentList, options);

@@ -7,25 +7,55 @@ const { Bun } = globalThis;
 if (!Bun) {
   throw new Error('This test runner must be launched with Bun');
 }
-const avaCliPath = fileURLToPath(
+const avaCommandLineInterfacePath = fileURLToPath(
   new URL('node_modules/ava/entrypoints/cli.js', rootUrl),
 );
 const preloadPath = fileURLToPath(
   new URL('scripts/ava-bun-preload.mjs', rootUrl),
 );
 
-const requestedPackages = new Set();
+// Each requested package maps to the test files to run, or to an empty list
+// to run its whole suite.
+const requestedPackages = new Map();
 const excludedPackages = new Set(['@endo/skel']);
 let failFast = false;
+
+const takeValue = (index, option) => {
+  const value = process.argv[index];
+  if (!value || value.startsWith('-')) {
+    throw new Error(`${option} requires a value, got ${value ?? 'nothing'}`);
+  }
+  return value;
+};
+
 for (let index = 2; index < process.argv.length; index += 1) {
   const argument = process.argv[index];
   if (argument === '--package') {
     index += 1;
-    const packageName = process.argv[index];
-    if (!packageName) {
-      throw new Error('--package requires a package name');
+    const packageName = takeValue(index, '--package');
+    if (requestedPackages.get(packageName)?.length) {
+      throw new Error(`${packageName} is selected both whole and by --file`);
     }
-    requestedPackages.add(packageName);
+    requestedPackages.set(packageName, []);
+  } else if (argument === '--file') {
+    index += 1;
+    const selection = takeValue(index, '--file');
+    const separator = selection.lastIndexOf(':');
+    if (separator <= 0 || separator === selection.length - 1) {
+      throw new Error(
+        `--file requires <package>:<test file>, got ${selection}`,
+      );
+    }
+    const packageName = selection.slice(0, separator);
+    const testFile = selection.slice(separator + 1);
+    const testFiles = requestedPackages.get(packageName);
+    if (testFiles === undefined) {
+      requestedPackages.set(packageName, [testFile]);
+    } else if (testFiles.length === 0) {
+      throw new Error(`${packageName} is selected both whole and by --file`);
+    } else {
+      testFiles.push(testFile);
+    }
   } else if (argument === '--fail-fast') {
     failFast = true;
   } else {
@@ -42,17 +72,26 @@ for (const directory of packageDirectories) {
   }
   const packageUrl = new URL(`${directory.name}/`, packagesUrl);
   const packageJsonUrl = new URL('package.json', packageUrl);
-  let descriptor;
+  let packageJsonText;
   try {
-    descriptor = JSON.parse(await readFile(packageJsonUrl, 'utf8'));
+    packageJsonText = await readFile(packageJsonUrl, 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') {
       continue;
     }
     throw error;
   }
+  let descriptor;
+  try {
+    descriptor = JSON.parse(packageJsonText);
+  } catch (error) {
+    throw new Error(`Cannot parse ${fileURLToPath(packageJsonUrl)}`, {
+      cause: error,
+    });
+  }
 
-  if (requestedPackages.size > 0 && !requestedPackages.has(descriptor.name)) {
+  const testFiles = requestedPackages.get(descriptor.name);
+  if (requestedPackages.size > 0 && testFiles === undefined) {
     continue;
   }
   if (requestedPackages.size === 0 && excludedPackages.has(descriptor.name)) {
@@ -78,8 +117,26 @@ for (const directory of packageDirectories) {
       packagePath: fileURLToPath(packageUrl),
       configuration,
       configPath,
+      testFiles: testFiles ?? [],
     });
   }
+}
+
+// An explicit selection that schedules nothing would otherwise pass without
+// testing anything, so a misspelled or renamed package fails the run.
+const scheduledPackages = new Set(runs.map(({ packageName }) => packageName));
+const unscheduledPackages = [...requestedPackages.keys()].filter(
+  packageName => !scheduledPackages.has(packageName),
+);
+if (unscheduledPackages.length > 0) {
+  console.error(
+    `[test:bun] no AVA runs scheduled for: ${unscheduledPackages.join(', ')}`,
+  );
+  process.exit(1);
+}
+if (runs.length === 0) {
+  console.error('[test:bun] no AVA runs scheduled');
+  process.exit(1);
 }
 
 const results = [];
@@ -92,9 +149,10 @@ for (const run of runs) {
     process.execPath,
     '--import',
     preloadPath,
-    avaCliPath,
+    avaCommandLineInterfacePath,
     '--no-worker-threads',
     ...(run.configPath ? ['--config', run.configPath] : []),
+    ...run.testFiles,
   ];
   const started = performance.now();
   const child = Bun.spawn(argumentsForAva, {
