@@ -245,3 +245,39 @@ test('URLSearchParams built from an iterable stores only string copies', t => {
   t.is(typeof params.get('a'), 'string');
   t.is(typeof params.get('b'), 'string');
 });
+
+test('Bun-only URLSearchParams.prototype.length and toJSON are frozen and receiver-scoped', t => {
+  if (!hasURLSearchParams) {
+    t.pass('host does not provide URLSearchParams');
+    return;
+  }
+  const prototype = URLSearchParams.prototype;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(prototype, 'length');
+  const toJSONDescriptor = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
+  if (lengthDescriptor === undefined && toJSONDescriptor === undefined) {
+    t.pass('host does not add Bun-only URLSearchParams members');
+    return;
+  }
+  const params = new URLSearchParams('x=1&x=2&y=3');
+  if (lengthDescriptor !== undefined) {
+    const getLength = lengthDescriptor.get;
+    if (getLength === undefined) {
+      t.fail('URLSearchParams.prototype.length must be an accessor');
+      return;
+    }
+    t.is(lengthDescriptor.set, undefined);
+    t.true(Object.isFrozen(getLength));
+    t.is(Reflect.apply(getLength, params, []), params.size);
+    t.throws(() => Reflect.apply(getLength, {}, []), { instanceOf: TypeError });
+  }
+  if (toJSONDescriptor !== undefined) {
+    const toJSON = toJSONDescriptor.value;
+    t.false(toJSONDescriptor.writable);
+    t.true(Object.isFrozen(toJSON));
+    const first = Reflect.apply(toJSON, params, []);
+    const second = Reflect.apply(toJSON, params, []);
+    t.not(first, second);
+    t.deepEqual({ ...first }, { x: ['1', '2'], y: '3' });
+    t.throws(() => Reflect.apply(toJSON, {}, []), { instanceOf: TypeError });
+  }
+});

@@ -977,6 +977,15 @@ export const permitted = {
     sort: fn,
     size: getter,
     toString: fn,
+    // Bun-only additions, absent from the WHATWG URL Standard and from
+    // Safari/WebKit. Bun installs `length` as a non-configurable accessor, so
+    // lockdown cannot remove it. Both are permitted because they disclose only
+    // the receiver's own entries: `length` shares the native getter behind
+    // `size` and returns a number, and `toJSON` returns a fresh plain object on
+    // each call. Neither reads or writes state outside its receiver, so frozen
+    // after lockdown, neither can carry state between compartments.
+    length: getter,
+    toJSON: fn,
     // Each returns an instance of `%URLSearchParamsIteratorPrototype%`, tamed
     // below.
     entries: fn,
