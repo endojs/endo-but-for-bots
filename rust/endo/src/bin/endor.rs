@@ -13,8 +13,8 @@
 //!   endor ping                  # liveness check
 //!
 //!   endor worker  [-e xs]       # supervised worker child
-//!   endor run     [-e xs] <archive.zip | dir/>
-//!                               # standalone archive/directory runner
+//!   endor run     [-e xs] <archive.zip | dir/ | entry.js>
+//!                               # standalone archive/directory/entry runner
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -82,6 +82,18 @@ fn main() -> ExitCode {
                             // Form 2: unpacked directory — ingest the tree
                             // into CAS and execute via CAS-backed loading.
                             result_to_exit("endor", cmd_run_dir_with_cas(p))
+                        } else if !endo::cas_archive::is_zip_archive(p) {
+                            // Form 3: entry-point module — map it in XS,
+                            // ingest the archive into CAS, and execute.
+                            if no_cas {
+                                eprintln!(
+                                    "endor: --no-cas applies only to a ZIP archive; \
+                                     an entry-point module is always mapped into the CAS"
+                                );
+                                ExitCode::from(2)
+                            } else {
+                                result_to_exit("endor", cmd_run_entry_with_cas(p))
+                            }
                         } else if no_cas {
                             xsnap_result_to_exit(xsnap::run_xs_archive(p))
                         } else {
@@ -89,7 +101,7 @@ fn main() -> ExitCode {
                         }
                     } else {
                         eprintln!(
-                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip|dir/>"
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip|dir/|entry.js>"
                         );
                         ExitCode::from(2)
                     }
@@ -130,7 +142,8 @@ fn print_help() {
     eprintln!();
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
-    eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+    eprintln!("  run     [-e xs] <archive.zip|dir/|entry.js>");
+    eprintln!("                                 Run an archive, directory, or entry module");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
@@ -195,15 +208,19 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
         }
         "run" => {
-            eprintln!("Usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip|dir/>");
+            eprintln!("Usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip|dir/|entry.js>");
             eprintln!();
             eprintln!("Run a compartment-map archive standalone.");
             eprintln!();
             eprintln!("Executes the given input in an XS machine without a running");
             eprintln!("daemon. Useful for testing and one-off execution. The input");
-            eprintln!("may be a .zip archive or an unpacked directory containing a");
-            eprintln!("compartment-map.json alongside its compartment sources; either");
-            eprintln!("is ingested into the CAS and executed via CAS-backed loading.");
+            eprintln!("may be a .zip archive, an unpacked directory containing a");
+            eprintln!("compartment-map.json alongside its compartment sources, or an");
+            eprintln!("entry-point module. An entry-point module is first mapped by");
+            eprintln!("the compartment mapper, running in its own XS machine, into an");
+            eprintln!("archive in the CAS. A module with no package.json above it is");
+            eprintln!("treated as ESM. Every form is ingested into the CAS, its root");
+            eprintln!("hash is printed, and it executes via CAS-backed loading.");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
@@ -422,6 +439,23 @@ fn cmd_run_dir_with_cas(dir_path: &std::path::Path) -> Result<(), EndoError> {
     eprintln!("endor[run]: archive root {}", ingested.root_hash);
 
     // Run the archive using the loaded archive (already in memory).
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
+fn cmd_run_entry_with_cas(entry_path: &std::path::Path) -> Result<(), EndoError> {
+    // Create a temporary CAS for standalone runs.
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    let ingested = endo::cas_archive::ingest_entry_point(&cas, entry_path)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
+    // The application runs in a fresh machine, not the mapper's.
     xsnap::run_xs_archive_loaded(&ingested.archive)
         .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())

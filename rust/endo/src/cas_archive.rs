@@ -120,79 +120,155 @@ fn collect_files(
 /// Build the CAS tree for a set of `(archive-relative path, bytes)` files
 /// and return the root tree hash.
 ///
-/// Mirrors the archive layout: top-level files become root-tree entries;
-/// files under a top-level directory become entries in that directory's
-/// sub-tree. Shared by both the ZIP (`ingest_archive`) and directory
-/// (`ingest_directory`) ingestion paths so the two produce identical
-/// trees.
+/// Shared by the ZIP (`ingest_archive`) and directory (`ingest_directory`)
+/// ingestion paths so the two produce identical trees.
 fn ingest_files(
     cas: &ContentStore,
     files: Vec<(String, Vec<u8>)>,
 ) -> io::Result<String> {
-    // BTreeMap keeps the manifests canonical (sorted keys → stable hash).
-    let mut root_entries: BTreeMap<String, TreeEntry> = BTreeMap::new();
-    // Compartment sub-trees: compartment_name → { filename → TreeEntry }
-    let mut compartment_trees: HashMap<String, BTreeMap<String, TreeEntry>> = HashMap::new();
-
+    let mut builder = ArchiveTreeBuilder::new(cas);
     for (name, contents) in files {
-        let hash = cas.store(&contents, "blob")?;
-        let size = contents.len() as u64;
+        builder.add_file(&name, &contents)?;
+    }
+    builder.finish()
+}
 
-        // Determine if this is a top-level file or inside a compartment dir.
-        if let Some(slash_pos) = name.find('/') {
-            let dir = &name[..slash_pos];
-            let file_name = &name[slash_pos + 1..];
-            if !file_name.is_empty() {
-                compartment_trees
-                    .entry(dir.to_string())
-                    .or_default()
-                    .insert(
-                        file_name.to_string(),
-                        TreeEntry {
-                            entry_type: "blob".to_string(),
-                            hash,
-                            size: Some(size),
-                        },
-                    );
-            }
-        } else {
-            // Top-level file (e.g., compartment-map.json).
-            root_entries.insert(
-                name,
-                TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash,
-                    size: Some(size),
-                },
-            );
+/// Incrementally stores archive files in the CAS and assembles the tree
+/// manifests that mirror the archive's directory structure.
+///
+/// Each `/`-separated path component below the root becomes a nested
+/// tree, so `app-v1.0.0/lib/util.js` is stored as root → `app-v1.0.0`
+/// (tree) → `lib` (tree) → `util.js` (blob), the shape
+/// `ContentStore::fetch_from_tree` walks.
+pub struct ArchiveTreeBuilder<'a> {
+    cas: &'a ContentStore,
+    root: DirectoryNode,
+}
+
+#[derive(Default)]
+struct DirectoryNode {
+    files: BTreeMap<String, TreeEntry>,
+    directories: BTreeMap<String, DirectoryNode>,
+}
+
+impl<'a> ArchiveTreeBuilder<'a> {
+    pub fn new(cas: &'a ContentStore) -> Self {
+        ArchiveTreeBuilder {
+            cas,
+            root: DirectoryNode::default(),
         }
     }
 
-    // Build sub-tree manifests for each compartment directory.
-    for (dir_name, entries) in &compartment_trees {
-        let sub_tree = TreeManifest {
-            entries: entries.clone(),
+    /// Store `contents` as a blob and record it at the archive-relative
+    /// `path`. Empty path components are ignored, so a trailing `/` (a ZIP
+    /// directory entry) records nothing.
+    pub fn add_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()> {
+        let components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+        let Some((file_name, directories)) = components.split_last() else {
+            return Ok(());
         };
-        let tree_json = serde_json::to_vec(&sub_tree)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let tree_hash = cas.store_tree(&tree_json)?;
-        root_entries.insert(
-            dir_name.clone(),
+        if path.ends_with('/') {
+            return Ok(());
+        }
+
+        let mut node = &mut self.root;
+        for directory in directories {
+            if node.files.contains_key(*directory) {
+                return Err(conflict(path, directory));
+            }
+            node = node.directories.entry(directory.to_string()).or_default();
+        }
+        if node.directories.contains_key(*file_name) {
+            return Err(conflict(path, file_name));
+        }
+
+        let hash = self.cas.store(contents, "blob")?;
+        node.files.insert(
+            file_name.to_string(),
+            TreeEntry {
+                entry_type: "blob".to_string(),
+                hash,
+                size: Some(contents.len() as u64),
+            },
+        );
+        Ok(())
+    }
+
+    /// Store the tree manifests bottom-up and return the root tree hash.
+    pub fn finish(self) -> io::Result<String> {
+        store_directory(self.cas, self.root)
+    }
+}
+
+fn conflict(path: &str, component: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("archive path {path:?}: {component:?} is both a file and a directory"),
+    )
+}
+
+fn store_directory(cas: &ContentStore, node: DirectoryNode) -> io::Result<String> {
+    // BTreeMap keeps the manifests canonical (sorted keys → stable hash).
+    let mut entries = node.files;
+    for (name, child) in node.directories {
+        let hash = store_directory(cas, child)?;
+        entries.insert(
+            name,
             TreeEntry {
                 entry_type: "tree".to_string(),
-                hash: tree_hash,
+                hash,
                 size: None,
             },
         );
     }
-
-    // Build root tree manifest.
-    let root_tree = TreeManifest {
-        entries: root_entries,
-    };
-    let root_json = serde_json::to_vec(&root_tree)
+    let tree_json = serde_json::to_vec(&TreeManifest { entries })
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    cas.store_tree(&root_json)
+    cas.store_tree(&tree_json)
+}
+
+/// Whether `path` names a ZIP archive: a `.zip` extension, or a file whose
+/// first bytes are the ZIP local-file-header magic `PK\x03\x04`.
+///
+/// `endor run` treats a non-directory input that is not a ZIP archive as
+/// an entry-point module.
+pub fn is_zip_archive(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        return true;
+    }
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .is_ok_and(|()| magic == *b"PK\x03\x04")
+}
+
+/// Ingest the application rooted at an entry-point module into the CAS
+/// and return the root hash (Form 3 of `endor run`).
+///
+/// The XS-hosted compartment mapper (`xsnap::mapper`) walks the module
+/// graph from `entry` and writes each archive file straight into the CAS
+/// through an [`ArchiveTreeBuilder`], so the result has the same layout,
+/// and loads through the same `load_archive_from_cas` path, as an ingested
+/// ZIP archive of the same application.
+pub fn ingest_entry_point(cas: &ContentStore, entry: &Path) -> io::Result<IngestedArchive> {
+    let entry = std::fs::canonicalize(entry)
+        .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", entry.display())))?;
+    if !entry.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a file: {}", entry.display()),
+        ));
+    }
+
+    let mut builder = ArchiveTreeBuilder::new(cas);
+    xsnap::mapper::map_entry_point(&entry, &mut |path, bytes| builder.add_file(path, bytes))
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let root_hash = builder.finish()?;
+    let archive = load_archive_from_cas(cas, &root_hash)?;
+
+    Ok(IngestedArchive { root_hash, archive })
 }
 
 /// Load a `LoadedArchive` from the CAS given a root tree hash.
@@ -503,5 +579,227 @@ mod tests {
         std::fs::write(&file_path, b"hello").unwrap();
 
         assert!(ingest_directory(&cas, &file_path).is_err());
+    }
+
+    /// A compartment-map directory whose entry module lives two levels deep
+    /// inside its compartment (`app-v1.0.0/lib/util.js`).
+    fn write_nested_directory(dir: &std::path::Path) {
+        const MAP: &str = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./lib/util.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./lib/util.js": {"parser": "mjs", "location": "lib/util.js"}
+                    }
+                }
+            }
+        }"#;
+        std::fs::write(dir.join("compartment-map.json"), MAP).unwrap();
+        let nested = dir.join("app-v1.0.0").join("lib");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("util.js"), b"export const x = 1;").unwrap();
+    }
+
+    #[test]
+    fn nested_module_loads_from_cas() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let src_tmp = tempfile::tempdir().unwrap();
+        write_nested_directory(src_tmp.path());
+
+        let ingested = ingest_directory(&cas, src_tmp.path()).unwrap();
+
+        let key = ("app-v1.0.0".to_string(), "./lib/util.js".to_string());
+        assert_eq!(
+            ingested.archive.sources.get(&key).map(String::as_str),
+            Some("export const x = 1;")
+        );
+    }
+
+    #[test]
+    fn nested_files_become_nested_trees() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let src_tmp = tempfile::tempdir().unwrap();
+        write_nested_directory(src_tmp.path());
+
+        let root = ingest_directory(&cas, src_tmp.path()).unwrap().root_hash;
+
+        let root_tree = cas.read_tree(&root).unwrap();
+        let compartment = cas.read_tree(&root_tree.entries["app-v1.0.0"].hash).unwrap();
+        let names: Vec<&String> = compartment.entries.keys().collect();
+        assert_eq!(names, vec!["lib"]);
+        assert_eq!(compartment.entries["lib"].entry_type, "tree");
+        let lib = cas.read_tree(&compartment.entries["lib"].hash).unwrap();
+        assert_eq!(lib.entries["util.js"].entry_type, "blob");
+        assert_eq!(
+            cas.fetch_from_tree(&root, "app-v1.0.0/lib/util.js").unwrap(),
+            b"export const x = 1;"
+        );
+    }
+
+    #[test]
+    fn tree_builder_rejects_file_directory_conflict() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let mut builder = ArchiveTreeBuilder::new(&cas);
+        builder.add_file("app/lib", b"a file").unwrap();
+        let error = builder.add_file("app/lib/util.js", b"x").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+        let mut builder = ArchiveTreeBuilder::new(&cas);
+        builder.add_file("app/lib/util.js", b"x").unwrap();
+        let error = builder.add_file("app/lib", b"a file").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn zip_detection_by_extension_and_magic() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let named = tmp.path().join("app.ZIP");
+        std::fs::write(&named, b"not really a zip").unwrap();
+        assert!(is_zip_archive(&named));
+
+        let unnamed = tmp.path().join("app");
+        std::fs::write(&unnamed, make_test_archive()).unwrap();
+        assert!(is_zip_archive(&unnamed));
+
+        let module = tmp.path().join("hello.js");
+        std::fs::write(&module, b"print('hi');").unwrap();
+        assert!(!is_zip_archive(&module));
+
+        let short = tmp.path().join("x");
+        std::fs::write(&short, b"PK").unwrap();
+        assert!(!is_zip_archive(&short));
+    }
+
+    /// Serializes the tests that run the XS mapper. XS's quiesce loop reads
+    /// a process-global pending-jobs flag (`fxHasPendingJobs` in
+    /// `xsnap-platform.c`), so a machine on another test thread can consume
+    /// the flag and end this machine's drain early.
+    static XS_MACHINE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_xs_machine() -> std::sync::MutexGuard<'static, ()> {
+        XS_MACHINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Lay out an ESM application: `hello.js` imports `./lib/greet.js`.
+    fn write_entry_point_application(dir: &std::path::Path, package_json: bool) {
+        if package_json {
+            std::fs::write(
+                dir.join("package.json"),
+                br#"{"name":"hello","version":"1.2.3","type":"module"}"#,
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            dir.join("hello.js"),
+            b"import { greet } from './lib/greet.js';\nprint(greet());\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(
+            dir.join("lib").join("greet.js"),
+            b"export const greet = () => 'hello';\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn entry_point_maps_module_graph_into_cas() {
+        let _xs = lock_xs_machine();
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let src_tmp = tempfile::tempdir().unwrap();
+        write_entry_point_application(src_tmp.path(), true);
+
+        let ingested = ingest_entry_point(&cas, &src_tmp.path().join("hello.js")).unwrap();
+
+        let map = &ingested.archive.map;
+        let compartment = map.entry.compartment.clone();
+        assert_eq!(map.entry.module, "./hello.js");
+        let greet = (compartment.clone(), "./lib/greet.js".to_string());
+        assert_eq!(
+            ingested.archive.sources.get(&greet).map(String::as_str),
+            Some("export const greet = () => 'hello';\n")
+        );
+        assert_eq!(
+            cas.fetch_from_tree(&ingested.root_hash, &format!("{compartment}/lib/greet.js"))
+                .unwrap(),
+            b"export const greet = () => 'hello';\n"
+        );
+
+        // Re-running from the root hash reproduces the same archive.
+        let reloaded = load_archive_from_cas(&cas, &ingested.root_hash).unwrap();
+        assert_eq!(reloaded.sources, ingested.archive.sources);
+    }
+
+    #[test]
+    fn entry_point_without_package_json_is_esm() {
+        let _xs = lock_xs_machine();
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let src_tmp = tempfile::tempdir().unwrap();
+        write_entry_point_application(src_tmp.path(), false);
+        // A package.json above the temporary directory would be found first.
+        if !no_package_json_above(src_tmp.path()) {
+            return;
+        }
+
+        let ingested = ingest_entry_point(&cas, &src_tmp.path().join("hello.js")).unwrap();
+
+        let compartment = &ingested.archive.map.compartments[&ingested.archive.map.entry.compartment];
+        assert!(matches!(
+            compartment.modules.get("./lib/greet.js"),
+            Some(xsnap::archive::ModuleDescriptor::File { parser, .. }) if parser == "mjs"
+        ));
+        // The synthetic package.json is not stored.
+        let names = cas.list_tree(&ingested.root_hash).unwrap();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    fn no_package_json_above(dir: &std::path::Path) -> bool {
+        dir.ancestors().all(|d| !d.join("package.json").exists())
+    }
+
+    #[test]
+    fn entry_point_is_deterministic() {
+        let _xs = lock_xs_machine();
+        let src_tmp = tempfile::tempdir().unwrap();
+        write_entry_point_application(src_tmp.path(), true);
+        let entry = src_tmp.path().join("hello.js");
+
+        let a_tmp = tempfile::tempdir().unwrap();
+        let a = ContentStore::open(a_tmp.path()).unwrap();
+        let b_tmp = tempfile::tempdir().unwrap();
+        let b = ContentStore::open(b_tmp.path()).unwrap();
+
+        assert_eq!(
+            ingest_entry_point(&a, &entry).unwrap().root_hash,
+            ingest_entry_point(&b, &entry).unwrap().root_hash
+        );
+    }
+
+    #[test]
+    fn entry_point_reports_unresolvable_import() {
+        let _xs = lock_xs_machine();
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let src_tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            src_tmp.path().join("package.json"),
+            br#"{"name":"broken","version":"1.0.0","type":"module"}"#,
+        )
+        .unwrap();
+        std::fs::write(src_tmp.path().join("main.js"), b"import './missing.js';\n").unwrap();
+
+        let error = match ingest_entry_point(&cas, &src_tmp.path().join("main.js")) {
+            Ok(_) => panic!("mapping an unresolvable import succeeded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("missing.js"), "{error}");
     }
 }
