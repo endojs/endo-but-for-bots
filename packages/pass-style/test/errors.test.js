@@ -40,6 +40,33 @@ test('style of extended errors', t => {
   }
 });
 
+test('style of JavaScriptCore errors with source locations', t => {
+  const error = Error('located');
+  for (const [name, value] of Object.entries({
+    line: 1,
+    column: 2,
+    sourceURL: 'file:///example.js',
+    originalLine: 3,
+    originalColumn: 4,
+  })) {
+    defineProperty(error, name, { value });
+  }
+  harden(error);
+  t.is(passStyleOf(error), 'error');
+});
+
+test('JavaScriptCore error source locations must have primitive types', t => {
+  const badSourceURL = Error('bad source URL');
+  defineProperty(badSourceURL, 'sourceURL', { value: 1 });
+  harden(badSourceURL);
+  t.throws(() => passStyleOf(badSourceURL), { instanceOf: Error });
+
+  const badLine = Error('bad line');
+  defineProperty(badLine, 'line', { value: '1' });
+  harden(badLine);
+  t.throws(() => passStyleOf(badLine), { instanceOf: Error });
+});
+
 test('toPassableError, toThrowable', t => {
   const e = makeError('test error', undefined, {
     sanitize: false,

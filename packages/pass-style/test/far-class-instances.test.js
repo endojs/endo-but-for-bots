@@ -59,10 +59,7 @@ test('far class instances', t => {
   assertMethodNames(t, fb, [GET_METHOD_NAMES, 'constructor']);
 
   t.assert(new fb.constructor() instanceof FarBaseClass);
-  t.throws(() => fb.constructor(), {
-    // TODO message depends on JS engine, and so is a fragile golden test
-    message: "Class constructor FarBaseClass cannot be invoked without 'new'",
-  });
+  t.throws(() => fb.constructor(), { instanceOf: TypeError });
 
   const fs1 = new FarSubclass1();
   t.is(passStyleOf(fs1), 'remotable');
@@ -113,9 +110,6 @@ test('far class instances', t => {
       z = 0;
     }
     harden(FarClass4);
-    t.throws(() => new FarClass4(), {
-      // TODO message depends on JS engine, and so is a fragile golden test
-      message: 'Cannot define property z, object is not extensible',
-    });
+    t.throws(() => new FarClass4(), { instanceOf: TypeError });
   },
 );

@@ -214,7 +214,6 @@ test('new HandledPromise expected errors', async t => {
           () => noApplyFunction.then(naf => naf()),
           {
             instanceOf: TypeError,
-            message: `naf is not a function`,
           },
           `direct applyFunction`,
         );

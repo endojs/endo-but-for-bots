@@ -230,8 +230,11 @@ jobs:
           --package @endo/chacha12-fast-check-test
           --package @endo/check-bundle
           --package @endo/cjs-module-analyzer
+          --package @endo/common
           --package @endo/errors
           --package @endo/evasive-transform
+          --package @endo/eventual-send
+          --package @endo/exo
           --package @endo/far
           --package @endo/goblin-chat
           --package @endo/hex
@@ -239,11 +242,16 @@ jobs:
           --package @endo/import-bundle
           --package @endo/init
           --package @endo/lp32
+          --package @endo/marshal
+          --package @endo/memoize
+          --package @endo/module-source
           --package @endo/nat
           --package @endo/netstring
           --package @endo/ocapn-noise
           --package @endo/panic
+          --package @endo/pass-style
           --package @endo/path-compare
+          --package @endo/patterns
           --package @endo/random
           --package @endo/stream
           --package @endo/syrup-frame

@@ -70,7 +70,7 @@ test('exportHook', async t => {
   // We cannot rely on isExtensible when using lockdown with unsafe hardenTaming.
   if (!hardenIsNoop(harden)) {
     await t.throwsAsync(() => E(bs).echo(Promise.resolve('never exported')), {
-      message: /.*object is not extensible/,
+      instanceOf: TypeError,
     });
   }
   t.deepEqual(exports, []);

@@ -125,11 +125,7 @@ test('FarWobblyPoint inheritance', t => {
 
   const otherPt = new FarPoint(1, 2);
   t.false(otherPt instanceof FarWobblyPoint);
-  t.throws(() => apply(wpt.getX, otherPt, []), {
-    // TODO great error message, but is a golden specific to v8
-    message:
-      'Cannot read private member #getWobble from an object whose class did not declare it',
-  });
+  t.throws(() => apply(wpt.getX, otherPt, []), { instanceOf: TypeError });
   t.is(apply(wpt.getY, otherPt, []), 2);
 
   const otherWpt = new FarWobblyPoint(3, 5, () => 1);

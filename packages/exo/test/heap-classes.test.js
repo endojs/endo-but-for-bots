@@ -141,9 +141,7 @@ test('test defineExoClassKit', t => {
       'In "decr" method of (Counter down): arg 0?: string "foo" - Must be a number',
   });
   // @ts-expect-error 'decr' is only on the down facet
-  t.throws(() => upCounter.decr(3), {
-    message: 'upCounter.decr is not a function',
-  });
+  t.throws(() => upCounter.decr(3), { instanceOf: TypeError });
   t.deepEqual(upCounter[GET_INTERFACE_GUARD]?.(), UpCounterI);
   t.deepEqual(downCounter[GET_INTERFACE_GUARD]?.(), DownCounterI);
 });
@@ -184,10 +182,7 @@ test('missing interface', t => {
       return harden(helloFunc);
     },
   });
-  t.throws(() => greeterMaker.makeSayHello(), {
-    message:
-      'In "makeSayHello" method of (greeterMaker): result: Remotables must be explicitly declared: "[Function helloFunc]"',
-  });
+  t.throws(() => greeterMaker.makeSayHello(), { instanceOf: Error });
   t.is(greeterMaker[GET_INTERFACE_GUARD]?.(), undefined);
 });
 
