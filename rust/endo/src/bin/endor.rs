@@ -102,6 +102,18 @@ fn main() -> ExitCode {
                                     result_to_exit("endor", cmd_run_with_cas(p))
                                 }
                             }
+                            RunInput::Directory => {
+                                if no_cas {
+                                    eprintln!(
+                                        "endor run: --no-cas is incompatible with a \
+                                         directory input; directory runs always use \
+                                         the CAS"
+                                    );
+                                    ExitCode::from(2)
+                                } else {
+                                    result_to_exit("endor", cmd_run_directory_with_cas(p))
+                                }
+                            }
                             RunInput::EntryPoint => match entry_resolution(rest) {
                                 EntryResolution::Registry => {
                                     // Default: resolve the entry package's
@@ -135,7 +147,7 @@ fn main() -> ExitCode {
                         }
                     } else {
                         eprintln!(
-                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | entry.js>"
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | dir/ | entry.js>"
                         );
                         ExitCode::from(2)
                     }
@@ -267,13 +279,17 @@ fn print_subcommand_help(sub: &str) {
         }
         "run" => {
             eprintln!(
-                "Usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | entry.js>"
+                "Usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | dir/ | entry.js>"
             );
             eprintln!();
             eprintln!("Run a compartment-map archive, or an entry module, standalone.");
             eprintln!();
             eprintln!("<path> is one of:");
             eprintln!("  archive.zip   A compartment-map ZIP file (Phase 2).");
+            eprintln!("  dir/          An unpacked compartment-map directory:");
+            eprintln!("                compartment-map.json at its root and one");
+            eprintln!("                subdirectory per compartment (Phase 3).");
+            eprintln!("                Symbolic links are not followed.");
             eprintln!("  entry.js      A single source file. With no static");
             eprintln!("                imports, synthesises a one-compartment");
             eprintln!("                archive (Phase 4). With one or more");
@@ -307,11 +323,11 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
             eprintln!("  --cas <hash>           Run from a previously ingested CAS root hash.");
             eprintln!("  --no-cas               Skip CAS ingestion; legacy in-memory path.");
-            eprintln!("                         ZIP inputs only. Entry-point inputs always");
-            eprintln!("                         use the CAS (the synthesised compartment-map");
-            eprintln!("                         needs a content-addressed home); passing");
-            eprintln!("                         --no-cas with an entry-point input exits with");
-            eprintln!("                         code 2 and prints a diagnostic.");
+            eprintln!("                         ZIP inputs only. Directory and entry-point");
+            eprintln!("                         inputs always use the CAS; passing --no-cas");
+            eprintln!("                         with a directory or --node-modules entry");
+            eprintln!("                         input exits with code 2 and prints a");
+            eprintln!("                         diagnostic.");
             eprintln!(
                 "  --registry <url>       Registry base URL for registry-backed entry-module runs"
             );
@@ -691,6 +707,21 @@ fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     eprintln!("endor[run]: archive root {}", ingested.root_hash);
 
     // Run the archive using the loaded archive (already in memory).
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
+fn cmd_run_directory_with_cas(dir: &std::path::Path) -> Result<(), EndoError> {
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    let ingested = endo::cas_archive::ingest_directory(&cas, dir)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
     xsnap::run_xs_archive_loaded(&ingested.archive)
         .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())

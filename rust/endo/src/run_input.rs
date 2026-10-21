@@ -5,7 +5,7 @@
 //!
 //! - Form 1: a compartment-map ZIP archive (Phase 2).
 //! - Form 2: a directory laid out as a compartment-map tree
-//!   (Phase 3; lives on PR #278 and not on this branch).
+//!   (Phase 3).
 //! - Form 3: a single entry-point source file (Phase 4).
 //!
 //! The CLI inspects the path once with [`classify_run_input`] and
@@ -20,15 +20,16 @@ use std::path::Path;
 ///
 /// The dispatch follows the design's "input form detection by file
 /// type, not flags" rule: the path is inspected once and the
-/// matching run path is chosen. Directory input (Form 2 / Phase 3)
-/// ships separately on PR #278 and is not present on this branch;
-/// when Phase 3 lands a `RunInput::Directory` variant will join
-/// this enum.
+/// matching run path is chosen.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunInput {
     /// A ZIP archive: a regular file with a `.zip` extension or a
     /// `PK\x03\x04` magic prefix.
     ZipArchive,
+    /// An unpacked compartment-map directory (Phase 3). Any
+    /// directory routes here; `ingest_directory` reports a missing
+    /// `compartment-map.json`.
+    Directory,
     /// A single entry-point source file (Phase 4): a regular file
     /// whose extension is one of `.js`, `.mjs`, `.cjs`, `.json`
     /// and which does not match the ZIP shape above.
@@ -49,6 +50,9 @@ pub enum RunInput {
 /// `Missing` so the user gets a clear error rather than a
 /// surprising behaviour change later.
 pub fn classify_run_input(path: &Path) -> RunInput {
+    if path.is_dir() {
+        return RunInput::Directory;
+    }
     if !path.is_file() {
         return RunInput::Missing;
     }
@@ -123,14 +127,17 @@ mod tests {
     }
 
     #[test]
-    fn missing_when_path_is_a_directory() {
-        // A directory is not a regular file. The classifier
-        // refuses it at the `is_file()` gate so the CLI does not
-        // try to read a directory as a ZIP or a source file.
-        // (Phase 3's directory form lives on PR #278 and will add
-        // a `RunInput::Directory` variant once landed.)
+    fn directory_when_path_is_a_directory() {
+        // A directory routes to the Phase 3 directory form, even
+        // when its name looks like a ZIP or a source file: the path
+        // type is checked before any extension.
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(classify_run_input(dir.path()), RunInput::Missing);
+        assert_eq!(classify_run_input(dir.path()), RunInput::Directory);
+        for name in ["archive.zip", "entry.js"] {
+            let sub = dir.path().join(name);
+            std::fs::create_dir(&sub).unwrap();
+            assert_eq!(classify_run_input(&sub), RunInput::Directory, "{name}");
+        }
     }
 
     #[test]
