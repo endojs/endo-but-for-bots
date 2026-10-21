@@ -144,6 +144,6 @@ export const makeDebugWorkerRestarter = ({
     return makeDebugger(session);
   };
 
-  return harden({ debugWorker, debugFlag, requestSuspend, handleSuspendReply });
+  return harden({ debugWorker, debugFlag, handleSuspendReply });
 };
 harden(makeDebugWorkerRestarter);

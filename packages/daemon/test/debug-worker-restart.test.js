@@ -81,6 +81,7 @@ const makeFakeSupervisor = ({ suspendReply = 'suspended' } = {}) => {
 test('encodeHandleRequest emits the CBOR map {"handle": n}', t => {
   const prefix = [0xa1, 0x66, ...encodeUtf8('handle')];
   t.deepEqual([...encodeHandleRequest(7)], [...prefix, 7]);
+  t.deepEqual([...encodeHandleRequest(200)], [...prefix, 0x18, 0xc8]);
   t.deepEqual([...encodeHandleRequest(300)], [...prefix, 0x19, 0x01, 0x2c]);
   t.deepEqual(
     [...encodeHandleRequest(0x1234_5678)],
@@ -140,4 +141,41 @@ test('debugWorker refuses a worker that already has a debugger', async t => {
   await t.throwsAsync(() => restarter.debugWorker(WORKER), {
     message: /already has a debugger/,
   });
+});
+
+test('handleSuspendReply ignores envelopes that answer no pending suspend', async t => {
+  const sent = [];
+  const restarter = makeDebugWorkerRestarter({
+    sendEnvelope: (handle, verb, payload, n) => {
+      sent.push({ handle, verb, nonce: n });
+    },
+    allocNonce: () => 5,
+    debugSessions: new Map(),
+  });
+  const decode = () => 'unexpected';
+
+  t.false(
+    restarter.handleSuspendReply(
+      { handle: WORKER, verb: 'suspended', payload: new Uint8Array(), nonce: 9 },
+      decode,
+    ),
+    'unknown nonce',
+  );
+
+  const attempt = restarter.debugWorker(WORKER);
+  t.deepEqual(sent, [{ handle: 0, verb: 'suspend', nonce: 5 }]);
+  t.false(
+    restarter.handleSuspendReply(
+      { handle: WORKER, verb: 'pong', payload: new Uint8Array(), nonce: 5 },
+      decode,
+    ),
+    'unrelated verb leaves the suspend pending',
+  );
+  t.true(
+    restarter.handleSuspendReply(
+      { handle: WORKER, verb: 'error', payload: encodeUtf8('gone'), nonce: 5 },
+      decodeUtf8,
+    ),
+  );
+  await t.throwsAsync(attempt, { message: 'gone' });
 });
