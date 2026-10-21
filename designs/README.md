@@ -609,8 +609,8 @@ Those twelve buckets sum to 250
 retrospective rows
 ([cbor-codec](cbor-codec.md) and [genie-integration](genie-integration.md))
 fold into no bucket and bring the total to **252 indexed records**.
-Its 2-3 days fit within M8's existing 2-3 week range, so the milestone timeline
-does not move.
+The invitation-enclosures estimate of 2-3 days fits within M8's existing
+2-3 week range, so the milestone timeline does not move.
 
 
 

@@ -112,8 +112,11 @@ type InvitationAcceptance =
     }>;
 ```
 
-The public records are string-keyed so that callers can write
-`{ coupon: [...] }` and read `.enclosures.coupon` without a type assertion.
+Both public records are string-keyed.
+A caller writes an `InvitationEnclosureNames` input record such as
+`{ coupon: ['coupon-book', couponName] }`, whose values are pet-name paths, and
+reads the `InvitationEnclosures` output record as `.enclosures.coupon`, whose
+values are `FormulaIdentifier` strings, without a type assertion on either.
 The daemon validates every key at the runtime boundary (the interface guard,
 `invite`, and `parseLocator`); an internal `EnclosureName` brand may mark keys
 after that check, but it never appears in a public signature.
@@ -154,9 +157,12 @@ The optional `options` argument is an exact passable copy record; unknown option
 keys are rejected by the interface guard.
 An omitted `options`, an omitted `enclosures`, and an empty enclosure record all
 mean the same thing.
-This result extends the discriminated `{ status }` contract in
-[Guest-Native Invitation and Acceptance](guest-native-invitations.md), rather
-than replacing it.
+This result extends the discriminated `{ status }` contract that
+[Guest-Native Invitation and Acceptance](guest-native-invitations.md) specifies,
+rather than replacing it.
+That contract is target state, not shipped: the landed `accept` still throws or
+resolves `undefined` (its Open Question 7 and *Implementation status*), and
+*Dependencies and phased implementation* orders the work accordingly.
 `joined` and the same-agent idempotent `already-joined` return an `enclosures`
 field, using an empty hardened record for a legacy or unenclosed invitation.
 Outcomes that did not join this agent return no enclosure field.
@@ -198,8 +204,9 @@ alive.
 This design uses each mechanism for one job.
 Pins bridge windows inside one call.
 Edges hold anything that must outlive a call or a restart.
-Cleanup that must happen whether or not collection runs uses an explicit
-durable record and restart recovery, never the collector.
+Cleanup that must happen whether or not collection runs comes from a single
+durable transaction that either commits every record or none, never from the
+collector.
 
 ## Creation and authority
 
@@ -211,10 +218,20 @@ reachable through the inviting agent's own namespace at creation time.
 The daemon does not consult the root host, another agent, or the formula graph to
 find an authority the inviter did not designate.
 
-An identifier is **local** when its node is the inviting daemon's own node, so
-this daemon stores the formula and its collector decides when the formula dies.
-It is **remote** when its node names another daemon: the inviter's pet store
-holds it because the inviter received that capability from a peer.
+An identifier is **local** when the daemon's authoritative `isLocalId`
+predicate (`manager.js`) accepts it: its node is either the daemon's own node or
+an agent key registered with this daemon (`hasAgentKey`).
+The second class matters here: a formula created by a locally hosted guest or
+host agent uses that agent's key as its node, so a guest's coupon book entries
+are local even though their node differs from the daemon node.
+For every local identifier, this daemon stores the formula and its collector
+decides when the formula dies.
+The design never compares a node with the daemon node directly; it calls
+`isLocalId`, the same predicate the formula graph and pet-store controller use
+to decide which edges they track.
+An identifier is **remote** when `isLocalId` rejects it: its node names another
+daemon or an agent hosted there, and the inviter's pet store holds it because
+the inviter received that capability from a peer.
 `identify` returns whichever kind the pet name holds; it does not translate one
 into the other.
 Holding a remote identifier means holding bearer authority whose formula,
@@ -228,54 +245,62 @@ Writing a new invitation into the slot does two things at once: it roots the
 new invitation, giving it its first retaining edge, and it supersedes
 (cancels) whatever pending invitation the slot held before.
 
-Creation is all-or-nothing, and its single commit point is the correspondent
-slot write.
+Creation is all-or-nothing, and its single commit point is one synchronous
+`DaemonDatabase` transaction.
+The `formula` and `pet_store_entry` tables live in the same SQLite database
+(`manager-database.js`), so the new invitation formula and the correspondent
+binding that roots it can be written together.
+Both database backends, `better-sqlite3` and the XS shim
+(`better-sqlite3-xs.js`), run `BEGIN IMMEDIATE` and `COMMIT` through `exec`, and
+`writeFormula` and the pet-store statements are already synchronous underneath
+their async wrappers, so no backend constraint prevents it.
 Today `formulateInvitation` runs the deferred slot write before `formulate`, and
 that write already supersedes (cancels) any pending invitation under the same
 name, so a later persistence failure could not be undone.
 For this design the order changes:
 
 1. Validate the options record, enclosure names, entry count, and name paths.
-2. Resolve every path in sorted enclosure-name order.
+2. Enter the formula-graph lock.
+   Inside it, resolve every path in sorted enclosure-name order with the
+   inviting agent's `identify`, and transiently pin each local identifier
+   immediately after resolving it.
+   Pet-store edge removal (`removeEdgeIfUnreferenced`) and collection also run
+   under this lock, so resolve-and-pin is atomic with respect to them.
+   A concurrent `remove` of a source pet name either finishes its pet-store
+   write first, so resolution finds the name absent and the call rejects, or
+   its edge removal waits behind the lock and finds the formula pinned.
    An absent name or a value that is not a valid `FormulaIdentifier` rejects the
-   whole call before the correspondent slot or any formula is changed.
-3. Transiently pin each resolved local identifier.
-   A concurrent removal of the source pet name after resolution does not revoke
-   the delegation, but cannot collect the formula in the handoff window.
-4. Under the formula-graph lock, in one synchronous formula-store transaction,
-   write a durable **creation intent** (the inviting agent, the correspondent
-   name, and the new invitation's formula number), persist the
-   `InvitationFormula`, and install its `enclosure:<name>` edges.
-   Transiently pin the new invitation formula as well: until step 5 it has
-   outgoing edges but no incoming one.
-   Nothing observable has changed yet: no name refers to the new formula and no
-   locator has been returned.
-5. Commit by running the deferred correspondent slot write.
-   It installs the invitation's first incoming retaining edge and supersedes any
-   prior pending invitation exactly as it does today.
-6. Delete the creation intent, then release every pin.
+   whole call, releasing any pins already taken, before the correspondent slot
+   or any formula is changed.
+3. Still under the lock, run one synchronous database transaction that inserts
+   the `InvitationFormula` row and writes the correspondent's
+   `pet_store_entry` row to the new invitation identifier.
+   This transaction is the commit point.
+   Nothing observable has changed before it: no name refers to the new formula
+   and no locator has been returned.
+4. Still under the lock and with no intervening `await`, apply the committed
+   records to memory: register the formula, add its `enclosure:<name>` edges and
+   the slot's pet-store edge to the formula graph, and update the pet-store
+   index.
+   The collector cannot observe the new invitation without its incoming edge.
+5. Leave the lock, run the existing supersession path for any invitation the
+   slot previously bound, publish the name change, and release every pin.
 
 Every formula this sequence touches is therefore pinned or rooted at every
 moment: the enclosures by their pins and then by the invitation's edges, and the
-invitation by its pin until the slot write roots it.
+invitation by the slot binding that commits with it.
 
 Rollback follows from that order.
-A failure in steps 1 through 3 releases every pin and leaves the store as it
-was.
-A failure in step 4 aborts its transaction, so nothing was written.
-A failure in step 5 removes the formula, its edges, and the creation intent in
-one transaction before leaving the lock, then releases every pin; the prior slot
-binding was never touched, so the superseded invitation is still pending.
-
-A crash loses the pins but not the creation intent.
-On restart, before any agent serves requests, the daemon reads each creation
-intent.
-If the named correspondent slot binds the intent's formula, creation committed
-and the daemon deletes only the intent.
-Otherwise it removes the formula, its edges, and the intent in one transaction.
-This recovery does not depend on the collector, so an uncommitted creation
-neither leaks its formula nor retains its enclosures in a daemon with collection
-off.
+A failure in steps 1 or 2 releases every pin and leaves the store as it was.
+A failure in step 3 rolls back the transaction, so nothing was written and the
+prior slot binding still names the earlier, still-pending invitation.
+A crash before the commit leaves neither row; a crash after it leaves both, and
+ordinary reincarnation restores the invitation and its edges.
+Supersession after the commit is the existing overwrite path and keeps its
+existing crash behavior; this design adds none.
+No durable intent, startup scan, or recovery protocol is needed, and the result
+does not depend on the collector, so an uncommitted creation neither leaks its
+formula nor retains its enclosures in a daemon with collection off.
 
 The persisted shape is:
 
@@ -370,8 +395,11 @@ or `invalid enclosure identifier`.
 
 ## Inspection and acceptance
 
-An invitation incarnation reads `formula.enclosures ?? {}` once and uses that
-hardened record for both `locate()` and `enclosures()`.
+An **invitation incarnation** is the live `Invitation` object that the daemon
+makes from an invitation formula when it is first used or reincarnated after a
+restart.
+Each incarnation reads `formula.enclosures ?? {}` once and uses that hardened
+record for both `locate()` and `enclosures()`.
 `enclosures()` returns identifiers only.
 It neither resolves them, reports their formula types, nor reveals any other
 name in the inviter's namespace.
@@ -446,9 +474,41 @@ The shared `acceptInvitation` path performs these steps:
    The inviter has just confirmed that the parsed record equals its own, so
    either copy is authoritative.
 
-A re-drive after either daemon restarts reaches the inviter exactly as
-[Guest-Native Invitation and Acceptance](guest-native-invitations.md) re-drives
-an `accepting` record, and makes the same `accept` call.
+The records involved in an acceptance, and their owners, move like this:
+
+```text
+inviting daemon                           accepting daemon
+---------------                           ----------------
+invitation formula                        `accepting` record
+  state: pending                            locator (carries enclosures)
+  edges: enclosure:<name> (retaining)       correspondentName
+  owner of the enclosure snapshot
+          |                                         |
+          |  consume transaction                    |
+          v                                         |
+invitation state record                             |
+  state: accepted                                   |
+  receipt: accepting handle + enclosures            |
+  (plain data, retains nothing)                     |
+pet-store edge to the formula released              |
+          |                                         v
+          |  <------- re-drive after restart ---- `accepting` record
+          |  compare the record with the receipt    (same locator, same call)
+          |  answer `already-joined`                        |
+          |                                                 v
+          |                                         `joined` record
+          |                                           locator dropped
+```
+
+Consumption releases the pet-store edge to the invitation formula, so the
+formula's pending snapshot is no longer a reliable source: with collection on,
+the formula and its snapshot may be gone.
+The receipt, written in the consume transaction, is therefore the record a
+re-drive compares against.
+
+A re-drive after either daemon restarts reaches the inviter exactly as the
+guest-native design specifies for an `accepting` record, and makes the same
+`accept` call.
 It never needs the consumed invitation's pending object.
 
 The inviter knows which agent is accepting from the handle locator that
@@ -462,11 +522,16 @@ agent re-driving (`already-joined`); different handles are a different agent
 The pending invitation's retention is released at consumption, so an
 `already-joined` re-drive after consumption or restart cannot read the record
 from the pending invitation object.
-The guest-native design already records the invitation's state durably in the
-formula store, moving it from `pending` to `accepted` with the acceptor's handle
-identifier in one synchronous transaction.
-This design adds the authoritative enclosure snapshot to that `accepted` state
-record, written in the same transaction, so it is an immutable terminal
+The guest-native design specifies, as target state, a durable invitation state
+record in the formula store that moves from `pending` to `accepted` with the
+acceptor's handle identifier in one synchronous transaction, plus the acceptor's
+`accepting` record and its restart re-drive (its section 7).
+That state machine is not shipped: the landed code still serializes consume-once
+with an in-memory `SerialJobs` queue and reports an ambiguous timeout as an
+error (its *Implementation status*).
+This design depends on it and does not build it.
+It adds the authoritative enclosure snapshot to that `accepted` state record,
+written in the same transaction, so it is an immutable terminal
 **acceptance receipt**: the accepting handle plus the enclosures.
 
 - *Persistence*: the inviter's daemon writes the receipt only at the consume
@@ -575,8 +640,9 @@ consumer and ledger.
   possession.
 - Durable state: the inviter's pet store owns names; the invitation formula
   owns the pending enclosure snapshot.
-- Commit authority: the daemon commits creation at the correspondent slot
-  write; the inviter may later cancel or supersede a pending invitation.
+- Commit authority: the daemon commits creation in the one transaction that
+  writes the invitation formula and its correspondent binding; the inviter may
+  later cancel or supersede a pending invitation.
 - Value crossing: `InvitationEnclosureNames` in, `InvitationEnclosures` out.
 
 **Invitation formula -> locator holder.**
@@ -620,7 +686,6 @@ Every durable copy of an enclosure has one owner and one release condition:
 | Copy | Owner | Retains? | Released when |
 |---|---|---|---|
 | `InvitationFormula` edges | inviting daemon | yes | invitation consumed, canceled, or superseded |
-| creation intent | inviting daemon | no | creation commits or recovery removes it |
 | acceptance receipt | inviting daemon | no | the guest-native state record is discarded |
 | `accepting` locator | accepting daemon | no | the handshake reaches `joined` or a refusal |
 | application copy | the application | its choice | the application decides |
@@ -633,8 +698,8 @@ The daemon commits or discards invitation creation and the peer-binding
 handshake.
 It never commits or discards an operation on an enclosure.
 
-The inviter's daemon reincarnates the formula and its edges, replays creation
-intents, and keeps the receipt after restart.
+The inviter's daemon reincarnates the formula and its edges and keeps the
+receipt after restart.
 The invitation state machine owns acceptance replay through the receipt; the
 enclosed capability independently owns invocation replay.
 
@@ -653,11 +718,14 @@ provisioning, commit, replay, or persistence into the daemon mechanism.
   `Invitation.enclosures` guard.
 - `packages/daemon/src/host.js` and `guest.js`: resolve enclosure paths only
   through the inviting agent, and keep both facets behaviorally identical.
-- `packages/daemon/src/manager.js`: persist enclosures and the creation intent
-  before the slot commit, pin the formulation handoff, add graph edges, recover
-  creation intents on restart, compare and write the acceptance receipt inside
-  the consume transaction, drop the locator from a finished `accepting` record,
-  format invitation locators, and return the result.
+- `packages/daemon/src/manager.js`: resolve and pin enclosures under the
+  formula-graph lock, commit the invitation formula and correspondent binding in
+  one transaction, classify enclosures with `isLocalId` and add graph edges,
+  compare and write the acceptance receipt inside the consume transaction, drop
+  the locator from a finished `accepting` record, format invitation locators,
+  and return the result.
+- `packages/daemon/src/manager-database.js`: expose one synchronous operation
+  that writes a formula row and a pet-store row in a single transaction.
 - `packages/daemon/src/locator.js`: parse bounded `enc.*` parameters, reject
   duplicates and malformed records, and stop echoing bearer locators in errors.
 - `packages/daemon/src/formula-record.js`: render enclosures as a privileged
@@ -681,22 +749,24 @@ that resolves to malformed stored data, and mixed valid/invalid entries.
 Every failure leaves the correspondent name and formula store unchanged.
 A concurrent removal during formulation cannot collect a transiently pinned
 local formula, and the completed invitation's graph retains it while pending.
-With collection enabled, a test forces a collection between persistence and
-the slot write and asserts that both the new invitation and its local
-enclosures survive.
+With collection enabled, an interleaving test removes the source pet name and
+forces a collection at each point around resolution: before resolution the
+call rejects as absent and changes nothing; after resolution the enclosure
+survives and the invitation retains it.
+Retention tests cover every local identity class: an enclosure whose node is the
+daemon node, and an enclosure created by a locally hosted guest (node is that
+guest's registered agent key), each retained while pending and released at
+consumption; a remote enclosure is recorded but adds no graph edge.
 
-Fault-injection tests make formula persistence, edge installation, and the
-correspondent slot write each throw in turn, with a pending invitation already
-under the same name.
+Fault-injection tests make path resolution and the commit transaction each
+throw in turn, with a pending invitation already under the same name.
 Each case asserts that every transient pin is released, that no orphan formula
-or edge remains, and that the earlier invitation is still pending and
-acceptable.
-With collection disabled, a crash injected between persistence and the slot
-write leaves no name bound to the new formula; after restart, recovery has
-removed that formula, its edges, and its creation intent, and the earlier
-invitation is still pending.
-A crash injected between the slot write and intent deletion leaves the new
-invitation pending and acceptable after restart, with no intent remaining.
+row, pet-store row, or edge remains, and that the earlier invitation is still
+pending and acceptable.
+With collection disabled, a crash injected inside the transaction leaves neither
+row after restart, and the earlier invitation is still pending; a crash just
+after the commit leaves the new invitation pending and acceptable after
+restart.
 
 Non-leakage tests inspect the locator, `Invitation.enclosures()`, the acceptance
 result, formula-inspector output, thrown errors, and captured diagnostics.
@@ -747,8 +817,11 @@ The existing-agent branch ignores the coupon and still accepts.
 ## Dependencies and phased implementation
 
 - [Guest-Native Invitation and Acceptance](guest-native-invitations.md)
-  supplies the shared host/guest formulation and acceptance paths, along with
-  the durable invitation state record that this design extends.
+  supplies the shared host/guest formulation and acceptance paths, which have
+  shipped, and specifies the durable invitation state machine and the returned
+  `{ status }` records, which have not.
+  This design extends the unshipped parts, so they are prerequisites, not
+  existing interfaces.
 - The daemon locator and formula-graph code supply the existing identifier
   grammar, strict locator parser, persistence, and retention edges.
 - [minion.town guest coupons](https://github.com/kriscendobot/minion.town/pull/144)
@@ -764,6 +837,11 @@ reviewable slices:
 3. acceptance comparison/results plus same-daemon, cross-daemon, replay,
    restart, and minion.town consumer coverage.
 
+Slices 1 and 2 depend only on shipped code.
+Slice 3 depends on the guest-native durable state machine (`pending` ->
+`accepted` in the formula store, the acceptor's `accepting` record and its
+re-drive) and its `{ status }` acceptance results; it must land after them, or
+in the same PR after commits that deliver them.
 The daemon implementation must land before minion.town enables `coupon` inside
 an `endo://` invitation.
 minion.town's existing fragment-envelope coupon path does not depend on this
