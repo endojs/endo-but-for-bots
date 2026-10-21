@@ -67,16 +67,16 @@ const defaultPackages = {
 };
 
 /**
- * @param {string[]} args
+ * @param {string[]} cliArguments
  * @param {Record<string, object>} [packages]
  */
-const runBun = async (args, packages = defaultPackages) => {
+const runBun = async (cliArguments, packages = defaultPackages) => {
   const root = await makeRepository(packages);
   const logPath = join(root, 'ava-invocations.jsonl');
   await writeFile(logPath, '');
   const { status, stdout, stderr, error } = spawnSync(
     'bun',
-    [join(root, 'scripts', 'test-bun.mjs'), ...args],
+    [join(root, 'scripts', 'test-bun.mjs'), ...cliArguments],
     { encoding: 'utf8', env: { ...process.env, TEST_BUN_LOG: logPath } },
   );
   if (error) {
@@ -162,7 +162,7 @@ test('fails when no package has an AVA suite', async t => {
   t.deepEqual(invocations, []);
 });
 
-for (const [title, args, pattern] of [
+for (const [title, cliArguments, pattern] of [
   [
     'option-shaped package',
     ['--package', '--fail-fast'],
@@ -197,7 +197,7 @@ for (const [title, args, pattern] of [
   ['unknown argument', ['@endo/alpha'], /Unknown argument: @endo\/alpha/],
 ]) {
   test(`rejects ${title}`, async t => {
-    const { status, stderr, invocations } = await runBun(args);
+    const { status, stderr, invocations } = await runBun(cliArguments);
     t.not(status, 0);
     t.regex(stderr, pattern);
     t.deepEqual(invocations, []);
