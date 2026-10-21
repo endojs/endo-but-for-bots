@@ -68,8 +68,11 @@ const malformedReplies = [
 ];
 for (const [name, bytes] of malformedReplies) {
   test(`default ${name} remains a sanitized parser failure`, async t => {
-    await t.throwsAsync(boundedJson(new Response(bytes), 64, 'Probe'), {
-      message: 'Probe was not JSON',
-    });
+    await t.throwsAsync(
+      boundedJson(new Response(Uint8Array.from(bytes)), 64, 'Probe'),
+      {
+        message: 'Probe was not JSON',
+      },
+    );
   });
 }

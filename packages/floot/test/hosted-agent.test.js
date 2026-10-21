@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
@@ -822,7 +823,10 @@ test('provider validation rejection is failed in live output, durable effects an
       });
     },
   });
-  const config = { kind: 'provider', provideProvider: () => provider };
+  const config = {
+    kind: /** @type {const} */ ('provider'),
+    provideProvider: () => provider,
+  };
   const first = await makeStreamingAgent(powers, undefined, config, 'test', {
     journalPowers,
   });
@@ -837,10 +841,14 @@ test('provider validation rejection is failed in live output, durable effects an
     journalPowers,
   });
   t.teardown(() => revived.shutdown());
-  t.true((await revived.getHistory()).find(row => row.role === 'tool').failed);
   t.true(
-    (await revived.getTranscript()).find(row => row.kind === 'tool-result')
+    defined((await revived.getHistory()).find(row => row.role === 'tool'))
       .failed,
+  );
+  t.true(
+    defined(
+      (await revived.getTranscript()).find(row => row.kind === 'tool-result'),
+    ).failed,
   );
 });
 

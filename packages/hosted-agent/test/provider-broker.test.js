@@ -2026,7 +2026,10 @@ test('an undo that cannot land leaves the mark and the original failure', async 
 
 test('retirement never acknowledges a renewal result CAS that writes then rejects', async t => {
   let entered;
-  let release;
+  /** @type {(value?: any) => void} */
+  let release = () => {
+    throw Error('Test gate is not initialized');
+  };
   const started = new Promise(resolve => {
     entered = resolve;
   });
@@ -2436,18 +2439,19 @@ test('the bytes stream is bound by the response quota like the text stream', asy
  * A grant over two subscriptions. Each member has a transport of its own that
  * records what it was sent and answers as scripted: 'ok', 'exhausted' (the
  * bare classification a real transport throws), or 'broken'.
- * @param root0
- * @param root0.scripts
- * @param root0.order
- * @param root0.echo
- * @param root0.revealExhaustion
+ * @param {object} [root0]
+ * @param {Record<string, string[]>} [root0.scripts]
+ * @param {string[] | 'throw'} [root0.order]
+ * @param {string} [root0.echo]
+ * @param {boolean} [root0.revealExhaustion]
  */
 const poolSetup = ({
-  scripts,
+  scripts = { first: [], second: [] },
   order = ['first', 'second'],
   echo,
   revealExhaustion,
 } = {}) => {
+  /** @type {Record<string, any[]>} */
   const sent = { first: [], second: [] };
   const events = [];
   const member = id =>
@@ -2871,12 +2875,16 @@ const catalogPoolSetup = ({
   select = () => ['first', 'second'],
 } = {}) => {
   /** @type {Record<string, any[]>} */
+  /** @type {Record<string, any[]>} */
   const sent = { first: [], second: [] };
   /** @type {string[]} */
   const events = [];
   /** @type {string[]} */
   const secretReads = [];
-  /** @param {string} id @param {string[] | 'throws'} lists */
+  /**
+   * @param {string} id @param {string[] | 'throws'} lists
+   * @param lists
+   */
   const member = (id, lists) =>
     harden({
       id,
@@ -3003,7 +3011,11 @@ test('a far subscription is asked only when its holder’s answer lists the mode
   /** @type {any[]} */
   const farCalls = [];
   let opened = 0;
-  /** @param {string} id @param {string[]} lists @param {boolean} refuses */
+  /**
+   * @param {string} id @param {string[]} lists @param {boolean} refuses
+   * @param lists
+   * @param refuses
+   */
   const wrappedMember = (id, lists, refuses) =>
     harden({
       id,
@@ -3027,7 +3039,10 @@ test('a far subscription is asked only when its holder’s answer lists the mode
         reset: () => {},
       },
     });
-  /** @param {string} id @param {string[]} lists */
+  /**
+   * @param {string} id @param {string[]} lists
+   * @param lists
+   */
   const ownMember = (id, lists) =>
     harden({
       id,

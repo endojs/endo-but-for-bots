@@ -513,7 +513,7 @@ export const makeDelegatedRunner = ({
     };
     return harden({
       run: makeExo('HostedTurnBackend', HostedTurnBackendInterface, {
-        send: (prompt, options) =>
+        send: (prompt, options = /** @type {any} */ (undefined)) =>
           bare('a turn', async () => {
             const limits = await checkLive();
             const checked = allowed(options, limits);

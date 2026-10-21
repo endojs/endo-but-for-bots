@@ -212,7 +212,7 @@ export const makeStateStorageOperations = (
     return validateAllocation(record, true);
   };
 
-  /** @param {string} sessionId */
+  /** @param {string} sessionId @returns {Promise<{ directory: string }>} */
   const prepareSessionDirectory = async sessionId => {
     const marker = markerPath(sessionId);
     await validateRoots(true);
@@ -273,7 +273,10 @@ export const makeStateStorageOperations = (
     await link(recordPath, marker);
     await syncDirectory(owners);
     await checkpoint('record-published');
-    return harden({ directory: await validateAllocation(record) });
+    const validated = await validateAllocation(record);
+    if (validated === undefined)
+      throw Fail`Published session state directory is missing`;
+    return harden({ directory: validated });
   };
 
   /** @param {string} sessionId */

@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { Passable } from '@endo/pass-style' */
+
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 /**
@@ -16,7 +18,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
  * A closed reader's stream ends; a view subscribes again, as it does after a
  * restart.
  *
- * @template T
+ * @template {Passable} [T=any]
  * @param {object} [options]
  * @param {number} [options.maxWatchers]
  */
@@ -96,9 +98,12 @@ export const makeLatestTopic = ({ maxWatchers = 64 } = {}) => {
     // next publication, which on a quiet daemon may never come: without this
     // hook the pump waits for the pending pull, and a page that went away
     // would leave its watcher behind.
-    return readerFromIterator(/** @type {any} */ (iterator), {
-      cancelPending: () => closeWatcher(watcher),
-    });
+    return readerFromIterator(
+      /** @type {AsyncIterable<T, undefined>} */ (iterator),
+      {
+        cancelPending: () => closeWatcher(watcher),
+      },
+    );
   };
 
   const close = () => {

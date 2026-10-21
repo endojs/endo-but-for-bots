@@ -2405,6 +2405,12 @@ export const resolveSharedWorkspaceHostPath = async (
 };
 harden(resolveSharedWorkspaceHostPath);
 
+/**
+ * Construct the retained Floot factory with explicit host authorities.
+ * @param {any} hostPowers
+ * @param {any} [context]
+ * @param {{ env?: Record<string, string>, fetch?: typeof globalThis.fetch }} [options]
+ */
 export const make = async (
   hostPowers,
   context,

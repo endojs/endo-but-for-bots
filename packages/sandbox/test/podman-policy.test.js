@@ -470,7 +470,11 @@ for (const policy of [false, true]) {
     t.is(new Set(calls.map(call => call.env)).size, calls.length);
     for (const call of calls) {
       if (!call.env) throw Error('Expected command environment');
-      t.true(Object.isExtensible(call.env));
+      // Unsafe SES deliberately spoofs isExtensible(). Exercise the native
+      // consumer's actual ability to extend its fresh environment instead.
+      call.env.ENDO_MUTABILITY_PROBE = 'mutable';
+      t.is(call.env.ENDO_MUTABILITY_PROBE, 'mutable');
+      delete call.env.ENDO_MUTABILITY_PROBE;
       // Every command gets a fresh copy of the one captured environment:
       // the same values, never re-read from the ambient process env.
       t.deepEqual(

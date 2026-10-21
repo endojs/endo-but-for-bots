@@ -38,7 +38,9 @@ const fixture = ({ publicInternet = false } = {}) => {
     imageDigest: digest,
     listenerImageRef: `localhost/fixture@${digest}`,
     publicInternet,
-    onSettings: next => settings.push(next),
+    onSettings: next => {
+      settings.push(next);
+    },
     runtimeKit: /** @type {any} */ ({
       open: async () => harden({}),
       close: async () => {},

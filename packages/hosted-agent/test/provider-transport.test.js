@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
+import { defined } from '../../../scripts/test/defined.js';
 
 import {
   isCredentialRejection,
@@ -139,7 +140,13 @@ for (const { label, headers, detail } of [
     );
     t.teardown(subject.dispose);
     await t.throwsAsync(
-      () => E(subject.transport).request(harden({ ...request, headers })),
+      () =>
+        E(subject.transport).request(
+          harden({
+            ...request,
+            headers: /** @type {Record<string,string>} */ (headers),
+          }),
+        ),
       {
         message: 'Provider transport failed',
       },
@@ -241,7 +248,7 @@ test('a refusal is bounded, and never echoes the credential it carried', async t
   t.true(`${diagnostics[1].refusal}`.length <= 1024);
 });
 
-for (const fixture of [
+for (const fixture of /** @type {Array<{ name: string, headers: Record<string, string>, body: string, expected: string }>} */ ([
   {
     name: 'bare bearer',
     headers: { authorization: 'Bearer demo-only-token' },
@@ -278,7 +285,7 @@ for (const fixture of [
     body: 'invalid token Bearer demo-only-',
     expected: 'invalid token ',
   },
-]) {
+])) {
   test(`refusal diagnostics screen ${fixture.name}`, async t => {
     const diagnostics = [];
     let pulls = 0;
@@ -301,7 +308,9 @@ for (const fixture of [
           }),
         },
       }),
-      diagnostic => diagnostics.push(diagnostic),
+      diagnostic => {
+        diagnostics.push(diagnostic);
+      },
     );
     t.teardown(subject.dispose);
     await t.throwsAsync(
@@ -546,8 +555,14 @@ test('dispose aborts a pending body read and refuses subsequent dispatch', async
 });
 
 test('owner close waits for late response body cancellation and retains uncertainty', async t => {
-  let returnFetch;
-  let releaseCancel;
+  /** @type {(response: Response) => void} */
+  let returnFetch = () => {
+    throw Error('Missing fetch gate');
+  };
+  /** @type {(value?: unknown) => void} */
+  let releaseCancel = () => {
+    throw Error('Missing cancellation gate');
+  };
   let entered;
   const began = new Promise(resolve => {
     entered = resolve;
@@ -569,11 +584,13 @@ test('owner close waits for late response body cancellation and retains uncertai
   const closing = lease.close().then(() => {
     closed = true;
   });
-  returnFetch(new Response(new ReadableStream({ cancel: () => cancelling })));
+  defined(returnFetch)(
+    new Response(new ReadableStream({ cancel: () => cancelling })),
+  );
   await failedRequest;
   await null;
   t.false(closed);
-  releaseCancel();
+  defined(releaseCancel)();
   await closing;
   t.true(closed);
   const uncertain = setup(
@@ -594,7 +611,10 @@ test('owner close waits for late response body cancellation and retains uncertai
 for (let delay = 0; delay <= 8; delay += 1) {
   test(`close drains the fetch-to-reader handoff at microtask ${delay}`, async t => {
     let cancellations = 0;
-    let release;
+    /** @type {(value?: any) => void} */
+    let release = () => {
+      throw Error('Test gate is not initialized');
+    };
     const paused = new Promise(resolve => {
       release = resolve;
     });
@@ -634,7 +654,7 @@ for (let delay = 0; delay <= 8; delay += 1) {
     release();
     await closing;
     await settled;
-    t.false(response.body.locked);
+    t.false(defined(response.body).locked);
     t.true(acknowledged);
   });
 }

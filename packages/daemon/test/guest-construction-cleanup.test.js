@@ -34,11 +34,17 @@ for (const automatic of [false, true, 'directory']) {
           ['mail-hub', 1, 2],
           ['pet-store', 1, 3],
           ['worker', 1, 4],
-          ['guest', 1, 9],
+          ['guest', 1, 13],
           ['pet-store', 2, 5],
           ['directory', 1, 6],
           ['pet-store', 3, 7],
           ['directory', 2, 8],
+          // The guest's @pins and the host-private relationship pins each
+          // add a pet-store/directory pair before the guest is persisted.
+          ['pet-store', 4, 9],
+          ['directory', 3, 10],
+          ['pet-store', 5, 11],
+          ['directory', 4, 12],
         ];
   for (const [stage, occurrence, expectedAcquired] of cases) {
     for (const afterWrite of [false, true]) {

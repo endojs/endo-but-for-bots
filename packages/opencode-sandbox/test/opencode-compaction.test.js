@@ -6,6 +6,7 @@ import {
   assertTranscriptRecord,
   pairToolCalls,
 } from '@endo/hosted-agent/transcript-records.js';
+import { defined } from '../../../scripts/test/defined.js';
 import {
   makeMessageRegistry,
   mapSseEvent,
@@ -22,7 +23,7 @@ test('boundary duplicates are idempotent and changed identities fail closed', t 
     type: 'session.compacted',
     properties: { sessionID, checkpoint: fixture() },
   };
-  t.is(mapSseEvent(event, seen, sessionID).type, 'compaction');
+  t.is(defined(mapSseEvent(event, seen, sessionID)).type, 'compaction');
   t.is(
     mapSseEvent(JSON.parse(JSON.stringify(event)), seen, sessionID),
     undefined,
@@ -185,10 +186,10 @@ test('checkpoint uses native pruned output without rewriting full history', t =>
     ]),
   ]);
   const before = JSON.stringify(checkpoint);
-  t.is(
-    project(checkpoint).retainedTail[1].content,
-    '[Old tool result content cleared]',
-  );
+  const retainedResult = project(checkpoint).retainedTail[1];
+  if (retainedResult.kind !== 'tool-result')
+    throw Error('Expected retained tool result');
+  t.is(retainedResult.content, '[Old tool result content cleared]');
   t.is(JSON.stringify(checkpoint), before);
 });
 

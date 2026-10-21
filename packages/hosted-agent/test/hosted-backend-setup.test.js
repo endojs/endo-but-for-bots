@@ -292,7 +292,7 @@ test('a minted broker derives its owner from the host, or keeps the operator’s
     }),
     'named',
   );
-  for (const [overrides, message] of [
+  for (const [overrides, message] of /** @type {Array<[any, any]>} */ ([
     [{ brokerOwnerId: 'Bad Owner' }, /ENDO_X_BROKER_OWNER_ID must match/],
     [{ listenerImageRef: '' }, /ENDO_X_BROKER_LISTENER_IMAGE is required/],
     [
@@ -304,7 +304,7 @@ test('a minted broker derives its owner from the host, or keeps the operator’s
       /ENDO_X_BROKER_DIR must be a normalized absolute path/,
     ],
     [{ rootfs: 'oci:-rm' }, /Invalid Adapter sandbox image/],
-  ]) {
+  ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       resolveMintedBrokerIdentity(host, { ...base, ...overrides }),

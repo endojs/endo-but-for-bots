@@ -1048,6 +1048,7 @@ const makePooledBrokerServiceKit = ({
  * cannot serve is a full window until the time it names.
  *
  * @param {any} status
+ * @returns {{ plan?: any, rateLimits?: any }}
  */
 export const readingFromShareStatus = status => {
   if (status === null || typeof status !== 'object') return harden({});

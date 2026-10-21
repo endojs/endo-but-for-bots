@@ -5,7 +5,8 @@ import { turnStatusView } from '../src/MessageList.js';
 // Live 2026-09-25: a failed turn showed the adapter's reason and a CLI's
 // stderr as if it were the assistant's reply.
 const status = (turnState, text) => ({
-  role: 'assistant',
+  id: 'status',
+  role: /** @type {const} */ ('assistant'),
   text,
   meta: { turnStatus: true, turnState },
 });

@@ -9,7 +9,8 @@ import { E } from '@endo/eventual-send';
  * peer is this one's, so the peer can store it, and it revives with the
  * daemon, with no path to the kit, its revocation, or what is beneath.
  *
- * @param {import('@endo/eventual-send').ERef<{ share(): unknown }>} kit
+ * @template T
+ * @param {import('@endo/eventual-send').ERef<{ share(): T }>} kit
  */
 export const make = kit => E(kit).share();
 harden(make);

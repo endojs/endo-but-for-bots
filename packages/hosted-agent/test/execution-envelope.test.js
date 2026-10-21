@@ -72,6 +72,7 @@ const attestationFor = requested =>
     })),
   });
 
+/** @param {Record<string, any>} [overrides] @returns {any} */
 const planFor = (overrides = {}) =>
   harden({
     sessionId: 'a',
@@ -203,6 +204,7 @@ const fixture = ({
     },
     assertOpen: () => {},
   };
+  /** @type {any} */
   const adapter = harden({
     label: 'Test',
     makeMounter: () => ({

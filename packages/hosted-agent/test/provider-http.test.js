@@ -83,24 +83,26 @@ test.serial(
     });
     /** @type {any} */
     let seen;
-    const reader = bytesReaderFromIterator({
-      async next() {
-        calls += 1;
-        if (calls === 1)
-          return {
-            done: false,
-            value: new TextEncoder().encode('data: first\n\n'),
-          };
-        await finished;
-        return { done: true, value: undefined };
-      },
-      return() {
-        returned = true;
-        finish();
-        acknowledgeReturn();
-        return { done: true, value: undefined };
-      },
-    });
+    const reader = bytesReaderFromIterator(
+      /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+        async next() {
+          calls += 1;
+          if (calls === 1)
+            return {
+              done: false,
+              value: new TextEncoder().encode('data: first\n\n'),
+            };
+          await finished;
+          return { done: true, value: undefined };
+        },
+        async return() {
+          returned = true;
+          finish();
+          acknowledgeReturn();
+          return { done: true, value: undefined };
+        },
+      }),
+    );
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
@@ -285,11 +287,13 @@ test.serial(
           return harden({
             status: 200,
             contentType: 'application/json',
-            reader: bytesReaderFromIterator({
-              async next() {
-                return { done: true, value: undefined };
-              },
-            }),
+            reader: bytesReaderFromIterator(
+              /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+                async next() {
+                  return { done: true, value: undefined };
+                },
+              }),
+            ),
           });
         },
       }),
@@ -323,6 +327,7 @@ test.serial(
   async t => {
     t.timeout(5000);
     let resolveRead;
+    /** @type {Promise<IteratorResult<Uint8Array, undefined>>} */
     const read = new Promise(resolve => {
       resolveRead = resolve;
     });
@@ -338,13 +343,13 @@ test.serial(
             status: 200,
             contentType: 'text/event-stream',
             reader: bytesReaderFromIterator(
-              {
+              /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
                 next: () => read,
-                return: () => {
+                return: async () => {
                   cancelled();
                   return { done: true, value: undefined };
                 },
-              },
+              }),
               {
                 cancelPending: () =>
                   resolveRead({ done: true, value: undefined }),
@@ -440,15 +445,17 @@ test.serial(
       harden({
         status: 200,
         contentType: 'text/event-stream',
-        reader: bytesReaderFromIterator({
-          next() {
-            throw Error('must not read');
-          },
-          return() {
-            cancelled();
-            return { done: true, value: undefined };
-          },
-        }),
+        reader: bytesReaderFromIterator(
+          /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+            next() {
+              throw Error('must not read');
+            },
+            async return() {
+              cancelled();
+              return { done: true, value: undefined };
+            },
+          }),
+        ),
       }),
     );
     await cancellation;

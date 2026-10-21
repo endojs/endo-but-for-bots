@@ -3,7 +3,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
 
 const gate = () => {
-  let resolve;
+  /** @type {(value?: any) => void} */
+  let resolve = () => {
+    throw Error('Test gate is not initialized');
+  };
   const promise = new Promise(done => {
     resolve = done;
   });

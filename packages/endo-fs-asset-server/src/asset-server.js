@@ -292,7 +292,8 @@ const makeMemoryStore = () => {
     load: async () => [...records.values()],
     recall: async id => {
       const facet = facets.get(id);
-      if (facet === undefined) throw makeError(X`no retained facet for ${q(id)}`);
+      if (facet === undefined)
+        throw makeError(X`no retained facet for ${q(id)}`);
       return facet;
     },
     release: async id => {
@@ -560,7 +561,9 @@ export const makeAssetServerKit = async ({
           } catch (cause) {
             failed = { until: now() + RESOLVE_BACKOFF_MS, cause };
             entry.status = 'unavailable';
-            entry.error = String(/** @type {Error} */ (cause)?.message || cause);
+            entry.error = String(
+              /** @type {Error} */ (cause)?.message || cause,
+            );
             throw cause;
           } finally {
             disarm();
@@ -789,7 +792,7 @@ export const makeAssetServerKit = async ({
    */
   const drop = async id => {
     if (!/^[0-9a-f]{32}$/.test(id)) return false;
-    // eslint-disable-next-line no-use-before-define
+
     await serving.get(id)?.catch(() => {});
     const entry = entries.get(id);
     if (entry) {
@@ -867,7 +870,9 @@ export const makeAssetServerKit = async ({
     }
     const label = serveOpts.label ?? '';
     if (typeof label !== 'string' || label.length > 256) {
-      throw makeError(X`serve label must be a string of at most 256 characters`);
+      throw makeError(
+        X`serve label must be a string of at most 256 characters`,
+      );
     }
     const requestedId = serveOpts.id;
     if (
@@ -880,7 +885,9 @@ export const makeAssetServerKit = async ({
       const standing = entries.get(requestedId);
       if (standing) {
         if (standing.status === 'unreadable') {
-          throw makeError(X`serve id ${q(requestedId)} names an unreadable record`);
+          throw makeError(
+            X`serve id ${q(requestedId)} names an unreadable record`,
+          );
         }
         return harden({
           id: requestedId,

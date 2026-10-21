@@ -54,7 +54,7 @@ const makeFakeOwner = () => {
   const records = new Map();
   /** @type {any[][]} */
   const log = [];
-  /** @type {{ createError: Error | undefined }} */
+  /** @type {{ createError: Error | undefined, catalogDown: boolean }} */
   const knobs = { createError: undefined, catalogDown: false };
   const facet = harden({
     async send() {

@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 // Establish a perimeter:
-// eslint-disable-next-line import/order
+
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -173,7 +173,6 @@ const waitForText = async (filePath, matcher, opts = {}) => {
   const matches = text =>
     matcher instanceof RegExp ? matcher.test(text) : text.includes(matcher);
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     // eslint-disable-next-line no-await-in-loop
     const text = await fs.promises.readFile(filePath, 'utf-8').catch(() => '');
@@ -198,7 +197,7 @@ const waitForCondition = async (predicate, opts = {}) => {
   await null;
   const { timeoutMs = 2000, intervalMs = 50 } = opts;
   const startTime = Date.now();
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     // eslint-disable-next-line no-await-in-loop
     if (await predicate()) {
@@ -303,7 +302,6 @@ const makeHost = async (config, cancelled) => {
  * @returns {Promise<ReturnType<prepareConfig> & ReturnType<makeHost>>}
  */
 const prepareHost = async (t, configName = t.title) => {
-  // eslint-disable-next-line no-use-before-define
   const { cancel, cancelled, config } = await prepareConfig(t, { configName });
   const { host } = await makeHost(config, cancelled);
   return { cancel, cancelled, config, host };
@@ -3094,6 +3092,9 @@ testNeedsNodeManager(
       '@node',
       spec('claude-sandbox/src/claude-broker-service-agent.js'),
       {
+        workerTrustedShims: [
+          new URL('./claude-catalog-shim.js', import.meta.url).href,
+        ],
         powersName: 'claude-creds.broker-read',
         resultName: ['claude-sandbox', 'broker-service'],
         env: {
@@ -3104,7 +3105,6 @@ testNeedsNodeManager(
             imageDigest: digest,
             listenerImageRef: `localhost/listener@${digest}`,
             accountAuthority: 'claude-main',
-            models: ['claude-sonnet-4-6'],
             credentialKind: 'oauthToken',
           }),
         },
@@ -3252,7 +3252,6 @@ testNeedsNodeManager(
         imageDigest,
         listenerImageRef: `localhost/provider@${imageDigest}`,
         accountAuthority: 'openrouter-main',
-        models: ['test/model'],
       }),
     };
     const specifier = new URL(
@@ -8763,8 +8762,7 @@ test('provideSubMount takes the parent as a capability and refuses a derived vie
 
   // A holder that was handed the mount, not its name: another agent.
   const parent = await E(host).provideMount(mountPath, 'submount-cap-parent');
-  await E(host).provideHost('submount-cap-holder');
-  const holder = await E(host).lookup(['submount-cap-holder']);
+  const holder = await E(host).provideHost('submount-cap-holder');
   t.false(await E(holder).has('submount-cap-parent'));
 
   const child = await E(holder).provideSubMount(parent, [], 'retained', {

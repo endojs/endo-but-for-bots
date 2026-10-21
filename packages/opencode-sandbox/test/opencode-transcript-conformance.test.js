@@ -39,6 +39,7 @@ test('reused ids retain each imported result failure status independently', t =>
 });
 
 test('import payload excludes superseded history before reaching the route', t => {
+  /** @type {readonly import('@endo/hosted-agent/transcript-records.js').TranscriptRecord[]} */
   const records = harden([
     { kind: 'message', role: 'user', content: 'superseded' },
     { kind: 'compaction', summary: 'old summary' },

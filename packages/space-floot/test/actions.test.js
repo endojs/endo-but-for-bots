@@ -307,9 +307,19 @@ test('a run with thoughts says how long the backend thought, and counts only too
   const now = 1_000_000;
   const summary = summarizeActions(
     [
-      { role: 'thinking', thinking: { startedAt: now - 65_000, endedAt: now - 3000, truncated: false } },
+      {
+        role: 'thinking',
+        thinking: {
+          startedAt: now - 65_000,
+          endedAt: now - 3000,
+          truncated: false,
+        },
+      },
       { role: 'tool', name: 'exec' },
-      { role: 'thinking', thinking: { startedAt: now - 2000, truncated: false } },
+      {
+        role: 'thinking',
+        thinking: { startedAt: now - 2000, truncated: false },
+      },
     ],
     now,
   );
@@ -319,7 +329,12 @@ test('a run with thoughts says how long the backend thought, and counts only too
   t.is(summary.label, 'Thinking… (1m4s) · 1 action');
   t.is(summary.detail, 'exec');
   const done = summarizeActions(
-    [{ role: 'thinking', thinking: { startedAt: 0, endedAt: 205_000, truncated: false } }],
+    [
+      {
+        role: 'thinking',
+        thinking: { startedAt: 0, endedAt: 205_000, truncated: false },
+      },
+    ],
     now,
   );
   t.is(done.total, 0);
@@ -331,17 +346,25 @@ test('a run with thoughts says how long the backend thought, and counts only too
 test('thoughts group with the tool calls around them, and a thought alone is a group too', t => {
   const { rows } = projectTranscript([
     { role: 'user', text: 'think and act' },
-    { role: 'thinking', thinking: { startedAt: 1, endedAt: 2, truncated: false } },
+    {
+      role: 'thinking',
+      thinking: { startedAt: 1, endedAt: 2, truncated: false },
+    },
     { role: 'tool', name: 'exec' },
     { role: 'thinking', thinking: { startedAt: 3, truncated: false } },
     { role: 'assistant', text: 'done' },
     { role: 'thinking', thinking: { startedAt: 4, truncated: false } },
   ]);
   t.deepEqual(
-    rows.map(row => (row.kind === 'actions' ? row.actions.map(m => m.role) : row.kind)),
+    rows.map(row =>
+      row.kind === 'actions' ? row.actions.map(m => m.role) : row.kind,
+    ),
     ['bubble', ['thinking', 'tool', 'thinking'], 'bubble', ['thinking']],
   );
-  t.deepEqual(rows.map(row => row.index), [0, 1, 4, 5]);
+  t.deepEqual(
+    rows.map(row => row.index),
+    [0, 1, 4, 5],
+  );
 });
 
 test('a thought’s preview is its opening words, never a command read out of JSON', t => {

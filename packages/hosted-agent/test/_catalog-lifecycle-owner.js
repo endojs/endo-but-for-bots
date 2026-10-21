@@ -16,7 +16,16 @@ const construct = makeOwnedProviderBrokerService({
     imageDigest: digest,
     listenerImageRef: `localhost/fixture@${digest}`,
   }),
-  makePolicy: () => ({ policy: {}, accountAuthority: 'fixture' }),
+  makePolicy: () => ({
+    policy: {
+      origin: 'https://provider.invalid',
+      routes: [],
+      maxConcurrentRequests: 1,
+      maxRequestBytes: 1024n,
+      maxResponseBytes: 1024n,
+    },
+    accountAuthority: 'fixture',
+  }),
   makeCredential: (_config, control) => {
     void E(control).note('construct');
     return harden({ current: () => E(control).renew() });

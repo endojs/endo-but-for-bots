@@ -2,11 +2,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { defined } from '../../../scripts/test/defined.js';
 import { makeAccountOracleKit } from '../src/account-oracle.js';
 import { makeAccountReadingSource } from '../src/account-source.js';
 import { make } from '../src/account-oracle-module.js';
 
 const deferred = () => {
+  /** @type {(value: any) => void} */
   let resolve = value => {
     throw Error(`Not initialized: ${value}`);
   };
@@ -145,7 +147,10 @@ test('module awaits disposal registration before exposing an oracle', async t =>
   t.timeout(5000);
   const gate = deferred();
   const entered = deferred();
-  let hook;
+  /** @type {() => Promise<void>} */
+  let hook = async () => {
+    throw Error('Missing disposal hook');
+  };
   const context = Far('Context', {
     addDisposalHook: async value => {
       hook = value;
@@ -157,7 +162,7 @@ test('module awaits disposal registration before exposing an oracle', async t =>
   const constructing = make(powers, context);
   void constructing.catch(() => {});
   await entered.promise;
-  await E(hook)();
+  await defined(E(hook))();
   gate.resolve(undefined);
   await t.throwsAsync(constructing, { message: /closed/ });
 });

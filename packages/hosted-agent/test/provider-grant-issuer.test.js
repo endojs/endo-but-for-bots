@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { makeBrokerSubscription } from '../src/broker-subscription.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
@@ -315,7 +316,10 @@ test('retiring one pool member leaves an existing auto endpoint usable by its si
 
 test('member retirement waits for a late wrapped endpoint and retains failed revocation', async t => {
   const owner = makePoolMemberLifecycle();
-  let finish;
+  /** @type {(value?: any) => void} */
+  let finish = () => {
+    throw Error('Test gate is not initialized');
+  };
   let entered;
   const started = new Promise(resolve => {
     entered = resolve;
@@ -415,6 +419,7 @@ const fixture = ({
   let stops = 0;
   let fails = false;
   let drift = false;
+  /** @type {any} */
   let endpoint;
   let listenerLimits;
   let listenerNetwork;
@@ -1138,6 +1143,7 @@ test('a pool issuer serves a session from its chosen subscription and reads each
     readingOf: latest,
     cacheLifetimeMs: 300_000,
   });
+  /** @type {any} */
   let endpoint;
   const issuer = makeIssuer({
     runtime: listenerRuntime(value => {
@@ -1163,7 +1169,7 @@ test('a pool issuer serves a session from its chosen subscription and reads each
   t.teardown(issuer.dispose);
   const kit = issuer.issueKit(spec);
   await kit.value;
-  const response = await E(endpoint).request(
+  const response = await defined(E(endpoint)).request(
     harden({
       method: 'POST',
       path: '/v1/responses',
@@ -1188,14 +1194,14 @@ test('a pool issuer serves a session from its chosen subscription and reads each
     '2096-10-02T07:06:40.000Z',
   );
   // The next request of this session does not try `work` again.
-  await E(endpoint).request(
+  await defined(E(endpoint)).request(
     harden({
       method: 'POST',
       path: '/v1/responses',
       body: '{"model":"allowed"}',
     }),
   );
-  t.is(requests.at(-1).authorization, 'Bearer home-key');
+  t.is(defined(requests.at(-1)).authorization, 'Bearer home-key');
   t.is(requests.length, 3);
   await kit.revoke();
 });
@@ -1230,7 +1236,9 @@ test('an endpoint without a listener serves the same credentialed core, and is t
   t.is(f.endpoint(), undefined);
 
   // eslint-disable-next-line no-underscore-dangle
-  const endpointMethods = await E(endpoint).__getMethodNames__();
+  const endpointMethods = await E(
+    /** @type {any} */ (endpoint),
+  ).__getMethodNames__();
   t.deepEqual(
     endpointMethods.filter(name => !name.startsWith('__')),
     ['attestation', 'request', 'requestByteStream', 'revoke'],

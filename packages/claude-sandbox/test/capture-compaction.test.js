@@ -1,5 +1,5 @@
 // @ts-check
-import test from 'ava';
+import ava from 'ava';
 import {
   mkdtemp,
   mkdir,
@@ -13,6 +13,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+
+// Every case forks a capture helper. Serialize these filesystem/process
+// fixtures so concurrent large frames do not exhaust their stall deadlines.
+const test = ava.serial;
 
 const exec = promisify(execFile);
 const helper = fileURLToPath(

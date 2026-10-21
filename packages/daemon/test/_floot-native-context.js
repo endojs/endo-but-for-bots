@@ -155,6 +155,8 @@ export const make = async host => {
             modelId: 'test',
           });
           // eslint-disable-next-line no-await-in-loop
+          await journal.dispatch(turn);
+          // eslint-disable-next-line no-await-in-loop
           await journal.completeTranscript(turn, '0');
           // eslint-disable-next-line no-await-in-loop
           await journal.append(turn, { type: 'finish', state: 'completed' });

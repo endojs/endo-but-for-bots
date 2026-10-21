@@ -27,6 +27,9 @@ const pairFormula = () => ({
   },
 });
 
+/**
+ * @param {{ bound?: boolean, boundPath?: string[], faults?: Record<string, any> }} [options]
+ */
 const makeFixture = ({
   bound = false,
   boundPath = secretPath,
@@ -97,6 +100,7 @@ const makeFixture = ({
       CREDENTIAL_LABEL: 'Codex',
     });
   }
+  /** @type {object} */
   let selectedSecret = secret;
   const host = Far('Host', {
     has: async (...parts) => bindings.has(key(...parts)),
@@ -329,6 +333,7 @@ test('adoption refuses a dynamic powers recipe before evaluating it', async t =>
     () =>
       readManagedRenewableCredentials(f.host, {
         namePath: ['codex-sandbox', 'credential'],
+        label: 'Codex',
       }),
     { message: /must be a marshalled dependency pair/ },
   );

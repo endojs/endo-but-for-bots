@@ -18,7 +18,10 @@ test('model discovery never opens an issuer and is fenced by service closure', a
   t.timeout(5000);
   let opens = 0;
   const requested = [];
-  let finish;
+  /** @type {(value?: any) => void} */
+  let finish = () => {
+    throw Error('Test gate is not initialized');
+  };
   const pending = new Promise(resolve => {
     finish = resolve;
   });

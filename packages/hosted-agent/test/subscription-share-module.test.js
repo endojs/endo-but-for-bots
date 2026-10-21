@@ -3,6 +3,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { make as makeFacet } from '../src/subscription-share-facet-module.js';
 import { make } from '../src/subscription-share-module.js';
@@ -76,13 +77,13 @@ test('the share’s state lives in its own namespace: a restart keeps the meter 
   // What is handed out is the kit's share() and nothing else of it.
   const share = await makeFacet(kit);
   // eslint-disable-next-line no-underscore-dangle
-  const shareMethods = await E(share).__getMethodNames__();
+  const shareMethods = await E(/** @type {any} */ (share)).__getMethodNames__();
   t.false(shareMethods.includes('revoke'));
   t.false(shareMethods.includes('share'));
   const endpoint = await E(share).openEndpoint({ sessionId: 's1' });
   await E(endpoint).request(request);
   await new Promise(resolve => setTimeout(resolve, 5));
-  t.is((await E(share).getStatus()).budget.spent, 150);
+  t.is(defined((await E(share).getStatus()).budget).spent, 150);
   t.true(
     [...space.names.keys()].some(name => name.startsWith('share-state-v1-')),
   );
@@ -91,7 +92,7 @@ test('the share’s state lives in its own namespace: a restart keeps the meter 
   const revived = await make(space.powers, undefined, {
     env: { SHARE_ID: 'alice' },
   });
-  const spentAfter = (await E(revived).getStatus()).budget.spent;
+  const spentAfter = defined((await E(revived).getStatus()).budget).spent;
   t.true(spentAfter >= 150);
 
   // The grantor rewrites the limits: a write of a value, read at once.

@@ -24,7 +24,11 @@ const model = (id, { efforts = [], effort = null, isDefault = false } = {}) =>
     reasoningEfforts: efforts,
   });
 
-/** @param {string} subscriptionId @param {any[]} models @param {string} [state] */
+/**
+ * @param {string} subscriptionId @param {any[]} models @param {string} [state]
+ * @param models
+ * @param state
+ */
 const account = (subscriptionId, models, state = 'current') =>
   harden({
     subscriptionId,
@@ -385,7 +389,8 @@ test('a model the runtime cannot spell is left out; the rest of the account’s 
     label: 'Test',
     readCatalog: async () =>
       harden({ accounts: [account('default', [model('a'), model('b')])] }),
-    project: entry => (entry.id === 'b' ? { id: 'b' } : entry),
+    project: entry =>
+      entry.id === 'b' ? /** @type {any} */ ({ id: 'b' }) : entry,
   });
   t.deepEqual(
     (await broken.catalog()).accounts.map(entry => entry.models.map(m => m.id)),

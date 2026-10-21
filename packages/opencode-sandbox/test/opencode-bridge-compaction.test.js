@@ -96,6 +96,8 @@ for (const mode of [
           events.map(event => event.type),
           ['phase', 'compaction', 'text-delta', 'end'],
         );
+        if (events[1].type !== 'compaction' || events[2].type !== 'text-delta')
+          throw Error('Expected checkpoint then text');
         t.is(events[1].summary.length, 2 * 1024 * 1024);
         t.is(events[2].text, 'After checkpoint');
       } else {

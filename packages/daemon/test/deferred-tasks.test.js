@@ -27,7 +27,10 @@ for (const synchronous of [false, true]) {
     t.timeout(5000);
     const tasks = makeDeferredTasks();
     const failure = Error('publication failed');
-    let release;
+    /** @type {(value?: any) => void} */
+    let release = () => {
+      throw Error('Test gate is not initialized');
+    };
     const held = new Promise(resolve => {
       release = resolve;
     });

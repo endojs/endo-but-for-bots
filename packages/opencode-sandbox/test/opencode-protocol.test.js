@@ -22,6 +22,8 @@ test('compaction events validate nested canonical records and strip native ident
     summary: 'summary',
     retainedTail: [{ kind: 'message', role: 'user', content: 'continue' }],
   });
+  if (event.type !== 'compaction' || event.retainedTail === undefined)
+    throw Error('Expected retained compaction tail');
   t.true(Object.isFrozen(event.retainedTail[0]));
   t.throws(() =>
     assertBridgeEvent({

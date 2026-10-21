@@ -193,6 +193,7 @@ const native = harden({
 
 test('native context round-trips atomically with deterministic nested ordering', t => {
   const ordered = assertTranscriptRecord(native);
+  if (ordered.kind !== 'native-context') throw Error('Expected native context');
   t.deepEqual(parseTranscript(encodeTranscript([native])), [ordered]);
   t.is(
     encodeTranscriptRecord({

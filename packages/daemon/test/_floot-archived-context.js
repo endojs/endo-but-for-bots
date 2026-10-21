@@ -66,7 +66,14 @@ export const make = async host => {
       const seedStorage = await providePrivateTurnStorage(host, sessionId);
       try {
         const journal = makeTurnJournal(seedStorage);
-        const old = await journal.begin(options);
+        // Synthetic completed history obeys the same write-ahead dispatch
+        // contract as turns produced by the live agent.
+        const begin = async () => {
+          const id = await journal.begin(options);
+          await journal.dispatch(id);
+          return id;
+        };
+        const old = await begin();
         await journal.recordTranscript(old, '0', {
           kind: 'message',
           role: 'assistant',
@@ -85,7 +92,7 @@ export const make = async host => {
           args: '{}',
         });
         await journal.append(old, { type: 'finish', state: 'completed' });
-        const certified = await journal.begin(options);
+        const certified = await begin();
         await journal.recordTranscript(certified, '0', {
           kind: 'tool-call',
           id: 'known',
@@ -98,7 +105,7 @@ export const make = async host => {
           content: 'KNOWN-SUMMARIZED',
         });
         await journal.append(certified, { type: 'finish', state: 'completed' });
-        const boundary = await journal.begin(options);
+        const boundary = await begin();
         await journal.recordTranscript(boundary, '0', {
           kind: 'compaction',
           summary: 'ARCHIVED-SUMMARY',
@@ -110,7 +117,7 @@ export const make = async host => {
         const finish = async count => {
           for (let index = 0; index < Number(count); index += 1) {
             // eslint-disable-next-line no-await-in-loop
-            const id = await journal.begin(options);
+            const id = await begin();
             // eslint-disable-next-line no-await-in-loop
             await journal.append(id, { type: 'finish', state: 'completed' });
           }

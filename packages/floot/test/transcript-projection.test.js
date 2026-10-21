@@ -112,7 +112,11 @@ test('Responses output survives the journal with native call ids and opaque reas
 });
 
 test('per-message provider context is canonical and cannot be silently flattened', t => {
-  const base = { kind: 'message', role: 'assistant', content: 'answer' };
+  const base = {
+    kind: /** @type {const} */ ('message'),
+    role: /** @type {const} */ ('assistant'),
+    content: 'answer',
+  };
   const one = {
     ...base,
     providerContext: { format: 'responses-output-v1', payload: '{}' },
@@ -167,6 +171,8 @@ test('compaction retains exact Responses tail rather than resurrecting supersede
   );
   t.is(restored.length, 2);
   t.is(restored[0].content, 'earlier work');
+  if (!('responsesOutput' in restored[1]))
+    throw Error('Missing Responses context');
   t.is(restored[1].responsesOutput.items[0].encrypted_content, 'kept-context');
 });
 

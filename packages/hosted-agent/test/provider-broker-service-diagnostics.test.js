@@ -9,6 +9,7 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { defined } from '../../../scripts/test/defined.js';
 import { makeSubscriptionShare } from '../src/subscription-share.js';
 import { makeLatestTopic } from '../src/latest-topic.js';
 
@@ -21,7 +22,10 @@ import {
 
 const encode = text => new TextEncoder().encode(text);
 
-/** What an account's catalog read says when it lists these models. */
+/**
+ * What an account's catalog read says when it lists these models.
+ * @param {...any} ids
+ */
 const listing =
   (...ids) =>
   async () =>
@@ -371,7 +375,7 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
   t.like(await E(held).attestation(), { subscription: 'alice', hops: 1 });
   // The response did not say what it cost, so the reservation is the charge.
   await new Promise(resolve => setTimeout(resolve, 0));
-  t.true((await E(share).getStatus()).budget.spent > 0);
+  t.true(defined((await E(share).getStatus()).budget).spent > 0);
   await kit.close();
   await t.throwsAsync(() => E(held).request(request));
 });
@@ -396,13 +400,17 @@ const pooledKit = (digestLetter, ownerId, subscriptions, overrides = {}) => {
 
 test('pool close drains an admitted observation write and fences later chooser updates', async t => {
   let entered;
-  let release;
+  /** @type {(value?: any) => void} */
+  let release = () => {
+    throw Error('Test gate is not initialized');
+  };
   const began = new Promise(resolve => {
     entered = resolve;
   });
   const paused = new Promise(resolve => {
     release = resolve;
   });
+  /** @type {any} */
   let pool;
   let writes = 0;
   const kit = pooledKit(
@@ -442,7 +450,7 @@ test('pool close drains an admitted observation write and fences later chooser u
   t.false(closed);
   release();
   await closing;
-  pool.forSession('late-request', 'auto').served('work');
+  defined(pool).forSession('late-request', 'auto').served('work');
   await null;
   t.is(writes, 1);
 });
@@ -549,7 +557,10 @@ test('wrapped follower read errors do not poison acknowledged resource closure',
 
 test('removed member drains renewal and fences retained account and reset facets', async t => {
   let members = [{ id: 'work', accountRef: 'acct_work' }];
-  let release;
+  /** @type {(value?: any) => void} */
+  let release = () => {
+    throw Error('Test gate is not initialized');
+  };
   let entered;
   const began = new Promise(resolve => {
     entered = resolve;
@@ -707,7 +718,10 @@ test('discovery constructor failure does not discard the credential owner or lea
 test('a removed account cannot publish its pending catalog as current', async t => {
   t.timeout(5000);
   let stored = { members: [{ id: 'work' }] };
-  let finish;
+  /** @type {(value?: any) => void} */
+  let finish = () => {
+    throw Error('Test gate is not initialized');
+  };
   let started;
   const began = new Promise(resolve => {
     started = resolve;
@@ -751,7 +765,10 @@ test('a removed account cannot publish its pending catalog as current', async t 
 test('catalog batch rechecks a fast account after a slower account finishes', async t => {
   t.timeout(5000);
   let stored = { members: [{ id: 'fast' }, { id: 'slow' }] };
-  let finishSlow;
+  /** @type {(value: any) => void} */
+  let finishSlow = () => {
+    throw Error('Missing model read gate');
+  };
   let markFast;
   const fastDone = new Promise(resolve => {
     markFast = resolve;
@@ -778,7 +795,7 @@ test('catalog batch rechecks a fast account after a slower account finishes', as
   await new Promise(resolve => setTimeout(resolve, 0));
   stored = { members: [{ id: 'slow' }] };
   await E(kit.service).subscriptions();
-  finishSlow(snapshot);
+  defined(finishSlow)(snapshot);
   const result = await reading;
   t.deepEqual(
     result.accounts.map(account => [account.subscriptionId, account.state]),
@@ -1014,19 +1031,24 @@ test('chooser observations require an established matching capability binding an
     refusals: { work: { untilMs: 123, strikes: 1 } },
     sessions: { s: { memberId: 'work', atMs: 1 } },
   };
-  const names = new Map([
-    ['subscriptions', harden({ members: [{ id: 'work', secretName: 'key' }] })],
-    ['key', authority],
-    ['pool-state-v1-00000000000000000000', observations],
-    [
-      'pool-state-v2-00000000000000000000',
-      harden({
-        version: 2,
-        bindings: [{ id: 'work', authority }],
-        state: observations,
-      }),
-    ],
-  ]);
+  const names = new Map(
+    /** @type {Array<[string, any]>} */ ([
+      [
+        'subscriptions',
+        harden({ members: [{ id: 'work', secretName: 'key' }] }),
+      ],
+      ['key', authority],
+      ['pool-state-v1-00000000000000000000', observations],
+      [
+        'pool-state-v2-00000000000000000000',
+        harden({
+          version: 2,
+          bindings: [{ id: 'work', authority }],
+          state: observations,
+        }),
+      ],
+    ]),
+  );
   const namespace = Far('ChooserNamespace', {
     list: async () => harden([...names.keys()]),
     has: async name => names.has(name),
@@ -1038,32 +1060,51 @@ test('chooser observations require an established matching capability binding an
       names.delete(name);
     },
   });
+  /** @type {any} */
   let options;
   const make = makeOwnedProviderBrokerService({
     label: 'Chooser',
-    readConfig: () => ({ ownerId: 'chooser-bound-state', pool: true }),
+    readConfig: () => ({
+      ownerId: 'chooser-bound-state',
+      pool: true,
+      directory: '/tmp/chooser-bound-state',
+      imageRef: 'localhost/fixture',
+      imageDigest: `sha256:${'a'.repeat(64)}`,
+      listenerImageRef: 'localhost/listener',
+    }),
     makePolicy: () => ({
-      policy: { origin: 'https://provider.test' },
+      policy: {
+        origin: 'https://provider.test',
+        routes: [],
+        maxConcurrentRequests: 1,
+        maxRequestBytes: 1024n,
+        maxResponseBytes: 1024n,
+      },
       accountAuthority: 'pool',
     }),
-    makeServiceKit: value => {
-      options = value;
-      return { service: Far('Inert', {}), close: async () => {} };
-    },
+    makeServiceKit: /** @type {any} */ (
+      value => {
+        options = value;
+        return { service: Far('Inert', {}), close: async () => {} };
+      }
+    ),
   });
-  let cancel;
+  /** @type {(value?: any) => void} */
+  let cancel = () => {
+    throw Error('Test gate is not initialized');
+  };
   let cancelled = new Promise(resolve => {
     cancel = resolve;
   });
   const context = Far('ChooserContext', { whenCancelled: () => cancelled });
   await make(namespace, context, { env: {} });
-  await options.subscriptions.readSet();
+  await defined(options).subscriptions.readSet();
   t.is(
-    await options.subscriptions.readState(),
+    await defined(options).subscriptions.readState(),
     undefined,
     'even v2 cannot precede authoritative identity',
   );
-  await options.subscriptions.writeState(observations);
+  await defined(options).subscriptions.writeState(observations);
   cancel();
   await new Promise(resolve => setTimeout(resolve, 0));
   cancelled = new Promise(resolve => {
@@ -1071,8 +1112,8 @@ test('chooser observations require an established matching capability binding an
   });
   t.teardown(() => cancel());
   await make(namespace, context, { env: {} });
-  await options.subscriptions.readSet();
-  t.deepEqual(await options.subscriptions.readState(), observations);
+  await defined(options).subscriptions.readSet();
+  t.deepEqual(await defined(options).subscriptions.readState(), observations);
   // A syntactically current observation for a different authority is not useful.
   for (const [name, value] of names) {
     if (name.startsWith('pool-state-v2-'))
@@ -1081,14 +1122,14 @@ test('chooser observations require an established matching capability binding an
         harden({ ...value, bindings: [{ id: 'work', authority: other }] }),
       );
   }
-  t.deepEqual(await options.subscriptions.readState(), {
+  t.deepEqual(await defined(options).subscriptions.readState(), {
     refusals: {},
     sessions: {},
   });
   for (const name of names.keys())
     if (name.startsWith('pool-state-v2-')) names.delete(name);
   t.is(
-    await options.subscriptions.readState(),
+    await defined(options).subscriptions.readState(),
     undefined,
     'v1 is never a fallback',
   );
@@ -1145,7 +1186,7 @@ test('failed authoritative identity write prevents owned-pool credential constru
   void cancelled.catch(() => {});
   t.teardown(() => cancel());
   const service = await make(
-    namespace,
+    /** @type {any} */ (namespace),
     Far('IdentityContext', { whenCancelled: () => cancelled }),
     { env: {} },
   );
@@ -1343,7 +1384,7 @@ test('a pool member that is somebody else’s share is served through its endpoi
   });
   // Her share charged its meter from the same settlement.
   await new Promise(resolve => setTimeout(resolve, 5));
-  t.is((await E(share).getStatus()).budget.spent, 42);
+  t.is(defined((await E(share).getStatus()).budget).spent, 42);
   // What the share says of itself reached our account source for it, as a
   // window: the pool ranks it and a view shows it like the rest.
   const friend = await E(kit.service).accountSource('friend');
@@ -1683,6 +1724,7 @@ test('a request goes to the subscription whose account lists its model, and a re
 test('a retired member’s catalog admits nothing, even to a grant that still holds it', async t => {
   /** @type {any} */
   let storedSet = { members: [{ id: 'work' }, { id: 'home' }] };
+  /** @type {any} */
   /** @type {any} */
   let pool;
   const kit = pooledKit(

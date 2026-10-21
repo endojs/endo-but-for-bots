@@ -8,10 +8,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 // This integration fixture must not make the daemon depend on hosted-agent.
-// eslint-disable-next-line import/no-relative-packages
 import {
   makeAccountId,
   publishAccountBindings,
+  // eslint-disable-next-line import/no-relative-packages
 } from '../../hosted-agent/src/account-bindings.js';
 import { makeEndoClient, start, stop } from '../index.js';
 

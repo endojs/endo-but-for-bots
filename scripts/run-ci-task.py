@@ -32,6 +32,11 @@ def command(task, selected, root):
     if not names:
         return None
     args = ["corepack", "yarn", "turbo", "run", task]
+    if task in {"test", "test:c8"}:
+        # Each AVA workspace already schedules workers across the runner's CPUs.
+        # Running several such pools concurrently starves process/IO fixtures
+        # until their stall deadlines expire, especially under coverage.
+        args.append("--concurrency=1")
     if task in {"test:types", "lint:types"}:
         args.append("--continue=always")
     return args + [f"--filter={name}" for name in names]

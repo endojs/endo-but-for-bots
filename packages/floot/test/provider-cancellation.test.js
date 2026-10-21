@@ -149,7 +149,7 @@ for (const cleanupFails of [false, true]) {
           },
         }),
       execute: async () => {
-        toolEntered.resolve();
+        toolEntered.resolve(undefined);
         await toolReleased.promise;
         return 'stopped';
       },
@@ -183,16 +183,16 @@ for (const cleanupFails of [false, true]) {
         journalPowers: powers,
         extraTools: new Map([['effect', tool]]),
         stopEnvironment: async () => {
-          stopEntered.resolve();
-          toolReleased.resolve();
+          stopEntered.resolve(undefined);
+          toolReleased.resolve(undefined);
           await stopReleased.promise;
           if (cleanupFails) throw Error('Stop acknowledgement refused');
         },
       },
     );
     t.teardown(async () => {
-      stopReleased.resolve();
-      toolReleased.resolve();
+      stopReleased.resolve(undefined);
+      toolReleased.resolve(undefined);
       await agent.shutdown(true);
     });
     const abort = new AbortController();
@@ -207,7 +207,7 @@ for (const cleanupFails of [false, true]) {
     await stopEntered.promise;
     await setImmediate();
     t.false(finished);
-    stopReleased.resolve();
+    stopReleased.resolve(undefined);
     await running.catch(() => {});
     t.is(requests, 1);
     t.is(

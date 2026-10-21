@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { makeProviderBrokerGrant } from '../src/provider-broker.js';
 import { admitsModels } from './admits-models.js';
@@ -88,7 +89,7 @@ test('a stream the upstream reset mid-way is cut short, whatever it had said of 
   const usage = await run(t, 'reset');
   t.like(usage, { began: true, complete: false });
   // What it had said is kept, for a meter to set against its reservation.
-  t.is(usage.usage.inputTokens, 25);
+  t.is(defined(usage.usage).inputTokens, 25);
 });
 
 test('a stream cut by the deadline is cut short', async t => {
@@ -98,5 +99,5 @@ test('a stream cut by the deadline is cut short', async t => {
 test('a stream read to its end is complete, with all it said', async t => {
   const usage = await run(t, 'end');
   t.like(usage, { began: true, complete: true });
-  t.is(usage.usage.outputTokens, 90);
+  t.is(defined(usage.usage).outputTokens, 90);
 });

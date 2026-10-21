@@ -369,6 +369,7 @@ export const projectCompactionCheckpoint = (
     summary.info.error
   )
     refuse();
+  /** @type {import('@endo/hosted-agent/transcript-records.js').TranscriptContextRecord[]} */
   const retainedTail = [];
   const calls = new Set();
   const appendMessage = (role, content) => {

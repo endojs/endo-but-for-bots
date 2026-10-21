@@ -2300,13 +2300,13 @@ test.serial('a busy turn holds exactly one screen lock', async t => {
 
 test.serial('unmounting releases the screen lock', async t => {
   const lock = stubWakeLock(t);
-  const { turns, send, remount } = await setup(t);
+  const { turns, send, unmount } = await setup(t);
   await send('still running when we leave');
   await waitFor(() => turns.length === 1);
   await waitFor(() => lock.held.length === 1);
-  // `remount` disposes the old component; the turn keeps running in the
-  // background, but this view has no business holding the screen for it.
-  remount();
+  // Dispose the view while its daemon-owned turn continues in the background.
+  // A remount would correctly reacquire a lock for that still-busy session.
+  unmount();
   await waitFor(() => lock.held.length === 0);
   t.pass();
 });

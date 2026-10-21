@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { runHostedTurn } from '../src/hosted-turn.js';
 import { projectJournalTurnHistory } from '../src/journal-history.js';
@@ -39,6 +40,7 @@ for (const failed of [true, false, undefined]) {
     const status = {
       phase: '',
       streamingText: '',
+      /** @type {any[]} */
       messages: [],
       error: null,
       usage: null,
@@ -88,7 +90,7 @@ for (const failed of [true, false, undefined]) {
     );
     t.is(records.find(record => record.kind === 'tool-result').failed, failed);
     t.is(status.messages[0].failed, failed);
-    const adopted = { ...status, messages: [] };
+    const adopted = { ...status, messages: /** @type {any[]} */ ([]) };
     fold.adopt(adopted, status);
     t.is(adopted.messages[0].failed, failed);
   });
@@ -265,7 +267,7 @@ test('late host rejection settles unknown outcome without making the cancelled t
   const records = await recoverTurnTranscript(turn, ref =>
     revived.readContent(ref),
   );
-  t.true(records.find(record => record.kind === 'tool-result').failed);
+  t.true(defined(records.find(record => record.kind === 'tool-result')).failed);
 });
 
 test('failure enrichment keeps its journal position across compaction and cannot certify a native cut', async t => {
@@ -324,7 +326,7 @@ test('failure enrichment keeps its journal position across compaction and cannot
     ref => f.journal.readContent(ref),
     { evidenceAfter: turn.transcript[2].sequence },
   );
-  t.true(late.find(record => record.kind === 'tool-result').failed);
+  t.true(defined(late.find(record => record.kind === 'tool-result')).failed);
   const native = {
     ...turn,
     nativeContextFormat: 'test-native',

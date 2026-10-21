@@ -146,6 +146,7 @@ test('portable development tools validate named argv and retain nonzero exit as 
   const tools = makeDevelopmentTools(f.shell);
   t.deepEqual([...tools.keys()], ['runCommand', 'inspectShell']);
   const run = tools.get('runCommand');
+  if (!run) throw Error('Missing runCommand tool');
   t.is(run.schema().function.name, 'runCommand');
   t.is(
     JSON.parse(

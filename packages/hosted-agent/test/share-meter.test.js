@@ -8,9 +8,9 @@ const ANCHOR = Date.parse('2026-09-20T00:00:00Z');
 
 /**
  * @param {object} [options]
- * @param options.tokens
- * @param options.periodSeconds
- * @param options.initial
+ * @param {number} [options.tokens]
+ * @param {number} [options.periodSeconds]
+ * @param {any} [options.initial]
  */
 const makeHarness = ({ tokens = 1000, periodSeconds = 3600, initial } = {}) => {
   /** @type {any[]} */
@@ -18,6 +18,7 @@ const makeHarness = ({ tokens = 1000, periodSeconds = 3600, initial } = {}) => {
   const state = {
     now: ANCHOR + 1000,
     failing: false,
+    /** @type {{ tokens: number, periodSeconds: number } | undefined} */
     budget: { tokens, periodSeconds },
   };
   const meter = makeShareMeter({

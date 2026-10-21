@@ -9,6 +9,21 @@ import { setImmediate } from 'node:timers';
 import { make } from '../agent.js';
 import { makePromiseKit } from './_promise-kit.js';
 
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {object} [options]
+ * @param {string} [options.catalogState]
+ * @param {Promise<unknown>} [options.endpointGate]
+ * @param {boolean} [options.forceCompaction]
+ * @param {boolean} [options.development]
+ * @param {number} [options.contextLength]
+ * @param {(request: any, ordinal: number) => any[] | undefined} [options.responseOutput]
+ * @param {(request: any) => any} [options.responseUsage]
+ * @param {string} [options.shellOutput]
+ * @param {boolean} [options.refuseCheckpoint]
+ * @param {() => any} [options.executeShell]
+ * @param {() => any} [options.onNativeStop]
+ */
 const world = (
   t,
   {
@@ -107,10 +122,14 @@ const world = (
       throw Error('must not create CLI');
     },
   });
-  const store = new Map([
-    ['codex-inference', subscription],
-    ['codex-backend', backend],
-  ]);
+  /** @type {Map<string, any>} */
+  const store = new Map(
+    /** @type {Array<[string, any]>} */ ([
+      ['codex-inference', subscription],
+      ['codex-backend', backend],
+    ]),
+  );
+  /** @type {Map<string, Map<string, any>>} */
   const guests = new Map();
   let environments = 0;
   if (development) store.set('environment-runner', Far('Runner'));
@@ -134,7 +153,7 @@ const world = (
     },
     copy: ([from], [guestName, name]) => {
       if (guests.has(guestName))
-        guests.get(guestName).set(name, store.get(from));
+        guests.get(guestName)?.set(name, store.get(from));
     },
     provideEnvironment: (_runner, _mount, adminName, shellName) => {
       environments += 1;
@@ -176,6 +195,7 @@ const world = (
     provideGuest: (_name, { agentName }) => {
       guestCreates += 1;
       if (store.has(agentName)) return;
+      /** @type {Map<string, any>} */
       const values = new Map([['user', harden({})]]);
       guests.set(agentName, values);
       if (development)
@@ -682,6 +702,7 @@ test('invalid retained inference recipe is refused before guest acquisition', as
     .filter(name => name.startsWith('floot-sessions-v1-'))
     .sort()
     .at(-1);
+  if (key === undefined) throw Error('Missing retained session registry');
   const snapshot = subject.store.get(key);
   subject.store.set(
     key,
@@ -733,6 +754,7 @@ test('creating cleanup retains the captured inference recipe', async t => {
     .filter(name => name.startsWith('floot-sessions-v1-'))
     .sort()
     .at(-1);
+  if (key === undefined) throw Error('Missing retained session registry');
   const snapshot = subject.store.get(key);
   subject.store.set(
     key,

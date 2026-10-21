@@ -97,7 +97,7 @@ const fixture = (t, { realClient = false } = {}) => {
   const faults = {
     catalogState: 'unavailable',
     catalogContext: 65_536,
-    catalogOutput: undefined,
+    catalogOutput: /** @type {number | null | undefined} */ (undefined),
     catalogFail: false,
     catalogMissing: false,
     catalogWait: false,

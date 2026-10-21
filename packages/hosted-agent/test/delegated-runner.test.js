@@ -68,7 +68,7 @@ const makeBeneath = () => {
       if (state.failCreate) throw Error(state.failCreate);
       return harden({
         run: Far('run', {
-          send: async (prompt, options) => {
+          send: async (prompt, options = /** @type {any} */ (undefined)) => {
             calls.push({ verb: 'send', id: spec.sessionId, prompt, options });
             if (state.stopped.has(spec.sessionId)) throw Error('stopped');
             return 'a turn';
@@ -96,13 +96,6 @@ const makeBeneath = () => {
 const tools = Far('HostedToolSet', {});
 
 /**
- * @param {object} [options]
- * @param options.runnerId
- * @param options.limits
- * @param options.store
- * @param options.beneath
- */
-/**
  * A provider-native descriptor as a broker's reader answers it.
  * @param {string} id
  */
@@ -116,6 +109,15 @@ const descriptor = id =>
     reasoningEfforts: [],
   });
 
+/**
+ * @param {object} [options]
+ * @param {string} [options.runnerId]
+ * @param {Record<string, any>} [options.limits]
+ * @param {ReturnType<typeof makeStore>} [options.store]
+ * @param {ReturnType<typeof makeBeneath>} [options.beneath]
+ * @param {number} [options.beneathDeadlineMs]
+ * @param {number} [options.stopDeadlineMs]
+ */
 const makeHarness = ({
   runnerId = 'alice',
   limits = {},
@@ -234,7 +236,7 @@ test('a session is the runner’s own, pinned to its subscription, with no netwo
   });
   t.is(beneath.calls[0].toolSet, tools, 'the holder’s own tools');
   // What a holder may not name, or may not make huge or strange.
-  for (const [extra, message] of [
+  for (const [extra, message] of /** @type {Array<[any, any]>} */ ([
     [{ workspaceHostPath: '/home/operator' }, /does not take that/],
     [{ containerMounts: [{ hostPath: '/etc' }] }, /does not take that/],
     [{ accountRef: 'x' }, /does not take that/],
@@ -249,7 +251,7 @@ test('a session is the runner’s own, pinned to its subscription, with no netwo
     [{ reasoningEffort: 'x'.repeat(200) }, /Invalid session reasoning effort/],
     [{ systemPrompt: 'x'.repeat(300_000) }, /Invalid session system prompt/],
     [{ systemPrompt: 7 }, /Invalid session system prompt/],
-  ]) {
+  ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       () => E(factory).create(harden({ sessionId: 's2', ...extra }), tools),
@@ -273,9 +275,12 @@ test('the descriptor is the runner’s own: its id, no pinning, its policies, an
 
 test('a delegated runner never exposes operator binding identities', async t => {
   const { factory, beneath } = makeHarness();
-  await t.throwsAsync(E(factory).inspectBindings({ sessionId: 's1' }), {
-    message: /do not expose operator bindings/,
-  });
+  await t.throwsAsync(
+    E(/** @type {any} */ (factory)).inspectBindings({ sessionId: 's1' }),
+    {
+      message: /do not expose operator bindings/,
+    },
+  );
   t.is(beneath.calls.length, 0);
 });
 
@@ -546,7 +551,7 @@ test('creation keeps admission and inference refusal order', async t => {
     limits: { models: ['small'] },
   });
   t.teardown(close);
-  for (const [extra, message] of [
+  for (const [extra, message] of /** @type {Array<[any, any]>} */ ([
     [
       { workspaceHostPath: '/', networkPolicy: 7, model: 7 },
       'A delegated runner does not take that in a session',
@@ -578,7 +583,7 @@ test('creation keeps admission and inference refusal order', async t => {
       'Invalid session reasoning effort',
     ],
     [{ model: 'small', systemPrompt: 7 }, 'Invalid session system prompt'],
-  ]) {
+  ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       () => E(factory).create(harden({ sessionId: 's', ...extra }), tools),
@@ -773,12 +778,12 @@ test('a revived runner stops its sessions at expiry without anybody calling it',
 test('a turn’s options are checked like a session’s spec', async t => {
   const { factory, beneath } = makeHarness();
   const session = await E(factory).create(harden({ sessionId: 's' }), tools);
-  for (const [options, message] of [
+  for (const [options, message] of /** @type {Array<[any, any]>} */ ([
     [{ developerInstructions: 'x' }, /does not take that in a turn/],
     [{ systemPrompt: 'x'.repeat(300_000) }, /Invalid session system prompt/],
     [{ reasoningEffort: 'x'.repeat(100) }, /Invalid session reasoning effort/],
     [{ model: 'not a model' }, /Invalid session model/],
-  ]) {
+  ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(session.run).send('hi', harden(options)), {
       message,
@@ -809,7 +814,7 @@ test('turns keep their narrower options and may retain the current model', async
     harden({ sessionId: 's', model: 'small' }),
     tools,
   );
-  for (const [options, message] of [
+  for (const [options, message] of /** @type {Array<[any, any]>} */ ([
     [
       { networkPolicy: 'public-internet', model: 7 },
       'A delegated runner does not take that in a turn',
@@ -833,7 +838,7 @@ test('turns keep their narrower options and may retain the current model', async
       'Invalid session reasoning effort',
     ],
     [{ model: '', systemPrompt: 7 }, 'Invalid session system prompt'],
-  ]) {
+  ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(session.run).send('hi', harden(options)), {
       message,

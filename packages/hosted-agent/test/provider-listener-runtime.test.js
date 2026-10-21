@@ -28,7 +28,11 @@ const limits = harden({
   timeoutMs: 1000,
 });
 
-/** @param {any} t */
+/**
+ * @param {any} t
+ * @param publicNetwork
+ * @param checkNetworkLimits
+ */
 const fixture = async (
   t,
   publicNetwork = false,
@@ -192,7 +196,7 @@ test.serial(
       },
       { network: { endpoint: Far('egress', {}) }, limits },
     ]) {
-      t.throws(() => runtime.startKit(configuration), {
+      t.throws(() => runtime.startKit(/** @type {any} */ (configuration)), {
         message: /configuration|egress authority|Must|properties/,
       });
     }

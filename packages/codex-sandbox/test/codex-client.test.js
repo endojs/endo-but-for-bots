@@ -3509,6 +3509,7 @@ test('a turn the app-server never announces cannot be interrupted, so the sessio
 for (const phase of ['thread/start', 'thread/inject_items']) {
   test(`interrupt during ${phase} is a terminating admission barrier`, async t => {
     const queue = makeQueue();
+    const preparationEntered = Promise.withResolvers();
     /** @type {any[]} */
     const sent = [];
     let closed = false;
@@ -3520,6 +3521,7 @@ for (const phase of ['thread/start', 'thread/inject_items']) {
         messages: queue.messages,
         send: async (/** @type {any} */ message) => {
           sent.push(message);
+          if (message.method === phase) preparationEntered.resolve(undefined);
           if (message.method === 'initialize') {
             queue.push({ id: message.id, result: INITIALIZE_RESULT });
           } else if (message.method === 'account/read') {
@@ -3549,11 +3551,7 @@ for (const phase of ['thread/start', 'thread/inject_items']) {
           transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
         });
         sendP.catch(() => undefined);
-        for (let tries = 0; tries < 100; tries += 1) {
-          if (sent.some(message => message.method === phase)) break;
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise(resolve => setImmediate(resolve));
-        }
+        await preparationEntered.promise;
         t.true(
           sent.some(message => message.method === phase),
           'the actual native preparation request is held',

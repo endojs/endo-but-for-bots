@@ -4,6 +4,7 @@ import { Far } from '@endo/far';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { defined } from '../../../scripts/test/defined.js';
 import { main } from '../setup-environments.js';
 
 test('environment setup persists null powers and bounded operator env, retains formula on rerun', async t => {
@@ -13,6 +14,7 @@ test('environment setup persists null powers and bounded operator env, retains f
   await mkdir(runtime, { mode: 0o700 });
   const store = new Map();
   const mints = [];
+  /** @type {{ specifier: string, options: any } | undefined} */
   let stored;
   const key = names => names.flat().join('/');
   const host = Far('Host', {
@@ -25,11 +27,11 @@ test('environment setup persists null powers and bounded operator env, retains f
           harden({
             type: 'make-unconfined',
             properties: {
-              specifier: { kind: 'literal', value: stored.specifier },
+              specifier: { kind: 'literal', value: defined(stored).specifier },
             },
           }),
       }),
-    getFormulaEnvironment: () => stored.options.env,
+    getFormulaEnvironment: () => defined(stored).options.env,
     makeDirectory: names => {
       store.set(key(names), Far('Directory'));
     },
@@ -74,14 +76,20 @@ test('environment setup persists null powers and bounded operator env, retains f
   );
   t.is(mints.length, 1);
   t.false(store.has('environment.null-powers'));
-  t.false('ANTHROPIC_API_KEY' in stored.options.env);
-  t.false('CODEX_TOKEN' in stored.options.env);
-  t.false('HTTP_PROXY' in stored.options.env);
-  t.is(stored.options.env.ENDO_NINEP_SUDO, '1');
-  t.is(stored.options.env.ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS, '2048');
-  t.is(stored.options.env.ENDO_PUBLIC_EGRESS_MAX_BYTES, '10995116277760');
-  t.is(stored.options.env.ENDO_PUBLIC_EGRESS_TIMEOUT_MS, '172800000');
-  t.is(stored.options.env.ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES, '2147483648');
+  t.false('ANTHROPIC_API_KEY' in defined(stored).options.env);
+  t.false('CODEX_TOKEN' in defined(stored).options.env);
+  t.false('HTTP_PROXY' in defined(stored).options.env);
+  t.is(defined(stored).options.env.ENDO_NINEP_SUDO, '1');
+  t.is(defined(stored).options.env.ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS, '2048');
+  t.is(
+    defined(stored).options.env.ENDO_PUBLIC_EGRESS_MAX_BYTES,
+    '10995116277760',
+  );
+  t.is(defined(stored).options.env.ENDO_PUBLIC_EGRESS_TIMEOUT_MS, '172800000');
+  t.is(
+    defined(stored).options.env.ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES,
+    '2147483648',
+  );
   await t.throwsAsync(
     main(host, { ...env, ENDO_PUBLIC_EGRESS_MAX_CONNECTIONS: '4096' }),
     { message: /configuration changed/ },
@@ -90,7 +98,9 @@ test('environment setup persists null powers and bounded operator env, retains f
     main(host, { ...env, ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES: '0' }),
     { message: /Invalid workload limit/ },
   );
-  t.true(String(stored.options.env.ENDO_SANDBOX_OWNER_ID).length <= 56);
+  t.true(
+    String(defined(stored).options.env.ENDO_SANDBOX_OWNER_ID).length <= 56,
+  );
   await t.throwsAsync(
     main(host, {
       ...env,
@@ -100,7 +110,7 @@ test('environment setup persists null powers and bounded operator env, retains f
   );
   store.delete('environments/runner');
   await writeFile(
-    join(runtime, `${stored.options.env.ENDO_SANDBOX_OWNER_ID}.owner`),
+    join(runtime, `${defined(stored).options.env.ENDO_SANDBOX_OWNER_ID}.owner`),
     'stale',
   );
   await t.throwsAsync(main(host, env), { message: /still holds/ });

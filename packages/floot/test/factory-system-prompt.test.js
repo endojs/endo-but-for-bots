@@ -119,9 +119,9 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
     destroy: () => undefined,
     stop: () => undefined,
   });
-  /** @type {Map<string, unknown>} */
+  /** @type {Map<string, any>} */
   const hostStore = new Map(
-    /** @type {[string, unknown][]} */ ([
+    /** @type {[string, any][]} */ ([
       ['codex-backend', backend],
       [AUTH_SECRET_PETNAME, authSecret('test-key')],
     ]),
@@ -153,7 +153,10 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
       },
     });
   let factory = make(host, context(), { fetch });
-  /** The prompt the backend was given for a session, once a turn has run. */
+  /**
+   * The prompt the backend was given for a session, once a turn has run.
+   * @param session
+   */
   const promptOf = async session => {
     const { id } = await E(session).getInfo();
     const turn = await E(session).startTurn('hello');
@@ -513,7 +516,10 @@ test('a session keeps the prompt it started with when the backend changes its st
   t.true((await world.promptOf(later)).includes('other_exec'));
 });
 
-/** The newest registry snapshot the factory stored. */
+/**
+ * The newest registry snapshot the factory stored.
+ * @param hostStore
+ */
 const registryOf = hostStore => {
   const names = [...hostStore.keys()]
     .filter(name => name.startsWith('floot-sessions-v1-'))

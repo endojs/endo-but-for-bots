@@ -10,7 +10,8 @@ import { E } from '@endo/eventual-send';
  * (and name it in `FLOOT_BACKEND_FACTORIES`), and it revives with the daemon,
  * with no path to the kit, its revocation, or the backend beneath.
  *
- * @param {import('@endo/eventual-send').ERef<{ runner(): unknown }>} kit
+ * @template T
+ * @param {import('@endo/eventual-send').ERef<{ runner(): T }>} kit
  */
 export const make = kit => E(kit).runner();
 harden(make);

@@ -120,7 +120,7 @@ export const assertBridgeEvent = candidate => {
     Fail`opencode bridge event must be a record`;
   BRIDGE_EVENT_TYPES.includes(candidate.type) ||
     Fail`unknown opencode bridge event type ${q(candidate.type)}`;
-  const { type } = candidate;
+  const type = /** @type {string} */ (candidate.type);
   if (type === 'compaction') {
     const record = assertTranscriptRecord({
       kind: 'compaction',
@@ -129,7 +129,7 @@ export const assertBridgeEvent = candidate => {
     });
     if (record.kind !== 'compaction') throw Fail`expected compaction record`;
     return harden({
-      type,
+      type: /** @type {const} */ ('compaction'),
       summary: record.summary,
       retainedTail: record.retainedTail,
     });
@@ -158,7 +158,8 @@ export const assertBridgeEvent = candidate => {
     // names only: this decides which commands the client will send, so it is
     // read as a fixed vocabulary, never echoed anywhere.
     const rawFeatures = candidate.features;
-    if (rawFeatures === undefined) return harden({ type, sessionId, port });
+    if (rawFeatures === undefined)
+      return harden({ type: /** @type {const} */ ('ready'), sessionId, port });
     (Array.isArray(rawFeatures) &&
       rawFeatures.length <= 32 &&
       rawFeatures.every(
@@ -166,7 +167,7 @@ export const assertBridgeEvent = candidate => {
       )) ||
       Fail`ready event features must be bounded lowercase names`;
     return harden({
-      type,
+      type: /** @type {const} */ ('ready'),
       sessionId,
       port,
       features: harden([...rawFeatures]),
@@ -179,7 +180,7 @@ export const assertBridgeEvent = candidate => {
     // the next prompt instead.
     typeof candidate.ok === 'boolean' || Fail`imported event needs an outcome`;
     return harden({
-      type,
+      type: /** @type {const} */ ('imported'),
       ok: candidate.ok,
       ...(candidate.reason === undefined
         ? {}
@@ -190,7 +191,7 @@ export const assertBridgeEvent = candidate => {
     ['busy', 'idle', 'error'].includes(candidate.phase) ||
       Fail`invalid phase ${q(candidate.phase)}`;
     return harden({
-      type,
+      type: /** @type {const} */ ('phase'),
       phase: candidate.phase,
       ...(candidate.error === undefined ? {} : { error: `${candidate.error}` }),
     });
@@ -201,7 +202,12 @@ export const assertBridgeEvent = candidate => {
     type === 'thinking-delta'
   ) {
     typeof candidate.text === 'string' || Fail`${q(type)} needs text`;
-    return harden({ type, text: candidate.text });
+    return harden({
+      type: /** @type {'text-delta' | 'commentary-delta' | 'thinking-delta'} */ (
+        type
+      ),
+      text: candidate.text,
+    });
   }
   if (type === 'tool-call') {
     typeof candidate.id === 'string' && candidate.id !== ''
@@ -211,7 +217,7 @@ export const assertBridgeEvent = candidate => {
       ? undefined
       : Fail`tool-call needs a name`;
     return harden({
-      type,
+      type: /** @type {const} */ ('tool-call'),
       id: candidate.id,
       name: candidate.name,
       ...(candidate.args === undefined ? {} : { args: candidate.args }),
@@ -223,7 +229,7 @@ export const assertBridgeEvent = candidate => {
       : Fail`tool-result needs an id`;
     typeof candidate.ok === 'boolean' || Fail`tool-result needs ok`;
     return harden({
-      type,
+      type: /** @type {const} */ ('tool-result'),
       id: candidate.id,
       ok: candidate.ok,
       ...(candidate.name === undefined ? {} : { name: `${candidate.name}` }),
@@ -251,11 +257,14 @@ export const assertBridgeEvent = candidate => {
     // An image built before the bridge learned the other three counts and the
     // context reading sends these two alone; `projectUsage` reads the rest as
     // absent rather than refusing the line.
-    return harden({ type, ...projectUsage(candidate) });
+    return harden({
+      type: /** @type {const} */ ('usage'),
+      ...projectUsage(candidate),
+    });
   }
   if (type === 'end') {
     return harden({
-      type,
+      type: /** @type {const} */ ('end'),
       ...(candidate.checkpoint === undefined
         ? {}
         : { checkpoint: `${candidate.checkpoint}` }),
@@ -263,7 +272,7 @@ export const assertBridgeEvent = candidate => {
   }
   // abort
   return harden({
-    type,
+    type: /** @type {const} */ ('abort'),
     reason: candidate.reason === undefined ? 'aborted' : `${candidate.reason}`,
   });
 };

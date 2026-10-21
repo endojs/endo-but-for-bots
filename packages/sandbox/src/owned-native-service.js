@@ -60,7 +60,7 @@ export const makeOwnedNativeService = ({
 
   /**
    * @param {ERef<Input>} inputP
-   * @param {ERef<{whenCancelled(): Promise<never>}>} context
+   * @param {ERef<{whenCancelled(): Promise<unknown>}>} context
    * @param {{env?: Record<string, string>}} [options]
    */
   const make = async (inputP, context, { env = {} } = {}) => {

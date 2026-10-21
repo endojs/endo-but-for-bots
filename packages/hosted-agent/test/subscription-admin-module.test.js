@@ -3,6 +3,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { makeAccountReadingSource } from '../src/account-source.js';
 import { makeResetRedeemer } from '../src/reset-redeemer.js';
@@ -91,7 +92,10 @@ test('the intent lives in the admin’s own namespace and outlives the admin and
     }),
   );
   const revived = await make(space.powers);
-  t.is((await E(revived).getResetState()).pending.creditId, 'credit-1');
+  t.is(
+    defined((await E(revived).getResetState()).pending).creditId,
+    'credit-1',
+  );
   t.deepEqual(second, [], 'revival asks the provider nothing');
   const result = await E(revived).consumeResetCredit({ replay: true });
   t.deepEqual(result, {

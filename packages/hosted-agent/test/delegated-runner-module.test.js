@@ -71,7 +71,7 @@ test('the runner’s sessions and its revocation live in its own namespace, acro
   const runner = await makeFacet(kit);
   // What is handed out is a backend factory and nothing of the kit.
   // eslint-disable-next-line no-underscore-dangle
-  const methods = await E(runner).__getMethodNames__();
+  const methods = await E(/** @type {any} */ (runner)).__getMethodNames__();
   t.false(methods.includes('revoke'));
   t.false(methods.includes('runner'));
   await E(runner).create(harden({ sessionId: 's1' }), tools);

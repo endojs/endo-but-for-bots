@@ -12,6 +12,7 @@ const initial = harden({
 });
 
 const fixture = () => {
+  /** @type {typeof initial & { pendingRefresh?: any }} */
   let state = initial;
   let generation = 0n;
   let exchanges = 0;
@@ -26,6 +27,10 @@ const fixture = () => {
     async readBase64WithGeneration() {
       return harden({ base64: btoa(JSON.stringify(state)), generation });
     },
+    /**
+     * @param {string} base64
+     * @param {{ ifGeneration?: bigint }} [options]
+     */
     async replaceBase64(base64, { ifGeneration } = {}) {
       const next = JSON.parse(atob(base64));
       beforeWrite?.(next);

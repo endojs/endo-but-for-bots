@@ -370,7 +370,10 @@ test.serial(
       publication.accounts[0].accountId,
       makeAccountId({ providerId: 'codex', accountAuthority: 'codex-main' }),
     );
-    t.deepEqual(publication.accounts[0].uses, [{ backendId: 'codex' }]);
+    t.deepEqual(publication.accounts[0].uses, [
+      { backendId: 'codex' },
+      { backendId: 'fae-codex' },
+    ]);
     const credential = fake.mints.find(
       mint => mint.specifier === renewableCredentialsSpecifier,
     );
@@ -819,7 +822,10 @@ test.serial(
             subscriptionId: id,
           }),
         );
-        t.deepEqual(entry.uses, [{ backendId: 'codex', subscriptionId: id }]);
+        t.deepEqual(entry.uses, [
+          { backendId: 'codex', subscriptionId: id },
+          { backendId: 'fae-codex', subscriptionId: id },
+        ]);
         t.is(
           entry.oracle,
           await fake.host.lookup(['codex-sandbox', `account-oracle-${id}`]),

@@ -57,7 +57,9 @@ const makeHost = ({
     },
     copy: (from, to) => {
       calls.push('copy');
-      names.set(to.join('/'), names.get(from.join('/')));
+      const value = names.get(from.join('/'));
+      if (value === undefined) throw Error('Missing source binding');
+      names.set(to.join('/'), value);
     },
   });
   return { agent, names, calls };

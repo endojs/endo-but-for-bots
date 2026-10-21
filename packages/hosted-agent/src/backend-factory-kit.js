@@ -117,7 +117,7 @@ const readRebind = (value, label) => {
  * @param {() => Promise<DeclaredSubscription[]>} [powers.listSubscriptions]
  *   The provider's subscriptions a session may be pinned to; none when the
  *   broker holds one credential.
- * @param {() => Record<string, any>} powers.describe The fixed part of the
+ * @param {() => Record<string, any> & { id: string, title: string, continuity: string }} powers.describe The fixed part of the
  *   descriptor: `id`, `title`, `continuity`, `providerId` where the runtime
  *   spends one provider's credential, and `promptEnvironment`.
  * @param {(spec: Record<string, any>) => Record<string, any>} [powers.readRequest]

@@ -1,6 +1,7 @@
 // @ts-check
 import '@endo/init';
 import test from 'ava';
+import { defined } from '../../../scripts/test/defined.js';
 
 import {
   deriveTerminal,
@@ -592,10 +593,12 @@ test('a step reports every token kind and the window of the model that ran it', 
   );
   // Without a provider total the kinds are added; they are disjoint.
   t.is(
-    usageEventFromStep(
-      { input: 1, output: 2, reasoning: 3, cache: { read: 4, write: 5 } },
-      0,
-    ).context.usedTokens,
+    defined(
+      usageEventFromStep(
+        { input: 1, output: 2, reasoning: 3, cache: { read: 4, write: 5 } },
+        0,
+      ).context,
+    ).usedTokens,
     15,
   );
   t.deepEqual(contextWindowsFrom(undefined).size, 0);

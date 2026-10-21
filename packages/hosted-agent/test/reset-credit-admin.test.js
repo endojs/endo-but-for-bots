@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
+import { defined } from '../../../scripts/test/defined.js';
 
 import {
   chooseResetCredit,
@@ -156,7 +157,7 @@ test('the intent is stored before the provider is called, and cleared by its ans
   t.deepEqual(calls, [{ idempotencyKey: KEY_A, creditId: 'soon' }]);
   const state = await E(admin).getResetState();
   t.is(state.pending, null);
-  t.is(state.last.outcome, 'reset');
+  t.is(defined(state.last).outcome, 'reset');
   t.is(journal.written[journal.written.length - 1].intent, null);
   // The key is not part of what a view is told.
   t.false(JSON.stringify(state).includes(KEY_A));
@@ -184,8 +185,8 @@ test('a lost answer leaves the intent; a restart replays nothing; asking again u
   // The daemon restarts: a new admin over the same store.
   const second = makeHarness({ journal });
   const revived = await E(second.admin).getResetState();
-  t.is(revived.pending.creditId, 'soon');
-  t.is(revived.pending.attempts, 1);
+  t.is(defined(revived.pending).creditId, 'soon');
+  t.is(defined(revived.pending).attempts, 1);
   await E(second.admin).refresh();
   t.deepEqual(
     second.calls,
@@ -247,7 +248,10 @@ test('a refresh settles a pending redeem only when the credit reads redeemed', a
   const settled = await E(admin).getResetState();
   t.is(settled.pending, null);
   t.deepEqual(
-    { outcome: settled.last.outcome, creditId: settled.last.creditId },
+    {
+      outcome: defined(settled.last).outcome,
+      creditId: defined(settled.last).creditId,
+    },
     { outcome: 'redeemed', creditId: 'late' },
   );
   t.is(calls.length, 1);
@@ -260,7 +264,7 @@ test('a refusal spends nothing and clears the intent', async t => {
   t.is(result.outcome, 'refused');
   const state = await E(admin).getResetState();
   t.is(state.pending, null);
-  t.is(state.last.outcome, 'refused');
+  t.is(defined(state.last).outcome, 'refused');
 });
 
 test('with no credit left nothing is asked; with nothing known the account is read once first', async t => {
@@ -362,8 +366,8 @@ test('a later ask that is refused leaves the redeem unconfirmed', async t => {
     pending: true,
   });
   const state = await E(admin).getResetState();
-  t.is(state.pending.lastAnswer, 'refused');
-  t.is(state.pending.attempts, 2);
+  t.is(defined(state.pending).lastAnswer, 'refused');
+  t.is(defined(state.pending).attempts, 2);
   t.is(state.last, null);
   await t.throwsAsync(() => E(admin).consumeResetCredit(), {
     message: /unconfirmed/,
@@ -401,10 +405,10 @@ test('an unconfirmed redeem the provider will never settle can be given up', asy
   answers.push(() => ({ outcome: 'words of tomorrow' }));
   await t.throwsAsync(() => E(admin).consumeResetCredit());
   // No credit id, so no status can ever settle it.
-  t.is((await E(admin).getResetState()).pending.creditId, null);
+  t.is(defined((await E(admin).getResetState()).pending).creditId, null);
   const state = await E(admin).abandonResetIntent();
   t.is(state.pending, null);
-  t.is(state.last.outcome, 'abandoned');
+  t.is(defined(state.last).outcome, 'abandoned');
   t.is(journal.written[journal.written.length - 1].intent, null);
   // Giving up calls nobody; a redeem afterwards is a new one, with a new key.
   t.is(calls.length, 1);
@@ -415,7 +419,7 @@ test('an unconfirmed redeem the provider will never settle can be given up', asy
     [KEY_A, KEY_B],
   );
   // With nothing pending it is a no-op.
-  t.is((await E(admin).abandonResetIntent()).last.outcome, 'reset');
+  t.is(defined((await E(admin).abandonResetIntent()).last).outcome, 'reset');
 });
 
 test('the state is answered from memory while the provider is being asked', async t => {
@@ -435,7 +439,7 @@ test('the state is answered from memory while the provider is being asked', asyn
     await new Promise(resolve => setTimeout(resolve, 1));
   }
   const during = await E(admin).getResetState();
-  t.is(during.pending.creditId, 'soon');
+  t.is(defined(during.pending).creditId, 'soon');
   answer({ outcome: 'reset' });
   await redeeming;
   t.is((await E(admin).getResetState()).pending, null);

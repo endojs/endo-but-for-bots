@@ -53,6 +53,7 @@ const nextUtcMidnight = nowMs => {
  * @param {any} keyPayload `GET /api/v1/key`
  * @param {any} creditsPayload `GET /api/v1/credits`, or undefined
  * @param {number} nowMs
+ * @returns {{ plan?: any, rateLimits?: any }}
  */
 export const readingFromOpenRouter = (keyPayload, creditsPayload, nowMs) => {
   const key = keyPayload?.data;

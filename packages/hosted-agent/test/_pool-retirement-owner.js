@@ -7,7 +7,11 @@ import {
 
 const digest = `sha256:${'a'.repeat(64)}`;
 
-/** Real formula fixture: fake provider gates, actual capability journal. */
+/**
+ * Real formula fixture: fake provider gates, actual capability journal.
+ * @param namespace
+ * @param context
+ */
 export const make = async (namespace, context) => {
   const control = await E(namespace).lookup('pool-control');
   const construct = makeOwnedProviderBrokerService({
@@ -22,7 +26,13 @@ export const make = async (namespace, context) => {
       listenerImageRef: `localhost/fixture@${digest}`,
     }),
     makePolicy: () => ({
-      policy: { origin: 'https://provider.invalid' },
+      policy: {
+        origin: 'https://provider.invalid',
+        routes: [],
+        maxConcurrentRequests: 1,
+        maxRequestBytes: 1024n,
+        maxResponseBytes: 1024n,
+      },
       accountAuthority: 'pool',
     }),
     makeCredential: (config, secret) => {

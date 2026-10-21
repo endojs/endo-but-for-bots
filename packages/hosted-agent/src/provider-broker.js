@@ -1079,7 +1079,7 @@ export const makeProviderBrokerGrant = (
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {false} streaming
-   * @returns {Promise<{status: number, body: string}>}
+   * @returns {Promise<{status: number, body: string, usage: UsageSettlement}>}
    */
   /**
    * @overload

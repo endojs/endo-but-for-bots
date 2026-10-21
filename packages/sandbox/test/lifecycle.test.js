@@ -593,9 +593,9 @@ test('timeout escalates a soft-kill refusal and reaps', async t => {
   );
   await t.throwsAsync(() => E(proc).wait(), { message: /timed out/ });
   t.deepEqual(fixture.signals(), ['SIGTERM', 'SIGKILL']);
-  // The hard kill came after the soft kill's grace, and the reap after the
-  // drain's; neither was skipped.
-  t.deepEqual(fixture.graces(), [KILL_GRACE_MS, DRAIN_GRACE_MS]);
+  // Wait for the soft signal, independently bound the hard-kill reap proof,
+  // then drain stdio. A delivered signal alone does not prove process exit.
+  t.deepEqual(fixture.graces(), [KILL_GRACE_MS, KILL_GRACE_MS, DRAIN_GRACE_MS]);
 });
 
 test('a descendant-held pipe cannot hold wait past bounded drain', async t => {

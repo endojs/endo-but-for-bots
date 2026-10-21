@@ -25,6 +25,12 @@ const families = harden([
     value: undefined,
   },
   {
+    name: 'native bytes reader',
+    make: bytesReaderFromIterator,
+    iterate: iterateReader,
+    value: undefined,
+  },
+  {
     name: 'bytes reader',
     make: bytesReaderFromIterator,
     iterate: iterateBytesReader,
@@ -281,7 +287,8 @@ for (const family of families) {
     test(`${family.name} close observes cleanup failure with an abandoned ${consumed ? 'tail' : 'head'}`, async t => {
       t.timeout(5000);
       let refuses = true;
-      const value = family.name === 'bytes reader' ? Uint8Array.of(1) : 'chunk';
+      const value =
+        family.make === bytesReaderFromIterator ? Uint8Array.of(1) : 'chunk';
       const endpoint = /** @type {any} */ (family.make)(
         harden({
           next: async () => harden({ done: false, value }),

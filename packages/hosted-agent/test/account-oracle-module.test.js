@@ -87,6 +87,7 @@ test('an explicit refresh uses the current source and observes its active readin
   t.teardown(() => account.close());
   const oracle = await make(
     makeNamespace({ 'account-source': account.source }).powers,
+    undefined,
   );
   t.is((await E(oracle).getRateLimits()).source, 'unavailable');
   t.is(reads, 0);
@@ -96,7 +97,7 @@ test('an explicit refresh uses the current source and observes its active readin
 });
 
 test('with nothing bound the oracle says so, and does not throw', async t => {
-  const oracle = await make(makeNamespace().powers);
+  const oracle = await make(makeNamespace().powers, undefined);
   t.is((await E(oracle).getRateLimits()).source, 'unavailable');
   await E(oracle).refresh();
   const reader = iterateReader(E(oracle).watch());
@@ -116,7 +117,7 @@ test('a source that does not resolve is no source, not a failure', async t => {
     storeValue: async () => {},
     remove: async () => {},
   });
-  const oracle = await make(powers);
+  const oracle = await make(powers, undefined);
   t.is((await E(oracle).getRateLimits()).source, 'unavailable');
   await t.notThrowsAsync(() => E(oracle).refresh());
 });

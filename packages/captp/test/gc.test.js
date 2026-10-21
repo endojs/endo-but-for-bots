@@ -18,7 +18,8 @@ const isolated = async (t, makeFar) => {
   t.is(await E(far).method(), 'local');
 };
 
-test('test loopback gc', async t => {
+test.serial('test loopback gc', async t => {
+  t.timeout(10_000);
   const { makeFar, getFarStats, getNearStats } = makeLoopback(
     'dean',
     { gcImports: true },
@@ -27,7 +28,25 @@ test('test loopback gc', async t => {
   const gcAndFinalize = await makeGcAndFinalize(detectEngineGC());
 
   await isolated(t, makeFar);
-  await gcAndFinalize();
+  // Collection can release questions before their answers and imported
+  // capabilities. Wait for the complete drop exchange, with a finite bound.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await gcAndFinalize();
+    const near = getNearStats();
+    const far = getFarStats();
+    if (
+      Number(near.send.CTP_DROP) >= 3 &&
+      Number(near.recv.CTP_DROP) >= 2 &&
+      Number(far.send.CTP_DROP) >= 2 &&
+      Number(far.recv.CTP_DROP) >= 3 &&
+      near.send.CTP_DROP === far.recv.CTP_DROP &&
+      near.recv.CTP_DROP === far.send.CTP_DROP &&
+      near.gc.DROPPED === near.recv.CTP_DROP &&
+      far.gc.DROPPED === far.recv.CTP_DROP
+    )
+      break;
+  }
 
   // Check the GC stats.
   const nearStats = getNearStats();
@@ -80,10 +99,19 @@ test.serial(
       }
     };
     await consume();
-    await gcAndFinalize();
-    await gcAndFinalize();
+    // Question collection sends CTP_DROP; receiving that releases an answer
+    // promise, whose collection then releases its payload. These dependent
+    // finalization stages need not finish in exactly two engine collections.
+    let retained = records.length;
+    for (let attempt = 0; attempt < 8 && retained > 0; attempt += 1) {
+      // The helper crosses turn boundaries before collecting, so deref() in
+      // the previous check cannot keep a payload alive for the next sweep.
+      // eslint-disable-next-line no-await-in-loop
+      await gcAndFinalize();
+      retained = records.filter(ref => ref.deref() !== undefined).length;
+    }
     t.is(records.length, 64);
     t.true(Number(getFarStats().gc.DROPPED) >= 64);
-    t.true(records.every(ref => ref.deref() === undefined));
+    t.is(retained, 0, 'all dropped answers release their copy-record payloads');
   },
 );

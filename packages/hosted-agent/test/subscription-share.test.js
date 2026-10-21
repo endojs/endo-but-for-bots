@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { defined } from '../../../scripts/test/defined.js';
 
 import { makeLatestTopic } from '../src/latest-topic.js';
 import {
@@ -45,7 +46,11 @@ const makeBeneath = () => {
   const served = [];
   const statusTopic = makeLatestTopic();
   const state = {
-    status: { available: true, blockedUntil: '', remainingFraction: 0.8 },
+    status: {
+      available: true,
+      blockedUntil: '',
+      remainingFraction: /** @type {number | null} */ (0.8),
+    },
     /** @type {Array<(message: any) => any>} */
     script: [],
   };
@@ -102,9 +107,9 @@ const makeStore = () => {
 
 /**
  * @param {object} [options]
- * @param options.limits
- * @param options.store
- * @param options.beneath
+ * @param {Record<string, any>} [options.limits]
+ * @param {ReturnType<typeof makeStore>} [options.store]
+ * @param {ReturnType<typeof makeBeneath>} [options.beneath]
  */
 const makeHarness = ({
   limits = {},
@@ -113,7 +118,10 @@ const makeHarness = ({
 } = {}) => {
   const state = {
     now: T0 + 1000,
-    limits: { createdAt: new Date(T0).toISOString(), ...limits },
+    limits: /** @type {Record<string, any>} */ ({
+      createdAt: new Date(T0).toISOString(),
+      ...limits,
+    }),
   };
   const kit = makeSubscriptionShare({
     shareId: 'alice',
@@ -411,7 +419,7 @@ test('revocation is durable, cancels what is open, and survives a meter write be
   const status = await E(revived.admin).getStatus();
   t.true(status.revoked);
   t.true(status.over);
-  t.true(status.budget.spent >= 700);
+  t.true(defined(status.budget).spent >= 700);
 });
 
 test('an expired share is over, without anybody revoking it', async t => {
@@ -439,7 +447,7 @@ test('an endpoint that settles nothing is charged its reservation; limits are re
     { max_output_tokens: 100 },
     8192,
   );
-  t.is((await E(share).getStatus()).budget.spent, reserved);
+  t.is(defined((await E(share).getStatus()).budget).spent, reserved);
   // The grantor narrows the models; the open endpoint obeys.
   state.limits = { ...state.limits, models: ['other'] };
   await t.throwsAsync(() => E(endpoint).request(message()), {
@@ -557,7 +565,7 @@ test('a response cut short costs its reservation or its size, whichever is more'
     }),
   );
   await E(endpoint).request(message());
-  t.is((await E(share).getStatus()).budget.spent, reserved);
+  t.is(defined((await E(share).getStatus()).budget).spent, reserved);
   // And one that streamed far past its reservation before it was dropped.
   beneath.state.script.push(() =>
     harden({
@@ -573,7 +581,7 @@ test('a response cut short costs its reservation or its size, whichever is more'
   );
   await E(endpoint).request(message());
   t.is(
-    (await E(share).getStatus()).budget.spent,
+    defined((await E(share).getStatus()).budget).spent,
     reserved + Math.ceil(Math.ceil(body.length / 4) + 10_000),
   );
 });
@@ -646,7 +654,7 @@ test('a request lost after the provider had its whole deadline is charged, and r
     { max_output_tokens: 100 },
     8192,
   );
-  t.is((await E(share).getStatus()).budget.spent, reserved);
+  t.is(defined((await E(share).getStatus()).budget).spent, reserved);
 
   // And a share of this share does.
   const outer = makeSubscriptionShare({
@@ -665,6 +673,6 @@ test('a request lost after the provider had its whole deadline is charged, and r
     throw Error('Provider response lost');
   });
   await t.throwsAsync(() => E(through).request(message()));
-  t.is((await E(outer.share).getStatus()).budget.spent, reserved);
-  t.is((await E(share).getStatus()).budget.spent, 2 * reserved);
+  t.is(defined((await E(outer.share).getStatus()).budget).spent, reserved);
+  t.is(defined((await E(share).getStatus()).budget).spent, 2 * reserved);
 });

@@ -23,7 +23,10 @@ const recipe = harden({
   networkPolicy: 'off',
 });
 const gate = () => {
-  let resolve;
+  /** @type {(value?: any) => void} */
+  let resolve = () => {
+    throw Error('Test gate is not initialized');
+  };
   const promise = new Promise(r => {
     resolve = r;
   });
@@ -174,8 +177,8 @@ const fixture = async t => {
       runtime,
       listener,
       storage,
-      makeMounter,
-      makeEgress,
+      makeMounter: /** @type {any} */ (makeMounter),
+      makeEgress: /** @type {any} */ (makeEgress),
     },
   );
   t.teardown(() => kit.close());
