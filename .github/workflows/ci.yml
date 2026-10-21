@@ -271,9 +271,10 @@ jobs:
           --file @endo/parser-pipeline:test/sync-parser.test.js
           --file @endo/parser-pipeline:test/worker-runner.test.js
 
-      # An unmatched package selection must fail rather than pass untested.
-      - name: Check Bun runner rejects unknown packages
-        run: '! yarn test:bun --package @endo/does-not-exist'
+      # A selection that matches no AVA suite must fail rather than pass
+      # untested; these tests run the runner against stub packages.
+      - name: Test the Bun runner's selections
+        run: yarn exec ava scripts/test-bun.test.mjs
 
       # Every supported package except @endo/skel, including those that fail
       # for engine and harness reasons tracked on the Bun probe; report them

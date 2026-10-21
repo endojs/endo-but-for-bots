@@ -48,6 +48,10 @@ for (let index = 2; index < process.argv.length; index += 1) {
     }
     const packageName = selection.slice(0, separator);
     const testFile = selection.slice(separator + 1);
+    // AVA would read an option-shaped file as a flag and run the whole suite.
+    if (testFile.startsWith('-')) {
+      throw new Error(`--file requires a test file, got ${testFile}`);
+    }
     const testFiles = requestedPackages.get(packageName);
     if (testFiles === undefined) {
       requestedPackages.set(packageName, [testFile]);
