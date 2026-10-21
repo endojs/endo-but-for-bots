@@ -156,7 +156,12 @@ test('handleSuspendReply ignores envelopes that answer no pending suspend', asyn
 
   t.false(
     restarter.handleSuspendReply(
-      { handle: WORKER, verb: 'suspended', payload: new Uint8Array(), nonce: 9 },
+      {
+        handle: WORKER,
+        verb: 'suspended',
+        payload: new Uint8Array(),
+        nonce: 9,
+      },
       decode,
     ),
     'unknown nonce',

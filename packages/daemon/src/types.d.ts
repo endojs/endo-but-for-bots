@@ -3405,7 +3405,10 @@ export interface Property {
 
 export interface DebugSession {
   /** Resolves once the worker's `<login>` arrives (at once if it has). */
-  waitForLogin(): Promise<{ name: string | undefined; tag: string | undefined }>;
+  waitForLogin(): Promise<{
+    name: string | undefined;
+    tag: string | undefined;
+  }>;
   feedXml(bytes: Uint8Array): void;
   go(): void;
   step(): Promise<BreakEvent>;

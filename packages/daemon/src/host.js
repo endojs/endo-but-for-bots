@@ -384,9 +384,10 @@ export const makeHostMaker = ({
   localNodeNumber,
   isLocalKey,
   getAgentIdForHandleId,
-  debugWorker: debugWorkerById = /** @param {FormulaIdentifier} _id */ async _id => {
-    throw makeError(X`debugWorker is not supported on this platform`);
-  },
+  debugWorker:
+    debugWorkerById = /** @param {FormulaIdentifier} _id */ async _id => {
+      throw makeError(X`debugWorker is not supported on this platform`);
+    },
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
   },
