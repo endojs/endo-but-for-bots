@@ -603,8 +603,10 @@ The 2026-10-21 pass adds
 M8 plan, dependency graph, and estimates table.
 Re-deriving the summary table gives 77 Complete/Implemented, 83 In Progress,
 18 Not Started, 33 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft,
-5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved, plus the two
-qualified retrospective rows (**252 indexed records**).
+5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved.
+Those buckets sum to 250; the two qualified retrospective rows
+([cbor-codec](cbor-codec.md) and [genie-integration](genie-integration.md))
+fold into no bucket and bring the total to **252 indexed records**.
 Its 2-3 days fit within M8's existing 2-3 week range, so the milestone timeline
 does not move.
 
