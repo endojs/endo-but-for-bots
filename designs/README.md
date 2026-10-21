@@ -334,7 +334,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [invitation-enclosures](invitation-enclosures.md) | 2026-10-21 | — | Proposed |
+| [invitation-enclosures](invitation-enclosures.md) | 2026-10-21 | - | Proposed |
 | [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-10-02 | In Progress |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
@@ -604,7 +604,9 @@ M8 plan, dependency graph, and estimates table.
 Re-deriving the summary table gives 77 Complete/Implemented, 83 In Progress,
 18 Not Started, 33 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft,
 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved.
-Those buckets sum to 250; the two qualified retrospective rows
+Those twelve buckets sum to 250
+(77 + 83 + 18 + 33 + 3 + 21 + 4 + 3 + 5 + 1 + 1 + 1); the two qualified
+retrospective rows
 ([cbor-codec](cbor-codec.md) and [genie-integration](genie-integration.md))
 fold into no bucket and bring the total to **252 indexed records**.
 Its 2-3 days fit within M8's existing 2-3 week range, so the milestone timeline
@@ -1470,7 +1472,7 @@ deep-link -> P2 app + sandboxed UI -> P3 clone).
 | app-sharing-milestone | Proposed | — | Milestone roadmap doc; verified current state + P0-P3 plan |
 | familiar-deep-link-invitations | In Progress | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete) |
 | guest-native-invitations | In Progress | 2 — connect peers | `invite`/`accept` on `EndoGuest` landed (#1305, #1310; host `accept` converged, no minted guest); remaining: durable invitation state machine in the formula store, returned `{ status }` outcomes, collection-driven revocation, newcomer guest provisioning |
-| invitation-enclosures | Proposed | 2 — connect peers | Generic bounded capability record on invitation formulas and `endo://` locators; first consumer is minion.town guest coupons |
+| invitation-enclosures | Proposed | 2: connect peers | Generic bounded capability record on invitation formulas and `endo://` locators; first consumer is minion.town guest coupons |
 | endo-app-sharing | In Progress | 3 — make & share apps | New: app handle (source + exec + ui + `cloneable`); cross-daemon clone as a single streamed tree-archive into a pluggable durable backing (default zip) vs remote reference — no per-blob hashing |
 | familiar-app-ui-hosting | Proposed | 3 — sandboxed UI | New: app UI manifest + sandbox tiers (`isolated`/`connected`/`trusted`) over the weblet substrate |
 | ~~familiar-electron-shell~~ | **Complete** | 1 — distributable | The shell being distributed (counted under M1) |
