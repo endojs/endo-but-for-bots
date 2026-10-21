@@ -9,7 +9,12 @@
 
 /// <reference types="ses"/>
 
-import { defineProperty, globalThis, weakmapGet } from '../src/commons.js';
+import {
+  TypeError,
+  defineProperty,
+  globalThis,
+  weakmapGet,
+} from '../src/commons.js';
 import {
   NativeStartCompartment,
   nativeCompartmentPrototype,
@@ -26,6 +31,7 @@ import {
   shimGetGlobalThis,
   shimImport,
   shimImportNow,
+  shimLoad,
 } from './compartment.js';
 
 const adapterFunctions = {
@@ -68,6 +74,17 @@ const adapterFunctions = {
     const delegateImportNow = delegateNative ? nativeImportNow : shimImportNow;
     return delegateImportNow(this, specifier);
   },
+
+  // Native XS compartments have no load(), so only shim compartments can
+  // load a module graph without executing it.
+  async load(specifier) {
+    await null;
+    const fields = weakmapGet(privateFields, this);
+    if (fields === undefined || fields.delegateNative) {
+      throw TypeError('load() is not supported by native XS compartments');
+    }
+    return shimLoad(this, specifier);
+  },
 };
 
 defineProperty(nativeCompartmentPrototype, 'evaluate', {
@@ -79,6 +96,13 @@ defineProperty(nativeCompartmentPrototype, 'evaluate', {
 
 defineProperty(nativeCompartmentPrototype, 'import', {
   value: adapterFunctions.import,
+  writable: true,
+  configurable: true,
+  enumerable: false,
+});
+
+defineProperty(nativeCompartmentPrototype, 'load', {
+  value: adapterFunctions.load,
   writable: true,
   configurable: true,
   enumerable: false,

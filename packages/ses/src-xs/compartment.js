@@ -47,6 +47,7 @@ export const shimCompartmentPrototype = ShimStartCompartment.prototype;
 export const shimEvaluate = uncurryThis(shimCompartmentPrototype.evaluate);
 export const shimImport = uncurryThis(shimCompartmentPrototype.import);
 export const shimImportNow = uncurryThis(shimCompartmentPrototype.importNow);
+export const shimLoad = uncurryThis(shimCompartmentPrototype.load);
 
 /** @type {(compartment: typeof Compartment) => typeof globalThis} */
 export const shimGetGlobalThis = uncurryThis(
