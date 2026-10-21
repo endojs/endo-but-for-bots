@@ -3,13 +3,13 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-08-01 |
+| **Updated** | 2026-10-21 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Complete |
+| **Status** | Implemented |
 
 ## Status
 
-All five phases implemented:
+**Implemented.** All five phases are on `llm`:
 
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
@@ -455,6 +455,14 @@ The tree's children are the package's files, stored as blobs.
    verify selection matches expectations.
 
 ### Phase 4: Integration with compartment mapper
+
+> **As implemented:** the plan below was not built as written.
+> Resolution and compartment-map assembly happen in Rust before
+> XS runs (`npm_resolve.rs`, `assemble.rs`, `execute.rs`; see
+> § Status), so no `CasPackageResolver` host functions or
+> mapper-hook wiring were needed. Lazy in-XS resolution through
+> host functions would be a new design question, not an
+> outstanding step of this one.
 
 1. Add a `CasPackageResolver` that the XS-hosted compartment
    mapper can call via host functions:
