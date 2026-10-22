@@ -351,18 +351,19 @@ The daemon package takes a new dependency on `@endo/endo-fs` to import its inter
 ### Phase 5: Content-address QID/hash hook + SHA-256 repo support
 
 - [x] Backend-supplied QID/hash hook on `wrapBackend`: optional `qidFor(path, kind)` (sync, sources QID `pathId` from the git OID) and `blobInfoFor(path)` (sources the `BlobRef` `{ algorithm: 'git-sha1', hash }` from the git blob OID), probed by existence with path-hash `synthQid` / SHA-256 fallbacks. The git-tree backend supplies both from its path-resolution cache. Tests: same-blob QID + hash equivalence across paths and across refs (`packages/daemon/test/git.test.js`), plus the hook seam over a fake backend (`packages/platform/test/wrap-backend.test.js`).
-- [ ] (still deferred) Detect `extensions.objectFormat = sha256` in `.git/config` and set `blobInfoFor` → `algorithm: 'git-sha256'` accordingly.
-- [ ] (still deferred) Adjust `pathId` derivation if needed (sha256 OIDs are 64 hex chars, fits in BigInt fine).
+- [x] SHA-256-format repositories (`git init --object-format=sha256`): the native backend's `ls-tree` record parser accepts 64-hex OIDs alongside 40-hex ones, so `filesystemAt(ref)` resolves, lists, and reads such a repository. Tests: `packages/git/test/native-git-backend.test.js` (sha256 `lsTree` / `streamLsTree`) and `packages/daemon/test/git.test.js` (end-to-end `filesystemAt` over a sha256 repository).
+- [x] `pathId` derivation needed no change: `BigInt('0x' + oid)` carries the full 256-bit OID, and the 9p seam folds it to 64 bits as it does a 160-bit one.
+- [x] ~~Set `blobInfoFor` → `algorithm: 'git-sha256'`.~~ Obsolete: the `ReadableBlob` range-attenuation change (`0668baf85`) retired the `blobInfoFor` hook, so a git-tree `BlobRef` reports the SHA-256 of its raw bytes in every repository format; only the QID carries the OID.
 
-### Phase 6 (deferred): Paged directory listing
+### Phase 6: Paged directory listing
 
-The shipped `Directory.list()` calls `backend.lsTree(treeOid)` and `await`s the full entry array before yielding the first `DirEntry`.
+Before this phase, `Directory.list()` called `backend.lsTree(treeOid)` and `await`ed the full entry array before yielding the first `DirEntry`.
 `listTreeEntries` no longer hits the 1 MiB `runGitRaw` cap (it streams via `streamGitBuffer` and concatenates locally), but the in-memory materialization is bounded only by tree size — a directory with hundreds of thousands of entries still allocates a buffer proportional to the listing.
 The paged-Filesystem contract that wrapBackend exposes via `Cursor.read(limit)` can carry one page at a time once the backend supports it.
 
-- [ ] Add a `streamLsTree(treeOid)` async iterable to `GitBackend` that yields parsed `GitTreeEntryRecord` values one at a time.
-- [ ] Rewire `git-filesystem.list()` to consume the iterator directly, retaining `lsTreeCached` only as the random-access cache `resolvePath` needs (or split the two paths: cached-for-lookup, streamed-for-list).
-- [ ] Cursor pagination test that asserts `read(limit)` returns after `limit` entries on a tree with several thousand blobs without materializing the whole listing.
+- [x] Add a `streamLsTree(treeOid)` async iterable to `GitBackend` that yields parsed `GitTreeEntryRecord` values one at a time. It is an optional member of the contract, so existing backends keep working; the native backend implements it by splitting `git ls-tree -z --long` stdout on NUL as it streams, and stopping the iterator early kills the child.
+- [x] Rewire `git-filesystem.list()` to consume the iterator directly. The two paths are split: `lsTreeCached` stays the random-access cache `resolvePath` needs, and `list()` streams unless that cache already holds the tree's listing (then it replays the cached array rather than spawning a second `ls-tree`). A backend without `streamLsTree` falls back to `lsTree`.
+- [x] Cursor pagination tests: `packages/exo-git/test/git-filesystem.test.js` asserts over a counting fake backend that `read(10n)` on a 5,000-entry tree pulls exactly 10 entries and that `close()` releases the stream; `packages/daemon/test/git.test.js` pages a 4,000-blob tree through the native backend.
 
 ## Design Decisions
 

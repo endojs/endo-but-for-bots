@@ -217,13 +217,18 @@ export const makeGitFsBackend = ({ backend, treeOid }) => {
       if (entry.kind !== 'directory') {
         throw makeError(X`ENOTDIR: ${q(dirPath.join('/'))}`);
       }
-      // Materializes the full `lsTree` array before yielding the
-      // first entry: bounded by tree size (not by `runGitRaw`'s
-      // 1 MiB cap, since `listTreeEntries` streams), but not by
-      // a page count.  True paged streaming through wrap-backend's
-      // `Cursor.read(limit)` is Phase 6 in `designs/endo-fs-from-git.md`.
-      const entries = await lsTreeCached(entry.oid);
-      for (const e of entries) {
+      // Page through the backend's `streamLsTree` when it has one, so
+      // wrap-backend's `Cursor.read(limit)` pulls (and this generator
+      // holds) one page at a time rather than the whole tree.  A listing
+      // already cached for `resolvePath` is replayed instead of spawning
+      // a second `ls-tree`; a backend without `streamLsTree` falls back
+      // to the materialized `lsTree` array.  See Phase 6 in
+      // `designs/endo-fs-from-git.md`.
+      const entries =
+        backend.streamLsTree === undefined || lsCache.has(entry.oid)
+          ? await lsTreeCached(entry.oid)
+          : backend.streamLsTree(entry.oid);
+      for await (const e of entries) {
         if (e.type === 'commit') {
           // Submodules are not part of the visible tree at this layer.
           // eslint-disable-next-line no-continue

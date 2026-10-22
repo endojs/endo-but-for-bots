@@ -2112,6 +2112,36 @@ export const makeNativeGitBackend = ({
   };
 
   /**
+   * Parse one NUL-delimited `git ls-tree -z --long` record.  The OID
+   * may be 40 hex digits (a `sha1` repository) or 64 hex digits (a
+   * `sha256` repository, `extensions.objectFormat = sha256`).
+   *
+   * @param {string} record
+   * @returns {GitTreeEntry}
+   */
+  const parseLsTreeRecord = record => {
+    const tab = record.indexOf('\t');
+    if (tab < 0) {
+      throw new Error(`Could not parse git ls-tree record: ${q(record)}`);
+    }
+    const meta = record.slice(0, tab);
+    const name = record.slice(tab + 1);
+    const match = meta.match(
+      /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40}|[0-9a-f]{64}) +(-|\d+)$/u,
+    );
+    if (!match) {
+      throw new Error(`Could not parse git ls-tree metadata: ${q(meta)}`);
+    }
+    return harden({
+      mode: match[1],
+      type: /** @type {'blob' | 'tree' | 'commit'} */ (match[2]),
+      oid: match[3],
+      size: match[4] === '-' ? undefined : Number.parseInt(match[4], 10),
+      name,
+    });
+  };
+
+  /**
    * @param {string} output
    * @returns {GitTreeEntry[]}
    */
@@ -2119,33 +2149,69 @@ export const makeNativeGitBackend = ({
     if (output === '') {
       return [];
     }
-    const records = output.split('\0').filter(record => record !== '');
-    /** @type {GitTreeEntry[]} */
-    const entries = [];
-    for (const record of records) {
-      const tab = record.indexOf('\t');
-      if (tab < 0) {
-        throw new Error(`Could not parse git ls-tree record: ${q(record)}`);
+    return output
+      .split('\0')
+      .filter(record => record !== '')
+      .map(parseLsTreeRecord);
+  };
+
+  /**
+   * Stream `git ls-tree -z --long <treeOid>` one parsed entry at a time.
+   * Only the bytes of the record currently being split are retained, so
+   * a consumer that stops early (a paged `Cursor.read(limit)`) holds one
+   * page of entries rather than the whole listing; returning from the
+   * iterator kills the child through `streamGitBuffer`'s `finally`.
+   *
+   * @param {string} treeOid
+   * @returns {AsyncGenerator<GitTreeEntry>}
+   */
+  const streamTreeEntries = async function* streamTreeEntries(treeOid) {
+    /** @type {Uint8Array[]} */
+    let pending = [];
+    let pendingLength = 0;
+    /** @param {Uint8Array} tail */
+    const takeRecord = tail => {
+      let bytes = tail;
+      if (pending.length > 0) {
+        bytes = new Uint8Array(pendingLength + tail.length);
+        let offset = 0;
+        for (const part of pending) {
+          bytes.set(part, offset);
+          offset += part.length;
+        }
+        bytes.set(tail, offset);
+        pending = [];
+        pendingLength = 0;
       }
-      const meta = record.slice(0, tab);
-      const name = record.slice(tab + 1);
-      const match = meta.match(
-        /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40}) +(-|\d+)$/u,
-      );
-      if (!match) {
-        throw new Error(`Could not parse git ls-tree metadata: ${q(meta)}`);
+      return utf8Decoder.decode(bytes);
+    };
+    for await (const chunk of streamGitBuffer([
+      'ls-tree',
+      '-z',
+      '--long',
+      treeOid,
+    ])) {
+      let start = 0;
+      let nul = chunk.indexOf(0, start);
+      while (nul >= 0) {
+        const record = takeRecord(chunk.subarray(start, nul));
+        if (record !== '') {
+          yield parseLsTreeRecord(record);
+        }
+        start = nul + 1;
+        nul = chunk.indexOf(0, start);
       }
-      entries.push(
-        harden({
-          mode: match[1],
-          type: /** @type {'blob' | 'tree' | 'commit'} */ (match[2]),
-          oid: match[3],
-          size: match[4] === '-' ? undefined : Number.parseInt(match[4], 10),
-          name,
-        }),
-      );
+      if (start < chunk.length) {
+        // Copy: the child's stdout buffer may be reused after this turn.
+        const rest = chunk.slice(start);
+        pending.push(rest);
+        pendingLength += rest.length;
+      }
     }
-    return entries;
+    const last = takeRecord(new Uint8Array(0));
+    if (last !== '') {
+      yield parseLsTreeRecord(last);
+    }
   };
 
   /**
@@ -3708,6 +3774,18 @@ export const makeNativeGitBackend = ({
       const oid = requireRevision(treeOid, 'lsTree.treeOid');
       const entries = await listTreeEntries(oid);
       return harden(entries);
+    },
+
+    /**
+     * Stream entries at a tree OID one at a time, in `git ls-tree`
+     * order, without materializing the whole listing.  Backs paged
+     * directory listing in `Git.filesystemAt(ref)`.
+     *
+     * @param {string} treeOid
+     */
+    streamLsTree: treeOid => {
+      const oid = requireRevision(treeOid, 'streamLsTree.treeOid');
+      return streamTreeEntries(oid);
     },
 
     /**

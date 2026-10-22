@@ -198,6 +198,12 @@ import {
  * @property {(treeOid: string) => Promise<readonly GitTreeEntryRecord[]>} lsTree
  *   Enumerate entries at a tree OID.  The records are content-addressed
  *   and safe to cache per-OID.
+ * @property {(treeOid: string) => AsyncIterable<GitTreeEntryRecord>} [streamLsTree]
+ *   Stream entries at a tree OID one at a time, in the same order as
+ *   `lsTree`, without materializing the whole listing.  Optional: when
+ *   present, `filesystemAt(ref)`'s `Directory.list()` pages through it
+ *   so `Cursor.read(limit)` holds one page rather than the full tree;
+ *   when absent, the listing falls back to `lsTree`.
  * @property {(blobOid: string) => Promise<Uint8Array>} readBlobBytes
  *   Read full bytes of a blob.
  * @property {(blobOid: string) => AsyncIterable<Uint8Array>} streamBlobBytes
@@ -208,11 +214,10 @@ import {
 /**
  * Structural record describing one entry in a git tree object.  Mirrors
  * `git ls-tree -z --long` output: mode is the 6-digit octal string, type
- * is `'blob'` / `'tree'` / `'commit'`, oid is the 40-hex (sha1) object
- * identifier — the native backend's `parseLsTreeEntries` regex only
- * accepts sha1 today; sha256-formatted repos are a Phase 5 follow-up
- * tracked in `designs/endo-fs-from-git.md` — size is present for blobs
- * only, and name is the single-segment entry name (no slashes).
+ * is `'blob'` / `'tree'` / `'commit'`, oid is the hex object
+ * identifier: 40 hex digits in a sha1 repository, 64 in a sha256
+ * repository (`extensions.objectFormat = sha256`).  Size is present for
+ * blobs only, and name is the single-segment entry name (no slashes).
  *
  * @typedef {object} GitTreeEntryRecord
  * @property {string} mode
@@ -1597,6 +1602,19 @@ export const makeNotYetImplementedBackend = () => {
       });
     },
     lsTree: async () => fail('lsTree'),
+    streamLsTree: () => {
+      fail('streamLsTree');
+      // Unreachable; satisfies the typedef's async-iterable return.
+      return /** @type {AsyncIterable<GitTreeEntryRecord>} */ ({
+        [Symbol.asyncIterator]() {
+          return {
+            async next() {
+              return { done: true, value: undefined };
+            },
+          };
+        },
+      });
+    },
     readBlobBytes: async () => fail('readBlobBytes'),
     streamBlobBytes: () => {
       fail('streamBlobBytes');
