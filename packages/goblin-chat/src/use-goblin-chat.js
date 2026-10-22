@@ -1,3 +1,4 @@
+// spell-out-exempt: SwissNum is the OCapN specification's domain term.
 // @ts-check
 
 /**

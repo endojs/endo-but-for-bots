@@ -519,7 +519,7 @@ purposes, we can annotate embedded CBOR with `24(<...>)` to show structure:
 The angle brackets `<...>` are not standard diagnostic notation but serve to
 indicate "this is the decoded content of the byte string."
 
-**Forwarding benefit**: The intermediary can remap `-10` → `5` and `2` → `7` in
+**Forwarding benefit**: The intermediary can remap `-10` -> `5` and `2` -> `7` in
 the `targets` array without touching the body bytes.
 
 ### Body Content Format
@@ -662,8 +662,8 @@ Delivers a message and expects a return value (promise pipelining).
 **Fields**:
 - `to-desc`: The target to deliver to (`export` or `answer`)
 - `body`: Embedded CBOR (Tag 24) containing method selector and arguments
-- `targets`: Parallel array for target markers → CapTP positions
-- `promises`: Parallel array for promise markers → CapTP positions
+- `targets`: Parallel array for target markers -> CapTP positions
+- `promises`: Parallel array for promise markers -> CapTP positions
 - `errors`: Parallel array for error identifiers
 - `answer-pos`: Position in answers table for the return promise, or `false`
 - `resolve-me-desc`: Descriptor for where to send the resolution

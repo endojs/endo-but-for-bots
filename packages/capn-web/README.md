@@ -4,11 +4,11 @@ A JavaScript implementation of [Cap'n Web](https://github.com/cloudflare/capnweb
 built on top of [`@endo/eventual-send`](../eventual-send).
 
 The wire protocol matches Cloudflare's reference implementation: messages are
-JSON arrays (`["push", …]`, `["resolve", id, …]`, `["release", id, n]`, …),
+JSON arrays (`["push", ...]`, `["resolve", id, ...]`, `["release", id, n]`, ...),
 capability references are positive/negative integer ids, and atomic values that
 don't fit JSON (`undefined`, `BigInt`, `Date`, `Uint8Array`, `Error`, non-finite
 numbers) are tagged with the spec-defined forms (`["bigint", "1"]`,
-`["date", 1700000000000]`, etc.). Plain JS arrays are escaped with `[[…]]`.
+`["date", 1700000000000]`, etc.). Plain JS arrays are escaped with `[[...]]`.
 
 The endo flavour adds:
 
@@ -22,7 +22,7 @@ The endo flavour adds:
 - **Pluggable transports**. Loopback (in-memory pair), WebSocket, HTTP-batch
   and MessagePort transports are bundled.
 - **`.map()` record-replay**. Runs a mapper callback on the peer side via the
-  `["remap", …]` expression form (endo extension; see Limitations below).
+  `["remap", ...]` expression form (endo extension; see Limitations below).
 
 ## Quick start
 
@@ -179,7 +179,7 @@ The wire format matches `cloudflare/capnweb` 0.10 for the implemented surface:
   without padding — all as of capnweb 0.8.
 - Reference-introducing expressions (`import`, `pipeline`, `export`, `promise`,
   `writable`, `readable`).
-- Array escape (`[[…]]`).
+- Array escape (`[[...]]`).
 
 ### Transport encoding levels
 
@@ -234,7 +234,7 @@ error propagation), and `test/transports/message-port-capnweb.test.js`
   pipe export's writable hook, so chunked streaming over a single
   HTTP-batch request still isn't feasible (the response body isn't
   held open) but `WebSocket` and `MessagePort` transports work.
-- Sender-side `["stream", …]` (cloudflare/capnweb's fire-and-forget
+- Sender-side `["stream", ...]` (cloudflare/capnweb's fire-and-forget
   variant) is intentionally not emitted: send-only calls use a normal
   `["push", expr]` *without* a paired `["pull", id]`, which is strictly
   spec-compliant and works against any conforming peer. The trade-off
@@ -298,7 +298,7 @@ What each protocol can carry as a leaf, beyond the obvious primitives:
   streams, and you're willing to anchor trust in TLS.
 - Pick **`@endo/ocapn`** if you want federated identity, sturdy-refs that
   survive across sessions, signed three-party handoffs, and the full
-  `@endo/pass-style` bijection (symbols, `copyTagged`, …).
+  `@endo/pass-style` bijection (symbols, `copyTagged`, ...).
 
 Pithy: **Cap'n Web is wire-cheap, model-thin, web-shaped; OCapN is wire-rich,
 model-deep, mesh-shaped.** The two are complementary, not redundant.
@@ -323,7 +323,7 @@ model-deep, mesh-shaped.** The two are complementary, not redundant.
 [^cw-remap]: `.map()` recorder + replayer — `src/remap.js`
 [^cw-tables]: Import / export tables, refcount + microtask-coalesced release — `src/tables.js`
 [^cw-stubs]: `Remotable(...)`-wrapped presences (so `passStyleOf === 'remotable'` enables three-party round-trips) — `src/stubs.js`
-[^cw-walk]: Path-and-call walker for incoming `["pipeline", …]` — `src/walk-path.js`
+[^cw-walk]: Path-and-call walker for incoming `["pipeline", ...]` — `src/walk-path.js`
 [^cw-devaluate]: Devaluator (rejects symbols, plain classes, etc.) — `src/devaluate.js`
 
 ## Tests
