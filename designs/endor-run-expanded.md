@@ -12,7 +12,7 @@
 Phases 1-4 are implemented (Phase 4 for the no-dependency case);
 Phase 3 (directory input) was rebuilt on current `llm`, superseding
 the stale PR #278. Phase 5's local-`node_modules` walk and its
-fixture-parity ratchet are implemented on this PR (stacked on PR #279).
+fixture-parity ratchet are implemented (PR #282, stacked on PR #279).
 The Rust walker now covers CommonJS and statically analyzable dynamic
 edges, conditional and subpath exports/imports, dependency-kind
 classification, duplicate and symlinked packages, browser resolution,
@@ -22,9 +22,9 @@ compartment mapper bundle remains deferred.
 Phase 5's item 3 (the registry-table resolution path) landed
 **independently** in `llm` via `designs/endor-npm-registry-proxy.md`
 Phases 4/5 (`assemble_entry` + `cmd_run_entry`, merged in
-PRs #799 #800 #803 #805 #812 #818 #862) and, on this PR's rebase
+PRs #799 #800 #803 #805 #812 #818 #862) and, on PR #282's rebase
 onto `llm`, became the **default** resolver for `endor run
-<entry.js>`. The `node_modules` walker this PR contributes is now
+<entry.js>`. The `node_modules` walker PR #282 contributes is now
 the **legacy** resolver, reachable behind an explicit
 `--node-modules` flag. See § Reconciliation with the registry-cache
 resolver below — this is the shape the maintainer asked for on
@@ -63,6 +63,11 @@ walk).
   `endor-cas` in the system temporary directory. The registry
   resolver keeps its CAS beside its registry table, so it rejects
   `--cas-dir`, and `--no-cas` with `--cas-dir` is rejected too.
+  Because the default store sits in a shared temporary directory,
+  `ContentStore::fetch` re-hashes every entry it reads and rejects
+  a mismatch, `store` replaces an existing entry whose bytes do not
+  match its name, and hashes that are not 64 lowercase hex digits
+  are refused before they reach a path.
   `--entry` is not implemented: every file the classifier does not
   already route to the entry form has an extension the entry
   resolvers cannot load, so the flag would only change the error.
@@ -259,33 +264,18 @@ resolver above). The original "extend `resolve_bare`" plan is
 therefore superseded: the two resolution strategies live side by
 side under the dispatch flag instead of being fused into one walk.
 
-### Cross-PR coordination with Phase 3
+### Cross-PR coordination with Phase 3 (historical)
 
-Phase 3 (directory input, PR #278) is in review against `llm` at
-this PR's open time; both Phase 3 and Phase 4 branch off `llm`
-and target `llm`. The two PRs touch `cas_archive.rs` and
-`endor.rs` in non-overlapping regions: Phase 3 adds
-`ingest_directory` and the `RunInput::Directory` dispatch
-branch; Phase 4 adds `ingest_entry_point` and the
-`RunInput::EntryPoint` dispatch branch. When Phase 3 lands
-first, this PR's rebase needs:
-
-1. The `RunInput` enum gains a `Directory` variant; the
-   classifier returns it when `p.is_dir()`.
-2. The CLI dispatch grows a `RunInput::Directory` arm calling
-   `cmd_run_directory_with_cas`.
-3. The `encode_manifest_sorted` determinism helper Phase 3
-   introduces should be used by `ingest_entry_point`'s tree
-   serialisation calls so the synthesised root hash is
-   reproducible across runs. This is not required by Phase 4's
-   own tests (the synthetic map has one or two entries and
-   `HashMap` iteration is effectively stable per-run for those
-   sizes) but it brings entry-point ingestion under the same
-   determinism contract as the ZIP and directory paths.
-
-When this PR lands first, Phase 3's rebase needs the mirror
-change: insert the `Directory` arm alongside the existing
-`EntryPoint` arm in the classifier and dispatch.
+When Phase 4 opened, Phase 3 (directory input) was in review as
+PR #278, and this section planned how the two PRs would rebase
+over each other. That plan no longer applies: Phase 3 was rebuilt
+on current `llm` instead (see § Status), with `RunInput::Directory`
+and the `cmd_run_directory_with_cas` dispatch arm beside the
+existing `EntryPoint` arm. The `encode_manifest_sorted` helper
+PR #278 proposed was not carried over, because
+`TreeManifest.entries` is a `BTreeMap` and every tree, including
+the one `ingest_entry_point` synthesizes, serializes in sorted
+order.
 
 ## What is the Problem Being Solved?
 
@@ -487,13 +477,22 @@ only a subset of modules are actually imported at runtime.
 ### CLI changes
 
 ```
-endor run [options] <path-or-hash>
+endor run [options] <archive.zip | dir/ | entry.js>
 
 Options:
   -e, --engine <engine>   Engine to use (default: xs)
+  --zip                   Read the path as a ZIP archive
+  --dir                   Read the path as an unpacked compartment-map
+                          directory (at most one of --zip and --dir)
   --cas <hash>            Run from CAS root hash directly
-  --cas-dir <path>        CAS directory (default: state/store-sha256)
-  --no-cas                Don't use CAS (current behavior, for compat)
+  --cas-dir <path>        CAS directory for ZIP, directory, --cas, and
+                          --node-modules runs (default: endor-cas in the
+                          system temporary directory; rejected by the
+                          registry resolver, which keeps its own CAS)
+  --no-cas                Don't use CAS (ZIP input only, for compat)
+  --registry <url>        Registry for registry-backed entry runs
+  --offline               Refuse network access for registry runs
+  --node-modules          Resolve an entry's imports from node_modules
 ```
 
 The `--cas-dir` flag allows using a CAS in a non-default
@@ -644,6 +643,11 @@ deferred; see the Status section's deviation and fixture-parity notes.
    `endor run foo` examines `foo` to determine the form.
    Explicit `--zip`, `--dir`, `--entry` flags are available
    for disambiguation but rarely needed.
+   `--zip` and `--dir` are implemented. `--entry` is deferred
+   until extension-less entries get module-language inference;
+   until then every file that is not already routed to the
+   entry form has an extension no entry resolver can load, so
+   the flag would only change the error (see § Status).
 
 ## Prompt
 
