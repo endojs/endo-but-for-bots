@@ -10,7 +10,8 @@ import { decodeToJustin } from '../src/marshal-justin.js';
 import { makePassableKit, passStylePrefixes } from '../src/encodePassable.js';
 import { compareRank } from '../src/rankOrder.js';
 
-/** @type {any} */
+/** @import {ParcelObject} from '@endo/pass-style' */
+
 const { Parcel } = globalThis;
 
 const locations = new WeakMap();
@@ -50,7 +51,10 @@ for (const serializeBodyFormat of /** @type {const} */ ([
           : `#{"again":"'#ocapn=1&peer=alice&value=secret","parcel":"'#ocapn=1&peer=alice&value=secret"}`;
       t.is(capData.body, expectedBody);
 
-      const decoded = /** @type {any} */ (fromCapData(capData));
+      const decoded =
+        /** @type {{ parcel: ParcelObject, again: ParcelObject }} */ (
+          fromCapData(capData)
+        );
       t.is(passStyleOf(decoded.parcel), 'parcel');
       t.is(passStyleOf(decoded.again), 'parcel');
       t.is(
@@ -87,7 +91,10 @@ for (const serializeBodyFormat of /** @type {const} */ ([
       const { fromCapData } = makeMarshal(undefined, undefined, {
         serializeBodyFormat,
         // A deliberately wrong hook result, to reach the decoder's check.
-        decodeParcel: location => /** @type {any} */ (harden({ location })),
+        decodeParcel: location =>
+          /** @type {ParcelObject} */ (
+            /** @type {unknown} */ (harden({ location }))
+          ),
       });
       t.throws(() => fromCapData(capData), {
         message: /a parcel encoding must decode to a parcel/,

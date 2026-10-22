@@ -10,7 +10,7 @@ import { passStyleOf } from '../src/passStyleOf.js';
 
 /**
  * @import { Arbitrary } from 'fast-check';
- * @import { Passable, CopyTagged } from '../src/types.js';
+ * @import { Passable, CopyTagged, ParcelObject } from '../src/types.js';
  */
 
 /** Avoid wasting time on overly large data structures. */
@@ -37,7 +37,10 @@ export const exampleCarol = Far('carol', {});
  * @returns {Passable[]}
  */
 const makeExampleParcels = () => {
-  const { Parcel } = /** @type {any} */ (globalThis);
+  const { Parcel } =
+    /** @type {{ Parcel?: new (location: string, openHook: (location: string) => unknown) => ParcelObject }} */ (
+      globalThis
+    );
   if (typeof Parcel !== 'function' || !Object.isFrozen(Parcel)) {
     return [];
   }
