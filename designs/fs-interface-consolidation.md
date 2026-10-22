@@ -3,15 +3,16 @@
 | | |
 |---|---|
 | **Created** | 2026-06-18 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-10-22 |
 | **Author** | Aaron (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 
 ## Status
 
-This document proposes reducing the overlap in the ~30 filesystem-shaped and
-name-hub-shaped `M.interface` guards that now exist across `@endo/platform`,
-`@endo/platform/fs/extended` (formerly `@endo/endo-fs`), and `@endo/daemon`.
+This document records the completed reduction of overlap in the ~30
+filesystem-shaped and name-hub-shaped `M.interface` guards that existed across
+`@endo/platform`, `@endo/platform/fs/extended` (formerly `@endo/endo-fs`), and
+`@endo/daemon`.
 It builds directly on
 [fs-interface-reconciliation.md](fs-interface-reconciliation.md) (which unified
 the method *names and signatures* across the three live tree surfaces) and on
@@ -23,21 +24,22 @@ question: now that `lookup` / `move` / `copy` / `makeDirectory` / `remove` /
 `subView` mean the same thing on every tree surface, **which of the duplicated
 guards can be collapsed, and what blocks each one.**
 
-Each phase below touches core exo guards and therefore needs its own
-daemon-test validation pass.
+All five consolidation candidates (C1–C5) shipped through
+[PR #467](https://github.com/endojs/endo-but-for-bots/pull/467), merged on
+2026-06-19. Later documentation and test refinements do not leave implementation
+work open under this design; adjacent enhancements are tracked by their own
+designs.
 
-### Implemented so far
+### Shipped scope
 
-The low-risk, shape-identical portions of C1–C5 have landed on this PR; the
-parts that need a maintainer canonical-shape decision or that are blocked on
-another design are called out below and left as follow-ups.
+The implementation delivered C1–C5 as follows:
 
 - **C2 (done).** `@endo/platform/fs` now exports `readableBlobMethodGuards`
   (help / streamBase64 / text / json) and `readableTreeMethodGuards`
   (help / has / list / lookup) as method-guard records. The lite
   ReadableBlob / SnapshotBlob / File and ReadableTree / SnapshotTree /
   Directory guards spread them instead of repeating the shapes.
-- **C3 (done) / C4 (done for the daemon blob).** `EndoReadableTree` is now
+- **C3 (done) / C4 (done).** `EndoReadableTree` is now
   `{ ...readableTreeMethodGuards, sha256 }` (the `SnapshotTree` shape).
   `EndoBlob` is aligned *up* to the richer `BlobRef` range-I/O shape: it carries
   `{ ...readableBlobMethodGuards, ...rangeReadMethodGuards }`, i.e. the
@@ -45,9 +47,8 @@ another design are called out below and left as follow-ups.
   `getInfo()` (the `{ algorithm, hash, size }` triple in one round-trip) and
   `fetch(offset, length)` (a windowed read) — the surface that makes remote
   reads optimal. The Node/XS powers gained `readFileRange` and the content
-  store surfaces `size`/`readRange` to back it. Remaining C4 follow-ups (extend
-  the other blob implementers, mirror conveniences onto `BlobRef`) are optional
-  — see § C4.
+  store surfaces `size`/`readRange` to back it. The other blob implementers and
+  `BlobRef` conveniences described in § C4 shipped as well.
 - **C1 (done).** `EndoNameHub`, `EndoDirectory`, `EndoGuest`, and `EndoHost` all
   share `nameHubMethodGuards`. The canonical-shape question is **resolved:
   `NameOrPathShape`** — the shared `readableNameHubMethodGuards` (has / list /
