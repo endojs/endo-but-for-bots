@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-10-21 |
+| **Updated** | 2026-10-22 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
@@ -53,6 +53,20 @@ walk).
   rejected before any CAS write. Sorted manifest serialization,
   which PR #278 added as `encode_manifest_sorted`, is now inherent:
   `TreeManifest.entries` is a `BTreeMap`.
+- **CLI form overrides and `--cas-dir`** (§ CLI changes, design
+  decision 5): `--zip` and `--dir` replace extension and magic-byte
+  detection (`run_input::resolve_run_input`), so a ZIP behind a
+  self-extracting stub runs with `--zip`. Naming both, pairing
+  either with `--cas <hash>`, or naming a path of the wrong type
+  exits 2. `--cas-dir <path>` now selects the CAS for ZIP,
+  directory, `--cas`, and `--node-modules` runs; the default stays
+  `endor-cas` in the system temporary directory. The registry
+  resolver keeps its CAS beside its registry table, so it rejects
+  `--cas-dir`, and `--no-cas` with `--cas-dir` is rejected too.
+  `--entry` is not implemented: every file the classifier does not
+  already route to the entry form has an extension the entry
+  resolvers cannot load, so the flag would only change the error.
+  It waits on module-language inference for extension-less entries.
 - **Phase 4** (no-dependency case):
   `rust/endo/src/cas_archive.rs` — `ingest_entry_point(cas, path)`
   synthesises a one-compartment, one-module archive around a

@@ -20,7 +20,8 @@ use std::path::Path;
 ///
 /// The dispatch follows the design's "input form detection by file
 /// type, not flags" rule: the path is inspected once and the
-/// matching run path is chosen.
+/// matching run path is chosen. [`resolve_run_input`] applies the
+/// explicit `--zip` / `--dir` override.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunInput {
     /// A ZIP archive: a regular file with a `.zip` extension or a
@@ -84,6 +85,77 @@ pub fn classify_run_input(path: &Path) -> RunInput {
     // The file exists but is not a recognised form. Treat as
     // missing so the CLI surfaces a clear error.
     RunInput::Missing
+}
+
+/// An explicit form chosen with `--zip` or `--dir`.
+///
+/// The design keeps detection by file type as the default and makes
+/// these flags available "for disambiguation but rarely needed": a
+/// ZIP with bytes ahead of its first local file header (a
+/// self-extracting stub, say) lacks the magic the classifier sniffs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunForm {
+    /// `--zip`: read the path as a ZIP archive.
+    Zip,
+    /// `--dir`: read the path as an unpacked compartment-map directory.
+    Directory,
+}
+
+impl RunForm {
+    fn flag(self) -> &'static str {
+        match self {
+            RunForm::Zip => "--zip",
+            RunForm::Directory => "--dir",
+        }
+    }
+}
+
+/// Read the form override from the `endor run` argument list.
+///
+/// Repeating one flag is harmless. Naming two different forms is a
+/// usage error, reported as a message naming both flags.
+pub fn parse_run_form(args: &[String]) -> Result<Option<RunForm>, String> {
+    let mut chosen: Option<RunForm> = None;
+    for argument in args {
+        let form = match argument.as_str() {
+            "--zip" => RunForm::Zip,
+            "--dir" => RunForm::Directory,
+            _ => continue,
+        };
+        match chosen {
+            Some(previous) if previous != form => {
+                return Err(format!(
+                    "{} and {} name different input forms; pass at most one",
+                    previous.flag(),
+                    form.flag()
+                ));
+            }
+            _ => chosen = Some(form),
+        }
+    }
+    Ok(chosen)
+}
+
+/// Classify `path`, honoring an explicit form when one is given.
+///
+/// Without an override this is [`classify_run_input`]. With one, the
+/// override replaces extension and magic-byte detection, but the path
+/// type still has to fit: `--dir` needs a directory and `--zip` needs
+/// a regular file. A path that does not exist is
+/// `Missing` either way, so the CLI reports it the same way.
+pub fn resolve_run_input(path: &Path, form: Option<RunForm>) -> Result<RunInput, String> {
+    let Some(form) = form else {
+        return Ok(classify_run_input(path));
+    };
+    if !path.exists() {
+        return Ok(RunInput::Missing);
+    }
+    match form {
+        RunForm::Directory if path.is_dir() => Ok(RunInput::Directory),
+        RunForm::Zip if path.is_file() => Ok(RunInput::ZipArchive),
+        RunForm::Directory => Err(format!("--dir expects a directory: {}", path.display())),
+        RunForm::Zip => Err(format!("--zip expects a regular file: {}", path.display())),
+    }
 }
 
 // Tests
@@ -254,6 +326,104 @@ mod tests {
         // input.
         let (_tmp, path) = write_temp_file("tiny", b"PK");
         assert_eq!(classify_run_input(&path), RunInput::Missing);
+    }
+
+    fn arguments(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn run_form_absent_by_default() {
+        assert_eq!(parse_run_form(&arguments(&["app.js"])), Ok(None));
+        assert_eq!(
+            parse_run_form(&arguments(&["--no-cas", "--node-modules", "app.js"])),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn run_form_flags_parse_in_any_position() {
+        assert_eq!(
+            parse_run_form(&arguments(&["--zip", "bundle"])),
+            Ok(Some(RunForm::Zip))
+        );
+        assert_eq!(
+            parse_run_form(&arguments(&["--offline", "app", "--dir"])),
+            Ok(Some(RunForm::Directory))
+        );
+        assert_eq!(
+            parse_run_form(&arguments(&["--zip", "bundle", "--zip"])),
+            Ok(Some(RunForm::Zip))
+        );
+    }
+
+    #[test]
+    fn run_form_rejects_two_different_forms() {
+        let error = parse_run_form(&arguments(&["--zip", "--dir", "x"])).unwrap_err();
+        assert!(
+            error.contains("--zip") && error.contains("--dir"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn resolve_without_override_is_classification() {
+        let (_temporary, path) = write_temp_file("notes.txt", b"plain text");
+        assert_eq!(resolve_run_input(&path, None), Ok(RunInput::Missing));
+        let (_temporary, path) = write_temp_file("entry.js", b"x");
+        assert_eq!(resolve_run_input(&path, None), Ok(RunInput::EntryPoint));
+    }
+
+    #[test]
+    fn zip_override_routes_a_file_without_magic() {
+        let (_temporary, path) = write_temp_file("bundle.bin", b"#!stub\nPK\x03\x04");
+        assert_eq!(classify_run_input(&path), RunInput::Missing);
+        assert_eq!(
+            resolve_run_input(&path, Some(RunForm::Zip)),
+            Ok(RunInput::ZipArchive)
+        );
+    }
+
+    #[test]
+    fn zip_override_wins_over_entry_extension() {
+        let (_temporary, path) = write_temp_file("bundle.js", b"#!stub\nPK\x03\x04");
+        assert_eq!(classify_run_input(&path), RunInput::EntryPoint);
+        assert_eq!(
+            resolve_run_input(&path, Some(RunForm::Zip)),
+            Ok(RunInput::ZipArchive)
+        );
+    }
+
+    #[test]
+    fn dir_override_accepts_a_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_run_input(directory.path(), Some(RunForm::Directory)),
+            Ok(RunInput::Directory)
+        );
+    }
+
+    #[test]
+    fn override_rejects_a_path_of_the_wrong_type() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = resolve_run_input(directory.path(), Some(RunForm::Zip)).unwrap_err();
+        assert!(error.contains("--zip expects a regular file"), "{error}");
+        let (_temporary, path) = write_temp_file("archive.zip", &zip_magic_prefix());
+        let error = resolve_run_input(&path, Some(RunForm::Directory)).unwrap_err();
+        assert!(error.contains("--dir expects a directory"), "{error}");
+    }
+
+    #[test]
+    fn override_of_a_missing_path_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("nope");
+        for form in [RunForm::Zip, RunForm::Directory] {
+            assert_eq!(
+                resolve_run_input(&missing, Some(form)),
+                Ok(RunInput::Missing),
+                "{form:?}"
+            );
+        }
     }
 
     // Re-import io within the tests module for the cursor used by
