@@ -316,8 +316,8 @@ the mismatch.
     blob (its first outbound frame, or exit). **(done)**
 
 15. Integration test: full supervisor round-trip (suspend via
-    control verb → worker streams snapshot to CAS → worker
-    exits → message triggers resume → restored worker has
+    control verb -> worker streams snapshot to CAS -> worker
+    exits -> message triggers resume -> restored worker has
     correct JS state). **(done)** —
     `supervisor_suspend_resume_round_trip` in
     `rust/endo/src/endo.rs` drives this through the real
