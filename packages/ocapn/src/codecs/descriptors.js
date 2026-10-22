@@ -8,7 +8,7 @@
  * @import { SyrupCodec, SyrupRecordCodec, SyrupRecordUnionCodec } from '../syrup/codec.js'
  * @import { OcapnWriter, OcapnCodec } from '../codec-interface.js'
  * @import { OcapnLocation, OcapnPublicKeyDescriptor, OcapnSignature } from './components.js'
- * @import { SessionId, PublicKeyId } from '../client/types.js'
+ * @import { SessionId, PublicKeyId } from '../client/types.types.js'
  */
 
 import harden from '@endo/harden';

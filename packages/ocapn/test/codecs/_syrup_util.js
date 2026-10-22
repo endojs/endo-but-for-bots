@@ -8,8 +8,8 @@ const textEncoder = new TextEncoder();
 
 /**
  * @typedef {import('../../src/codecs/components.js').OcapnLocation} OcapnLocation
- * @typedef {import('../../src/client/types.js').SessionId} SessionId
- * @typedef {import('../../src/client/types.js').PublicKeyId} PublicKeyId
+ * @typedef {import('../../src/client/types.types.js').SessionId} SessionId
+ * @typedef {import('../../src/client/types.types.js').PublicKeyId} PublicKeyId
  * @typedef {import('../../src/cryptography.js').OcapnPublicKey} OcapnPublicKey
  */
 

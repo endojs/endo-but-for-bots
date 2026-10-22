@@ -12,7 +12,7 @@
  * @import { OcapnReader } from '../codec-interface.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { ParcelTracker } from './parcels.js'
- * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.js'
+ * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.types.js'
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  */
 

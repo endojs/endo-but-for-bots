@@ -3,7 +3,7 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { InternalSession } from './types.js'
+ * @import { InternalSession } from './types.types.js'
  * @import { ParcelObject } from '@endo/pass-style'
  */
 

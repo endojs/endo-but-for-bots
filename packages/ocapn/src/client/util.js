@@ -3,7 +3,7 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { LocationId, SwissNum } from './types.js'
+ * @import { LocationId, SwissNum } from './types.types.js'
  */
 
 import { encodeAscii } from '@endo/ascii/encode.js';

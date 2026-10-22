@@ -7,7 +7,7 @@ import {
 } from '../src/client/grant-tracker.js';
 
 /** @import { OcapnLocation } from '../src/codecs/components.js' */
-/** @import { SwissNum } from '../src/client/types.js' */
+/** @import { SwissNum } from '../src/client/types.types.js' */
 /** @import { Slot } from '../src/captp/types.js' */
 
 const swissNum = /** @param {string} s @returns {SwissNum} */ s =>

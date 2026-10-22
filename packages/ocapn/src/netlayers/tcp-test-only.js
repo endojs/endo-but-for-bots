@@ -10,7 +10,7 @@ import { locationToLocationId } from '../client/util.js';
 import { sendHandshake } from '../client/handshake.js';
 
 /**
- * @import { Connection, Logger, NetLayer, NetlayerHandlers, SelfIdentity, SocketOperations } from '../client/types.js'
+ * @import { Connection, Logger, NetLayer, NetlayerHandlers, SelfIdentity, SocketOperations } from '../client/types.types.js'
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { Reader, Writer } from '@endo/stream'
  */
@@ -175,13 +175,13 @@ const makeSyrupDeframer = (logger, onFrame) => {
  * @typedef {object} TcpTestOnlyNetLayerDebug
  * @property {(location: OcapnLocation) => ConnectionSocketPair} establishConnection
  *
- * @typedef {NetLayer & import('../client/types.js').OcapnNetwork & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
+ * @typedef {NetLayer & import('../client/types.types.js').OcapnNetwork & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
  */
 
 /**
  * @param {object} options
  * @param {NetlayerHandlers} options.handlers
- * @param {import('../client/types.js').Logger} options.logger
+ * @param {import('../client/types.types.js').Logger} options.logger
  * @param {number} [options.specifiedPort]
  * @param {string} [options.specifiedHostname]
  * @param {string} [options.specifiedDesignator]

@@ -10,7 +10,7 @@ import harden from '@endo/harden';
  * @import { OcapnTable } from '../captp/ocapn-tables.js'
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { HandoffGiveSigEnvelope } from '../codecs/descriptors.js'
- * @import { Logger, SwissNum } from './types.js'
+ * @import { Logger, SwissNum } from './types.types.js'
  * @import { GrantTracker, GrantDetails, HandoffGiveDetails } from './grant-tracker.js'
  * @import { Parcel, ParcelTracker } from './parcels.js'
  * @import { MakeRemoteKit, SendHandoff } from './ocapn.js'

@@ -9,7 +9,7 @@
  * @import { OcapnReader, OcapnWriter } from '../../src/codec-interface.js'
  * @import { ParcelTracker } from '../../src/client/parcels.js'
  * @import { Settler } from '@endo/eventual-send'
- * @import { PublicKeyId, SessionId, SwissNum } from '../../src/client/types.js'
+ * @import { PublicKeyId, SessionId, SwissNum } from '../../src/client/types.types.js'
  */
 
 import harden from '@endo/harden';

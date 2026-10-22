@@ -17,7 +17,7 @@
  * lines is what makes `@import { Foo } from '@endo/ocapn'` resolve in
  * downstream JSDoc.
  *
- * @typedef {import('./src/client/types.js').SwissNum} SwissNum
+ * @typedef {import('./src/client/types.types.js').SwissNum} SwissNum
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
  */
 
