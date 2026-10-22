@@ -1,7 +1,5 @@
 // @ts-check
 
-/// <reference types="./types.d.ts" />
-
 /** @import { Name, NamePath, PetName, SpecialName } from './types.js' */
 
 import { q } from '@endo/errors';

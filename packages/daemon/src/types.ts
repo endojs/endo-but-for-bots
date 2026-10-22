@@ -86,16 +86,16 @@ export type MignonicPowers = {
   };
 };
 
-type IdRecord = {
+export type IdRecord = {
   number: FormulaNumber;
   node: NodeNumber;
 };
 
-type ParseIdRecord = IdRecord & {
+export type ParseIdRecord = IdRecord & {
   id: FormulaIdentifier;
 };
 
-type EndoFormula = {
+export type EndoFormula = {
   type: 'endo';
   networks: FormulaIdentifier;
   pins: FormulaIdentifier;
@@ -104,11 +104,11 @@ type EndoFormula = {
   leastAuthority: FormulaIdentifier;
 };
 
-type LoopbackNetworkFormula = {
+export type LoopbackNetworkFormula = {
   type: 'loopback-network';
 };
 
-type WorkerFormula = {
+export type WorkerFormula = {
   type: 'worker';
 };
 
@@ -124,7 +124,7 @@ export type AgentDeferredTaskParams = {
   handleId: FormulaIdentifier;
 };
 
-type HostFormula = {
+export type HostFormula = {
   type: 'host';
   handle: FormulaIdentifier;
   worker: FormulaIdentifier;
@@ -137,7 +137,7 @@ type HostFormula = {
   pins: FormulaIdentifier;
 };
 
-type GuestFormula = {
+export type GuestFormula = {
   type: 'guest';
   handle: FormulaIdentifier;
   hostHandle: FormulaIdentifier;
@@ -152,13 +152,13 @@ type LeastAuthorityFormula = {
   type: 'least-authority';
 };
 
-type MarshalFormula = {
+export type MarshalFormula = {
   type: 'marshal';
   body: any;
   slots: Array<FormulaIdentifier>;
 };
 
-type EvalFormula = {
+export type EvalFormula = {
   type: 'eval';
   worker: FormulaIdentifier;
   source: string;
@@ -178,7 +178,7 @@ export type EvalDeferredTaskParams = {
   workerId: FormulaIdentifier;
 };
 
-type ReadableBlobFormula = {
+export type ReadableBlobFormula = {
   type: 'readable-blob';
   content: string;
 };
@@ -187,7 +187,7 @@ export type ReadableBlobDeferredTaskParams = {
   readableBlobId: FormulaIdentifier;
 };
 
-type LookupFormula = {
+export type LookupFormula = {
   type: 'lookup';
 
   /**
@@ -202,7 +202,7 @@ type LookupFormula = {
   path: NamePath;
 };
 
-type MakeUnconfinedFormula = {
+export type MakeUnconfinedFormula = {
   type: 'make-unconfined';
   worker: FormulaIdentifier;
   powers: FormulaIdentifier;
@@ -210,7 +210,7 @@ type MakeUnconfinedFormula = {
   // TODO formula slots
 };
 
-type MakeBundleFormula = {
+export type MakeBundleFormula = {
   type: 'make-bundle';
   worker: FormulaIdentifier;
   powers: FormulaIdentifier;
@@ -224,14 +224,14 @@ export type MakeCapletDeferredTaskParams = {
   workerId: FormulaIdentifier;
 };
 
-type PeerFormula = {
+export type PeerFormula = {
   type: 'peer';
   networks: FormulaIdentifier;
   node: NodeNumber;
   addresses: Array<string>;
 };
 
-type HandleFormula = {
+export type HandleFormula = {
   type: 'handle';
   agent: FormulaIdentifier;
 };
@@ -240,20 +240,20 @@ type KnownPeersStoreFormula = {
   type: 'known-peers-store';
 };
 
-type PetStoreFormula = {
+export type PetStoreFormula = {
   type: 'pet-store';
 };
 
-type MailboxStoreFormula = {
+export type MailboxStoreFormula = {
   type: 'mailbox-store';
 };
 
-type MailHubFormula = {
+export type MailHubFormula = {
   type: 'mail-hub';
   store: FormulaIdentifier;
 };
 
-type MessageFormula = {
+export type MessageFormula = {
   type: 'message';
   messageType: 'request' | 'package';
   from: FormulaIdentifier;
@@ -268,27 +268,27 @@ type MessageFormula = {
 };
 
 // Pending is represented by the absence of a status entry in the promise store.
-type PromiseFormula = {
+export type PromiseFormula = {
   type: 'promise';
   store: FormulaIdentifier;
 };
 
-type ResolverFormula = {
+export type ResolverFormula = {
   type: 'resolver';
   store: FormulaIdentifier;
 };
 
-type PetInspectorFormula = {
+export type PetInspectorFormula = {
   type: 'pet-inspector';
   petStore: FormulaIdentifier;
 };
 
-type DirectoryFormula = {
+export type DirectoryFormula = {
   type: 'directory';
   petStore: FormulaIdentifier;
 };
 
-type InvitationFormula = {
+export type InvitationFormula = {
   type: 'invitation';
   hostAgent: FormulaIdentifier;
   hostHandle: FormulaIdentifier;
@@ -850,7 +850,7 @@ export type DaemonicPowers = {
   control: DaemonicControlPowers;
 };
 
-type FormulateResult<T> = Promise<{
+export type FormulateResult<T> = Promise<{
   id: FormulaIdentifier;
   value: T;
 }>;
