@@ -30,21 +30,23 @@ pub struct SuspendedWorker {
     pub meter: Option<MeterState>,
 }
 
-/// Ownership of one ephemeral GC-root reference taken at suspend.
+/// One ephemeral GC-root reference, pinned by `mark_suspended` and
+/// released when the lease drops.
 ///
-/// The resume path takes the suspended record out of the supervisor
-/// and wraps its pin in a lease; dropping the lease releases the root.
-/// The holder drops it once the restored worker has consumed the
-/// snapshot (or the resume failed), never before the worker has
-/// opened the blob.
+/// Both resume paths hold the lease until the restored worker's first
+/// outbound frame. The init handshake is inbound-only and the machine
+/// is built by `Machine::from_snapshot_file` before it can send
+/// anything, so that frame shows the blob has been read. If the worker
+/// dies first, its output ends and the lease drops then.
 pub struct GcRootLease {
     sup: Arc<Supervisor>,
     sha256: String,
 }
 
 impl GcRootLease {
-    /// Adopt the pin `mark_suspended` took for `sha256`. An empty
-    /// digest (store-backed worker) is a no-op lease.
+    /// Take over the pin `mark_suspended` took for `sha256`. This does
+    /// not pin: the caller must hold a matching suspended record. An
+    /// empty digest (store-backed worker) is a no-op lease.
     pub fn adopt(sup: Arc<Supervisor>, sha256: String) -> Self {
         GcRootLease { sup, sha256 }
     }
@@ -73,11 +75,9 @@ pub struct Supervisor {
     /// Suspended workers keyed by handle.  The inbox is removed
     /// when the worker suspends; on resume, a new inbox is created.
     suspended: RwLock<HashMap<Handle, SuspendedWorker>>,
-    /// Ephemeral CAS GC roots: SHA-256 hex digest → reference count.
-    /// A suspended XS worker's snapshot blob is pinned here from
-    /// `mark_suspended` until its resumed worker has consumed the
-    /// snapshot (`GcRootLease` drop), so a future CAS collector must
-    /// treat every key in this map as live.
+    /// Ephemeral CAS GC roots: SHA-256 hex digest -> reference count,
+    /// pinned by `mark_suspended` and released by `GcRootLease`. A
+    /// future CAS collector must treat every key in this map as live.
     gc_roots: Mutex<HashMap<String, usize>>,
     /// Per-worker metering state.
     meters: RwLock<HashMap<Handle, MeterState>>,
@@ -260,7 +260,6 @@ impl Supervisor {
         });
         // Capture meter state before removing it.
         let meter = self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
-        // Pin the snapshot blob for as long as the worker is suspended.
         if !sha256.is_empty() {
             self.pin_gc_root(&sha256);
         }
@@ -272,7 +271,7 @@ impl Supervisor {
         registrations.remove(&handle);
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
-        self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
+        let displaced = self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
             handle,
             SuspendedWorker {
                 sha256,
@@ -283,6 +282,13 @@ impl Supervisor {
             },
         );
         drop(registrations);
+        // A repeated suspend replaces the record; release its pin so
+        // only the record that a resume can adopt holds one.
+        if let Some(displaced) = displaced {
+            if !displaced.sha256.is_empty() {
+                self.release_gc_root(&displaced.sha256);
+            }
+        }
     }
 
     /// Check if a handle is suspended.
@@ -330,7 +336,6 @@ impl Supervisor {
         }
     }
 
-    /// Whether `sha256` is currently held as an ephemeral GC root.
     pub fn is_gc_root(&self, sha256: &str) -> bool {
         self.gc_roots
             .lock()

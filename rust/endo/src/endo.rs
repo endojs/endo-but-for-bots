@@ -214,7 +214,7 @@ impl Endo {
             pid,
             started: SystemTime::now(),
         };
-        let inbox = self.supervisor.register(daemon_handle, Some(info));
+        let (inbox, registration) = self.supervisor.register_tracked(daemon_handle, Some(info));
 
         // The daemon exit triggers a full shutdown via the Notify.
         let shutdown_notify = Arc::clone(&self.shutdown_notify);
@@ -225,7 +225,18 @@ impl Endo {
             sup_for_exit.stop();
         });
 
-        wire_worker_tasks(spawned, daemon_handle, 0, &self.supervisor, inbox, Some(on_exit), "init", Vec::new())?;
+        wire_worker_tasks(
+            spawned,
+            daemon_handle,
+            0,
+            &self.supervisor,
+            inbox,
+            registration,
+            None,
+            Some(on_exit),
+            "init",
+            Vec::new(),
+        )?;
 
         Ok(())
     }
@@ -759,8 +770,6 @@ fn handle_resume(
         return;
     }
     let cas_file_path = suspended.cas_dir.join(&suspended.sha256);
-    // Take over the snapshot's ephemeral GC root; the resume path
-    // drops it once the restored worker has read the blob.
     let gc_root = supervisor::GcRootLease::adopt(Arc::clone(sup), suspended.sha256.clone());
     let info = suspended.info;
 
@@ -812,6 +821,7 @@ fn resume_shared(
     });
     if sup_to_machine_tx.send(init_bytes).is_err() {
         eprintln!("endor: resume: failed to send restore init");
+        sup.unregister_registration(handle, registration);
         return;
     }
 
@@ -824,6 +834,7 @@ fn resume_shared(
         let bytes = codec::encode_envelope(&env);
         if sup_to_machine_tx.send(bytes).is_err() {
             eprintln!("endor: resume: failed to send pending message");
+            sup.unregister_registration(handle, registration);
             return;
         }
     }
@@ -858,10 +869,8 @@ fn resume_shared(
         }
     });
 
-    // Outbound bridge: machine → supervisor.
-    // The first outbound frame proves the machine restored from the
-    // snapshot, so the GC root is released then; if the machine dies
-    // first, the channel closes and the lease drops with this task.
+    // Outbound bridge: machine → supervisor. Holds the GC root until
+    // the first frame (see `GcRootLease`).
     let sup_outbound = Arc::clone(sup);
     tokio::task::spawn_blocking(move || {
         let mut gc_root = Some(gc_root);
@@ -905,8 +914,6 @@ fn resume_shared(
         } else {
             eprintln!("endor: resumed worker {handle} exited cleanly");
         }
-        // A no-op if the resumed worker was itself suspended (or
-        // resumed again) before this thread finished exiting.
         sup_for_exit.unregister_registration(handle, registration);
     });
 }
@@ -926,7 +933,7 @@ fn resume_process(
     let args = info.args;
 
     // Re-register the handle with a fresh inbox.
-    let inbox = sup.register(
+    let (inbox, registration) = sup.register_tracked(
         handle,
         Some(WorkerInfo {
             handle,
@@ -966,6 +973,8 @@ fn resume_process(
         pending_msg.from,
         sup,
         inbox,
+        registration,
+        Some(gc_root),
         None,
         "restore",
         restore_payload,
@@ -974,10 +983,6 @@ fn resume_process(
         sup.unregister(handle);
         return;
     }
-    // The child opens the snapshot during its restore handshake;
-    // the restore payload is handed over, so release the root.
-    drop(gc_root);
-
     // Deliver the pending message that triggered resume.
     sup.deliver(pending_msg);
 }
@@ -1148,6 +1153,80 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    fn pending(sup: &Arc<Supervisor>, to: Handle) -> Message {
+        Message {
+            from: sup.alloc_handle(),
+            to,
+            envelope: Envelope {
+                handle: to,
+                verb: "ping".to_string(),
+                payload: Vec::new(),
+                nonce: 0,
+            },
+            response_tx: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn store_backed_resume_stays_suspended_without_a_gc_root() {
+        let (sup, _outbox_rx) = Supervisor::new();
+        let handle = sup.alloc_handle();
+        let _inbox = sup.register(handle, None);
+        sup.mark_suspended_store(handle, std::path::PathBuf::from("/tmp/heap.sqlite"));
+        let suspended = sup.take_suspended(handle).expect("suspended record");
+
+        let message = pending(&sup, handle);
+        handle_resume(&sup, &sup, handle, suspended, std::path::Path::new("/tmp"), message);
+
+        assert!(sup.is_suspended(handle));
+        assert!(sup.gc_roots().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_process_resume_releases_the_gc_root() {
+        let (sup, _outbox_rx) = Supervisor::new();
+        let handle = sup.alloc_handle();
+        let _inbox = sup.register(
+            handle,
+            Some(WorkerInfo {
+                handle,
+                platform: "separate".to_string(),
+                cmd: "/nonexistent/endor-worker".to_string(),
+                args: Vec::new(),
+                pid: 0,
+                started: SystemTime::now(),
+            }),
+        );
+        let sha256 = "ab".repeat(32);
+        sup.mark_suspended(handle, sha256.clone(), std::path::PathBuf::from("/tmp/cas"));
+        assert!(sup.is_gc_root(&sha256));
+        let suspended = sup.take_suspended(handle).expect("suspended record");
+
+        let message = pending(&sup, handle);
+        handle_resume(&sup, &sup, handle, suspended, std::path::Path::new("/tmp/cas"), message);
+
+        assert!(sup.gc_roots().is_empty());
+        assert_eq!(sup.registration(handle), None);
+    }
+
+    #[test]
+    fn repeated_suspend_keeps_one_gc_root_reference() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let handle = sup.alloc_handle();
+            let _inbox = sup.register(handle, None);
+            let cas = std::path::PathBuf::from("/tmp/cas");
+            sup.mark_suspended(handle, "first".to_string(), cas.clone());
+            sup.mark_suspended(handle, "second".to_string(), cas);
+            assert_eq!(sup.gc_roots(), vec!["second".to_string()]);
+
+            let suspended = sup.take_suspended(handle).expect("suspended record");
+            drop(supervisor::GcRootLease::adopt(Arc::clone(&sup), suspended.sha256));
+            assert!(sup.gc_roots().is_empty());
+        });
     }
 
     fn suspend_request(target: Handle) -> Vec<u8> {

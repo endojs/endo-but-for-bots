@@ -310,34 +310,33 @@ the mismatch.
 
 14. Ephemeral GC root bookkeeping for CAS-stored snapshots:
     `mark_suspended` pins the snapshot's SHA-256 in a
-    ref-counted root set (`Supervisor::gc_roots`,
-    `is_gc_root`); resume adopts the pin as a `GcRootLease`
-    that releases it once the restored worker has read the
-    blob (its first outbound frame, or exit). **(done)**
+    ref-counted root set (`Supervisor::gc_roots`); resume adopts
+    the pin as a `GcRootLease`. Both resume paths (in-process and
+    child process) release it on the restored worker's first
+    outbound frame, or when its output ends. A worker sends
+    nothing before its machine is rebuilt from the snapshot, so
+    that frame shows the blob has been read. A repeated suspend
+    of the same handle releases the replaced record's pin.
+    **(done)**
 
 15. Integration test: full supervisor round-trip (suspend via
     control verb -> worker streams snapshot to CAS -> worker
     exits -> message triggers resume -> restored worker has
-    correct JS state). **(done)** —
-    `supervisor_suspend_resume_round_trip` in
-    `rust/endo/src/endo.rs` drives this through the real
-    routing callbacks with a ping-counter bundle, checking the
-    CAS blob against its SHA-256, the GC root pinned while
-    suspended and released on resume, and the JS count carried
-    across the snapshot. It first exposed a crank-end crash:
+    correct JS state): `supervisor_suspend_resume_round_trip`
+    in `rust/endo/src/endo.rs`. It exposed a crank-end crash:
     the worker loop ran `machine.eval("__shouldTerminate()")`,
     and `Machine::eval` has no catch frame, so a bundle that
     does not define `__shouldTerminate` (or one whose check
     throws) longjmped through a NULL `firstJump` and SIGSEGVed
-    the process. The probe is now a self-contained
-    `try`/`typeof` expression that never throws.
-16. Exit-path race: the supervisor stamps each `register` with
-    a generation (`register_tracked`), `mark_suspended` ends
-    it, and worker exit paths (in-process spawn, in-process
-    resume, child-process wait task) unregister through
-    `unregister_registration`, a no-op once the handle was
-    suspended (keeping its parent link for resume) or
-    re-registered by a resume. **(done)**
+    the process. The probe is now a `try`/`typeof` expression
+    that never throws. **(done)**
+
+16. Exit-path race: each registration carries a generation
+    (`register_tracked`) that `mark_suspended` ends. Every worker
+    exit path (in-process spawn, in-process resume, child-process
+    wait task) unregisters through `unregister_registration`
+    with the generation its caller registered, a no-op once the
+    handle was suspended or re-registered by a resume. **(done)**
 
 ### Phase 3: Future enhancements
 
