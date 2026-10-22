@@ -1158,7 +1158,7 @@ mod tests {
     // Ignored: on the first crank the in-process worker SIGSEGVs right
     // after `handleCommand` returns from `sendRawFrame`, before the
     // pong reaches the tester (reproduced with stub SES/worker bundles;
-    // successor job debug-daemon-xs-inproc-worker-first-crank-segfault).
+    // successor job build-daemon-xs-worker-snapshot-round-trip-segfault).
     #[ignore = "in-process XS worker segfaults after its first crank"]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn supervisor_suspend_resume_round_trip() {
