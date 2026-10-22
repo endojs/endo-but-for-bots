@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::mailbox::{self, Mailbox, MailboxReceiver};
+use crate::tui_store::TuiStore;
 use crate::types::{Handle, MeterMode, MeterState, Message, RateLimit, WorkerInfo};
 
 /// State for a suspended worker.
@@ -40,6 +41,8 @@ pub struct Supervisor {
     suspended: RwLock<HashMap<Handle, SuspendedWorker>>,
     /// Per-worker metering state.
     meters: RwLock<HashMap<Handle, MeterState>>,
+    /// Worker-owned TUI windows and regions (designs/endor-bus-tui.md).
+    tui: Mutex<TuiStore>,
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
@@ -57,6 +60,7 @@ impl Supervisor {
             pending_syncs: Mutex::new(HashMap::new()),
             suspended: RwLock::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
+            tui: Mutex::new(TuiStore::new()),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
@@ -82,6 +86,12 @@ impl Supervisor {
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        self.tui_store().sweep_owner(h);
+    }
+
+    /// Lock the TUI window/region store.
+    pub fn tui_store(&self) -> std::sync::MutexGuard<'_, TuiStore> {
+        self.tui.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn set_parent(&self, child: Handle, parent: Handle) {
@@ -426,6 +436,41 @@ pub fn is_debug_public() -> bool {
 mod tests {
     use super::*;
     use std::time::SystemTime;
+
+    fn tui_window(sup: &Supervisor, owner: Handle) {
+        use crate::codec::{TuiLayoutHint, TuiRequest};
+        sup.tui_store()
+            .apply(
+                owner,
+                TuiRequest::CreateWindow {
+                    screen_id: crate::tui_store::SCREEN_ID,
+                    title: "status".to_string(),
+                    role: "status".to_string(),
+                    layout_hint: TuiLayoutHint::default(),
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn unregister_sweeps_tui_state() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let a = sup.alloc_handle();
+            let b = sup.alloc_handle();
+            let _rx_a = sup.register(a, None);
+            let _rx_b = sup.register(b, None);
+            tui_window(&sup, a);
+            tui_window(&sup, b);
+            sup.unregister(a);
+            assert!(!sup.tui_store().owns_anything(a));
+            assert!(sup.tui_store().owns_anything(b));
+            // The terminated-worker meter path funnels through unregister.
+            sup.process_meter_report(b, 1, "terminated");
+            assert!(sup.tui_store().is_empty());
+        });
+    }
 
     #[test]
     fn suspend_resume_preserves_platform() {

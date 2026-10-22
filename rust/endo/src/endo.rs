@@ -697,6 +697,22 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 }
             }
         }
+        verb if verb.starts_with("tui.") => {
+            // Worker-programmable TUI (designs/endor-bus-tui.md): the
+            // store is keyed by the sender, so a worker names only its
+            // own windows and regions.
+            let result = crate::tui_store::dispatch(&mut sup.tui_store(), msg.from, verb, &msg.envelope.payload);
+            let (verb, payload) = match result {
+                Ok(payload) => (verb.to_string(), payload),
+                Err(err) => ("error".to_string(), codec::encode_tui_error(&err)),
+            };
+            sup.deliver(Message {
+                from: 0,
+                to: msg.from,
+                envelope: Envelope { handle: 0, verb, payload, nonce: msg.envelope.nonce },
+                response_tx: None,
+            });
+        }
         other => {
             if crate::supervisor::is_debug_public() {
                 eprintln!("endor: unhandled control verb: {other}");
