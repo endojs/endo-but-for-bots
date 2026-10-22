@@ -11,11 +11,12 @@
  */
 
 import harden from '@endo/harden';
+import { open as openParcel } from '@endo/parcel';
 import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
 import { makeCryptography } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
-import { makeParcelTracker, openParcel, openParcelDetails } from './parcels.js';
+import { makeParcelTracker } from './parcels.js';
 import { locationToLocationId, toHex } from './util.js';
 import {
   handleHandshakeMessageData,
@@ -535,11 +536,6 @@ export const makeOcapn = async ({
   };
 
   const grantTracker = makeGrantTracker();
-  // The Parcels this client mints open through this client. The
-  // session helpers are declared below; they are only reached on open.
-  const parcelTracker = makeParcelTracker(locator, details =>
-    openParcelDetails(details, provideInternalSession, isSelfLocation, locator),
-  );
 
   /**
    * Check whether a location refers to this instance (as opposed to
@@ -597,6 +593,12 @@ export const makeOcapn = async ({
     newSessionPromise.then(forget, forget);
     return newSessionPromise;
   };
+
+  const parcelTracker = makeParcelTracker(
+    locator,
+    provideInternalSession,
+    isSelfLocation,
+  );
 
   const prepareOcapn = (connection, sessionId, peerLocation) => {
     return makeOcapnCore(
@@ -935,8 +937,6 @@ export const makeOcapn = async ({
     makeParcel(location, secret) {
       return parcelTracker.makeParcel(location, secret);
     },
-    // Compatibility aliases for downstream packages updated later in this
-    // stacked series.
     makeSturdyRef(location, secret) {
       return parcelTracker.makeParcel(location, secret);
     },
@@ -949,20 +949,10 @@ export const makeOcapn = async ({
      * @returns {Promise<any>}
      */
     openParcel(parcel) {
-      return openParcel(
-        parcel,
-        provideInternalSession,
-        isSelfLocation,
-        locator,
-      );
+      return openParcel(parcel);
     },
     enlivenSturdyRef(parcel) {
-      return openParcel(
-        parcel,
-        provideInternalSession,
-        isSelfLocation,
-        locator,
-      );
+      return openParcel(parcel);
     },
     shutdown() {
       logger.info(`shutdown called`);

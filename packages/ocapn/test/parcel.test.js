@@ -5,7 +5,9 @@
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import harden from '@endo/harden';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { passStyleOf } from '@endo/pass-style';
+import { locate } from '@endo/parcel';
 import baseTest from '@endo/ses-ava/test.js';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import {
@@ -16,12 +18,10 @@ import {
 } from '../src/client/util.js';
 import {
   formatParcelLocation,
-  isParcel,
-  getParcelDetails,
   makeParcel,
   makeParcelTracker,
+  parseParcelLocation,
 } from '../src/client/parcels.js';
-import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 import { AllCodecs, makeCodecTestKit } from './codecs/_codecs_util.js';
 
 const Parcel = globalThis.Parcel;
@@ -31,6 +31,7 @@ const parcelTest = parcelIsInstalled ? test : baseTest.skip;
 const parcelTestWithErrorUnwrapping = parcelIsInstalled
   ? testWithErrorUnwrapping
   : baseTest.skip;
+const readParcelDetails = parcel => parseParcelLocation(locate(parcel));
 
 test('swissnum text conversion rejects U+0080 without changing raw bytes', t => {
   t.throws(() => encodeSwissnum('\u0080'), { instanceOf: RangeError });
@@ -66,7 +67,6 @@ parcelTestWithErrorUnwrapping('Parcel is a realm Parcel', async t => {
 
   t.true(Parcel.isParcel(parcel), 'brand check accepts it');
   t.is(passStyleOf(parcel), 'parcel', 'passStyleOf returns parcel');
-  t.is(ocapnPassStyleOf(parcel), 'parcel', 'ocapnPassStyleOf returns parcel');
   t.is(Object.getPrototypeOf(parcel), Parcel.prototype);
   t.deepEqual(Reflect.ownKeys(parcel), [], 'no own properties');
 
@@ -105,9 +105,29 @@ parcelTest('a Parcel minted without a client refuses to open', async t => {
     hints: /** @type {const} */ (false),
   });
   const parcel = makeParcel(location, 'a-secret');
-  t.true(isParcel(parcel));
+  t.true(Parcel.isParcel(parcel));
   await t.throwsAsync(() => Parcel.open(parcel), {
     message: /minted without an OCapN client/,
+  });
+});
+
+parcelTest('an OCapN Parcel location names its peer without JSON', t => {
+  const location = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'tcp-test',
+    transport: 'tcp',
+    designator: 'ed25519-public-key',
+    hints: { host: '127.0.0.1', port: '9999' },
+  });
+  const parcel = makeParcel(location, frozenBytes(Uint8Array.of(0xab, 0xcd)));
+  const parcelLocation = locate(parcel);
+  const params = new URLSearchParams(parcelLocation.slice(1));
+
+  t.is(params.get('peer'), 'ed25519-public-key');
+  t.is(params.get('value'), 'abcd');
+  t.deepEqual(readParcelDetails(parcel), {
+    location,
+    secret: frozenBytes(Uint8Array.of(0xab, 0xcd)),
   });
 });
 
@@ -127,7 +147,7 @@ parcelTest('the public Parcel mint takes no custom open', async t => {
     'a-secret',
     async () => decoy,
   );
-  t.deepEqual(getParcelDetails(parcel), { location, secret: 'a-secret' });
+  t.deepEqual(readParcelDetails(parcel), { location, secret: 'a-secret' });
   await t.throwsAsync(() => Parcel.open(parcel), {
     message: /minted without an OCapN client/,
   });
@@ -135,9 +155,9 @@ parcelTest('the public Parcel mint takes no custom open', async t => {
 
 parcelTest('a Parcel for another location scheme is refused by OCapN', t => {
   const foreign = new Parcel('other:elsewhere', () => 'elsewhere');
-  t.is(ocapnPassStyleOf(foreign), 'parcel', 'takes the parcel codec');
-  t.true(isParcel(foreign), 'it remains a realm Parcel');
-  t.is(getParcelDetails(foreign), undefined);
+  t.is(passStyleOf(foreign), 'parcel', 'takes the parcel codec');
+  t.true(Parcel.isParcel(foreign), 'it remains a realm Parcel');
+  t.throws(() => readParcelDetails(foreign));
   const { PassableCodec } = makeCodecTestKit();
   for (const codec of AllCodecs) {
     const writer = codec.makeWriter({ name: 'foreign Parcel' });
@@ -171,7 +191,7 @@ parcelTest('OCapN carries a Parcel it did not mint', t => {
       name: 'foreign OCapN Parcel',
     });
     const received = PassableCodec.read(reader);
-    const details = getParcelDetails(received);
+    const details = readParcelDetails(received);
     t.truthy(details);
     if (details) {
       t.like(details.location, {
@@ -189,7 +209,7 @@ parcelTest('OCapN carries a Parcel it did not mint', t => {
 });
 
 parcelTestWithErrorUnwrapping(
-  'isParcel correctly identifies Parcels',
+  'Parcel.isParcel correctly identifies Parcels',
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
@@ -198,11 +218,11 @@ parcelTestWithErrorUnwrapping(
 
     const parcel = clientA.makeParcel(locationB, 'test');
 
-    t.true(isParcel(parcel), 'isParcel returns true for Parcel');
-    t.false(isParcel({}), 'isParcel returns false for plain object');
-    t.false(isParcel(null), 'isParcel returns false for null');
-    t.false(isParcel(undefined), 'isParcel returns false for undefined');
-    t.false(isParcel('string'), 'isParcel returns false for string');
+    t.true(Parcel.isParcel(parcel), 'isParcel returns true for Parcel');
+    t.false(Parcel.isParcel({}), 'isParcel returns false for plain object');
+    t.false(Parcel.isParcel(null), 'isParcel returns false for null');
+    t.false(Parcel.isParcel(undefined), 'isParcel returns false for undefined');
+    t.false(Parcel.isParcel('string'), 'isParcel returns false for string');
 
     clientA.shutdown();
     clientB.shutdown();
@@ -210,7 +230,7 @@ parcelTestWithErrorUnwrapping(
 );
 
 parcelTestWithErrorUnwrapping(
-  'getParcelDetails returns correct details',
+  'Parcel.locate reveals OCapN details to the initial realm',
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
@@ -219,20 +239,12 @@ parcelTestWithErrorUnwrapping(
 
     const parcel = clientA.makeParcel(locationB, 'test-object');
 
-    const details = getParcelDetails(parcel);
-    t.truthy(details, 'getParcelDetails returns details');
-    if (details) {
-      t.deepEqual(details.location, locationB, 'location matches');
-      t.is(details.secret, 'test-object', 'secret matches');
-    }
+    const details = readParcelDetails(parcel);
+    t.deepEqual(details.location, locationB, 'location matches');
+    t.is(details.secret, 'test-object', 'secret matches');
 
     const notAParcel = /** @type {any} */ ({});
-    const noDetails = getParcelDetails(notAParcel);
-    t.is(
-      noDetails,
-      undefined,
-      'getParcelDetails returns undefined for non-Parcel',
-    );
+    t.throws(() => readParcelDetails(notAParcel));
 
     clientA.shutdown();
     clientB.shutdown();
@@ -304,11 +316,11 @@ parcelTest('Resolved values are not Parcels', async t => {
 
   const parcel = clientA.makeParcel(locationB, 'test-object');
 
-  t.true(isParcel(parcel), 'parcel is a Parcel before resolve');
+  t.true(Parcel.isParcel(parcel), 'parcel is a Parcel before resolve');
 
   const resolved = await clientA.openParcel(parcel);
 
-  t.false(isParcel(resolved), 'resolved value is not a Parcel');
+  t.false(Parcel.isParcel(resolved), 'resolved value is not a Parcel');
 
   const value = await E(resolved).getValue();
   t.is(value, 42, 'resolved value works correctly');
@@ -331,11 +343,11 @@ parcelTest('Parcel to self-location can be resolved', async t => {
 
   const parcel = clientA.makeParcel(locationA, 'test-object');
 
-  t.true(isParcel(parcel), 'parcel is a Parcel');
+  t.true(Parcel.isParcel(parcel), 'parcel is a Parcel');
 
   const resolved = await clientA.openParcel(parcel);
 
-  t.false(isParcel(resolved), 'resolved value is not a Parcel');
+  t.false(Parcel.isParcel(resolved), 'resolved value is not a Parcel');
 
   const value = await E(resolved).getValue();
   t.is(value, 42, 'resolved self-location value works correctly');

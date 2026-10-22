@@ -13,6 +13,7 @@
 
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { locate } from '@endo/parcel';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -26,7 +27,7 @@ import {
   OcapnPublicKeyCodec,
   OcapnSignatureCodec,
 } from './components.js';
-import { getParcelDetails } from '../client/parcels.js';
+import { parseParcelLocation } from '../client/parcels.js';
 import { encodeSwissnum } from '../client/util.js';
 
 /**
@@ -330,8 +331,10 @@ export const makeDescCodecs = referenceKit => {
      * @param {OcapnWriter} writer
      */
     (parcel, writer) => {
-      const details = getParcelDetails(parcel);
-      if (!details) {
+      let details;
+      try {
+        details = parseParcelLocation(locate(parcel));
+      } catch {
         throw Error(
           'Cannot serialize: Parcel location is not an OCapN location',
         );

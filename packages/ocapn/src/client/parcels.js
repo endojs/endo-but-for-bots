@@ -11,11 +11,7 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { decodeHex, encodeHex } from '@endo/hex';
 import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
-import {
-  isParcel as isRealmParcel,
-  locate,
-  makeParcel as makeRealmParcel,
-} from '@endo/parcel';
+import { makeParcel as makeRealmParcel } from '@endo/parcel';
 import {
   decodeSwissnum,
   encodeSwissnum,
@@ -45,11 +41,20 @@ import {
 export const formatParcelLocation = (location, secret) => {
   const params = new URLSearchParams();
   params.set('ocapn', '1');
-  params.set('peer', JSON.stringify(location));
+  params.set('peer', location.designator);
+  params.set('transport', location.transport);
+  if (location.network !== undefined) {
+    params.set('network', location.network);
+  }
+  if (location.hints !== false) {
+    for (const [key, value] of Object.entries(location.hints).sort()) {
+      params.append('hint', `${key}=${value}`);
+    }
+  }
   if (typeof secret === 'string') {
     params.set('text', secret);
   } else {
-    params.set('value', encodeHex(thawedBytes(secret)));
+    params.set('value', encodeHex(secret));
   }
   return `#${params}`;
 };
@@ -69,44 +74,42 @@ export const parseParcelLocation = parcelLocation => {
   if (peer === null) {
     throw TypeError('OCapN Parcel location has no peer');
   }
+  const transport = params.get('transport');
+  if (transport === null) {
+    throw TypeError('OCapN Parcel location has no transport');
+  }
   const text = params.get('text');
   const value = params.get('value');
   if ((text === null) === (value === null)) {
     throw TypeError('OCapN Parcel location must carry one value');
   }
-  const location = JSON.parse(/** @type {string} */ (peer));
-  if (!location || location.type !== 'ocapn-peer') {
-    throw TypeError('OCapN Parcel peer is malformed');
+  const hintEntries = params.getAll('hint').map(hint => {
+    const separator = hint.indexOf('=');
+    if (separator < 0) {
+      throw TypeError('OCapN Parcel location has a malformed hint');
+    }
+    return [hint.slice(0, separator), hint.slice(separator + 1)];
+  });
+  const hints =
+    hintEntries.length === 0 ? false : Object.fromEntries(hintEntries);
+  /** @type {OcapnLocation} */
+  const location = {
+    type: 'ocapn-peer',
+    designator: peer,
+    transport,
+    hints,
+  };
+  const network = params.get('network');
+  if (network !== null) {
+    location.network = network;
   }
   return harden({
-    location,
+    location: harden(location),
     secret:
       text !== null
         ? text
         : frozenBytes(decodeHex(/** @type {string} */ (value), 'Parcel value')),
   });
-};
-
-/**
- * @param {unknown} value
- * @returns {value is Parcel}
- */
-export const isParcel = value => isRealmParcel(value);
-
-/**
- * Read OCapN coordinates with the caller's privileged initial Parcel
- * constructor. A Parcel with a location for another scheme has no OCapN
- * details and is rejected by the OCapN wire codec.
- *
- * @param {Parcel} parcel
- * @returns {ParcelDetails | undefined}
- */
-export const getParcelDetails = parcel => {
-  try {
-    return parseParcelLocation(locate(parcel));
-  } catch {
-    return undefined;
-  }
 };
 
 /** @type {OpenParcelDetails} */
@@ -138,53 +141,6 @@ export const makeParcel = (location, secret) =>
   makeBoundParcel(location, secret, openUnbound);
 
 /**
- * @param {ParcelDetails} details
- * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
- * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
- */
-export const openParcelDetails = async (
-  details,
-  provideSession,
-  isSelfLocation,
-  locator,
-) => {
-  const { location, secret } = details;
-  if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
-    if (value === undefined) {
-      throw Error('ocapn: locator has no capability for parcel value');
-    }
-    return value;
-  }
-  const { ocapn } = await provideSession(location);
-  const wireSecret =
-    typeof secret === 'string'
-      ? encodeSwissnum(secret)
-      : swissnumFromBytes(secret);
-  return E(ocapn.getRemoteBootstrap()).fetch(wireSecret);
-};
-
-/**
- * @param {Parcel} parcel
- * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
- * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
- */
-export const openParcel = async (
-  parcel,
-  provideSession,
-  isSelfLocation,
-  locator,
-) => {
-  const details = getParcelDetails(parcel);
-  if (!details) {
-    throw Error('OCapN Parcel details not found');
-  }
-  return openParcelDetails(details, provideSession, isSelfLocation, locator);
-};
-
-/**
  * @typedef {object} ParcelTracker
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => Parcel} makeParcel
  * @property {(secretBytes: Uint8Array) => Promise<any | undefined>} lookup
@@ -192,11 +148,35 @@ export const openParcel = async (
 
 /**
  * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
- * @param {OpenParcelDetails} [openDetails]
+ * @param {(location: OcapnLocation) => Promise<InternalSession>} [provideSession]
+ * @param {(location: OcapnLocation) => boolean} [isSelfLocation]
  * @returns {ParcelTracker}
  */
-export const makeParcelTracker = (locator, openDetails = openUnbound) =>
-  harden({
+export const makeParcelTracker = (
+  locator,
+  provideSession = undefined,
+  isSelfLocation = undefined,
+) => {
+  const openDetails =
+    provideSession === undefined || isSelfLocation === undefined
+      ? openUnbound
+      : async details => {
+          const { location, secret } = details;
+          if (isSelfLocation(location)) {
+            const value = await locator.get(secret);
+            if (value === undefined) {
+              throw Error('ocapn: locator has no capability for parcel value');
+            }
+            return value;
+          }
+          const { ocapn } = await provideSession(location);
+          const wireSecret =
+            typeof secret === 'string'
+              ? encodeSwissnum(secret)
+              : swissnumFromBytes(secret);
+          return E(ocapn.getRemoteBootstrap()).fetch(wireSecret);
+        };
+  return harden({
     makeParcel: (location, secret) =>
       makeBoundParcel(location, secret, openDetails),
     lookup: async secretBytes => {
@@ -208,3 +188,4 @@ export const makeParcelTracker = (locator, openDetails = openUnbound) =>
       }
     },
   });
+};
