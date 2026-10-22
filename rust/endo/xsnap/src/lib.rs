@@ -1679,6 +1679,13 @@ pub enum XsProgram<'a> {
 /// Supervised modes run the main loop dispatching envelopes into
 /// JS `handleCommand`; standalone modes drain promises/timers to
 /// quiescence and return.
+/// Crank-end termination probe, safe to `Machine::eval` (never throws).
+const SHOULD_TERMINATE_CHECK: &str = "(function () { \
+    try { \
+        return typeof __shouldTerminate === 'function' && __shouldTerminate() === true; \
+    } catch (e) { return false; } \
+})()";
+
 pub fn run_xs_program(
     program: XsProgram<'_>,
     creation: &ffi::XsCreation,
@@ -2104,9 +2111,11 @@ pub fn run_xs_program(
             // Report steps to the supervisor.
             send_meter_report(steps, "ok");
 
-            if let Some(JsValue::Boolean(true)) =
-                machine.eval("__shouldTerminate()")
-            {
+            // `Machine::eval` has no catch frame: a throw here (a bundle
+            // that never defines `__shouldTerminate`, or one whose check
+            // throws) would longjmp through a NULL `firstJump` and SIGSEGV
+            // the whole process. Absent or throwing means "keep running".
+            if let Some(JsValue::Boolean(true)) = machine.eval(SHOULD_TERMINATE_CHECK) {
                 break;
             }
         }
