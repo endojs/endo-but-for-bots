@@ -1664,6 +1664,13 @@ pub enum XsProgram<'a> {
     Archive(&'a [u8]),
 }
 
+/// Crank-end termination probe; see the main loop in `run_xs_program`.
+const SHOULD_TERMINATE_CHECK: &str = "(function () { \
+    try { \
+        return typeof __shouldTerminate === 'function' && __shouldTerminate() === true; \
+    } catch (e) { return false; } \
+})()";
+
 /// Unified XS runner.
 ///
 /// The `(program, transport)` matrix encodes the four modes the
@@ -1679,13 +1686,6 @@ pub enum XsProgram<'a> {
 /// Supervised modes run the main loop dispatching envelopes into
 /// JS `handleCommand`; standalone modes drain promises/timers to
 /// quiescence and return.
-/// Crank-end termination probe, safe to `Machine::eval` (never throws).
-const SHOULD_TERMINATE_CHECK: &str = "(function () { \
-    try { \
-        return typeof __shouldTerminate === 'function' && __shouldTerminate() === true; \
-    } catch (e) { return false; } \
-})()";
-
 pub fn run_xs_program(
     program: XsProgram<'_>,
     creation: &ffi::XsCreation,
