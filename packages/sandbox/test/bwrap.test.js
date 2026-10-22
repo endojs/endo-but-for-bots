@@ -1103,6 +1103,93 @@ test.serial(
   },
 );
 
+/**
+ * List host processes whose command line contains `marker`.
+ *
+ * @param {string} marker
+ * @returns {number[]}
+ */
+const findMarkedProcesses = marker => {
+  /** @type {number[]} */
+  const pids = [];
+  for (const entry of nodeFs.readdirSync('/proc')) {
+    if (/^\d+$/.test(entry)) {
+      let cmdline = '';
+      try {
+        cmdline = nodeFs.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
+      } catch {
+        // exited while listing
+      }
+      if (cmdline.includes(marker)) pids.push(Number(entry));
+    }
+  }
+  return pids;
+};
+
+test.serial(
+  'bwrap cancellation during launcher setup strands no sandbox init',
+  async t => {
+    // bwrap arms `--die-with-parent` in its sandbox init only after the
+    // launcher finishes namespace setup, and the init leaves the host
+    // process group via `setsid()`. A launcher killed inside that window
+    // used to strand the init beyond the reach of any group signal.
+    t.timeout(60_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const driver = makeBwrapDriver({ env: {} });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    );
+    const marker = `endo-sandbox-setup-race-${process.pid}-${Date.now()}`;
+    t.teardown(async () => {
+      for (const pid of findMarkedProcesses(marker)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+      await E(handle).dispose();
+      for (const dir of tmpdirs)
+        nodeFs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    for (let i = 0; i < 40; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const proc = await E(handle).spawn(
+        harden([
+          '/bin/sh',
+          '-c',
+          `trap "" TERM; while :; do sleep 60; done # ${marker}`,
+        ]),
+        harden({ captureStdout: false, captureStderr: false }),
+      );
+      // Vary the kill across the launcher's setup window.
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, i % 8));
+      // eslint-disable-next-line no-await-in-loop
+      await E(proc).kill();
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(proc).wait(), { message: /cancelled/ });
+    }
+
+    // A namespace being torn down by its init's death exits promptly.
+    const deadline = Date.now() + 3000;
+    let survivors = findMarkedProcesses(marker);
+    while (survivors.length > 0 && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 50));
+      survivors = findMarkedProcesses(marker);
+    }
+    t.deepEqual(survivors, [], 'no sandbox process outlives its cancellation');
+  },
+);
+
 test.serial('bwrap parent death leaves no owned process group', async t => {
   t.timeout(10_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator

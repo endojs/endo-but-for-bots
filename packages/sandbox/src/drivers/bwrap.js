@@ -102,6 +102,74 @@ const raceChildClose = (child, ms) =>
 harden(raceChildClose);
 
 /**
+ * File descriptor on which each spawned bwrap reports, through
+ * `--info-fd`, the host pid of the sandbox init it cloned.
+ */
+const INFO_FD = 3;
+
+/**
+ * Bound on how long a kill waits for bwrap to report its sandbox init.
+ * bwrap writes the report immediately after `clone()`, before it waits
+ * on anything, so this only matters for a launcher that failed or hung
+ * before cloning; such a launcher owns no sandbox init to kill.
+ */
+const INFO_REPORT_GRACE_MS = 1000;
+
+/**
+ * Read the sandbox init's host pid from bwrap's `--info-fd` report.
+ *
+ * Resolves `undefined` when the stream is absent, closes without a
+ * parseable report, or errors: the launcher then never cloned a sandbox
+ * init, or bwrap is too old to report it, and the process-group signal
+ * remains the only cleanup available.
+ *
+ * @param {import('stream').Readable | null | undefined} stream
+ * @returns {Promise<number | undefined>}
+ */
+const readSandboxInitPid = stream =>
+  new Promise(resolve => {
+    if (stream === null || stream === undefined) {
+      resolve(undefined);
+      return;
+    }
+    let report = '';
+    stream.setEncoding('utf8');
+    stream.on('data', chunk => {
+      report += chunk;
+    });
+    const settle = () => {
+      try {
+        const pid = Number(JSON.parse(report)['child-pid']);
+        resolve(Number.isSafeInteger(pid) && pid > 0 ? pid : undefined);
+      } catch {
+        resolve(undefined);
+      }
+    };
+    stream.once('close', settle);
+    stream.once('error', () => resolve(undefined));
+  });
+harden(readSandboxInitPid);
+
+/**
+ * Resolve with `promise`, or with `undefined` after `ms`.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @returns {Promise<T | undefined>}
+ */
+const raceBound = (promise, ms) =>
+  new Promise(resolve => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    if (typeof timer.unref === 'function') timer.unref();
+    void promise.then(value => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+harden(raceBound);
+
+/**
  * Inner mount points the driver always installs for a usable rootfs.
  *
  * `--proc /proc` mounts a fresh procfs inside the pid namespace,
@@ -816,6 +884,7 @@ export const makeBwrapDriver = ({
       }
     }
 
+    fullArgv.push('--info-fd', String(INFO_FD));
     fullArgv.push('--', ...argv);
 
     // Phase 1.5: when the factory supplied resource caps, prepend
@@ -847,6 +916,8 @@ export const makeBwrapDriver = ({
           'pipe',
           opts.captureStdout === false ? 'ignore' : 'pipe',
           opts.captureStderr === false ? 'ignore' : 'pipe',
+          // INFO_FD: bwrap's report of the sandbox init's host pid.
+          'pipe',
         ],
         // A distinct host process group lets every termination path signal
         // bwrap, its launcher, and all descendants with one negative pid.
@@ -863,6 +934,54 @@ export const makeBwrapDriver = ({
       );
     }
 
+    const sandboxInit = readSandboxInitPid(
+      /** @type {import('stream').Readable | null | undefined} */ (
+        child.stdio?.[INFO_FD]
+      ),
+    );
+
+    /**
+     * Kill the sandbox init, then signal the launcher's process group.
+     *
+     * The host process group holds only the launcher: bwrap's sandbox
+     * init calls `setsid()` for `--new-session`, so a group signal never
+     * reaches the slice.  The slice dies only when its init dies, which
+     * `--die-with-parent` arranges when the launcher dies.  But bwrap
+     * arms that death signal in the init only after the launcher has
+     * finished user-namespace setup.  A launcher that dies first, from
+     * any signal, strands the init: it is reparented, either blocked
+     * forever on setup or running the command with no death signal.
+     * Its leader is then reaped, so `killProcessGroup` declines every
+     * later attempt.
+     *
+     * Signalling the init directly closes that window.  Killing a pid
+     * namespace's init kills the whole namespace, whatever session the
+     * command is in, and the launcher then exits on its own.  A soft
+     * signal never reached the command anyway, so `SIGKILL` changes no
+     * observable outcome.  The init is signalled only while Node has not
+     * reaped the launcher, and the launcher reaps the init just before it
+     * exits.  That leaves the same single-turn window documented on
+     * `killProcessGroup`.
+     *
+     * @param {NodeJS.Signals | number} signal
+     */
+    const killSlice = async signal => {
+      const initPid = await raceBound(sandboxInit, INFO_REPORT_GRACE_MS);
+      if (
+        initPid !== undefined &&
+        child.exitCode === null &&
+        child.signalCode === null
+      ) {
+        try {
+          process.kill(initPid, 'SIGKILL');
+        } catch (e) {
+          const err = /** @type {Error & { code?: string }} */ (e);
+          if (err.code !== 'ESRCH') throw err;
+        }
+      }
+      killProcessGroup(child, signal);
+    };
+
     let closed = false;
     const stop = async () => {
       await null;
@@ -871,7 +990,7 @@ export const makeBwrapDriver = ({
       // killProcessGroup declines a group whose leader Node already reaped.
       const closing = raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS);
       try {
-        killProcessGroup(child, 'SIGKILL');
+        await killSlice('SIGKILL');
       } catch {
         // A signal refusal is not a close proof; still wait for close.
       }
@@ -914,7 +1033,7 @@ export const makeBwrapDriver = ({
       stderr: readableToAsyncIterable(child.stderr),
       wait: () => exited,
       kill: async signal => {
-        killProcessGroup(child, signal ?? 'SIGTERM');
+        await killSlice(signal ?? 'SIGTERM');
       },
       /** @param {Uint8Array} chunk */
       writeStdin: async chunk => {
