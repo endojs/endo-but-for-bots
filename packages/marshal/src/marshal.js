@@ -258,12 +258,12 @@ export const makeMarshal = (
   };
 
   const makeFullRevive = slots => {
-    /** @type {Map<number, any>} */
+    /** @type {Map<number, RemotableObject | Promise>} */
     const valMap = new Map();
 
     /**
      * @param {{iface?: string, index: number}} slotData
-     * @returns {any}
+     * @returns {RemotableObject | Promise}
      */
     const decodeSlotCommon = slotData => {
       const { iface = undefined, index, ...rest } = slotData;
@@ -366,9 +366,7 @@ export const makeMarshal = (
     // See https://github.com/Agoric/agoric-sdk/issues/4334
     const decodeRemotableOrPromiseFromCapData = (rawTree, _decodeRecur) => {
       const { [QCLASS]: _, ...slotData } = rawTree;
-      return /** @type {RemotableObject | Promise} */ (
-        decodeSlotCommon(slotData)
-      );
+      return decodeSlotCommon(slotData);
     };
 
     const decodeErrorFromCapData = (rawTree, decodeRecur) => {
@@ -405,12 +403,10 @@ export const makeMarshal = (
         const index = Number(stringEncoding.slice(1, i < 0 ? undefined : i));
         // i < 0 means there was no iface included.
         const iface = i < 0 ? undefined : stringEncoding.slice(i + 1);
-        return /** @type {RemotableObject | Promise} */ (
-          decodeSlotCommon({
-            ...(iface !== undefined && { iface }),
-            index,
-          })
-        );
+        return decodeSlotCommon({
+          ...(iface !== undefined && { iface }),
+          index,
+        });
       };
     };
     const decodeRemotableFromSmallcaps = makeDecodeSlotFromSmallcaps('$');
