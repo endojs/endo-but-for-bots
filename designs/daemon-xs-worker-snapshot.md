@@ -166,9 +166,15 @@ When a message arrives for a suspended handle:
    is never buffered in memory.
 5. The buffered message (and any subsequent ones) is
    delivered.
-6. Supervisor removes the CAS ephemeral GC root.
-   (CAS GC is not yet implemented, but the bookkeeping is
-   set up correctly for when it arrives.)
+6. The CAS ephemeral GC root stays pinned for the restored
+   incarnation's lifetime.
+   The restore reads the blob asynchronously on the worker's
+   thread (or child process), so releasing the root at resume
+   time would let a concurrent `cas-gc` delete the snapshot
+   before it is opened.
+   The root is released when the worker exits without
+   suspending again, or replaced when it suspends to a new
+   snapshot.
 
 ### CAS storage
 
@@ -179,9 +185,15 @@ JS daemon's content store:
 `{statePath}/store-sha256/{hex-digest}`.
 
 The snapshot's SHA-256 hash is held as an ephemeral GC root
-for as long as the worker is suspended.
-When the worker resumes (or is cancelled), the root is
-released.
+for as long as the worker is suspended and through the
+incarnation restored from it.
+The supervisor keeps one root per worker handle
+(`Supervisor::snapshot_roots()`), and the `cas-gc` control verb
+treats those roots as live.
+When the worker exits without re-suspending (or is
+cancelled), the root is released; a re-suspend replaces it.
+Roots are in-memory: a daemon restart forgets suspended
+workers along with their roots.
 
 ### Envelope protocol
 
@@ -308,18 +320,28 @@ the mismatch.
     - `suspend_resume_with_host_function`
     - `suspend_resume_multiple_cycles`
 
+14. Ephemeral GC root bookkeeping for CAS-stored snapshots —
+    `Supervisor::snapshot_roots` pinned in `mark_suspended`,
+    held through the restored incarnation, released in
+    `unregister` unless the exit is a suspend; `cas-gc` passes
+    the roots as live. **(done)**
+15. **Tests:** `snapshot_root_pinned_across_suspend_and_resume`,
+    `cas_gc_keeps_suspended_snapshot`,
+    `store_backed_suspend_pins_no_snapshot_root`. **(done)**
+
 #### Remaining
 
 - Integration test: full supervisor round-trip (suspend via
   control verb → worker streams snapshot to CAS → worker
   exits → message triggers resume → restored worker has
   correct JS state).
-- Ephemeral GC root bookkeeping for CAS-stored snapshots.
 
 ### Phase 3: Future enhancements
 
 - Auto-suspend on idle timeout.
-- CAS GC integration (ephemeral roots).
+- CAS GC integration with the JS daemon's formula roots
+  (the supervisor's ephemeral snapshot roots are wired;
+  `cas-gc` does not yet receive the daemon's live set).
 - Filesystem CAS matching the JS daemon's directory layout.
 - Cross-version snapshot compatibility.
 
