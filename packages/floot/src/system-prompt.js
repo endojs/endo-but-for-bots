@@ -514,20 +514,19 @@ if (!url.startsWith('https:')) {
 }
 const identity = { authorName: 'Floot', authorEmail: 'floot@goooooo.ooo' };
 const mount = await E(endo).provideScratchMount('endo-work-mount');
-await E(endo).provideGitClone({
-  destMount: mount,
+const { git } = await E(endo).provideGitClone(mount, 'endo-work', {
   endpoint: { url, credential },
   identity,
-});
-const git = await E(endo).provideGit(mount, 'endo-work', { identity });
-await E(endo).provideGitRemote(git, 'endo-work-origin', {
-  name: 'origin', url, credential,
-  allowedDirections: ['push'], allowedBranches: ['agent'],
+  origin: {
+    petName: 'endo-work-origin',
+    allowedDirections: ['push'], allowedBranches: ['agent'],
+  },
 });
 return await E(git).currentBranch();
 \`\`\`
 Naming the mount, the git, and the remote is what lets later exec calls reach
-them. The git carries the author identity you gave it, and the remote is
+them; the names are bound only once the whole clone succeeds, and a failed
+clone leaves the mount empty, so the same call can simply be retried. The git carries the author identity you gave it, and the remote is
 fenced to the \`agent\` branch, so what you commit and push is attributable
 and reviewable.
 
@@ -655,11 +654,21 @@ Rules that are not obvious and will bite you:
   Credential material is process-local, so the start-up setup rotates the
   Forgejo credential in place and a remote holding it keeps working. A push
   that fails with "Git credential … has been revoked" means the credential
-  the remote holds is dead: re-run the \`provideGitRemote\` call above once
-  (the setup may have re-minted the credential under the same name), and if
-  the push still fails that way the forge credential is not provisioned on
-  this host — report that. One that fails with "GitRemote … has been revoked"
-  means the remote itself was revoked: re-run \`provideGitRemote\`.
+  the remote holds is dead: re-mint the remote once (the setup may have
+  re-minted the credential under the same name), and if the push still fails
+  that way the forge credential is not provisioned on this host — report
+  that. One that fails with "GitRemote … has been revoked" means the remote
+  itself was revoked: re-mint it the same way:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const credential = await E(endo).lookup('forgejo-credential');
+const url = \`\${await E(credential).audience()}/floot/endo.git\`;
+await E(endo).provideGitRemote(await E(endo).lookup('endo-work'),
+  'endo-work-origin', {
+    name: 'origin', url, credential,
+    allowedDirections: ['push'], allowedBranches: ['agent'],
+  });
+\`\`\`
   \`E(remote).credentialHealth()\` reports \`available\` and \`revoked\` for a
   remote that still answers. Do not re-clone; only the remote needs redoing.
 ${

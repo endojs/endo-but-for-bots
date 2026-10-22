@@ -65,3 +65,26 @@ expectTypeOf(optionsSelectedAtRuntimeResult).resolves.toEqualTypeOf<
 // pin regressed to `HistoryRewriteEndoGit` or widened to the union above.
 type CloneResult = Awaited<ReturnType<EndoHost['provideGitClone']>>;
 expectTypeOf<CloneResult['git']>().toEqualTypeOf<ReadWriteEndoGit>();
+
+// The clone's call shape is `(subject, petName, options)`, the same as
+// `provideGit` and `provideGitRemote`, and the `origin` policy record cannot
+// carry the fields the clone fixes from the endpoint.
+const cloned = host.provideGitClone(mount, 'cloned', {
+  endpoint: { url: 'https://example.test/repo.git' },
+  origin: {
+    petName: 'cloned-origin',
+    allowedDirections: ['fetch', 'push'],
+    allowedBranches: ['refs/heads/agent/*'],
+  },
+});
+expectTypeOf(cloned).resolves.toEqualTypeOf<CloneResult>();
+host.provideGitClone(mount, 'cloned', {
+  endpoint: { url: 'https://example.test/repo.git' },
+  // @ts-expect-error the origin url comes from the endpoint
+  origin: { url: 'https://example.test/other.git' },
+});
+// @ts-expect-error the one-object form is removed
+host.provideGitClone({
+  destMount: mount,
+  endpoint: { url: 'https://example.test/repo.git' },
+});
