@@ -5,7 +5,7 @@
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { Ocapn } from './ocapn.js'
- * @import { Connection, Logger, SelfIdentity, SessionManager, SessionId } from './types.js'
+ * @import { Connection, Logger, SelfIdentity, SessionManager, SessionId } from './types.types.js'
  */
 
 import harden from '@endo/harden';
@@ -68,7 +68,7 @@ const compareSessionKeysForCrossedHellos = (
 };
 
 /**
- * @import { InternalSession } from './types.js'
+ * @import { InternalSession } from './types.types.js'
  */
 
 /**

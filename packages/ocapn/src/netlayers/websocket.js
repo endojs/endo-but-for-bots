@@ -15,7 +15,7 @@ import { makeOcapnRecordCodecFromDefinition } from '../codecs/util.js';
 
 /**
  * @import { RawData } from 'ws'
- * @import { Connection, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.js'
+ * @import { Connection, Logger, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.types.js'
  * @import { OcapnLocation, OcapnSignature } from '../codecs/components.js'
  */
 
@@ -268,7 +268,7 @@ const makeIncomingSocketOperations = ws => {
 /**
  * @param {object} options
  * @param {NetlayerHandlers} options.handlers
- * @param {import('../client/types.js').Logger} options.logger
+ * @param {Logger} options.logger
  * @param {number} [options.specifiedPort]
  * @param {string} [options.specifiedHostname]
  * @param {string} [options.specifiedUrl]

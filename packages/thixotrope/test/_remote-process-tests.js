@@ -139,11 +139,11 @@ export const registerRemoteProcessTests = (test, kind) => {
             }),
         });
         t.teardown(() => client.shutdown());
-        const counter = await client.enlivenSturdyRef(
-          client.makeSturdyRef(first.ready.location, first.ready.publication),
+        const counter = await client.openParcel(
+          client.makeParcel(first.ready.location, first.ready.publication),
         );
-        const remoteCaller = await client.enlivenSturdyRef(
-          client.makeSturdyRef(sender.location, publication),
+        const remoteCaller = await client.openParcel(
+          client.makeParcel(sender.location, publication),
         );
         t.true(await E(remoteCaller).hold(counter));
         t.is(await E(counter).read(), 0n);

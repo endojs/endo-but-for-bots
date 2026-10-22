@@ -31,7 +31,7 @@ import { fromHex, toHex } from '../hex.js';
  * application object we control. Application capabilities are therefore
  * reached *through* the bootstrap by a swissnum: `bootstrap.fetch(sn)`
  * resolves `sn` against the peer's locator, which is exactly what
- * `makeSturdyRef(location, sn)` + `enlivenSturdyRef` wrap.
+ * `makeParcel(location, sn)` + `openParcel` wrap.
  *
  * So each daemon publishes one peer entry-point capability — an
  * `EndoPeerEntry` exo — in its OCapN locator under a single well-known
@@ -349,11 +349,11 @@ export const make = async (powers, context) => {
 
     // Fetch the remote daemon's peer entry-point capability by its
     // well-known swissnum (through the peer's OCapN bootstrap).
-    // `enlivenSturdyRef` reuses the active session we just established;
+    // `openParcel` reuses the active session we just established;
     // subsequent CapTP operations naturally fail-fast if cancellation
     // aborts that session out from under them.
-    const sturdyRef = client.makeSturdyRef(remoteLocation, PEER_ENTRY_SWISSNUM);
-    const remotePeerEntry = await client.enlivenSturdyRef(sturdyRef);
+    const sturdyRef = client.makeParcel(remoteLocation, PEER_ENTRY_SWISSNUM);
+    const remotePeerEntry = await client.openParcel(sturdyRef);
     const remoteGreeterP = E(remotePeerEntry).getGreeter();
 
     // Verify the layered agent-binding attestation: the OCapN session

@@ -8,6 +8,7 @@
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
+import { locate } from '@endo/parcel';
 import { makeTagged } from '@endo/pass-style';
 
 import { makeSelector } from '../../src/selector.js';
@@ -20,9 +21,12 @@ import {
   SyrupCodec,
 } from './_codecs_util.js';
 import { throws } from '../_util.js';
-import { getSturdyRefDetails } from '../../src/client/sturdyrefs.js';
+import { parseParcelLocation } from '../../src/client/parcels.js';
 
 const textEncoder = new TextEncoder();
+const parcelIsInstalled =
+  typeof globalThis.Parcel === 'function' &&
+  Object.isFrozen(globalThis.Parcel.prototype);
 
 const { PassableCodec } = makeCodecTestKit();
 
@@ -138,30 +142,27 @@ const table = [
       text: 'hello',
     }),
   },
-  // SturdyRef
+  // Parcel. Keep the historical snapshot keys stable: these are wire-format
+  // fixtures and the OCapN record name deliberately remains sturdyref.
   {
     name: 'sturdyRef',
+    skip: !parcelIsInstalled,
     makeValue: testKit =>
-      testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123'),
+      testKit.parcelTracker.makeParcel(exporterLocation, '123'),
     customAssert: (t, actual) => {
-      const details = getSturdyRefDetails(actual);
-      if (!details) {
-        throw Error('SturdyRef has no details');
-      }
+      const details = parseParcelLocation(locate(actual));
       t.deepEqual(details.location, exporterLocation);
       t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
     },
   },
   {
     name: 'sturdyRef in list',
+    skip: !parcelIsInstalled,
     makeValue: testKit =>
-      harden([testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123')]),
+      harden([testKit.parcelTracker.makeParcel(exporterLocation, '123')]),
     customAssert: (t, actual) => {
       t.is(actual.length, 1);
-      const details = getSturdyRefDetails(actual[0]);
-      if (!details) {
-        throw Error('SturdyRef has no details');
-      }
+      const details = parseParcelLocation(locate(actual[0]));
       t.deepEqual(details.location, exporterLocation);
       t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
     },
@@ -207,18 +208,16 @@ const table = [
   },
   {
     name: 'tagged with sturdyRef',
+    skip: !parcelIsInstalled,
     makeValue: testKit =>
       makeTagged(
         'sturdyRefTag',
-        testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '456'),
+        testKit.parcelTracker.makeParcel(exporterLocation, '456'),
       ),
-    // SturdyRefs need customAssert because object identity differs after round-trip
+    // Parcels need customAssert because object identity differs after round-trip
     customAssert: (t, actual) => {
       t.is(actual[Symbol.toStringTag], 'sturdyRefTag');
-      const details = getSturdyRefDetails(actual.payload);
-      if (!details) {
-        throw Error('SturdyRef has no details');
-      }
+      const details = parseParcelLocation(locate(actual.payload));
       t.deepEqual(details.location, exporterLocation);
       t.deepEqual([...details.secret], [0x34, 0x35, 0x36]);
     },

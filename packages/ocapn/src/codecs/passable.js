@@ -6,7 +6,8 @@
  */
 
 import harden from '@endo/harden';
-import { makeTagged } from '@endo/pass-style';
+import { makeTagged, passStyleOf } from '@endo/pass-style';
+import { isParcel } from '@endo/parcel';
 import { makeSelector, getSelectorName } from '../selector.js';
 import {
   BooleanCodec,
@@ -84,7 +85,7 @@ const AtomCodecs = {
  * @returns {PassableCodecs}
  */
 export const makePassableCodecs = descCodecs => {
-  const { ReferenceCodec, OcapnSturdyRefCodec, HandOffUnionCodec } = descCodecs;
+  const { ReferenceCodec, OcapnParcelCodec, HandOffUnionCodec } = descCodecs;
 
   // OCapN Passable Containers
 
@@ -215,16 +216,24 @@ export const makePassableCodecs = descCodecs => {
       error: OcapnErrorCodec,
       // Containers
       tagged: ContainerCodecs.tagged,
-      copyRecord: ContainerCodecs.struct,
+      copyRecord: value => {
+        if (
+          value.type === 'desc:sig-envelope' &&
+          (value.object.type === 'desc:handoff-receive' ||
+            value.object.type === 'desc:handoff-give')
+        ) {
+          return HandOffUnionCodec;
+        }
+        return ContainerCodecs.struct;
+      },
       copyArray: ContainerCodecs.list,
       // References
       remotable: ReferenceCodec,
       promise: ReferenceCodec,
       // Special Cases
-      signedHandoffReceive: HandOffUnionCodec,
-      signedHandoffGive: HandOffUnionCodec,
-      sturdyref: OcapnSturdyRefCodec,
+      parcel: OcapnParcelCodec,
     },
+    value => (isParcel(value) ? 'parcel' : passStyleOf(value)),
   );
 
   return {

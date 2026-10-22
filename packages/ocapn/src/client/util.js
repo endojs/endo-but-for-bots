@@ -3,7 +3,7 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { LocationId, SwissNum } from './types.js'
+ * @import { LocationId, SwissNum } from './types.types.js'
  */
 
 import { encodeAscii } from '@endo/ascii/encode.js';
@@ -79,7 +79,7 @@ export const encodeSwissnum = value => {
 /**
  * Wrap raw swissnum bytes as a hardened immutable `SwissNum`. Use this
  * when the bytes already came from a wire-format source (e.g. the
- * base64url-decoded `/s/<…>` segment of a sturdyref URI) and only the
+ * base64url-decoded `/s/<…>` segment of a parcel URI) and only the
  * branded type wrapping is missing.
  *
  * For the common case of constructing a swissnum from a printable

@@ -9,7 +9,7 @@ import { syrupCodec } from '../src/syrup/index.js';
 import { makeCryptography, makeSessionId } from '../src/cryptography.js';
 
 /**
- * @import { NetworkSession, OcapnNetwork } from '../src/client/types.js'
+ * @import { NetworkSession, OcapnNetwork } from '../src/client/types.types.js'
  * @import { OcapnLocation } from '../src/codecs/components.js'
  */
 

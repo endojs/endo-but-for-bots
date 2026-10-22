@@ -4,15 +4,16 @@
 /**
  * @import { ReferenceKit } from '../client/ref-kit.js'
  * @import { HandoffGiveDetails } from '../client/grant-tracker.js'
- * @import { SturdyRef } from '../client/sturdyrefs.js'
+ * @import { Parcel } from '../client/parcels.js'
  * @import { SyrupCodec, SyrupRecordCodec, SyrupRecordUnionCodec } from '../syrup/codec.js'
  * @import { OcapnWriter, OcapnCodec } from '../codec-interface.js'
  * @import { OcapnLocation, OcapnPublicKeyDescriptor, OcapnSignature } from './components.js'
- * @import { SessionId, PublicKeyId } from '../client/types.js'
+ * @import { SessionId, PublicKeyId } from '../client/types.types.js'
  */
 
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { locate } from '@endo/parcel';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -26,7 +27,7 @@ import {
   OcapnPublicKeyCodec,
   OcapnSignatureCodec,
 } from './components.js';
-import { getSturdyRefDetails } from '../client/sturdyrefs.js';
+import { parseParcelLocation } from '../client/parcels.js';
 import { encodeSwissnum } from '../client/util.js';
 
 /**
@@ -39,7 +40,7 @@ import { encodeSwissnum } from '../client/util.js';
  * @property {SyrupRecordUnionCodec} ReferenceCodec
  * @property {SyrupCodec} DeliverTargetCodec
  * @property {SyrupCodec} RemotePromiseCodec
- * @property {SyrupRecordCodec} OcapnSturdyRefCodec
+ * @property {SyrupRecordCodec} OcapnParcelCodec
  * @property {SyrupRecordCodec} HandOffUnionCodec
  * @property {SyrupRecordCodec} DescSigEnvelopeReadCodec
  */
@@ -315,24 +316,28 @@ export const makeDescCodecs = referenceKit => {
   });
 
   // Wire label is the spec-defined 'ocapn-sturdyref' tag; we keep it
-  // intact for interop even though the JS-side identifier is `SturdyRef`.
-  const OcapnSturdyRefCodec = makeOcapnRecordCodec(
-    'OcapnSturdyRef',
+  // intact for interop even though the JS-side identifier is `Parcel`.
+  const OcapnParcelCodec = makeOcapnRecordCodec(
+    'OcapnParcel',
     'ocapn-sturdyref',
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      const value = referenceKit.makeSturdyRef(node, swissNum);
+      const value = referenceKit.makeParcel(node, swissNum);
       return value;
     },
     /**
-     * @param {SturdyRef} sturdyRef
+     * @param {Parcel} parcel
      * @param {OcapnWriter} writer
      */
-    (sturdyRef, writer) => {
-      const details = getSturdyRefDetails(sturdyRef);
-      if (!details) {
-        throw Error('Cannot serialize: not a valid SturdyRef object');
+    (parcel, writer) => {
+      let details;
+      try {
+        details = parseParcelLocation(locate(parcel));
+      } catch {
+        throw Error(
+          'Cannot serialize: Parcel location is not an OCapN location',
+        );
       }
       const { location, secret } = details;
       OcapnPeerCodec.write(location, writer);
@@ -347,7 +352,7 @@ export const makeDescCodecs = referenceKit => {
   );
 
   // ReferenceCodec is handles any kind of Reference (Promise or Target),
-  // as well as SturdyRefs and Handoffs.
+  // as well as Parcels and Handoffs.
   // when reading: export = local to us
   // when writing: export = remote to us
   const ReferenceCodec = makeValueInfoRecordUnionCodec(
@@ -358,7 +363,7 @@ export const makeDescCodecs = referenceKit => {
       DescAnswerCodec,
       DescImportObjectCodec,
       DescImportPromiseCodec,
-      OcapnSturdyRefCodec,
+      OcapnParcelCodec,
       HandOffUnionCodec,
     },
     {
@@ -381,7 +386,7 @@ export const makeDescCodecs = referenceKit => {
     RemotePromiseCodec,
     ReferenceCodec,
     ResolveMeDescCodec,
-    OcapnSturdyRefCodec,
+    OcapnParcelCodec,
     HandOffUnionCodec,
     DescSigEnvelopeReadCodec,
   };

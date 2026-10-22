@@ -72,11 +72,11 @@ test.serial(
       if (!parsed.swissNum) {
         throw Error('parsed sturdyref URI missing swissNum');
       }
-      const sref = remote.makeSturdyRef(
+      const sref = remote.makeParcel(
         parsed.location,
         decodeSwissnum(parsed.swissNum),
       );
-      const chatroom = await remote.enlivenSturdyRef(sref);
+      const chatroom = await remote.openParcel(sref);
       const name = await E(chatroom)['self-proposed-name']();
       t.is(name, '#test-host');
     } finally {

@@ -1,15 +1,17 @@
 // @ts-check
+// spell-out-exempt: SwissNum is the OCapN specification's established type name.
 import harden from '@endo/harden';
 
 /** @typedef {import('@endo/ses-ava/prepare-endo.js').default} Test */
 
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /**
- * @import { Client, ClientDebug, Connection, InternalSession, LocationId, NonceLocator, SwissNum } from '../src/client/types.js'
+ * @import { Client } from '../src/client/parcel.types.js'
+ * @import { ClientDebug, Connection, InternalSession, LocationId, NonceLocator, SwissNum } from '../src/client/types.types.js'
  * @import { OcapnLocation } from '../src/codecs/components.js'
  * @import { TcpTestOnlyNetLayer } from '../src/netlayers/tcp-test-only.js'
  * @import { Ocapn, OcapnDebug } from '../src/client/ocapn.js'
- * @import { OcapnBootstrap } from '../src/client/types.js'
+ * @import { OcapnBootstrap } from '../src/client/types.types.js'
  */
 
 import baseTest from '@endo/ses-ava/test.js';
@@ -42,7 +44,7 @@ import { locationToLocationId } from '../src/client/util.js';
  *   getId: TestRemoteMethod,
  *   getNumber: TestRemoteMethod,
  *   getRecord: TestRemoteMethod,
- *   getSturdyRef: TestRemoteMethod,
+ *   getParcel: TestRemoteMethod,
  *   getValue: TestRemoteMethod,
  *   greet: TestRemoteMethod,
  *   increment: TestRemoteMethod,

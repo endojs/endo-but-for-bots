@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: SwissNum is the OCapN specification's domain term.
 
 /**
  * @import { FarRef, RemoteKit, Settler } from '@endo/eventual-send'
@@ -10,8 +11,8 @@
  * @import { HandoffGiveSigEnvelope, HandoffReceiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { OcapnReader } from '../codec-interface.js'
  * @import { OcapnCodec } from '../codec-interface.js'
- * @import { SturdyRefTracker } from './sturdyrefs.js'
- * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.js'
+ * @import { ParcelTracker } from './parcels.js'
+ * @import { Connection, InternalSession, LocationId, Logger, OcapnBootstrap, ProvideImport, SessionId, SwissNum } from './types.types.js'
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  */
 
@@ -20,6 +21,8 @@ import { ZERO_N } from '@endo/nat';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
+import { passStyleOf } from '@endo/pass-style';
+import { isParcel } from '@endo/parcel';
 import {
   makeDescCodecs,
   makeHandoffReceiveDescriptor,
@@ -31,7 +34,6 @@ import { getSelectorName, makeSelector } from '../selector.js';
 import { locationToLocationId, toHex } from './util.js';
 import { randomGiftId } from '../cryptography.js';
 import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
-import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
@@ -42,9 +44,9 @@ import { makeGrantDetails } from './grant-tracker.js';
  * @typedef {any} RemoteResolver
  * @typedef {(questionSlot: Slot, ownerLabel?: string) => LocalResolver} MakeLocalResolver
  * @typedef {(slot: Slot) => RemoteResolver} MakeRemoteResolver
- * @typedef {(node: OcapnLocation, swissNum: SwissNum) => Promise<any>} MakeRemoteSturdyRef
+ * @typedef {(node: OcapnLocation, swissNum: SwissNum) => Promise<any>} MakeRemoteParcel
  * @typedef {(signedGive: HandoffGiveSigEnvelope) => Promise<any>} MakeHandoff
- * @typedef {(nodeLocation: OcapnLocation, swissNum: SwissNum) => any} GetRemoteSturdyRef
+ * @typedef {(nodeLocation: OcapnLocation, swissNum: SwissNum) => any} GetRemoteParcel
  * @typedef {'object' | 'promise' | 'question'} SlotType
  */
 
@@ -489,7 +491,7 @@ const makeCodecKit = (referenceKit, codec) => {
  * @param {string} label
  * @param {Logger} logger
  * @param {SessionId} sessionId
- * @param {SturdyRefTracker} sturdyRefTracker
+ * @param {ParcelTracker} parcelTracker
  * @param {ReferenceKit} referenceKit
  * @param {Map<string, any>} giftTable
  * @param {(sessionId: SessionId) => OcapnPublicKey | undefined} getPeerPublicKeyForSessionId
@@ -500,7 +502,7 @@ const makeBootstrapObject = (
   label,
   logger,
   sessionId,
-  sturdyRefTracker,
+  parcelTracker,
   referenceKit,
   giftTable,
   getPeerPublicKeyForSessionId,
@@ -514,7 +516,7 @@ const makeBootstrapObject = (
      * @returns {Promise<any>}
      */
     fetch: async swissnum => {
-      const object = await sturdyRefTracker.lookup(swissnum);
+      const object = await parcelTracker.lookup(swissnum);
       if (object === undefined) {
         // Do not echo the swissnum/secret bytes in the error: the
         // rejection rides back to the peer over CapTP, and is also
@@ -530,7 +532,7 @@ const makeBootstrapObject = (
      * @param {any} gift
      */
     'deposit-gift': (giftId, gift) => {
-      const passStyle = ocapnPassStyleOf(gift);
+      const passStyle = passStyleOf(gift);
       if (passStyle !== 'remotable') {
         throw Error(`${label}: Bootstrap deposit-gift: Gift must be remotable`);
       }
@@ -706,7 +708,7 @@ const makeBootstrapObject = (
  * @param {() => void} endSession
  * @param {GrantTracker} grantTracker
  * @param {Map<string, any>} giftTable
- * @param {SturdyRefTracker} sturdyRefTracker
+ * @param {ParcelTracker} parcelTracker
  * @param {OcapnCodec} codec
  * @param {Cryptography} cryptography
  * @param {string} [ourIdLabel]
@@ -735,7 +737,7 @@ export const makeOcapn = (
   endSession,
   grantTracker,
   giftTable,
-  sturdyRefTracker,
+  parcelTracker,
   codec,
   cryptography,
   ourIdLabel = 'OCapN',
@@ -778,7 +780,9 @@ export const makeOcapn = (
     // We need to resolve the target to an object or function before we can invoke it.
     const resolvedTarget = await Promise.resolve(to);
     // We only apply functions to values with pass-style "remotable".
-    const passStyle = ocapnPassStyleOf(resolvedTarget);
+    const passStyle = isParcel(resolvedTarget)
+      ? 'parcel'
+      : passStyleOf(resolvedTarget);
     if (passStyle !== 'remotable') {
       throw Error(
         `OCapN: Cannot apply functions to values with pass-style ${passStyle}`,
@@ -935,7 +939,7 @@ export const makeOcapn = (
       // Create a promise for the field value
       const getPromise = Promise.resolve(receiverDesc).then(resolved => {
         // Check that the resolved value is a copyRecord
-        const passStyle = ocapnPassStyleOf(resolved);
+        const passStyle = passStyleOf(resolved);
         if (passStyle !== 'copyRecord') {
           throw Error(
             `OCapN: Cannot get fields from values with pass-style ${passStyle}`,
@@ -970,7 +974,7 @@ export const makeOcapn = (
         }
 
         // Check that the resolved value is a copyArray (List)
-        const passStyle = ocapnPassStyleOf(resolved);
+        const passStyle = passStyleOf(resolved);
         if (passStyle !== 'copyArray') {
           throw Error(
             `OCapN: Cannot index into values with pass-style ${passStyle}`,
@@ -1004,7 +1008,7 @@ export const makeOcapn = (
       // Create a promise for the untagged value
       const untagPromise = Promise.resolve(receiverDesc).then(resolved => {
         // Check that the resolved value is a tagged value
-        const passStyle = ocapnPassStyleOf(resolved);
+        const passStyle = passStyleOf(resolved);
         if (passStyle !== 'tagged') {
           throw Error(
             `OCapN: Cannot untag values with pass-style ${passStyle}`,
@@ -1322,7 +1326,7 @@ export const makeOcapn = (
     peerLocation,
     ocapnTable,
     grantTracker,
-    sturdyRefTracker,
+    parcelTracker,
     makeRemoteKit,
     makeHandoff,
     sendHandoff,
@@ -1378,7 +1382,7 @@ export const makeOcapn = (
     ourIdLabel,
     logger,
     sessionId,
-    sturdyRefTracker,
+    parcelTracker,
     referenceKit,
     giftTable,
     getPeerPublicKeyForSessionId,

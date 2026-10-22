@@ -1,4 +1,6 @@
 // @ts-check
+// inline-import-exempt: public JSDoc typedef forwarding needs direct module identity.
+// spell-out-exempt: SwissNum is the OCapN specification's established type name.
 
 /**
  * Public entry point for `@endo/ocapn`.
@@ -17,9 +19,11 @@
  * lines is what makes `@import { Foo } from '@endo/ocapn'` resolve in
  * downstream JSDoc.
  *
- * @typedef {import('./src/client/types.js').SwissNum} SwissNum
+ * @typedef {import('./src/client/types.types.js').SwissNum} SwissNum
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
  */
+
+import { makeParcel } from './src/client/parcels.js';
 
 export { makeOcapn } from './src/client/index.js';
 export {
@@ -40,4 +44,4 @@ export {
 } from './src/codecs/descriptors.js';
 export { makePassableCodecs } from './src/codecs/passable.js';
 export { getSelectorName, makeSelector } from './src/selector.js';
-export { makeSturdyRef } from './src/client/sturdyrefs.js';
+export { makeParcel };

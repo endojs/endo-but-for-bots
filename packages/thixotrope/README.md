@@ -391,7 +391,7 @@ a fresh worker, a wake from snapshot, and a daemon restart.
 
 Durability is snapshot-keyed frame retention:
 
-- daemon→worker frames are journaled before they reach the duct, and
+- daemon->worker frames are journaled before they reach the duct, and
   retained until a snapshot commits (not until acknowledged);
 - wake = restore the snapshot and replay the journal suffix; every
   worker frame — live or replay-regenerated — carries a
@@ -412,7 +412,7 @@ requirement.
 
 Thixotrope owns the hub, its persistence transactions, delivery queues, and session lifecycle.
 OCapN supplies protocol codecs, descriptor helpers, and signature operations.
-The hub (`src/hub.js`) holds only per-session c-lists (position ↔
+The hub (`src/hub.js`) holds only per-session c-lists (position <->
 reference row), answer routes, and publications — plain JSON tables,
 written through to the store before any frame that names them exists.
 Every message is decoded with the ordinary wire codecs against a
@@ -679,7 +679,7 @@ have no timer queue, so frame silence is exact dormancy):
 - `lookup(secret)` — the embedder's in-process route to a publication.
 - `collectVats({ keep? })` — vat-level mark-and-sweep over the hub's
   reference tables; resolves to the swept ids.
-- `location` and `makeSturdyRefDetails(secret)` — what a peer needs to
+- `location` and `makeParcelDetails(secret)` — what a peer needs to
   mint a sturdy ref.
 - `shutdown()` — snapshots and parks every worker, then closes the
   endpoint and the netlayer.

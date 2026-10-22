@@ -22,7 +22,7 @@
     "./netlayer/tcp-testing": "./src/netlayers/tcp-test-only.js",
     "./netlayer/ws": "./src/netlayers/websocket.js",
     "./client/types": {
-      "types": "./src/client/types.js"
+      "types": "./src/client/parcel.types.d.ts"
     },
     "./client/util": "./src/client/util.js",
     "./syrup": "./src/syrup/index.js",
@@ -58,6 +58,7 @@
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/nat": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",

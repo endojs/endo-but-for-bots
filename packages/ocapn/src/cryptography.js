@@ -23,7 +23,7 @@ import {
 /**
  * @import { OcapnLocation, OcapnPublicKeyDescriptor, OcapnSignature } from './codecs/components.js'
  * @import { HandoffGive, HandoffReceive, HandoffGiveSigEnvelope, HandoffReceiveSigEnvelope } from './codecs/descriptors.js'
- * @import { SessionId, PublicKeyId } from './client/types.js'
+ * @import { SessionId, PublicKeyId } from './client/types.types.js'
  * @import { OcapnCodec } from './codec-interface.js'
  */
 

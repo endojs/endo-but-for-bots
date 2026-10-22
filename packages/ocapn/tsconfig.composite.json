@@ -36,6 +36,9 @@
       "path": "../nat/tsconfig.composite.json"
     },
     {
+      "path": "../parcel/tsconfig.composite.json"
+    },
+    {
       "path": "../pass-style/tsconfig.composite.json"
     },
     {

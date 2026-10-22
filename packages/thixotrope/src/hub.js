@@ -1,6 +1,7 @@
 // @ts-check
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import {
   DescHandoffGiveSigEnvelopeCodec,
   getSelectorName,
@@ -9,7 +10,7 @@ import {
   makeHandoffReceiveSigEnvelope,
   makePassableCodecs,
   makeSelector,
-  makeSturdyRef,
+  makeParcel,
 } from '@endo/ocapn';
 import { makeOcapnOperationsCodecs } from '@endo/ocapn/operations';
 
@@ -846,13 +847,13 @@ export const makeOcapnHub = ({
         return refTokenFor(row.refId);
       },
       /**
-       * Sturdyrefs are opaque pointers: they transit the hub as plain
+       * Parcels are opaque pointers: they transit the hub as plain
        * values, re-encoded verbatim toward the destination.
        *
        * @param {any} location
        * @param {string | Uint8Array} secret
        */
-      makeSturdyRef: (location, secret) => makeSturdyRef(location, secret),
+      makeParcel: (location, secret) => makeParcel(location, secret),
 
       // -- write side (message TOWARD this session) --
       /** @param {any} value */
@@ -1136,7 +1137,9 @@ export const makeOcapnHub = ({
           const handoffReceive = makeHandoffReceiveDescriptor(
             signedGive,
             handoffCount,
-            /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
+            /** @type {any} */ (
+              frozenBytes(bytesFromHex(session.identity.sessionId))
+            ),
             selfAtExporter.publicKey.id,
           );
           const signature = cryptography.signHandoffReceive(
