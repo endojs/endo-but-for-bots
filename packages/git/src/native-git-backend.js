@@ -453,6 +453,12 @@ const runGitWithAskpassAt = ({
     let outputTooLarge = false;
     let aborted = false;
 
+    // A remote operation runs a transport helper (`git-remote-https`) as a
+    // child of `git`.  Signalling `git` alone orphans the helper, which keeps
+    // the output pipes and the connection open, so the call never settles.
+    // On POSIX the child leads its own process group and every kill below
+    // signals the whole group.
+    const ownGroup = process.platform !== 'win32';
     const child = spawn('git', [...GIT_BASE_ARGS, ...args], {
       cwd,
       env: withGitEnvOverrides(makeGitEnv(envRoot), {
@@ -460,11 +466,23 @@ const runGitWithAskpassAt = ({
         ENDO_GIT_ASKPASS_FD: String(GIT_ASKPASS_FD),
       }),
       stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+      detached: ownGroup,
     });
+    const kill = () => {
+      if (ownGroup && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGTERM');
+          return;
+        } catch {
+          // The group is already gone; fall through to the child itself.
+        }
+      }
+      child.kill('SIGTERM');
+    };
 
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
+      kill();
     }, GIT_TIMEOUT_MS);
     timeout.unref();
 
@@ -474,7 +492,7 @@ const runGitWithAskpassAt = ({
       );
     if (credentialPipe === undefined || credentialPipe === null) {
       clearTimeout(timeout);
-      child.kill('SIGTERM');
+      kill();
       reject(new Error('git credential pipe was not available'));
       return;
     }
@@ -483,7 +501,7 @@ const runGitWithAskpassAt = ({
 
     const abort = () => {
       aborted = true;
-      child.kill('SIGTERM');
+      kill();
     };
     signal?.addEventListener('abort', abort, { once: true });
 
@@ -501,7 +519,7 @@ const runGitWithAskpassAt = ({
       }
       if (stdoutSize + stderrSize > GIT_MAX_BUFFER) {
         outputTooLarge = true;
-        child.kill('SIGTERM');
+        kill();
         return;
       }
       chunks.push(bytes);
