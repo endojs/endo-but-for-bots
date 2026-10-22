@@ -1,4 +1,5 @@
 // @ts-check
+import fs from 'node:fs';
 import { builtinModules } from 'node:module';
 import { OptionDefaults } from 'typedoc';
 import { configs as endoConfigs, hardenedGlobals } from '@endo/eslint-plugin';
@@ -46,6 +47,16 @@ const thixotropeAmbientGlobals = [
   'performance',
   'Date',
 ];
+
+// Files that predate the no-explicit-any rules, with their violation counts.
+// scripts/check-no-explicit-any.mjs holds each count fixed or falling.
+/** @type {Record<string, number>} */
+const explicitAnyBaseline = JSON.parse(
+  fs.readFileSync(
+    new URL('eslint-no-explicit-any-baseline.json', import.meta.url),
+    'utf8',
+  ),
+);
 
 const importResolverSettingsFor = condition => ({
   'import/resolver': {
@@ -411,6 +422,23 @@ export default defineConfig(
       ],
     },
   },
+
+  // Exempt the explicit-any baseline. This comes after every block that
+  // re-extends the internal config, so nothing re-enables the rules for these
+  // files; scripts/check-no-explicit-any.mjs keeps their counts from growing.
+  // An empty `files` list would match everything, so the block goes away
+  // with the last baselined file.
+  Object.keys(explicitAnyBaseline).length > 0
+    ? {
+        files: Object.keys(explicitAnyBaseline).map(file =>
+          file.replace(/[*?[\]{}()!+@\\]/g, '\\$&'),
+        ),
+        rules: {
+          'jsdoc/reject-any-type': 'off',
+          '@typescript-eslint/no-explicit-any': 'off',
+        },
+      }
+    : [],
 
   // Repository-wide ignores formerly provided by .eslintignore.
   {
