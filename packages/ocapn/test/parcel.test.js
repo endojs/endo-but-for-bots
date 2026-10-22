@@ -5,7 +5,7 @@
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import harden from '@endo/harden';
-import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 import { passStyleOf } from '@endo/pass-style';
 import { locate } from '@endo/parcel';
 import baseTest from '@endo/ses-ava/test.js';
@@ -125,10 +125,13 @@ parcelTest('an OCapN Parcel location names its peer without JSON', t => {
 
   t.is(params.get('peer'), 'ed25519-public-key');
   t.is(params.get('value'), 'abcd');
-  t.deepEqual(readParcelDetails(parcel), {
-    location,
-    secret: frozenBytes(Uint8Array.of(0xab, 0xcd)),
-  });
+  const details = readParcelDetails(parcel);
+  t.deepEqual(details.location, location);
+  t.not(typeof details.secret, 'string');
+  t.deepEqual(
+    [...thawedBytes(/** @type {Uint8Array} */ (details.secret))],
+    [0xab, 0xcd],
+  );
 });
 
 parcelTest('the public Parcel mint takes no custom open', async t => {
