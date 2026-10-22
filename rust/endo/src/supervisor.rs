@@ -38,6 +38,14 @@ pub struct Supervisor {
     /// Suspended workers keyed by handle.  The inbox is removed
     /// when the worker suspends; on resume, a new inbox is created.
     suspended: RwLock<HashMap<Handle, SuspendedWorker>>,
+    /// Ephemeral CAS GC roots: the snapshot SHA-256 each XS worker
+    /// was last suspended to.  Pinned on suspend and held through the
+    /// restored incarnation's lifetime (the restore reads the blob
+    /// asynchronously on the worker's thread, so releasing at resume
+    /// time would let a concurrent `cas-gc` delete it before it is
+    /// opened).  Released when the worker exits without suspending
+    /// again, or replaced when it suspends to a new snapshot.
+    snapshot_roots: RwLock<HashMap<Handle, String>>,
     /// Per-worker metering state.
     meters: RwLock<HashMap<Handle, MeterState>>,
     outbox: Mutex<Option<Mailbox>>,
@@ -56,6 +64,7 @@ impl Supervisor {
             parents: RwLock::new(HashMap::new()),
             pending_syncs: Mutex::new(HashMap::new()),
             suspended: RwLock::new(HashMap::new()),
+            snapshot_roots: RwLock::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
@@ -78,6 +87,11 @@ impl Supervisor {
     }
 
     pub fn unregister(&self, h: Handle) {
+        // A worker thread exiting because it just suspended keeps its
+        // snapshot root; any other exit releases it.
+        if !self.is_suspended(h) {
+            self.snapshot_roots.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        }
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
@@ -184,6 +198,12 @@ impl Supervisor {
         // Remove the inbox — the worker thread is exiting.
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
+        if !sha256.is_empty() {
+            self.snapshot_roots
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(handle, sha256.clone());
+        }
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
             handle,
             SuspendedWorker {
@@ -215,6 +235,17 @@ impl Supervisor {
     /// worker suspended rather than half-resumed.
     pub fn put_suspended(&self, handle: Handle, worker: SuspendedWorker) {
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(handle, worker);
+    }
+
+    /// The ephemeral CAS GC roots held for suspended (and restored)
+    /// XS worker snapshots.  `cas-gc` treats these as live.
+    pub fn snapshot_roots(&self) -> std::collections::HashSet<String> {
+        self.snapshot_roots
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
     }
 
     // ---- Metering API ----
@@ -458,6 +489,96 @@ mod tests {
             assert_eq!(suspended.info.platform, "shared");
             assert_eq!(suspended.sha256, "abc123");
             assert!(!sup.is_suspended(handle));
+        });
+    }
+
+    #[test]
+    fn snapshot_root_pinned_across_suspend_and_resume() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let handle = sup.alloc_handle();
+            let _inbox = sup.register(handle, None);
+            assert!(sup.snapshot_roots().is_empty());
+
+            sup.mark_suspended(
+                handle,
+                "aaa".to_string(),
+                std::path::PathBuf::from("/tmp/cas"),
+            );
+            // The suspending worker thread exits after the supervisor
+            // has recorded the suspend: the root must survive.
+            sup.unregister(handle);
+            assert!(sup.snapshot_roots().contains("aaa"));
+
+            // Resume: the record leaves the suspended set but the root
+            // stays pinned while the restored incarnation runs.
+            let _suspended = sup.take_suspended(handle).unwrap();
+            let _inbox = sup.register(handle, None);
+            assert!(sup.snapshot_roots().contains("aaa"));
+
+            // Re-suspend to a new snapshot replaces the root.
+            sup.mark_suspended(
+                handle,
+                "bbb".to_string(),
+                std::path::PathBuf::from("/tmp/cas"),
+            );
+            let roots = sup.snapshot_roots();
+            assert!(roots.contains("bbb"));
+            assert!(!roots.contains("aaa"));
+
+            // Resume, then exit without suspending: the root is released.
+            let _suspended = sup.take_suspended(handle).unwrap();
+            let _inbox = sup.register(handle, None);
+            sup.unregister(handle);
+            assert!(sup.snapshot_roots().is_empty());
+        });
+    }
+
+    #[test]
+    fn cas_gc_keeps_suspended_snapshot() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let cas = crate::cas::ContentStore::open(tmp.path()).unwrap();
+            let snapshot = cas.store(b"xs heap snapshot", "blob").unwrap();
+            let garbage = cas.store(b"unreferenced", "blob").unwrap();
+
+            let (sup, _outbox_rx) = Supervisor::new();
+            let handle = sup.alloc_handle();
+            let _inbox = sup.register(handle, None);
+            sup.mark_suspended(handle, snapshot.clone(), tmp.path().to_path_buf());
+            sup.unregister(handle);
+
+            cas.gc(&sup.snapshot_roots()).unwrap();
+            assert!(cas.has(&snapshot));
+            assert!(!cas.has(&garbage));
+
+            // Once the restored incarnation exits, the snapshot is
+            // collectable.
+            let _suspended = sup.take_suspended(handle).unwrap();
+            let _inbox = sup.register(handle, None);
+            sup.unregister(handle);
+            cas.gc(&sup.snapshot_roots()).unwrap();
+            assert!(!cas.has(&snapshot));
+        });
+    }
+
+    #[test]
+    fn store_backed_suspend_pins_no_snapshot_root() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let handle = sup.alloc_handle();
+            let _inbox = sup.register(handle, None);
+            sup.mark_suspended_store(handle, std::path::PathBuf::from("/tmp/heap.db"));
+            assert!(sup.snapshot_roots().is_empty());
         });
     }
 

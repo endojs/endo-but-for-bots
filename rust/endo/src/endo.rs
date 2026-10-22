@@ -631,8 +631,8 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             }
         }
         "cas-gc" => {
-            // Run GC with live roots from the payload (if any).
-            let live_roots = std::collections::HashSet::new();
+            // Suspended XS worker snapshots are ephemeral GC roots.
+            let live_roots = sup.snapshot_roots();
             match cas.gc(&live_roots) {
                 Ok(report) => {
                     eprintln!(
