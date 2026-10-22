@@ -20,6 +20,7 @@ import {
   isGitReadOnly,
   makeGitCloner,
   makeGitRemoteEndpoint,
+  normalizeGitRemotePolicy,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
@@ -306,6 +307,8 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
+ * @param {DaemonCore['listMountHostEntries']} [args.listMountHostEntries]
+ * @param {DaemonCore['emptyMountHostPath']} [args.emptyMountHostPath]
  * @param {HostToolPowers['gitClone']} [args.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
@@ -399,6 +402,12 @@ export const makeHostMaker = ({
   // injected from the daemon core's host tool powers rather than
   // imported here: a static `@endo/git` import would put nine `node:`
   // builtins on the XS daemon bundle's compartment graph.
+  listMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`listMountHostEntries not wired into makeHostMaker`);
+  },
+  emptyMountHostPath = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`emptyMountHostPath not wired into makeHostMaker`);
+  },
   gitClone = /** @param {...any} _args */ (..._args) => {
     throw makeError(X`gitClone not wired into makeHostMaker`);
   },
@@ -1588,6 +1597,50 @@ export const makeHostMaker = ({
       return controller;
     };
 
+    /**
+     * Build the persisted `git-remote` policy record from
+     * `provideGitRemote`-shaped options.  `provideGitClone` builds its
+     * `origin` policy through the same function, so the two paths store
+     * the same shape and the `git-remote` maker normalizes both the same
+     * way at incarnation.
+     *
+     * @param {{
+     *   url: string,
+     *   allowedDirections?: Array<'fetch' | 'push'>,
+     *   fetchRefspecs?: string[],
+     *   pushRefspecs?: string[],
+     *   defaultPullRef?: string,
+     *   allowedBranches?: string[],
+     *   allowForcePush?: boolean,
+     *   allowTags?: boolean,
+     *   allowDelete?: boolean,
+     *   allowLocalFileTransport?: boolean,
+     * }} opts
+     */
+    const makeGitRemotePolicyRecord = opts =>
+      harden({
+        url: opts.url,
+        allowedDirections: harden([...(opts.allowedDirections || ['fetch'])]),
+        fetchRefspecs: harden([...(opts.fetchRefspecs || [])]),
+        pushRefspecs: harden([...(opts.pushRefspecs || [])]),
+        ...(opts.defaultPullRef !== undefined
+          ? { defaultPullRef: opts.defaultPullRef }
+          : {}),
+        ...(opts.allowedBranches !== undefined
+          ? { allowedBranches: harden([...opts.allowedBranches]) }
+          : {}),
+        ...(opts.allowForcePush !== undefined
+          ? { allowForcePush: opts.allowForcePush }
+          : {}),
+        ...(opts.allowTags !== undefined ? { allowTags: opts.allowTags } : {}),
+        ...(opts.allowDelete !== undefined
+          ? { allowDelete: opts.allowDelete }
+          : {}),
+        ...(opts.allowLocalFileTransport !== undefined
+          ? { allowLocalFileTransport: opts.allowLocalFileTransport }
+          : {}),
+      });
+
     /** @type {EndoHost['provideGitRemote']} */
     const provideGitRemote = async (gitCap, petName, opts) => {
       const { namePath } = petNamePathFrom(petName);
@@ -1622,28 +1675,7 @@ export const makeHostMaker = ({
           );
         }
       }
-      const policy = harden({
-        url: opts.url,
-        allowedDirections: harden([...(opts.allowedDirections || ['fetch'])]),
-        fetchRefspecs: harden([...(opts.fetchRefspecs || [])]),
-        pushRefspecs: harden([...(opts.pushRefspecs || [])]),
-        ...(opts.defaultPullRef !== undefined
-          ? { defaultPullRef: opts.defaultPullRef }
-          : {}),
-        ...(opts.allowedBranches !== undefined
-          ? { allowedBranches: harden([...opts.allowedBranches]) }
-          : {}),
-        ...(opts.allowForcePush !== undefined
-          ? { allowForcePush: opts.allowForcePush }
-          : {}),
-        ...(opts.allowTags !== undefined ? { allowTags: opts.allowTags } : {}),
-        ...(opts.allowDelete !== undefined
-          ? { allowDelete: opts.allowDelete }
-          : {}),
-        ...(opts.allowLocalFileTransport !== undefined
-          ? { allowLocalFileTransport: opts.allowLocalFileTransport }
-          : {}),
-      });
+      const policy = makeGitRemotePolicyRecord(opts);
 
       /** @type {DeferredTasks<GitRemoteDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -1661,16 +1693,51 @@ export const makeHostMaker = ({
       return value;
     };
 
+    /**
+     * The `origin` policy fields `provideGitClone` accepts.  `name`, `url`,
+     * `credential` and `allowLocalFileTransport` are absent on purpose: the
+     * clone fixes them from the endpoint.
+     */
+    const gitCloneOriginKeys = harden([
+      'petName',
+      'allowedDirections',
+      'fetchRefspecs',
+      'pushRefspecs',
+      'allowedBranches',
+      'defaultPullRef',
+      'allowForcePush',
+      'allowTags',
+      'allowDelete',
+    ]);
+
     /** @type {EndoHost['provideGitClone']} */
-    const provideGitClone = async opts => {
-      if (!opts || typeof opts !== 'object') {
+    const provideGitClone = async (destMount, petName, options) => {
+      const { namePath } = petNamePathFrom(petName);
+      if (!options || typeof options !== 'object') {
         throw makeError(X`provideGitClone: options must be an object`);
       }
-      if (typeof opts.endpoint !== 'object' || opts.endpoint === null) {
+      if (typeof options.endpoint !== 'object' || options.endpoint === null) {
         throw makeError(X`provideGitClone: endpoint must be an object`);
       }
-      const { destMount, endpoint: endpointOptions } = opts;
-      const identity = normalizeGitIdentity(opts.identity, 'provideGitClone');
+      const { endpoint: endpointOptions, origin = {} } = options;
+      const identity = normalizeGitIdentity(
+        options.identity,
+        'provideGitClone',
+      );
+      if (typeof origin !== 'object' || origin === null) {
+        throw makeError(X`provideGitClone: origin must be an object`);
+      }
+      for (const key of Object.keys(origin)) {
+        if (!gitCloneOriginKeys.includes(key)) {
+          throw makeError(
+            X`provideGitClone: origin.${q(key)} is not an origin policy field; the clone fixes the remote name, url, credential and transport from the endpoint`,
+          );
+        }
+      }
+      const originNamePath =
+        origin.petName === undefined
+          ? undefined
+          : petNamePathFrom(origin.petName).namePath;
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
         throw makeError(
@@ -1724,61 +1791,116 @@ export const makeHostMaker = ({
             ? false
             : endpointRecord.allowLocalFileTransport,
       });
+      const { petName: _originPetName, ...originPolicy } = origin;
+      const policy = makeGitRemotePolicyRecord({
+        fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+        ...originPolicy,
+        url: endpoint.url,
+        allowLocalFileTransport: endpoint.allowLocalFileTransport,
+      });
+      // Reject before cloning a policy the `git-remote` maker would reject
+      // at incarnation, the same check `provideGitRemote` gets there.
+      normalizeGitRemotePolicy({ name: 'origin', policy });
+
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
+      // The emptiness check that `gitClone` repeats is made here so that
+      // discard can never remove content the caller had before the call.
+      if ((await listMountHostEntries(destMountId)).length > 0) {
+        throw makeError(X`provideGitClone: destMount must be empty`);
+      }
+
+      // Formulas minted during the composition stay transiently pinned
+      // until their names are stored, or until discard releases them.
+      /** @type {FormulaIdentifier[]} */
+      const pinned = [];
       /** @type {FormulaIdentifier | undefined} */
       let clonedGitId;
+      /** @type {FormulaIdentifier | undefined} */
+      let originId;
       const cloner = makeGitCloner({
         endpoint,
         clone: gitClone,
         makeGit: async () => {
-          /** @type {DeferredTasks<GitDeferredTaskParams>} */
-          const tasks = makeDeferredTasks();
           const { value, id } = await formulateGit(
             destMountId,
             false,
             identity,
-            tasks,
+            makeDeferredTasks(),
           );
+          pinTransient(id);
+          pinned.push(id);
           clonedGitId = id;
           return value;
         },
-        makeRemote: async ({ endpoint: remoteEndpoint }) => {
+        makeRemote: async () => {
           await null;
           if (clonedGitId === undefined) {
             throw makeError(X`provideGitClone: cloned Git id was not minted`);
           }
-          const policy = harden({
-            url: remoteEndpoint.url,
-            allowedDirections: harden(
-              /** @type {Array<'fetch' | 'push'>} */ (['fetch', 'push']),
-            ),
-            fetchRefspecs: harden(['+refs/heads/*:refs/remotes/origin/*']),
-            pushRefspecs: harden(['refs/heads/*:refs/heads/*']),
-            allowLocalFileTransport: remoteEndpoint.allowLocalFileTransport,
-          });
-          /** @type {DeferredTasks<GitRemoteDeferredTaskParams>} */
-          const tasks = makeDeferredTasks();
-          const { value } = await formulateGitRemote(
+          const { value, id } = await formulateGitRemote(
             clonedGitId,
             credentialId,
             'origin',
             policy,
-            tasks,
+            makeDeferredTasks(),
           );
+          pinTransient(id);
+          pinned.push(id);
+          originId = id;
           return value;
         },
       });
-      const { git, remote } = await cloner.clone({
-        destMount,
-        destPath,
-      });
-      const gitCap = /** @type {ReadWriteEndoGit} */ (git);
-      return harden({
-        git: gitCap,
-        remote,
-      });
+      /** @type {NamePath | undefined} */
+      let storedOriginName;
+      try {
+        const { git, remote } = await cloner.clone({
+          destMount,
+          destPath,
+        });
+        // Naming is the last step, so a failure anywhere above leaves no
+        // name bound.  The origin is named first so that, if naming the
+        // Git fails, only the origin's name needs to be removed.
+        if (originNamePath !== undefined) {
+          await E(directory).storeIdentifier(
+            originNamePath,
+            /** @type {FormulaIdentifier} */ (originId),
+          );
+          storedOriginName = originNamePath;
+        }
+        await E(directory).storeIdentifier(
+          namePath,
+          /** @type {FormulaIdentifier} */ (clonedGitId),
+        );
+        return harden({
+          git: /** @type {ReadWriteEndoGit} */ (git),
+          remote,
+        });
+      } catch (error) {
+        const cleanupErrors = [];
+        if (storedOriginName !== undefined) {
+          await E(directory)
+            .remove(...storedOriginName)
+            .catch(cleanupError => cleanupErrors.push(cleanupError));
+        }
+        await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
+          cleanupError => cleanupErrors.push(cleanupError),
+        );
+        await emptyMountHostPath(destMountId).catch(cleanupError =>
+          cleanupErrors.push(cleanupError),
+        );
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            [error, ...cleanupErrors],
+            'provideGitClone failed and could not discard the partial clone',
+            { cause: error },
+          );
+        }
+        throw error;
+      } finally {
+        await Promise.all(pinned.map(unpinTransient));
+      }
     };
 
     /** @type {EndoHost['storeValue']} */

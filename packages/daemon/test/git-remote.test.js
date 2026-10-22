@@ -6,6 +6,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -108,12 +109,15 @@ const provisionHostContext = async t => {
   cancelled.catch(() => {});
   await purge(config);
   await start(config);
-  const { getBootstrap, closed } = await makeEndoClient(
-    'client',
-    config.sockPath,
-    cancelled,
-  );
-  closed.catch(() => {});
+  const connect = async () => {
+    const { getBootstrap, closed } = await makeEndoClient(
+      'client',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    return E(getBootstrap()).host();
+  };
   t.teardown(async () => {
     await stop(config);
     cancel(Error('teardown'));
@@ -121,7 +125,13 @@ const provisionHostContext = async t => {
     // delete races the same background packing (see `removeRepoTree`).
     await removeRepoTree(root);
   });
-  return { host: E(getBootstrap()).host(), config };
+  /** Stop and restart the daemon over the same state; return a new host. */
+  const restart = async () => {
+    await stop(config);
+    await start(config);
+    return connect();
+  };
+  return { host: await connect(), config, restart };
 };
 
 /**
@@ -985,15 +995,13 @@ test.serial(
 
     const destMount = await E(host).provideScratchMount('clone-destination');
     await t.throwsAsync(
-      E(host).provideGitClone({
-        destMount: Far('NotMount', {}),
+      E(host).provideGitClone(Far('NotMount', {}), 'clone-git', {
         endpoint: { url: remoteUrl, allowLocalFileTransport: true },
       }),
       { message: /destMount must be a daemon-minted mount cap/ },
     );
     await t.throwsAsync(
-      E(host).provideGitClone({
-        destMount,
+      E(host).provideGitClone(destMount, 'clone-git', {
         endpoint: /** @type {any} */ ({
           url: remoteUrl,
           allowLocalFileTransport: 'true',
@@ -1002,8 +1010,7 @@ test.serial(
       { message: /endpoint\.allowLocalFileTransport must be a boolean/ },
     );
     await t.throwsAsync(
-      E(host).provideGitClone({
-        destMount,
+      E(host).provideGitClone(destMount, 'clone-git', {
         endpoint: /** @type {any} */ ({
           url: 1,
           allowLocalFileTransport: true,
@@ -1011,14 +1018,39 @@ test.serial(
       }),
       { message: /endpoint\.url must be a string/ },
     );
-    const { git, remote } = await E(host).provideGitClone({
+    for (const field of [
+      'name',
+      'url',
+      'credential',
+      'allowLocalFileTransport',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        E(host).provideGitClone(destMount, 'clone-git', {
+          endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+          origin: /** @type {any} */ ({ [field]: 'x' }),
+        }),
+        { message: /is not an origin policy field/ },
+        `origin.${field} is fixed by the clone`,
+      );
+    }
+    t.false(await E(host).has('clone-git'));
+    const { git, remote } = await E(host).provideGitClone(
       destMount,
-      endpoint: {
-        url: remoteUrl,
-        allowLocalFileTransport: true,
+      'clone-git',
+      {
+        endpoint: {
+          url: remoteUrl,
+          allowLocalFileTransport: true,
+        },
+        origin: {
+          allowedDirections: ['fetch', 'push'],
+          pushRefspecs: ['refs/heads/*:refs/heads/*'],
+        },
       },
-    });
+    );
 
+    t.is(await E(host).lookup('clone-git'), git);
     t.is((await E(git).currentBranch()).name, 'main');
     t.deepEqual(await E(git).status(), { entries: [], truncated: false });
     t.like(await E(remote).inspect(), {
@@ -1061,11 +1093,18 @@ test.serial(
     const destMount = await E(host).provideScratchMount(
       'clone-identity-destination',
     );
-    const { git, remote } = await E(host).provideGitClone({
+    const { git, remote } = await E(host).provideGitClone(
       destMount,
-      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-      identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
-    });
+      'clone-identity-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+        origin: {
+          allowedDirections: ['fetch', 'push'],
+          allowedBranches: ['main'],
+        },
+      },
+    );
 
     await E(destMount).writeText(['identity.txt'], 'clone identity\n');
     const entry = await E(destMount).entry(['identity.txt']);
@@ -1112,8 +1151,7 @@ test.serial(
     t.deepEqual(await fs.promises.readdir(destPath), []);
 
     await t.throwsAsync(
-      E(host).provideGitClone({
-        destMount,
+      E(host).provideGitClone(destMount, 'read-only-clone-git', {
         endpoint: {
           url: remoteUrl,
           allowLocalFileTransport: true,
@@ -1121,8 +1159,316 @@ test.serial(
       }),
       { message: /destMount must be writable/ },
     );
+    t.false(await E(host).has('read-only-clone-git'));
 
     t.deepEqual(await fs.promises.readdir(destPath), []);
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone aborts the native clone when the credential rotates',
+  async t => {
+    const { host } = await provisionHostContext(t);
+
+    // An https listener that accepts and never answers holds `git` inside
+    // the TLS handshake, so the rotation lands while the subprocess runs.
+    /** @type {Set<net.Socket>} */
+    const sockets = new Set();
+    const connected = makePromiseKit();
+    const disconnected = makePromiseKit();
+    const server = net.createServer(socket => {
+      sockets.add(socket);
+      socket.on('error', () => {});
+      socket.on('close', () => disconnected.resolve(undefined));
+      connected.resolve(undefined);
+    });
+    await new Promise(resolve => {
+      server.listen(0, '127.0.0.1', () => resolve(undefined));
+    });
+    t.teardown(() => {
+      for (const socket of sockets) socket.destroy();
+      server.close();
+    });
+    const { port } = /** @type {net.AddressInfo} */ (server.address());
+    const audience = `https://127.0.0.1:${port}`;
+
+    const credential = await E(host).provideBearerCredential(
+      'rotating-clone-credential',
+      { audience, token: 'first-token' },
+    );
+    const controller = await E(host).getGitCredentialController(credential);
+    const destMount = await E(host).provideScratchMount(
+      'rotating-clone-destination',
+    );
+    const destPath = await E(host).provideHostPath(destMount);
+
+    const cloneP = E(host).provideGitClone(destMount, 'rotating-clone-git', {
+      endpoint: { url: `${audience}/repo.git`, credential },
+      origin: { petName: 'rotating-clone-origin' },
+    });
+    cloneP.catch(() => {});
+    // Settles on whichever comes first, so an early rejection fails below
+    // rather than hanging here.
+    await Promise.race([connected.promise, cloneP]);
+    await E(controller).rotate({ token: 'second-token' });
+
+    await t.throwsAsync(cloneP, { message: /changed during clone/ });
+    // The aborted subprocess drops its connection to the listener.
+    await disconnected.promise;
+    t.deepEqual(await fs.promises.readdir(destPath), []);
+    t.false(await E(host).has('rotating-clone-git'));
+    t.false(await E(host).has('rotating-clone-origin'));
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone discards a clone that fails after formulateGit, and a retry succeeds',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount('retry-destination');
+    const destPath = await E(host).provideHostPath(destMount);
+
+    // Naming the origin under a directory that does not exist fails at the
+    // last step, after the clone ran and both formulas were minted.
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, 'retry-git', {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        origin: { petName: ['no-such-directory', 'retry-origin'] },
+      }),
+    );
+    t.deepEqual(
+      await fs.promises.readdir(destPath),
+      [],
+      'the partial clone is discarded',
+    );
+    t.false(await E(host).has('retry-git'));
+    t.false(await E(host).has('retry-origin'));
+
+    const { git, remote } = await E(host).provideGitClone(
+      destMount,
+      'retry-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        origin: { petName: 'retry-origin' },
+      },
+    );
+    t.is(await E(host).lookup('retry-git'), git);
+    t.is(await E(host).lookup('retry-origin'), remote);
+    t.is((await E(git).currentBranch()).name, 'main');
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone refuses a non-empty destination without discarding it',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount('occupied-destination');
+    await E(destMount).writeText(['keep.txt'], 'caller content\n');
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, 'occupied-git', {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      }),
+      { message: /destMount must be empty/ },
+    );
+    t.is(await E(destMount).readText(['keep.txt']), 'caller content\n');
+    t.false(await E(host).has('occupied-git'));
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone origin defaults to fetch-only and the Agent MVP Profile pushes only agent branches',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const defaultMount = await E(host).provideScratchMount(
+      'default-origin-destination',
+    );
+    const { git: defaultGit, remote: defaultRemote } = await E(
+      host,
+    ).provideGitClone(defaultMount, 'default-origin-git', {
+      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+    });
+    t.like(await E(defaultRemote).inspect(), {
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+      pushRefspecs: [],
+    });
+    await E(defaultMount).writeText(['default.txt'], 'default\n');
+    await E(defaultGit).add([await E(defaultMount).entry(['default.txt'])]);
+    await E(defaultGit).commit('test: default origin');
+    await t.throwsAsync(
+      E(defaultRemote).push({
+        source: 'refs/heads/main',
+        destination: 'refs/heads/main',
+      }),
+      { message: /does not permit "push"/ },
+    );
+    await E(defaultRemote).fetch();
+
+    const agentMount = await E(host).provideScratchMount(
+      'agent-origin-destination',
+    );
+    const { git, remote } = await E(host).provideGitClone(
+      agentMount,
+      'agent-origin-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        origin: {
+          allowedDirections: ['fetch', 'push'],
+          allowedBranches: ['refs/heads/agent/*'],
+        },
+      },
+    );
+    await E(agentMount).writeText(['agent.txt'], 'agent\n');
+    await E(git).add([await E(agentMount).entry(['agent.txt'])]);
+    await E(git).commit('test: agent origin');
+    await t.throwsAsync(
+      E(remote).push({
+        source: 'refs/heads/main',
+        destination: 'refs/heads/main',
+      }),
+    );
+    await E(git).createBranch('agent/work');
+    const pushResult = await E(remote).push({
+      source: 'refs/heads/agent/work',
+      destination: 'refs/heads/agent/work',
+    });
+    t.like([...pushResult.updatedRefs][0], {
+      remote: 'refs/heads/agent/work',
+    });
+    const { stdout } = await execFileAsync('git', [
+      '--git-dir',
+      remoteRoot,
+      'show',
+      'agent/work:agent.txt',
+    ]);
+    t.is(stdout, 'agent\n');
+    const { stdout: mainLog } = await execFileAsync('git', [
+      '--git-dir',
+      remoteRoot,
+      'log',
+      '--format=%s',
+      'main',
+    ]);
+    t.false(mainLog.includes('test: agent origin'));
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone names resolve after a daemon restart',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host, restart } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount('durable-destination');
+    await E(host).provideGitClone(destMount, ['durable-git'], {
+      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+      origin: {
+        petName: 'durable-origin',
+        allowedDirections: ['fetch', 'push'],
+        allowedBranches: ['refs/heads/agent/*'],
+      },
+    });
+
+    const restarted = await restart();
+    const git = await E(restarted).lookup('durable-git');
+    const remote = await E(restarted).lookup('durable-origin');
+    t.is((await E(git).currentBranch()).name, 'main');
+    t.like(await E(remote).inspect(), {
+      name: 'origin',
+      url: remoteUrl,
+      allowedDirections: ['fetch', 'push'],
+      allowedBranches: ['refs/heads/agent/*'],
+    });
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone rejects an origin policy that provideGitRemote rejects',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const sourceMount = await E(host).provideScratchMount(
+      'policy-source-destination',
+    );
+    const { git } = await E(host).provideGitClone(
+      sourceMount,
+      'policy-source-git',
+      { endpoint: { url: remoteUrl, allowLocalFileTransport: true } },
+    );
+    const destMount = await E(host).provideScratchMount(
+      'policy-rejected-destination',
+    );
+    const destPath = await E(host).provideHostPath(destMount);
+
+    /** @type {Array<[string, Record<string, unknown>, RegExp]>} */
+    const cases = [
+      [
+        'push without push refspecs',
+        { allowedDirections: ['fetch', 'push'] },
+        /allows push but has no pushRefspecs or allowedBranches/,
+      ],
+      [
+        'both allowedBranches and pushRefspecs',
+        {
+          allowedDirections: ['fetch', 'push'],
+          allowedBranches: ['refs/heads/agent/*'],
+          pushRefspecs: ['refs/heads/main:refs/heads/main'],
+        },
+        /must choose allowedBranches or pushRefspecs, not both/,
+      ],
+      [
+        'a branch selector outside refs/heads',
+        {
+          allowedDirections: ['fetch', 'push'],
+          allowedBranches: ['refs/tags/v1'],
+        },
+        /must be rooted under refs\/heads\//,
+      ],
+    ];
+    for (const [label, origin, message] of cases) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        E(host).provideGitRemote(git, 'policy-rejected-remote', {
+          name: 'origin',
+          url: remoteUrl,
+          allowLocalFileTransport: true,
+          ...origin,
+        }),
+        { message },
+        `provideGitRemote rejects ${label}`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        E(host).provideGitClone(destMount, 'policy-rejected-git', {
+          endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+          origin: /** @type {any} */ (origin),
+        }),
+        { message },
+        `provideGitClone rejects ${label}`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      t.deepEqual(await fs.promises.readdir(destPath), []);
+      // eslint-disable-next-line no-await-in-loop
+      t.false(await E(host).has('policy-rejected-git'));
+    }
   },
 );
 
