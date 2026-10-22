@@ -4386,6 +4386,127 @@ test('Git.filesystemAt: an empty tree exposes an empty root', async t => {
   await t.throwsAsync(E(root).lookup('anything'), { message: /ENOENT/ });
 });
 
+/**
+ * Run git with `input` on stdin and return trimmed stdout.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {string} input
+ */
+const gitWithInput = (cwd, args, input) => {
+  const result = spawnSync('git', args, { cwd, input, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw Error(`git ${args[0]} failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+};
+
+/**
+ * Commit a tree of `count` entries (all one blob) written with
+ * `git mktree`, and return the commit OID.
+ *
+ * @param {string} repoRoot
+ * @param {number} count
+ */
+const commitWideTree = (repoRoot, count) => {
+  const blobOid = gitWithInput(
+    repoRoot,
+    ['hash-object', '-w', '--stdin'],
+    'same\n',
+  );
+  const lines = [];
+  for (let i = 0; i < count; i += 1) {
+    lines.push(`100644 blob ${blobOid}\tf-${String(i).padStart(5, '0')}`);
+  }
+  const treeOid = gitWithInput(repoRoot, ['mktree'], `${lines.join('\n')}\n`);
+  const commitOid = gitWithInput(
+    repoRoot,
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit-tree',
+      '-m',
+      'wide',
+      treeOid,
+    ],
+    '',
+  );
+  return { blobOid, treeOid, commitOid };
+};
+
+test('Git.filesystemAt: Cursor.read(limit) pages a wide tree', async t => {
+  // Phase 6 of designs/endo-fs-from-git.md: `Directory.list()` streams
+  // `ls-tree` through `streamLsTree`, so a page returns after `limit`
+  // entries with the rest of the listing still pending.
+  t.timeout(120_000);
+  const repoRoot = await provisionGitWorktree(t);
+  const count = 4000;
+  const { blobOid, commitOid } = commitWideTree(repoRoot, count);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  const gitFs = /** @type {any} */ (await E(git).filesystemAt(commitOid));
+  const root = /** @type {any} */ (await E(gitFs).root());
+
+  const cursor = /** @type {any} */ (await E(root).list());
+  const first = await E(cursor).read(25n);
+  t.false(first.atEnd);
+  t.deepEqual(
+    first.entries.map(e => e.name),
+    Array.from({ length: 25 }, (_, i) => `f-${String(i).padStart(5, '0')}`),
+  );
+  t.is(first.entries[0].qid.pathId, BigInt(`0x${blobOid}`));
+
+  const rest = await E(cursor).read();
+  t.true(rest.atEnd);
+  t.is(rest.entries.length, count - 25);
+  t.is(rest.entries.at(-1).name, `f-${String(count - 1).padStart(5, '0')}`);
+});
+
+test('Git.filesystemAt: a sha256-format repository reads with 256-bit QIDs', async t => {
+  // Phase 5: `extensions.objectFormat = sha256` repositories carry
+  // 64-hex OIDs; the QID `pathId` is the full 256-bit OID.
+  const repoRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-sha256-'),
+  );
+  t.teardown(() => removeRepoTree(repoRoot));
+  await execFileAsync(
+    'git',
+    ['init', '-q', '-b', 'main', '--object-format=sha256'],
+    { cwd: repoRoot },
+  );
+  await quiesceGitMaintenance(repoRoot);
+  const { blobOid, treeOid, commitOid } = commitWideTree(repoRoot, 3);
+  t.regex(blobOid, /^[0-9a-f]{64}$/);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  const gitFs = /** @type {any} */ (await E(git).filesystemAt(commitOid));
+  const root = /** @type {any} */ (await E(gitFs).root());
+
+  t.is((await E(root).getQid()).pathId, BigInt(`0x${treeOid}`));
+  const { entries } = await E(await E(root).list()).read();
+  t.deepEqual(
+    entries.map(e => e.name),
+    ['f-00000', 'f-00001', 'f-00002'],
+  );
+  t.is(entries[1].qid.pathId, BigInt(`0x${blobOid}`));
+
+  const file = /** @type {any} */ (await E(root).lookup('f-00002'));
+  t.is((await E(file).getQid()).pathId, BigInt(`0x${blobOid}`));
+  const reader = await E(await E(file).open({ read: true })).read(0n, 4n);
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  for await (const chunk of iterateBytesReader(reader)) {
+    chunks.push(chunk);
+  }
+  t.is(Buffer.concat(chunks).toString('utf8'), 'same');
+});
+
 test('Git.filesystemAt: directories report size 0n via getStat', async t => {
   // A subdirectory in the tree should report `kind: 'directory'` and
   // `size: 0n` (git trees have no inherent size).

@@ -689,3 +689,125 @@ test('remotePush refuses a force refspec alongside a force-with-lease', async t 
       ),
   );
 });
+
+/**
+ * Write a tree of `count` entries straight into the object database
+ * with `git mktree`, every entry pointing at one blob, so a
+ * several-thousand-entry tree costs two git invocations instead of a
+ * checkout.  Names carry a multi-byte UTF-8 character so a chunk
+ * boundary can fall inside a code point.
+ *
+ * @param {string} repoRoot
+ * @param {number} count
+ */
+const writeWideTree = (repoRoot, count) => {
+  const blobOid = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+    cwd: repoRoot,
+    input: 'same\n',
+  })
+    .toString()
+    .trim();
+  const lines = [];
+  for (let i = 0; i < count; i += 1) {
+    lines.push(
+      `100644 blob ${blobOid}\tentry-é-${String(i).padStart(6, '0')}.txt`,
+    );
+  }
+  const treeOid = execFileSync('git', ['mktree'], {
+    cwd: repoRoot,
+    input: `${lines.join('\n')}\n`,
+  })
+    .toString()
+    .trim();
+  return { blobOid, treeOid };
+};
+
+/**
+ * The native backend always supplies the optional `streamLsTree`.
+ *
+ * @param {ReturnType<typeof makeNativeGitBackend>} backend
+ * @param {string} treeOid
+ */
+const streamLsTree = (backend, treeOid) => {
+  const stream = backend.streamLsTree;
+  if (stream === undefined) {
+    throw Error('NativeGitBackend must implement streamLsTree');
+  }
+  return stream(treeOid);
+};
+
+test('NativeGitBackend.streamLsTree yields the same entries as lsTree', async t => {
+  t.timeout(60_000);
+  const { backend, repoRoot } = await provisionRepo(t);
+  const { blobOid, treeOid } = writeWideTree(repoRoot, 5000);
+
+  const listed = await backend.lsTree(treeOid);
+  /** @type {any[]} */
+  const streamed = [];
+  for await (const entry of streamLsTree(backend, treeOid)) {
+    streamed.push(entry);
+  }
+  t.is(streamed.length, 5000);
+  t.deepEqual(streamed, [...listed]);
+  t.deepEqual(streamed[0], {
+    mode: '100644',
+    type: 'blob',
+    oid: blobOid,
+    size: 5,
+    name: 'entry-é-000000.txt',
+  });
+  t.true(Object.isFrozen(streamed[0]));
+});
+
+test('NativeGitBackend.streamLsTree stops early without draining the listing', async t => {
+  t.timeout(60_000);
+  const { backend, repoRoot } = await provisionRepo(t);
+  const { treeOid } = writeWideTree(repoRoot, 5000);
+
+  /** @type {string[]} */
+  const names = [];
+  for await (const entry of streamLsTree(backend, treeOid)) {
+    names.push(entry.name);
+    if (names.length === 3) break;
+  }
+  t.deepEqual(names, [
+    'entry-é-000000.txt',
+    'entry-é-000001.txt',
+    'entry-é-000002.txt',
+  ]);
+});
+
+test('NativeGitBackend.streamLsTree rejects an option-shaped tree OID', async t => {
+  const { backend } = await provisionRepo(t);
+  t.throws(() => streamLsTree(backend, '--output=/tmp/x'), {
+    message: /must not start with "-"/,
+  });
+});
+
+test('NativeGitBackend.lsTree parses 64-hex OIDs from a sha256 repository', async t => {
+  const repoRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-sha256-'),
+  );
+  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  await execFileAsync(
+    'git',
+    ['init', '-q', '-b', 'main', '--object-format=sha256'],
+    { cwd: repoRoot },
+  );
+  const backend = makeNativeGitBackend({ repoRoot });
+  const { blobOid, treeOid } = writeWideTree(repoRoot, 2);
+  t.regex(blobOid, /^[0-9a-f]{64}$/);
+
+  const listed = await backend.lsTree(treeOid);
+  t.deepEqual(
+    listed.map(entry => entry.oid),
+    [blobOid, blobOid],
+  );
+  /** @type {any[]} */
+  const streamed = [];
+  for await (const entry of streamLsTree(backend, treeOid)) {
+    streamed.push(entry);
+  }
+  t.deepEqual(streamed, [...listed]);
+  t.deepEqual(await backend.readBlobBytes(blobOid), encodeUtf8('same\n'));
+});
