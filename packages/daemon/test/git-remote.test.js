@@ -1170,17 +1170,21 @@ test.serial(
   async t => {
     const { host } = await provisionHostContext(t);
 
-    // An https listener that accepts and never answers holds `git` inside
+    // An https listener that reads and never answers holds `git` inside
     // the TLS handshake, so the rotation lands while the subprocess runs.
+    // Waiting for the ClientHello, not just the connection, makes the
+    // rotation land after `git` has written to the socket.  The listener
+    // keeps reading: unread bytes would withhold `end`, and `close` would
+    // never fire after `git` dies.
     /** @type {Set<net.Socket>} */
     const sockets = new Set();
-    const connected = makePromiseKit();
+    const handshaking = makePromiseKit();
     const disconnected = makePromiseKit();
     const server = net.createServer(socket => {
       sockets.add(socket);
+      socket.on('data', () => handshaking.resolve(undefined));
       socket.on('error', () => {});
       socket.on('close', () => disconnected.resolve(undefined));
-      connected.resolve(undefined);
     });
     await new Promise(resolve => {
       server.listen(0, '127.0.0.1', () => resolve(undefined));
@@ -1209,7 +1213,7 @@ test.serial(
     cloneP.catch(() => {});
     // Settles on whichever comes first, so an early rejection fails below
     // rather than hanging here.
-    await Promise.race([connected.promise, cloneP]);
+    await Promise.race([handshaking.promise, cloneP]);
     await E(controller).rotate({ token: 'second-token' });
 
     await t.throwsAsync(cloneP, { message: /changed during clone/ });
