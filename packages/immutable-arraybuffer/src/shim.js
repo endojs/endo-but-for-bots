@@ -2,20 +2,13 @@ import {
   immutableArrayBufferLibProperties,
   freezableTypedArrayLibProperties,
   freezableDataViewLibProperties,
-  makeEmulatedTypedArrayConstructor,
-  concreteTypedArrayConstructors,
-  EmulatedDataView,
+  installEmulatedGlobalConstructors,
 } from './lib.js';
 
 // eslint-disable-next-line no-restricted-globals
 const { ArrayBuffer, Object } = globalThis;
 
-const {
-  getOwnPropertyDescriptors,
-  defineProperties,
-  defineProperty,
-  getPrototypeOf,
-} = Object;
+const { getOwnPropertyDescriptors, defineProperties, getPrototypeOf } = Object;
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
 
 // Stage-3 install policy: first evaluation wins.
@@ -69,31 +62,23 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
     getOwnPropertyDescriptors(freezableTypedArrayLibProperties),
   );
 
-  // Replace each of the eleven concrete global TypedArray constructors with
-  // the emulated constructor produced by the lib. The emulated constructor
-  // discriminates on `buffers` brand membership and falls through to
-  // the genuine constructor for all other call shapes.
-  for (const { name, Constructor } of concreteTypedArrayConstructors) {
-    const EmulatedConstructor = makeEmulatedTypedArrayConstructor(Constructor);
-    defineProperty(
-      // eslint-disable-next-line no-restricted-globals
-      globalThis,
-      name,
-      {
-        value: EmulatedConstructor,
-      },
-    );
-  }
-
   defineProperties(
     // eslint-disable-next-line no-restricted-globals
     globalThis.DataView.prototype,
     getOwnPropertyDescriptors(freezableDataViewLibProperties),
   );
-  defineProperty(
-    // eslint-disable-next-line no-restricted-globals
-    globalThis,
-    'DataView',
-    { value: EmulatedDataView },
-  );
+
+  // Replace each of the eleven concrete global TypedArray constructors, and
+  // `DataView`, with the emulated constructor produced by the lib. The
+  // emulated constructor discriminates on `buffers` brand membership and falls
+  // through to the genuine constructor for all other call shapes.
+  //
+  // The lib owns this step, and takes the target global, so the descriptor it
+  // leaves behind can be tested against a realm whose global is not an
+  // ordinary object -- the case where a partial descriptor silently turns
+  // these into non-configurable globals and breaks `lockdown()`. See
+  // `installEmulatedGlobalConstructors`, and `test/shim-vm-realm.test.js`
+  // which evaluates this file in such a realm.
+  // eslint-disable-next-line no-restricted-globals
+  installEmulatedGlobalConstructors(globalThis);
 }
