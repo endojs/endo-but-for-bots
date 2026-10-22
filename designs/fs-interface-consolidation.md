@@ -282,7 +282,7 @@ is the strictly richer shape, and the daemon and lite blobs were brought up to
 it.
 
 **First version (PR #467, superseded).** PR #467 delivered the range surface as
-`getInfo() → { algorithm, hash, size }` plus a windowed
+`getInfo() -> { algorithm, hash, size }` plus a windowed
 `fetch(offset, length)`, and removed the separate `EndoBlob.sha256()`.
 
 **Current version (PR #1301).**
@@ -344,7 +344,7 @@ flagged ones and their resolutions:
 
 | Concept | Divergence | Resolution |
 |---|---|---|
-| **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }` — and `getInfo().size` (now `size()`) is bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it; `kind` is kept (the mount stats a path); XS approximates `atime ← mtime` (host stat lacks it). |
+| **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }` — and `getInfo().size` (now `size()`) is bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it; `kind` is kept (the mount stats a path); XS approximates `atime <- mtime` (host stat lacks it). |
 | **Content hash** | `EndoBlob` exposed both `sha256()` (hex) and `getInfo().hash` (base64); blob vs tree hash encodings differed | **Every public hash accessor is base64; hex is internal-only.** PR #467 first removed `EndoBlob.sha256()` in favor of `getInfo().hash`; PR #1301 then removed `getInfo()` and restored `sha256()` as the single hash accessor, now returning base64. `EndoBlob`, `BlobRef`, `SnapshotBlob`, `SnapshotTree`, and `EndoReadableTree` all report the content hash through `sha256()` in base64. Hex survives only as the on-disk `store-sha256/<hex>` address and the tree-manifest child references; callers convert base64 to hex via `@endo/hex` + `@endo/base64` where the store key is needed. |
 | **Dir-change record** | NameHub `{ add, value: idRecord }` vs mount `{ add, type }` vs extended `WatchEvent { kind, name }` — three shapes | **Live mount feed, separate record.** `followNameChanges` returns the daemon-local `{ add, type } \| { remove }` reader; a common record remains deferred until a shared operation establishes common semantics. |
 | **Listing** | daemon/lite `list()` → `string[]` vs extended `Cursor`/`DirEntry[]` (name + qid) | **Intentional layer split** (the reconciliation chose names for lite/daemon, rich `Cursor` for the cap-FS engine). Not aligned. |
