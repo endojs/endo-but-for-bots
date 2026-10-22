@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established public CapTP type names
 import type { CapData } from '@endo/marshal';
 
 export type CapTPSlot = string;

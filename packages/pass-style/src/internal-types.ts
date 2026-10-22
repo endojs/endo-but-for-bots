@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established helper parameter names
 import type { Rejector } from '@endo/errors/rejector.js';
 import type { PassStyle } from './types.js';
 

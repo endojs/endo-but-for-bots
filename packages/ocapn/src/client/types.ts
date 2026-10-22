@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established OCapN protocol type names
 import type { OcapnLocation, OcapnSignature } from '../codecs/components.js';
 import type { OcapnKeyPair, OcapnPublicKey } from '../cryptography.js';
 import type { GrantTracker } from './grant-tracker.js';

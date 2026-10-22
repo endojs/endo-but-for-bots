@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established configuration property names
 export declare function whereEndoState(
   platform: string,
   env: { [name: string]: string | undefined },

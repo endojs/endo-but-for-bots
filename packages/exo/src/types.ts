@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established public guard and parameter names
 import type { RemotableBrand } from '@endo/eventual-send';
 import type { RemotableObject, RemotableMethodName } from '@endo/pass-style';
 import type {

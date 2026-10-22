@@ -19,7 +19,8 @@ import { getCopyMapKeys, makeCopyMap } from '../keys/checkKey.js';
 
 /**
  * @import {RemotableMethodName} from '@endo/pass-style';
- * @import {AnyMethodGuard, AwaitArgGuard, AwaitArgGuardPayload, CopyMap, InterfaceGuard, InterfaceGuardPayload, MethodGuard, MethodGuardPayload} from '../types.js'
+ * @import {AwaitArgGuard, AwaitArgGuardPayload, InterfaceGuard, InterfaceGuardPayload, MethodGuard, MethodGuardPayload} from '../types.js'
+ * @import {AnyMethodGuard, CopyMap} from '../types.js'
  */
 
 // The get*GuardPayload functions exist to adapt to the worlds both

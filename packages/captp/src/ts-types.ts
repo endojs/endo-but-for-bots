@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established public type parameter names
 /* eslint-disable */
 
 // @ts-expect-error FIXME these aren't defined

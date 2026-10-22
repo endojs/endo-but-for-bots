@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established SES diagnostic type names
 import type { VirtualConsole } from './types.js';
 
 export type LogArgs = readonly any[];

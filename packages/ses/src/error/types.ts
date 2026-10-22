@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established SES console type names
 export type VirtualConsole = {
   debug: Console['debug'];
   log: Console['log'];

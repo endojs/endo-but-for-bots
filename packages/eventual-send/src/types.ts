@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established public callable parameter names
 /* eslint-disable import/export */
 
 // Module Types //////////////////////////////////////////////////////

@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established public maker parameter names
 /* eslint-disable no-redeclare */
 
 import type { InterfaceGuard, TypeFromInterfaceGuard } from '@endo/patterns';
