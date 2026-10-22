@@ -15,7 +15,7 @@
 //! Bounded runs now cap the walk and halt with `Halt::StepLimit` far below
 //! the dispatch ceiling. Unbounded runs keep XS's walk unchanged.
 
-use ironhorse_vm::{run_program_bounded, Halt};
+use ironhorse_vm::{run_program_bounded, Halt, Interp, Opcode};
 
 const INPUT: [u8; 198] = [
     0x0b, 0x85, 0x85, 0x85, 0x85, 0x85, 0xaa, 0x65, 0x65, 0x65, 0x65, 0x65, 0x65, 0x65, 0x65, 0x65,
@@ -59,4 +59,28 @@ fn short_store_chains_run_to_the_dispatch_ceiling_unchanged() {
     let out = run_program_bounded(&INPUT, 10_000);
     assert_eq!(out.halt, Halt::StepLimit(10_000));
     assert_eq!(out.dispatched, 10_000);
+}
+
+#[test]
+fn store_arrow_into_a_long_chain_halts_under_the_same_ceiling() {
+    // `store_arrow` appends a `this` capture to the object on top of the
+    // stack without popping it, so a straight run of them grows one chain
+    // by a slot per dispatch. The 4097th walk exceeds the ceiling.
+    let mut code = vec![Opcode::XS_CODE_OBJECT as u8, Opcode::XS_CODE_OBJECT as u8];
+    code.extend(std::iter::repeat_n(
+        Opcode::XS_CODE_STORE_ARROW as u8,
+        5_000,
+    ));
+    code.push(Opcode::XS_CODE_RETURN as u8);
+    let out = Interp::new().run_bounded(&code, DECODER_STEP_LIMIT);
+    assert!(
+        matches!(out.halt, Halt::StepLimit(_)),
+        "the store_arrow chain walk must halt as a bounded StepLimit, got {:?}",
+        out.halt
+    );
+    assert!(
+        out.dispatched < 5_002,
+        "the chain ceiling must trip before the run ends: {}",
+        out.dispatched
+    );
 }
