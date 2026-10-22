@@ -12,7 +12,7 @@ import {
 
 import { makeMarshal } from '../src/marshal.js';
 
-/** @import {ConvertValToSlot} from '../src/types.types.js' */
+/** @import {ConvertValToSlot} from '../src/types.js' */
 
 const { create, getPrototypeOf, prototype: objectPrototype } = Object;
 

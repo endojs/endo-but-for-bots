@@ -13,7 +13,7 @@ import { makeMarshal } from '../src/marshal.js';
 
 import { roundTripPairs } from '../tools/marshal-test-data.js';
 
-/** @import {MakeMarshalOptions} from '../src/types.types.js' */
+/** @import {MakeMarshalOptions} from '../src/types.js' */
 
 const {
   freeze,

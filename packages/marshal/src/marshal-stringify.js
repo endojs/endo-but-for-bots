@@ -3,7 +3,7 @@ import { Fail } from '@endo/errors';
 import { makeMarshal } from './marshal.js';
 
 /** @import {Passable} from '@endo/pass-style' */
-/** @import {ConvertSlotToVal, ConvertValToSlot} from './types.types.js' */
+/** @import {ConvertSlotToVal, ConvertValToSlot} from './types.js' */
 
 const { freeze } = Object;
 

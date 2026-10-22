@@ -13,7 +13,7 @@ import { makeMarshal } from './marshal.js';
 /**
  * @import {Stringable} from 'ses';
  * @import {Passable} from '@endo/pass-style';
- * @import {Encoding} from './types.types.js';
+ * @import {Encoding} from './types.js';
  */
 
 const { ownKeys } = Reflect;

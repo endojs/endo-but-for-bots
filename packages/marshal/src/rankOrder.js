@@ -13,7 +13,7 @@ import {
 
 /**
  * @import {Atom, Passable, PassStyle} from '@endo/pass-style'
- * @import {FullCompare, PartialCompare, PartialComparison, RankCompare, RankComparison, RankCover} from './types.types.js'
+ * @import {FullCompare, PartialCompare, PartialComparison, RankCompare, RankComparison, RankCover} from './types.js'
  */
 
 const { isNaN: NumberIsNaN } = Number;

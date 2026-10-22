@@ -21,10 +21,10 @@ import {
 } from './encodeToSmallcaps.js';
 
 /**
- * @import {ConvertSlotToVal, ConvertValToSlot, FromCapData, MakeMarshalOptions, ToCapData} from './types.types.js';
+ * @import {ConvertSlotToVal, ConvertValToSlot, FromCapData, MakeMarshalOptions, ToCapData} from './types.js';
  * @import {Passable, PassableCap, RemotableObject, ParcelObject} from '@endo/pass-style';
  * @import {InterfaceSpec} from '@endo/pass-style';
- * @import {Encoding} from './types.types.js';
+ * @import {Encoding} from './types.js';
  */
 
 const { defineProperties, hasOwn } = Object;

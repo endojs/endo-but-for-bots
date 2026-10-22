@@ -1,4 +1,4 @@
-export type * from './src/types.types.js';
+export type * from './src/types.js';
 
 export { QCLASS } from './src/encodeToCapData.js';
 export { makeMarshal } from './src/marshal.js';

@@ -20,7 +20,7 @@ import { encodeHex, decodeHex } from '@endo/hex';
 import { X, Fail, q } from '@endo/errors';
 
 /** @import {Passable, RemotableObject, ParcelObject} from '@endo/pass-style' */
-/** @import {Encoding, EncodingUnion} from './types.types.js' */
+/** @import {Encoding, EncodingUnion} from './types.js' */
 
 const { ownKeys } = Reflect;
 const { isArray } = Array;

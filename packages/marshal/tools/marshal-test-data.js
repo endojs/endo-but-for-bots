@@ -13,7 +13,7 @@ import {
 const byteArrayFromHex = hex => frozenBytes(decodeHex(hex));
 
 /** @import { Passable } from '@endo/pass-style' */
-/** @import {RankComparison} from '../src/types.types.js' */
+/** @import {RankComparison} from '../src/types.js' */
 
 /**
  * Essentially a ponyfill for Array.prototype.toSorted, for use before
