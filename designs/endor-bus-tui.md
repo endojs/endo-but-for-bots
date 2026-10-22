@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-04-23 |
+| **Updated** | 2026-10-22 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
@@ -988,53 +989,263 @@ state-centric-at-the-daemon.
 | `daemon-value-message.md` | Exo handles can be shared between agents via `sendValue`, which is the cross-agent advertisement mechanism for TUI capabilities. |
 | `workers-panel.md` | The workers panel is itself a TUI consumer — it renders into a window obtained from the same screen Exo. |
 
+## Ownership map
+
+Three components meet in this subsystem: the worker (XS, confined),
+the `endor` daemon, and one or more `endor tui` client processes.
+[endor-tui](endor-tui.md) § Process model makes `endor tui` a
+separate client of the daemon socket (PR #1525 builds it that way),
+so "the daemon owns the terminal" in this document means the daemon
+owns the **TUI state**, and the client owns the **terminal**.
+"Attached" means at least one `endor tui` client is following the
+screen.
+
+| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
+|---|---|---|---|---|---|
+| worker -> daemon | `tui.*` envelopes on handle 0, dispatched by `handle_control_message` in `rust/endo/src/endo.rs` | daemon validates role, ownership, size caps | none at the worker; window/region IDs are its only references | daemon assigns IDs and commits every mutation; owner-handle sweep on worker exit | CBOR maps (verb payloads), daemon-assigned ints |
+| daemon (region store) | a pure store keyed by owner handle | store enforces scrollback caps and ID scoping | **daemon** holds every window and region (in memory; lost on daemon restart per § Known Gaps) | store is the sole writer | — |
+| daemon -> `endor tui` client | `tui.screen.follow` snapshot plus delta events | client owns layout, z-order, focus | none; client state is a cache rebuilt from the snapshot on every connect | daemon decides what exists; client decides where it is drawn | window/region descriptors and content |
+| client -> daemon -> worker (input) | client sends `tui.input`, daemon forwards as `tui.event` | client decides which region has focus; daemon checks the region has a live subscription | none | daemon routes; worker consumes | decoded key/mouse/resize events, never raw bytes |
+
+The four ownership questions:
+persistent state is owned by the daemon's region store;
+the commit/discard decision for a mutation is the daemon's (a
+rejected verb changes nothing);
+restart/replay is the client's job on reconnect (it re-follows and
+redraws from the snapshot, no worker involvement) and the worker's
+job on daemon restart (it re-requests windows, § Known Gaps);
+execution classification (which verbs a region accepts) is the
+store's, keyed on region `role`.
+
+Naming check: the store is an inner mechanism and is named for what
+it holds (`TuiStore`, `RegionState`), not for the client's layout or
+render concepts (no `Frame`, `Pane`, or `Layout` types in the
+daemon).
+
+Authority note: window and region IDs are small integers scoped to
+the owning worker handle, like a c-list index.
+The ID alone is not authority: the store looks up `(owner, id)`, so
+worker B naming worker A's region ID gets `no-such-region`.
+Cross-worker sharing goes through the Exo wrapper (Phase 6), never
+through ID guessing.
+
 ## Phases
 
-### Phase 1 — Bus verbs for text and buffer regions
+Sequencing assumption: endor-tui Phase 1 (PR #1525, `endor tui`
+skeleton and chat transcript) is in flight on `llm`.
+This design's phases are cut so that **Phase 1 needs nothing from
+#1525** and can merge independently, and **Phase 2 is the first phase
+that builds on #1525's client** (`rust/endo/src/tui/`).
+Every phase is one builder PR.
+`rust/endo` exists only on `llm`, so per the project's
+base-inference rule every phase's PR is based on a frozen `llm-<sha>`
+snapshot.
 
-Implement `tui.getScreen`, `tui.createWindow`, `tui.createRegion`
-(text and buffer roles only), `tui.setText`, `tui.appendLines`,
-`tui.destroyRegion`, `tui.destroyWindow`, implicit teardown on worker
-disconnect.
-No events, no canvas, no mouse.
+```mermaid
+flowchart LR
+  T1["endor-tui Phase 1<br/>PR #1525"]
+  B1["1: daemon region store<br/>text + buffer verbs"]
+  B2["2: endor tui follows<br/>and renders worker windows"]
+  B3["3: XS endor:tui module<br/>text + buffer"]
+  B4["4: input events<br/>buffer editing"]
+  B5["5: canvas, mouse, focus"]
+  B6["6: Exo wrapper<br/>@tui-screen"]
+  B7["7: hardening<br/>diagnostics"]
+  T1 --> B2
+  B1 --> B2
+  B1 --> B3
+  B2 --> B4
+  B3 --> B4
+  B4 --> B5
+  B4 --> B6
+  B5 --> B7
+  B6 --> B7
+```
 
-Exit criterion: a worker can create a status window with a single
-text region and update it from agent code.
+Phases 2 and 3 can be built in parallel once Phase 1 merges.
 
-### Phase 2 — Input events and buffer editing
+### Phase 1 — Daemon region store and text/buffer verbs (first mergeable phase)
 
-Add `tui.subscribeEvents` (key and resize only), `tui.editLine`,
-`tui.scrollTo`, and the XS handle API's `events()` iterator.
-Add the `whenRevoked` promise plumbing.
+Scope, all in `rust/endo`:
 
-Exit criterion: a worker can host a scrollable log with a status
-line that responds to keystrokes.
+1. A new `tui_store` module (`rust/endo/src/tui_store.rs`): a pure,
+   synchronous `TuiStore` holding windows and regions keyed by
+   `(owner Handle, id)`, with no I/O and no terminal dependency.
+   One `screenId` (the constant `1`) for now; multi-screen stays in
+   § Known Gaps.
+2. Codec functions in `rust/endo/src/codec.rs` for the Phase 1
+   request and response payloads, as CBOR maps with exactly the keys
+   in § Layer 1.
+3. A `tui_store::dispatch(store, owner, verb, payload)` function that
+   returns the reply payload or error, and one `tui.*` arm in
+   `handle_control_message` that calls it and sends the reply with the
+   request nonce, covering `tui.getScreen`,
+   `tui.createWindow` (without `initialRegions`), `tui.configureWindow`,
+   `tui.destroyWindow`, `tui.createRegion` (roles `text` and `buffer`
+   only; `status`, `input`, and `canvas` return `wrong-role`),
+   `tui.destroyRegion`, `tui.setText`, `tui.appendLines`.
+4. The error shape from § Error shape, with codes `no-such-window`,
+   `no-such-region`, `wrong-role`, `bad-argument`, `too-large`.
+5. Owner sweep: `Supervisor::unregister` (the single funnel for worker
+   exit, including the terminated-worker path in
+   `process_meter_report`) drops every window and region the handle
+   owns in one pass.
+6. A hard scrollback ceiling: a `buffer` region's `scrollback` is
+   clamped to a daemon constant (default 10 000 lines), and lines past
+   capacity are evicted oldest-first while line numbers keep
+   counting.
+   This is the minimum of Phase 7's caps, pulled forward so Phase 1
+   never stores unbounded worker output.
 
-### Phase 3 — Canvas regions
+`tui.getScreen` answers `attached: false` until Phase 2 adds clients.
+Windows may still be created while detached; their state is kept and
+shown when a client attaches (§ Lifecycle, Screen loss).
 
-Add `canvas` role, `tui.drawCells`, `tui.clearRegion`, the cell
-packing codec.
-Add mouse and focus events.
+Out of scope: any client or renderer change, the XS module, events,
+canvas, `editLine`, `scrollTo`, `initialRegions`.
 
-Exit criterion: the XS debugger pane described in `endor-tui.md` can
-be rendered entirely from a worker using a single canvas region.
+Acceptance tests (`cargo test -p endo`):
 
-### Phase 4 — Exo wrapper and pet-store advertisement
+- **Store unit tests** (`tui_store`, no sockets):
+  - create window -> create `text` region -> `setText` -> the store's
+    snapshot of that region holds exactly the submitted runs;
+  - `appendLines` returns `firstLine`/`lastLine`, and line numbers
+    are monotonic across calls;
+  - with `scrollback: 3`, appending 5 lines keeps lines 3–5 and the
+    next append returns `firstLine: 6`;
+  - a requested `scrollback` above the ceiling is clamped;
+  - `setText` on a `buffer` region and `appendLines` on a `text`
+    region each return `wrong-role` and leave state unchanged;
+  - `createRegion` with role `canvas` returns `wrong-role`;
+  - `destroyWindow` drops its regions; a later `setText` on one of
+    them returns `no-such-region`;
+  - **ID scoping**: owner B calling `setText`, `destroyRegion`, or
+    `destroyWindow` with owner A's IDs gets `no-such-region` /
+    `no-such-window`, and A's state is unchanged;
+  - `sweep_owner(A)` removes all of A's windows and regions and none
+    of B's.
+- **Codec round-trip tests**: every Phase 1 request and response
+  payload encodes and decodes to the same value; a payload missing a
+  required key, or with a wrong-typed value, decodes to `bad-argument`.
+- **Dispatch tests**: call `tui_store::dispatch` with encoded
+  payloads for the full Phase 1 sequence (getScreen, createWindow,
+  createRegion, setText, appendLines, destroyRegion, destroyWindow)
+  and decode each reply; an unknown `tui.*` verb returns
+  `bad-argument`.
+- **Sweep test**: register a handle on a `Supervisor`, create a window
+  for it, call `unregister`, and assert the store holds nothing for
+  that handle.
+- `cargo clippy -p endo` is clean on the new code.
 
-Ship the `@endor/tui` guest module with `ScreenInterface`,
-`WindowInterface`, `RegionInterface`, `TextBufferInterface`.
-Wire up `@tui-screen` auto-provisioning at worker start.
-Document the cross-agent sharing pattern.
+Exit criterion: a worker speaking raw envelopes can create a status
+window with a single text region and update it, and its state is
+gone after the worker exits.
 
-Exit criterion: an agent can receive a `TuiWindow` over CapTP from
-another agent and render into it using only `E()` calls.
+### Phase 2 — `endor tui` follows the store and renders worker windows
 
-### Phase 5 — Hardening and diagnostics
+Builds on #1525's `rust/endo/src/tui/` (`bus.rs`, `state.rs`,
+`ui.rs`).
 
-Error-code stabilization, draw-call rate limits, buffer scrollback
-caps, diagnostic verbs (`tui.listWindows`, `tui.listRegions`) scoped
-to a worker's own handles, a `/tui` debug panel in the workers
-inventory.
+1. Client-facing verbs on the daemon: `tui.screen.follow` (request:
+   `{ cols, rows, colorDepth, hasMouse, hasFocus }`; reply: a full
+   snapshot of every live window and region) followed by delta
+   events `tui.window.added`, `tui.window.changed`,
+   `tui.window.removed`, `tui.region.content`.
+   `tui.screen.unfollow`, or the client's disconnect, ends the follow.
+2. The first follower flips `attached` to `true`; the last one leaving
+   flips it back.
+   Both send `tui.screenChanged` to every worker that owns a window.
+   With several clients, `cols`/`rows` come from the most recently
+   attached client (see Open questions).
+3. In `endor tui`, worker windows are placed by `layoutHint.dock`
+   around the chat layout (`top`/`bottom`/`left`/`right` dock; `fill`
+   shares the transcript area; `float` is deferred to Phase 5), with
+   lower-`priority` windows hidden first when space runs out.
+4. Reconnect (already in #1525's `bus.rs`) re-follows and redraws from
+   the snapshot.
+
+Acceptance tests: a `TestBackend` render of a snapshot holding one
+`bottom`-docked status window at 80x24 and 50x24; a delta sequence
+folded into `App` state matches the equivalent snapshot; a Unix-socket
+test in which a raw-envelope fake worker creates and updates a window,
+a client follows, the content appears, the client disconnects and
+reconnects, and the same content is redrawn with no worker traffic.
+
+### Phase 3 — XS `endor:tui` module for text and buffer regions
+
+The § Layer 2 module, limited to `getScreen`, `createWindow`,
+`createRegion` (text, buffer), `setText`, `appendLines`, `destroy`,
+served to XS workers the way other host-provided modules are
+(`HostPowers::add_module` in `rust/endo/xsnap/src/powers/mod.rs`),
+and built on the existing `issueCommand` host function with a
+nonce-to-promise table for replies.
+
+Acceptance test: an XS worker spawned by the daemon test harness
+imports `endor:tui`, creates a status window, sets its text twice,
+and the store snapshot shows the second text; a call on a destroyed
+region rejects with an `Error` whose `code` is `no-such-region`.
+
+Exit criterion (the original Phase 1 criterion, end to end): a worker
+creates a status window with a single text region and updates it from
+agent code, and `endor tui` shows it.
+
+### Phase 4 — Input events and buffer editing
+
+`tui.subscribeEvents` (key and resize only), `tui.unsubscribeEvents`,
+`tui.editLine`, `tui.scrollTo`, `tui.windowRevoked` (reason
+`user-closed`), the client's focus model (a key to cycle focus into
+worker windows, `Esc` back to chat, reusing #1525's mode machine), the
+client-to-daemon `tui.input` verb, the XS module's `events()` async
+iterator, and `whenRevoked`.
+
+Exit criterion: a worker hosts a scrollable log with a status line
+that responds to keystrokes.
+
+### Phase 5 — Canvas regions, mouse, focus events, float windows
+
+`canvas` role, `tui.drawCells`, `tui.clearRegion`, the cell packing
+codec, mouse and focus events (mouse remains opt-in per endor-tui
+Design Decision 11), and `dock: float`.
+
+Exit criterion: the XS debugger pane in endor-tui § Debugger panel
+layout can be rendered from a worker using a single canvas region.
+This does not depend on endor-tui Phase 4 (the debugger baseline);
+the two meet when the debugger pane moves into a worker.
+
+### Phase 6 — Exo wrapper and pet-store advertisement
+
+Unchanged from the earlier plan: the `@endor/tui` guest module with
+`ScreenInterface`, `WindowInterface`, `RegionInterface`,
+`TextBufferInterface`, `@tui-screen` auto-provisioning at worker
+start, and the cross-agent sharing pattern.
+
+Exit criterion: an agent receives a `TuiWindow` over CapTP from
+another agent and renders into it using only `E()` calls.
+
+### Phase 7 — Hardening and diagnostics
+
+Error-code stabilization, per-worker draw-call budgets, configurable
+scrollback caps, diagnostic verbs (`tui.listWindows`,
+`tui.listRegions`) scoped to a worker's own handles, and a `/tui`
+debug panel in the workers inventory.
+
+## Open questions
+
+- With several `endor tui` clients attached at different terminal
+  sizes, which size does `tui.getScreen` report: the most recently
+  attached client's (Phase 2's provisional rule), the smallest, or one
+  `screenId` per client as § Layer 1 already allows?
+- Which client's input reaches a worker when several clients are
+  attached: any client, or only one that has claimed control the way
+  endor-tui Phase 5's debugger observer mode does?
+- endor-tui § Relationship to the Daemon Bus says the chat verbs PR
+  #1525 speaks (`inbox.follow`, `inventory.follow`, `command.submit`)
+  are "defined in endor-bus-tui", but this document defines only the
+  worker-facing `tui.*` verbs.
+  Should those chat verbs get their own design, or a section here?
+- Should the stale open PRs #166 (an earlier `rust/endor` TUI
+  skeleton) and #216 (`packages/tui` and `packages/tui-xs` stubs) be
+  closed as superseded by #1525 and this phase plan?
 
 ## Design Decisions
 
@@ -1130,7 +1341,7 @@ inventory.
 - [ ] Performance envelope.
       No rate limits or backpressure are specified for `drawCells`;
       a hostile worker could saturate the bus with canvas updates.
-      Phase 5 should add per-worker draw-call budgets.
+      Phase 7 adds per-worker draw-call budgets.
 
 ## Prompt
 
