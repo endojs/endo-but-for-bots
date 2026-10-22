@@ -21,7 +21,8 @@ concurrency:
 jobs:
   browser-tests:
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    # Playwright 1.60.0 does not support the Ubuntu 26.04 latest image yet.
+    runs-on: ubuntu-24.04
     # This Chrome nightly image can no longer install browsers in Github CI for
     # lack of some system dependencies:
     #  Package 'libasound2' has no installation candidate
