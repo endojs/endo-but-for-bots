@@ -1,15 +1,14 @@
 /**
- * @import { OcapnPassStyle } from '../codecs/ocapn-pass-style.js'
+ * @import { PassStyle } from '@endo/pass-style'
  * @import { SyrupReader, SyrupType, TypeHintTypes } from './decode.js'
  * @import { SyrupWriter } from './encode.js'
  * @import { OcapnReader, OcapnWriter } from '../codec-interface.js'
  */
 
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
-
-import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 
 // Strict UTF-8 decoder used for record labels carried as bytestrings on
 // the wire.  `fatal: true` rejects malformed sequences rather than
@@ -545,7 +544,7 @@ export const makeUnionCodec = (
  * @typedef {'undefined'|'object'|'function'|'boolean'|'number'|'string'|'symbol'|'bigint'} JavascriptTypeofValueTypes
  * @typedef {Partial<Record<TypeHintTypes, ResolvableCodec>>} TypeHintUnionReadTable
  * @typedef {Partial<Record<JavascriptTypeofValueTypes, ResolvableCodec>>} TypeHintUnionWriteTable
- * @typedef {Partial<Record<OcapnPassStyle, ResolvableCodec>>} TypeHintPassStyleUnionWriteTable
+ * @typedef {Partial<Record<PassStyle, ResolvableCodec>>} TypeHintPassStyleUnionWriteTable
  */
 
 const isResolvableCodec = codec => {
@@ -655,7 +654,7 @@ export const makeTypeHintPassStyleUnionCodec = (
       return codec;
     },
     value => {
-      const passStyle = ocapnPassStyleOf(value);
+      const passStyle = passStyleOf(value);
       const codecOrGetter = writeTable[passStyle];
       if (!codecOrGetter) {
         const expected = Object.keys(writeTable)

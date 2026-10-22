@@ -21,6 +21,7 @@ import { ZERO_N } from '@endo/nat';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
+import { passStyleOf } from '@endo/pass-style';
 import {
   makeDescCodecs,
   makeHandoffReceiveDescriptor,
@@ -32,7 +33,6 @@ import { getSelectorName, makeSelector } from '../selector.js';
 import { locationToLocationId, toHex } from './util.js';
 import { randomGiftId } from '../cryptography.js';
 import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
-import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
@@ -531,7 +531,7 @@ const makeBootstrapObject = (
      * @param {any} gift
      */
     'deposit-gift': (giftId, gift) => {
-      const passStyle = ocapnPassStyleOf(gift);
+      const passStyle = passStyleOf(gift);
       if (passStyle !== 'remotable') {
         throw Error(`${label}: Bootstrap deposit-gift: Gift must be remotable`);
       }
@@ -779,7 +779,7 @@ export const makeOcapn = (
     // We need to resolve the target to an object or function before we can invoke it.
     const resolvedTarget = await Promise.resolve(to);
     // We only apply functions to values with pass-style "remotable".
-    const passStyle = ocapnPassStyleOf(resolvedTarget);
+    const passStyle = passStyleOf(resolvedTarget);
     if (passStyle !== 'remotable') {
       throw Error(
         `OCapN: Cannot apply functions to values with pass-style ${passStyle}`,
@@ -936,7 +936,7 @@ export const makeOcapn = (
       // Create a promise for the field value
       const getPromise = Promise.resolve(receiverDesc).then(resolved => {
         // Check that the resolved value is a copyRecord
-        const passStyle = ocapnPassStyleOf(resolved);
+        const passStyle = passStyleOf(resolved);
         if (passStyle !== 'copyRecord') {
           throw Error(
             `OCapN: Cannot get fields from values with pass-style ${passStyle}`,
@@ -971,7 +971,7 @@ export const makeOcapn = (
         }
 
         // Check that the resolved value is a copyArray (List)
-        const passStyle = ocapnPassStyleOf(resolved);
+        const passStyle = passStyleOf(resolved);
         if (passStyle !== 'copyArray') {
           throw Error(
             `OCapN: Cannot index into values with pass-style ${passStyle}`,
@@ -1005,7 +1005,7 @@ export const makeOcapn = (
       // Create a promise for the untagged value
       const untagPromise = Promise.resolve(receiverDesc).then(resolved => {
         // Check that the resolved value is a tagged value
-        const passStyle = ocapnPassStyleOf(resolved);
+        const passStyle = passStyleOf(resolved);
         if (passStyle !== 'tagged') {
           throw Error(
             `OCapN: Cannot untag values with pass-style ${passStyle}`,

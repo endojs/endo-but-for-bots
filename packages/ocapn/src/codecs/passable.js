@@ -215,14 +215,21 @@ export const makePassableCodecs = descCodecs => {
       error: OcapnErrorCodec,
       // Containers
       tagged: ContainerCodecs.tagged,
-      copyRecord: ContainerCodecs.struct,
+      copyRecord: value => {
+        if (
+          value.type === 'desc:sig-envelope' &&
+          (value.object.type === 'desc:handoff-receive' ||
+            value.object.type === 'desc:handoff-give')
+        ) {
+          return HandOffUnionCodec;
+        }
+        return ContainerCodecs.struct;
+      },
       copyArray: ContainerCodecs.list,
       // References
       remotable: ReferenceCodec,
       promise: ReferenceCodec,
       // Special Cases
-      signedHandoffReceive: HandOffUnionCodec,
-      signedHandoffGive: HandOffUnionCodec,
       parcel: OcapnParcelCodec,
     },
   );

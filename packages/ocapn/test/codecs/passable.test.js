@@ -8,6 +8,7 @@
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
+import { locate } from '@endo/parcel';
 import { makeTagged } from '@endo/pass-style';
 
 import { makeSelector } from '../../src/selector.js';
@@ -20,7 +21,7 @@ import {
   SyrupCodec,
 } from './_codecs_util.js';
 import { throws } from '../_util.js';
-import { getParcelDetails } from '../../src/client/parcels.js';
+import { parseParcelLocation } from '../../src/client/parcels.js';
 
 const textEncoder = new TextEncoder();
 const parcelIsInstalled =
@@ -149,10 +150,7 @@ const table = [
     makeValue: testKit =>
       testKit.parcelTracker.makeParcel(exporterLocation, '123'),
     customAssert: (t, actual) => {
-      const details = getParcelDetails(actual);
-      if (!details) {
-        throw Error('Parcel has no details');
-      }
+      const details = parseParcelLocation(locate(actual));
       t.deepEqual(details.location, exporterLocation);
       t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
     },
@@ -164,10 +162,7 @@ const table = [
       harden([testKit.parcelTracker.makeParcel(exporterLocation, '123')]),
     customAssert: (t, actual) => {
       t.is(actual.length, 1);
-      const details = getParcelDetails(actual[0]);
-      if (!details) {
-        throw Error('Parcel has no details');
-      }
+      const details = parseParcelLocation(locate(actual[0]));
       t.deepEqual(details.location, exporterLocation);
       t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
     },
@@ -222,10 +217,7 @@ const table = [
     // Parcels need customAssert because object identity differs after round-trip
     customAssert: (t, actual) => {
       t.is(actual[Symbol.toStringTag], 'sturdyRefTag');
-      const details = getParcelDetails(actual.payload);
-      if (!details) {
-        throw Error('Parcel has no details');
-      }
+      const details = parseParcelLocation(locate(actual.payload));
       t.deepEqual(details.location, exporterLocation);
       t.deepEqual([...details.secret], [0x34, 0x35, 0x36]);
     },
