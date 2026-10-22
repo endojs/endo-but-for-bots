@@ -340,6 +340,65 @@ function extractMembersFromJSDocTypedef(typedefTag, checker) {
 }
 
 /**
+ * Extract members from a TypeScript type declaration.
+ * @param {ts.Type} type
+ * @param {ts.TypeChecker} checker
+ * @returns {TypeMember[]}
+ */
+function extractMembersFromType(type, checker) {
+  return checker.getPropertiesOfType(type).map(property => {
+    const name = property.getName();
+    const propertyType = checker.getTypeOfSymbol(property);
+    // Optional callbacks are properties in the source API, not methods.
+    const isOptional = Boolean(
+      property
+        .getDeclarations()
+        ?.some(declaration => /** @type {any} */ (declaration).questionToken),
+    );
+    const isMethod = !isOptional && isMethodType(propertyType);
+    const referencedTypes = [];
+
+    if (isMethod) {
+      for (const signature of propertyType.getCallSignatures()) {
+        const typeParameterNames = new Set();
+        for (const typeParameter of signature.getTypeParameters() || []) {
+          const symbol = typeParameter.getSymbol();
+          if (symbol) {
+            typeParameterNames.add(symbol.getName());
+          }
+        }
+        referencedTypes.push(
+          ...extractTypeReferences(
+            checker.getReturnTypeOfSignature(signature),
+            checker,
+            new Set(),
+            typeParameterNames,
+          ),
+        );
+        for (const parameter of signature.getParameters()) {
+          referencedTypes.push(
+            ...extractTypeReferences(
+              checker.getTypeOfSymbol(parameter),
+              checker,
+              new Set(),
+              typeParameterNames,
+            ),
+          );
+        }
+      }
+    } else {
+      referencedTypes.push(...extractTypeReferences(propertyType, checker));
+    }
+
+    return {
+      name,
+      referencedTypes: [...new Set(referencedTypes)],
+      isMethod,
+    };
+  });
+}
+
+/**
  * Collect all type definitions using TypeScript compiler.
  * Scans all source files in src/ that are part of the TypeScript program.
  * @returns {Map<string, TypeDef>}
@@ -354,6 +413,7 @@ function collectTypeDefinitions() {
   // Get all source files from the program that are in our src/ directory
   for (const sourceFile of program.getSourceFiles()) {
     const filePath = sourceFile.fileName;
+    const isPackageSource = filePath.startsWith(`${join(packageRoot, 'src')}/`);
 
     // Get relative path for storage
     const relativePath = filePath.slice(packageRoot.length + 1);
@@ -375,6 +435,28 @@ function collectTypeDefinitions() {
                 name: typeName,
                 file: relativePath,
                 members,
+              });
+            } else if (
+              isPackageSource &&
+              (ts.isTypeAliasDeclaration(decl) ||
+                ts.isInterfaceDeclaration(decl))
+            ) {
+              const typeName = String(name);
+              if (allTypes.has(typeName)) {
+                // eslint-disable-next-line no-continue
+                continue;
+              }
+              const type = ts.isTypeAliasDeclaration(decl)
+                ? checker.getTypeFromTypeNode(decl.type)
+                : checker.getTypeAtLocation(decl);
+              allTypes.set(typeName, {
+                name: typeName,
+                file: relativePath,
+                members:
+                  ts.isInterfaceDeclaration(decl) ||
+                  ts.isTypeLiteralNode(decl.type)
+                    ? extractMembersFromType(type, checker)
+                    : [],
               });
             }
           }
