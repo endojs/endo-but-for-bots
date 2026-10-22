@@ -4,26 +4,19 @@ import test from '@endo/ses-ava/test.js';
 
 import { Far } from '@endo/marshal';
 import { passStyleOf } from '@endo/pass-style';
+import { locate } from '@endo/parcel';
 import { makeCapTP, E } from '../src/captp.js';
 
 /** @type {any} */
 const { Parcel } = globalThis;
 
 const makeParcelCodec = openLocation => {
-  const locations = new WeakMap();
-  const parcels = new Map();
   const make = location => {
-    let parcel = parcels.get(location);
-    if (parcel === undefined) {
-      parcel = new Parcel(location, openLocation);
-      parcels.set(location, parcel);
-      locations.set(parcel, location);
-    }
-    return parcel;
+    return new Parcel(location, openLocation);
   };
   return {
     make,
-    encodeParcel: parcel => locations.get(parcel),
+    encodeParcel: parcel => locate(parcel),
     decodeParcel: make,
   };
 };
@@ -37,7 +30,7 @@ try {
 }
 const parcelTest = parcelIsPassable ? test : test.skip;
 
-parcelTest('CapTP carries a Parcel inline without an s slot', async t => {
+parcelTest('makeCapTP carries a Parcel inline without an s slot', async t => {
   const sent = [];
   const leftCodec = makeParcelCodec(location => `left:${location}`);
   const rightCodec = makeParcelCodec(location => `right:${location}`);
@@ -65,8 +58,11 @@ parcelTest('CapTP carries a Parcel inline without an s slot', async t => {
   );
 
   const parcel = await E(left.getBootstrap()).getParcel();
+  const parcelAgain = await E(left.getBootstrap()).getParcel();
+  t.not(parcelAgain, parcel);
   t.is(passStyleOf(parcel), 'parcel');
   t.is(await Parcel.open(parcel), 'left:test:durable');
+  t.is(await Parcel.open(parcelAgain), 'left:test:durable');
 
   const resolution = sent.find(
     message =>
