@@ -126,6 +126,12 @@ export const render = value => {
       $value.innerText = remotable[Symbol.toStringTag];
       return $value;
     }
+    case 'parcel': {
+      const $value = document.createElement('span');
+      $value.className = 'parcel';
+      $value.innerText = 'Parcel';
+      return $value;
+    }
     default: {
       throw new Error(
         'Unreachable if programmed to account for all pass-styles',

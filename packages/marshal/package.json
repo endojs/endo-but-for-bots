@@ -58,6 +58,7 @@
   "devDependencies": {
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",

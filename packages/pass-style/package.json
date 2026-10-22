@@ -45,6 +45,7 @@
   "devDependencies": {
     "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
+    "@endo/parcel": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",

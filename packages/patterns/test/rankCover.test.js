@@ -35,7 +35,7 @@ const {
   arbPassable,
   arbLiftedPassable: arbPassableAndPattern,
 } = makeArbitraries(fc, {
-  excludePassStyles: ['byteArray'],
+  excludePassStyles: ['byteArray', 'parcel'],
   transformKeyableLeaves: x => /** @type {(Arbitrary<Key>)[]} */ (x),
   arbLiftingDetail: fc.oneof(
     { withCrossShrink: true },

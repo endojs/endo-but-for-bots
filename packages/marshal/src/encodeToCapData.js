@@ -241,6 +241,9 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'error',
         )}: ${encoded}`;
       }
+      case 'parcel': {
+        throw Fail`a ${q(passStyle)} cannot be marshalled`;
+      }
       default: {
         throw assert.fail(
           X`internal: Unrecognized passStyle ${q(passStyle)}`,
