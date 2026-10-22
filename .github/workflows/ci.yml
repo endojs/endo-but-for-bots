@@ -726,6 +726,18 @@ jobs:
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
+      - name: Test endor run input handling (endo crate)
+        # The `endor run` input classifier (run_input::) and the CAS
+        # archive ingest (cas_archive::, designs/endor-run-expanded.md)
+        # use xsnap's archive types but drive no xsnap machine, so they
+        # sit outside the `inproc` segfault that keeps the step above
+        # scoped to `ironhorse_engine::`. Without this step no CI lane
+        # runs them. Both module filters go after `--`, where the test
+        # harness accepts several. Keep this a block scalar: a plain
+        # scalar containing `:: ` is not valid YAML.
+        run: |
+          cargo test --locked -p endo --features ironhorse-engine --lib -- cas_archive:: run_input::
+
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
     needs: changes
