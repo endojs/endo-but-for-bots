@@ -8,7 +8,7 @@ use tokio::io::unix::AsyncFd;
 
 use crate::codec;
 use crate::mailbox::MailboxReceiver;
-use crate::supervisor::Supervisor;
+use crate::supervisor::{GcRootLease, Supervisor};
 use crate::types::{Envelope, Handle, Message, WorkerInfo};
 use crate::util;
 
@@ -58,12 +58,20 @@ pub fn spawn_with_pipes(command: &str, args: &[String], cmd: &mut tokio::process
 }
 
 /// Wire up async read/write/wait tasks for a spawned worker.
+///
+/// `registration` is the generation `register_tracked` returned for
+/// `handle`; the wait task unregisters through it. `gc_root`, when
+/// given, is held until the child's first outbound frame (or the end
+/// of its output).
+#[allow(clippy::too_many_arguments)]
 pub fn wire_worker_tasks(
     spawned: SpawnedWorker,
     handle: Handle,
     parent_handle: Handle,
     sup: &Arc<Supervisor>,
     mut inbox: MailboxReceiver,
+    registration: u64,
+    gc_root: Option<GcRootLease>,
     on_exit: Option<Box<dyn FnOnce() + Send>>,
     init_verb: &str,
     init_payload: Vec<u8>,
@@ -116,8 +124,11 @@ pub fn wire_worker_tasks(
     let sup_read = Arc::clone(sup);
     tokio::spawn(async move {
         let mut reader = PipeReader(async_read);
+        let mut gc_root = gc_root;
         loop {
-            match codec::async_read_frame(&mut reader).await {
+            let frame = codec::async_read_frame(&mut reader).await;
+            drop(gc_root.take());
+            match frame {
                 Ok(Some(data)) => match codec::decode_envelope(&data) {
                     Ok(env) => {
                         let to = env.handle;
@@ -182,7 +193,7 @@ pub fn wire_worker_tasks(
             response_tx: None,
         });
         eprintln!("endor: wait task for handle={handle} delivered exited to parent={parent_handle}");
-        sup_wait.unregister(handle);
+        sup_wait.unregister_registration(handle, registration);
         if let Some(f) = on_exit {
             f();
         }
@@ -232,9 +243,20 @@ pub fn spawn_process(
         pid,
         started: SystemTime::now(),
     };
-    let inbox = sup.register(handle, Some(info));
+    let (inbox, registration) = sup.register_tracked(handle, Some(info));
 
-    wire_worker_tasks(spawned, handle, parent_handle, sup, inbox, None, "init", Vec::new())?;
+    wire_worker_tasks(
+        spawned,
+        handle,
+        parent_handle,
+        sup,
+        inbox,
+        registration,
+        None,
+        None,
+        "init",
+        Vec::new(),
+    )?;
 
     Ok(handle)
 }

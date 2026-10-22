@@ -1664,6 +1664,13 @@ pub enum XsProgram<'a> {
     Archive(&'a [u8]),
 }
 
+/// Crank-end termination probe; see the main loop in `run_xs_program`.
+const SHOULD_TERMINATE_CHECK: &str = "(function () { \
+    try { \
+        return typeof __shouldTerminate === 'function' && __shouldTerminate() === true; \
+    } catch (e) { return false; } \
+})()";
+
 /// Unified XS runner.
 ///
 /// The `(program, transport)` matrix encodes the four modes the
@@ -2104,9 +2111,11 @@ pub fn run_xs_program(
             // Report steps to the supervisor.
             send_meter_report(steps, "ok");
 
-            if let Some(JsValue::Boolean(true)) =
-                machine.eval("__shouldTerminate()")
-            {
+            // `Machine::eval` has no catch frame: a throw here (a bundle
+            // that never defines `__shouldTerminate`, or one whose check
+            // throws) would longjmp through a NULL `firstJump` and SIGSEGV
+            // the whole process. Absent or throwing means "keep running".
+            if let Some(JsValue::Boolean(true)) = machine.eval(SHOULD_TERMINATE_CHECK) {
                 break;
             }
         }

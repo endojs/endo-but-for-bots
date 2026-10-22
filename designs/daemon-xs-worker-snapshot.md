@@ -272,7 +272,7 @@ from a different XS version than the snapshot code's built-in
 Compiling XS from source (`c/moddable/xs/sources/`) resolved
 the mismatch.
 
-### Phase 2: Supervisor suspend/resume **(in progress)**
+### Phase 2: Supervisor suspend/resume **(done)**
 
 1. `SuspendedWorker` struct in `supervisor.rs` — tracks
    suspended handles with snapshot bytes, SHA-256 hash, and
@@ -308,13 +308,35 @@ the mismatch.
     - `suspend_resume_with_host_function`
     - `suspend_resume_multiple_cycles`
 
-#### Remaining
+14. Ephemeral GC root bookkeeping for CAS-stored snapshots:
+    `mark_suspended` pins the snapshot's SHA-256 in a
+    ref-counted root set (`Supervisor::gc_roots`); resume adopts
+    the pin as a `GcRootLease`. Both resume paths (in-process and
+    child process) release it on the restored worker's first
+    outbound frame, or when its output ends. A worker sends
+    nothing before its machine is rebuilt from the snapshot, so
+    that frame shows the blob has been read. A repeated suspend
+    of the same handle releases the replaced record's pin.
+    **(done)**
 
-- Integration test: full supervisor round-trip (suspend via
-  control verb → worker streams snapshot to CAS → worker
-  exits → message triggers resume → restored worker has
-  correct JS state).
-- Ephemeral GC root bookkeeping for CAS-stored snapshots.
+15. Integration test: full supervisor round-trip (suspend via
+    control verb -> worker streams snapshot to CAS -> worker
+    exits -> message triggers resume -> restored worker has
+    correct JS state): `supervisor_suspend_resume_round_trip`
+    in `rust/endo/src/endo.rs`. It exposed a crank-end crash:
+    the worker loop ran `machine.eval("__shouldTerminate()")`,
+    and `Machine::eval` has no catch frame, so a bundle that
+    does not define `__shouldTerminate` (or one whose check
+    throws) longjmped through a NULL `firstJump` and SIGSEGVed
+    the process. The probe is now a `try`/`typeof` expression
+    that never throws. **(done)**
+
+16. Exit-path race: each registration carries a generation
+    (`register_tracked`) that `mark_suspended` ends. Every worker
+    exit path (in-process spawn, in-process resume, child-process
+    wait task) unregisters through `unregister_registration`
+    with the generation its caller registered, a no-op once the
+    handle was suspended or re-registered by a resume. **(done)**
 
 ### Phase 3: Future enhancements
 

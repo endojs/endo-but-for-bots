@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use tokio::task::JoinHandle;
@@ -30,14 +30,55 @@ pub struct SuspendedWorker {
     pub meter: Option<MeterState>,
 }
 
+/// One ephemeral GC-root reference, pinned by `mark_suspended` and
+/// released when the lease drops.
+///
+/// Both resume paths hold the lease until the restored worker's first
+/// outbound frame. The init handshake is inbound-only and the machine
+/// is built by `Machine::from_snapshot_file` before it can send
+/// anything, so that frame shows the blob has been read. If the worker
+/// dies first, its output ends and the lease drops then.
+pub struct GcRootLease {
+    sup: Arc<Supervisor>,
+    sha256: String,
+}
+
+impl GcRootLease {
+    /// Take over the pin `mark_suspended` took for `sha256`. This does
+    /// not pin: the caller must hold a matching suspended record. An
+    /// empty digest (store-backed worker) is a no-op lease.
+    pub fn adopt(sup: Arc<Supervisor>, sha256: String) -> Self {
+        GcRootLease { sup, sha256 }
+    }
+}
+
+impl Drop for GcRootLease {
+    fn drop(&mut self) {
+        if !self.sha256.is_empty() {
+            self.sup.release_gc_root(&self.sha256);
+        }
+    }
+}
+
 pub struct Supervisor {
     inboxes: RwLock<HashMap<Handle, Mailbox>>,
+    /// Registration generation per live handle. `register` stamps a
+    /// fresh one; an exit path that captured its generation unregisters
+    /// through `unregister_registration`, which is a no-op once the
+    /// handle was suspended or re-registered (resumed) after it. Lock
+    /// order: this lock before `inboxes`/`workers`/`parents`/`meters`.
+    registrations: RwLock<HashMap<Handle, u64>>,
+    next_registration: AtomicU64,
     workers: RwLock<HashMap<Handle, WorkerInfo>>,
     parents: RwLock<HashMap<Handle, Handle>>,
     pending_syncs: Mutex<HashMap<(Handle, i64), Handle>>,
     /// Suspended workers keyed by handle.  The inbox is removed
     /// when the worker suspends; on resume, a new inbox is created.
     suspended: RwLock<HashMap<Handle, SuspendedWorker>>,
+    /// Ephemeral CAS GC roots: SHA-256 hex digest -> reference count,
+    /// pinned by `mark_suspended` and released by `GcRootLease`. A
+    /// future CAS collector must treat every key in this map as live.
+    gc_roots: Mutex<HashMap<String, usize>>,
     /// Per-worker metering state.
     meters: RwLock<HashMap<Handle, MeterState>>,
     outbox: Mutex<Option<Mailbox>>,
@@ -52,10 +93,13 @@ impl Supervisor {
         let (outbox_tx, outbox_rx) = mailbox::mailbox();
         let sup = Arc::new(Supervisor {
             inboxes: RwLock::new(HashMap::new()),
+            registrations: RwLock::new(HashMap::new()),
+            next_registration: AtomicU64::new(1),
             workers: RwLock::new(HashMap::new()),
             parents: RwLock::new(HashMap::new()),
             pending_syncs: Mutex::new(HashMap::new()),
             suspended: RwLock::new(HashMap::new()),
+            gc_roots: Mutex::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
@@ -69,15 +113,50 @@ impl Supervisor {
     }
 
     pub fn register(&self, h: Handle, info: Option<WorkerInfo>) -> MailboxReceiver {
+        self.register_tracked(h, info).0
+    }
+
+    /// Like `register`, also returning the registration generation for
+    /// a later `unregister_registration`.
+    pub fn register_tracked(&self, h: Handle, info: Option<WorkerInfo>) -> (MailboxReceiver, u64) {
         let (tx, rx) = mailbox::mailbox();
+        let generation = self.next_registration.fetch_add(1, Ordering::SeqCst);
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        registrations.insert(h, generation);
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).insert(h, tx);
         if let Some(info) = info {
             self.workers.write().unwrap_or_else(|e| e.into_inner()).insert(h, info);
         }
-        rx
+        (rx, generation)
+    }
+
+    /// The handle's current registration generation, if registered.
+    pub fn registration(&self, h: Handle) -> Option<u64> {
+        self.registrations.read().unwrap_or_else(|e| e.into_inner()).get(&h).copied()
     }
 
     pub fn unregister(&self, h: Handle) {
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        registrations.remove(&h);
+        self.remove_registered_state(h);
+    }
+
+    /// Unregister `h` only if `generation` is still its current
+    /// registration. A worker thread's exit path uses this so it cannot
+    /// clobber a handle that was suspended (parent link kept for the
+    /// resume) or resumed (fresh inbox) after the exiting registration.
+    /// Returns whether it unregistered.
+    pub fn unregister_registration(&self, h: Handle, generation: u64) -> bool {
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        if registrations.get(&h) != Some(&generation) {
+            return false;
+        }
+        registrations.remove(&h);
+        self.remove_registered_state(h);
+        true
+    }
+
+    fn remove_registered_state(&self, h: Handle) {
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
@@ -181,10 +260,18 @@ impl Supervisor {
         });
         // Capture meter state before removing it.
         let meter = self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
-        // Remove the inbox — the worker thread is exiting.
+        if !sha256.is_empty() {
+            self.pin_gc_root(&sha256);
+        }
+        // Remove the inbox — the worker thread is exiting. Ending the
+        // registration makes that thread's exit-path
+        // `unregister_registration` a no-op, so it cannot drop the
+        // parent link kept for resume or a resumed registration.
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        registrations.remove(&handle);
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
-        self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
+        let displaced = self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
             handle,
             SuspendedWorker {
                 sha256,
@@ -194,6 +281,14 @@ impl Supervisor {
                 meter,
             },
         );
+        drop(registrations);
+        // A repeated suspend replaces the record; release its pin so
+        // only the record that a resume can adopt holds one.
+        if let Some(displaced) = displaced {
+            if !displaced.sha256.is_empty() {
+                self.release_gc_root(&displaced.sha256);
+            }
+        }
     }
 
     /// Check if a handle is suspended.
@@ -215,6 +310,51 @@ impl Supervisor {
     /// worker suspended rather than half-resumed.
     pub fn put_suspended(&self, handle: Handle, worker: SuspendedWorker) {
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(handle, worker);
+    }
+
+    // ---- Ephemeral CAS GC roots ----
+
+    /// Add one reference to the ephemeral GC root for `sha256`.
+    pub fn pin_gc_root(&self, sha256: &str) {
+        *self
+            .gc_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(sha256.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// Drop one reference to the ephemeral GC root for `sha256`,
+    /// removing the root when the count reaches zero.
+    pub fn release_gc_root(&self, sha256: &str) {
+        let mut roots = self.gc_roots.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = roots.get_mut(sha256) {
+            *count -= 1;
+            if *count == 0 {
+                roots.remove(sha256);
+            }
+        }
+    }
+
+    pub fn is_gc_root(&self, sha256: &str) -> bool {
+        self.gc_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(sha256)
+    }
+
+    /// The current ephemeral GC root set (CAS keys a collector must
+    /// keep), sorted.
+    pub fn gc_roots(&self) -> Vec<String> {
+        let mut roots: Vec<String> = self
+            .gc_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        roots.sort();
+        roots
     }
 
     // ---- Metering API ----
@@ -481,6 +621,76 @@ mod tests {
             let suspended = sup.take_suspended(handle).unwrap();
             assert_eq!(suspended.info.platform, "separate");
             assert!(suspended.meter.is_none());
+        });
+    }
+
+    #[test]
+    fn stale_exit_unregister_spares_suspend_and_resume() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let parent = sup.alloc_handle();
+            let handle = sup.alloc_handle();
+            let (_old_inbox, old) = sup.register_tracked(handle, None);
+            sup.set_parent(handle, parent);
+            assert_eq!(sup.registration(handle), Some(old));
+
+            // Suspend ends the registration; the exiting thread's late
+            // unregister must not drop the parent link kept for resume.
+            sup.mark_suspended(handle, String::new(), std::path::PathBuf::from("/tmp/cas"));
+            assert_eq!(sup.registration(handle), None);
+            assert!(!sup.unregister_registration(handle, old));
+            assert!(sup.can_block(handle, parent));
+
+            // Resume re-registers; the stale exit is still a no-op.
+            let _ = sup.take_suspended(handle);
+            let (_new_inbox, new) = sup.register_tracked(handle, None);
+            assert_ne!(new, old);
+            assert!(!sup.unregister_registration(handle, old));
+            assert!(sup.inboxes.read().unwrap().contains_key(&handle));
+
+            // The current registration's own exit does unregister.
+            assert!(sup.unregister_registration(handle, new));
+            assert!(!sup.inboxes.read().unwrap().contains_key(&handle));
+        });
+    }
+
+    #[test]
+    fn gc_root_leases_are_reference_counted() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let first = sup.alloc_handle();
+            let second = sup.alloc_handle();
+            let store_backed = sup.alloc_handle();
+            let _first_inbox = sup.register(first, None);
+            let _second_inbox = sup.register(second, None);
+            let _store_inbox = sup.register(store_backed, None);
+            let cas = std::path::PathBuf::from("/tmp/cas");
+
+            // Two workers suspended to the same snapshot share one root.
+            sup.mark_suspended(first, "same".to_string(), cas.clone());
+            sup.mark_suspended(second, "same".to_string(), cas.clone());
+            // A store-backed worker has no snapshot digest and pins nothing.
+            sup.mark_suspended(store_backed, String::new(), cas);
+            assert_eq!(sup.gc_roots(), vec!["same".to_string()]);
+
+            let first_lease = GcRootLease::adopt(Arc::clone(&sup), "same".to_string());
+            let second_lease = GcRootLease::adopt(Arc::clone(&sup), "same".to_string());
+            drop(GcRootLease::adopt(Arc::clone(&sup), String::new()));
+            drop(first_lease);
+            assert!(sup.is_gc_root("same"), "one pin still outstanding");
+            drop(second_lease);
+            assert!(!sup.is_gc_root("same"));
+            assert!(sup.gc_roots().is_empty());
+
+            // Releasing an unpinned digest is a no-op, not an underflow.
+            sup.release_gc_root("same");
+            assert!(sup.gc_roots().is_empty());
         });
     }
 
