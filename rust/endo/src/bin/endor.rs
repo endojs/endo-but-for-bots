@@ -11,6 +11,7 @@
 //!   endor start                 # detached daemon
 //!   endor stop                  # graceful shutdown
 //!   endor ping                  # liveness check
+//!   endor tui                   # terminal user interface
 //!
 //!   endor worker  [-e xs]       # supervised worker child
 //!   endor run     [-e xs] <archive.zip>
@@ -156,6 +157,7 @@ fn main() -> ExitCode {
         "start" => result_to_exit("endor", cmd_start()),
         "stop" => result_to_exit("endor", cmd_stop()),
         "ping" => result_to_exit("endor", cmd_ping()),
+        "tui" => result_to_exit("endor", cmd_tui()),
         "gc" => result_to_exit("endor", cmd_gc()),
         "npm-resolve" => result_to_exit("endor", cmd_npm_resolve(rest)),
         "registry" => result_to_exit("endor", cmd_registry(rest)),
@@ -185,6 +187,7 @@ fn print_help() {
     eprintln!("  start               Spawn the daemon in a detached session");
     eprintln!("  stop                Gracefully stop a running daemon");
     eprintln!("  ping                Verify daemon responsiveness");
+    eprintln!("  tui                 Open the terminal user interface");
     eprintln!();
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
@@ -252,6 +255,16 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("Connects to the daemon's Unix socket and immediately");
             eprintln!("disconnects. Prints \"pong\" on success; exits non-zero if");
             eprintln!("the daemon is not running or the socket is unreachable.");
+        }
+        "tui" => {
+            eprintln!("Usage: endor tui");
+            eprintln!();
+            eprintln!("Open the terminal user interface (designs/endor-tui.md).");
+            eprintln!();
+            eprintln!("Starts the daemon if needed, then attaches to its socket and");
+            eprintln!("shows the inbox transcript, inventory, and command bar. Keeps");
+            eprintln!("the last-known state visible and reconnects with backoff if the");
+            eprintln!("daemon goes away. q or Ctrl+C quits; Ctrl+L redraws.");
         }
         "worker" => {
             eprintln!("Usage: endor worker [-e xs]");
@@ -564,6 +577,12 @@ fn cmd_stop() -> Result<(), EndoError> {
         )));
     }
 
+    Ok(())
+}
+
+fn cmd_tui() -> Result<(), EndoError> {
+    let paths = endo::endo::ensure_running()?;
+    endo::tui::run(paths.sock_path, "@self".to_string())?;
     Ok(())
 }
 
