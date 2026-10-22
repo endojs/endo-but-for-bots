@@ -3,7 +3,7 @@
 import harden from '@endo/harden';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { EndoHost } from '@endo/daemon' */
+/** @import { EndoHost, NamePath } from '@endo/daemon' */
 
 import { E } from '@endo/eventual-send';
 
@@ -926,7 +926,7 @@ export const createCommandExecutor = ({
 
         case 'debug-restart': {
           const { workerName } = params;
-          const workerPath = /** @type {[string, ...string[]]} */ (
+          const workerPath = /** @type {NamePath} */ (
             String(workerName).split('/')
           );
           const debuggerRef = await E(powers).debugWorker(workerPath);
