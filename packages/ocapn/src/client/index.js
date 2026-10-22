@@ -7,7 +7,7 @@
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { Parcel } from './parcels.js'
  * @import { Client } from './parcel.types.js'
- * @import { Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, ResumedSession, SelfIdentity, Session, SessionHooks, SessionManager, SessionResumption, SocketOperations, SwissNum } from './types.types.js'
+ * @import { Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, ResumedSession, SelfIdentity, Session, SessionHooks, SessionId, SessionManager, SessionResumption, SocketOperations, SwissNum } from './types.types.js'
  */
 
 import harden from '@endo/harden';
