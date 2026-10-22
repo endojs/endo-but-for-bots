@@ -160,9 +160,9 @@ pub fn ingest_archive<R: Read + Seek>(
 /// same root hash, and [`load_archive_from_cas`] (or `endor run --cas
 /// <hash>`) reads either interchangeably.
 ///
-/// Symbolic links and other non-regular files are skipped, so an
-/// input directory cannot pull content from outside itself into the
-/// store. Entries whose names are not valid UTF-8 are rejected with
+/// Symbolic links and other non-regular files are skipped, so a
+/// symbolic link cannot pull content from outside the directory into
+/// the store. Hard links and mount points are not detected. Entries whose names are not valid UTF-8 are rejected with
 /// `InvalidData`, since the tree manifest keys are strings.
 ///
 /// Errors:
@@ -574,16 +574,22 @@ pub fn load_archive_from_cas(
                 };
 
                 // Fetch from the compartment's sub-tree in the CAS.
-                let path = format!("{compartment_name}/{file_location}");
-                match cas.fetch_from_tree(root_hash, &path) {
+                match fetch_module_blob(
+                    cas,
+                    root_hash,
+                    &root_tree,
+                    compartment_name,
+                    &file_location,
+                ) {
                     Ok(bytes) => {
                         let source = String::from_utf8_lossy(&bytes).into_owned();
                         sources.insert((compartment_name.clone(), specifier.clone()), source);
                     }
-                    Err(_) => {
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
                         // Module file missing — will be a runtime error
                         // if actually imported.
                     }
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -594,6 +600,30 @@ pub fn load_archive_from_cas(
         sources,
         cjs_sources: HashMap::new(),
     })
+}
+
+/// Fetch one module's bytes from a compartment sub-tree.
+///
+/// [`ingest_archive`] and [`ingest_directory`] key a nested module by its
+/// whole `/`-joined path (`lib/util.js`) in a flat compartment tree, so that
+/// key is tried first. Trees with one level per directory are still read
+/// through [`ContentStore::fetch_from_tree`].
+fn fetch_module_blob(
+    cas: &ContentStore,
+    root_hash: &str,
+    root_tree: &TreeManifest,
+    compartment_name: &str,
+    file_location: &str,
+) -> io::Result<Vec<u8>> {
+    if let Some(compartment) = root_tree.entries.get(compartment_name) {
+        if compartment.entry_type == "tree" {
+            let tree = cas.read_tree(&compartment.hash)?;
+            if let Some(entry) = tree.entries.get(file_location) {
+                return cas.fetch(&entry.hash);
+            }
+        }
+    }
+    cas.fetch_from_tree(root_hash, &format!("{compartment_name}/{file_location}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,7 +1311,8 @@ mod tests {
             "app-v1.0.0": {
                 "name": "app",
                 "modules": {
-                    "./index.js": {"parser": "mjs", "location": "index.js"}
+                    "./index.js": {"parser": "mjs", "location": "index.js"},
+                    "./lib/util.js": {"parser": "mjs", "location": "lib/util.js"}
                 }
             }
         }
@@ -1339,6 +1370,14 @@ mod tests {
                 .get(&("app-v1.0.0".to_string(), "./index.js".to_string()))
                 .map(String::as_str),
             Some("export default 42;"),
+        );
+        assert_eq!(
+            ingested
+                .archive
+                .sources
+                .get(&("app-v1.0.0".to_string(), "./lib/util.js".to_string()))
+                .map(String::as_str),
+            Some("export const x = 1;"),
         );
 
         // A later `endor run --cas <hash>` reloads the same archive.
