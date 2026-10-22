@@ -1002,10 +1002,10 @@ screen.
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| worker → daemon | `tui.*` envelopes on handle 0, dispatched by `handle_control_message` in `rust/endo/src/endo.rs` | daemon validates role, ownership, size caps | none at the worker; window/region IDs are its only references | daemon assigns IDs and commits every mutation; owner-handle sweep on worker exit | CBOR maps (verb payloads), daemon-assigned ints |
+| worker -> daemon | `tui.*` envelopes on handle 0, dispatched by `handle_control_message` in `rust/endo/src/endo.rs` | daemon validates role, ownership, size caps | none at the worker; window/region IDs are its only references | daemon assigns IDs and commits every mutation; owner-handle sweep on worker exit | CBOR maps (verb payloads), daemon-assigned ints |
 | daemon (region store) | a pure store keyed by owner handle | store enforces scrollback caps and ID scoping | **daemon** holds every window and region (in memory; lost on daemon restart per § Known Gaps) | store is the sole writer | — |
-| daemon → `endor tui` client | `tui.screen.follow` snapshot plus delta events | client owns layout, z-order, focus | none; client state is a cache rebuilt from the snapshot on every connect | daemon decides what exists; client decides where it is drawn | window/region descriptors and content |
-| client → daemon → worker (input) | client sends `tui.input`, daemon forwards as `tui.event` | client decides which region has focus; daemon checks the region has a live subscription | none | daemon routes; worker consumes | decoded key/mouse/resize events, never raw bytes |
+| daemon -> `endor tui` client | `tui.screen.follow` snapshot plus delta events | client owns layout, z-order, focus | none; client state is a cache rebuilt from the snapshot on every connect | daemon decides what exists; client decides where it is drawn | window/region descriptors and content |
+| client -> daemon -> worker (input) | client sends `tui.input`, daemon forwards as `tui.event` | client decides which region has focus; daemon checks the region has a live subscription | none | daemon routes; worker consumes | decoded key/mouse/resize events, never raw bytes |
 
 The four ownership questions:
 persistent state is owned by the daemon's region store;
@@ -1107,7 +1107,7 @@ canvas, `editLine`, `scrollTo`, `initialRegions`.
 Acceptance tests (`cargo test -p endo`):
 
 - **Store unit tests** (`tui_store`, no sockets):
-  - create window → create `text` region → `setText` → the store's
+  - create window -> create `text` region -> `setText` -> the store's
     snapshot of that region holds exactly the submitted runs;
   - `appendLines` returns `firstLine`/`lastLine`, and line numbers
     are monotonic across calls;
@@ -1165,7 +1165,7 @@ Builds on #1525's `rust/endo/src/tui/` (`bus.rs`, `state.rs`,
    the snapshot.
 
 Acceptance tests: a `TestBackend` render of a snapshot holding one
-`bottom`-docked status window at 80×24 and 50×24; a delta sequence
+`bottom`-docked status window at 80x24 and 50x24; a delta sequence
 folded into `App` state matches the equivalent snapshot; a Unix-socket
 test in which a raw-envelope fake worker creates and updates a window,
 a client follows, the content appears, the client disconnects and
