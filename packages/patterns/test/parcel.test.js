@@ -17,10 +17,6 @@ import {
   getRankCover,
 } from '../src/patterns/patternMatchers.js';
 
-/** @type {any} */
-const { Parcel } = globalThis;
-const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
-
 const makeTestParcel = () => makeParcel('test:patterns', () => 'opened');
 
 /**
@@ -42,7 +38,7 @@ const wrapParcel = (inner, kind) => {
 // nor a pattern. Predicates must answer false, and assertions must say so,
 // rather than fail with an internal error.
 
-parcelTest('a Parcel is not a key', t => {
+test('a Parcel is not a key', t => {
   const parcel = makeTestParcel();
   t.is(passStyleOf(parcel), 'parcel');
   t.false(isKey(parcel));
@@ -54,7 +50,7 @@ parcelTest('a Parcel is not a key', t => {
   t.throws(() => keyEQ(parcel, parcel), { message });
 });
 
-parcelTest('a Parcel is not a pattern', t => {
+test('a Parcel is not a pattern', t => {
   const parcel = makeTestParcel();
   t.false(isPattern(parcel));
   t.false(isPattern(harden([parcel])));
@@ -66,7 +62,7 @@ parcelTest('a Parcel is not a pattern', t => {
   });
 });
 
-parcelTest('a Parcel cannot bound a range pattern', t => {
+test('a Parcel cannot bound a range pattern', t => {
   // Range matchers look up a rank cover, which a Parcel does not have.
   // They must reject it as a non-key when the pattern is made.
   const parcel = makeTestParcel();
@@ -81,7 +77,7 @@ parcelTest('a Parcel cannot bound a range pattern', t => {
   t.throws(() => M.gt(parcel), { message });
 });
 
-parcelTest('a Parcel as a specimen fails to match rather than throwing', t => {
+test('a Parcel as a specimen fails to match rather than throwing', t => {
   const parcel = makeTestParcel();
   t.true(matches(parcel, M.any()));
   t.false(matches(parcel, M.key()));
@@ -93,14 +89,14 @@ parcelTest('a Parcel as a specimen fails to match rather than throwing', t => {
   t.true(matches(harden({ parcel }), harden({ parcel: M.any() })));
 });
 
-parcelTest('a Parcel has no rank cover', t => {
+test('a Parcel has no rank cover', t => {
   const encodePassable = makeEncodePassable();
   t.throws(() => getRankCover(makeTestParcel(), encodePassable), {
     message: /"parcel" cannot be rank-ordered/,
   });
 });
 
-parcelTest('Parcels nested at any depth are neither keys nor patterns', t => {
+test('Parcels nested at any depth are neither keys nor patterns', t => {
   fastCheck.assert(
     fastCheck.property(
       fastCheck.array(

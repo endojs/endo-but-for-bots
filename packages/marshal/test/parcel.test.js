@@ -19,12 +19,6 @@ import { makeEncodePassable } from '../src/encodePassable.js';
 import { makeMarshal } from '../src/marshal.js';
 import { makeDotMembraneKit } from '../src/dot-membrane.js';
 
-/** @type {any} */
-const { Parcel } = globalThis;
-// The shims-only AVA configuration installs Parcel before lockdown but does
-// not harden it, and only a frozen Parcel is passable.
-const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
-
 /** @import {Passable} from '@endo/pass-style' */
 
 const makeTestParcel = () => makeParcel('test:marshal', () => 'opened');
@@ -54,7 +48,7 @@ const wrapperPathArbitrary = fastCheck.array(
   { maxLength: 8 },
 );
 
-parcelTest('a Parcel cannot be rank-ordered', t => {
+test('a Parcel cannot be rank-ordered', t => {
   const parcel = makeTestParcel();
   t.is(passStyleOf(parcel), 'parcel');
   const message = /"parcel" cannot be rank-ordered/;
@@ -65,35 +59,32 @@ parcelTest('a Parcel cannot be rank-ordered', t => {
   t.throws(() => compareRank(parcel, makeTestParcel()), { message });
 });
 
-parcelTest(
-  'distinct containers of the same Parcel cannot be rank-ordered',
-  t => {
-    const parcel = makeTestParcel();
-    const message = /"parcel" cannot be rank-ordered/;
-    t.throws(() => compareRank(harden([parcel]), harden([parcel])), {
-      message,
-    });
-    t.throws(() => compareRank(harden({ parcel }), harden({ parcel })), {
-      message,
-    });
-    t.throws(
-      () =>
-        compareRank(
-          makeTagged('parcelBox', parcel),
-          makeTagged('parcelBox', parcel),
-        ),
-      { message },
-    );
-    const shared = harden([parcel]);
-    t.throws(() => compareRank(harden([shared]), harden([shared])), {
-      message,
-    });
-    const remotable = Far('remotable', {});
-    t.is(compareRank(harden([remotable]), harden([remotable])), 0);
-  },
-);
+test('distinct containers of the same Parcel cannot be rank-ordered', t => {
+  const parcel = makeTestParcel();
+  const message = /"parcel" cannot be rank-ordered/;
+  t.throws(() => compareRank(harden([parcel]), harden([parcel])), {
+    message,
+  });
+  t.throws(() => compareRank(harden({ parcel }), harden({ parcel })), {
+    message,
+  });
+  t.throws(
+    () =>
+      compareRank(
+        makeTagged('parcelBox', parcel),
+        makeTagged('parcelBox', parcel),
+      ),
+    { message },
+  );
+  const shared = harden([parcel]);
+  t.throws(() => compareRank(harden([shared]), harden([shared])), {
+    message,
+  });
+  const remotable = Far('remotable', {});
+  t.is(compareRank(harden([remotable]), harden([remotable])), 0);
+});
 
-parcelTest('a Parcel compares equal to itself without a rank', t => {
+test('a Parcel compares equal to itself without a rank', t => {
   // compareRank answers 0 for identical operands before it consults their
   // pass style, so only a Parcel compared with a different value throws.
   const parcel = makeTestParcel();
@@ -102,14 +93,14 @@ parcelTest('a Parcel compares equal to itself without a rank', t => {
   t.is(sortByRank(parcels, compareRank), parcels);
 });
 
-parcelTest('a singleton Parcel does not require a rank', t => {
+test('a singleton Parcel does not require a rank', t => {
   const singleton = harden([makeTestParcel()]);
   t.true(isRankSorted(singleton, compareRank));
   t.notThrows(() => assertRankSorted(singleton, compareRank));
   t.is(sortByRank(singleton, compareRank), singleton);
 });
 
-parcelTest('a Parcel cannot be encoded', t => {
+test('a Parcel cannot be encoded', t => {
   const parcel = makeTestParcel();
   for (const format of /** @type {const} */ ([
     'legacyOrdered',
@@ -126,7 +117,7 @@ parcelTest('a Parcel cannot be encoded', t => {
   }
 });
 
-parcelTest('a Parcel cannot be marshalled', t => {
+test('a Parcel cannot be marshalled', t => {
   const message = /a "parcel" cannot be marshalled/;
   for (const serializeBodyFormat of /** @type {const} */ ([
     'capdata',
@@ -153,33 +144,30 @@ parcelTest('a Parcel cannot be marshalled', t => {
   }
 });
 
-parcelTest(
-  'Parcels beside generated passables remain unrankable and unmarshallable',
-  async t => {
-    const { arbPassable: passableArbitrary } = makeArbitraries(fastCheck);
-    const parcelContextArbitrary = /** @type {any} */ (passableArbitrary);
-    const marshals = /** @type {const} */ (['capdata', 'smallcaps']).map(
-      serializeBodyFormat =>
-        makeMarshal(undefined, undefined, { serializeBodyFormat }).toCapData,
-    );
-    await fastCheck.assert(
-      fastCheck.property(parcelContextArbitrary, value => {
-        const passable = /** @type {Passable} */ (value);
-        const parcel = makeTestParcel();
-        t.throws(() => compareRank(parcel, passable), {
-          message: /"parcel" cannot be rank-ordered/,
+test('Parcels beside generated passables remain unrankable and unmarshallable', async t => {
+  const { arbPassable: passableArbitrary } = makeArbitraries(fastCheck);
+  const parcelContextArbitrary = /** @type {any} */ (passableArbitrary);
+  const marshals = /** @type {const} */ (['capdata', 'smallcaps']).map(
+    serializeBodyFormat =>
+      makeMarshal(undefined, undefined, { serializeBodyFormat }).toCapData,
+  );
+  await fastCheck.assert(
+    fastCheck.property(parcelContextArbitrary, value => {
+      const passable = /** @type {Passable} */ (value);
+      const parcel = makeTestParcel();
+      t.throws(() => compareRank(parcel, passable), {
+        message: /"parcel" cannot be rank-ordered/,
+      });
+      for (const toCapData of marshals) {
+        t.throws(() => toCapData(harden([parcel, passable])), {
+          message: /a "parcel" cannot be marshalled/,
         });
-        for (const toCapData of marshals) {
-          t.throws(() => toCapData(harden([parcel, passable])), {
-            message: /a "parcel" cannot be marshalled/,
-          });
-        }
-      }),
-    );
-  },
-);
+      }
+    }),
+  );
+});
 
-parcelTest('Parcels nested at any depth cannot be encoded or marshalled', t => {
+test('Parcels nested at any depth cannot be encoded or marshalled', t => {
   const encoders = /** @type {const} */ ([
     'legacyOrdered',
     'compactOrdered',
@@ -204,7 +192,7 @@ parcelTest('Parcels nested at any depth cannot be encoded or marshalled', t => {
   );
 });
 
-parcelTest('a Parcel cannot pass through a membrane', t => {
+test('a Parcel cannot pass through a membrane', t => {
   const message = /a "parcel" cannot be marshalled/;
   t.throws(() => makeDotMembraneKit(makeTestParcel()), { message });
   const { proxy } = makeDotMembraneKit(
