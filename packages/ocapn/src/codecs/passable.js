@@ -6,7 +6,8 @@
  */
 
 import harden from '@endo/harden';
-import { makeTagged } from '@endo/pass-style';
+import { makeTagged, passStyleOf } from '@endo/pass-style';
+import { isParcel } from '@endo/parcel';
 import { makeSelector, getSelectorName } from '../selector.js';
 import {
   BooleanCodec,
@@ -232,6 +233,7 @@ export const makePassableCodecs = descCodecs => {
       // Special Cases
       parcel: OcapnParcelCodec,
     },
+    value => (isParcel(value) ? 'parcel' : passStyleOf(value)),
   );
 
   return {

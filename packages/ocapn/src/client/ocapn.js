@@ -22,6 +22,7 @@ import { E, HandledPromise } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { passStyleOf } from '@endo/pass-style';
+import { isParcel } from '@endo/parcel';
 import {
   makeDescCodecs,
   makeHandoffReceiveDescriptor,
@@ -779,7 +780,9 @@ export const makeOcapn = (
     // We need to resolve the target to an object or function before we can invoke it.
     const resolvedTarget = await Promise.resolve(to);
     // We only apply functions to values with pass-style "remotable".
-    const passStyle = passStyleOf(resolvedTarget);
+    const passStyle = isParcel(resolvedTarget)
+      ? 'parcel'
+      : passStyleOf(resolvedTarget);
     if (passStyle !== 'remotable') {
       throw Error(
         `OCapN: Cannot apply functions to values with pass-style ${passStyle}`,

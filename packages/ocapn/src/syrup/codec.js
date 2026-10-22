@@ -612,12 +612,14 @@ export const makeTypeHintUnionCodec = (codecName, readTable, writeTable) => {
  * @param {string} codecName
  * @param {TypeHintUnionReadTable} readTable
  * @param {TypeHintPassStyleUnionWriteTable} writeTable
+ * @param {(value: unknown) => string} [classifyPassStyle]
  * @returns {SyrupCodec}
  */
 export const makeTypeHintPassStyleUnionCodec = (
   codecName,
   readTable,
   writeTable,
+  classifyPassStyle = passStyleOf,
 ) => {
   let badCodecEntry = Object.entries(readTable).find(
     ([_, codec]) => !isResolvableCodec(codec),
@@ -654,7 +656,7 @@ export const makeTypeHintPassStyleUnionCodec = (
       return codec;
     },
     value => {
-      const passStyle = passStyleOf(value);
+      const passStyle = classifyPassStyle(value);
       const codecOrGetter = writeTable[passStyle];
       if (!codecOrGetter) {
         const expected = Object.keys(writeTable)
