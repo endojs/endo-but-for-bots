@@ -500,6 +500,20 @@ a go() or step() command.
 Only shared (in-process) XS workers support this; for any
 other worker the call rejects before suspending it.
 
+## attachDebugger(workerNameOrPath) -> Promise<Debugger>
+
+Attach the XS debugger to a running worker without restarting it.
+Starts the worker if it is not yet running. Returns a Debugger
+capability; attaching to a worker that already has a debugger
+returns one over the same session.
+Workers that run on Node.js have no XS debugger and reject.
+
+## detachDebugger(workerNameOrPath) -> Promise<void>
+
+Detach the XS debugger from a worker, returning its debug hooks
+to dormant so it runs at full speed.
+Does nothing if the worker is not running or has no debugger.
+
 ## addPeerInfo(peerInfo) -> Promise<void>
 
 Add information about a remote peer.
@@ -864,8 +878,8 @@ options.followSymlinks: boolean — Let `**` descend through directory symlinks 
 (default false). This is `rg -L`, and like it, the sweep can become very large: in a
 workspace checkout every node_modules link points back into the tree, so the walk
 enumerates every route to every package rather than every file.
-Example: glob("**/*.js") → all JavaScript files at any depth.
-Example: glob("src/*") → the immediate children of src.
+Example: glob("**/*.js") -> all JavaScript files at any depth.
+Example: glob("src/*") -> the immediate children of src.
 
 ## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -884,8 +898,8 @@ Each matching line yields one { file, line, text } record: file is the mount-fac
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
 (CRLF normalization). A path that is denied, escapes the mount, resolves into a denied
 directory, is a directory, or cannot be read is skipped silently.
-Example: grep("TODO", await glob("src/**/*.js")) → every TODO line under src.
-Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+Example: grep("TODO", await glob("src/**/*.js")) -> every TODO line under src.
+Example: grep("^export") -> up to 1000 exported-symbol lines across the whole mount.
 
 ## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -902,7 +916,7 @@ options.maxResults: number — Non-negative safe-integer cap on match records (d
 options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
 receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Example: glorp("src/**/*.js", "TODO") → every TODO line in a .js file under src.
+Example: glorp("src/**/*.js", "TODO") -> every TODO line in a .js file under src.
 
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 

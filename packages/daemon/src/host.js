@@ -302,6 +302,8 @@ harden(normalizeHttpClientPolicy);
  * @param {(id: FormulaIdentifier) => string} options.getMountHostPath
  * @param {HostToolPowers['gitClone']} [options.gitClone]
  * @param {(id: FormulaIdentifier) => ReturnType<EndoHost['debugWorker']>} [options.debugWorker]
+ * @param {(id: FormulaIdentifier) => ReturnType<EndoHost['attachDebugger']>} [options.attachDebugger]
+ * @param {(id: FormulaIdentifier) => ReturnType<EndoHost['detachDebugger']>} [options.detachDebugger]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} options.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} options.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} options.checkinTree
@@ -387,6 +389,14 @@ export const makeHostMaker = ({
   debugWorker:
     debugWorkerById = /** @param {FormulaIdentifier} _id */ async _id => {
       throw makeError(X`debugWorker is not supported on this platform`);
+    },
+  attachDebugger:
+    attachDebuggerById = /** @param {FormulaIdentifier} _id */ async _id => {
+      throw makeError(X`attachDebugger is not supported on this platform`);
+    },
+  detachDebugger:
+    detachDebuggerById = /** @param {FormulaIdentifier} _id */ async _id => {
+      throw makeError(X`detachDebugger is not supported on this platform`);
     },
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
@@ -2275,17 +2285,45 @@ export const makeHostMaker = ({
       return E(endoBootstrap).followPeerChanges();
     };
 
-    /** @type {EndoHost['debugWorker']} */
-    const debugWorker = async workerNameOrPath => {
+    /**
+     * @param {NameOrPath} workerNameOrPath
+     * @returns {Promise<FormulaIdentifier>}
+     */
+    const identifyWorker = async workerNameOrPath => {
       const namePath = namePathFrom(workerNameOrPath);
       const workerId = await E(directory).identify(...namePath);
       if (workerId === undefined) {
         throw makeError(X`Unknown pet name: ${q(namePath.join('/'))}`);
       }
-      // Incarnates the worker if it is not yet running, and refuses a
-      // name that does not designate a worker.
-      await provide(/** @type {FormulaIdentifier} */ (workerId), 'worker');
-      return debugWorkerById(/** @type {FormulaIdentifier} */ (workerId));
+      const id = /** @type {FormulaIdentifier} */ (workerId);
+      if ((await getTypeForId(id)) !== 'worker') {
+        throw makeError(X`${q(namePath.join('/'))} is not a worker`);
+      }
+      return id;
+    };
+
+    /** @type {EndoHost['debugWorker']} */
+    const debugWorker = async workerNameOrPath => {
+      const workerId = await identifyWorker(workerNameOrPath);
+      // Incarnates the worker if it is not yet running.
+      await provide(workerId, 'worker');
+      return debugWorkerById(workerId);
+    };
+
+    /** @type {EndoHost['attachDebugger']} */
+    const attachDebugger = async workerNameOrPath => {
+      const workerId = await identifyWorker(workerNameOrPath);
+      // Incarnates the worker if it is not yet running.
+      await provide(workerId, 'worker');
+      return attachDebuggerById(workerId);
+    };
+
+    /** @type {EndoHost['detachDebugger']} */
+    const detachDebugger = async workerNameOrPath => {
+      const workerId = await identifyWorker(workerNameOrPath);
+      // A worker that is not running has no debugger to detach, so
+      // this does not incarnate one.
+      return detachDebuggerById(workerId);
     };
 
     /** @type {EndoHost['getPeerInfo']} */
@@ -2748,6 +2786,8 @@ export const makeHostMaker = ({
       sign,
       getPeerInfo,
       debugWorker,
+      attachDebugger,
+      detachDebugger,
       addPeerInfo,
       listKnownPeers,
       followPeerChanges,

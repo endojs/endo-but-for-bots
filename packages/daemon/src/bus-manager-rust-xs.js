@@ -63,8 +63,7 @@ import {
   makeXsFilePowers,
   makeXsCryptoPowers,
 } from './bus-manager-rust-xs-powers.js';
-import { makeDebugSession } from './debug-session.js';
-import { makeDebugger } from './debugger.js';
+import { makeDebugAttacher } from './debug-attach.js';
 import { makeDebugWorkerRestarter } from './debug-worker-restart.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
@@ -365,25 +364,35 @@ let endoGreeter = null;
 /** @type {Map<number, import('./types.js').DebugSession>} */
 const debugSessions = new Map();
 
-// Pending debug-attach promises, keyed by nonce.
-/** @type {Map<number, { resolve: (debuggerRef: import('./types.js').Debugger) => void, reject: (reason: Error) => void, workerHandle: number }>} */
-const pendingDebugAttach = new Map();
-
 let nextNonce = 1;
 
 // Bus handle of each live worker, keyed by worker formula id, so the
-// host can name a worker for `debugWorker`.
+// host can name a worker for `debugWorker` and `attachDebugger`.
 /** @type {Map<string, number>} */
 const workerHandlesById = new Map();
+
+// Handles of workers running under Node.js rather than XS; they carry
+// no XS debugger to attach.
+/** @type {Set<number>} */
+const nodeWorkerHandles = new Set();
+
+const allocNonce = () => {
+  const nonce = nextNonce;
+  nextNonce += 1;
+  return nonce;
+};
+
+const debugAttacher = makeDebugAttacher({
+  sendEnvelope: (handle, verb, payload, nonce) =>
+    sendEnvelope(handle, verb, payload, nonce),
+  allocNonce,
+  debugSessions,
+});
 
 const debugRestarter = makeDebugWorkerRestarter({
   sendEnvelope: (handle, verb, payload, nonce) =>
     sendEnvelope(handle, verb, payload, nonce),
-  allocNonce: () => {
-    const nonce = nextNonce;
-    nextNonce += 1;
-    return nonce;
-  },
+  allocNonce,
   debugSessions,
 });
 
@@ -536,6 +545,9 @@ const makeWorker = async (
 
   workerWriters.set(workerHandle, { writer: captpWriteTo });
   workerHandlesById.set(workerId, workerHandle);
+  if (kind === 'node' && endoNodeWorkerBin) {
+    nodeWorkerHandles.add(workerHandle);
+  }
 
   /** @type {import('@endo/stream').Writer<Uint8Array>} */
   const envelopeBytesWriter = harden({
@@ -580,6 +592,8 @@ const makeWorker = async (
     if (workerHandlesById.get(workerId) === workerHandle) {
       workerHandlesById.delete(workerId);
     }
+    nodeWorkerHandles.delete(workerHandle);
+    debugAttacher.forgetWorker(workerHandle);
     hostTrace(
       `Endo worker connection closed for handle=${workerHandle} id=${workerId}`,
     );
@@ -594,50 +608,41 @@ const makeWorker = async (
 };
 
 /**
- * Attach a debugger to a running worker.
+ * Attach a debugger to a running XS worker, named by formula number.
  * Sends a `debug-attach` envelope and waits for the worker to
  * acknowledge. Returns a Debugger exo remotable over CapTP.
  *
- * @param {number} workerHandle
+ * @param {string} workerId
  * @returns {Promise<Debugger>}
  */
-const attachDebugger = workerHandle => {
-  if (debugSessions.has(workerHandle)) {
-    const session = /** @type {import('./types.js').DebugSession} */ (
-      debugSessions.get(workerHandle)
-    );
-    return Promise.resolve(makeDebugger(session));
+const attachDebugger = async workerId => {
+  const workerHandle = workerHandlesById.get(workerId);
+  if (workerHandle === undefined) {
+    throw makeError(X`attachDebugger: worker ${q(workerId)} is not running`);
   }
-  const nonce = nextNonce;
-  nextNonce += 1;
-  const { promise, resolve, reject } =
-    /** @type {import('@endo/promise-kit').PromiseKit<import('./types.js').Debugger>} */ (
-      makePromiseKit()
+  if (nodeWorkerHandles.has(workerHandle)) {
+    throw makeError(
+      X`attachDebugger: worker ${q(workerId)} runs on Node.js, not XS`,
     );
-  pendingDebugAttach.set(nonce, { resolve, reject, workerHandle });
-  sendEnvelope(workerHandle, 'debug-attach', undefined, nonce);
-  hostTrace(
-    `daemon-xs: debug-attach sent handle=${workerHandle} nonce=${nonce}`,
-  );
-  return promise;
+  }
+  hostTrace(`daemon-xs: debug-attach handle=${workerHandle}`);
+  return debugAttacher.attach(workerHandle);
 };
 harden(attachDebugger);
 
 /**
- * Detach a debugger from a running worker.
+ * Detach the debugger from a running worker, named by formula number.
+ * Does nothing for a worker that is not running or has no debugger.
  *
- * @param {number} workerHandle
+ * @param {string} workerId
  */
-const detachDebugger = workerHandle => {
-  const session = debugSessions.get(workerHandle);
-  if (!session) {
+const detachDebugger = workerId => {
+  const workerHandle = workerHandlesById.get(workerId);
+  if (workerHandle === undefined) {
     return;
   }
-  debugSessions.delete(workerHandle);
-  const nonce = nextNonce;
-  nextNonce += 1;
-  sendEnvelope(workerHandle, 'debug-detach', undefined, nonce);
-  hostTrace(`daemon-xs: debug-detach sent handle=${workerHandle}`);
+  hostTrace(`daemon-xs: debug-detach handle=${workerHandle}`);
+  debugAttacher.detach(workerHandle);
 };
 harden(detachDebugger);
 
@@ -1025,20 +1030,8 @@ globalThis.handleCommand = harden(bytes => {
 
   // Debug attach acknowledgement.
   if (env.verb === 'debug-attached' && env.nonce > 0) {
-    const pending = pendingDebugAttach.get(env.nonce);
-    if (pending) {
-      pendingDebugAttach.delete(env.nonce);
-      const { workerHandle } = pending;
-
-      /** @param {Uint8Array} xmlBytes */
-      const sendToWorker = xmlBytes => {
-        sendEnvelope(workerHandle, 'debug', xmlBytes);
-      };
-      const session = makeDebugSession(sendToWorker);
-      debugSessions.set(workerHandle, session);
-      const dbg = makeDebugger(session);
-      hostTrace(`daemon-xs: debug-attached handle=${workerHandle}`);
-      pending.resolve(dbg);
+    if (debugAttacher.handleAttached(env)) {
+      hostTrace(`daemon-xs: debug-attached handle=${env.handle}`);
     }
     return;
   }

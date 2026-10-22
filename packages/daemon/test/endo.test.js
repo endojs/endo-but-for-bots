@@ -684,6 +684,39 @@ test('evaluate allows mixed-case code names', async t => {
   t.is(six, 6);
 });
 
+test('host debugger attach is refused without an XS worker supervisor', async t => {
+  const { host } = await prepareHost(t);
+
+  await E(host).provideWorker(['w1']);
+  await t.throwsAsync(() => E(host).attachDebugger('w1'), {
+    message: /attachDebugger requires a platform with an XS worker supervisor/,
+  });
+  await t.throwsAsync(() => E(host).detachDebugger(['w1']), {
+    message: /detachDebugger requires a platform with an XS worker supervisor/,
+  });
+});
+
+test('host debugger attach and detach refuse names that are not workers', async t => {
+  const { host } = await prepareHost(t);
+
+  await E(host).storeValue(10, 'ten');
+  await t.throwsAsync(() => E(host).attachDebugger('nothing'), {
+    message: /Unknown pet name/,
+  });
+  await t.throwsAsync(() => E(host).detachDebugger('nothing'), {
+    message: /Unknown pet name/,
+  });
+  await t.throwsAsync(() => E(host).attachDebugger('ten'), {
+    message: /is not a worker/,
+  });
+  await t.throwsAsync(() => E(host).debugWorker('ten'), {
+    message: /is not a worker/,
+  });
+  await t.throwsAsync(() => E(host).detachDebugger('ten'), {
+    message: /is not a worker/,
+  });
+});
+
 // Regression test for https://github.com/endojs/endo/issues/2147
 test('spawning a worker does not overwrite existing non-worker name', async t => {
   const { host } = await prepareHost(t);
