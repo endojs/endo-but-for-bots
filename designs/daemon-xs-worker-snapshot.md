@@ -308,13 +308,28 @@ the mismatch.
     - `suspend_resume_with_host_function`
     - `suspend_resume_multiple_cycles`
 
+14. Ephemeral GC root bookkeeping for CAS-stored snapshots:
+    `mark_suspended` pins the snapshot's SHA-256 in a
+    ref-counted root set (`Supervisor::gc_roots`,
+    `is_gc_root`); resume adopts the pin as a `GcRootLease`
+    that releases it once the restored worker has read the
+    blob (its first outbound frame, or exit). **(done)**
+
 #### Remaining
 
 - Integration test: full supervisor round-trip (suspend via
   control verb → worker streams snapshot to CAS → worker
   exits → message triggers resume → restored worker has
-  correct JS state).
-- Ephemeral GC root bookkeeping for CAS-stored snapshots.
+  correct JS state). **(written, ignored)** —
+  `supervisor_suspend_resume_round_trip` in
+  `rust/endo/src/endo.rs` drives this through the real
+  routing callbacks with a ping-counter bundle, but the
+  in-process worker segfaults after its first crank, so the
+  test is `#[ignore]`d until that is fixed.
+- Race: the suspended worker thread's exit-path `unregister`
+  can run after `mark_suspended` or after the resume
+  re-registers the handle; it should skip a handle that has
+  since been suspended or resumed.
 
 ### Phase 3: Future enhancements
 

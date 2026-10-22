@@ -30,6 +30,34 @@ pub struct SuspendedWorker {
     pub meter: Option<MeterState>,
 }
 
+/// Ownership of one ephemeral GC-root reference taken at suspend.
+///
+/// The resume path takes the suspended record out of the supervisor
+/// and wraps its pin in a lease; dropping the lease releases the root.
+/// The holder drops it once the restored worker has consumed the
+/// snapshot (or the resume failed), never before the worker has
+/// opened the blob.
+pub struct GcRootLease {
+    sup: Arc<Supervisor>,
+    sha256: String,
+}
+
+impl GcRootLease {
+    /// Adopt the pin `mark_suspended` took for `sha256`. An empty
+    /// digest (store-backed worker) is a no-op lease.
+    pub fn adopt(sup: Arc<Supervisor>, sha256: String) -> Self {
+        GcRootLease { sup, sha256 }
+    }
+}
+
+impl Drop for GcRootLease {
+    fn drop(&mut self) {
+        if !self.sha256.is_empty() {
+            self.sup.release_gc_root(&self.sha256);
+        }
+    }
+}
+
 pub struct Supervisor {
     inboxes: RwLock<HashMap<Handle, Mailbox>>,
     workers: RwLock<HashMap<Handle, WorkerInfo>>,
@@ -38,6 +66,12 @@ pub struct Supervisor {
     /// Suspended workers keyed by handle.  The inbox is removed
     /// when the worker suspends; on resume, a new inbox is created.
     suspended: RwLock<HashMap<Handle, SuspendedWorker>>,
+    /// Ephemeral CAS GC roots: SHA-256 hex digest → reference count.
+    /// A suspended XS worker's snapshot blob is pinned here from
+    /// `mark_suspended` until its resumed worker has consumed the
+    /// snapshot (`GcRootLease` drop), so a future CAS collector must
+    /// treat every key in this map as live.
+    gc_roots: Mutex<HashMap<String, usize>>,
     /// Per-worker metering state.
     meters: RwLock<HashMap<Handle, MeterState>>,
     outbox: Mutex<Option<Mailbox>>,
@@ -56,6 +90,7 @@ impl Supervisor {
             parents: RwLock::new(HashMap::new()),
             pending_syncs: Mutex::new(HashMap::new()),
             suspended: RwLock::new(HashMap::new()),
+            gc_roots: Mutex::new(HashMap::new()),
             meters: RwLock::new(HashMap::new()),
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
@@ -181,6 +216,10 @@ impl Supervisor {
         });
         // Capture meter state before removing it.
         let meter = self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
+        // Pin the snapshot blob for as long as the worker is suspended.
+        if !sha256.is_empty() {
+            self.pin_gc_root(&sha256);
+        }
         // Remove the inbox — the worker thread is exiting.
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
@@ -215,6 +254,52 @@ impl Supervisor {
     /// worker suspended rather than half-resumed.
     pub fn put_suspended(&self, handle: Handle, worker: SuspendedWorker) {
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(handle, worker);
+    }
+
+    // ---- Ephemeral CAS GC roots ----
+
+    /// Add one reference to the ephemeral GC root for `sha256`.
+    pub fn pin_gc_root(&self, sha256: &str) {
+        *self
+            .gc_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(sha256.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// Drop one reference to the ephemeral GC root for `sha256`,
+    /// removing the root when the count reaches zero.
+    pub fn release_gc_root(&self, sha256: &str) {
+        let mut roots = self.gc_roots.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = roots.get_mut(sha256) {
+            *count -= 1;
+            if *count == 0 {
+                roots.remove(sha256);
+            }
+        }
+    }
+
+    /// Whether `sha256` is currently held as an ephemeral GC root.
+    pub fn is_gc_root(&self, sha256: &str) -> bool {
+        self.gc_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(sha256)
+    }
+
+    /// The current ephemeral GC root set (CAS keys a collector must
+    /// keep), sorted.
+    pub fn gc_roots(&self) -> Vec<String> {
+        let mut roots: Vec<String> = self
+            .gc_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        roots.sort();
+        roots
     }
 
     // ---- Metering API ----

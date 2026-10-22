@@ -759,6 +759,9 @@ fn handle_resume(
         return;
     }
     let cas_file_path = suspended.cas_dir.join(&suspended.sha256);
+    // Take over the snapshot's ephemeral GC root; the resume path
+    // drops it once the restored worker has read the blob.
+    let gc_root = supervisor::GcRootLease::adopt(Arc::clone(sup), suspended.sha256.clone());
     let info = suspended.info;
 
     // Restore meter state from before suspend.
@@ -767,8 +770,8 @@ fn handle_resume(
     }
 
     match info.platform.as_str() {
-        "shared" | "" => resume_shared(sup, handle, info, cas_file_path, pending_msg),
-        _ => resume_process(sup, handle, info, cas_file_path, pending_msg),
+        "shared" | "" => resume_shared(sup, handle, info, cas_file_path, gc_root, pending_msg),
+        _ => resume_process(sup, handle, info, cas_file_path, gc_root, pending_msg),
     }
 }
 
@@ -778,6 +781,7 @@ fn resume_shared(
     handle: Handle,
     info: WorkerInfo,
     cas_file_path: std::path::PathBuf,
+    gc_root: supervisor::GcRootLease,
     pending_msg: Message,
 ) {
     // Re-register the handle with a fresh inbox.
@@ -855,10 +859,16 @@ fn resume_shared(
     });
 
     // Outbound bridge: machine → supervisor.
+    // The first outbound frame proves the machine restored from the
+    // snapshot, so the GC root is released then; if the machine dies
+    // first, the channel closes and the lease drops with this task.
     let sup_outbound = Arc::clone(sup);
     tokio::task::spawn_blocking(move || {
+        let mut gc_root = Some(gc_root);
         loop {
-            match machine_to_sup_rx.recv() {
+            let frame = machine_to_sup_rx.recv();
+            drop(gc_root.take());
+            match frame {
                 Ok(bytes) => match codec::decode_envelope(&bytes) {
                     Ok(env) => {
                         let to = env.handle;
@@ -906,6 +916,7 @@ fn resume_process(
     handle: Handle,
     info: WorkerInfo,
     cas_file_path: std::path::PathBuf,
+    gc_root: supervisor::GcRootLease,
     pending_msg: Message,
 ) {
     let platform = info.platform.clone();
@@ -961,6 +972,9 @@ fn resume_process(
         sup.unregister(handle);
         return;
     }
+    // The child opens the snapshot during its restore handshake;
+    // the restore payload is handed over, so release the root.
+    drop(gc_root);
 
     // Deliver the pending message that triggered resume.
     sup.deliver(pending_msg);
@@ -1069,4 +1083,173 @@ pub fn ensure_running() -> Result<EndoPaths, EndoError> {
         return Err(EndoError::NotRunning);
     }
     Ok(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Supervisor round-trip for XS worker snapshots
+    //! (designs/daemon-xs-worker-snapshot.md § Phase 2): suspend via the
+    //! control verb, the worker streams its snapshot to the CAS and
+    //! exits, the next message resumes it, and the restored worker
+    //! carries the JS state it had before suspending.
+
+    use super::*;
+    use crate::mailbox::MailboxReceiver;
+
+    /// Counts pings and answers each by echoing the envelope back to
+    /// its sender with the `@@@@` payload marker overwritten by the
+    /// zero-padded count. `pings` lives only in the XS heap, so a
+    /// correct count after resume proves the snapshot carried it.
+    const PING_COUNTER_BUNDLE: &str = "\
+        var pings = 0; \
+        globalThis.handleCommand = function (bytes) { \
+          pings += 1; \
+          var d = String(pings); \
+          while (d.length < 4) d = '0' + d; \
+          for (var i = 0; i + 4 <= bytes.length; i += 1) { \
+            if (bytes[i] === 64 && bytes[i + 1] === 64 && \
+                bytes[i + 2] === 64 && bytes[i + 3] === 64) { \
+              for (var j = 0; j < 4; j += 1) bytes[i + j] = d.charCodeAt(j); \
+              break; \
+            } \
+          } \
+          sendRawFrame(bytes); \
+        };";
+
+    fn ping(sup: &Arc<Supervisor>, from: Handle, to: Handle) {
+        sup.deliver(Message {
+            from,
+            to,
+            envelope: Envelope {
+                handle: to,
+                verb: "ping".to_string(),
+                payload: b"@@@@".to_vec(),
+                nonce: 0,
+            },
+            response_tx: None,
+        });
+    }
+
+    async fn expect_pong(inbox: &mut MailboxReceiver, worker: Handle) -> String {
+        let msg = tokio::time::timeout(Duration::from_secs(60), inbox.recv())
+            .await
+            .expect("timed out waiting for pong")
+            .expect("test inbox closed");
+        assert_eq!(msg.from, worker);
+        assert_eq!(msg.envelope.verb, "ping");
+        String::from_utf8(msg.envelope.payload).expect("pong payload is UTF-8")
+    }
+
+    async fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while !cond() {
+            assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn suspend_request(target: Handle) -> Vec<u8> {
+        let mut payload = vec![0xa1, 0x66];
+        payload.extend_from_slice(b"handle");
+        payload.extend_from_slice(&codec::encode_handle(target));
+        payload
+    }
+
+    // Ignored: on the first crank the in-process worker SIGSEGVs right
+    // after `handleCommand` returns from `sendRawFrame`, before the
+    // pong reaches the tester (reproduced with stub SES/worker bundles;
+    // successor job debug-daemon-xs-inproc-worker-first-crank-segfault).
+    #[ignore = "in-process XS worker segfaults after its first crank"]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn supervisor_suspend_resume_round_trip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cas_dir = tmp.path().join("store-sha256");
+        let cas = Arc::new(ContentStore::open(&cas_dir).expect("CAS open"));
+
+        let (sup, outbox_rx) = Supervisor::new();
+        let control_sup = Arc::clone(&sup);
+        let resume_sup = Arc::clone(&sup);
+        let cas_for_control = Arc::clone(&cas);
+        let cas_dir_for_resume = cas_dir.clone();
+        supervisor::start_routing(
+            &sup,
+            outbox_rx,
+            supervisor::RoutingCallbacks {
+                on_control: Box::new(move |msg| {
+                    handle_control_message(&control_sup, &control_sup, &cas_for_control, msg);
+                }),
+                on_resume: Box::new(move |s, handle, suspended, pending| {
+                    handle_resume(&resume_sup, s, handle, suspended, &cas_dir_for_resume, pending);
+                }),
+            },
+        );
+
+        let tester = sup.alloc_handle();
+        let mut tester_inbox = sup.register(tester, None);
+
+        let worker = inproc::spawn_inproc_xs_peer(
+            &sup,
+            "<round-trip-worker>".to_string(),
+            None,
+            Box::new(|transport| {
+                xsnap::run_xs_program(
+                    xsnap::XsProgram::Bundle(PING_COUNTER_BUNDLE),
+                    &xsnap::WORKER_CREATION,
+                    "round-trip-worker",
+                    Some(transport),
+                )
+            }),
+        )
+        .expect("spawn in-process worker");
+
+        // Build up JS state before suspending.
+        ping(&sup, tester, worker);
+        assert_eq!(expect_pong(&mut tester_inbox, worker).await, "0001");
+        ping(&sup, tester, worker);
+        assert_eq!(expect_pong(&mut tester_inbox, worker).await, "0002");
+
+        // Suspend through the control verb.
+        sup.deliver(Message {
+            from: tester,
+            to: 0,
+            envelope: Envelope {
+                handle: 0,
+                verb: "suspend".to_string(),
+                payload: suspend_request(worker),
+                nonce: 7,
+            },
+            response_tx: None,
+        });
+        wait_until("worker suspended", || sup.is_suspended(worker)).await;
+
+        // The snapshot is in the CAS under its SHA-256 and pinned.
+        let roots = sup.gc_roots();
+        assert_eq!(roots.len(), 1, "exactly one ephemeral GC root: {roots:?}");
+        let sha256 = roots[0].clone();
+        assert_eq!(sha256.len(), 64, "SHA-256 hex digest: {sha256}");
+        let blob = cas_dir.join(&sha256);
+        let snapshot = fs::read(&blob).expect("snapshot blob in CAS");
+        assert!(!snapshot.is_empty());
+        {
+            use sha2::Digest;
+            assert_eq!(hex::encode(sha2::Sha256::digest(&snapshot)), sha256);
+        }
+        // The worker's inbox and registration are gone.
+        assert!(sup.workers_snapshot().iter().all(|w| w.handle != worker));
+        // Let the suspended worker thread finish exiting (its exit
+        // path unregisters the handle) before the resume re-registers it.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // The next message resumes the worker transparently; the
+        // count continues from the snapshot.
+        ping(&sup, tester, worker);
+        assert_eq!(expect_pong(&mut tester_inbox, worker).await, "0003");
+        assert!(!sup.is_suspended(worker));
+        assert!(!sup.is_gc_root(&sha256), "resume releases the GC root");
+        assert!(sup.gc_roots().is_empty());
+        assert!(sup.workers_snapshot().iter().any(|w| w.handle == worker && w.platform == "shared"));
+
+        ping(&sup, tester, worker);
+        assert_eq!(expect_pong(&mut tester_inbox, worker).await, "0004");
+    }
 }
