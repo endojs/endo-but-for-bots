@@ -153,6 +153,10 @@ export const helpTextEntries = harden([
         "getPeerInfo() -> Promise<{node: string, addresses: string[]}>\nGet this node's peer information for sharing with others.",
       debugWorker:
         'debugWorker(workerNameOrPath) -> Promise<Debugger>\nRestart a worker in debug mode.\nSuspends the worker, then resumes it with the XS debugger\nactive from the first instruction. Returns a Debugger\ncapability. The worker is paused until the debugger issues\na go() or step() command.\nOnly shared (in-process) XS workers support this; for any\nother worker the call rejects before suspending it.',
+      attachDebugger:
+        'attachDebugger(workerNameOrPath) -> Promise<Debugger>\nAttach the XS debugger to a running worker without restarting it.\nStarts the worker if it is not yet running. Returns a Debugger\ncapability; attaching to a worker that already has a debugger\nreturns one over the same session.\nWorkers that run on Node.js have no XS debugger and reject.',
+      detachDebugger:
+        'detachDebugger(workerNameOrPath) -> Promise<void>\nDetach the XS debugger from a worker, returning its debug hooks\nto dormant so it runs at full speed.\nDoes nothing if the worker is not running or has no debugger.',
       addPeerInfo:
         'addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }',
       locateWithHints:

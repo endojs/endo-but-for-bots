@@ -500,6 +500,20 @@ a go() or step() command.
 Only shared (in-process) XS workers support this; for any
 other worker the call rejects before suspending it.
 
+## attachDebugger(workerNameOrPath) -> Promise<Debugger>
+
+Attach the XS debugger to a running worker without restarting it.
+Starts the worker if it is not yet running. Returns a Debugger
+capability; attaching to a worker that already has a debugger
+returns one over the same session.
+Workers that run on Node.js have no XS debugger and reject.
+
+## detachDebugger(workerNameOrPath) -> Promise<void>
+
+Detach the XS debugger from a worker, returning its debug hooks
+to dormant so it runs at full speed.
+Does nothing if the worker is not running or has no debugger.
+
 ## addPeerInfo(peerInfo) -> Promise<void>
 
 Add information about a remote peer.

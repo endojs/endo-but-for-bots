@@ -8217,8 +8217,39 @@ const makeDaemonCore = async (
     return controlPowers.debugWorker(parseId(workerId).number);
   };
 
+  /**
+   * Hot-attach the XS debugger to a running worker (Rust supervisor
+   * only).
+   *
+   * @param {FormulaIdentifier} workerId
+   */
+  const attachDebuggerById = async workerId => {
+    if (controlPowers.attachDebugger === undefined) {
+      throw makeError(
+        X`attachDebugger requires a platform with an XS worker supervisor`,
+      );
+    }
+    return controlPowers.attachDebugger(parseId(workerId).number);
+  };
+
+  /**
+   * Return a worker's XS debugger to dormant (Rust supervisor only).
+   *
+   * @param {FormulaIdentifier} workerId
+   */
+  const detachDebuggerById = async workerId => {
+    if (controlPowers.detachDebugger === undefined) {
+      throw makeError(
+        X`detachDebugger requires a platform with an XS worker supervisor`,
+      );
+    }
+    controlPowers.detachDebugger(parseId(workerId).number);
+  };
+
   const makeHost = makeHostMaker({
     debugWorker: debugWorkerById,
+    attachDebugger: attachDebuggerById,
+    detachDebugger: detachDebuggerById,
     gitClone,
     provide,
     provideStoreController,

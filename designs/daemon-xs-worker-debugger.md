@@ -832,12 +832,33 @@ flushes the outbound debug buffer.
    Shift+F11 (step out), Esc (close).
 
 **Remaining:**
-- The host does not yet expose `attachDebugger` over CapTP —
-  the `/debug` command will produce a CapTP method-not-found
-  error until that is wired.
 - `followBreaks` async iterator for live break notification.
 - Source view with breakpoint gutters.
 - Profiling output (Chrome DevTools `.cpuprofile` format).
+
+### Phase 7: Host hot-attach over CapTP
+
+1. `EndoHost.attachDebugger(workerNameOrPath)` resolves a pet
+   name to a worker formula, starts the worker if needed, and
+   returns the Debugger exo; `detachDebugger(workerNameOrPath)`
+   returns the worker's debug hooks to dormant.
+   This is the `E(daemon).attachDebugger('my-worker')` entry
+   point of Layer 6, and what Chat's `/debug` command calls.
+2. The XS supervisor's control powers take a worker formula
+   number, not a bus handle, so the host never handles bus
+   handles.
+   A worker on Node.js has no XS debugger, and the call rejects
+   rather than waiting for an acknowledgement that never comes.
+3. `debug-attach.js` holds the attach state: concurrent attaches
+   share one `debug-attach`, an attached worker reuses its
+   session, and a worker whose connection closes rejects its
+   pending attach and drops its session.
+4. **Test**: unit tests of the attach state over a fake bus, and
+   daemon tests that the Node platform refuses the methods and
+   that non-worker names are refused.
+
+Storing each Debugger as a formula with a `@debug:<worker>` pet
+name (Layer 4) is not part of this phase.
 
 ## Design decisions
 

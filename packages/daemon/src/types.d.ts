@@ -2126,6 +2126,18 @@ export interface EndoHost extends EndoAgent {
    * the worker is suspended.
    */
   debugWorker(workerNameOrPath: NameOrPath): Promise<Debugger>;
+  /**
+   * Attach the XS debugger to a running worker without restarting it,
+   * starting the worker first if it is not running.  A second attach
+   * to the same worker returns a Debugger over the same session.
+   * Rejects for a worker that runs on Node.js rather than XS.
+   */
+  attachDebugger(workerNameOrPath: NameOrPath): Promise<Debugger>;
+  /**
+   * Return a worker's XS debugger hooks to dormant.  Does nothing for
+   * a worker that is not running or has no debugger attached.
+   */
+  detachDebugger(workerNameOrPath: NameOrPath): Promise<void>;
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
@@ -2729,15 +2741,16 @@ export type DaemonicControlPowers = {
    */
   startEnvelopeReader?: () => void;
   /**
-   * Attach a debugger to a running worker (Rust supervisor only).
-   * Returns a Debugger exo that wraps the xsbug debug session
-   * and is remotable over CapTP.
+   * Attach a debugger to a running worker, named by formula number
+   * (Rust supervisor only).  Returns a Debugger exo that wraps the
+   * xsbug debug session and is remotable over CapTP.
    */
-  attachDebugger?: (workerHandle: number) => Promise<Debugger>;
+  attachDebugger?: (workerId: string) => Promise<Debugger>;
   /**
-   * Detach a debugger from a running worker (Rust supervisor only).
+   * Detach a debugger from a running worker, named by formula number
+   * (Rust supervisor only).
    */
-  detachDebugger?: (workerHandle: number) => void;
+  detachDebugger?: (workerId: string) => void;
   /**
    * Restart a running worker, named by formula number, paused under
    * the XS debugger (Rust supervisor only).
