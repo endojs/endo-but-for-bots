@@ -87,10 +87,19 @@ impl ContentStore {
     }
 
     /// Store bytes in the CAS and return the hex SHA-256 hash.
+    ///
+    /// An existing `{dir}/{hash}` is reused only when its bytes still hash
+    /// to `hash`. Anything else (a planted or truncated file) is replaced,
+    /// so a store that another user can write to cannot pin wrong content
+    /// under a hash.
     pub fn store(&self, data: &[u8], content_type: &str) -> io::Result<String> {
         let hash = hex_sha256(data);
         let path = self.dir.join(&hash);
-        if !path.exists() {
+        let intact = match fs::read(&path) {
+            Ok(existing) => hex_sha256(&existing) == hash,
+            Err(_) => false,
+        };
+        if !intact {
             // Write atomically: write to .tmp, then rename.
             let tmp = self.dir.join(format!("{hash}.tmp"));
             fs::write(&tmp, data)?;
@@ -104,14 +113,26 @@ impl ContentStore {
     }
 
     /// Fetch content by hex hash.
+    ///
+    /// The bytes are re-hashed before they are returned: a file name is not
+    /// an integrity check, and callers hand these bytes to parsers and the
+    /// evaluator. A malformed hash or a mismatching file is `InvalidData`.
     pub fn fetch(&self, hash: &str) -> io::Result<Vec<u8>> {
-        let path = self.dir.join(hash);
-        fs::read(&path)
+        check_hash(hash)?;
+        let data = fs::read(self.dir.join(hash))?;
+        let actual = hex_sha256(&data);
+        if actual != hash {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("CAS entry {hash} has content hashing to {actual}"),
+            ));
+        }
+        Ok(data)
     }
 
     /// Check whether a hash exists in the store.
     pub fn has(&self, hash: &str) -> bool {
-        self.dir.join(hash).exists()
+        is_hex_sha256(hash) && self.dir.join(hash).exists()
     }
 
     /// Increment ref count for a hash.
@@ -282,6 +303,23 @@ pub struct GcReport {
     pub freed_bytes: u64,
 }
 
+/// Whether `hash` is a lowercase hex SHA-256 digest, so it can name a file
+/// in the store without escaping it.
+fn is_hex_sha256(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn check_hash(hash: &str) -> io::Result<()> {
+    if is_hex_sha256(hash) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a hex SHA-256 hash: {hash:?}"),
+        ))
+    }
+}
+
 /// Compute hex-encoded SHA-256 of `data`.
 fn hex_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -333,6 +371,56 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cas = ContentStore::open(tmp.path()).unwrap();
         assert!(cas.fetch("nonexistent").is_err());
+    }
+
+    #[test]
+    fn fetch_rejects_planted_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let hash = hex_sha256(b"export default 'victim';");
+        fs::write(tmp.path().join(&hash), b"export default 'attacker';").unwrap();
+
+        let err = cas.fetch(&hash).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn fetch_rejects_truncated_blob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let data = b"a blob that will be cut short";
+        let hash = cas.store(data, "blob").unwrap();
+        fs::write(tmp.path().join(&hash), &data[..5]).unwrap();
+
+        let err = cas.fetch(&hash).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn store_replaces_planted_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let data = b"export default 'victim';";
+        let hash = hex_sha256(data);
+        fs::write(tmp.path().join(&hash), b"export default 'attacker';").unwrap();
+
+        assert_eq!(cas.store(data, "blob").unwrap(), hash);
+        assert_eq!(cas.fetch(&hash).unwrap(), data);
+    }
+
+    #[test]
+    fn fetch_rejects_path_shaped_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        for hash in ["../etc/passwd", "/etc/passwd", "ABCDEF", ""] {
+            let err = cas.fetch(hash).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{hash:?}");
+            assert!(!cas.has(hash));
+        }
     }
 
     #[test]
