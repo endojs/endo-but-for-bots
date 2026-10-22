@@ -95,11 +95,26 @@ impl<'a> Cursor<'a> {
         Ok((major, value))
     }
 
+    /// Check that `len` more bytes remain, without overflowing on a
+    /// hostile head value.
+    fn checked_len(&self, len: u64, msg: &'static str) -> io::Result<usize> {
+        let remaining = self.data.len() - self.pos;
+        match usize::try_from(len) {
+            Ok(len) if len <= remaining => Ok(len),
+            _ => Err(io::Error::new(io::ErrorKind::UnexpectedEof, msg)),
+        }
+    }
+
     fn read_int(&mut self) -> io::Result<i64> {
         let (major, value) = self.read_head()?;
         match major {
-            0 => Ok(value as i64),
-            1 => Ok(-(value as i64) - 1),
+            0 | 1 => {
+                // Checked so an out-of-range head reads as malformed input
+                // instead of wrapping (release) or panicking (debug).
+                let n = i64::try_from(value)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "CBOR: int out of range"))?;
+                Ok(if major == 0 { n } else { -n - 1 })
+            }
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected int, got major {major}"))),
         }
     }
@@ -109,10 +124,7 @@ impl<'a> Cursor<'a> {
         if major != CBOR_BYTES {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected bytes, got major {major}")));
         }
-        let len = len as usize;
-        if self.pos + len > self.data.len() {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated bytes"));
-        }
+        let len = self.checked_len(len, "CBOR: truncated bytes")?;
         let result = self.data[self.pos..self.pos + len].to_vec();
         self.pos += len;
         Ok(result)
@@ -123,10 +135,7 @@ impl<'a> Cursor<'a> {
         if major != CBOR_TEXT {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("CBOR: expected text, got major {major}")));
         }
-        let len = len as usize;
-        if self.pos + len > self.data.len() {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated text"));
-        }
+        let len = self.checked_len(len, "CBOR: truncated text")?;
         let s = std::str::from_utf8(&self.data[self.pos..self.pos + len])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         self.pos += len;
@@ -154,10 +163,7 @@ impl<'a> Cursor<'a> {
         match major {
             0 | 1 => Ok(()),
             2 | 3 => {
-                let len = value as usize;
-                if self.pos + len > self.data.len() {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "CBOR: truncated skip"));
-                }
+                let len = self.checked_len(value, "CBOR: truncated skip")?;
                 self.pos += len;
                 Ok(())
             }
@@ -1235,6 +1241,10 @@ enum Value {
 }
 
 const TUI_MAX_DEPTH: usize = 16;
+/// Most keys any `tui.*` map carries (run attrs have 7). Capping the
+/// count keeps the duplicate-key check and `Fields::take` cheap on the
+/// routing loop, whatever a hostile worker sends.
+const TUI_MAX_MAP_ENTRIES: u64 = 16;
 
 fn read_value(c: &mut Cursor, depth: usize) -> io::Result<Value> {
     if depth > TUI_MAX_DEPTH {
@@ -1263,6 +1273,12 @@ fn read_value(c: &mut Cursor, depth: usize) -> io::Result<Value> {
             Ok(Value::Array(items))
         }
         CBOR_MAP => {
+            if value > TUI_MAX_MAP_ENTRIES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("CBOR: map has more than {TUI_MAX_MAP_ENTRIES} entries"),
+                ));
+            }
             let mut entries: Vec<(String, Value)> = Vec::new();
             for _ in 0..value {
                 let key = c.read_text()?;
@@ -1526,26 +1542,46 @@ fn layout_hint_value(h: &TuiLayoutHint) -> Value {
     Value::Map(m)
 }
 
-fn decode_layout_hint(mut f: Fields) -> Result<TuiLayoutHint, TuiError> {
-    let dim = |f: &mut Fields, key: &str| -> Result<Option<i64>, TuiError> {
-        match f.opt_int(key)? {
-            Some(n) if n < 0 => Err(f.wrong(key, "a non-negative int")),
-            n => Ok(n),
+/// Check the constraints `decode_tui_request` enforces on a layout
+/// hint, so `TuiStore::apply` can re-check them for a direct caller.
+pub fn validate_tui_layout_hint(hint: &TuiLayoutHint) -> Result<(), TuiError> {
+    for (key, n) in [
+        ("minCols", hint.min_cols),
+        ("minRows", hint.min_rows),
+        ("preferredCols", hint.preferred_cols),
+        ("preferredRows", hint.preferred_rows),
+    ] {
+        if matches!(n, Some(n) if n < 0) {
+            return Err(TuiError::bad_argument(format!("layoutHint: `{key}` must be a non-negative int")));
         }
-    };
-    let hint = TuiLayoutHint {
-        min_cols: dim(&mut f, "minCols")?,
-        min_rows: dim(&mut f, "minRows")?,
-        preferred_cols: dim(&mut f, "preferredCols")?,
-        preferred_rows: dim(&mut f, "preferredRows")?,
-        dock: f.opt_text("dock")?,
-        priority: f.opt_int("priority")?,
-    };
+    }
     if let Some(d) = &hint.dock {
         if !TUI_DOCKS.contains(&d.as_str()) {
             return Err(TuiError::bad_argument(format!("layoutHint: unknown dock `{d}`")));
         }
     }
+    Ok(())
+}
+
+/// Check a `tui.createWindow` role.
+pub fn validate_tui_window_role(role: &str) -> Result<(), TuiError> {
+    if TUI_WINDOW_ROLES.contains(&role) {
+        Ok(())
+    } else {
+        Err(TuiError::bad_argument(format!("tui.createWindow: unknown role `{role}`")))
+    }
+}
+
+fn decode_layout_hint(mut f: Fields) -> Result<TuiLayoutHint, TuiError> {
+    let hint = TuiLayoutHint {
+        min_cols: f.opt_int("minCols")?,
+        min_rows: f.opt_int("minRows")?,
+        preferred_cols: f.opt_int("preferredCols")?,
+        preferred_rows: f.opt_int("preferredRows")?,
+        dock: f.opt_text("dock")?,
+        priority: f.opt_int("priority")?,
+    };
+    validate_tui_layout_hint(&hint)?;
     f.finish()?;
     Ok(hint)
 }
@@ -1623,9 +1659,7 @@ pub fn decode_tui_request(verb: &str, data: &[u8]) -> Result<TuiRequest, TuiErro
             let screen_id = f.int("screenId")?;
             let title = f.text("title")?;
             let role = f.text("role")?;
-            if !TUI_WINDOW_ROLES.contains(&role.as_str()) {
-                return Err(TuiError::bad_argument(format!("tui.createWindow: unknown role `{role}`")));
-            }
+            validate_tui_window_role(&role)?;
             let layout_hint = match f.opt_map("layoutHint", "layoutHint")? {
                 Some(h) => decode_layout_hint(h)?,
                 None => return Err(f.missing("layoutHint")),
@@ -1895,5 +1929,51 @@ mod tui_tests {
         assert_eq!(decode_tui_request("tui.getScreen", &[0xff]).unwrap_err().code, TuiErrorCode::BadArgument);
         assert_eq!(decode_tui_request("tui.getScreen", &[0xa0, 0x00]).unwrap_err().code, TuiErrorCode::BadArgument);
         assert!(decode_tui_reply("tui.createWindow", &encode_tui_reply(&TuiReply::Empty)).is_err());
+    }
+
+    #[test]
+    fn oversized_map_is_bad_argument() {
+        // A map head claiming many entries is refused before any key is read.
+        let mut payload = Vec::new();
+        cbor_append_head(&mut payload, CBOR_MAP, TUI_MAX_MAP_ENTRIES + 1);
+        for i in 0..=TUI_MAX_MAP_ENTRIES {
+            cbor_append_text(&mut payload, &format!("k{i}"));
+            cbor_append_int(&mut payload, 0);
+        }
+        let err = decode_tui_request("tui.getScreen", &payload).unwrap_err();
+        assert_eq!(err.code, TuiErrorCode::BadArgument);
+        let mut payload = Vec::new();
+        cbor_append_head(&mut payload, CBOR_MAP, u64::MAX);
+        assert_eq!(decode_tui_request("tui.getScreen", &payload).unwrap_err().code, TuiErrorCode::BadArgument);
+    }
+
+    #[test]
+    fn out_of_range_ints_are_bad_argument() {
+        for major in [CBOR_UINT, CBOR_NEGINT] {
+            for value in [1u64 << 63, u64::MAX] {
+                let mut payload = Vec::new();
+                cbor_append_head(&mut payload, CBOR_MAP, 1);
+                cbor_append_text(&mut payload, "regionId");
+                cbor_append_head(&mut payload, major, value);
+                let err = decode_tui_request("tui.destroyRegion", &payload).unwrap_err();
+                assert_eq!(err.code, TuiErrorCode::BadArgument, "major {major} value {value}");
+            }
+        }
+        let mut payload = Vec::new();
+        cbor_append_head(&mut payload, CBOR_MAP, 1);
+        cbor_append_text(&mut payload, "regionId");
+        cbor_append_head(&mut payload, CBOR_NEGINT, i64::MAX as u64);
+        assert_eq!(
+            decode_tui_request("tui.destroyRegion", &payload).unwrap(),
+            TuiRequest::DestroyRegion { region_id: i64::MIN }
+        );
+    }
+
+    #[test]
+    fn huge_text_length_is_bad_argument() {
+        let mut payload = Vec::new();
+        cbor_append_head(&mut payload, CBOR_MAP, 1);
+        cbor_append_head(&mut payload, CBOR_TEXT, u64::MAX);
+        assert_eq!(decode_tui_request("tui.getScreen", &payload).unwrap_err().code, TuiErrorCode::BadArgument);
     }
 }
