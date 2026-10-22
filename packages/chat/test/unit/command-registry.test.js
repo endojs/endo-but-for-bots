@@ -349,6 +349,17 @@ test('mktmp command exists', t => {
   t.is(cmd?.name, 'mktmp');
 });
 
+test('debug-restart command takes a worker in the workers category', t => {
+  const command = getCommand('debug-restart');
+  t.is(command?.name, 'debug-restart');
+  t.is(command?.category, 'workers');
+  t.is(command?.mode, 'inline');
+  t.is(command?.fields.length, 1);
+  t.is(command?.fields[0].name, 'workerName');
+  t.is(command?.fields[0].type, 'petNamePath');
+  t.true(command?.fields[0].required);
+});
+
 test('mount command has path and petName fields', t => {
   const cmd = COMMANDS.mount;
   t.is(cmd.name, 'mount');

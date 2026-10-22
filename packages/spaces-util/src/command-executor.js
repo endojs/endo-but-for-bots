@@ -3,7 +3,7 @@
 import harden from '@endo/harden';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { EndoHost } from '@endo/daemon' */
+/** @import { EndoHost, NamePath } from '@endo/daemon' */
 
 import { E } from '@endo/eventual-send';
 
@@ -921,6 +921,21 @@ export const createCommandExecutor = ({
           return {
             success: true,
             message: `Debugger attached to "${workerName}"`,
+          };
+        }
+
+        case 'debug-restart': {
+          const { workerName } = params;
+          const workerPath = /** @type {NamePath} */ (
+            String(workerName).split('/')
+          );
+          const debuggerRef = await E(powers).debugWorker(workerPath);
+          if (openDebugger) {
+            openDebugger(debuggerRef, String(workerName));
+          }
+          return {
+            success: true,
+            message: `"${workerName}" restarted paused under the debugger`,
           };
         }
 
