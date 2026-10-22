@@ -924,6 +924,21 @@ export const createCommandExecutor = ({
           };
         }
 
+        case 'debug-restart': {
+          const { workerName } = params;
+          const workerPath = /** @type {[string, ...string[]]} */ (
+            String(workerName).split('/')
+          );
+          const debuggerRef = await E(powers).debugWorker(workerPath);
+          if (openDebugger) {
+            openDebugger(debuggerRef, String(workerName));
+          }
+          return {
+            success: true,
+            message: `"${workerName}" restarted paused under the debugger`,
+          };
+        }
+
         // ============ SYSTEM ============
         case 'cancel': {
           const { petName, reason } = params;

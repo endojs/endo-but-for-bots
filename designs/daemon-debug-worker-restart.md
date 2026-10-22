@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-10-21 |
+| **Updated** | 2026-10-22 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress — Phases 1–2 implemented |
+| **Status** | In Progress — Phases 1–3 implemented; Phase 3 manual check pending |
 
 ## What is the Problem Being Solved?
 
@@ -83,8 +83,8 @@ No new verbs are required.
 The operation is sequenced entirely by the JS manager using
 existing verbs:
 
-1. **Suspend**: manager sends `suspend` control verb →
-   worker streams snapshot → supervisor receives `suspended`
+1. **Suspend**: manager sends `suspend` control verb ->
+   worker streams snapshot -> supervisor receives `suspended`
    with CAS hash.
 2. **Resume with debug flag**: manager sends a new control
    verb `debug-resume` with the worker's handle.
@@ -353,6 +353,13 @@ A restart abandoned after arming withdraws the flag with
    paused.
 
 ### Phase 3: Chat integration
+
+**Implemented** as a separate `/debug-restart` command in
+`packages/spaces-util/src/command-registry.js` and
+`packages/spaces-util/src/command-executor.js`, beside `/debug`,
+which attaches to a running worker without restarting it.
+Unit tests cover the command wiring; the manual check in step 3
+has not yet been performed.
 
 1. Add `/debug-restart <worker>` command (or extend existing
    `/debug` to handle the restart case).

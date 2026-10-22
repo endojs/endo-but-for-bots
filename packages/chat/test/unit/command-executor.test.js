@@ -619,6 +619,87 @@ test('execute spawn command', async t => {
   t.is(result.message, 'Worker "worker1" spawned');
 });
 
+test('execute debug-restart calls debugWorker and opens the debugger panel', async t => {
+  /** @type {unknown[][]} */
+  const debugWorkerCalls = [];
+  const debuggerRef = makeExo(
+    'MockDebugger',
+    M.interface('MockDebugger', {}, { defaultGuards: 'passable' }),
+    {},
+  );
+  const powers = /** @type {ERef<EndoHost>} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'DebugPowers',
+        M.interface('DebugPowers', {}, { defaultGuards: 'passable' }),
+        {
+          debugWorker: async workerPath => {
+            debugWorkerCalls.push([workerPath]);
+            return debuggerRef;
+          },
+        },
+      )
+    )
+  );
+  /** @type {Array<[unknown, string]>} */
+  const openDebuggerCalls = [];
+  const executor = createCommandExecutor({
+    powers,
+    showValue: () => {},
+    showMessage: () => {},
+    showError: () => {},
+    openDebugger: (ref, label) => openDebuggerCalls.push([ref, label]),
+  });
+
+  const result = await executor.execute('debug-restart', {
+    workerName: 'apps/worker1',
+  });
+
+  t.true(result.success);
+  t.is(result.message, '"apps/worker1" restarted paused under the debugger');
+  // A nested worker name reaches the daemon as a path, not a "/" string.
+  t.deepEqual(debugWorkerCalls, [[['apps', 'worker1']]]);
+  t.is(openDebuggerCalls.length, 1);
+  t.is(openDebuggerCalls[0][0], debuggerRef);
+  t.is(openDebuggerCalls[0][1], 'apps/worker1');
+});
+
+test('execute debug-restart opens no panel when debugWorker rejects', async t => {
+  const powers = /** @type {ERef<EndoHost>} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'RefusingDebugPowers',
+        M.interface('RefusingDebugPowers', {}, { defaultGuards: 'passable' }),
+        {
+          debugWorker: async () => {
+            throw new Error('debugWorker: worker is not a shared XS worker');
+          },
+        },
+      )
+    )
+  );
+  /** @type {unknown[]} */
+  const openDebuggerCalls = [];
+  /** @type {Error[]} */
+  const errors = [];
+  const executor = createCommandExecutor({
+    powers,
+    showValue: () => {},
+    showMessage: () => {},
+    showError: e => errors.push(e),
+    openDebugger: ref => openDebuggerCalls.push(ref),
+  });
+
+  const result = await executor.execute('debug-restart', {
+    workerName: '@main',
+  });
+
+  t.false(result.success);
+  t.is(result.error?.message, 'debugWorker: worker is not a shared XS worker');
+  t.is(errors.length, 1);
+  t.deepEqual(openDebuggerCalls, []);
+});
+
 test('execute mkhost command', async t => {
   const ctx = createMockContext();
   const executor = createCommandExecutor({

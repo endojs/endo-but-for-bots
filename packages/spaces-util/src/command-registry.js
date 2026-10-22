@@ -848,6 +848,24 @@ export const COMMANDS = {
     ],
     submitLabel: 'Debug',
   },
+  'debug-restart': {
+    name: 'debug-restart',
+    label: 'Restart Worker in Debugger',
+    description:
+      'Restart a worker paused under the debugger before it runs any code',
+    category: 'workers',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'workerName',
+        label: 'Worker',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'worker-name',
+      },
+    ],
+    submitLabel: 'Restart',
+  },
 
   // ============ HOSTS/GUESTS ============
   mkhost: {
