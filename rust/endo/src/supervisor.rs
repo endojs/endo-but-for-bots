@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use tokio::task::JoinHandle;
@@ -60,6 +60,13 @@ impl Drop for GcRootLease {
 
 pub struct Supervisor {
     inboxes: RwLock<HashMap<Handle, Mailbox>>,
+    /// Registration generation per live handle. `register` stamps a
+    /// fresh one; an exit path that captured its generation unregisters
+    /// through `unregister_registration`, which is a no-op once the
+    /// handle was suspended or re-registered (resumed) after it. Lock
+    /// order: this lock before `inboxes`/`workers`/`parents`/`meters`.
+    registrations: RwLock<HashMap<Handle, u64>>,
+    next_registration: AtomicU64,
     workers: RwLock<HashMap<Handle, WorkerInfo>>,
     parents: RwLock<HashMap<Handle, Handle>>,
     pending_syncs: Mutex<HashMap<(Handle, i64), Handle>>,
@@ -86,6 +93,8 @@ impl Supervisor {
         let (outbox_tx, outbox_rx) = mailbox::mailbox();
         let sup = Arc::new(Supervisor {
             inboxes: RwLock::new(HashMap::new()),
+            registrations: RwLock::new(HashMap::new()),
+            next_registration: AtomicU64::new(1),
             workers: RwLock::new(HashMap::new()),
             parents: RwLock::new(HashMap::new()),
             pending_syncs: Mutex::new(HashMap::new()),
@@ -104,15 +113,50 @@ impl Supervisor {
     }
 
     pub fn register(&self, h: Handle, info: Option<WorkerInfo>) -> MailboxReceiver {
+        self.register_tracked(h, info).0
+    }
+
+    /// Like `register`, also returning the registration generation for
+    /// a later `unregister_registration`.
+    pub fn register_tracked(&self, h: Handle, info: Option<WorkerInfo>) -> (MailboxReceiver, u64) {
         let (tx, rx) = mailbox::mailbox();
+        let generation = self.next_registration.fetch_add(1, Ordering::SeqCst);
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        registrations.insert(h, generation);
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).insert(h, tx);
         if let Some(info) = info {
             self.workers.write().unwrap_or_else(|e| e.into_inner()).insert(h, info);
         }
-        rx
+        (rx, generation)
+    }
+
+    /// The handle's current registration generation, if registered.
+    pub fn registration(&self, h: Handle) -> Option<u64> {
+        self.registrations.read().unwrap_or_else(|e| e.into_inner()).get(&h).copied()
     }
 
     pub fn unregister(&self, h: Handle) {
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        registrations.remove(&h);
+        self.remove_registered_state(h);
+    }
+
+    /// Unregister `h` only if `generation` is still its current
+    /// registration. A worker thread's exit path uses this so it cannot
+    /// clobber a handle that was suspended (parent link kept for the
+    /// resume) or resumed (fresh inbox) after the exiting registration.
+    /// Returns whether it unregistered.
+    pub fn unregister_registration(&self, h: Handle, generation: u64) -> bool {
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        if registrations.get(&h) != Some(&generation) {
+            return false;
+        }
+        registrations.remove(&h);
+        self.remove_registered_state(h);
+        true
+    }
+
+    fn remove_registered_state(&self, h: Handle) {
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
@@ -220,7 +264,12 @@ impl Supervisor {
         if !sha256.is_empty() {
             self.pin_gc_root(&sha256);
         }
-        // Remove the inbox — the worker thread is exiting.
+        // Remove the inbox — the worker thread is exiting. Ending the
+        // registration makes that thread's exit-path
+        // `unregister_registration` a no-op, so it cannot drop the
+        // parent link kept for resume or a resumed registration.
+        let mut registrations = self.registrations.write().unwrap_or_else(|e| e.into_inner());
+        registrations.remove(&handle);
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&handle);
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(
@@ -233,6 +282,7 @@ impl Supervisor {
                 meter,
             },
         );
+        drop(registrations);
     }
 
     /// Check if a handle is suspended.
@@ -566,6 +616,39 @@ mod tests {
             let suspended = sup.take_suspended(handle).unwrap();
             assert_eq!(suspended.info.platform, "separate");
             assert!(suspended.meter.is_none());
+        });
+    }
+
+    #[test]
+    fn stale_exit_unregister_spares_suspend_and_resume() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let parent = sup.alloc_handle();
+            let handle = sup.alloc_handle();
+            let (_old_inbox, old) = sup.register_tracked(handle, None);
+            sup.set_parent(handle, parent);
+            assert_eq!(sup.registration(handle), Some(old));
+
+            // Suspend ends the registration; the exiting thread's late
+            // unregister must not drop the parent link kept for resume.
+            sup.mark_suspended(handle, String::new(), std::path::PathBuf::from("/tmp/cas"));
+            assert_eq!(sup.registration(handle), None);
+            assert!(!sup.unregister_registration(handle, old));
+            assert!(sup.can_block(handle, parent));
+
+            // Resume re-registers; the stale exit is still a no-op.
+            let _ = sup.take_suspended(handle);
+            let (_new_inbox, new) = sup.register_tracked(handle, None);
+            assert_ne!(new, old);
+            assert!(!sup.unregister_registration(handle, old));
+            assert!(sup.inboxes.read().unwrap().contains_key(&handle));
+
+            // The current registration's own exit does unregister.
+            assert!(sup.unregister_registration(handle, new));
+            assert!(!sup.inboxes.read().unwrap().contains_key(&handle));
         });
     }
 

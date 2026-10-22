@@ -272,7 +272,7 @@ from a different XS version than the snapshot code's built-in
 Compiling XS from source (`c/moddable/xs/sources/`) resolved
 the mismatch.
 
-### Phase 2: Supervisor suspend/resume **(in progress)**
+### Phase 2: Supervisor suspend/resume **(done)**
 
 1. `SuspendedWorker` struct in `supervisor.rs` — tracks
    suspended handles with snapshot bytes, SHA-256 hash, and
@@ -315,21 +315,29 @@ the mismatch.
     that releases it once the restored worker has read the
     blob (its first outbound frame, or exit). **(done)**
 
-#### Remaining
-
-- Integration test: full supervisor round-trip (suspend via
-  control verb → worker streams snapshot to CAS → worker
-  exits → message triggers resume → restored worker has
-  correct JS state). **(written, ignored)** —
-  `supervisor_suspend_resume_round_trip` in
-  `rust/endo/src/endo.rs` drives this through the real
-  routing callbacks with a ping-counter bundle, but the
-  in-process worker segfaults after its first crank, so the
-  test is `#[ignore]`d until that is fixed.
-- Race: the suspended worker thread's exit-path `unregister`
-  can run after `mark_suspended` or after the resume
-  re-registers the handle; it should skip a handle that has
-  since been suspended or resumed.
+15. Integration test: full supervisor round-trip (suspend via
+    control verb → worker streams snapshot to CAS → worker
+    exits → message triggers resume → restored worker has
+    correct JS state). **(done)** —
+    `supervisor_suspend_resume_round_trip` in
+    `rust/endo/src/endo.rs` drives this through the real
+    routing callbacks with a ping-counter bundle, checking the
+    CAS blob against its SHA-256, the GC root pinned while
+    suspended and released on resume, and the JS count carried
+    across the snapshot. It first exposed a crank-end crash:
+    the worker loop ran `machine.eval("__shouldTerminate()")`,
+    and `Machine::eval` has no catch frame, so a bundle that
+    does not define `__shouldTerminate` (or one whose check
+    throws) longjmped through a NULL `firstJump` and SIGSEGVed
+    the process. The probe is now a self-contained
+    `try`/`typeof` expression that never throws.
+16. Exit-path race: the supervisor stamps each `register` with
+    a generation (`register_tracked`), `mark_suspended` ends
+    it, and worker exit paths (in-process spawn, in-process
+    resume, child-process wait task) unregister through
+    `unregister_registration`, a no-op once the handle was
+    suspended (keeping its parent link for resume) or
+    re-registered by a resume. **(done)**
 
 ### Phase 3: Future enhancements
 

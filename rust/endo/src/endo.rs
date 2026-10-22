@@ -785,7 +785,7 @@ fn resume_shared(
     pending_msg: Message,
 ) {
     // Re-register the handle with a fresh inbox.
-    let mut inbox = sup.register(
+    let (mut inbox, registration) = sup.register_tracked(
         handle,
         Some(WorkerInfo {
             handle,
@@ -905,7 +905,9 @@ fn resume_shared(
         } else {
             eprintln!("endor: resumed worker {handle} exited cleanly");
         }
-        sup_for_exit.unregister(handle);
+        // A no-op if the resumed worker was itself suspended (or
+        // resumed again) before this thread finished exiting.
+        sup_for_exit.unregister_registration(handle, registration);
     });
 }
 
@@ -1155,11 +1157,6 @@ mod tests {
         payload
     }
 
-    // Ignored: on the first crank the in-process worker SIGSEGVs right
-    // after `handleCommand` returns from `sendRawFrame`, before the
-    // pong reaches the tester (reproduced with stub SES/worker bundles;
-    // successor job build-daemon-xs-worker-snapshot-round-trip-segfault).
-    #[ignore = "in-process XS worker segfaults after its first crank"]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn supervisor_suspend_resume_round_trip() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -1236,9 +1233,6 @@ mod tests {
         }
         // The worker's inbox and registration are gone.
         assert!(sup.workers_snapshot().iter().all(|w| w.handle != worker));
-        // Let the suspended worker thread finish exiting (its exit
-        // path unregisters the handle) before the resume re-registers it.
-        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // The next message resumes the worker transparently; the
         // count continues from the snapshot.

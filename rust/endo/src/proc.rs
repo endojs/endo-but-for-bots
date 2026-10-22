@@ -163,7 +163,10 @@ pub fn wire_worker_tasks(
         }
     });
 
-    // Wait task: child exit notification.
+    // Wait task: child exit notification. Capture the registration
+    // the caller just made so a late exit after a suspend (or a
+    // resume's re-registration) cannot clobber the newer state.
+    let registration = sup.registration(handle);
     let sup_wait = Arc::clone(sup);
     tokio::spawn(async move {
         let mut child = child;
@@ -182,7 +185,12 @@ pub fn wire_worker_tasks(
             response_tx: None,
         });
         eprintln!("endor: wait task for handle={handle} delivered exited to parent={parent_handle}");
-        sup_wait.unregister(handle);
+        match registration {
+            Some(generation) => {
+                sup_wait.unregister_registration(handle, generation);
+            }
+            None => sup_wait.unregister(handle),
+        }
         if let Some(f) = on_exit {
             f();
         }

@@ -124,7 +124,7 @@ pub fn spawn_inproc_xs_peer(
         pid: std::process::id(),
         started: SystemTime::now(),
     };
-    let mut inbox = sup.register(handle, Some(info));
+    let (mut inbox, registration) = sup.register_tracked(handle, Some(info));
 
     // Build the two std::mpsc channels that carry raw CBOR frames.
     // Use std::mpsc (not tokio mpsc) so the blocking machine thread
@@ -254,8 +254,9 @@ pub fn spawn_inproc_xs_peer(
             eprintln!("inproc: {label_for_thread} exited cleanly");
         }
         // Notify the daemon that the peer has stopped and withdraw
-        // the inbox so route_message drops new deliveries cleanly.
-        sup_for_exit.unregister(handle);
+        // the inbox so route_message drops new deliveries cleanly —
+        // unless the handle was suspended or resumed since.
+        sup_for_exit.unregister_registration(handle, registration);
         if let Some(n) = shutdown_notify {
             n.notify_one();
             sup_for_exit.stop();
