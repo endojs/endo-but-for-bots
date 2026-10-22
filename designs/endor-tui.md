@@ -190,7 +190,7 @@ The web Chat's feature surface, enumerated from `packages/chat/`:
 
 ### Panel layout
 
-The default layout on an 80×24 minimum terminal:
+The default layout on an 80x24 minimum terminal:
 
 ```
 ┌─┬───────────────┬────────────────────────────────────────────┐
@@ -214,7 +214,7 @@ The default layout on an 80×24 minimum terminal:
 Widths:
 
 - Spaces rail: 2 columns (1 for icon, 1 for separator).
-- Inventory: 15–30 columns; resizable with `Alt+←` / `Alt+→`.
+- Inventory: 15–30 columns; resizable with `Alt+<-` / `Alt+->`.
 - Transcript + command bar: remainder.
 - Pending and command-bar heights are dynamic; the transcript fills the
   remaining vertical space.
@@ -239,7 +239,7 @@ Primary keybindings (global — except where noted):
 
 | Chord | Mode | Action |
 |-------|------|--------|
-| `Alt+1` … `Alt+9`, `Alt+0` | any | Switch to space N (home = 0) |
+| `Alt+1` ... `Alt+9`, `Alt+0` | any | Switch to space N (home = 0) |
 | `Alt+s` | any | Open spaces picker (for >10 spaces) |
 | `Alt+i` | any | Toggle inventory |
 | `Alt+p` | any | Toggle pending commands panel (keeps recent even when empty) |
@@ -319,7 +319,7 @@ needed for code blocks and links).
 On each frame, compute the visible window based on scroll offset, map
 each entry to `ratatui::text::Line`s, and hand them to a `Paragraph`
 widget with a bounded scroll state.
-Only when messages arrive, dismiss, or change (e.g., pending → settled)
+Only when messages arrive, dismiss, or change (e.g., pending -> settled)
 do we rebuild the affected entries.
 
 ### Focus mode
@@ -468,8 +468,8 @@ Key facts grounding this section:
   view of VM state (modules, globals).
 - The VM communicates over a **TCP-like byte stream** (historically
   Moddable's `mxDebug`): line-delimited XML packets roughly of the form
-  `<xsbug><break …/><frames/><locals/></xsbug>` and
-  `<xsbug><set-breakpoint …/></xsbug>`.
+  `<xsbug><break .../><frames/><locals/></xsbug>` and
+  `<xsbug><set-breakpoint .../></xsbug>`.
   The protocol is undocumented in any formal sense but is stable and
   implemented in `xs/tools/xsbug.js` and `xs/platforms/*_xs.c`.
 - Verbs the VM accepts (from `xsbug` observation):
@@ -560,7 +560,7 @@ view is focused:
 | `p` | Pause — inject a `debugger;`-equivalent via `endor-bus-tui` `pause` verb |
 | `b` | Add conditional breakpoint (opens form) |
 | `↑` / `↓` | Move within the focused sub-panel |
-| `Tab` | Cycle focus: source → stack → locals → breakpoints → eval |
+| `Tab` | Cycle focus: source -> stack -> locals -> breakpoints -> eval |
 | `Enter` (on locals row) | Expand / collapse |
 | `Enter` (on eval) | Evaluate in selected frame |
 | `k` / `x` | Kill selected worker (asks for confirmation) |
@@ -674,7 +674,7 @@ The verbs the TUI speaks are defined in
 [endor-bus-tui](endor-bus-tui.md).
 This section summarizes only what the TUI needs from that surface:
 
-| Verb (TUI → daemon) | Purpose |
+| Verb (TUI -> daemon) | Purpose |
 |---------------------|---------|
 | `space.list`, `space.watch` | Enumerate and observe spaces |
 | `profile.enter`, `profile.exit` | Space activation |
@@ -689,7 +689,7 @@ This section summarizes only what the TUI needs from that surface:
 | `debug.go`, `debug.step`, `debug.step-over`, `debug.step-out` | Execution control |
 | `debug.eval` | Evaluate an expression in the selected frame |
 
-| Event (daemon → TUI) | Purpose |
+| Event (daemon -> TUI) | Purpose |
 |----------------------|---------|
 | `message.added`, `message.dismissed`, `message.resolved` | Inbox events |
 | `inventory.added`, `inventory.removed` | Name events |
@@ -716,10 +716,10 @@ CLI.
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| client ↔ supervisor | Unix socket, netstring frames bridged as `deliver` envelopes (`socket.rs`) | none; the supervisor forwards and does not interpret | none | the supervisor assigns the connection handle and sends `connect`/`disconnect` | opaque frames |
-| client ↔ manager (chat) | the chat data path chosen in Phase 2 (see Open questions) | the manager authorizes every call against the client's host capability | **manager**: messages, pet names, spaces, pending commands | the manager commits `send`, `dismiss`, `adopt`, and command results; the client never mutates state locally | messages, name changes, command results |
-| client ↔ manager (debugger) | the `Debugger` exo (`packages/daemon/src/debugger.js`) reached from the host capability | the manager refuses attach to a worker the caller does not hold | **manager**: breakpoints (made durable in Phase 7) | the manager owns attach, detach, and the controller claim | stop events, frames, locals, eval results |
-| manager ↔ worker (debugger) | `debug-attach`/`debug`/`debug-detach` envelopes (`attachDebugger` in `bus-manager-rust-xs.js`) | per-worker opt-in (Design Decision 7) | none at the worker beyond the live XS session | the manager | `mxDebug` XML |
+| client <-> supervisor | Unix socket, netstring frames bridged as `deliver` envelopes (`socket.rs`) | none; the supervisor forwards and does not interpret | none | the supervisor assigns the connection handle and sends `connect`/`disconnect` | opaque frames |
+| client <-> manager (chat) | the chat data path chosen in Phase 2 (see Open questions) | the manager authorizes every call against the client's host capability | **manager**: messages, pet names, spaces, pending commands | the manager commits `send`, `dismiss`, `adopt`, and command results; the client never mutates state locally | messages, name changes, command results |
+| client <-> manager (debugger) | the `Debugger` exo (`packages/daemon/src/debugger.js`) reached from the host capability | the manager refuses attach to a worker the caller does not hold | **manager**: breakpoints (made durable in Phase 7) | the manager owns attach, detach, and the controller claim | stop events, frames, locals, eval results |
+| manager <-> worker (debugger) | `debug-attach`/`debug`/`debug-detach` envelopes (`attachDebugger` in `bus-manager-rust-xs.js`) | per-worker opt-in (Design Decision 7) | none at the worker beyond the live XS session | the manager | `mxDebug` XML |
 | client (terminal) | `ratatui` + `crossterm` | the client owns layout, focus, mode, keybindings, colors | none; every client state is a cache rebuilt on reconnect | the client | — |
 
 The four ownership questions:
@@ -855,7 +855,7 @@ inbox and inventory and can send, dismiss, and adopt.
 4. Inbox, channel, and forum mode rendering
    (§ Inbox vs. channel vs. forum modes).
 
-Acceptance: `TestBackend` renders of the rail at 80×24 with three
+Acceptance: `TestBackend` renders of the rail at 80x24 with three
 spaces; switching spaces re-follows the new profile's inbox and
 inventory and leaves the old ones unfollowed; each built-in scheme
 renders with its palette.
