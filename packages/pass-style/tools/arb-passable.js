@@ -1,7 +1,6 @@
 // @ts-check
 import harden from '@endo/harden';
 import { objectMap } from '@endo/common/object-map.js';
-import '../src/types.js';
 import { Far } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { nameForPassableSymbol, passableSymbolForName } from '../src/symbol.js';

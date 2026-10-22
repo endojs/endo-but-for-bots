@@ -1,7 +1,6 @@
 import test from 'ava';
 import assert from 'node:assert';
 
-import '../src/types.js';
 import { ZipWriter } from '../src/writer.js';
 import { ZipReader } from '../src/reader.js';
 import { BufferReader } from '../src/buffer-reader.js';

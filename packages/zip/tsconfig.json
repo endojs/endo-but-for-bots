@@ -3,6 +3,8 @@
   "include": [
     "*.js",
     "src/*.js",
+    "src/*.ts",
+    "types-index.d.ts",
     "test"
   ]
 }

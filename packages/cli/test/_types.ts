@@ -4,7 +4,7 @@ type Expectation = {
   stdout: RegExp | string | undefined;
   stderr?: RegExp | string | undefined;
 };
-type TestCommand = (
+export type TestCommand = (
   command: ReturnType<ExecaMethod>,
   expectation?: Expectation,
 ) => Promise<void>;

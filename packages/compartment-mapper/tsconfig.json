@@ -9,6 +9,7 @@
     "src/types-external.d.ts",
     "src/types.d.ts",
     "test",
+    "test/test.types.ts",
     "!**/*.d.ts"
   ]
 }

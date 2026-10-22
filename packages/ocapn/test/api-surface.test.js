@@ -339,6 +339,63 @@ function extractMembersFromJSDocTypedef(typedefTag, checker) {
 }
 
 /**
+ * Extract members from a TypeScript type alias or interface.
+ * @param {ts.Type} type
+ * @param {ts.TypeChecker} checker
+ * @returns {TypeMember[]}
+ */
+function extractMembersFromDeclaredType(type, checker) {
+  return checker.getPropertiesOfType(type).map(property => {
+    const declaration =
+      property.valueDeclaration || property.getDeclarations()?.[0];
+    const propertyType = declaration
+      ? checker.getTypeOfSymbolAtLocation(property, declaration)
+      : checker.getTypeOfSymbol(property);
+    const isMethod = isMethodType(propertyType);
+    const referencedTypes = [];
+
+    if (isMethod) {
+      for (const signature of propertyType.getCallSignatures()) {
+        const typeParameterNames = new Set();
+        for (const typeParameter of signature.getTypeParameters() || []) {
+          const symbol = typeParameter.getSymbol();
+          if (symbol) {
+            typeParameterNames.add(symbol.getName());
+          }
+        }
+
+        referencedTypes.push(
+          ...extractTypeReferences(
+            checker.getReturnTypeOfSignature(signature),
+            checker,
+            new Set(),
+            typeParameterNames,
+          ),
+        );
+        for (const parameter of signature.getParameters()) {
+          referencedTypes.push(
+            ...extractTypeReferences(
+              checker.getTypeOfSymbol(parameter),
+              checker,
+              new Set(),
+              typeParameterNames,
+            ),
+          );
+        }
+      }
+    } else {
+      referencedTypes.push(...extractTypeReferences(propertyType, checker));
+    }
+
+    return {
+      name: property.getName(),
+      referencedTypes: [...new Set(referencedTypes)],
+      isMethod,
+    };
+  });
+}
+
+/**
  * Collect all type definitions using TypeScript compiler.
  * Scans all source files in src/ that are part of the TypeScript program.
  * @returns {Map<string, TypeDef>}
@@ -356,6 +413,10 @@ function collectTypeDefinitions() {
 
     // Get relative path for storage
     const relativePath = filePath.slice(packageRoot.length + 1);
+    if (!relativePath.startsWith('src/')) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
 
     const locals = /** @type {any} */ (sourceFile).locals;
     if (locals) {
@@ -374,6 +435,27 @@ function collectTypeDefinitions() {
                 name: typeName,
                 file: relativePath,
                 members,
+              });
+            } else if (
+              ts.isTypeAliasDeclaration(decl) ||
+              ts.isInterfaceDeclaration(decl)
+            ) {
+              const typeName = String(name);
+              if (allTypes.has(typeName)) {
+                // eslint-disable-next-line no-continue
+                continue;
+              }
+              const type = ts.isTypeAliasDeclaration(decl)
+                ? checker.getTypeFromTypeNode(decl.type)
+                : checker.getDeclaredTypeOfSymbol(symbol);
+              allTypes.set(typeName, {
+                name: typeName,
+                file: relativePath,
+                members:
+                  ts.isTypeAliasDeclaration(decl) &&
+                  !ts.isTypeLiteralNode(decl.type)
+                    ? []
+                    : extractMembersFromDeclaredType(type, checker),
               });
             }
           }

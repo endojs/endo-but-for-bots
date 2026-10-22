@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established public callable parameter names
 /* eslint-disable import/export */
 
 // Module Types //////////////////////////////////////////////////////
@@ -30,10 +31,14 @@ export type Callable = (...args: any[]) => any;
  * {@link RemotableObject} type, and as such is not suitable to represent a
  * "remotable" for APIs that expect an object with a pass-style symbol.
  */
-export declare class RemotableBrand<Local, Remote> {
-  /** The local properties of the object. */
-  private L: Local;
+declare const RemotableBrandSymbol: unique symbol;
 
-  /** The type of all the remotely-callable functions. */
-  private R: Remote;
-}
+export type RemotableBrand<Local, Remote> = {
+  readonly [RemotableBrandSymbol]: {
+    /** The local properties of the object. */
+    readonly local: Local;
+
+    /** The type of all the remotely-callable functions. */
+    readonly remote: Remote;
+  };
+};

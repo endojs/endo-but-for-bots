@@ -1,5 +1,5 @@
+// spell-out-exempt -- preserves established public type parameter names
 /* eslint-disable */
-// eslint-disable-next-line spaced-comment
 
 // @ts-expect-error FIXME these aren't defined
 import type { ESingleMethod, Unpromise } from '@endo/eventual-send';

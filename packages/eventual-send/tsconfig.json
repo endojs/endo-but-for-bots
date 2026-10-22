@@ -5,7 +5,7 @@
     "src/**/*.js",
     "src/exports.d.ts",
     "src/exports.test-d.ts",
-    "src/types.d.ts",
+    "src/types.ts",
     "test",
     "!**/*.d.ts"
   ]

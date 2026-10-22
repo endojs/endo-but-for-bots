@@ -20,6 +20,7 @@ import { getCopyMapKeys, makeCopyMap } from '../keys/checkKey.js';
 /**
  * @import {RemotableMethodName} from '@endo/pass-style';
  * @import {AwaitArgGuard, AwaitArgGuardPayload, InterfaceGuard, InterfaceGuardPayload, MethodGuard, MethodGuardPayload} from '../types.js'
+ * @import {AnyMethodGuard, CopyMap} from '../types.js'
  */
 
 // The get*GuardPayload functions exist to adapt to the worlds both
@@ -255,6 +256,7 @@ export const getInterfaceGuardPayload = interfaceGuard => {
 };
 harden(getInterfaceGuardPayload);
 
+/** @type {CopyMap<symbol, AnyMethodGuard>} */
 const emptyCopyMap = makeCopyMap([]);
 
 /**

@@ -1,3 +1,4 @@
+// spell-out-exempt -- preserves established fixture parameter names
 /* eslint-disable no-shadow */
 /**
  * Utility types for tests
