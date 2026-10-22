@@ -431,6 +431,7 @@ LLM-agent stack).*
 | [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) | 2026-07-29 | 2026-08-24 | **Complete** |
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | In Progress |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | In Progress |
+| [daemon-git-clone](daemon-git-clone.md) | 2026-10-22 | 2026-10-22 | Proposed |
 | [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) | 2026-09-08 | 2026-09-22 | **Implemented** |
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | 2026-07-10 | 2026-07-10 | In Progress |
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
@@ -647,6 +648,8 @@ The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**
 The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), bringing Proposed to 31 and the indexed records to 250 after the totals above.
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
+
+The 2026-10-22 pass adds [daemon-git-clone](daemon-git-clone.md) (Proposed) to the summary table and the dependency graph, bringing Proposed to 33 and the indexed records to 252.
 
 
 
@@ -921,6 +924,7 @@ flowchart TD
         dgitfollow[exo-git-follow-root-advancement<br/><i>COMPLETE</i>]
         dgitremote[daemon-git-remotes]
         dgitnext[daemon-git-next-steps]
+        dgitclone[daemon-git-clone]
         dfsw[filesystem-watchers<br/><i>COMPLETE</i>]
         dcsgc[daemon-content-store-gc<br/><i>COMPLETE</i>]
         dpers[daemon-capability-persona<br/><i>IN PROGRESS</i>]
@@ -951,6 +955,8 @@ flowchart TD
         dgit --> dgitremote
         dgit --> dgitnext
         dgitremote --> dgitnext
+        dgitremote --> dgitclone
+        dmcap --> dgitclone
         pfs --> dci
         pfs --> dfsw
         dmount --> dfsw
@@ -1211,6 +1217,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | exo-git-follow-root-advancement | **Complete** | Extends `@endo/platform/fs` with tree identity, atomic method-call transactions, high-level patches, and separate lossless-change / lossy-latest root followers; `GitStage` adds tentative commit metadata and a mutable root whose explicit `commit()` advances the corresponding Git followers |
 | daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | In Progress | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
+| daemon-git-clone | Proposed | Repository bootstrap: `provideGitClone(destMount, petName, options)` composing an empty mount, endpoint policy and sealed credential into a named `Git` plus a fetch-only-by-default `origin`; host-owned discard on failure; the commit identity as formula data borne by the `Git` capability |
 | **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
 | **endo-claude** | In Progress | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
 | **endo-claude-inference-backends** | Draft | **Client-side bridge (back-fill of `endo-claude` from the minion.town Claude CLI and Agent SDK experiments, kriscendobot/minion.town#105 and #106).** Settles a provider-neutral `@endo/inference` seam (interfaces, provider plugins over a `CredentialSource` that owns admission and delivery, mechanism libraries, and enrichers; never-reject tagged `InferResult`, facet as authority and formula id as label only) that four minion.town prototypes shared, with the Claude CLI and Agent SDK backends as plugins in `@endo/claude`; finds the two Claude paths are one engine with two front ends. Credentials live in the daemon secret manager, one backend instance per credential, delivered through a broker lease; the deployed root user runs on the maintainer-approved subscription. The OS slice is required for multi-principal inference (guests bringing their own subscription or API key) and, per `endo-claude` Decision 6, for any guest-influenced prompt whoever pays; Claude Code's credential store does not require it. Stays a draft until a speculative build and deployment supplies production evidence. |
