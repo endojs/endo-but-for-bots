@@ -119,9 +119,7 @@ export const compareNumerics = (left, right) => {
 harden(compareNumerics);
 
 /**
- * A Parcel has no encoding yet, so it has no rank either.
- *
- * @typedef {Exclude<PassStyle, 'parcel'>} RankedPassStyle
+ * @typedef {PassStyle} RankedPassStyle
  * @typedef {Record<RankedPassStyle, { index: number, cover: RankCover }>} PassStyleRanksRecord
  * @typedef {PassStyleRanksRecord & { '*': { cover: RankCover } }} StaticRanksRecord
  */
@@ -260,7 +258,8 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
       case 'undefined':
       case 'null':
       case 'error':
-      case 'promise': {
+      case 'promise':
+      case 'parcel': {
         // For each of these passStyles, all members of that passStyle are tied
         // for the same rank.
         return 0;
@@ -367,9 +366,6 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
         const leftArray = /** @type {Uint8Array} */ (left).slice(0);
         const rightArray = /** @type {Uint8Array} */ (right).slice(0);
         return compareBytes(leftArray, rightArray);
-      }
-      case 'parcel': {
-        throw Fail`A ${q(leftStyle)} cannot be rank-ordered`;
       }
       case 'tagged': {
         // Lexicographic by `[Symbol.toStringTag]` then `.payload`.

@@ -10,6 +10,8 @@ import {
 import { makeMarshal } from '../src/marshal.js';
 import { roundTripPairs } from '../tools/marshal-test-data.js';
 
+/** @import {MakeMarshalOptions} from '../src/types.js' */
+
 const {
   freeze,
   isFrozen,
@@ -29,7 +31,7 @@ const testIfAggregateError = supportsAggregateError ? test : test.skip;
 // this only includes the tests that do not use liveSlots
 
 /**
- * @param {import('../src/types.js').MakeMarshalOptions} [opts]
+ * @param {MakeMarshalOptions} [opts]
  */
 const makeTestMarshal = (opts = { errorTagging: 'off' }) =>
   makeMarshal(undefined, undefined, {

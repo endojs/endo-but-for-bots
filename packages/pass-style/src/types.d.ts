@@ -70,7 +70,8 @@ export type PassByRef =
   | RemotableBrand<any, any>
   | Promise<RemotableObject>
   | Promise<RemotableBrand<any, any>>
-  | Promise<PassByCopy>;
+  | Promise<PassByCopy>
+  | ParcelObject;
 
 /**
  * A Passable is acyclic data that a transport can classify for passage. It
@@ -89,9 +90,8 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
- *   * Parcels (PassStyle 'parcel') are dormant capabilities. They are
- *     Passable but are not PassableCaps. A transport needs explicit Parcel
- *     support to carry one; the generic marshal does not yet provide it.
+ *   * Parcels (PassStyle 'parcel') are passable by identity, but use an
+ *     inline transport representation instead of a marshal slot.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -205,9 +205,10 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 export type RemotableMethodName = PropertyKey;
 
 /**
- * A Parcel is a passable dormant capability with no exposed data. The runtime
- * recognition in `parcel.js` senses `globalThis.Parcel` without importing the
- * shim.
+ * A Parcel is a passable dormant capability with no exposed data.
+ * `passStyleOf` returns `'parcel'` for a value accepted by the realm's
+ * `Parcel.isParcel` brand check. Its location and open hook are known only to
+ * the constructor's private state.
  */
 export type ParcelObject = ReturnType<typeof makeParcel>;
 

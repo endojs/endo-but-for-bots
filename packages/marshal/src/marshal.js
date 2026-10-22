@@ -1,3 +1,4 @@
+// spell-out-exempt: ConvertValToSlot and ConvertSlotToVal are longstanding public API names.
 import harden from '@endo/harden';
 import { Nat } from '@endo/nat';
 import {
@@ -21,7 +22,7 @@ import {
 
 /**
  * @import {ConvertSlotToVal, ConvertValToSlot, FromCapData, MakeMarshalOptions, ToCapData} from './types.js';
- * @import {Passable, PassableCap, RemotableObject} from '@endo/pass-style';
+ * @import {Passable, PassableCap, RemotableObject, ParcelObject} from '@endo/pass-style';
  * @import {InterfaceSpec} from '@endo/pass-style';
  * @import {Encoding} from './types.js';
  */
@@ -59,6 +60,8 @@ export const makeMarshal = (
     // the wire). Lets a privileged downstream layer correlate the
     // decoded error object with the sender's locally captured context.
     marshalLoadError = undefined,
+    encodeParcel = parcel => Fail`parcel unexpected: ${parcel}`,
+    decodeParcel = location => Fail`parcel unexpected: ${location}`,
     // Default to 'capdata' because it was implemented first.
     // Sometimes, ontogeny does recapitulate phylogeny ;)
     serializeBodyFormat = 'capdata',
@@ -68,6 +71,11 @@ export const makeMarshal = (
   errorTagging === 'on' ||
     errorTagging === 'off' ||
     Fail`The errorTagging option can only be "on" or "off" ${errorTagging}`;
+  const locateParcel = parcel => {
+    const location = encodeParcel(parcel);
+    assert.typeof(location, 'string');
+    return location;
+  };
   const nextErrorId = () => {
     errorIdNum += 1;
     return `error:${marshalName}#${errorIdNum}`;
@@ -164,6 +172,10 @@ export const makeMarshal = (
       const encodePromiseToCapData = (promise, _encodeRecur) =>
         encodeSlotToCapData(promise);
 
+      /** @type {(parcel: ParcelObject, encodeRecur: (p: Passable) => Encoding) => Encoding} */
+      const encodeParcelToCapData = (parcel, _encodeRecur) =>
+        harden({ [QCLASS]: 'parcel', location: locateParcel(parcel) });
+
       /**
        * Even if an Error is not actually passable, we'd rather send
        * it anyway because the diagnostic info carried by the error
@@ -182,6 +194,7 @@ export const makeMarshal = (
       const encodeToCapData = makeEncodeToCapData({
         encodeRemotableToCapData,
         encodePromiseToCapData,
+        encodeParcelToCapData,
         encodeErrorToCapData,
       });
 
@@ -214,6 +227,9 @@ export const makeMarshal = (
       const encodePromiseToSmallcaps = (promise, _encodeRecur) =>
         encodeSlotToSmallcaps('&', promise);
 
+      const encodeParcelToSmallcaps = (parcel, _encodeRecur) =>
+        `'${locateParcel(parcel)}`;
+
       const encodeErrorToSmallcaps = (err, encodeRecur) => {
         const errData = encodeErrorCommon(err, encodeRecur);
         const { message, ...rest } = errData;
@@ -223,6 +239,7 @@ export const makeMarshal = (
       const encodeToSmallcaps = makeEncodeToSmallcaps({
         encodeRemotableToSmallcaps,
         encodePromiseToSmallcaps,
+        encodeParcelToSmallcaps,
         encodeErrorToSmallcaps,
       });
 
@@ -257,7 +274,8 @@ export const makeMarshal = (
         return extant;
       }
       // TODO SECURITY HAZARD: must enfoce that remotable vs promise
-      // is according to the encoded string.
+      // is according to the encoded string. The cache is keyed only by
+      // index and shared by remotables and promises.
       const slot = slots[Number(Nat(index))];
       const val = convertSlotToVal(slot, iface);
       valMap.set(index, val);
@@ -356,9 +374,19 @@ export const makeMarshal = (
       return decodeErrorCommon(errData, decodeRecur);
     };
 
+    const decodeParcelFromCapData = (rawTree, _decodeRecur) => {
+      const { [QCLASS]: _, location, ...rest } = rawTree;
+      ownKeys(rest).length === 0 ||
+        Fail`unexpected encoded parcel properties ${q(ownKeys(rest))}`;
+      typeof location === 'string' ||
+        Fail`parcel location must be a string: ${location}`;
+      return decodeParcel(location);
+    };
+
     const reviveFromCapData = makeDecodeFromCapData({
       decodeRemotableFromCapData: decodeRemotableOrPromiseFromCapData,
       decodePromiseFromCapData: decodeRemotableOrPromiseFromCapData,
+      decodeParcelFromCapData,
       decodeErrorFromCapData,
     });
 
@@ -384,6 +412,16 @@ export const makeMarshal = (
     const decodeRemotableFromSmallcaps = makeDecodeSlotFromSmallcaps('$');
     const decodePromiseFromSmallcaps = makeDecodeSlotFromSmallcaps('&');
 
+    /**
+     * @param {string} stringEncoding
+     * @param {(e: unknown) => Passable} _decodeRecur
+     * @returns {ParcelObject}
+     */
+    const decodeParcelFromSmallcaps = (stringEncoding, _decodeRecur) => {
+      assert(stringEncoding.charAt(0) === "'");
+      return decodeParcel(stringEncoding.slice(1));
+    };
+
     const decodeErrorFromSmallcaps = (encoding, decodeRecur) => {
       const { '#error': message, ...restErrData } = encoding;
       !hasOwn(restErrData, 'message') ||
@@ -396,6 +434,7 @@ export const makeMarshal = (
       decodeRemotableFromSmallcaps,
       // @ts-ignore XXX SmallCapsEncoding
       decodePromiseFromSmallcaps,
+      decodeParcelFromSmallcaps,
       decodeErrorFromSmallcaps,
     });
 

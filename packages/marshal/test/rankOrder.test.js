@@ -1,4 +1,6 @@
 // @ts-nocheck
+// Install the realm's Parcel so the arbitraries generate Parcels.
+import '@endo/parcel/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';

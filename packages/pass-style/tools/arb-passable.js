@@ -1,14 +1,16 @@
 // @ts-check
+// prefer-endo-primitives-exempt: pass-style cannot depend on @endo/exo, which depends on pass-style.
 import harden from '@endo/harden';
 import { objectMap } from '@endo/common/object-map.js';
 import '../src/types.js';
 import { Far } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { nameForPassableSymbol, passableSymbolForName } from '../src/symbol.js';
+import { passStyleOf } from '../src/passStyleOf.js';
 
 /**
  * @import { Arbitrary } from 'fast-check';
- * @import { Passable, CopyTagged } from '../src/types.js';
+ * @import { Passable, CopyTagged, ParcelObject } from '../src/types.js';
  */
 
 /** Avoid wasting time on overly large data structures. */
@@ -28,6 +30,33 @@ export const exampleBob = Far('bob', {});
 export const exampleCarol = Far('carol', {});
 
 /**
+ * Make Parcels to serve as leaves, if the realm has a `Parcel`.
+ * Pass-style does not depend on `@endo/parcel`, so this senses the
+ * global the shim installs, the way `passStyleOf` does.
+ *
+ * @returns {Passable[]}
+ */
+const makeExampleParcels = () => {
+  const { Parcel } =
+    /** @type {{ Parcel?: new (location: string, openHook: (location: string) => unknown) => ParcelObject }} */ (
+      globalThis
+    );
+  if (typeof Parcel !== 'function' || !Object.isFrozen(Parcel)) {
+    return [];
+  }
+  const parcels = ['dave', 'erin'].map(
+    label => new Parcel(`test:${label}`, () => Far(label, {})),
+  );
+  try {
+    return parcels.every(parcel => passStyleOf(parcel) === 'parcel')
+      ? parcels
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+/**
  * @template {Passable} T
  * @template {Passable} U
  * @typedef {[T, U?] | [T[], U[]?] | [Record<string, T>, Record<string, U>?] | [CopyTagged<string, T | T[] | Record<string, T>>, CopyTagged<string, U | U[] | Record<string, U>>?]} LiftedInput
@@ -45,7 +74,9 @@ export const exampleCarol = Far('carol', {});
  * @template [LiftingDetail=unknown]
  * @param {typeof import('@fast-check/ava').fc} fc
  * @param {object} [options]
- * @param {Array<'byteArray'>} [options.excludePassStyles]
+ * @param {Array<'byteArray' | 'parcel'>} [options.excludePassStyles]
+ *   `parcel` leaves appear only where the realm has a `Parcel`, and
+ *   are not keys, so they appear only in `arbPassable`.
  * @param {<T extends Passable>(input: LiftedInput<T, Lifted>, detail: LiftingDetail) => T | Lifted} [options.lift]
  * @param {Arbitrary<LiftingDetail>} [options.arbLiftingDetail]
  * @param {(leaves: (Arbitrary<Passable>)[]) => (Arbitrary<Key>)[]} [options.transformKeyableLeaves] for refining types without introducing a (pass-style, patterns) import cycle
@@ -137,8 +168,13 @@ export const makeArbitraries = (
 
   const arbKeyLeaf = fc.oneof(...keyableLeaves);
 
+  const exampleParcels = excludePassStyles.includes('parcel')
+    ? []
+    : makeExampleParcels();
+
   const arbLeaf = fc.oneof(
     ...keyableLeaves,
+    ...(exampleParcels.length > 0 ? [fc.constantFrom(...exampleParcels)] : []),
     arbString.map(
       s => Error(s),
       v => (v instanceof Error ? v.message : reject('not an Error')),

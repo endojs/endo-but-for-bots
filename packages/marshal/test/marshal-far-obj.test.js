@@ -12,6 +12,8 @@ import {
 
 import { makeMarshal } from '../src/marshal.js';
 
+/** @import {ConvertValToSlot} from '../src/types.js' */
+
 const { create, getPrototypeOf, prototype: objectPrototype } = Object;
 
 // this only includes the tests that do not use liveSlots
@@ -59,7 +61,7 @@ test('Remotable/getInterfaceOf', t => {
   t.is(p2.birthYear(2020), 1956, `birthYear() works`);
 
   // Remotables and Fars can be serialized, of course
-  /** @type {import('../src/types.js').ConvertValToSlot<string>} */
+  /** @type {ConvertValToSlot<string>} */
   const convertValToSlot = _val => {
     return 'slot';
   };

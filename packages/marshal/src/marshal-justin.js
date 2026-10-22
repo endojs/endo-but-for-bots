@@ -197,6 +197,11 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           }
           return;
         }
+        case 'parcel': {
+          const { location } = rawTree;
+          assert.typeof(location, 'string');
+          return;
+        }
         case 'hilbert': {
           const { original, rest } = rawTree;
           'original' in rawTree ||
@@ -379,6 +384,10 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           return iface === undefined
             ? out.next(`slot(${index})`)
             : out.next(`slot(${index},${nestedRender(iface)})`);
+        }
+
+        case 'parcel': {
+          return out.next(`parcel(${quote(rawTree.location)})`);
         }
 
         case 'hilbert': {

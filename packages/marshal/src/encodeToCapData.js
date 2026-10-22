@@ -19,7 +19,7 @@ import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex, decodeHex } from '@endo/hex';
 import { X, Fail, q } from '@endo/errors';
 
-/** @import {Passable, RemotableObject} from '@endo/pass-style' */
+/** @import {Passable, RemotableObject, ParcelObject} from '@endo/pass-style' */
 /** @import {Encoding, EncodingUnion} from './types.js' */
 
 const { ownKeys } = Reflect;
@@ -69,6 +69,10 @@ const qclassMatches = (encoded, qclass) =>
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodePromiseToCapData]
  * @property {(
+ *   parcel: ParcelObject,
+ *   encodeRecur: (p: Passable) => Encoding
+ * ) => Encoding} [encodeParcelToCapData]
+ * @property {(
  *   error: Error,
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodeErrorToCapData]
@@ -77,6 +81,8 @@ const qclassMatches = (encoded, qclass) =>
 const dontEncodeRemotableToCapData = rem => Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToCapData = prom => Fail`promise unexpected: ${prom}`;
+
+const dontEncodeParcelToCapData = parcel => Fail`parcel unexpected: ${parcel}`;
 
 const dontEncodeErrorToCapData = err => Fail`error object unexpected: ${err}`;
 
@@ -88,6 +94,7 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
   const {
     encodeRemotableToCapData = dontEncodeRemotableToCapData,
     encodePromiseToCapData = dontEncodePromiseToCapData,
+    encodeParcelToCapData = dontEncodeParcelToCapData,
     encodeErrorToCapData = dontEncodeErrorToCapData,
   } = encodeOptions;
 
@@ -231,6 +238,15 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'slot',
         )}: ${encoded}`;
       }
+      case 'parcel': {
+        const encoded = encodeParcelToCapData(passable, encodeToCapDataRecur);
+        if (qclassMatches(encoded, 'parcel')) {
+          return encoded;
+        }
+        throw Fail`internal: Parcel encoding must be an object with ${q(
+          QCLASS,
+        )} ${q('parcel')}: ${encoded}`;
+      }
       case 'error': {
         const encoded = encodeErrorToCapData(passable, encodeToCapDataRecur);
         if (qclassMatches(encoded, 'error')) {
@@ -240,9 +256,6 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           QCLASS,
           'error',
         )}: ${encoded}`;
-      }
-      case 'parcel': {
-        throw Fail`a ${q(passStyle)} cannot be marshalled`;
       }
       default: {
         throw assert.fail(
@@ -283,6 +296,10 @@ harden(makeEncodeToCapData);
  *   decodeRecur: (e: Encoding) => Passable
  * ) => (Promise|RemotableObject)} [decodePromiseFromCapData]
  * @property {(
+ *   encodedParcel: Encoding,
+ *   decodeRecur: (e: Encoding) => Passable
+ * ) => ParcelObject} [decodeParcelFromCapData]
+ * @property {(
  *   encodedError: Encoding,
  *   decodeRecur: (e: Encoding) => Passable
  * ) => Error} [decodeErrorFromCapData]
@@ -290,6 +307,8 @@ harden(makeEncodeToCapData);
 
 const dontDecodeRemotableOrPromiseFromCapData = slotEncoding =>
   Fail`remotable or promise unexpected: ${slotEncoding}`;
+const dontDecodeParcelFromCapData = parcelEncoding =>
+  Fail`parcel unexpected: ${parcelEncoding}`;
 const dontDecodeErrorFromCapData = errorEncoding =>
   Fail`error unexpected: ${errorEncoding}`;
 
@@ -310,6 +329,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
   const {
     decodeRemotableFromCapData = dontDecodeRemotableOrPromiseFromCapData,
     decodePromiseFromCapData = dontDecodeRemotableOrPromiseFromCapData,
+    decodeParcelFromCapData = dontDecodeParcelFromCapData,
     decodeErrorFromCapData = dontDecodeErrorFromCapData,
   } = decodeOptions;
 
@@ -393,6 +413,18 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // capdata clients. We are deprecating capdata, and these clients
           // will need to update before switching to smallcaps.
           return decoded;
+        }
+        case 'parcel': {
+          // A parcel names its kind, so the decoder checks the callback's
+          // result instead of trusting arbitrary transport data.
+          const decoded = decodeParcelFromCapData(
+            jsonEncoded,
+            decodeFromCapData,
+          );
+          if (passStyleOf(decoded) === 'parcel') {
+            return decoded;
+          }
+          throw Fail`a parcel encoding must decode to a parcel: ${decoded}`;
         }
         case 'error': {
           const decoded = decodeErrorFromCapData(
