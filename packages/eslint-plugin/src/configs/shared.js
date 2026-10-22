@@ -557,6 +557,12 @@ export const internalRules = {
   'no-nested-ternary': 'off',
   // Work around https://github.com/import-js/eslint-plugin-import/issues/1810
   'import/no-unresolved': ['error', { ignore: ['ava'] }],
+  // Explicit `any` (and its JSDoc spelling `*`) switches type checking off
+  // for everything it touches; spell out a specific type instead. The Endo
+  // monorepo exempts files that predate these rules through a baseline that
+  // may only shrink (scripts/check-no-explicit-any.mjs).
+  'jsdoc/reject-any-type': 'error',
+  '@typescript-eslint/no-explicit-any': 'error',
   '@typescript-eslint/naming-convention': [
     'error',
     {

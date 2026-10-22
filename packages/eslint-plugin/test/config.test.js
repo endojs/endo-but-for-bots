@@ -206,6 +206,53 @@ describe('flat/internal', () => {
   });
 });
 
+describe('no explicit any', () => {
+  const ruleIds = [
+    'jsdoc/reject-any-type',
+    '@typescript-eslint/no-explicit-any',
+  ];
+
+  for (const filePath of ['src/foo.js', 'src/foo.ts', 'test/foo.test.js']) {
+    it(`flat/internal rejects explicit any in ${filePath}`, async () => {
+      const rules = await getRules(configs['flat/internal'], filePath);
+      for (const ruleId of ruleIds) {
+        assert.strictEqual(severityOf(rules[ruleId]), 2, ruleId);
+      }
+    });
+  }
+
+  it('flat/strict leaves explicit any to its consumers', async () => {
+    const rules = await getRules(configs['flat/strict']);
+    assert.strictEqual(severityOf(rules['jsdoc/reject-any-type']), 0);
+  });
+
+  it('legacy internal rejects explicit any', async () => {
+    const { default: internal } = await import('../src/configs/internal.js');
+    for (const ruleId of ruleIds) {
+      assert.strictEqual(severityOf(internal.rules[ruleId]), 2, ruleId);
+    }
+  });
+
+  it('reports any nested in a JSDoc cast', async () => {
+    const eslint = new ESLint({
+      cwd: pluginDir,
+      overrideConfigFile: true,
+      overrideConfig: [
+        ...configs['flat/strict'],
+        { rules: { 'jsdoc/reject-any-type': 'error' } },
+      ],
+    });
+    const [result] = await eslint.lintText(
+      'export const m = /** @type {Map<number, any>} */ (new Map());\n',
+      { filePath: 'src/foo.js' },
+    );
+    assert.deepEqual(
+      result.messages.map(({ ruleId }) => ruleId),
+      ['jsdoc/reject-any-type'],
+    );
+  });
+});
+
 describe('legacy configs', () => {
   it('retain the eslint:recommended baseline', () => {
     assert.deepEqual(recommended.extends, ['eslint:recommended']);
