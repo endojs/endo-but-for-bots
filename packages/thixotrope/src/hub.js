@@ -1,6 +1,7 @@
 // @ts-check
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import {
   DescHandoffGiveSigEnvelopeCodec,
   getSelectorName,
@@ -1136,7 +1137,9 @@ export const makeOcapnHub = ({
           const handoffReceive = makeHandoffReceiveDescriptor(
             signedGive,
             handoffCount,
-            /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
+            /** @type {any} */ (
+              frozenBytes(bytesFromHex(session.identity.sessionId))
+            ),
             selfAtExporter.publicKey.id,
           );
           const signature = cryptography.signHandoffReceive(
