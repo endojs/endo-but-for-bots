@@ -653,6 +653,43 @@ mod tests {
     }
 
     #[test]
+    fn gc_root_leases_are_reference_counted() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sup, _outbox_rx) = Supervisor::new();
+            let first = sup.alloc_handle();
+            let second = sup.alloc_handle();
+            let store_backed = sup.alloc_handle();
+            let _first_inbox = sup.register(first, None);
+            let _second_inbox = sup.register(second, None);
+            let _store_inbox = sup.register(store_backed, None);
+            let cas = std::path::PathBuf::from("/tmp/cas");
+
+            // Two workers suspended to the same snapshot share one root.
+            sup.mark_suspended(first, "same".to_string(), cas.clone());
+            sup.mark_suspended(second, "same".to_string(), cas.clone());
+            // A store-backed worker has no snapshot digest and pins nothing.
+            sup.mark_suspended(store_backed, String::new(), cas);
+            assert_eq!(sup.gc_roots(), vec!["same".to_string()]);
+
+            let first_lease = GcRootLease::adopt(Arc::clone(&sup), "same".to_string());
+            let second_lease = GcRootLease::adopt(Arc::clone(&sup), "same".to_string());
+            drop(GcRootLease::adopt(Arc::clone(&sup), String::new()));
+            drop(first_lease);
+            assert!(sup.is_gc_root("same"), "one pin still outstanding");
+            drop(second_lease);
+            assert!(!sup.is_gc_root("same"));
+            assert!(sup.gc_roots().is_empty());
+
+            // Releasing an unpinned digest is a no-op, not an underflow.
+            sup.release_gc_root("same");
+            assert!(sup.gc_roots().is_empty());
+        });
+    }
+
+    #[test]
     fn suspend_preserves_meter_state() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
