@@ -1,1 +1,1 @@
-export type * from './types/external.ts';
+export type * from './types/external.js';

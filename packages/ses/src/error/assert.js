@@ -43,8 +43,6 @@ import {
   hasOwn,
 } from '../commons.js';
 import { an, bestEffortStringify } from './stringify-utils.js';
-import './types.js';
-import './internal-types.js';
 import { makeNoteLogArgsArrayKit } from './note-log-args.js';
 
 /**

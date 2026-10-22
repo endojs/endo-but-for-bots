@@ -3,7 +3,6 @@
 
 import { freeze } from '../commons.js';
 import { makeAssert } from './assert.js';
-import './types.js';
 
 /** @import {Assert} from '../../types.js' */
 

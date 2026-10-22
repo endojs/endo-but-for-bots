@@ -8,7 +8,7 @@
     "bin/**/*.js",
     "src/**/*.js",
     "test",
-    "test/_types.d.ts",
+    "test/_types.ts",
     "!**/*.d.ts",
     "demo/**/*.js",
     "bin/endo.cjs"

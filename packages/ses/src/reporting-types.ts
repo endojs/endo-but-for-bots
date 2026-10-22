@@ -1,5 +1,3 @@
-/* eslint-disable no-restricted-globals */
-
 export type Reporter = {
   warn: (...message: Array<any>) => void;
   error: (...message: Array<string>) => void;
