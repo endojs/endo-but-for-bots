@@ -61,7 +61,7 @@ well-specified.
 The existing reference implementation is in
 `c/xsnap-pub/xsnap/xsbug-node/xsbug-machine.js`.
 
-### Commands (client → VM)
+### Commands (client -> VM)
 
 | Command | XML | Purpose |
 |---------|-----|---------|
@@ -80,7 +80,7 @@ The existing reference implementation is in
 | stop-profiling | `<stop-profiling/>` | End CPU profile |
 | script | `<script path="..." line="..."><![CDATA[...]]><script/>` | Eval script |
 
-### Responses (VM → client)
+### Responses (VM -> client)
 
 | Element | Content |
 |---------|---------|
@@ -198,7 +198,7 @@ Fork `xsDebug.c` to emit JSON instead of XML.
 
 ## Design: Option A Details
 
-### Layer 1: C platform hooks → Rust callbacks
+### Layer 1: C platform hooks -> Rust callbacks
 
 #### Compile-time changes
 
@@ -384,8 +384,8 @@ and workers:
 
 | Verb | Direction | Payload | Nonce |
 |------|-----------|---------|-------|
-| `"debug"` | daemon → worker | Raw xsbug XML bytes (command) | 0 |
-| `"debug"` | worker → daemon | Raw xsbug XML bytes (response) | 0 |
+| `"debug"` | daemon -> worker | Raw xsbug XML bytes (command) | 0 |
+| `"debug"` | worker -> daemon | Raw xsbug XML bytes (response) | 0 |
 
 The verb is the same in both directions — handle rewriting
 distinguishes sender.
@@ -710,7 +710,7 @@ flushes the outbound debug buffer.
 | File | Purpose |
 |------|---------|
 | `rust/endo/xsnap/src/powers/debug.rs` | Debug I/O buffers, C callbacks, host functions |
-| `rust/endo/xsnap/src/cesu8.rs` | CESU-8 ↔ UTF-8 codec for XS string round-tripping |
+| `rust/endo/xsnap/src/cesu8.rs` | CESU-8 <-> UTF-8 codec for XS string round-tripping |
 | `rust/endo/xsnap/src/debug_protocol_tests.rs` | 11 Rust-level debug protocol integration tests |
 | `packages/daemon/src/debug-session.js` | xsbug XML SAX parser and structured API |
 | `packages/daemon/src/debugger.js` | Debugger exo (CapTP-remotable debug controller) |
@@ -997,8 +997,8 @@ is fully available:
 - `the->firstJump` is the head of a linked list of active
   exception handlers (`txJump` structs).
 - Each `txJump` has a `flag` field:
-  - `flag == 0` → C-level `mxTry/mxCatch` (host boundary)
-  - `flag == 1` → JS-level `XS_CODE_CATCH` (JS `try/catch`)
+  - `flag == 0` -> C-level `mxTry/mxCatch` (host boundary)
+  - `flag == 1` -> JS-level `XS_CODE_CATCH` (JS `try/catch`)
 - If any `txJump` in the chain has `flag == 1`, the exception
   **will be caught** by a JavaScript `try/catch` block.
 - If no `txJump` in the chain has `flag == 1`, the exception
@@ -1126,9 +1126,9 @@ const DebuggerI = M.interface('Debugger', {
 ```
 
 The `DebugSession` translates:
-- `'none'` → clear both `exceptions` and `uncaughtExceptions`
-- `'all'` → set `exceptions`, clear `uncaughtExceptions`
-- `'uncaught'` → clear `exceptions`, set `uncaughtExceptions`
+- `'none'` -> clear both `exceptions` and `uncaughtExceptions`
+- `'all'` -> set `exceptions`, clear `uncaughtExceptions`
+- `'uncaught'` -> clear `exceptions`, set `uncaughtExceptions`
 
 ### Why backtracking is not needed
 
