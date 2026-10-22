@@ -1,10 +1,11 @@
+// reexport-policy-exempt -- runtime-empty bridge for types-index.d.ts
 import harden from '@endo/harden';
 import { makeReleasingExecutorKit } from './src/promise-executor-kit.js';
 import { memoRace } from './src/memo-race.js';
 
 export * from './src/is-promise.js';
 // eslint-disable-next-line import/export
-export * from './src/types.js';
+export * from './types-index.js';
 
 /** @type {PromiseConstructor} */
 const BestPipelinablePromise = globalThis.HandledPromise || Promise;

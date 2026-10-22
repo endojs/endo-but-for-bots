@@ -12,7 +12,7 @@ export type MatchConfig = {
   declaredLen: number;
   hasRestArgGuard: boolean;
   restArgGuardIsRaw: boolean;
-  paramsPattern: import('@endo/patterns').Pattern;
+  paramsPattern: Pattern;
   redactedIndices: number[];
 };
 export type FacetName = string;

@@ -1,3 +1,4 @@
+// reexport-policy-exempt -- runtime-empty bridge for types-index.d.ts
 export { mapIterable, filterIterable } from './src/iter-helpers.js';
 export {
   PASS_STYLE,
@@ -55,5 +56,5 @@ export {
 
 export * from './src/deeplyFulfilled.js';
 
-// eslint-disable-next-line import/export -- ESLint not aware of type exports in types.d.ts
-export * from './src/types.js';
+// eslint-disable-next-line import/export
+export * from './types-index.js';
