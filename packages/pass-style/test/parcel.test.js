@@ -10,20 +10,16 @@ import { deeplyFulfilled } from '../src/deeplyFulfilled.js';
 import { Far } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { PASS_STYLE } from '../src/passStyle-helpers.js';
+import { isParcelObject } from '../src/parcel.js';
 import { makeArbitraries } from '../tools.js';
 
-const { create, freeze } = Object;
+const { create, freeze, getPrototypeOf, isFrozen } = Object;
+const { ownKeys } = Reflect;
 
 /** @type {any} */
 const { Parcel } = globalThis;
 
-// The shims-only AVA configuration installs Parcel before lockdown but does
-// not harden it. Parcel is passable only after lockdown has frozen the realm's
-// constructor and prototype, so exercise the real integration in the lockdown
-// configurations. The adversarial-global tests below cover shims-only mode.
-const parcelTest = Object.isFrozen(Parcel) ? test : test.skip;
-
-parcelTest('passStyleOf recognizes a Parcel', t => {
+test('passStyleOf recognizes a Parcel', t => {
   const parcel = makeParcel('test:parcel', () => 'opened');
   t.is(passStyleOf(parcel), 'parcel');
   t.true(isPassable(parcel));
@@ -31,7 +27,7 @@ parcelTest('passStyleOf recognizes a Parcel', t => {
   t.is(passStyleOf(parcel), 'parcel');
 });
 
-parcelTest('distinct Parcels are distinct passables', t => {
+test('distinct Parcels are distinct passables', t => {
   const openHook = () => 'same';
   const a = new Parcel('test:same', openHook);
   const b = new Parcel('test:same', openHook);
@@ -40,14 +36,14 @@ parcelTest('distinct Parcels are distinct passables', t => {
   t.is(passStyleOf(b), 'parcel');
 });
 
-parcelTest('a Parcel nests in pass-by-copy containers', t => {
+test('a Parcel nests in pass-by-copy containers', t => {
   const parcel = makeParcel('test:parcel', () => 'opened');
   t.is(passStyleOf(harden({ parcel, note: 'hi' })), 'copyRecord');
   t.is(passStyleOf(harden([parcel, parcel])), 'copyArray');
   t.is(passStyleOf(makeTagged('box', parcel)), 'tagged');
 });
 
-parcelTest('Parcel passability composes with generated passables', async t => {
+test('Parcel passability composes with generated passables', async t => {
   const { arbPassable: passableArbitrary } = makeArbitraries(fastCheck);
   await fastCheck.assert(
     fastCheck.property(
@@ -66,7 +62,7 @@ parcelTest('Parcel passability composes with generated passables', async t => {
   );
 });
 
-parcelTest('Parcels nested at any depth are passable', t => {
+test('Parcels nested at any depth are passable', t => {
   /**
    * @param {unknown} inner
    * @param {'array' | 'record' | 'tagged'} kind
@@ -103,27 +99,32 @@ parcelTest('Parcels nested at any depth are passable', t => {
   );
 });
 
-parcelTest('recognition is by brand, not by prototype', t => {
-  const forged = freeze(create(Parcel.prototype));
-  t.false(Parcel.isParcel(forged));
-  t.false(isPassable(forged));
-  t.throws(() => passStyleOf(forged));
+test('an object shaped like a Parcel is not a Parcel', t => {
+  const parcel = makeParcel('test:parcel', () => 'opened');
+  const impostor = freeze(create(Parcel.prototype));
+  t.is(getPrototypeOf(impostor), getPrototypeOf(parcel));
+  t.true(isFrozen(impostor));
+  t.deepEqual(ownKeys(impostor), ownKeys(parcel));
+  t.false(Parcel.isParcel(impostor));
+  t.false(isParcelObject(impostor));
+  t.false(isPassable(impostor));
+  t.throws(() => passStyleOf(impostor));
 });
 
-parcelTest('a PASS_STYLE marker cannot claim parcel', t => {
+test('a PASS_STYLE marker cannot claim parcel', t => {
   const forged = harden({ [PASS_STYLE]: 'parcel' });
   t.throws(() => passStyleOf(forged), {
     message: /Unrecognized PassStyle: "parcel"/,
   });
 });
 
-parcelTest('a remotable is still a remotable', t => {
+test('a remotable is still a remotable', t => {
   const far = Far('Thing', { foo: () => 'foo' });
   t.false(Parcel.isParcel(far));
   t.is(passStyleOf(far), 'remotable');
 });
 
-parcelTest('deeplyFulfilled leaves a Parcel as is', async t => {
+test('deeplyFulfilled leaves a Parcel as is', async t => {
   const parcel = makeParcel('test:parcel', () => 'opened');
   const fulfilled = await deeplyFulfilled(parcel);
   t.is(fulfilled, parcel);
@@ -131,7 +132,7 @@ parcelTest('deeplyFulfilled leaves a Parcel as is', async t => {
   t.is(record.parcel, parcel);
 });
 
-parcelTest('recognition does not open', async t => {
+test('recognition does not open', async t => {
   let opened = 0;
   const parcel = new Parcel('test:recognition', () => {
     opened += 1;
@@ -144,7 +145,7 @@ parcelTest('recognition does not open', async t => {
   t.is(opened, 1);
 });
 
-parcelTest('the constructor rejects a foreign subclass prototype', t => {
+test('the constructor rejects a foreign subclass prototype', t => {
   class Subclass extends Parcel {}
   // @ts-expect-error The inherited type correctly exposes no public subclass
   // constructor; the runtime call verifies that bypassing it is also rejected.

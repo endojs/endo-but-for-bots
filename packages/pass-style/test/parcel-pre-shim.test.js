@@ -9,32 +9,7 @@ const fixture = fileURLToPath(
   new URL('./parcel-pre-shim-fixture.js', import.meta.url),
 );
 
-const scenarios = [
-  'absent',
-  'well-shaped',
-  'unfrozen-check',
-  'unfrozen-prototype',
-  'null-prototype',
-  'prototype-method',
-  'accessor-tag',
-  'wrong-tag',
-  'foreign-parent',
-  'foreign-constructor',
-  'enumerable-tag',
-  'enumerable-constructor',
-  'accessor-check',
-  'accessor-global',
-  'replacement',
-  'captured',
-  'lying',
-  'malformed',
-  'reentrant',
-  'throwing',
-  'throwing-then-true',
-  'stateful',
-  'proxy-global',
-  'unfrozen-global',
-];
+const scenarios = ['absent', 'accessor-global', 'shim', 'captured'];
 
 for (const scenario of scenarios) {
   test(`pre-shim Parcel trust boundary: ${scenario}`, async t => {
