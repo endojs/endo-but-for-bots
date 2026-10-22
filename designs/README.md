@@ -1444,7 +1444,7 @@ deep-link -> P2 app + sandboxed UI -> P3 clone).
 | Design | Status | Pillar | Notes |
 |--------|--------|--------|-------|
 | app-sharing-milestone | Proposed | — | Milestone roadmap doc; verified current state + P0-P3 plan |
-| https-fragment-locators | Proposed | 2 — connect peers | Replaces every `endo://` locator with `https://<base>/{adopt,invite}/#v=1&type=…&id=…&peer=…&at=…` (bare `#…` when no base); fragment-capture page, dual-stack parser, per-agent `locatorBase`, error redaction. Precedes familiar-deep-link-invitations, whose `endo://invite/` envelope it supersedes |
+| https-fragment-locators | Proposed | 2 — connect peers | Replaces every `endo://` locator with `[prefix]#ocapn=np&id=…&pk=…&at=…` (bare `#…` by default; per-agent prefix such as `https://minion.town/adopt?type=…&name=…`); fragment-capture page, dual-stack parser, per-agent `locatorPrefixes`, error redaction. Precedes familiar-deep-link-invitations, whose `endo://invite/` envelope it supersedes |
 | familiar-deep-link-invitations | In Progress | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete) |
 | guest-native-invitations | In Progress | 2 — connect peers | `invite`/`accept` on `EndoGuest` landed (#1305, #1310; host `accept` converged, no minted guest); remaining: durable invitation state machine in the formula store, returned `{ status }` outcomes, collection-driven revocation, newcomer guest provisioning |
 | endo-app-sharing | In Progress | 3 — make & share apps | New: app handle (source + exec + ui + `cloneable`); cross-daemon clone as a single streamed tree-archive into a pluggable durable backing (default zip) vs remote reference — no per-blob hashing |
@@ -1992,7 +1992,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-stdio-rpc-bridge | M | 4-5 days | 3 | LF-delimited JSONL RPC for embedding the Lal/Fae agent in another process; short-term shape before `endor-bus-tui` |
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
 | app-sharing-milestone | — | — | 8 | Roadmap doc; no implementation of its own (reference for the P0-P3 sequencing) |
-| https-fragment-locators | M-L | 12-14 days | 8 | Five phases: daemon grammar + redaction (3d), formatter + `locatorBase` + deadline (4d), minion.town capture page (3d), CLI/Chat (1-2d), Familiar launch scheme (3d, folds into deep-link) |
+| https-fragment-locators | M-L | 13-15 days | 8 | Five phases: daemon grammar + redaction + inviter handle in `accept` (4d), formatter + `locatorPrefixes` + deadline (4d), minion.town capture page (3d), CLI/Chat (1-2d), Familiar launch scheme (3d, folds into deep-link) |
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
 | familiar-app-ui-hosting | M | 4-5 days | 8 | App UI manifest + sandbox tiers over the existing weblet substrate (1.2x bump) |

@@ -5,6 +5,7 @@
 | **Created** | 2026-10-16 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
+| **Revised** | 2026-10-22, per the maintainer's review of #1484 (fragment keys `ocapn`, `id`, `pk`, `at`; query hints; per-agent prefixes) |
 | **Supersedes** | the "keep `endo://`, for now" decision in [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) § Decisions, and the `endo://invite/` envelope in [familiar-deep-link-invitations](familiar-deep-link-invitations.md) § 1 |
 
 ## What is the Problem Being Solved?
@@ -35,24 +36,39 @@ Endo and minion.town to this shape:
 https://minion.town/adopt/#id=…&peer=…&at=…&at=…&at=…
 ```
 
+The maintainer then refined the shape (review on #1484, 2026-10-22):
+
+```
+https://minion.town/adopt?type=…&name=…#ocapn=np&id=…&pk=…&at=…&at=…
+```
+
 These are the requirements:
 
-- An installed application such as Familiar can intercept the HTTPS origin, on
-  desktop and mobile.
+- An installed application such as Familiar can intercept the link, on
+  desktop and mobile. Ideally it intercepts **any** link whose fragment is an
+  OCapN locator, regardless of the domain, and not only links on an origin it
+  claims.
 - **All** cryptographic material is in the fragment. The page at the HTTPS
   endpoint captures the fragment into local storage and erases it from
   history.
-- Each host or guest agent inherits or configures a base URL. With no base
-  configured, the locator is a bare fragment.
-- Invitation links and adoption links are distinguishable by path.
-- The fragment parses with `URLSearchParams` and carries the connection hints
-  as a repeated `at`.
+- **Everything before the fragment is configured per agent, and is empty by
+  default.** With nothing configured, the locator is a bare fragment.
+- The fragment names its network with an `ocapn` key (`np`, the Noise
+  Protocol netlayer). That key also marks the fragment as an OCapN locator.
+- The fragment parses with `URLSearchParams`, names the peer by public key
+  (`pk`) and the object by Swiss number (`id`), both in hex, and carries the
+  connection hints as a repeated `at`.
+- The query string may carry non-secret hints: `type` (the far object's
+  interface name) and `name` (the sender's suggested pet name).
+- The path is site-specific steering, for example `/adopt` to recommend
+  adoption and `/accept` to accept an invitation. It matters only when the
+  link falls through to an ordinary HTTPS page.
 
 ## Scope
 
 This design is the grammar, the parser and formatter contract, the security
 model of the capture page, the platform interception facts, the migration, and
-per-agent base-URL configuration. Implementation is separate build work (see
+per-agent prefix configuration. Implementation is separate build work (see
 § 11), split so that the daemon, the CLI, minion.town and Familiar move
 independently behind dual-stack parsing.
 
@@ -118,135 +134,183 @@ ocapn://<designator>.<transport>?<hint>=<value>&…            peer locator
 ocapn://<designator>.<transport>/s/<swiss-num>?<hint>=…      sturdyref
 ```
 
-Each OCapN locator names **one** transport, and its hints are key-value pairs
-for that transport. An Endo locator names **one peer reachable over several
-transports**, and each Endo hint is already a complete transport address
-(`tcp+netstring+json+captp0://host:port`, `ws:…`, `noise:…`).
+Each OCapN locator names **one** netlayer (the `<transport>`), one designator,
+and that netlayer's hints. The fragment has exactly the same parts, so a
+fragment locator **is** one OCapN sturdyref, spelled as form fields:
 
-| HTTPS fragment field | OCapN | Endo-specific? |
+| Fragment field | OCapN | Endo-specific? |
 |---|---|---|
-| `peer` | `designator` (the Ed25519 key) | The encoding is Endo's: 64 lowercase hex. |
-| one `at` | one `<transport>` plus its hints, together, as one peer locator | The "several transports, one link" envelope is Endo's. |
-| `id` | `swiss-num` (`/s/<swiss-num>`) | No. |
-| `type`, `from`, `fromNode` | none | Yes, daemon metadata. |
-| base and path (`/adopt/`, `/invite/`) | none | Yes, routing only. Ignored by the cryptography. |
+| `ocapn` | `<transport>`, the netlayer (`np` for the Noise Protocol netlayer) | No. The key's presence also marks the fragment as an OCapN locator (§ 5). |
+| `pk` | `<designator>`, the peer's public key | The encoding is Endo's: lowercase hex. |
+| `id` | `swiss-num` (`/s/<swiss-num>`) | The encoding is Endo's: lowercase hex. |
+| each `at` | one hint for that netlayer, such as `ws:[2001:db8::5]:8920` | The hint string syntax is per netlayer. |
+| query `type`, `name` | none | Yes, informative hints (§ 3.2). |
+| origin and path (`/adopt`, `/accept`) | none | Yes, site steering only (§ 3.3). Ignored by the cryptography. |
 
-**Mapping rule.** A fragment locator with *N* `at` hints expands to *N* OCapN
-sturdyrefs that share `designator = peer` and `swiss-num = id`. In the other
-direction, a set of OCapN sturdyrefs with one designator and one Swiss number
-folds into one fragment locator. This adds an envelope and changes no
-semantics. The design does **not** fork OCapN in any of these ways:
+**Mapping rule.** `#ocapn=<t>&id=<s>&pk=<d>&at=<h1>&at=<h2>` and
+`ocapn://<d>.<t>/s/<s>?<hints>` name the same sturdyref. Only the hint
+encoding differs: OCapN's hints are key-value pairs, and an `at` value is one
+opaque hint string that the netlayer parses. This adds an envelope and changes
+no semantics. The design does **not** fork OCapN in any of these ways:
 
-- It does not define a new Swiss-number or designator encoding.
 - It does not change what a Swiss number grants.
 - It does not use `ocapn://` itself as the public link scheme, because no OS
-  routes `ocapn://` either.
+  routes `ocapn://`.
 
-**Recommendation (§ 13 question 3).** Allow an `at` value to be a complete
-`ocapn://<designator>.<transport>?…` peer locator once the OCapN URI form
-stabilizes. The daemon then checks that its designator equals `peer`. Until
-then, `at` keeps today's Endo hint strings byte for byte. This keeps the
-earlier maintainer decision not to "prematurely force the standard's hand"
-([daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md)).
+**Several netlayers.** Today one Endo locator lists hints for several
+transports at once (`tcp+netstring+json+captp0://host:port`, `ws:…`,
+`noise:…`). A fragment locator names one netlayer. An agent reachable over
+several netlayers is reachable through several locators, and the formatter
+emits the agent's preferred one (§ 7). How today's legacy transports map to
+`ocapn` values is open question 3.
 
 ## 3. Grammar
 
 ```
-locator      = [ base kind-path ] "#" fragment
-base         = "https://" host [ ":" port ] [ prefix-path ]   ; no userinfo, query or fragment
-kind-path    = "/adopt/" | "/invite/"
-fragment     = application/x-www-form-urlencoded, keys below
+locator      = [ prefix ] "#" fragment
+prefix       = "https://" host [ ":" port ] [ path ] [ "?" query ]   ; configured per agent (§ 7)
+fragment     = application/x-www-form-urlencoded, keys in § 3.1
+query        = application/x-www-form-urlencoded, keys in § 3.2
 ```
+
+Example, bare (nothing configured, the default):
+`#ocapn=np&id=…&pk=…&at=ws%3A%5B2001%3Adb8%3A%3A5%5D%3A8920`
+
+Example, prefixed:
+`https://minion.town/adopt?type=Counter&name=counter#ocapn=np&id=…&pk=…&at=…&at=…`
+
+### 3.1 Fragment keys
 
 | Key | Count | Value | Secret? |
 |---|---|---|---|
-| `v` | 0 or 1 | `1`. Absent means `1`. Any other value is rejected. | no |
-| `id` | exactly 1 | 64 lowercase hex: the formula number (the invitation number for invitations) | **yes**: possession grants |
-| `peer` | exactly 1 | 64 lowercase hex Ed25519 key of the node to dial | no, but it identifies the peer |
-| `type` | exactly 1 | a formula type, `remote`, or `invitation` | no |
-| `at` | 0 or more, ordered | one connection hint each, in preference order | no, but it reveals network location |
-| `from` | 0 or 1, required when `type=invitation` | 64 hex handle number | low; never sufficient to redeem |
-| `fromNode` | 0 or 1 | 64 hex | low |
+| `ocapn` | exactly 1 | the netlayer designator, `np` (Noise Protocol) at first | no |
+| `id` | exactly 1 | lowercase hex: the Swiss number, which opens a parcel or enlivens a sturdyref (the invitation's number for an invitation) | **yes**: possession grants |
+| `pk` | exactly 1 | lowercase hex: the public key of the peer to dial | no, but it identifies the peer |
+| `at` | 0 or more, ordered | one connection hint each, in preference order, such as `ws:[2001:db8::5]:8920` | no, but it reveals network location |
 
-Bare form (no base configured):
-`#v=1&type=guest&id=…&peer=…&at=tcp%2Bnetstring%2Bjson%2Bcaptp0%3A%2F%2F203.0.113.5%3A8920`
+The formatter emits `ocapn` first, so that a reader can recognize an OCapN
+locator at the start of the fragment. A parser requires the key but not its
+position. `se` is reserved for a live
+reference in place of `id` (§ 3.4).
 
-Based form:
-`https://minion.town/invite/#v=1&type=invitation&id=…&peer=…&from=…&at=…&at=…`
+### 3.2 Query keys (informative hints)
 
-**Invitation versus adoption.**
+| Key | Count | Value |
+|---|---|---|
+| `type` | 0 or 1 | the far object's interface name, such as `Counter`, or `invitation` |
+| `name` | 0 or 1 | the pet name the sender suggests the recipient use |
 
-- `/invite/` is used if and only if `type=invitation`. `/adopt/` is used for
-  every other type.
-- A parser that sees a path rejects a mismatch between the path and the type.
-  The bare form carries the distinction in `type` alone.
-- The path exists so that routing can treat the two kinds differently without
-  reading the fragment. An app association can claim one and not the other,
-  and the capture page can choose a confirmation UI.
+Both are **unauthenticated hints**. The sender writes them and nothing checks
+them. A recipient UI may prefill `name` and display `type`, labeled as the
+sender's claim, and the daemon never decides anything on either. The query is
+sent to the prefix's server, so these keys must never carry a secret. Whether
+the bare form can carry them too is open question 2.
 
-**Parsing (normative).**
+A parser ignores query keys it does not know, because a site's own steering
+may share the query string.
 
-1. Take everything after the first `#`. With a base, parse with `new URL` and
-   use `url.hash.slice(1)`. Pass the base to nothing else.
-2. Parse with `new URLSearchParams(fragment)`.
-3. **Reject a repeated singular key.** `get()` silently returns the first
+### 3.3 Path (site steering)
+
+The path is chosen by the site that serves the prefix. Familiar and the daemon
+ignore it. It tells the page what to recommend when the link falls through to
+an ordinary HTTPS page: `/adopt` recommends that the recipient adopt the
+value, and `/accept` recommends accepting an invitation. A site can use any
+other path. An agent configures one prefix for adoption links and one for
+invitations (§ 7), so the paths are the site's choice and not this grammar's.
+
+**Invitation versus adoption** is therefore not a field of the locator. It is
+the recipient's action. `endo accept` redeems an invitation, `endo
+adopt-locator` adopts a value, and Familiar picks the action from the
+`type=invitation` hint and the path and confirms it with the user. If the hint
+was wrong, the far peer rejects the action: an `id` that does not name an
+invitation cannot be accepted. The rejection uses the same fixed message as an
+unknown id (§ 4.5).
+
+### 3.4 Live references (`se`, reserved)
+
+`id` opens a parcel or enlivens a sturdyref. A sturdyref survives partition,
+and it can be passed without a connection and without a three-party hand-off.
+
+A later revision may add `se` in place of `id`: a salt and an encrypted kernel
+slot identifier for a **live** reference. An `se` can also be passed without a
+hand-off. It is opaque to every peer except the referent's, because it is
+encrypted with its salt using that peer's private key. It presumes that the
+peer never restarts and never reuses a kernel slot identifier. Not every peer
+or vat can promise that.
+
+This design does not specify `se`. A parser rejects a fragment that carries
+`se` with a fixed "unsupported locator" message, and rejects one that carries
+both `se` and `id`. A peer that supports `se` adds it as a later, versioned
+change (see Versioning below).
+
+### 3.5 Parsing (normative)
+
+1. Take everything after the first `#` as the fragment. If there is a
+   prefix, parse the whole string with `new URL` and use `url.hash.slice(1)`,
+   and read only the § 3.2 keys from `url.searchParams`. Origin and path go
+   nowhere.
+2. Parse the fragment with `new URLSearchParams(fragment)`. Require exactly
+   one `ocapn`.
+3. **Reject an unknown `ocapn` value** with a fixed message. The daemon
+   accepts only the netlayers it can dial.
+4. **Reject a repeated singular key.** `get()` silently returns the first
    occurrence. Require `getAll(k).length <= 1` for every key other than `at`.
-   This is exactly what minion.town `guest.js` `fragment()` already does.
-4. **Reject unknown keys**, matching today's `parseLocator` strictness.
-   Whether to tolerate keys with an `x-` prefix is § 13 question 4.
-5. Read `getAll('at')` in order. Order is preference and must be preserved.
+   This is exactly what minion.town `guest.js` `fragment()` already does. The
+   same rule applies to `type` and `name` in the query.
+5. **Reject unknown fragment keys**, matching today's `parseLocator`
+   strictness (open question 4).
+6. Read `getAll('at')` in order. Order is preference and must be preserved.
    Reject an empty `at`.
-6. **Watch the `+` hazard.** In form encoding a literal `+` decodes to a space.
-   Today's hint prefixes contain `+` (`tcp+netstring+json+captp0:`). A
+7. **Watch the `+` hazard.** In form encoding a literal `+` decodes to a space.
+   Legacy hint prefixes contain `+` (`tcp+netstring+json+captp0:`). A
    hand-concatenated fragment with a raw `+` silently corrupts the hint, so
    formatters **must** serialize through `URLSearchParams`, which emits `%2B`.
    Parsers must reject any decoded `at` that contains a space, rather than
    guessing.
-7. `URLSearchParams` percent-decodes. A hint containing `#`, `&`, `=` or `%`
-   round-trips only if the formatter used `URLSearchParams`. `at` values are
-   never decoded twice.
-8. Require lowercase hex in `id`, `peer`, `from` and `fromNode`, so that
-   string equality is identity equality.
-9. Cap the fragment at 4096 code units and at 16 `at` values, so a parser
-   cannot be made to allocate without bound.
+8. `URLSearchParams` percent-decodes. A hint containing `#`, `&`, `=`, `%`, or
+   the `[` and `]` of an IPv6 literal round-trips only if the formatter used
+   `URLSearchParams`. `at` values are never decoded twice.
+9. Require lowercase hex in `id` and `pk`, so that string equality is identity
+   equality.
+10. Cap the fragment at 4096 code units and at 16 `at` values, so a parser
+    cannot be made to allocate without bound.
 
-**Canonical form.** The formatter emits keys in the order
-`v, type, id, peer, from, fromNode, at…`. Two locators are equal when their
-canonical bare forms are equal. The base never takes part in equality. This
-matters to `reverseLocate`, `followLocatorNameChanges` and to deduplication in
-the UI.
+**Canonical form.** The formatter emits fragment keys in the order
+`ocapn, id, pk, at…`. Two locators are equal when their canonical bare
+fragments are equal. The prefix, including the query hints, never takes part
+in equality. This matters to `reverseLocate`, `followLocatorNameChanges` and to
+deduplication in the UI.
 
-**Versioning.**
-
-- `v=1` is this grammar.
-- A future incompatible change bumps `v`. A parser rejects a `v` it does not
-  know, with a fixed message.
-- A new optional key is a minor change only if § 13 question 4 is answered
-  "tolerate".
+**Versioning.** There is no `v` key. The set of fragment keys and the
+`ocapn` value are the version. A new netlayer is a new `ocapn` value. A new
+key, such as `se`, is an incompatible change: an older parser rejects it with
+a fixed message, which is the intended failure.
 
 ## 4. Security
 
 ### 4.1 The capture page
 
-The page at `https://<origin>/adopt/` and `/invite/` runs this sequence in one
-synchronous, same-origin, non-module script. The script is the first element
+The capture page is whatever page a site serves at the paths its agents'
+prefixes name, such as minion.town's `/adopt` and `/accept`. It runs this
+sequence in one synchronous, same-origin, non-module script. The script is the first element
 in `<head>`, and nothing loads before it.
 
-1. `const raw = location.hash;`
+1. `const raw = location.hash; const hints = location.search;`
 2. **Erase first**, before any parsing that could throw:
    `history.replaceState(null, '', location.pathname)`. Then confirm that
    `location.hash === ''`. If `replaceState` throws, call
    `location.replace(location.pathname)` instead. That costs a reload but
    never keeps the secret in place.
-3. Parse `raw.slice(1)` under § 3. On any failure, show a fixed message ("This
+3. Parse `raw.slice(1)` and `hints` under § 3.5. On any failure, show a fixed message ("This
    link is not valid") and store nothing.
 4. Store the parsed record under one key in `localStorage` as
    `{ locator: <canonical bare form>, capturedAt }`. Keep at most one pending
    record: a new capture replaces it. The record expires 15 minutes after
    capture and is deleted when it is handed off or declined. The page never
    keeps an inventory of past locators.
-5. Render the confirmation UI. It shows the peer key fingerprint, the kind
-   (invitation or adoption), and the actions (§ 5.4). The fragment is never
+5. Render the confirmation UI. It shows the peer key fingerprint, the action
+   the path recommends (adopt or accept), the `type` and `name` hints labeled
+   as the sender's claims, and the actions (§ 5.2). The fragment is never
    rendered into the DOM, and the `id` is never shown.
 
 **Failure modes.**
@@ -257,7 +321,7 @@ in `<head>`, and nothing loads before it.
 - A fragment captured from history before the erase is a residual risk the page
   cannot close (§ 4.3).
 
-**Response headers** for these two paths:
+**Response headers** for the capture paths:
 
 - `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
 - `Referrer-Policy: no-referrer`
@@ -273,35 +337,42 @@ behind oauth2-proxy. A login redirect would carry the fragment through
 **Conflict.** minion.town `guest.js` `normalizeGuestUrl` deliberately rewrites
 `#v=1&guest=<formula id>` into the URL so that it can be bookmarked. That is
 the W3C TAG § 5.3 trade-off resolved the other way, and it contradicts this
-design's "erase" rule. § 13 question 6 asks which wins. The recommendation is
+design's "erase" rule. Open question 6 asks which wins. The recommendation is
 erase, with recovery through the existing `#recover=1` flow.
 
-### 4.2 The base origin is a trust anchor
+### 4.2 The prefix origin is a trust anchor
 
 Whatever origin serves the capture page runs JavaScript that reads the secret.
-A locator with an attacker-chosen base therefore **hands the secret to the
-attacker** the moment the recipient clicks it. The rules:
+A locator with an attacker-chosen prefix therefore **hands the secret to the
+attacker** the moment the recipient clicks it, unless an application
+intercepts the link first. The rules:
 
-- **The daemon ignores the base when it parses.** `accept`, `adoptFromLocator`
-  and `storeLocator` use only the fragment and the path kind. Pasting a link
-  into the CLI or into Chat never contacts the base.
-- **The base is applied only at format time, by the agent that shares.** A
-  stored or received locator is normalized to the bare canonical form, so the
-  daemon never re-shares a foreign base. If Alice forwards a link she received
-  from Mallory, it goes out under Alice's own base or as a bare fragment.
-- **Which bases a formatter may emit.** The base must be `https:`, with no
-  userinfo, query or fragment. It is configured only through the host
-  capability (§ 7). A guest cannot set or choose its own base (`#1404`).
-- **Which origins an app may honor.** Familiar intercepts only the origins in
-  its signed associated-domain set (§ 5). The platforms already bind that set
-  to the app at build time: an app can claim an origin only if the origin's
-  `.well-known` file names the app, so an attacker cannot make Familiar
-  intercept `evil.example`. When Familiar receives a link through any other
-  path (paste, a custom scheme), it parses the fragment and discards the base.
+- **The daemon ignores the prefix when it parses.** `accept`, `adoptFromLocator`
+  and `storeLocator` use only the fragment. Pasting a link into the CLI or into
+  Chat never contacts the prefix's origin. The `type` and `name` hints may
+  prefill a UI and never change what the daemon does.
+- **The prefix is applied only at format time, by the agent that shares.** A
+  stored or received locator is normalized to the bare canonical fragment, so
+  the daemon never re-shares a foreign prefix. If Alice forwards a link she
+  received from Mallory, it goes out under Alice's own prefix or as a bare
+  fragment.
+- **Which prefixes a formatter may emit.** A prefix must be `https:`, with no
+  userinfo and no fragment. It may carry a path and a query. It is configured
+  only through the host capability (§ 7). A guest cannot set or choose its own
+  prefix (`#1404`).
+- **What an app may intercept.** The `ocapn` key, not the origin, is what
+  marks a link as a locator, so Familiar treats every link whose fragment
+  parses under § 3.5 as a locator, whatever the origin, wherever it can see
+  the link (paste, share sheet, its launch scheme, an origin it claims). It
+  parses the fragment and discards the prefix. The platforms let it *claim*
+  only the origins in its signed associated-domain set (§ 5.1): an app can
+  claim an origin only if the origin's `.well-known` file names the app, so
+  an attacker cannot make the OS route `evil.example` to Familiar, and a click
+  on an unclaimed origin reaches that origin's page.
 - **How a recipient decides.** The origin says nothing about **who** the peer
   is. A lookalike origin can only serve a page that steals the secret in that
   same link. In practice the attacker either receives a secret meant for
-  someone else (the sender misconfigured the base) or offers the recipient an
+  someone else (the sender misconfigured the prefix) or offers the recipient an
   object of the attacker's own (ordinary phishing). The confirmation UI
   therefore shows the peer key fingerprint and any existing pet name for that
   key, never the origin, as the identity. A peer key the recipient has seen
@@ -309,7 +380,7 @@ attacker** the moment the recipient clicks it. The rules:
 - **Phishing resistance is limited.** A recipient who clicks a link on an
   attacker's lookalike origin has already given that link's secret to the
   attacker. The defense is on the sending side: senders get a fixed,
-  allowlisted base, and the share UI shows the base it will use.
+  allowlisted prefix, and the share UI shows the prefix it will use.
 
 ### 4.3 Leakage routes that survive
 
@@ -317,7 +388,7 @@ attacker** the moment the recipient clicks it. The rules:
 |---|---|---|
 | HTTP request, server logs, CDN | None. The fragment is not sent in a request (RFC 3986 § 3.5; Referrer Policy § 8.4 strips it). | No action. Access logging stays off for these paths anyway. |
 | `Referer` | None (Referrer Policy § 8.4 sets the fragment to null). | `no-referrer` regardless. |
-| Redirects | A `Location` with no fragment **inherits** the original fragment (RFC 9110 § 10.2.2) *(unverified in this pass)*. | No redirects on `/adopt/` or `/invite/`. Never put them behind an auth redirect. |
+| Redirects | A `Location` with no fragment **inherits** the original fragment (RFC 9110 § 10.2.2) *(unverified in this pass)*. | No redirects on the capture paths. Never put them behind an auth redirect. |
 | Session history, back and forward | Replaced by `replaceState` (MDN, verified) | Erase first (§ 4.1). |
 | **Global history database and sync**, address-bar autocomplete | **Unknown.** No source says whether Chrome, Firefox or Safari record the pre-`replaceState` URL in the history store or sync it. | Treat it as a leak. The verification plan measures it (§ 10). Single use and expiry (§ 4.4) bound the damage. |
 | Bookmarks, screenshots, the address bar before JavaScript runs | User-driven | Erase immediately, warn in `<noscript>`, never show the `id` |
@@ -325,7 +396,7 @@ attacker** the moment the recipient clicks it. The rules:
 | Third-party scripts and analytics | Read `location` | None on these paths, enforced by the CSP above |
 | Link unfurlers (Slack, iMessage, Discord) | They fetch the URL without the fragment *(unverified in this pass)*, but the message itself stores the whole link. | The message service holds the secret. Single use bounds invitations. |
 | Clipboard and messaging apps | Whole link | Same as above. For long-lived adoption locators, prefer sending them over an existing CapTP edge rather than as a link. |
-| XSS on the capture origin | It reads `localStorage`. | One pending record with a short time to live. No other script-bearing pages on the capture origin. **Recommend a dedicated origin** (§ 13 question 2). |
+| XSS on the capture origin | It reads `localStorage`. | One pending record with a short time to live. No other script-bearing pages on the capture origin. **Recommend a dedicated origin** (open question 10). |
 | `window.opener` | An opener on another origin cannot read `location`, but it can navigate the window. | COOP `same-origin` |
 
 ### 4.4 Single use and expiry
@@ -381,6 +452,18 @@ on devices before anyone relies on it. On desktop, **no platform verified in
 this pass lets an installed app transparently claim an HTTPS link clicked in
 Chrome or Firefox.** The desktop path is the capture page plus a hand-off.
 
+**Intercepting every origin.** The maintainer's ideal is that Familiar
+intercepts every OCapN locator link, whatever its domain. The `ocapn` key makes
+such a link recognizable without knowing the origin, and Familiar recognizes it
+wherever the link reaches Familiar itself: paste, drop, the share sheet, its
+launch scheme. No OS routes a *click* on an arbitrary origin to an app. The
+claim mechanisms in the table are per origin, and the one mechanism that sees
+every navigation, a browser extension, is exactly the § 4.3 leak. A click on an
+origin Familiar does not claim therefore reaches that origin's page, and the
+page decides whether to offer the hand-off in § 5.2. A site that wants the
+hand-off serves the capture page. Any other site sees nothing, because the
+fragment never reaches its server.
+
 ### 5.2 The capture page as the universal fallback
 
 Every platform reaches the page when no app intercepts the link. The page
@@ -388,10 +471,10 @@ offers:
 
 - **Open in Familiar.** The page navigates to a narrow custom scheme that
   launches the app and carries the canonical bare fragment:
-  `familiar:adopt#…` or `familiar:invite#…`. This is a launch
+  `familiar:adopt#…` or `familiar:accept#…`. This is a launch
   vehicle, not a locator format. Familiar parses the fragment and drops the
   scheme, and nothing ever formats or stores a `familiar:` string. Whether to
-  reuse `endo:` as that scheme is § 13 question 5. If Familiar is not
+  reuse `endo:` as that scheme is open question 5. If Familiar is not
   installed, nothing happens. The page then shows the next action after a
   timeout and never retries in a loop.
 - **Copy for the CLI or Chat.** This copies the bare `#…` form, so the user
@@ -421,17 +504,20 @@ text.
 1. **Dual-stack parser (daemon, first).** `parseLocator` dispatches on the
    input:
    - A string that starts with `endo://` goes to the legacy path, unchanged.
-   - A string that starts with `#`, or an `https:` URL whose path ends in
-     `/adopt/` or `/invite/`, goes to the § 3 parser.
+   - A string that starts with `#`, or an `https:` URL whose fragment has an
+     `ocapn` key, goes to the § 3.5 parser.
 
-   Both paths return the same `{ formulaType, node, number, hints, from?,
-   fromNode? }`. `acceptInvitation` and `makeInvitation.accept` stop
-   re-parsing by hand and read `from` and `fromNode` from the parser result.
+   Both paths return the same `{ network, node, number, hints, typeHint?,
+   nameHint? }`. The legacy path also returns `formulaType`, `from` and
+   `fromNode`. `acceptInvitation` and `makeInvitation.accept` stop re-parsing
+   by hand. For a new-form invitation they learn the inviter's handle from the
+   invitation itself (open question 11), not from the locator.
    `directory.js` `storeLocator` drops its `endo://` prefix check in favor of
    `assertValidLocator`.
 2. **One formatter.**
-   - `formatLocator({ id, type, hints, from, fromNode, base })` emits the new
-     form.
+   - `formatLocator({ network, id, hints, prefix, typeHint, nameHint })`
+     emits the new form. It adds the query hints only when a prefix is
+     configured (open question 2).
    - `formatLegacyLocator` keeps the `endo://` output for one release, behind a
      daemon option, for peers that have not upgraded.
    - `makeInvitation.locate` and minion.town `guest-locator.ts` call the
@@ -446,7 +532,9 @@ text.
    Invitations get the new deadline only when they are minted after the
    upgrade. Older invitations have none.
 5. **Rollout order:**
-   1. Daemon parser and error redaction, with the new formatter off.
+   1. Daemon parser and error redaction, with the new formatter off. The
+      invitation's `accept` reports the inviter's handle (open question 11),
+      so a new-form invitation needs no `from` field.
    2. CLI and Chat input validation accept both shapes (`add-space-modal.js`,
       `shell.js` `startsWith('endo://')`).
    3. The capture page on minion.town, outside the oauth2-gated handle.
@@ -462,23 +550,36 @@ text.
    `bus-manager-rust-xs.js`) need `URLSearchParams` with `getAll` and ordered
    iteration before step 1 can land on the Rust/XS daemon.
 
-## 7. Per-agent base URL
+## 7. Per-agent prefixes
 
-- Each agent formula (host or guest) gains an optional `locatorBase` field:
-  an `https:` origin plus an optional prefix path. Absent means bare.
-- **Inheritance.** A new agent inherits its creator's `locatorBase` when it is
-  formulated. A hosted deployment configures the root host: minion.town sets
-  `https://minion.town`, so every guest it provisions inherits that base.
-- **Configuration.** A host sets its own base and its guests' bases through
-  `E(host).setLocatorBase(petNamePath, base | undefined)`. This is a method on
-  the host capability, which already holds authority over the agents it
-  names. It is not an identity check. `base` is validated per § 4.2.
-- **Use.** The base is read only by the formatter, when it produces a locator
-  for sharing (`locate`, `invite`, the minion.town guest-locator route). It is
-  never stored with a locator and never consulted by a parser.
+- Each agent formula (host or guest) gains an optional `locatorPrefixes`
+  field: `{ adopt?, accept? }`. Each value is everything that goes before
+  the `#`: an `https:` origin with an optional path and an optional query, for
+  example `https://minion.town/adopt` and `https://minion.town/accept`.
+  **Both are empty by default.** An empty prefix means the agent formats bare
+  fragments.
+- `adopt` is used when the agent shares a value (`locate`). `accept` is used
+  when it mints an invitation (`invite`). The paths are the site's choice
+  (§ 3.3).
+- **Inheritance.** A new agent inherits its creator's `locatorPrefixes` when it
+  is formulated. A hosted deployment configures the root host: minion.town sets
+  its two prefixes, so every guest it provisions inherits them.
+- **Configuration.** A host sets its own prefixes and its guests' prefixes
+  through `E(host).setLocatorPrefixes(petNamePath, { adopt, accept } |
+  undefined)`. This is a method on the host capability, which already holds
+  authority over the agents it names. It is not an identity check. Each
+  prefix is validated per § 4.2. A configured query must not use the `type`
+  or `name` keys, because the formatter appends those.
+- **Use.** The prefixes are read only by the formatter, when it produces a
+  locator for sharing (`locate`, `invite`, the minion.town guest-locator
+  route). They are never stored with a locator and never consulted by a
+  parser.
+- **Netlayer and hints.** The formatter takes `ocapn` and the `at` values from
+  the agent's transports (#138). It emits the agent's preferred netlayer and
+  that netlayer's hints.
 - **`#1404`** ("guests neither produce nor consume identifiers or locators")
   removes `locate`, `invite` and `accept` from `EndoGuest`. A guest therefore
-  never formats a locator itself. Its `locatorBase` matters only when **its
+  never formats a locator itself. Its `locatorPrefixes` matter only when **its
   host** shares on the guest's behalf: the minion.town guest-locator route,
   and a guest's invitation minted by its host. The two designs are compatible
   if `#1404` lands first. The guest rows of the inventory and of
@@ -489,9 +590,9 @@ text.
 
 | Work | Interaction | Conflict? |
 |---|---|---|
-| endo-but-for-bots #138 (`ocapn-daemon-integration`, connect by public key plus hint; per-agent `@transports`) | `peer` and `at` are exactly "public key plus connection hint". Per-agent transports decide which `at` values an agent's locator carries, so the formatter takes hints from the agent's transports. | None. #138's examples use `endo://` and must be re-spelled. |
+| endo-but-for-bots #138 (`ocapn-daemon-integration`, connect by public key plus hint; per-agent `@transports`) | `pk` and `at` are exactly "public key plus connection hint". Per-agent transports decide which `ocapn` netlayer and which `at` values an agent's locator carries, so the formatter takes them from the agent's transports. | None. #138's examples use `endo://` and must be re-spelled. |
 | #1430 (network-owned identity exchange, `makeStartSessionNetwork`) | The identity exchange is below the locator. A fragment locator changes only how the designator and hints reach the dialer. | None, if #1430 keeps taking the expected peer key as input (as `networks/ocapn.js` does). |
-| Garden design `ocapn-bootstrap-package` (garden repo `designs/ocapn-bootstrap-package.md`, `kriscendobot/garden#124`): the rung-2 nonce locator in the URL fragment, scrubbed at once | It needs a fragment carrier for a sturdyref. This grammar is that carrier, so it should not define its own. Its fixed error codes (`LOCATOR_MISS`, `LOCATOR_SPENT`) agree with § 4.5. Its "introducer" formula is the single-use primitive that § 4.4 defers to. | **Reconcile:** the bootstrap design says the nonce locator is "wrapped in #88's envelope" (minion.town's `#v=1&invitation=`). The two envelopes must converge on one. Recommendation: this grammar, with `type` naming the introducer. |
+| Garden design `ocapn-bootstrap-package` (garden repo `designs/ocapn-bootstrap-package.md`, `kriscendobot/garden#124`): the rung-2 nonce locator in the URL fragment, scrubbed at once | It needs a fragment carrier for a sturdyref. This grammar is that carrier, so it should not define its own. Its fixed error codes (`LOCATOR_MISS`, `LOCATOR_SPENT`) agree with § 4.5. Its "introducer" formula is the single-use primitive that § 4.4 defers to. | **Reconcile:** the bootstrap design says the nonce locator is "wrapped in #88's envelope" (minion.town's `#v=1&invitation=`). The two envelopes must converge on one. Recommendation: this grammar, with the `type` hint naming the introducer. |
 | Tower report (minion.town docs job, 2026-10-16): remote invitations carry no connection hints | `makeInvitation.locate` takes hints only from `networkBroker.getPeerInfo()`. An agent with no configured transport mints an undialable link. | The formatter **refuses** to emit an invitation with zero `at` unless the caller passes `{ allowNoHints: true }` (for local and same-daemon use). That turns a silent dead link into an error. |
 | Sandboxed-iframe and web-extension transports (garden `ocapn-bootstrap-package` rungs 1 and 3) | Neither needs a locator, because a port is handed over directly. A web-extension transport that watches the capture origin is the extension leak in § 4.3. | The extension must not watch the capture origin. It receives locators only from Familiar or by explicit paste. |
 | [familiar-deep-link-invitations](familiar-deep-link-invitations.md) | Superseded envelope, kept flow (§ 5.3) | Its § 1 needs a "Superseded by" note when this design is accepted. |
@@ -501,7 +602,7 @@ text.
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle and commit | Value crossing |
 |---|---|---|---|---|---|
-| Daemon to locator string | `locator.js` formatter and parser | Host: `locatorBase`, hint selection from transports | Formula store (ids only), `locatorBase` on the agent formula | Daemon: invitation consume and deadline | Canonical locator string |
+| Daemon to locator string | `locator.js` formatter and parser | Host: `locatorPrefixes`, netlayer and hint selection from transports | Formula store (ids only), `locatorPrefixes` on the agent formula | Daemon: invitation consume and deadline | Canonical locator string |
 | Capture page to app or shell | Page script | Origin operator: CSP, time to live | One `localStorage` record, 15-minute time to live | Page deletes the record on hand-off or decline | Canonical bare fragment |
 | App or shell to daemon | Familiar renderer and Chat over CapTP; CLI stdin | The user's consent in the confirmation UI | None in the app | **The daemon** decides accept and commit | Bare fragment plus a pet name |
 | Platform to app | Associated-domain verification | The origin's `.well-known` file plus the app's signed entitlements | OS | OS | Full URL (fragment delivery to be tested) |
@@ -513,8 +614,8 @@ Answers to the four ownership questions:
 2. **Commit and discard** belong to the daemon alone.
 3. **Restart and replay:** a pending page record that outlives a crash simply
    expires. The daemon's invitation state machine is unchanged.
-4. **Classification** (invitation versus adoption) is the `type` field. The
-   path only routes.
+4. **Classification** (invitation versus adoption) is the recipient's action,
+   checked by the far peer. The path and the `type` hint only steer.
 
 Naming check: the page "captures" and "hands off". It does not "accept",
 because accepting is the daemon's commit.
@@ -523,38 +624,46 @@ because accepting is the daemon's commit.
 
 **Unit tests (daemon, `locator.test.js`):**
 
-- Round trips through the bare and based forms.
-- `+` and `%` in hints.
+- Round trips through the bare and prefixed forms, with and without the
+  `type` and `name` query hints.
+- `+` and `%` in hints, and an IPv6 `ws:[…]:port` hint.
 - `#`, `&` and `=` inside a hint.
-- Rejection of each of these: a repeated singular key, an unknown key, an
-  uppercase hex value, an empty `at`, a decoded space in an `at`, a mismatch
-  between path and type, an unknown `v`, an oversized fragment, a hint count
-  over the cap.
+- Rejection of each of these: a missing or repeated `ocapn`, an unknown
+  `ocapn` value, a repeated singular key (in the fragment or the query), an
+  unknown fragment key, `se` alone and `se` with `id`, an uppercase hex value,
+  an empty `at`, a decoded space in an `at`, an oversized fragment, a hint
+  count over the cap.
+- Unknown query keys and any path are ignored.
 - Dual-stack: each legacy fixture parses to the same record as its new-form
   twin.
-- Canonical equality ignores the base.
-- **Redaction:** for every rejection, `error.message` contains no 64-hex run
-  and no `at` value.
+- Canonical equality ignores the prefix and the query hints.
+- **Redaction:** for every rejection, `error.message` contains no long hex
+  run and no `at` value.
 
 **Integration tests (daemon):**
 
 - An invite/accept round trip in each direction: a new-form inviter with a
   legacy accepter, and a legacy inviter with a new-form accepter.
+- A new-form invitation round trip learns the inviter's handle from the
+  invitation, with no `from` in the locator (open question 11).
+- Accepting a new-form locator whose `id` names a non-invitation fails with
+  the generic message, whatever its `type` hint says.
 - An invitation past its deadline fails with the generic message.
 - A zero-hint invitation is refused.
 - The captured daemon log of a full round trip contains no invitation id.
 
 **minion.town:**
 
-- `guest-locator.ts` emits the new form and keeps its fixed error strings.
-- A Caddy route test shows that `/adopt/` and `/invite/` are **not** behind
+- `guest-locator.ts` emits the new form under the configured `adopt` prefix
+  and keeps its fixed error strings.
+- A Caddy route test shows that `/adopt` and `/accept` are **not** behind
   forward auth and carry the § 4.1 headers.
 - The canary consumes the new form.
 
 **Real-browser check (Playwright; Chromium, Firefox and WebKit):**
 
 1. Serve the page over HTTPS with a logging server. Navigate to
-   `/adopt/#v=1&type=remote&id=<sentinel>&peer=…`.
+   `/adopt?type=Counter&name=counter#ocapn=np&id=<sentinel>&pk=…&at=…`.
 2. Assert that `location.hash === ''` after load.
 3. Assert that `history.length` has not grown, and that going back does not
    land on a URL containing the sentinel.
@@ -563,6 +672,7 @@ because accepting is the daemon's commit.
    Decline.
 5. Assert that the server log and every request the page made (from the
    Playwright request log) never contain the sentinel, including `Referer`.
+   The server log does contain the query hints, which is expected (§ 3.2).
    With `connect-src 'none'` there should be no requests after the document
    and its script.
 6. Open the browser's history store (Chromium `History` SQLite, Firefox
@@ -578,14 +688,16 @@ Familiar mobile depends on them.
 
 ## 11. Phased implementation
 
-1. Daemon grammar, dual-stack parser, error redaction, tests (S–M, 3 days).
-2. Formatter, `locatorBase`, invitation deadline, zero-hint refusal, docs
+1. Daemon grammar, dual-stack parser, error redaction, the inviter handle in
+   the invitation's `accept` reply, tests (M, 4 days).
+2. Formatter, `locatorPrefixes`, invitation deadline, zero-hint refusal, docs
    (M, 4 days).
-3. minion.town capture page, Caddy route, guest-locator route, canary
+3. minion.town capture page, Caddy routes, guest-locator route, canary
    (S–M, 3 days).
 4. CLI and Chat input acceptance, agent primers (S, 1–2 days).
-5. Familiar launch scheme and associated domains, which folds into
-   familiar-deep-link-invitations (S–M, 3 days, after the device checks).
+5. Familiar locator recognition, launch scheme and associated domains, which
+   folds into familiar-deep-link-invitations (S–M, 3 days, after the device
+   checks).
 
 ## Dependencies
 
@@ -597,38 +709,51 @@ Familiar mobile depends on them.
 | [familiar-deep-link-invitations](familiar-deep-link-invitations.md) | Consumer; envelope superseded (§ 5.3) |
 | [guest-native-invitations](guest-native-invitations.md) | Becomes host-only under `#1404` (§ 7) |
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | Sibling `magnet:` grammar; shares the redaction rule (§ 4.5) |
-| [daemon-agent-network-identity](daemon-agent-network-identity.md) | `peer` is the per-agent key |
+| [daemon-agent-network-identity](daemon-agent-network-identity.md) | `pk` is the per-agent key |
 
 ## Design Decisions
 
-1. **Secrets live only in the fragment, and the base routes only.** The parser
-   never reads the base, so a hostile base can steal a secret from a click but
+1. **Secrets live only in the fragment. The prefix only steers.** The parser
+   never reads the origin or the path, and reads the query only for
+   unauthenticated hints. A hostile prefix can steal a secret from a click but
    can never change what a pasted locator means.
-2. **Re-base on share.** Stored locators are bare, so the daemon cannot forward
-   a foreign origin.
-3. **One envelope over OCapN.** It adds no new Swiss-number or designator
-   encoding (§ 2).
-4. **The custom scheme is a launch vehicle, not a format** (§ 5.2).
-5. **Expiry is daemon-side.** A field in the link could not enforce it.
+2. **Everything before the fragment is per-agent configuration, empty by
+   default** (§ 7). The bare fragment is the locator. The prefix is
+   presentation.
+3. **The fragment is one OCapN sturdyref.** `ocapn` is the netlayer, `pk` the
+   designator, `id` the Swiss number and `at` the hints (§ 2). The `ocapn` key
+   also marks the link as a locator, whatever its origin (§ 5.1).
+4. **Invitation versus adoption is the recipient's action**, steered by the
+   path and the `type` hint and enforced by the far peer (§ 3.3).
+5. **`id` now, `se` later.** `id` names a sturdyref or parcel. `se`, for a live
+   reference, is reserved and rejected until specified (§ 3.4).
+6. **Re-prefix on share.** Stored locators are bare, so the daemon cannot
+   forward a foreign origin.
+7. **The custom scheme is a launch vehicle, not a format** (§ 5.2).
+8. **Expiry is daemon-side.** A field in the link could not enforce it.
 
 ## Open questions
 
-1. **Is `minion.town` the default base for Endo itself, or only for
+1. **Are `minion.town` prefixes the default for Endo itself, or only for
    minion.town-hosted agents?** Recommendation: only for minion.town-hosted
    agents. Plain Endo defaults to bare, as asked, and Familiar ships
    associated domains for a capture origin the project controls.
-2. **Should the capture page live on a dedicated origin (for example
-   `adopt.minion.town`) instead of `minion.town` itself?** Recommendation: yes.
-   XSS anywhere on the capture origin reads the pending record, and
-   minion.town serves guest shells and clips. A one-page origin keeps the
-   attack surface to one script.
-3. **Should `at` values become full `ocapn://` peer locators when the OCapN URI
-   form stabilizes?** Recommendation: yes, gated on the OCapN locator draft
-   being adopted. Keep today's hint strings until then.
+2. **May the bare form carry the `type` and `name` hints?** A bare fragment
+   has no query. Recommendation: no. The bare form is what the CLI and Chat
+   paste, and both already ask the user for a pet name. Putting hints in the
+   fragment would mix unauthenticated text with the secret.
+3. **Which `ocapn` values does the daemon accept, and how do today's
+   transports map onto them?** `np` is the first. Today's
+   `tcp+netstring+json+captp0://` and `ws:` hints are separate Endo transports
+   with no OCapN netlayer name. Recommendation: the formatter emits `np` with
+   its hints. Each legacy Endo transport gets an `ocapn` value only when it is
+   registered as an OCapN netlayer. Until then it is reachable only through
+   legacy `endo://` locators.
 4. **Should the parser reject unknown fragment keys (today's strictness) or
    tolerate `x-` prefixed keys for forward compatibility?** Recommendation:
-   reject. Bump `v` for any new key. A tolerated key is an unauthenticated
-   field that the UI may be tempted to display.
+   reject, as § 3.5 does. A new key such as `se` is an incompatible change.
+   A tolerated key is an unauthenticated field that the UI may be tempted to
+   display. Unknown query keys are tolerated because the site owns the query.
 5. **Which custom scheme launches Familiar from the page: keep `endo:` or
    introduce `familiar:`?** Recommendation: `familiar:`, so that `endo:`
    strings stop looking like locators. Accept `endo://` input for parsing
@@ -651,6 +776,19 @@ Familiar mobile depends on them.
 9. **Should durable adoption locators also gain an optional deadline, or stay
    revocation-only?** Recommendation: stay revocation-only in this design, and
    use the `ocapn-bootstrap-package` introducer for single-use adoption.
+10. **Should the capture page live on a dedicated origin (for example
+    `adopt.minion.town`) instead of `minion.town` itself?** Recommendation:
+    yes. XSS anywhere on the capture origin reads the pending record, and
+    minion.town serves guest shells and clips. A one-page origin keeps the
+    attack surface to one script.
+11. **Where does the inviter's handle go?** Today's invitation locator carries
+    `from` and `fromNode` (`acceptInvitation` reads them before it dials). The
+    revised fragment has no such keys. Recommendation: the inviting peer's
+    invitation formula already knows its inviter, so its `accept` returns the
+    inviter's handle id, and the accepter writes its routing after the
+    invitation is proven. That also removes one speculative write that
+    `acceptInvitation` must roll back today. The alternative is a `from` query
+    hint, which would be unauthenticated and visible to the prefix's server.
 
 ## Prompt
 
@@ -665,3 +803,16 @@ Familiar mobile depends on them.
 > variadic connection hints as a repeated `at`. (kriskowal, liaison session
 > 2026-10-16; the full brief is the garden job
 > `design-https-fragment-locators-20261016`.)
+
+Revision (kriskowal, review of #1484, 2026-10-22), paraphrased: everything
+before the fragment is configured per agent and empty by default, as in
+`#ocapn=np&id=…&pk=…&at=…&at=…`. `ocapn` names the network designator (`np`
+is the Noise Protocol) and marks the fragment as an OCapN locator that an app
+like Familiar should intercept whatever the rest of the URL is. `id` is the
+Swiss number in hex, `pk` the peer's public key in hex, and `at` a connection
+hint such as `ws:peer-ipv6:port`. The query string may carry `type`, an
+informative hint of the far type, and `name`, the sender's suggested pet name.
+The path is site-specific steering, such as `/adopt` or `/accept`, for when
+the link falls through to ordinary HTTPS. A later `se` in place of `id` could
+carry a salt and an encrypted kernel slot identifier for a live reference
+(§ 3.4).
