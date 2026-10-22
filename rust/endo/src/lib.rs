@@ -24,6 +24,7 @@ pub mod proc;
 pub mod run_input;
 pub mod socket;
 pub mod supervisor;
+pub mod tui;
 pub mod types;
 pub mod util;
 pub mod ironhorse_engine;
