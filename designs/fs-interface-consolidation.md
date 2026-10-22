@@ -131,7 +131,7 @@ names:
 
 Duplication is not free: it is where drift accumulates (the daemon comment
 already worries about it), it forces adapters that would otherwise be
-unnecessary (the unbuilt `BlobRef → SnapshotBlob` adapter, fs-reconciliation
+unnecessary (the unbuilt `BlobRef -> SnapshotBlob` adapter, fs-reconciliation
 F7/D3, is a *symptom* of two shapes for one concept), and it multiplies the
 surface a viewer must learn to dispatch over.
 
@@ -317,7 +317,7 @@ The layers, as built:
    `readableBlobMethodGuards`, `rangeReadMethodGuards`, and
    `rangeAttenuationMethodGuards` so implementers adopt the surface without
    re-spreading. The extended `BlobRef` carries the same methods plus `text` /
-   `json`. The `BlobRef → SnapshotBlob` adapter is unnecessary because the
+   `json`. The `BlobRef -> SnapshotBlob` adapter is unnecessary because the
    shapes converge from below.
 
 *Blast radius:* the widest: content-store powers, the CAS cache, every blob exo
@@ -347,7 +347,7 @@ flagged ones and their resolutions:
 | **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }` — and `getInfo().size` (now `size()`) is bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it; `kind` is kept (the mount stats a path); XS approximates `atime <- mtime` (host stat lacks it). |
 | **Content hash** | `EndoBlob` exposed both `sha256()` (hex) and `getInfo().hash` (base64); blob vs tree hash encodings differed | **Every public hash accessor is base64; hex is internal-only.** PR #467 first removed `EndoBlob.sha256()` in favor of `getInfo().hash`; PR #1301 then removed `getInfo()` and restored `sha256()` as the single hash accessor, now returning base64. `EndoBlob`, `BlobRef`, `SnapshotBlob`, `SnapshotTree`, and `EndoReadableTree` all report the content hash through `sha256()` in base64. Hex survives only as the on-disk `store-sha256/<hex>` address and the tree-manifest child references; callers convert base64 to hex via `@endo/hex` + `@endo/base64` where the store key is needed. |
 | **Dir-change record** | NameHub `{ add, value: idRecord }` vs mount `{ add, type }` vs extended `WatchEvent { kind, name }` — three shapes | **Live mount feed, separate record.** `followNameChanges` returns the daemon-local `{ add, type } \| { remove }` reader; a common record remains deferred until a shared operation establishes common semantics. |
-| **Listing** | daemon/lite `list()` → `string[]` vs extended `Cursor`/`DirEntry[]` (name + qid) | **Intentional layer split** (the reconciliation chose names for lite/daemon, rich `Cursor` for the cap-FS engine). Not aligned. |
+| **Listing** | daemon/lite `list()` -> `string[]` vs extended `Cursor`/`DirEntry[]` (name + qid) | **Intentional layer split** (the reconciliation chose names for lite/daemon, rich `Cursor` for the cap-FS engine). Not aligned. |
 
 Other audited items (`getStat`/`getAttrs` narrow-vs-wide, `mkdir`/`unlink`
 aliases, `Qid` vs `getInfo` (now `sha256()` / `size()`), `has`/`exists`, symlink scoping) are
@@ -372,14 +372,14 @@ After C1 through C5 the fs/name-hub interface set is:
   attenuation surface, pre-assembled as `ReadableBlobRangeInterface`. The
   convergence went the other way from the early "retire `BlobRef`" framing:
   `BlobRef` was the richest shape, so the daemon and lite blobs aligned **up**
-  to it. The `BlobRef → SnapshotBlob` adapter was never needed because the
+  to it. The `BlobRef -> SnapshotBlob` adapter was never needed because the
   shapes converge from below; `BlobRef` itself remains (enriched with `text` /
   `json`).
 - **Vocabulary:** records exported from `lite`; the catalog doc is the prose
   vocabulary (C5).
 
 Net: roughly a third fewer fs-shaped guards, no hand-copied method shapes, and
-no `BlobRef → SnapshotBlob` adapter.
+no `BlobRef -> SnapshotBlob` adapter.
 
 ## Sequencing (historical)
 
