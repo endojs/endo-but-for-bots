@@ -49,7 +49,7 @@ export type Session = {
   /**
    * - Get the remote bootstrap object
    */
-  getBootstrap: () => Record<PropertyKey, any>;
+  getBootstrap: () => any;
   /**
    * - Abort the session
    */
