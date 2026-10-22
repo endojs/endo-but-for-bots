@@ -190,7 +190,7 @@ The web Chat's feature surface, enumerated from `packages/chat/`:
 
 ### Panel layout
 
-The default layout on an 80×24 minimum terminal:
+The default layout on an 80x24 minimum terminal:
 
 ```
 ┌─┬───────────────┬────────────────────────────────────────────┐
@@ -214,7 +214,7 @@ The default layout on an 80×24 minimum terminal:
 Widths:
 
 - Spaces rail: 2 columns (1 for icon, 1 for separator).
-- Inventory: 15–30 columns; resizable with `Alt+←` / `Alt+→`.
+- Inventory: 15–30 columns; resizable with `Alt+<-` / `Alt+->`.
 - Transcript + command bar: remainder.
 - Pending and command-bar heights are dynamic; the transcript fills the
   remaining vertical space.
@@ -239,7 +239,7 @@ Primary keybindings (global — except where noted):
 
 | Chord | Mode | Action |
 |-------|------|--------|
-| `Alt+1` … `Alt+9`, `Alt+0` | any | Switch to space N (home = 0) |
+| `Alt+1` ... `Alt+9`, `Alt+0` | any | Switch to space N (home = 0) |
 | `Alt+s` | any | Open spaces picker (for >10 spaces) |
 | `Alt+i` | any | Toggle inventory |
 | `Alt+p` | any | Toggle pending commands panel (keeps recent even when empty) |
@@ -319,7 +319,7 @@ needed for code blocks and links).
 On each frame, compute the visible window based on scroll offset, map
 each entry to `ratatui::text::Line`s, and hand them to a `Paragraph`
 widget with a bounded scroll state.
-Only when messages arrive, dismiss, or change (e.g., pending → settled)
+Only when messages arrive, dismiss, or change (e.g., pending -> settled)
 do we rebuild the affected entries.
 
 ### Focus mode
@@ -468,8 +468,8 @@ Key facts grounding this section:
   view of VM state (modules, globals).
 - The VM communicates over a **TCP-like byte stream** (historically
   Moddable's `mxDebug`): line-delimited XML packets roughly of the form
-  `<xsbug><break …/><frames/><locals/></xsbug>` and
-  `<xsbug><set-breakpoint …/></xsbug>`.
+  `<xsbug><break .../><frames/><locals/></xsbug>` and
+  `<xsbug><set-breakpoint .../></xsbug>`.
   The protocol is undocumented in any formal sense but is stable and
   implemented in `xs/tools/xsbug.js` and `xs/platforms/*_xs.c`.
 - Verbs the VM accepts (from `xsbug` observation):
@@ -560,7 +560,7 @@ view is focused:
 | `p` | Pause — inject a `debugger;`-equivalent via `endor-bus-tui` `pause` verb |
 | `b` | Add conditional breakpoint (opens form) |
 | `↑` / `↓` | Move within the focused sub-panel |
-| `Tab` | Cycle focus: source → stack → locals → breakpoints → eval |
+| `Tab` | Cycle focus: source -> stack -> locals -> breakpoints -> eval |
 | `Enter` (on locals row) | Expand / collapse |
 | `Enter` (on eval) | Evaluate in selected frame |
 | `k` / `x` | Kill selected worker (asks for confirmation) |
@@ -674,7 +674,7 @@ The verbs the TUI speaks are defined in
 [endor-bus-tui](endor-bus-tui.md).
 This section summarizes only what the TUI needs from that surface:
 
-| Verb (TUI → daemon) | Purpose |
+| Verb (TUI -> daemon) | Purpose |
 |---------------------|---------|
 | `space.list`, `space.watch` | Enumerate and observe spaces |
 | `profile.enter`, `profile.exit` | Space activation |
@@ -689,7 +689,7 @@ This section summarizes only what the TUI needs from that surface:
 | `debug.go`, `debug.step`, `debug.step-over`, `debug.step-out` | Execution control |
 | `debug.eval` | Evaluate an expression in the selected frame |
 
-| Event (daemon → TUI) | Purpose |
+| Event (daemon -> TUI) | Purpose |
 |----------------------|---------|
 | `message.added`, `message.dismissed`, `message.resolved` | Inbox events |
 | `inventory.added`, `inventory.removed` | Name events |
@@ -703,55 +703,245 @@ All TUI-bus traffic runs over the existing CBOR-envelope protocol
 already present in `go/engo/daemon/codec.go` and inherited by `endor`.
 The TUI carries no persistent state the daemon does not also hold.
 
+## Ownership map
+
+Three components meet here: the `endor tui` client process, the
+daemon (the Rust `endor` supervisor plus the JS manager it runs), and
+the XS workers being debugged.
+The Rust supervisor only bridges the client's socket traffic:
+`rust/endo/src/socket.rs` (`start_socket_listener`) wraps each
+netstring frame from a client in a `deliver` envelope addressed to the
+manager, and the manager speaks CapTP on it, as it does for the `endo`
+CLI.
+
+| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
+|---|---|---|---|---|---|
+| client <-> supervisor | Unix socket, netstring frames bridged as `deliver` envelopes (`socket.rs`) | none; the supervisor forwards and does not interpret | none | the supervisor assigns the connection handle and sends `connect`/`disconnect` | opaque frames |
+| client <-> manager (chat) | the chat data path chosen in Phase 2 (see Open questions) | the manager authorizes every call against the client's host capability | **manager**: messages, pet names, spaces, pending commands | the manager commits `send`, `dismiss`, `adopt`, and command results; the client never mutates state locally | messages, name changes, command results |
+| client <-> manager (debugger) | the `Debugger` exo (`packages/daemon/src/debugger.js`) reached from the host capability | the manager refuses attach to a worker the caller does not hold | **manager**: breakpoints (made durable in Phase 7) | the manager owns attach, detach, and the controller claim | stop events, frames, locals, eval results |
+| manager <-> worker (debugger) | `debug-attach`/`debug`/`debug-detach` envelopes (`attachDebugger` in `bus-manager-rust-xs.js`) | per-worker opt-in (Design Decision 7) | none at the worker beyond the live XS session | the manager | `mxDebug` XML |
+| client (terminal) | `ratatui` + `crossterm` | the client owns layout, focus, mode, keybindings, colors | none; every client state is a cache rebuilt on reconnect | the client | — |
+
+The four ownership questions:
+persistent state is the manager's;
+the commit/discard decision for a chat action or a debugger command is
+the manager's (the client shows a command as pending until the manager
+settles it);
+restart/replay after a disconnect is the client's job (it reconnects,
+re-follows, and redraws, as #1525's `bus.rs` already does);
+classification of what a worker allows (debuggable or not) is the
+manager's.
+
+Naming check: client modules are named for what they render (`App`,
+`ui`, the transcript and pending regions), and daemon-side additions
+are named for the state they hold.
+The client does not gain a type named for a daemon lifecycle concept
+such as a "session commit".
+
 ## Phased Implementation
 
-### Phase 1: Skeleton and Chat transcript — foundational
+Phase 1 is in flight as PR #1525 (`endor-tui-phase-1` on
+`llm-f02cd81`).
+Every later phase is one builder PR on a frozen `llm-<sha>` snapshot,
+because `rust/endo` exists only on `llm`.
+The phases are cut so that each one merges on its own and leaves
+`endor tui` usable.
+Phase 2, the chat data path, is the hinge.
+#1525 speaks provisional payloads that no daemon serves, so every
+phase that shows real chat or debugger state waits on Phase 2.
+
+| Phase | Size | Depends on |
+|---|---|---|
+| 1 Skeleton and chat transcript | M | — (PR #1525) |
+| 2 Chat data path | L | 1 |
+| 3 Spaces and per-space themes | M | 2 |
+| 4 Value inspection and forms | L | 2 |
+| 5 XS debugger baseline | L | 2, [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) |
+| 6 Debugger richness | M | 5 |
+| 7 Durable breakpoints and controller claim | M | 5 |
+| 8 Polish and escape valves | M | 3, 4, 6 |
+
+```mermaid
+flowchart LR
+  P1["1: skeleton + chat transcript<br/>PR #1525"]
+  P2["2: chat data path"]
+  P3["3: spaces + themes"]
+  P4["4: value inspection + forms"]
+  P5["5: XS debugger baseline"]
+  P6["6: debugger richness"]
+  P7["7: durable breakpoints<br/>controller claim"]
+  P8["8: polish + escape valves"]
+  DBG["daemon-xs-worker-debugger<br/>remaining items"]
+  BT2["endor-bus-tui Phase 2<br/>worker windows"]
+  P1 --> P2
+  P2 --> P3
+  P2 --> P4
+  P2 --> P5
+  DBG --> P5
+  P5 --> P6
+  P5 --> P7
+  P3 --> P8
+  P4 --> P8
+  P6 --> P8
+  P1 --> BT2
+```
+
+After Phase 2, phases 3, 4, and 5 can be built in parallel, and so can
+6 and 7 after Phase 5.
+[endor-bus-tui](endor-bus-tui.md) Phase 2 (worker windows docked
+around the chat layout) builds on Phase 1 and is independent of
+phases 2 through 8.
+
+### Phase 1: Skeleton and chat transcript (in flight, #1525)
+
+Unchanged:
 
 1. `endor tui` subcommand with `ratatui` + `crossterm` wiring.
 2. Bus client (async, `tokio`), reconnect logic.
 3. Single-space view: inbox transcript, inventory, command bar.
-4. Basic send + `/dismiss` + `/adopt` via `command.submit`.
+4. Basic send, `/dismiss`, and `/adopt` via command submission.
 5. Modeline and mode state machine.
 6. Exit, redraw, SIGWINCH handling.
 
-### Phase 2: Spaces and focus mode
+#1525 also builds the normal/insert/focus modes and the pending
+commands region, which earlier drafts placed in Phase 2.
+Its request and event payloads are provisional and are confined to
+`encode_request` and `decode_event` in `rust/endo/src/tui/bus.rs`.
 
-1. Spaces rail, `Alt+0`..`Alt+9` keybinds.
-2. Per-space color schemes (mirror `chat-color-schemes`).
-3. Focus mode (`chat-focus-message`): arrow nav, `d`/`a`/`r`
-   pre-population.
-4. Pending commands region.
+### Phase 2: Chat data path
 
-### Phase 3: Value inspection and forms
+Replace the provisional payloads with a path the daemon serves, for
+the Phase 1 surface only: the inbox transcript, inventory names,
+`send`, `dismiss`, `adopt`, and slash-command submission with its
+pending/settled result.
 
-1. Value modal with type-dispatched rendering.
-2. Inline command forms (form-builder parity).
+The existing path is the one the `endo` CLI uses: CapTP over the same
+socket, starting from the bootstrap and the host's `followMessages`,
+`followNameChanges`, `send`, `dismiss`, and `adopt`.
+The recommended default is a minimal Rust CapTP client in
+`rust/endo/src/tui/` covering only what these calls need (bootstrap,
+calls on imported references, answers, and remote async iterators).
+This adds no new daemon mechanism.
+The alternative is a manager-side adapter that serves TUI chat verbs
+as envelopes, which is the bus-verb table in § Relationship to the
+Daemon Bus.
+Choosing between them is the first Open question, and the builder
+must not start Phase 2 before it is answered.
+
+Out of scope: spaces other than the home profile, value inspection,
+and the debugger.
+
+Acceptance tests:
+
+- `cargo test -p endo --lib tui`: decoders for every message and
+  name-change shape the transcript and inventory render, built from
+  fixtures captured from a JS daemon;
+- an integration test that starts a daemon, connects `endor tui`'s
+  client, sends a message from one agent to the host, and sees the
+  `App` transcript hold it; then dismisses it and sees it go;
+- a slash command submitted while connected settles in the pending
+  region with the daemon's result, and one submitted while
+  disconnected is rejected immediately (the #1525 behavior is kept).
+
+Exit criterion: against a running daemon, `endor tui` shows the real
+inbox and inventory and can send, dismiss, and adopt.
+
+### Phase 3: Spaces and per-space themes
+
+1. Spaces rail and `Alt+0`..`Alt+9` keybinds (§ Spaces).
+2. Profile enter and exit through the Phase 2 path.
+3. Per-space color schemes adapted from `chat-color-schemes` and
+   `chat-per-space-color-scheme`.
+4. Inbox, channel, and forum mode rendering
+   (§ Inbox vs. channel vs. forum modes).
+
+Acceptance: `TestBackend` renders of the rail at 80x24 with three
+spaces; switching spaces re-follows the new profile's inbox and
+inventory and leaves the old ones unfollowed; each built-in scheme
+renders with its palette.
+
+### Phase 4: Value inspection and forms
+
+1. Value modal with type-dispatched rendering (§ Value modal).
+2. Inline command forms, at parity with the web form builder.
 3. Token autocomplete and command menu popups.
-4. Blob viewer (fullscreen pager).
+4. Blob viewer (fullscreen pager), backed by `/view`.
 
-### Phase 4: XS debugger baseline
+Acceptance: a modal render for each value type
+`daemon-value-message` defines; a form round trip that submits a
+command and settles it; autocomplete offering pet names from the
+followed inventory.
 
-1. `debug.attach` / `debug.detach` verbs on the bus.
-2. Worker list panel with state glyphs.
-3. Stop events, frame + stack + locals rendering.
-4. `go`, `step`, `step-over`, `step-out` control.
-5. Unconditional breakpoints (`F9` toggle, persisted via daemon).
+### Phase 5: XS debugger baseline
 
-### Phase 5: Debugger richness
+1. Worker list panel with state glyphs, including the greyed-out
+   state for workers that cannot be debugged (Design Decision 7).
+2. Attach and detach through the `Debugger` exo.
+   This needs the two items still open in
+   [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) Phase 6
+   *Remaining*: the host exposing `attachDebugger` over CapTP, and a
+   `followBreaks` iterator.
+   If they have not landed separately, this phase lands them.
+3. Stop events rendered as frame, stack, and locals; the source pane
+   shows the break location (§ Source display).
+4. `go`, `step`, `step-over`, and `step-out`.
+5. Unconditional breakpoints toggled with `F9`, held by the
+   `Debugger` exo for the life of the attachment.
+   Making them durable is Phase 7.
+
+Acceptance: an integration test attaches to a debug-enabled XS
+worker, sets a breakpoint, triggers it, and sees the frame and locals
+in `App` state; stepping moves the reported line; detaching leaves
+the worker running.
+A worker without debugging enabled shows the disabled glyph and
+refuses attach with a typed error.
+
+### Phase 6: Debugger richness
 
 1. Conditional breakpoints.
-2. Eval-in-frame REPL.
+2. Eval-in-frame REPL (§ Eval in frame).
 3. Console output mirror (`Alt+o` panel).
 4. Stop-on-exception and stop-on-throw toggles.
-5. Multi-client observer mode with controller claim/release.
+5. Manual pause (`p`), if XS supports pause on request (§ Known Gaps);
+   otherwise it is left out with a note.
 
-### Phase 6: Polish and escape valves
+### Phase 7: Durable breakpoints and controller claim
 
-1. Mouse support (opt-in).
-2. `$EDITOR` escape for long eval buffers.
+The daemon-side half of the debugger design:
+
+1. Breakpoints stored by the manager and reapplied on attach, so they
+   survive a TUI restart and a worker stops at them with no TUI
+   attached (Design Decision 6).
+2. Several clients may observe a worker; one at a time claims control,
+   and the claim is released on disconnect (§ Attach semantics).
+
+Acceptance: set a breakpoint, quit the TUI, trigger it, start a new
+TUI, and see the worker stopped at it; a second client sees stop
+events but has its `step` refused until it claims control.
+
+### Phase 8: Polish and escape valves
+
+1. Mouse support (opt-in, Design Decision 11).
+2. `$EDITOR` escape for long eval buffers and source editing.
 3. Configurable keybindings via TOML.
-4. High-contrast and degraded-color fallbacks.
-5. Integration tests with a headless terminal (e.g. `vt100`).
+4. High-contrast and degraded-color fallbacks, with truecolor vs.
+   256-color detection.
+5. Headless-terminal integration tests (`vt100`, or `insta`
+   snapshots of `ratatui::buffer::Buffer`).
+
+## Open questions
+
+- Phase 2: should `endor tui` reach the manager with a minimal Rust
+  CapTP client over the existing socket (the path the `endo` CLI
+  uses, and the recommendation here), or through a manager-side
+  adapter that serves the bus verbs listed in § Relationship to the
+  Daemon Bus?
+  [endor-bus-tui](endor-bus-tui.md) does not define those chat verbs,
+  although this document says it does, so the adapter route needs
+  its own specification first.
+- Should the debugger phases reach the `Debugger` exo through the
+  same Phase 2 path, or does the bus-verb table's `debug.*` family
+  stay the plan for the debugger even if chat uses CapTP?
 
 ## Design Decisions
 
@@ -843,16 +1033,18 @@ The TUI carries no persistent state the daemon does not also hold.
   `chat-markdown-render.md` settles.
 - [ ] Research whether XS has a protocol verb for pause-on-request; if
   not, we may need a small VM patch to implement `p` (manual pause).
+  Phase 6 depends on the answer.
 - [ ] Specify how the TUI displays sourcemaps when agents run bundled
   (minified) code.
 - [ ] Remote-TUI-through-daemon-over-TCP story: today the bus socket is
   Unix-domain only; SSH suffices but there may be a case for exposing
   the bus over TLS + bearer token (see `gateway-bearer-token-auth`).
-- [ ] Terminal capability detection for truecolor vs. 256-color.
+- [ ] Terminal capability detection for truecolor vs. 256-color
+  (Phase 8).
 - [ ] Clipboard handling on headless servers (`arboard` falls back to
   OSC-52, which not all terminals support).
 - [ ] Playwright-equivalent integration tests for the TUI
-  (`insta`-style snapshots of `ratatui::buffer::Buffer`).
+  (`insta`-style snapshots of `ratatui::buffer::Buffer`; Phase 8).
 
 ## Prompt
 
