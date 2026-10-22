@@ -863,18 +863,22 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // /bin/sh's `ulimit -u` reports RLIMIT_NPROC, the same value
-  // prlimit set.  We assert the cap is in effect rather than
-  // running an actual fork bomb (which would also stress the host
-  // the test process is running on).
-  const result = await runInSlice(t, handle, ['/bin/sh', '-c', 'ulimit -u']);
+  // The `Max processes` row of `/proc/self/limits` reports
+  // RLIMIT_NPROC, the same value prlimit set; `cat` inherits it from
+  // the slice's process tree.  We read procfs rather than a shell
+  // builtin because `ulimit -u` is a bash spelling that dash, the
+  // `/bin/sh` on Debian and Ubuntu, rejects.  We assert the cap is in
+  // effect rather than running an actual fork bomb (which would also
+  // stress the host the test process is running on).
+  const result = await runInSlice(t, handle, ['/bin/cat', '/proc/self/limits']);
   if (result === null) return;
   t.is(
     result.exit.code,
     0,
-    `ulimit -u exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
+    `cat /proc/self/limits exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
   );
-  const reported = Number(result.stdout.trim());
+  const match = result.stdout.match(/^Max processes\s+(\S+)/m);
+  const reported = match === null ? undefined : Number(match[1]);
   t.is(
     reported,
     cap,
@@ -1146,7 +1150,10 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
   });
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
-  await waitForProcessGroupGone(/** @type {number} */ (pid));
+  await t.notThrowsAsync(
+    waitForProcessGroupGone(/** @type {number} */ (pid)),
+    `process group ${pid} should not outlive its owner`,
+  );
 });
 
 // --- PATH synthesis tests --------------------------------------------------
