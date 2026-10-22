@@ -937,9 +937,6 @@ export const makeOcapn = async ({
     makeParcel(location, secret) {
       return parcelTracker.makeParcel(location, secret);
     },
-    makeSturdyRef(location, secret) {
-      return parcelTracker.makeParcel(location, secret);
-    },
     /**
      * Resolve a `Parcel` to a live capability. Local Parcels flow
      * through the injected locator; remote Parcels fetch from the
@@ -949,9 +946,6 @@ export const makeOcapn = async ({
      * @returns {Promise<any>}
      */
     openParcel(parcel) {
-      return openParcel(parcel);
-    },
-    enlivenSturdyRef(parcel) {
       return openParcel(parcel);
     },
     shutdown() {

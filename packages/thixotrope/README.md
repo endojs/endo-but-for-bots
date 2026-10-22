@@ -679,7 +679,7 @@ have no timer queue, so frame silence is exact dormancy):
 - `lookup(secret)` — the embedder's in-process route to a publication.
 - `collectVats({ keep? })` — vat-level mark-and-sweep over the hub's
   reference tables; resolves to the swept ids.
-- `location` and `makeSturdyRefDetails(secret)` — what a peer needs to
+- `location` and `makeParcelDetails(secret)` — what a peer needs to
   mint a sturdy ref.
 - `shutdown()` — snapshots and parks every worker, then closes the
   endpoint and the netlayer.

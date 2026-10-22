@@ -109,8 +109,8 @@ test('live remote references survive dropped connections', async t => {
   const client = await makeDurableClient('durable-client', dropper.factory);
   t.teardown(() => client.shutdown());
 
-  const sturdyRef = client.makeSturdyRef(daemon.location, secret);
-  const remoteCounter = await client.enlivenSturdyRef(sturdyRef);
+  const sturdyRef = client.makeParcel(daemon.location, secret);
+  const remoteCounter = await client.openParcel(sturdyRef);
   t.is(await E(remoteCounter).incr(), 1);
 
   // Sever every socket. The OCapN sessions on both sides are never
@@ -149,8 +149,8 @@ test('a sleeping worker wakes for a call that crossed a drop', async t => {
   const client = await makeDurableClient('durable-client-2', dropper.factory);
   t.teardown(() => client.shutdown());
 
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon.location, secret),
+  const remoteCounter = await client.openParcel(
+    client.makeParcel(daemon.location, secret),
   );
   t.is(await E(remoteCounter).incr(), 1);
 

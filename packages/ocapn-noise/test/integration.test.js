@@ -70,8 +70,8 @@ test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', a
 
   // B opens a session to A, fetches A's greeter via SturdyRef, and calls
   // it: a round trip of two CapTP deliveries over Noise.
-  const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
-  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  const sturdyRef = peerB.client.makeParcel(peerA.location, 'Greeter');
+  const greeter = await peerB.client.openParcel(sturdyRef);
   const reply = await E(greeter).hello('Alice');
   t.is(reply, 'hello, Alice');
 });
@@ -120,11 +120,11 @@ test('three-party handoff: A forwards a cap from B into C, and C invokes it', as
   // three-party handoff protocol: A emits a handoff-give into the
   // A<->C session, C establishes a session to B to withdraw the gift,
   // then calls `getNumber()` on the remote.
-  const objectMaker = await peerA.client.enlivenSturdyRef(
-    peerA.client.makeSturdyRef(peerB.location, 'ObjectMaker'),
+  const objectMaker = await peerA.client.openParcel(
+    peerA.client.makeParcel(peerB.location, 'ObjectMaker'),
   );
-  const objectUser = await peerA.client.enlivenSturdyRef(
-    peerA.client.makeSturdyRef(peerC.location, 'ObjectUser'),
+  const objectUser = await peerA.client.openParcel(
+    peerA.client.makeParcel(peerC.location, 'ObjectUser'),
   );
 
   const object = await E(objectMaker).makeObject();

@@ -103,13 +103,13 @@ test('two iroh-backed OCapN peers exchange method calls via bootstrap fetch', as
   // B opens a session to A, fetches A's greeter via SturdyRef, and calls
   // it: a round trip of two CapTP deliveries over the mock iroh wire,
   // netstring-reassembled from deliberately tiny chunks.
-  const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
-  const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
+  const sturdyRef = peerB.client.makeParcel(peerA.location, 'Greeter');
+  const greeter = await peerB.client.openParcel(sturdyRef);
   const reply = await E(greeter).hello('Alice');
   t.is(reply, 'hello, Alice');
 
   // A second fetch over the same (reused) session also works.
-  const greeterAgain = await peerB.client.enlivenSturdyRef(sturdyRef);
+  const greeterAgain = await peerB.client.openParcel(sturdyRef);
   t.is(await E(greeterAgain).hello('Bob'), 'hello, Bob');
 });
 
@@ -136,11 +136,11 @@ test('sessions work in both directions between the same two peers', async t => {
   const peerB = await makeIrohPeer({ iroh, name: 'iroh-B', locator: locatorB });
   t.teardown(() => peerB.client.shutdown());
 
-  const echoB = await peerA.client.enlivenSturdyRef(
-    peerA.client.makeSturdyRef(peerB.location, 'EchoB'),
+  const echoB = await peerA.client.openParcel(
+    peerA.client.makeParcel(peerB.location, 'EchoB'),
   );
-  const echoA = await peerB.client.enlivenSturdyRef(
-    peerB.client.makeSturdyRef(peerA.location, 'EchoA'),
+  const echoA = await peerB.client.openParcel(
+    peerB.client.makeParcel(peerA.location, 'EchoA'),
   );
   t.is(await E(echoB).echo('x'), 'B:x');
   t.is(await E(echoA).echo('y'), 'A:y');
@@ -170,12 +170,8 @@ test('crossed hellos: simultaneous dials in both directions settle', async t => 
   t.teardown(() => peerB.client.shutdown());
 
   const [echoB, echoA] = await Promise.all([
-    peerA.client.enlivenSturdyRef(
-      peerA.client.makeSturdyRef(peerB.location, 'EchoB'),
-    ),
-    peerB.client.enlivenSturdyRef(
-      peerB.client.makeSturdyRef(peerA.location, 'EchoA'),
-    ),
+    peerA.client.openParcel(peerA.client.makeParcel(peerB.location, 'EchoB')),
+    peerB.client.openParcel(peerB.client.makeParcel(peerA.location, 'EchoA')),
   ]);
   const [replyB, replyA] = await Promise.all([
     E(echoB).echo('x'),
@@ -218,11 +214,11 @@ test('three-party handoff: A forwards a cap from B into C, and C invokes it', as
   // A fetches ObjectMaker from B and ObjectUser from C via SturdyRefs.
   // Asking ObjectUser to invoke an Object created on B triggers the
   // three-party handoff protocol between B and C.
-  const objectMaker = await peerA.client.enlivenSturdyRef(
-    peerA.client.makeSturdyRef(peerB.location, 'ObjectMaker'),
+  const objectMaker = await peerA.client.openParcel(
+    peerA.client.makeParcel(peerB.location, 'ObjectMaker'),
   );
-  const objectUser = await peerA.client.enlivenSturdyRef(
-    peerA.client.makeSturdyRef(peerC.location, 'ObjectUser'),
+  const objectUser = await peerA.client.openParcel(
+    peerA.client.makeParcel(peerC.location, 'ObjectUser'),
   );
   const object = await E(objectMaker).makeObject();
   const result = await E(objectUser).useObject(object);
@@ -280,8 +276,8 @@ test('shutdown closes the endpoint so peers can no longer dial it', async t => {
   const peerB = await makeIrohPeer({ iroh, name: 'iroh-B' });
   t.teardown(() => peerB.client.shutdown());
 
-  const greeter = await peerB.client.enlivenSturdyRef(
-    peerB.client.makeSturdyRef(peerA.location, 'Greeter'),
+  const greeter = await peerB.client.openParcel(
+    peerB.client.makeParcel(peerA.location, 'Greeter'),
   );
   t.is(await E(greeter).hello(), 'hi');
 
@@ -316,10 +312,10 @@ test('concurrent sessions to the same peer dedupe to one working session', async
   // dedup, both dial, both send a hello over the one reused connection,
   // and the peer aborts the session on the second unexpected hello. Both
   // must resolve to a usable session.
-  const ref = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
+  const ref = peerB.client.makeParcel(peerA.location, 'Greeter');
   const [g1, g2] = await Promise.all([
-    peerB.client.enlivenSturdyRef(ref),
-    peerB.client.enlivenSturdyRef(ref),
+    peerB.client.openParcel(ref),
+    peerB.client.openParcel(ref),
   ]);
   t.is(await E(g1).hello('one'), 'hello, one');
   t.is(await E(g2).hello('two'), 'hello, two');
@@ -356,12 +352,8 @@ test('an inbound session completing during our dial is adopted, not rejected', a
   iroh.setConnectDelay(peerB.location.designator, 40);
 
   const [echoB, echoA] = await Promise.all([
-    peerA.client.enlivenSturdyRef(
-      peerA.client.makeSturdyRef(peerB.location, 'EchoB'),
-    ),
-    peerB.client.enlivenSturdyRef(
-      peerB.client.makeSturdyRef(peerA.location, 'EchoA'),
-    ),
+    peerA.client.openParcel(peerA.client.makeParcel(peerB.location, 'EchoB')),
+    peerB.client.openParcel(peerB.client.makeParcel(peerA.location, 'EchoA')),
   ]);
   t.is(await E(echoB).echo('x'), 'B:x');
   t.is(await E(echoA).echo('y'), 'A:y');

@@ -111,8 +111,8 @@ const main = async () => {
       makeWebSocketNetLayer({ handlers, logger, specifiedPort: port }),
   });
   try {
-    const sturdyRef = client.makeSturdyRef(location, swissNum);
-    const chatroom = await client.enlivenSturdyRef(sturdyRef);
+    const sturdyRef = client.makeParcel(location, swissNum);
+    const chatroom = await client.openParcel(sturdyRef);
     await runChatParticipant({
       chatroom,
       name: 'endo-interop-ocapn',
