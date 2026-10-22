@@ -1,4 +1,6 @@
 // @ts-check
+// inline-import-exempt: public JSDoc typedef forwarding needs direct module identity.
+// spell-out-exempt: SwissNum is the OCapN specification's established type name.
 
 /**
  * Public entry point for `@endo/ocapn`.

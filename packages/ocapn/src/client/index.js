@@ -7,7 +7,7 @@
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { Parcel } from './parcels.js'
  * @import { Client } from './parcel.types.js'
- * @import { Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.types.js'
+ * @import { Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, ResumedSession, SelfIdentity, Session, SessionHooks, SessionManager, SessionResumption, SocketOperations, SwissNum } from './types.types.js'
  */
 
 import harden from '@endo/harden';
@@ -194,7 +194,7 @@ const makeSessionManager = () => {
  * @param {string} [options.captpVersion] - For testing: override the CapTP version sent in handshakes
  * @param {boolean} [options.enableImportCollection] - If true, imports are tracked with WeakRefs and GC'd when unreachable. Default: true.
  * @param {boolean} [options.debugMode] - **EXPERIMENTAL**: If true, exposes `_debug` object on Ocapn instances with internal APIs for testing. Default: false.
- * @param {import('./types.types.js').SessionHooks} [options.sessionHooks] - Optional
+ * @param {SessionHooks} [options.sessionHooks] - Optional
  *   observation hooks for durable-session embedders: e.g. `onExport`
  *   fires whenever a session assigns a local export slot. Netlayers
  *   that do not provide durability are unaffected.
@@ -630,25 +630,25 @@ export const makeOcapn = async ({
             onExport:
               sessionHooks.onExport &&
               ((slot, value) =>
-                /** @type {NonNullable<import('./types.types.js').SessionHooks['onExport']>} */ (
+                /** @type {NonNullable<SessionHooks['onExport']>} */ (
                   sessionHooks.onExport
                 )(connection, slot, value)),
             onImport:
               sessionHooks.onImport &&
               ((slot, value) =>
-                /** @type {NonNullable<import('./types.types.js').SessionHooks['onImport']>} */ (
+                /** @type {NonNullable<SessionHooks['onImport']>} */ (
                   sessionHooks.onImport
                 )(connection, slot, value)),
             onPendingResolver:
               sessionHooks.onPendingResolver &&
               ((resolverSlot, target) =>
-                /** @type {NonNullable<import('./types.types.js').SessionHooks['onPendingResolver']>} */ (
+                /** @type {NonNullable<SessionHooks['onPendingResolver']>} */ (
                   sessionHooks.onPendingResolver
                 )(connection, resolverSlot, target)),
             onResolverSettled:
               sessionHooks.onResolverSettled &&
               (resolverSlot =>
-                /** @type {NonNullable<import('./types.types.js').SessionHooks['onResolverSettled']>} */ (
+                /** @type {NonNullable<SessionHooks['onResolverSettled']>} */ (
                   sessionHooks.onResolverSettled
                 )(connection, resolverSlot)),
           }
@@ -778,8 +778,8 @@ export const makeOcapn = async ({
    * keep verifying.
    *
    * @param {Connection} connection
-   * @param {import('./types.types.js').SessionResumption} resumption
-   * @returns {import('./types.types.js').ResumedSession}
+   * @param {SessionResumption} resumption
+   * @returns {ResumedSession}
    */
   const resumeSession = (connection, resumption) => {
     const { sessionId, peerLocation, peerLocationSignature } = resumption;
@@ -802,11 +802,11 @@ export const makeOcapn = async ({
     }
     const ocapn = prepareOcapn(
       connection,
-      /** @type {import('./types.types.js').SessionId} */ (sessionId),
+      /** @type {SessionId} */ (sessionId),
       peerLocation,
     );
     const session = makeSession({
-      id: /** @type {import('./types.types.js').SessionId} */ (sessionId),
+      id: /** @type {SessionId} */ (sessionId),
       selfIdentity,
       peerLocation,
       peerPublicKey,

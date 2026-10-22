@@ -1,3 +1,4 @@
+// spell-out-exempt: SwissNum and argument abbreviations come from the OCapN API.
 import type { ERef, FarRef } from '@endo/eventual-send';
 import type { ParcelObject, RemotableObject } from '@endo/pass-style';
 
