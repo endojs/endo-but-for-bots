@@ -35,10 +35,13 @@ test('lockdown completes with legacy restricted properties on the text codec con
       enumerable: false,
       configurable: false,
     };
-    for (const ctor of [globalThis.TextEncoder, globalThis.TextDecoder]) {
-      for (const prop of ['caller', 'arguments']) {
-        if (!Object.getOwnPropertyDescriptor(ctor, prop)) {
-          Object.defineProperty(ctor, prop, restricted);
+    for (const constructor of [
+      globalThis.TextEncoder,
+      globalThis.TextDecoder,
+    ]) {
+      for (const property of ['caller', 'arguments']) {
+        if (!Object.getOwnPropertyDescriptor(constructor, property)) {
+          Object.defineProperty(constructor, property, restricted);
         }
       }
     }
@@ -61,8 +64,8 @@ test('host text codec constructors are encapsulated on every engine', async ({
 
     /** @type {string[]} */
     const failures = [];
-    const check = (label, ok) => {
-      if (!ok) {
+    const check = (label, passed) => {
+      if (!passed) {
         failures.push(label);
       }
     };

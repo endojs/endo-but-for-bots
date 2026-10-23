@@ -29,9 +29,9 @@ const restricted = {
   enumerable: false,
   configurable: false,
 };
-for (const ctor of [NativeTextEncoder, NativeTextDecoder]) {
-  Object.defineProperty(ctor, 'caller', restricted);
-  Object.defineProperty(ctor, 'arguments', restricted);
+for (const constructor of [NativeTextEncoder, NativeTextDecoder]) {
+  Object.defineProperty(constructor, 'caller', restricted);
+  Object.defineProperty(constructor, 'arguments', restricted);
 }
 
 lockdown();
@@ -80,13 +80,13 @@ test('the host constructors are unreachable from the permitted intrinsics', t =>
   t.is(TextDecoder.prototype.constructor, TextDecoder);
   t.is(new TextEncoder().constructor, TextEncoder);
   t.is(new TextDecoder().constructor, TextDecoder);
-  const c = new Compartment();
-  t.is(c.evaluate('TextEncoder'), TextEncoder);
-  t.is(c.evaluate('TextDecoder'), TextDecoder);
-  t.is(c.evaluate('new TextEncoder().constructor'), TextEncoder);
+  const compartment = new Compartment();
+  t.is(compartment.evaluate('TextEncoder'), TextEncoder);
+  t.is(compartment.evaluate('TextDecoder'), TextDecoder);
+  t.is(compartment.evaluate('new TextEncoder().constructor'), TextEncoder);
 
   const compartmentGlobalDescriptors = Object.values(
-    Object.getOwnPropertyDescriptors(c.globalThis),
+    Object.getOwnPropertyDescriptors(compartment.globalThis),
   );
   const roots = [TextEncoder, TextDecoder];
   for (const descriptor of compartmentGlobalDescriptors) {
