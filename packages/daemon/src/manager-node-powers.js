@@ -587,6 +587,57 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     });
   };
 
+  /**
+   * Rename `source` to `target` only if nothing holds `target`, with no
+   * window in which an entry another writer creates at `target` is
+   * replaced.  A directory claims `target` with an exclusive `mkdir` and
+   * then renames over that empty directory; any other entry is hard-linked,
+   * which refuses an existing `target`, and the source is then unlinked.
+   * The moved entry keeps its device and inode.
+   *
+   * @type {FilePowers['renameNoReplace']}
+   */
+  const renameNoReplace = async (source, target) => {
+    await writeJobs.enqueue(async () => {
+      const sourceStat = await fs.promises.lstat(source, { bigint: true });
+      if (sourceStat.isDirectory()) {
+        await fs.promises.mkdir(target);
+        try {
+          await fs.promises.rename(source, target);
+        } catch (error) {
+          // `rmdir` removes only an empty directory, so this cannot remove
+          // anything another writer put at `target`.
+          await fs.promises.rmdir(target).catch(() => {});
+          throw error;
+        }
+        return;
+      }
+      await fs.promises.link(source, target);
+      const targetStat = await fs.promises.lstat(target, { bigint: true });
+      if (
+        targetStat.dev !== sourceStat.dev ||
+        targetStat.ino !== sourceStat.ino
+      ) {
+        // A platform whose `link` follows a symbolic link linked its
+        // referent instead.  Drop that extra link and refuse.
+        await fs.promises.unlink(target);
+        throw new Error(
+          `renameNoReplace cannot move ${JSON.stringify(source)} without following it`,
+        );
+      }
+      await fs.promises.unlink(source);
+    });
+  };
+
+  /**
+   * Remove `path` only if it is an empty directory.
+   *
+   * @type {FilePowers['removeEmptyDirectory']}
+   */
+  const removeEmptyDirectory = async path => {
+    await writeJobs.enqueue(async () => fs.promises.rmdir(path));
+  };
+
   const joinPath = (...components) => fspath.join(...components);
 
   /** @param {string} path */
@@ -643,6 +694,17 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
    */
   const pathIdentity = async path => {
     const stat = await fs.promises.stat(path);
+    return `${stat.dev}:${stat.ino}`;
+  };
+
+  /**
+   * The device and inode of the entry at `path` itself; a symbolic link
+   * reports its own identity, not its referent's.
+   *
+   * @type {FilePowers['entryIdentity']}
+   */
+  const entryIdentity = async path => {
+    const stat = await fs.promises.lstat(path, { bigint: true });
     return `${stat.dev}:${stat.ino}`;
   };
 
@@ -874,6 +936,9 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     renamePath,
     realPath,
     pathIdentity,
+    entryIdentity,
+    renameNoReplace,
+    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,

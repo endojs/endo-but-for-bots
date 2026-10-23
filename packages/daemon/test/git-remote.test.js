@@ -1246,12 +1246,13 @@ test.serial(
     const destMount = await E(host).provideScratchMount('retry-destination');
     const destPath = await E(host).provideHostPath(destMount);
 
-    // Naming the origin under a directory that does not exist fails at the
-    // last step, after the clone ran and both formulas were minted.
+    // Naming the Git under a directory that does not exist fails at the
+    // last step, after the clone ran, both formulas were minted, and the
+    // origin was named.
     await t.throwsAsync(
-      E(host).provideGitClone(destMount, 'retry-git', {
+      E(host).provideGitClone(destMount, ['no-such-directory', 'retry-git'], {
         endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-        origin: { petName: ['no-such-directory', 'retry-origin'] },
+        origin: { petName: 'retry-origin' },
       }),
     );
     t.deepEqual(
@@ -1282,17 +1283,30 @@ test.serial(
     const { root } = await provisionGitContext(t);
     const remoteRoot = await provisionBareRemote(t, root);
     const remoteUrl = pathToFileURL(remoteRoot).href;
-    const { host: firstHost, restart } = await provisionHostContext(t);
+    const { host: firstHost, config, restart } = await provisionHostContext(t);
 
     const destMount = await E(firstHost).provideScratchMount(
       'stale-staging-destination',
     );
     const destPath = await E(firstHost).provideHostPath(destMount);
+    // Stand in for a daemon that stopped mid-clone: the staging directory
+    // exists and the daemon's host-private record names it.
     const staleName = '.endo-staging-0123456789abcdef0123456789abcdef';
-    await fs.promises.mkdir(path.join(destPath, staleName));
+    const stalePath = path.join(destPath, staleName);
+    await fs.promises.mkdir(stalePath);
     await fs.promises.writeFile(
-      path.join(destPath, staleName, 'partial-clone'),
+      path.join(stalePath, 'partial-clone'),
       'interrupted\n',
+    );
+    const { dev, ino } = await fs.promises.lstat(stalePath, { bigint: true });
+    const recordsPath = path.join(config.statePath, 'mount-staging');
+    await fs.promises.mkdir(recordsPath, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(recordsPath, `${staleName}.json`),
+      JSON.stringify({
+        mountId: await E(firstHost).identify('stale-staging-destination'),
+        identity: `${dev}:${ino}`,
+      }),
     );
 
     const host = await restart();
@@ -1305,7 +1319,139 @@ test.serial(
     );
 
     t.is((await E(git).currentBranch()).name, 'main');
-    t.false((await fs.promises.readdir(destPath)).includes(staleName));
+    t.deepEqual(await fs.promises.readdir(destPath), ['.git']);
+    t.deepEqual(await fs.promises.readdir(recordsPath), []);
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone keeps a staging-shaped entry the daemon did not record',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount(
+      'forged-staging-destination',
+    );
+    const destPath = await E(host).provideHostPath(destMount);
+    // Another holder of the mount may use any name, including one shaped
+    // like the daemon's staging directories.
+    const forgedName = '.endo-staging-fedcba9876543210fedcba9876543210';
+    await fs.promises.mkdir(path.join(destPath, forgedName));
+    await fs.promises.writeFile(
+      path.join(destPath, forgedName, 'holder-data'),
+      'keep me\n',
+    );
+
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, 'forged-staging-git', {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      }),
+      { message: /destMount must be empty/ },
+    );
+    t.deepEqual(await fs.promises.readdir(destPath), [forgedName]);
+    t.is(
+      await fs.promises.readFile(
+        path.join(destPath, forgedName, 'holder-data'),
+        'utf8',
+      ),
+      'keep me\n',
+    );
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone discard keeps an entry and a name another holder replaced',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    // A name hub that holds the clone's last naming step open until the
+    // test releases it, then refuses.  Everything the clone publishes is in
+    // place while the step is held.
+    const gate = await E(host).evaluate(
+      'MAIN',
+      `(() => {
+        let release;
+        const released = new Promise(resolve => { release = resolve; });
+        let reach;
+        const reached = new Promise(resolve => { reach = resolve; });
+        return makeExo('Gate', M.interface('Gate', {
+          storeIdentifier: M.call().rest(M.any()).returns(M.promise()),
+          reached: M.call().returns(M.promise()),
+          release: M.call().returns(M.undefined()),
+        }), {
+          storeIdentifier: async () => {
+            reach();
+            await released;
+            throw Error('the gate refuses every name');
+          },
+          reached: () => reached,
+          release: () => { release(); },
+        });
+      })()`,
+      [],
+      [],
+      'gate',
+    );
+    const destMount = await E(host).provideScratchMount('replaced-destination');
+    const destPath = await E(host).provideHostPath(destMount);
+
+    const cloneP = E(host).provideGitClone(destMount, ['gate', 'gated-git'], {
+      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      origin: { petName: 'gated-origin' },
+    });
+    cloneP.catch(() => {});
+    await Promise.race([E(gate).reached(), cloneP]);
+
+    // Another holder replaces the published entry and rebinds the origin's
+    // name before the clone fails.
+    t.deepEqual(await fs.promises.readdir(destPath), ['.git']);
+    await fs.promises.rm(path.join(destPath, '.git'), {
+      recursive: true,
+      force: true,
+    });
+    await fs.promises.mkdir(path.join(destPath, '.git'));
+    await fs.promises.writeFile(
+      path.join(destPath, '.git', 'holder-data'),
+      'keep me\n',
+    );
+    await E(host).storeValue('rebound', 'gated-origin');
+    await E(gate).release();
+
+    await t.throwsAsync(cloneP, { message: /refuses every name/ });
+    t.deepEqual(await fs.promises.readdir(destPath), ['.git']);
+    t.is(
+      await fs.promises.readFile(
+        path.join(destPath, '.git', 'holder-data'),
+        'utf8',
+      ),
+      'keep me\n',
+    );
+    t.is(await E(host).lookup('gated-origin'), 'rebound');
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone rejects an origin pet name path',
+  async t => {
+    const { host } = await provisionHostContext(t);
+    const destMount = await E(host).provideScratchMount('path-destination');
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, 'path-git', {
+        endpoint: { url: 'https://example.invalid/repo.git' },
+        origin: { petName: ['nested', 'path-origin'] },
+      }),
+      { message: /origin.petName must be a single pet name/ },
+    );
+    t.deepEqual(
+      await fs.promises.readdir(await E(host).provideHostPath(destMount)),
+      [],
+    );
   },
 );
 
@@ -1387,12 +1533,11 @@ test.serial(
     const destMount = await E(host).provideScratchMount('symlink-destination');
     const destPath = await E(host).provideHostPath(destMount);
     await t.throwsAsync(
-      E(host).provideGitClone(destMount, 'symlink-git', {
+      E(host).provideGitClone(destMount, ['no-such-directory', 'symlink-git'], {
         endpoint: {
           url: pathToFileURL(remoteRoot).href,
           allowLocalFileTransport: true,
         },
-        origin: { petName: ['no-such-directory', 'symlink-origin'] },
       }),
     );
     t.deepEqual(await fs.promises.readdir(destPath), []);

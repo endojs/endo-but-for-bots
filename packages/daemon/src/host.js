@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, MountEntryRecord, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 /** @import { SessionRecordDirectory } from './session-record-store.js' */
@@ -311,7 +311,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['removeStaleMountStagingEntries']} [powers.removeStaleMountStagingEntries]
  * @param {DaemonCore['makeMountStagingEntry']} [powers.makeMountStagingEntry]
  * @param {DaemonCore['moveMountEntries']} [powers.moveMountEntries]
- * @param {DaemonCore['removeMountEntries']} [powers.removeMountEntries]
+ * @param {DaemonCore['discardMountEntries']} [powers.discardMountEntries]
  * @param {HostToolPowers['gitClone']} [powers.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} powers.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} powers.formulateReadableBlob
@@ -421,10 +421,10 @@ export const makeHostMaker = ({
   ) => {
     throw makeError(X`moveMountEntries not wired into makeHostMaker`);
   },
-  removeMountEntries = /** @param {...any} _arguments */ async (
+  discardMountEntries = /** @param {...any} _arguments */ async (
     ..._arguments
   ) => {
-    throw makeError(X`removeMountEntries not wired into makeHostMaker`);
+    throw makeError(X`discardMountEntries not wired into makeHostMaker`);
   },
   gitClone = /** @param {...any} _arguments */ (..._arguments) => {
     throw makeError(X`gitClone not wired into makeHostMaker`);
@@ -1756,14 +1756,21 @@ export const makeHostMaker = ({
           );
         }
       }
-      const originNamePath =
+      // The origin's name lives in this host's own pet store, where reading
+      // and replacing a binding can happen in one turn; see below.
+      if (origin.petName !== undefined && typeof origin.petName !== 'string') {
+        throw makeError(
+          X`provideGitClone: origin.petName must be a single pet name`,
+        );
+      }
+      const originName =
         origin.petName === undefined
           ? undefined
-          : petNamePathFrom(origin.petName).namePath;
+          : petNamePathFrom(origin.petName).petName;
       if (
-        originNamePath !== undefined &&
-        originNamePath.length === namePath.length &&
-        originNamePath.every((name, index) => name === namePath[index])
+        originName !== undefined &&
+        namePath.length === 1 &&
+        namePath[0] === originName
       ) {
         throw makeError(
           X`provideGitClone: origin.petName must differ from the Git's pet name`,
@@ -1836,10 +1843,11 @@ export const makeHostMaker = ({
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
-      // A daemon process can stop after creating its private clone staging
-      // directory but before its catch/finally cleanup runs. On a later
-      // attempt, remove staging entries that no operation in this process
-      // owns before deciding whether the caller's mount is otherwise empty.
+      // A daemon process can stop after creating its clone staging
+      // directory but before its catch/finally cleanup runs.  On a later
+      // attempt, discard the staging directories this daemon recorded and
+      // no operation in this process owns, before deciding whether the
+      // caller's mount is otherwise empty.
       await removeStaleMountStagingEntries(destMountId);
       if ((await listMountHostEntries(destMountId)).length > 0) {
         throw makeError(X`provideGitClone: destMount must be empty`);
@@ -1848,11 +1856,12 @@ export const makeHostMaker = ({
       // Another holder of the mount can write to it at any time, so the
       // emptiness check above does not make the mount this call's to
       // discard.  The clone is built in a staging directory and its entries
-      // are then moved up one by one.  Discard removes only the staging
-      // directory and the entries this call moved, never anything else.
-      /** @type {string | undefined} */
-      let stagingName;
-      /** @type {string[]} */
+      // are then moved up one by one, never replacing an entry.  Discard
+      // removes only the staging directory and the entries this call moved,
+      // each only while it is still the object this call put there.
+      /** @type {MountEntryRecord | undefined} */
+      let staging;
+      /** @type {MountEntryRecord[]} */
       const movedEntries = [];
       // Formulas minted during the composition stay transiently pinned
       // until their names are stored, or until discard releases them.
@@ -1865,24 +1874,19 @@ export const makeHostMaker = ({
       const cloner = makeGitCloner({
         endpoint,
         clone: async input => {
-          stagingName = await makeMountStagingEntry(
+          staging = await makeMountStagingEntry(
             /** @type {FormulaIdentifier} */ (destMountId),
           );
           await gitClone({
             ...input,
-            destPath: `${destPath}/${stagingName}`,
+            destPath: `${destPath}/${staging.name}`,
           });
           await moveMountEntries(
             /** @type {FormulaIdentifier} */ (destMountId),
-            stagingName,
+            staging,
             movedEntries,
           );
-          // Every entry has moved up, so the staging directory is empty.
-          await removeMountEntries(
-            /** @type {FormulaIdentifier} */ (destMountId),
-            [stagingName],
-          );
-          stagingName = undefined;
+          staging = undefined;
         },
         makeGit: async () => {
           const { value, id } = await formulateGit(
@@ -1928,18 +1932,22 @@ export const makeHostMaker = ({
         // Naming is the last step, so a failure anywhere above leaves no
         // name bound.  The origin is named first so that, if naming the
         // Git fails, only the origin's name needs to be restored.
-        if (originNamePath !== undefined) {
+        if (originName !== undefined) {
+          // The pet store applies a store synchronously when it is called,
+          // so reading the prior binding and replacing it in one turn leaves
+          // no gap for another writer.
           priorOriginId = /** @type {FormulaIdentifier | undefined} */ (
-            await E(directory).identify(...originNamePath)
+            petStore.identifyLocal(originName)
+          );
+          const storing = petStore.storeIdentifier(
+            originName,
+            /** @type {FormulaIdentifier} */ (originId),
           );
           if (priorOriginId !== undefined) {
             pinTransient(priorOriginId);
             pinned.push(priorOriginId);
           }
-          await E(directory).storeIdentifier(
-            originNamePath,
-            /** @type {FormulaIdentifier} */ (originId),
-          );
+          await storing;
           storedOriginName = true;
         }
         await E(directory).storeIdentifier(
@@ -1952,27 +1960,26 @@ export const makeHostMaker = ({
         });
       } catch (error) {
         const cleanupErrors = [];
-        if (storedOriginName && originNamePath !== undefined) {
+        if (storedOriginName && originName !== undefined) {
           // Restore the origin's name only while it still holds the
-          // identifier this call stored; a concurrent rebind wins.
+          // identifier this call stored, so a concurrent rebind wins.  The
+          // check and the restore run in one turn, with no gap between.
           await (async () => {
-            const current = await E(directory).identify(...originNamePath);
-            if (current !== originId) {
+            await null;
+            if (petStore.identifyLocal(originName) !== originId) {
               return;
             }
             await (priorOriginId === undefined
-              ? E(directory).remove(...originNamePath)
-              : E(directory).storeIdentifier(originNamePath, priorOriginId));
+              ? petStore.remove(originName)
+              : petStore.storeIdentifier(originName, priorOriginId));
           })().catch(cleanupError => cleanupErrors.push(cleanupError));
         }
         await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
           cleanupError => cleanupErrors.push(cleanupError),
         );
-        await removeMountEntries(
+        await discardMountEntries(
           /** @type {FormulaIdentifier} */ (destMountId),
-          stagingName === undefined
-            ? movedEntries
-            : [...movedEntries, stagingName],
+          staging === undefined ? movedEntries : [...movedEntries, staging],
         ).catch(cleanupError => cleanupErrors.push(cleanupError));
         if (cleanupErrors.length > 0) {
           throw makeError(
