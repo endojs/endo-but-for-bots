@@ -208,7 +208,7 @@ export const makeShell = ({
           cwd,
           env: childEnv,
           shell: false,
-          timeoutMs: effectiveTimeoutMs + killGraceMs,
+          timeoutMs: effectiveTimeoutMs,
           maxOutputBytes,
         }),
       );

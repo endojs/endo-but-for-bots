@@ -364,9 +364,9 @@ test('the spawner is told the hard deadline and the output cap', async t => {
     killGraceMs: 500,
   });
   await shell.exec('echo', ['ok'], { timeoutMs: 200 });
-  // The narrowed timeout plus the SIGKILL grace: the latest moment this exo
-  // would still let the child live.
-  t.is(calls[0].opts.timeoutMs, 700);
+  // The engine receives the caller's exact deadline; the exo's SIGKILL grace
+  // bounds cleanup after that deadline rather than extending execution.
+  t.is(calls[0].opts.timeoutMs, 200);
   t.is(calls[0].opts.maxOutputBytes, basePolicy.maxOutputBytes);
 });
 
@@ -583,10 +583,17 @@ for (const engineCase of engineCases) {
         killProcessGroup: true,
       }),
     });
-    const result = await shell.exec(
-      engineCase.command,
-      engineCase.commandArguments,
-    );
-    t.deepEqual(engineCase.observe(result), engineCase.expected);
+    if (engineCase.expectedError !== undefined) {
+      await t.throwsAsync(
+        shell.exec(engineCase.command, engineCase.commandArguments),
+        { message: engineCase.expectedError },
+      );
+    } else {
+      const result = await shell.exec(
+        engineCase.command,
+        engineCase.commandArguments,
+      );
+      t.deepEqual(engineCase.observe?.(result), engineCase.expected);
+    }
   });
 }

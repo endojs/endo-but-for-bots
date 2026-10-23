@@ -170,10 +170,17 @@ for (const engineCase of engineCases) {
   test.serial(`sandbox engine conformance: ${engineCase.name}`, async t => {
     const sandboxed = await makeSandboxedShell(t, engineCase.policy);
     if (sandboxed === undefined) return;
-    const result = await sandboxed.shell.exec(
-      engineCase.command,
-      engineCase.commandArguments,
-    );
-    t.deepEqual(engineCase.observe(result), engineCase.expected);
+    if (engineCase.expectedError !== undefined) {
+      await t.throwsAsync(
+        sandboxed.shell.exec(engineCase.command, engineCase.commandArguments),
+        { message: engineCase.expectedError },
+      );
+    } else {
+      const result = await sandboxed.shell.exec(
+        engineCase.command,
+        engineCase.commandArguments,
+      );
+      t.deepEqual(engineCase.observe?.(result), engineCase.expected);
+    }
   });
 }

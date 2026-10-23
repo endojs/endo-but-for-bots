@@ -15,9 +15,10 @@
  * @property {string} command
  * @property {string[]} commandArguments
  * @property {{ timeoutMs?: number, maxOutputBytes?: number }} policy
- * @property {(result: ShellResult) => Record<string, unknown>} observe
+ * @property {(result: ShellResult) => Record<string, unknown>} [observe]
  *   Project the result onto the fields that must match across engines.
- * @property {Record<string, unknown>} expected
+ * @property {Record<string, unknown>} [expected]
+ * @property {string} [expectedError]
  */
 
 /** @type {readonly EngineCase[]} */
@@ -55,11 +56,10 @@ export const engineCases = harden([
     expected: { failed: true, stdout: '', truncated: false },
   },
   {
-    name: 'a process outliving the timeout is killed and reports SIGTERM',
+    name: 'a process outliving the timeout is killed and rejects',
     command: 'sleep',
     commandArguments: ['30'],
     policy: { timeoutMs: 300 },
-    observe: ({ exitCode, signal }) => ({ exitCode, signal }),
-    expected: { exitCode: null, signal: 'SIGTERM' },
+    expectedError: 'Shell command timed out after 300ms',
   },
 ]);
