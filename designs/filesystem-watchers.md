@@ -4,8 +4,14 @@
 |---|---|
 | **Created** | 2026-05-07 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Updated** | 2026-10-22 |
+| **Status** | **Complete** |
 | **Source** | Issue #110 |
+
+> **Implemented.** `EndoMount.followNameChanges` was declared in PR #467 and
+> became a live entry-name stream in PR #277; its public type was aligned in
+> PR #643. The current contract is recorded in
+> [fs-interface-consolidation.md § C1](fs-interface-consolidation.md#c1--name-hub-unification).
 
 ## What is the Problem Being Solved?
 

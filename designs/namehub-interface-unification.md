@@ -3,10 +3,18 @@
 | | |
 |---|---|
 | **Created** | 2026-05-07 |
-| **Updated** | 2026-05-07 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Accepted, not yet implemented |
+| **Updated** | 2026-10-22 |
+| **Status** | **Complete** (delivered as C1 of [fs-interface-consolidation](fs-interface-consolidation.md)) |
 | **Source** | PR #115 inline review comment on Open Question #6 |
+
+> **Superseded by the shipped contract.** This design was delivered as C1 of
+> [fs-interface-consolidation.md](fs-interface-consolidation.md) (PR #467,
+> with the live mount feed in PR #277). The shipped contract differs from the
+> plan below in one respect: the shared records use `string | string[]`, and
+> `EndoMount` overrides `lookup` / `maybeLookup` to also accept a
+> `MountEntry`. See [fs-interface-consolidation.md § C1](fs-interface-consolidation.md#c1--name-hub-unification)
+> for the current interface.
 
 ## What is the Problem Being Solved?
 
