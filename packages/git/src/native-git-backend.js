@@ -416,23 +416,19 @@ const remoteProtocolArgs = urlText => {
 harden(remoteProtocolArgs);
 
 /**
- * Run git with GIT_ASKPASS connected to an inherited anonymous pipe.
+ * Run a remote git operation (clone, fetch, push) so that a timeout, an
+ * abort, or an output overflow terminates every process it started.  With
+ * credential bytes, GIT_ASKPASS reads them from an inherited anonymous pipe.
  *
  * @param {object} input
  * @param {string} input.cwd
  * @param {string} input.envRoot
  * @param {string[]} input.args
- * @param {Buffer} input.credentialBytes
+ * @param {Buffer} [input.credentialBytes]
  * @param {AbortSignal} [input.signal]
  * @returns {Promise<{ stdout: string, stderr: string }>}
  */
-const runGitWithAskpassAt = ({
-  cwd,
-  envRoot,
-  args,
-  credentialBytes,
-  signal,
-}) => {
+const runRemoteGitAt = ({ cwd, envRoot, args, credentialBytes, signal }) => {
   if (signal?.aborted) {
     return Promise.reject(
       signal.reason instanceof Error
@@ -461,11 +457,17 @@ const runGitWithAskpassAt = ({
     const ownGroup = process.platform !== 'win32';
     const child = spawn('git', [...GIT_BASE_ARGS, ...args], {
       cwd,
-      env: withGitEnvOverrides(makeGitEnv(envRoot), {
-        GIT_ASKPASS: gitAskpassHelperPath,
-        ENDO_GIT_ASKPASS_FD: String(GIT_ASKPASS_FD),
-      }),
-      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+      env:
+        credentialBytes === undefined
+          ? makeGitEnv(envRoot)
+          : withGitEnvOverrides(makeGitEnv(envRoot), {
+              GIT_ASKPASS: gitAskpassHelperPath,
+              ENDO_GIT_ASKPASS_FD: String(GIT_ASKPASS_FD),
+            }),
+      stdio:
+        credentialBytes === undefined
+          ? ['ignore', 'pipe', 'pipe']
+          : ['ignore', 'pipe', 'pipe', 'pipe'],
       detached: ownGroup,
     });
     const kill = () => {
@@ -487,17 +489,21 @@ const runGitWithAskpassAt = ({
     timeout.unref();
 
     const credentialPipe =
-      /** @type {import('node:stream').Writable | null | undefined} */ (
-        child.stdio[GIT_ASKPASS_FD]
-      );
-    if (credentialPipe === undefined || credentialPipe === null) {
-      clearTimeout(timeout);
-      kill();
-      reject(new Error('git credential pipe was not available'));
-      return;
+      credentialBytes === undefined
+        ? undefined
+        : /** @type {import('node:stream').Writable | null | undefined} */ (
+            child.stdio[GIT_ASKPASS_FD]
+          );
+    if (credentialBytes !== undefined) {
+      if (credentialPipe === undefined || credentialPipe === null) {
+        clearTimeout(timeout);
+        kill();
+        reject(new Error('git credential pipe was not available'));
+        return;
+      }
+      credentialPipe.on('error', () => {});
+      credentialPipe.end(credentialBytes);
     }
-    credentialPipe.on('error', () => {});
-    credentialPipe.end(credentialBytes);
 
     const abort = () => {
       aborted = true;
@@ -536,7 +542,7 @@ const runGitWithAskpassAt = ({
       settled = true;
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);
-      credentialPipe.destroy();
+      credentialPipe?.destroy();
       reject(error);
     });
     child.once('close', (code, closeSignal) => {
@@ -544,7 +550,7 @@ const runGitWithAskpassAt = ({
       settled = true;
       clearTimeout(timeout);
       signal?.removeEventListener('abort', abort);
-      credentialPipe.destroy();
+      credentialPipe?.destroy();
 
       const stdout = Buffer.concat(stdoutChunks).toString('utf8');
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
@@ -567,7 +573,7 @@ const runGitWithAskpassAt = ({
     });
   });
 };
-harden(runGitWithAskpassAt);
+harden(runRemoteGitAt);
 
 /**
  * Host-only constructive clone helper. Unlike backend methods, clone
@@ -616,22 +622,11 @@ export const gitClone = async ({
     remoteUrl,
     destination,
   ];
-  const credentialBytes = credentialBytesFor(credential);
-  if (credentialBytes === undefined) {
-    await execFileAsync('git', [...GIT_BASE_ARGS, ...args], {
-      cwd: path.dirname(destination),
-      env: makeGitEnv(destination),
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: GIT_MAX_BUFFER,
-      signal,
-    });
-    return;
-  }
-  await runGitWithAskpassAt({
+  await runRemoteGitAt({
     cwd: path.dirname(destination),
     envRoot: destination,
     args,
-    credentialBytes,
+    credentialBytes: credentialBytesFor(credential),
     signal,
   });
 };
@@ -1910,18 +1905,20 @@ export const makeNativeGitBackend = ({
   };
 
   /**
-   * Run a sanitized git invocation with GIT_ASKPASS connected to an inherited
-   * anonymous pipe. Only the fd number reaches the child environment; the
-   * credential bytes never appear in argv, env, or a temporary file.
+   * Run a sanitized remote git invocation (fetch, push) whose timeout or
+   * abort terminates every process it started.  With credential bytes,
+   * GIT_ASKPASS is connected to an inherited anonymous pipe: only the fd
+   * number reaches the child environment, and the credential bytes never
+   * appear in argv, env, or a temporary file.
    *
    * @param {string[]} args
-   * @param {Buffer} credentialBytes
+   * @param {Buffer | undefined} credentialBytes
    * @param {AbortSignal} [signal]
    * @returns {Promise<{ stdout: string, stderr: string }>}
    */
-  const runGitWithAskpass = async (args, credentialBytes, signal) => {
+  const runRemoteGit = async (args, credentialBytes, signal) => {
     await verifyRepositoryIdentity();
-    return runGitWithAskpassAt({
+    return runRemoteGitAt({
       cwd: repoRoot,
       envRoot: repoRoot,
       args,
@@ -3524,24 +3521,15 @@ export const makeNativeGitBackend = ({
       }
       args.push(opts.tags ? '--tags' : '--no-tags');
       args.push(url, ...refspecs);
-      const credentialBytes = credentialBytesFor(opts.credential);
-      let text;
-      if (credentialBytes === undefined) {
-        // `runGit` already applies `truncateOutput` to its return value, so
-        // this plain (no-credential) path is bounded the same as the
-        // askpass path below; the exo-git guard bounds it again
-        // structurally regardless, since a different or hostile backend
-        // could skip this helper entirely.
-        text = await runGit(args, undefined, opts.signal);
-      } else {
-        const { stdout, stderr } = await runGitWithAskpass(
-          args,
-          credentialBytes,
-          opts.signal,
-        );
-        const output = `${stdout}${stderr ? `\n[stderr]:\n${stderr}` : ''}`;
-        text = truncateOutput(output.trim() || '(no output)');
-      }
+      // The exo-git guard bounds the output again structurally, since a
+      // different or hostile backend could skip this helper entirely.
+      const { stdout, stderr } = await runRemoteGit(
+        args,
+        credentialBytesFor(opts.credential),
+        opts.signal,
+      );
+      const output = `${stdout}${stderr ? `\n[stderr]:\n${stderr}` : ''}`;
+      const text = truncateOutput(output.trim() || '(no output)');
       const after = await readRefMap([...selectors]);
       const updatedRefs = summarizeFetchRefUpdates(refspecs, before, after);
       return harden({ updatedRefs, text });
@@ -3626,12 +3614,11 @@ export const makeNativeGitBackend = ({
         args.push('--set-upstream');
       }
       args.push(url, ...refspecs);
-      const credentialBytes = credentialBytesFor(opts.credential);
-      const raw =
-        credentialBytes === undefined
-          ? await runGitRaw(args, undefined, opts.signal)
-          : (await runGitWithAskpass(args, credentialBytes, opts.signal))
-              .stdout;
+      const { stdout: raw } = await runRemoteGit(
+        args,
+        credentialBytesFor(opts.credential),
+        opts.signal,
+      );
       const updatedRefs = await parsePushPorcelainUpdates(raw);
       const text = truncateOutput(raw.trim() || '(no output)');
       return harden({ updatedRefs, text });
