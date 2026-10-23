@@ -1,4 +1,6 @@
 // @ts-check
+// reexport-policy-exempt: this package entry point is the canonical public
+// surface for its implementation modules.
 //
 // `@endo/claude`: confined `claude -p` inference for an Endo guest from a Claude
 // subscription, whose only capability surface is the MCP projection of one guest
