@@ -7,14 +7,31 @@
 | **Author** | kriscendobot (prompted) |
 | **Status** | Superseded by [claude-bare-course-correction](claude-bare-course-correction.md) |
 
-> **Superseded.** The subscription-backed route this design specifies is
-> closed: `claude --bare` accepts only `ANTHROPIC_API_KEY` or `apiKeyHelper`,
-> and a subscription token presented as an API key is rejected (see
-> [claude-bare-course-correction](claude-bare-course-correction.md)
-> § Evidence). The replacement is
-> [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md).
-> This document remains only as the record of the legacy path that the
-> course correction migrates away from; do not build new work on it.
+## Status
+
+**Superseded** by
+[claude-bare-course-correction](claude-bare-course-correction.md), whose
+companion
+[api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md)
+specifies the replacement.
+
+The subscription-backed route this design specifies is closed. The `--help`
+text of the pinned Claude Code 2.1.296 states that under `--bare`, Anthropic
+authentication is strictly `ANTHROPIC_API_KEY` or `apiKeyHelper`, and a
+subscription token presented through `apiKeyHelper` is treated as an API key
+and rejected. That leaves this design's positive-canary gate unable to pass
+(course correction § Evidence, which also reconciles the earlier
+`ANTHROPIC_AUTH_TOKEN` observation in
+[endo-claude-inference-backends](endo-claude-inference-backends.md)).
+
+What was built under this design remains on `llm` until the course
+correction's deprecate-then-delete sequence removes it: the `@endo/claude`
+root harness and `endo-claude-turn` bin (#1371), the CLI and Agent SDK
+backends (#1412), and the guest stdio MCP server it reaches
+([endo-guest-stdio-mcp](endo-guest-stdio-mcp.md), #1336). The course
+correction's inventory gives each surface's disposition. This document remains
+only as the record of the legacy path that the course correction migrates
+away from; do not build new work on it.
 
 ## What is the Problem Being Solved?
 
