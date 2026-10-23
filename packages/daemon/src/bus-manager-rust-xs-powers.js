@@ -347,6 +347,27 @@ export const makeXsFilePowers = () => {
     return `${dev}:${ino}`;
   };
 
+  /**
+   * `pathIdentity` already reads the entry itself, not a link's referent.
+   *
+   * @type {FilePowers['entryIdentity']}
+   */
+  const entryIdentity = pathIdentity;
+
+  /**
+   * The XS host's `remove` is non-recursive, so it refuses a non-empty
+   * directory.
+   *
+   * @type {FilePowers['removeEmptyDirectory']}
+   */
+  const removeEmptyDirectory = async path => {
+    const { kind } = await statRaw(path);
+    if (kind !== 'directory') {
+      throw new Error(`removeEmptyDirectory: not a directory: ${path}`);
+    }
+    await removePath(path);
+  };
+
   /** @type {FilePowers['isDirectory']} */
   const isDirectory = async path => hostIsDir(DIR_TOKEN, toRelative(path));
 
@@ -478,6 +499,8 @@ export const makeXsFilePowers = () => {
     realPath,
     readLink,
     pathIdentity,
+    entryIdentity,
+    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,

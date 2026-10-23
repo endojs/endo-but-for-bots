@@ -139,7 +139,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MountEntryRecord, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -8758,32 +8758,43 @@ const makeDaemonCore = async (
     return filePowers.readDirectory(mountPath);
   };
 
-  const mountStagingNamePattern = /^\.endo-staging-[0-9a-f]{32}$/;
+  /**
+   * Host-private records of the clone staging directories this daemon
+   * created, one file per directory holding its mount and its `dev:ino`
+   * identity.  A mount holder can create any entry name in the mount, so a
+   * name alone never proves that the daemon owns an entry; these records,
+   * outside every mount, do.
+   */
+  const mountStagingRecordsPath = filePowers.joinPath(
+    persistencePowers.statePath,
+    'mount-staging',
+  );
   /** @type {Set<string>} */
   const liveMountStagingPaths = new Set();
 
+  /** @param {string} name */
+  const mountStagingRecordPath = name =>
+    filePowers.joinPath(mountStagingRecordsPath, `${name}.json`);
+
+  /** @param {string} name */
+  const forgetMountStagingEntry = async name => {
+    const recordPath = mountStagingRecordPath(name);
+    if (await filePowers.exists(recordPath)) {
+      await filePowers.removePath(recordPath);
+    }
+  };
+
   /**
-   * Remove clone staging directories left by a prior daemon process. A live
-   * staging directory is registered before it is created and stays registered
-   * until removal settles, so concurrent clone attempts cannot mistake one
-   * another's work for crash debris.
-   *
-   * @param {FormulaIdentifier} mountId
-   * @returns {Promise<void>}
+   * @param {string} source
+   * @param {string} target
    */
-  const removeStaleMountStagingEntries = async mountId => {
-    const mountPath = getMountHostPath(mountId);
-    if (!(await filePowers.exists(mountPath))) {
-      return;
+  const renameMountEntryNoReplace = async (source, target) => {
+    if (filePowers.renameNoReplace === undefined) {
+      throw makeError(
+        X`this daemon's file powers cannot move a mount entry without risking replacing another holder's entry`,
+      );
     }
-    for (const name of await filePowers.readDirectory(mountPath)) {
-      if (mountStagingNamePattern.test(name)) {
-        const stagingPath = filePowers.joinPath(mountPath, name);
-        if (!liveMountStagingPaths.has(stagingPath)) {
-          await filePowers.removeDirectory(stagingPath);
-        }
-      }
-    }
+    await filePowers.renameNoReplace(source, target);
   };
 
   /**
@@ -8791,10 +8802,11 @@ const makeDaemonCore = async (
    * mount's host path, so an operation can build there without touching
    * anything another holder of the mount writes alongside it.  Staging
    * under the mount keeps the later `moveMountEntries` a same-filesystem
-   * rename.
+   * rename.  The directory is registered as live before it is created and
+   * recorded, with its identity, in host-private state once it exists.
    *
    * @param {FormulaIdentifier} mountId
-   * @returns {Promise<string>} The staging directory's entry name.
+   * @returns {Promise<MountEntryRecord>}
    */
   const makeMountStagingEntry = async mountId => {
     const mountPath = getMountHostPath(mountId);
@@ -8805,62 +8817,171 @@ const makeDaemonCore = async (
     }
     liveMountStagingPaths.add(stagingPath);
     try {
+      await filePowers.makePath(mountStagingRecordsPath);
       await filePowers.makePath(stagingPath);
+      const identity = await filePowers.entryIdentity(stagingPath);
+      await filePowers.writeFileText(
+        mountStagingRecordPath(name),
+        JSON.stringify({ mountId, identity }),
+      );
+      return harden({ name, identity });
     } catch (error) {
       liveMountStagingPaths.delete(stagingPath);
       throw error;
     }
-    return name;
   };
 
   /**
-   * Move every entry of a staging directory up into the mount's host path,
-   * refusing to replace an entry that is already there.  Each moved name is
-   * appended to `moved` as it lands, so a caller whose move fails partway
-   * still knows exactly which entries it owns.
+   * Discard entries directly under a mount's host path, each only while it
+   * is still the very filesystem object that was recorded.  Each entry is
+   * first renamed into a fresh staging directory, which takes whatever
+   * object holds the name at that instant, and its identity is checked
+   * there.  A match is removed; a symbolic link is unlinked, never
+   * followed.  An object another holder put under the name meanwhile is
+   * renamed back, without replacing anything; if the name has been taken
+   * again, the object is left in the staging directory and the call
+   * throws.  A missing entry is not an error.
    *
    * @param {FormulaIdentifier} mountId
-   * @param {string} stagingName
-   * @param {string[]} moved
+   * @param {MountEntryRecord[]} entries
    * @returns {Promise<void>}
    */
-  const moveMountEntries = async (mountId, stagingName, moved) => {
-    const mountPath = getMountHostPath(mountId);
-    const stagingPath = filePowers.joinPath(mountPath, stagingName);
-    for (const entry of await filePowers.readDirectory(stagingPath)) {
-      const target = filePowers.joinPath(mountPath, entry);
-      if (await filePowers.exists(target)) {
-        throw makeError(
-          X`mount entry ${q(entry)} appeared while it was being staged`,
-        );
-      }
-      await filePowers.renamePath(
-        filePowers.joinPath(stagingPath, entry),
-        target,
-      );
-      moved.push(entry);
+  const discardMountEntries = async (mountId, entries) => {
+    if (entries.length === 0) {
+      return;
     }
-  };
-
-  /**
-   * Remove the named entries directly under a mount's host path, and
-   * nothing else.  A symbolic link is unlinked, never followed.  A missing
-   * entry is not an error.
-   *
-   * @param {FormulaIdentifier} mountId
-   * @param {string[]} names
-   * @returns {Promise<void>}
-   */
-  const removeMountEntries = async (mountId, names) => {
     const mountPath = getMountHostPath(mountId);
-    for (const name of names) {
+    const holding = await makeMountStagingEntry(mountId);
+    const holdingPath = filePowers.joinPath(mountPath, holding.name);
+    /** @type {unknown[]} */
+    const errors = [];
+    let keepHolding = false;
+    for (const { name, identity } of entries) {
       const entryPath = filePowers.joinPath(mountPath, name);
+      const heldPath = filePowers.joinPath(holdingPath, name);
       try {
-        await filePowers.removeDirectory(entryPath);
+        await renameMountEntryNoReplace(entryPath, heldPath);
+      } catch (error) {
+        if (/** @type {{ code?: unknown }} */ (error).code !== 'ENOENT') {
+          errors.push(error);
+        }
+        liveMountStagingPaths.delete(entryPath);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      try {
+        if ((await filePowers.entryIdentity(heldPath)) === identity) {
+          await filePowers.removeDirectory(heldPath);
+          await forgetMountStagingEntry(name);
+        } else {
+          try {
+            await renameMountEntryNoReplace(heldPath, entryPath);
+          } catch (error) {
+            keepHolding = true;
+            throw makeError(
+              X`mount entry ${q(name)} was replaced by another holder and its name was taken again, so the replacement was kept at ${q(`${holding.name}/${name}`)}`,
+              undefined,
+              { cause: /** @type {Error} */ (error) },
+            );
+          }
+        }
+      } catch (error) {
+        errors.push(error);
       } finally {
         liveMountStagingPaths.delete(entryPath);
       }
     }
+    if (!keepHolding) {
+      await filePowers
+        .removeEmptyDirectory(holdingPath)
+        .catch(error => errors.push(error));
+    }
+    await forgetMountStagingEntry(holding.name).catch(error =>
+      errors.push(error),
+    );
+    liveMountStagingPaths.delete(holdingPath);
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw makeError(
+        X`could not discard ${q(errors.length)} mount entries`,
+        AggregateError,
+        { errors: /** @type {Error[]} */ (errors) },
+      );
+    }
+  };
+
+  /**
+   * Discard the clone staging directories that this daemon recorded for a
+   * mount and that no operation in this process still owns: those a prior
+   * daemon process left when it stopped between creating one and removing
+   * it.  Each is removed only if it is still the recorded object.  An
+   * unrecorded entry is never touched, whatever its name.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @returns {Promise<void>}
+   */
+  const removeStaleMountStagingEntries = async mountId => {
+    if (!(await filePowers.exists(mountStagingRecordsPath))) {
+      return;
+    }
+    const mountPath = getMountHostPath(mountId);
+    /** @type {MountEntryRecord[]} */
+    const stale = [];
+    for (const recordName of await filePowers.readDirectory(
+      mountStagingRecordsPath,
+    )) {
+      const name = recordName.replace(/\.json$/, '');
+      if (!liveMountStagingPaths.has(filePowers.joinPath(mountPath, name))) {
+        const record = JSON.parse(
+          await filePowers.readFileText(mountStagingRecordPath(name)),
+        );
+        if (record.mountId === mountId) {
+          stale.push(harden({ name, identity: record.identity }));
+        }
+      }
+    }
+    await discardMountEntries(mountId, stale);
+    // A recorded entry that was gone or replaced has nothing left to prove.
+    for (const { name } of stale) {
+      await forgetMountStagingEntry(name);
+    }
+  };
+
+  /**
+   * Move every entry of a staging directory up into the mount's host path,
+   * never replacing an entry that is already there, not even one created
+   * concurrently.  Each moved entry is appended to `moved`, with its
+   * identity, as it lands, so a caller whose move fails partway still knows
+   * exactly which objects it owns.  Once the staging directory is empty it
+   * is removed; if another holder wrote into it meanwhile, it is left in
+   * place with their content.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @param {MountEntryRecord} staging
+   * @param {MountEntryRecord[]} moved
+   * @returns {Promise<void>}
+   */
+  const moveMountEntries = async (mountId, staging, moved) => {
+    const mountPath = getMountHostPath(mountId);
+    const stagingPath = filePowers.joinPath(mountPath, staging.name);
+    for (const name of await filePowers.readDirectory(stagingPath)) {
+      const sourcePath = filePowers.joinPath(stagingPath, name);
+      const identity = await filePowers.entryIdentity(sourcePath);
+      await renameMountEntryNoReplace(
+        sourcePath,
+        filePowers.joinPath(mountPath, name),
+      );
+      moved.push(harden({ name, identity }));
+    }
+    try {
+      await filePowers.removeEmptyDirectory(stagingPath);
+    } catch {
+      // Another holder wrote into the staging directory; keep their content.
+    }
+    await forgetMountStagingEntry(staging.name);
+    liveMountStagingPaths.delete(stagingPath);
   };
 
   /**
@@ -8940,7 +9061,7 @@ const makeDaemonCore = async (
     removeStaleMountStagingEntries,
     makeMountStagingEntry,
     moveMountEntries,
-    removeMountEntries,
+    discardMountEntries,
     getIdForRef,
     traceAggregator,
     secretManager,
