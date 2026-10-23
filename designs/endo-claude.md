@@ -3,9 +3,18 @@
 | | |
 |---|---|
 | **Created** | 2026-08-16 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-10-23 |
 | **Author** | kriscendobot (prompted) |
-| **Status** | Not Started |
+| **Status** | Superseded by [claude-bare-course-correction](claude-bare-course-correction.md) |
+
+> **Superseded.** The subscription-backed route this design specifies is
+> closed: `claude --bare` accepts only `ANTHROPIC_API_KEY` or `apiKeyHelper`,
+> and a subscription token presented as an API key is rejected (see
+> [claude-bare-course-correction](claude-bare-course-correction.md)
+> § Evidence). The replacement is
+> [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md).
+> This document remains only as the record of the legacy path that the
+> course correction migrates away from; do not build new work on it.
 
 ## What is the Problem Being Solved?
 
