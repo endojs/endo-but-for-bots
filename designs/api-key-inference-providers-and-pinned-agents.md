@@ -94,7 +94,8 @@ After provider selection, the page asks for:
 - bot name;
 - harness: `lal` (recommended) or `fae`;
 - model, chosen from the provider's safe catalog or its default;
-- **Wake on messages**, on by default; and
+- **Wake on messages**, on by default and changeable later (§ Agent
+  management); and
 - initial spend/rate limits, initialized from deployment defaults.
 
 Submit is a separate authenticated operation containing only provider id,
@@ -102,8 +103,59 @@ harness, bot name, model, limits, and an idempotency key. The provider id is
 resolved only through the signed-in owner's provider directory (§ Ownership and
 cross-principal denial). Success adds the agent to the guest's inventory.
 Retrying the same idempotency key returns the same provider or agent; it never
-creates a second spend source or responder. § Creation and retirement
-operations defines how that holds across crashes and lost responses.
+creates a second spend source or responder. The provider operation in
+§ Creation and retirement operations and the agent operation in § Agent
+creation, wake, and dismissal operations specify how that holds across crashes
+and lost responses.
+
+### Agent management
+
+Each agent's detail view, reached from the guest's inventory, shows its
+provider, harness, model, limits, wake state, and unread mail count. Its
+actions are **Wake on messages** (a toggle), **Edit limits**, **Reattach
+provider**, and **Dismiss**.
+
+- **Turning wake off** pauses the agent's responder. The responder stays pinned
+  with its cursor and effect records, but stops following the mailbox and
+  starts no turns. New mail is still delivered to the agent's guest and stays
+  unread, listed in the detail view, and dismissable there by the owner.
+- **Turning wake on** resumes the responder from its stored cursor. Mail that
+  arrived while paused is processed oldest first, each message admitted under
+  the agent's normal limits; mail the owner dismissed meanwhile is skipped.
+- An agent **created with wake off** has no responder until wake is first
+  turned on; its mail accumulates the same way.
+
+Each toggle is an idempotent agent operation (§ Agent creation, wake, and
+dismissal operations), so a repeated or interrupted toggle converges on the
+requested state.
+
+### Keyboard and assistive technology
+
+The dialog follows the interaction contract of the Chat wizard in
+[`chat-inventory-create-menu.md`](chat-inventory-create-menu.md) § Three-pane
+wizard: `Tab` / `Shift-Tab` between fields, arrow keys within a choice list,
+`Enter` on the next or submit button advances, and `Escape` cancels (with a
+confirmation once any field has input). Specifically:
+
+- **Semantics.** The dialog is a modal `<dialog>` labelled by its current step
+  heading. The provider list and the harness choice are native radio groups
+  with visible labels; provider kind and model are native `<select>`
+  elements; every input has a `<label>`. Step position is announced as part of
+  the heading ("Step 1 of 2: Inference provider").
+- **Focus.** Opening the dialog moves focus to the selected provider, or to
+  the first field of **New provider** when the owner has none. Advancing or
+  going Back moves focus to the new step's heading. Closing, cancelling, or
+  succeeding returns focus to the **Add agent** button (or to the new agent's
+  inventory entry on success).
+- **Validation and progress.** A field error sets `aria-invalid` and is tied to
+  its field through `aria-describedby`; on submit, focus moves to the first
+  invalid field. Server errors render their fixed-code message in a
+  `role="alert"` region at the top of the step. While a submit is pending the
+  submit button is disabled, the step is `aria-busy`, and a polite live region
+  announces "Creating provider" or "Creating agent".
+
+The Providers page and the agent detail view use the same rules for their
+confirmations and limit forms.
 
 ### Provider management
 
@@ -160,9 +212,10 @@ The record's facets are separate:
 - `InferenceProviderUse`, held only by the host-side agent factory/broker,
   creates a per-agent inference facet over a specific guest powers facet,
   harness, model, and budget. It does not vend its `SecretBlob`.
-- `AgentInference`, held by one agent driver, accepts bounded turns and returns
-  provider-neutral tagged results and usage. It cannot change provider,
-  model allowlist, or spend policy.
+- `AgentInference`, held by one agent driver, is an `InferenceEndpoint` grant
+  (§ Harness adapter boundary): it accepts bounded provider-wire requests and
+  returns response bytes, with admission, credentials, and accounting applied
+  by the broker. It cannot change provider, model allowlist, or spend policy.
 
 The browser endpoint invokes provider creation on the owner's directory, which
 runs the creation operation below and calls `@secrets/create` on the Endo root. The resulting
@@ -174,7 +227,8 @@ authenticated HTTP client assembled there is preferable to returning bytes to
 a harness.
 
 The store lives in the Endo host: `@secrets` owns encrypted bytes, lifecycle,
-and audit; the provider registry owns non-secret interpretation and usage.
+and audit; the provider registry owns non-secret interpretation; the usage
+ledger owns usage (§ Ownership map).
 minion.town is the UI/gateway and keeps no second durable key copy. Production
 backup and encryption follow
 [`daemon-secret-manager.md`](daemon-secret-manager.md). The `@secrets` catalog
@@ -271,9 +325,101 @@ Retirement uses the same record with `kind: 'retire'`. The registry first sets
 the provider to `retiring`; from that commit, admission refuses new and queued
 turns. It then revokes the `SecretBlob` and finally sets `retired`. Recovery
 drives any `retiring` provider forward to `retired`, so the registry can never
-show an `active` provider whose secret is already revoked. Agent creation uses
-an operation record of the same shape, keyed by `(ownerId, idempotencyKey)`,
-whose external effects are guest creation and responder pinning.
+show an `active` provider whose secret is already revoked.
+
+### Agent creation, wake, and dismissal operations
+
+Agent creation spans three stores: the Endo root's guest formulas, the provider
+registry's per-agent inference grants, and the new guest's `@pins` and
+inventory names. The **agent factory** is the single coordinator. It owns a
+root-private agent registry holding the durable `AgentRecord` (agent id, owner,
+guest formula id, provider id, harness, model, limits, wake state, lifecycle
+state) and an operation record for every change; the guest, the provider
+registry, and the responder are participants that each make one idempotent,
+name-keyed effect.
+
+```ts
+type AgentOperation = {
+  version: 1;
+  operationId: string;      // random; derives every preallocated name below
+  ownerId: string;
+  idempotencyKey: string;   // client-supplied, scoped to ownerId
+  kind: 'create' | 'set-wake' | 'dismiss';
+  agentId: string;          // preallocated before any external effect
+  request: SafeAgentFields; // provider id, harness, bot name, model, limits, wake
+  state:
+    | 'intent'
+    | 'guest-created'
+    | 'inference-bound'
+    | 'responder-ready'
+    | 'named'
+    | 'committed'
+    | 'aborting'
+    | 'aborted';
+  updatedAt: string;
+};
+```
+
+Creation proceeds through these commit boundaries. Each step's effect is keyed
+by a name preallocated at intent, so repeating a step finds its earlier effect
+instead of making a second one.
+
+1. **Intent.** The factory atomically checks `(ownerId, idempotencyKey)` as
+   provider creation does: a committed match returns the agent, a mismatch
+   returns `idempotency-conflict`, an uncommitted match resumes. It resolves
+   the provider through the owner's directory and checks the owner match
+   (§ Ownership and cross-principal denial), reserves the bot name in the
+   owner's agent registry (`agent-name-conflict` if another live agent holds
+   it), and writes `intent` with a preallocated `agentId`, guest name,
+   inference grant id, and responder name.
+2. **Guest.** The factory asks the Endo root to provide the guest under its
+   preallocated, root-private name; an existing guest under that name is the
+   earlier attempt's. It records `guest-created`.
+3. **Inference.** The factory asks the provider's `InferenceProviderUse` for the
+   agent's grant under the preallocated grant id; the registry returns the
+   existing grant for a known id. It records `inference-bound`.
+4. **Responder.** With wake on, the factory pins the responder formula under its
+   preallocated name in the guest's `@pins`, in the paused state; with wake off,
+   it skips this effect. It records `responder-ready`.
+5. **Name.** The factory writes the bot name into the owner's inventory,
+   designating the agent. A name already designating this agent is accepted.
+   It records `named`.
+6. **Commit.** The factory writes the `active` `AgentRecord` and marks the
+   operation `committed` in one agent-registry transaction, then unpauses the
+   responder. Success means this commit; the response follows it.
+
+No step after intent needs anything the client holds, so recovery always rolls
+forward. On daemon start and periodically, a factory-owned reconciler resumes
+every uncommitted operation from its recorded state. Crash and retry behavior:
+
+- Crash before intent: nothing exists; a retry starts fresh.
+- Crash after any later boundary, or between an effect and its state record:
+  the retry or the reconciler repeats the next step, which finds the earlier
+  effect by its preallocated name and records the state.
+- Lost response after commit: a retry with the same idempotency key returns the
+  committed agent.
+- A step that fails permanently (provider retired or not found, owner mismatch,
+  name conflict, guest creation refused) sets `aborting`. The factory then
+  undoes completed effects in reverse order: it removes the inventory name if
+  this operation wrote it, unpins the responder, disposes the grant, and
+  releases the guest. Then it records `aborted` and returns the fixed error.
+  Recovery drives `aborting` to `aborted` the same way.
+
+Until commit the owner sees the agent as `agent creation in progress`, and no
+responder runs a turn, so a crash can never leave a running agent without an
+`AgentRecord`.
+
+**Wake toggles** (`kind: 'set-wake'`) have a single participant, the responder:
+the factory records the requested state, pins (on first enable), unpauses, or
+pauses the responder, then commits the new wake state to the `AgentRecord`.
+Recovery repeats the responder effect, which is idempotent.
+
+**Dismissal** (`kind: 'dismiss'`) first commits the `AgentRecord` as
+`dismissing`, from which the grant refuses new turns. It then cancels any
+in-flight turn, unpins the responder, disposes the grant, removes the
+inventory name, and releases the guest, and finally commits `dismissed`.
+Recovery drives `dismissing` forward. Usage and audit rows for the agent remain
+in the usage ledger.
 
 ### "Indelible" and retirement
 
@@ -310,11 +456,63 @@ issuer, scoped to one agent's model allowlist and caps.
 is not reused directly. It owns one operator profile read from persisted
 operator configuration and serves container slices through a loopback
 listener. Here, providers are user-imported records (many per deployment), and
-Lal and Fae call their provider adapters in-process. The design needs one
-registry-driven issuer per record, not one operator-configured service. Phase 1
-must confirm that the issuer accepts an in-process request path without the
-slice listener. If it cannot, the gap is closed by extending the issuer, not by
-forking a second broker.
+Lal and Fae run in-process. The design needs one registry-driven issuer per
+record, not one operator-configured service. The issuer already returns its
+endpoint as an in-process `InferenceEndpoint` exo; phase 1 confirms that it
+serves requests without the slice listener. If it cannot, the gap is closed by
+extending the issuer, not by forking a second broker.
+
+### Harness adapter boundary
+
+The issuer's grant surface is an `InferenceEndpoint`
+(`InferenceEndpointInterface` in `packages/hosted-agent/src/subscription-share.js`):
+`request(message)` and `requestByteStream(message)` over a provider-wire
+message `{ method, path, body }`. Neither first-release harness consumes that
+today. Lal builds a Pi agent around a `getApiKey` callback
+(`packages/lal/agent.js`), and Fae's `makeProviderOwner` reads a `SecretBlob`
+per turn and builds a local keyed provider (`packages/fae/src/provider-owner.js`).
+Both would hold key bytes. The bridge is a capability-backed provider adapter
+that follows the existing precedent
+`makeSubscriptionResponsesProvider` (`packages/lal/providers/subscription-responses.js`),
+which already drives `E(endpoint).requestByteStream` with no URL or credential
+in the harness and which Fae already accepts as its `subscription-responses`
+provider kind.
+
+- **Adapter.** Add `makeBrokeredMessagesProvider` to `@endo/lal/providers`. It
+  takes an `AgentInference` remotable and a model, and speaks the Anthropic
+  Messages wire format (an OpenAI-compatible sibling ships with that provider
+  kind). It translates the harness's messages and tool schemas into a Messages
+  request body, parses the server-sent-event byte stream into the same events
+  and result shape that the direct `anthropic.js` adapter yields, and surfaces
+  the stream's usage events. Its requests carry no `x-api-key`,
+  `authorization`, or base URL. The issuer refuses a request that carries any
+  of them and adds the credential itself.
+- **Fae.** `makeProviderOwner` accepts a new provider kind `brokered-messages`
+  whose recipe holds the `AgentInference` capability in place of
+  `authSecretName`. Like `subscription-responses`, it takes no
+  `provideAuthToken`, so Fae never reads a `SecretBlob`.
+- **Lal.** For a brokered agent, `spawnWorkerLoop` passes `makePiAgent` a
+  `streamFn` built over the same adapter (`packages/agentry/src/harness/pi-agent.js`
+  already accepts one) and supplies no `getApiKey`; `LAL_AUTH_TOKEN` and
+  ambient `*_API_KEY` variables are absent from the worker environment.
+- **Lifecycle and revocation.** Each model call opens one request on the grant.
+  The issuer checks grant and provider state per request, so retirement fails
+  the agent's next call with a fixed `provider-retired` error, not its next
+  provisioning. Dismissal disposes the grant, after which every call fails
+  with `agent-dismissed`.
+- **Accounting.** The issuer's `onReading` and `audit` hooks write
+  reservations and settlements to the usage ledger (§ Cost and abuse
+  controls). Usage the adapter reports to the harness is informational and is
+  never a billing input.
+- **Cancellation.** A harness abort (Pi's `AbortSignal`, Fae's turn
+  cancellation) closes the byte-stream iterator. The issuer then cancels the
+  upstream request and releases the admission slot, and settlement charges the
+  reservation if no usage arrived.
+
+The agent factory refuses a harness configuration that contains
+`authSecretName`, `authToken`, `getApiKey`, or a provider other than
+`brokered-messages`, so neither harness keeps a direct-key path for an agent
+created by this flow.
 
 ## Confinement and wake-on-message
 
@@ -360,13 +558,19 @@ Endo capabilities where no bearer is needed.
 | UI -> provider endpoint | Password POST and safe summary response | Signed-in guest may create within quota, only in its own directory | None in UI; idempotency key in app | Registry operation commit decides success | Key in request only; safe provider summary back |
 | Provider registry -> `@secrets` | Retained `SecretBlob` lookup formula | Provider admin chooses create/supersede/retire | Secret manager owns bytes/audit; registry owns metadata and operation records | Registry coordinates each create/retire operation; secret manager commits/revokes bytes as a participant; registry reconciler recovers | Secret capability inward; no bytes or admin facet outward |
 | Provider broker -> agent | Per-agent `AgentInference` facet | Broker enforces model, spend, rate, concurrency | Usage ledger per provider and agent | Broker admits, cancels, and releases turns | Bounded prompt/result/usage |
-| Guest -> responder -> harness | Pinned mailbox subscription over one guest facet | User selects harness and wake policy | Guest formula, responder cursor/effects, harness transcript | Endo revives; user dismisses; responder commits mail effect | Message plus explicitly held guest capabilities |
+| Agent factory -> guest, grant, responder | Agent operation records in the agent registry | Owner creates, toggles wake, and dismisses | `AgentRecord` and agent operation records | Factory coordinates create/wake/dismiss; guest, registry grant, and responder commit their effects as participants; factory reconciler recovers | Preallocated names inward; agent summary outward |
+| Guest -> responder -> harness | Pinned mailbox subscription over one guest facet | Wake state set through the factory | Guest formula, responder cursor/effects, harness transcript | Endo revives; responder commits mail effect | Message plus explicitly held guest capabilities |
 
-Persistent state has one owner per datum: `@secrets` owns key material, the
-provider registry owns provider lifecycle, ownership, and cross-store operation
-records, the usage ledger owns accounting,
-and the guest owns mail/responder state. The provider admin owns retire; the
-broker owns per-turn admit/discard. Endo owns restart/replay. The harness owns
+Persistent state has one owner per datum: `@secrets` owns key material; the
+provider registry owns provider lifecycle, ownership, and provider operation
+records; the agent factory's registry owns agent lifecycle and agent operation
+records; the usage ledger owns accounting; and the guest owns mail/responder
+state. The usage ledger is the single source of truth for usage, reservations,
+and settlements: the broker is its only writer, admission and the Providers
+page read it directly, and no other store keeps a usage projection that would
+need rebuilding. The provider admin owns retire; the factory owns agent
+create/wake/dismiss; the broker owns per-turn admit/discard. Endo owns
+formula restart/replay. The harness owns
 execution classification, while the broker owns retry/spend policy. Inner
 types use provider, turn, result, and grant; none are named for outer commit,
 replay, or persistence policy.
@@ -428,7 +632,8 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    `InferenceProviderAdmin`/`Use`/`AgentInference` over the existing grant
    issuer, the creation/retirement operation records and reconciler, and
    secret-manager retention. Test restart, supersession, retirement, and
-   no-admin derivation from use. Test cross-principal denial: a foreign id in
+   no-admin derivation from use. Confirm the issuer serves an in-process
+   `InferenceEndpoint` without the slice listener. Test cross-principal denial: a foreign id in
    lookup, admin, and agent creation returns `provider-not-found` or
    `provider-owner-mismatch`, and listing never shows another owner's provider.
    Inject a crash at each creation and retirement commit boundary, including a
@@ -437,7 +642,11 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    Rollback leaves inert records.
 2. **Provider adapters and accounting.** Bind Anthropic API keys through the
    provider-neutral `@endo/inference` contract, usage recorder, model catalog,
-   limits, and a fake upstream. Test 401, rate limit, cancellation, unknown
+   limits, and a fake upstream. Add the `brokered-messages` adapter, Fae's
+   provider kind, and Lal's broker-backed `streamFn` (§ Harness adapter
+   boundary); test that neither harness can be configured with key material,
+   that a retired provider fails the next call, and that a harness abort
+   cancels upstream and releases the slot. Test 401, rate limit, cancellation, unknown
    usage, concurrency, budget refusal before secret read, and log redaction.
    Test reservation and settlement: refusal when the worst-case reservation does
    not fit, refusal of an unpriced model under a dollar budget, a streaming
@@ -448,13 +657,21 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    and revoke, CSRF/account gates, request-size bound, fixed errors, and no
    echo/cache/logging. Use the clip browser recipe against Chromium, Firefox,
    and WebKit: inspect rendered DOM, network URL/body lifetime, history,
-   console, retry, Back, and reload. Plant a unique canary key and apply the
+   console, retry, Back, and reload. Exercise both steps keyboard-only and
+   with a screen reader (focus order, focus return, announced errors and
+   progress). Plant a unique canary key and apply the
    secret-retention check below. Test that a second signed-in principal cannot
    list, select, or revoke the first principal's provider.
 4. **Agent factory and UI step.** Add the server-supplied Lal/Fae catalog,
    name/model/limit validation, idempotent agent creation, and exact powers
-   profiles. Test same-name conflicts, stale provider, foreign provider id,
-   model exclusion, and absence of root/secret/sibling methods.
+   profiles, the agent operation records and reconciler, and the agent
+   detail view with the wake toggle. Test same-name conflicts, stale provider,
+   foreign provider id, model exclusion, and absence of root/secret/sibling
+   methods. Inject a crash at each creation, wake, and dismissal boundary,
+   including a lost response, and assert exactly one guest, grant, and
+   responder per agent, no running responder without a committed
+   `AgentRecord`, and no residue after an abort. Test that mail sent while wake
+   is off stays unread and is processed after wake is turned on.
 5. **Pinned responder.** Generalize #165 away from Claude names and attach it to
    the created Lal/Fae agent. Test message wake, duplicate delivery, restart,
    busy/rate-limit refusal, cancellation, effect commit, and dismissal cleanup
@@ -481,12 +698,16 @@ held transiently by: the browser page's memory and the in-flight request body,
 TLS, the minion.town app process memory for the duration of the request, the
 Endo daemon process memory, the `@secrets` backend in its encrypted form, the
 host broker's memory during an upstream request, and the upstream provider. No
-check inspects those. After import, and again after a restart and after one
-upstream turn, the canary must have zero copies in:
+check inspects those.
 
-- browser persistence: DOM after submission, history and session-restore
-  entries, HTTP cache, Cache Storage and service-worker caches, local and
-  session storage, IndexedDB, cookies, and the form-autofill store;
+The gate covers only storage the application controls. After import, and
+again after a restart and after one upstream turn, the canary must have zero
+copies in:
+
+- application-controlled browser state: DOM after submission, history entries
+  and history state the app writes, HTTP cache (responses are `no-store`),
+  Cache Storage and service-worker caches, local and session storage,
+  IndexedDB, and cookies;
 - browser observability: console output and any test-harness trace or
   screenshot captured after submission;
 - minion.town: its database, files under its state directory, access and
@@ -496,6 +717,22 @@ upstream turn, the canary must have zero copies in:
 - Endo: formula and pet-store state, mail, agent transcripts, audit rows, the
   usage ledger, operation records, MCP results, and daemon logs, plus the
   `@secrets` store searched for plaintext (it holds only ciphertext).
+
+Browser-managed state is outside that gate, because the product can neither
+prevent nor reliably inspect it: form autofill and password-manager stores,
+session-restore snapshots of field values, and crash reports. Browsers may
+ignore `autocomplete` hints. For these the requirement is mitigation plus
+recorded evidence, not a zero-copy claim:
+
+- the key field uses `autocomplete="off"`, is not paired with a username
+  field, and is cleared once the request is sent and before any navigation
+  (§ Step 1), and the UI tells the user to decline any offer to save the key;
+- in each test browser, with a fresh profile, the clip recipe submits the
+  canary, closes the browser cleanly, and searches the profile directory for
+  it. The result is recorded per browser as observational evidence. A hit is
+  documented as a known limitation of that browser in the UI copy and the
+  canary report; it does not fail the gate, and a clean result is not
+  certified as proof of non-retention.
 
 ## Open questions
 

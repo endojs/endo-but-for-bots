@@ -43,15 +43,25 @@ $ env -i HOME=<empty> PATH=/usr/bin:/bin \
 Not logged in · Please run /login
 ```
 
-The fake token proves selection, not validity: bare mode ignored the only OAuth
-credential source and reported no login. The help text supplies the positive
-contract. No real credential or paid request was used.
+This run is negative evidence only. `Not logged in` shows that the invalid
+token did not authenticate; it is equally consistent with bare mode ignoring
+`CLAUDE_CODE_OAUTH_TOKEN` and with bare mode reading and rejecting it, so it
+does not by itself show which credential sources bare mode consults. The
+retirement rests instead on the positive contract in the help text, the
+upstream report, and the residual below. No real credential or paid request
+was used.
 
-This confirms the residual already recorded in
+That residual is already recorded in
 [`packages/claude/README.md`](../packages/claude/README.md): a subscription
 token presented through `apiKeyHelper` is treated as an API key and rejected.
-The older design's open entitlement and positive-canary gates are therefore
-ruled out.
+The older [`endo-claude.md`](endo-claude.md) design left two gates open before
+the subscription route could ship. The *entitlement* gate asked whether Claude
+subscription terms permit pooling one plan across many concurrent guests
+(§ Pooling subscriptions across concurrent guests). The *positive-canary* gate
+required a live run in which a real subscription token presented through
+`apiKeyHelper` authenticates. The documented mode contract means the canary
+gate cannot pass, so the route is closed and the entitlement question no
+longer needs an answer for it.
 
 ## Inventory and disposition
 
@@ -110,8 +120,10 @@ subscriptions, or funds a separate provider is an explicit open question.
 | Guest -> pinned responder | Endo mail subscription | Guest owner chooses wake-on-message and agent lifecycle | Guest formula, inbox cursor, effect/dedup records | Guest owner dismisses; daemon restarts/replays | One message and the guest's attenuated powers facet |
 
 The daemon secret manager owns credential durability. The provider registry
-owns active/retired provider state and usage. The user-held admin facet owns
-retirement; the broker owns per-call admit/discard. Endo owns restart and
+owns active/retired provider state. The usage ledger owns usage and is its
+single source of truth; the registry keeps no usage copy (companion
+§ Ownership map). The agent factory owns agent creation, wake, and dismissal
+operations. The user-held admin facet owns retirement; the broker owns per-call admit/discard. Endo owns restart and
 formula replay. The harness classifies model execution; the broker decides what
 that result permits next. Inner APIs use `inference`, `turn`, and `result`, not
 outer lifecycle words such as `commit`, `replay`, or `rollback`.
