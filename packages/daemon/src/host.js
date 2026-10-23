@@ -292,66 +292,66 @@ export const normalizeHttpClientPolicy = policy => {
 harden(normalizeHttpClientPolicy);
 
 /**
- * @param {object} args
- * @param {DaemonCore['provide']} args.provide
- * @param {DaemonCore['provideController']} args.provideController
- * @param {DaemonCore['provideStoreController']} args.provideStoreController
- * @param {DaemonCore['cancelValue']} args.cancelValue
- * @param {DaemonCore['formulateWorker']} args.formulateWorker
- * @param {DaemonCore['formulateHost']} args.formulateHost
- * @param {DaemonCore['formulateGuest']} args.formulateGuest
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulateEval']} args.formulateEval
- * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateArchive']} args.formulateArchive
- * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
- * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
- * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
- * @param {DaemonCore['listMountHostEntries']} [args.listMountHostEntries]
- * @param {DaemonCore['emptyMountHostPath']} [args.emptyMountHostPath]
- * @param {HostToolPowers['gitClone']} [args.gitClone]
- * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['checkinTree']} args.checkinTree
- * @param {DaemonCore['formulateMount']} args.formulateMount
- * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
- * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
- * @param {DaemonCore['formulateGit']} args.formulateGit
- * @param {DaemonCore['formulateShell']} args.formulateShell
- * @param {DaemonCore['formulateEnvironment']} args.formulateEnvironment
- * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
- * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
+ * @param {object} powers
+ * @param {DaemonCore['provide']} powers.provide
+ * @param {DaemonCore['provideController']} powers.provideController
+ * @param {DaemonCore['provideStoreController']} powers.provideStoreController
+ * @param {DaemonCore['cancelValue']} powers.cancelValue
+ * @param {DaemonCore['formulateWorker']} powers.formulateWorker
+ * @param {DaemonCore['formulateHost']} powers.formulateHost
+ * @param {DaemonCore['formulateGuest']} powers.formulateGuest
+ * @param {DaemonCore['formulateMarshalValue']} powers.formulateMarshalValue
+ * @param {DaemonCore['formulateEval']} powers.formulateEval
+ * @param {DaemonCore['formulateUnconfined']} powers.formulateUnconfined
+ * @param {DaemonCore['formulateArchive']} powers.formulateArchive
+ * @param {DaemonCore['formulateFromTree']} powers.formulateFromTree
+ * @param {(id: FormulaIdentifier) => string} powers.getScratchMountPath
+ * @param {(id: FormulaIdentifier) => string} powers.getMountHostPath
+ * @param {DaemonCore['listMountHostEntries']} [powers.listMountHostEntries]
+ * @param {DaemonCore['emptyMountHostPath']} [powers.emptyMountHostPath]
+ * @param {HostToolPowers['gitClone']} [powers.gitClone]
+ * @param {(ref: unknown) => FormulaIdentifier | undefined} powers.getIdForRef
+ * @param {DaemonCore['formulateReadableBlob']} powers.formulateReadableBlob
+ * @param {DaemonCore['checkinTree']} powers.checkinTree
+ * @param {DaemonCore['formulateMount']} powers.formulateMount
+ * @param {DaemonCore['formulateScratchMount']} powers.formulateScratchMount
+ * @param {DaemonCore['formulateSubMount']} powers.formulateSubMount
+ * @param {DaemonCore['formulateGit']} powers.formulateGit
+ * @param {DaemonCore['formulateShell']} powers.formulateShell
+ * @param {DaemonCore['formulateEnvironment']} powers.formulateEnvironment
+ * @param {DaemonCore['formulateHttpClient']} powers.formulateHttpClient
+ * @param {(client: unknown) => unknown} powers.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
  *   retained `HttpClientControl`, populated by the `http-client` maker.
- * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
- * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
- * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
- * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
- * @param {DaemonCore['formulateChannel']} args.formulateChannel
- * @param {DaemonCore['formulateTimer']} args.formulateTimer
- * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
- * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
- * @param {ContentLoadable['loadContent']} args.loadContent
- * @param {DaemonCore['getTypeForId']} args.getTypeForId
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
- * @param {DaemonCore['getActiveContext']} args.getActiveContext
- * @param {MakeMailbox} args.makeMailbox
- * @param {MakeDirectoryNode} args.makeDirectoryNode
- * @param {NodeNumber} args.localNodeNumber
- * @param {(node: string) => boolean} args.isLocalKey
- * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
- * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
- * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
- * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
- * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
+ * @param {DaemonCore['formulateGitCredential']} powers.formulateGitCredential
+ * @param {DaemonCore['formulateGitRemote']} powers.formulateGitRemote
+ * @param {DaemonCore['formulateInvitation']} powers.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} powers.acceptInvitation
+ * @param {DaemonCore['getPeerIdForNodeIdentifier']} powers.getPeerIdForNodeIdentifier
+ * @param {DaemonCore['formulateChannel']} powers.formulateChannel
+ * @param {DaemonCore['formulateTimer']} powers.formulateTimer
+ * @param {DaemonCore['getAllNetworkAddresses']} powers.getAllNetworkAddresses
+ * @param {DaemonCore['getAllContentSources']} powers.getAllContentSources
+ * @param {ContentLoadable['loadContent']} powers.loadContent
+ * @param {DaemonCore['getTypeForId']} powers.getTypeForId
+ * @param {DaemonCore['getFormulaForId']} powers.getFormulaForId
+ * @param {DaemonCore['getActiveContext']} powers.getActiveContext
+ * @param {MakeMailbox} powers.makeMailbox
+ * @param {MakeDirectoryNode} powers.makeDirectoryNode
+ * @param {NodeNumber} powers.localNodeNumber
+ * @param {(node: string) => boolean} powers.isLocalKey
+ * @param {DaemonCore['getAgentIdForHandleId']} powers.getAgentIdForHandleId
+ * @param {DaemonCore['pinTransient']} [powers.pinTransient]
+ * @param {DaemonCore['unpinTransient']} [powers.unpinTransient]
+ * @param {DaemonCore['getFormulaGraphSnapshot']} [powers.getFormulaGraphSnapshot]
+ * @param {DaemonCore['listRetentionPaths']} [powers.listRetentionPaths]
+ * @param {DaemonCore['followRetentionPaths']} [powers.followRetentionPaths]
+ * @param {ReturnType<typeof makeTraceAggregator>} [powers.traceAggregator]
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
- * @param {ReturnType<typeof makeSecretManager>} args.secretManager
- * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
+ * @param {ReturnType<typeof makeSecretManager>} powers.secretManager
+ * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} powers.formulateSecretLookup
  */
 export const makeHostMaker = ({
   provide,
