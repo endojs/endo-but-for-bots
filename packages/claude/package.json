@@ -68,6 +68,7 @@
     "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
+    "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
