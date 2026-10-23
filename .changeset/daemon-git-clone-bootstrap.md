@@ -1,14 +1,24 @@
 ---
 '@endo/daemon': major
+'@endo/git': patch
+'@endo/sandbox': patch
+'@endo/floot': patch
 ---
 
 `EndoHost.provideGitClone` now takes `(destMount, petName, options)`, the same argument order as `provideGit` and `provideGitRemote`, and the one-object form is removed.
 `petName` names the cloned `Git`.
-A new `options.origin` record carries the `origin` remote's policy (`allowedDirections`, `fetchRefspecs`, `pushRefspecs`, `allowedBranches`, `defaultPullRef`, `allowForcePush`, `allowTags`, `allowDelete`) and an optional `petName` for the remote.
-The remote's name, URL, credential and transport come from the endpoint and cannot be set on `origin`.
+The endpoint supplies the URL, credential and transport, and the clone always names its remote `origin`.
+A new `options.origin` record carries that remote's policy (`allowedDirections`, `fetchRefspecs`, `pushRefspecs`, `allowedBranches`, `defaultPullRef`, `allowForcePush`, `allowTags`, `allowDelete`) and an optional `petName` under which to store the remote, which must differ from `petName`.
 The `origin` remote now defaults to fetch-only, like `provideGitRemote`; the previous hardcoded fetch and push over `refs/heads/*` is gone, so a host that pushes must opt in, for example with `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
 An `origin` policy that `provideGitRemote` would reject is rejected before the clone starts.
 Both names are stored only after the whole clone succeeds.
-If any step fails after the destination is found empty, the destination is emptied before the error is rethrown, so the caller can retry into the same mount.
+A clone that fails removes only what it created, so the caller can retry into the same mount, and anything another holder of the mount wrote meanwhile is kept.
+A name that `origin.petName` replaced is restored if the clone then fails.
 
 Migration: replace `provideGitClone({ destMount, endpoint, identity })` with `provideGitClone(destMount, petName, { endpoint, identity, origin })`, and pass the push policy the old default granted as `origin` if the caller pushes.
+
+Aborted, timed-out and output-limited Git clone, fetch and push operations now settle promptly over HTTPS, with or without a credential, and leave no Git process running.
+
+Cancelling or disposing a bwrap sandbox slice no longer leaves sandbox processes running when the cancellation arrives while the slice is still starting.
+
+Floot's setup instructions use the new `provideGitClone` form.
