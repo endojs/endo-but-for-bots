@@ -1277,6 +1277,39 @@ test.serial(
 );
 
 test.serial(
+  'EndoHost.provideGitClone removes stale clone staging left by a stopped daemon',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host: firstHost, restart } = await provisionHostContext(t);
+
+    const destMount = await E(firstHost).provideScratchMount(
+      'stale-staging-destination',
+    );
+    const destPath = await E(firstHost).provideHostPath(destMount);
+    const staleName = '.endo-staging-0123456789abcdef0123456789abcdef';
+    await fs.promises.mkdir(path.join(destPath, staleName));
+    await fs.promises.writeFile(
+      path.join(destPath, staleName, 'partial-clone'),
+      'interrupted\n',
+    );
+
+    const host = await restart();
+    const { git } = await E(host).provideGitClone(
+      await E(host).lookup('stale-staging-destination'),
+      'stale-staging-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      },
+    );
+
+    t.is((await E(git).currentBranch()).name, 'main');
+    t.false((await fs.promises.readdir(destPath)).includes(staleName));
+  },
+);
+
+test.serial(
   'EndoHost.provideGitClone discard restores a name the origin replaced',
   async t => {
     const { root } = await provisionGitContext(t);

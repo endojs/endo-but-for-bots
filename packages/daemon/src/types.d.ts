@@ -3297,6 +3297,13 @@ export interface DaemonCore {
   listMountHostEntries: (id: FormulaIdentifier) => Promise<string[]>;
 
   /**
+   * Remove daemon-owned clone staging directories left by an earlier daemon
+   * process. Staging directories owned by operations in the current process
+   * are left intact.
+   */
+  removeStaleMountStagingEntries: (id: FormulaIdentifier) => Promise<void>;
+
+  /**
    * Create a uniquely named, empty staging directory directly under a
    * `mount` or `scratch-mount` formula's host path and return its entry
    * name.  `provideGitClone` clones there so that discarding a failed clone

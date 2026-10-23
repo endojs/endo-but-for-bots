@@ -308,6 +308,7 @@ harden(normalizeHttpClientPolicy);
  * @param {(id: FormulaIdentifier) => string} powers.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} powers.getMountHostPath
  * @param {DaemonCore['listMountHostEntries']} [powers.listMountHostEntries]
+ * @param {DaemonCore['removeStaleMountStagingEntries']} [powers.removeStaleMountStagingEntries]
  * @param {DaemonCore['makeMountStagingEntry']} [powers.makeMountStagingEntry]
  * @param {DaemonCore['moveMountEntries']} [powers.moveMountEntries]
  * @param {DaemonCore['removeMountEntries']} [powers.removeMountEntries]
@@ -406,6 +407,11 @@ export const makeHostMaker = ({
   // builtins on the XS daemon bundle's compartment graph.
   listMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
     throw makeError(X`listMountHostEntries not wired into makeHostMaker`);
+  },
+  removeStaleMountStagingEntries = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(
+      X`removeStaleMountStagingEntries not wired into makeHostMaker`,
+    );
   },
   makeMountStagingEntry = /** @param {FormulaIdentifier} _id */ async _id => {
     throw makeError(X`makeMountStagingEntry not wired into makeHostMaker`);
@@ -1826,6 +1832,11 @@ export const makeHostMaker = ({
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
+      // A daemon process can stop after creating its private clone staging
+      // directory but before its catch/finally cleanup runs. On a later
+      // attempt, remove staging entries that no operation in this process
+      // owns before deciding whether the caller's mount is otherwise empty.
+      await removeStaleMountStagingEntries(destMountId);
       if ((await listMountHostEntries(destMountId)).length > 0) {
         throw makeError(X`provideGitClone: destMount must be empty`);
       }

@@ -8758,6 +8758,34 @@ const makeDaemonCore = async (
     return filePowers.readDirectory(mountPath);
   };
 
+  const mountStagingNamePattern = /^\.endo-staging-[0-9a-f]{32}$/;
+  /** @type {Set<string>} */
+  const liveMountStagingPaths = new Set();
+
+  /**
+   * Remove clone staging directories left by a prior daemon process. A live
+   * staging directory is registered before it is created and stays registered
+   * until removal settles, so concurrent clone attempts cannot mistake one
+   * another's work for crash debris.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @returns {Promise<void>}
+   */
+  const removeStaleMountStagingEntries = async mountId => {
+    const mountPath = getMountHostPath(mountId);
+    if (!(await filePowers.exists(mountPath))) {
+      return;
+    }
+    for (const name of await filePowers.readDirectory(mountPath)) {
+      if (mountStagingNamePattern.test(name)) {
+        const stagingPath = filePowers.joinPath(mountPath, name);
+        if (!liveMountStagingPaths.has(stagingPath)) {
+          await filePowers.removeDirectory(stagingPath);
+        }
+      }
+    }
+  };
+
   /**
    * Create a fresh, uniquely named staging directory directly under a
    * mount's host path, so an operation can build there without touching
@@ -8775,7 +8803,13 @@ const makeDaemonCore = async (
     if (await filePowers.exists(stagingPath)) {
       throw makeError(X`mount staging entry ${q(name)} already exists`);
     }
-    await filePowers.makePath(stagingPath);
+    liveMountStagingPaths.add(stagingPath);
+    try {
+      await filePowers.makePath(stagingPath);
+    } catch (error) {
+      liveMountStagingPaths.delete(stagingPath);
+      throw error;
+    }
     return name;
   };
 
@@ -8820,7 +8854,12 @@ const makeDaemonCore = async (
   const removeMountEntries = async (mountId, names) => {
     const mountPath = getMountHostPath(mountId);
     for (const name of names) {
-      await filePowers.removeDirectory(filePowers.joinPath(mountPath, name));
+      const entryPath = filePowers.joinPath(mountPath, name);
+      try {
+        await filePowers.removeDirectory(entryPath);
+      } finally {
+        liveMountStagingPaths.delete(entryPath);
+      }
     }
   };
 
@@ -8898,6 +8937,7 @@ const makeDaemonCore = async (
     getScratchMountPath,
     getMountHostPath,
     listMountHostEntries,
+    removeStaleMountStagingEntries,
     makeMountStagingEntry,
     moveMountEntries,
     removeMountEntries,
