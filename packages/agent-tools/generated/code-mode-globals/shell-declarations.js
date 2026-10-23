@@ -29,16 +29,18 @@ export const shellDeclarations = harden({
     exitCode: number | null;
     signal: string | null;
     truncated: boolean;
+};
+type ShellInspectResult = {
+    allowedCommands: readonly string[];
+    timeoutMs: number;
+    maxOutputBytes: number;
+    engine: 'host' | 'sandbox';
 };`,
     body: `{
     exec: (command: string, args: readonly string[], options?: {
         timeoutMs?: number;
     }) => Promise<ShellResult>;
-    inspect: () => Promise<{
-        allowedCommands: readonly string[];
-        timeoutMs: number;
-        maxOutputBytes: number;
-    }>;
+    inspect: () => Promise<ShellInspectResult>;
 }`,
   },
 });

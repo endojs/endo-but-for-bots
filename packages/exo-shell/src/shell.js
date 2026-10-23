@@ -117,6 +117,7 @@ export const makeShell = ({
     timeoutMs: defaultTimeoutMs,
     maxOutputBytes,
     env = {},
+    engine = 'host',
   } = policy;
   if (
     !Array.isArray(allowedCommands) ||
@@ -137,6 +138,11 @@ export const makeShell = ({
   if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw makeError(
       X`makeShell: policy.maxOutputBytes must be a positive integer`,
+    );
+  }
+  if (engine !== 'host' && engine !== 'sandbox') {
+    throw makeError(
+      X`makeShell: policy.engine must be 'host' or 'sandbox', got ${q(engine)}`,
     );
   }
   if (
@@ -163,6 +169,7 @@ export const makeShell = ({
         allowedCommands: allowedList,
         timeoutMs: defaultTimeoutMs,
         maxOutputBytes,
+        engine,
       });
     },
 
@@ -202,6 +209,7 @@ export const makeShell = ({
           env: childEnv,
           shell: false,
           timeoutMs: effectiveTimeoutMs,
+          maxOutputBytes,
         }),
       );
       /** @type {Error | undefined} */

@@ -182,8 +182,9 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
     void stopping.catch(() => {});
     return stopping;
   };
+  const shellPolicy = harden({ ...recipe.policy, engine: 'sandbox' });
   const shell = makeExo('EnvironmentShell', ShellInterface, {
-    inspect: async () => recipe.policy,
+    inspect: async () => shellPolicy,
     exec: (command, args, options = {}) => {
       let failedController;
       const pending = inOrder(async () => {

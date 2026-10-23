@@ -11,6 +11,8 @@ export type {
   AcquireResult,
   AcquiredSlot,
   Broker,
+  ClaudeSessionBindings,
+  ClaudeSessionGrant,
   GuestFormulaId,
   HarnessOptions,
   HttpTransport,

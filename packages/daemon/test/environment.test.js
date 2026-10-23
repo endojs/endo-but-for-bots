@@ -13,6 +13,7 @@ const recipe = harden({
   policy: { allowedCommands: ['sh'], timeoutMs: 1000, maxOutputBytes: 4096 },
   networkPolicy: 'off',
 });
+const shellPolicy = harden({ ...recipe.policy, engine: 'sandbox' });
 const flush = async () => {
   for (let i = 0; i < 20; i += 1) await null; // eslint-disable-line no-await-in-loop
 };
@@ -92,7 +93,7 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
 
 test('creation, inspect, and idle restoration remain passive', async t => {
   const f = await fixture();
-  t.deepEqual(await E(f.owner.shell).inspect(), recipe.policy);
+  t.deepEqual(await E(f.owner.shell).inspect(), shellPolicy);
   t.is((await E(f.owner.admin).inspect()).phase, 'idle');
   const restored = await makeEnvironment({
     id: 'exact-id',
@@ -100,7 +101,7 @@ test('creation, inspect, and idle restoration remain passive', async t => {
     directory: f.directory,
     resolve: f.resolve,
   });
-  t.deepEqual(await E(restored.shell).inspect(), recipe.policy);
+  t.deepEqual(await E(restored.shell).inspect(), shellPolicy);
   t.deepEqual(f.calls, []);
 });
 
