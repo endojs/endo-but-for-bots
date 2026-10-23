@@ -61,6 +61,7 @@ import { tameHarden } from './tame-harden.js';
 import { tameSymbolConstructor } from './tame-symbol-constructor.js';
 import { tameFauxDataProperties } from './tame-faux-data-properties.js';
 import { tameRegeneratorRuntime } from './tame-regenerator-runtime.js';
+import { tameTextCodecs } from './tame-text-codecs.js';
 import { shimArrayBufferTransfer } from './shim-arraybuffer-transfer.js';
 import { reportInGroup, chooseReporter } from './reporting.js';
 
@@ -151,8 +152,18 @@ const probeHostEvaluators = () => {
 
 /**
  * @param {LockdownOptions} [options]
+ * @param {(
+ *   intrinsics: Record<string, any>,
+ *   markVirtualizedNativeFunction: (object: object) => void,
+ * ) => void} [onIntrinsics] receives the lockdown intrinsics and the
+ * native-function marker once repairs are done, for an engine adapter that
+ * must build its own start Compartment constructor from them. It is called
+ * synchronously, at most once, before `repairIntrinsics` returns. A repeated
+ * call throws `SES_ALREADY_LOCKED_DOWN` before reaching it. This module is
+ * not exported from `ses`, and the public `lockdown` and `repairIntrinsics`
+ * on `globalThis` deliberately do not forward this parameter.
  */
-export const repairIntrinsics = (options = {}) => {
+export const repairIntrinsics = (options = {}, onIntrinsics = undefined) => {
   // First time, absent options default to 'safe'.
   // Subsequent times, absent options default to first options.
   // Thus, all present options must agree with first options.
@@ -343,6 +354,13 @@ export const repairIntrinsics = (options = {}) => {
   // Replace Function.prototype.toString with one that recognizes
   // shimmed functions as honorary native functions.
   const markVirtualizedNativeFunction = tameFunctionToString();
+
+  // Replace host text codec constructors before the intrinsics
+  // collector samples the universal property names from the global object, so
+  // host constructors with legacy restricted properties stay out of the
+  // permitted intrinsics graph.
+  // See https://github.com/endojs/endo/issues/3369
+  tameTextCodecs();
 
   const { addIntrinsics, completePrototypes, finalIntrinsics } =
     makeIntrinsicsCollector(reporter);
@@ -579,6 +597,10 @@ export const repairIntrinsics = (options = {}) => {
 
     return tamedHarden;
   };
+
+  if (onIntrinsics !== undefined) {
+    onIntrinsics(intrinsics, markVirtualizedNativeFunction);
+  }
 
   return hardenIntrinsics;
 };

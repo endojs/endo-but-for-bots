@@ -1,4 +1,5 @@
 // @ts-nocheck
+// prefer-endo-primitives-exempt: direct text codec regression fixture
 // This is a test fixture for minimal spot checks of the XS-specific variant of
 // SES.
 // The script ../scripts/generate-test-xs.js generates the _meaning.pre-mjs.json
@@ -8,7 +9,7 @@
 // This generates ../tmp/test-xs.js, which can be run with xst directly for
 // validation of the XS environment under SES-for-XS.
 
-/* global print */
+/* global globalThis, print */
 
 // Eslint does not know about package reflexive imports (importing your own
 // package), which in this case is necessary to go through the conditional
@@ -20,10 +21,125 @@ import 'ses';
 // eslint-disable-next-line import/no-unresolved
 import precompiledModuleSource from '../tmp/_meaning.pre-mjs.json';
 
+const hostTextEncoderType = typeof globalThis.TextEncoder;
+const hostTextDecoderType = typeof globalThis.TextDecoder;
+const HostTextEncoder = globalThis.TextEncoder;
+const HostTextDecoder = globalThis.TextDecoder;
+globalThis.addedBeforeLockdown = {};
+
 lockdown();
 
 // spot checks
 assert(Object.isFrozen(Object));
+
+// xst provides both codecs, so the removal path runs in
+// _xs-missing-text-codecs.js, which deletes them before lockdown.
+print('# compartments observe the host text codecs, or their absence');
+{
+  print(`# host TextEncoder: ${hostTextEncoderType}`);
+  print(`# host TextDecoder: ${hostTextDecoderType}`);
+  const compartment = new Compartment();
+  const otherCompartment = new Compartment();
+  assert.equal(
+    compartment.evaluate('typeof TextEncoder'),
+    hostTextEncoderType,
+    'TextEncoder presence matches the host',
+  );
+  assert.equal(
+    compartment.evaluate('typeof TextDecoder'),
+    hostTextDecoderType,
+    'TextDecoder presence matches the host',
+  );
+  if (hostTextEncoderType === 'function') {
+    assert(TextEncoder !== HostTextEncoder, 'TextEncoder is encapsulated');
+    assert(
+      HostTextEncoder.prototype.constructor === TextEncoder,
+      'host TextEncoder prototype points to the replacement',
+    );
+    assert.equal(
+      compartment.evaluate('TextEncoder'),
+      TextEncoder,
+      'compartment shares the hardened TextEncoder',
+    );
+    assert.equal(
+      otherCompartment.evaluate('TextEncoder'),
+      TextEncoder,
+      'every compartment shares the hardened TextEncoder',
+    );
+    assert(Object.isFrozen(TextEncoder), 'TextEncoder itself is frozen');
+    assert(
+      Object.isFrozen(TextEncoder.prototype),
+      'TextEncoder.prototype is frozen',
+    );
+  }
+  if (hostTextDecoderType === 'function') {
+    assert(TextDecoder !== HostTextDecoder, 'TextDecoder is encapsulated');
+    assert(
+      HostTextDecoder.prototype.constructor === TextDecoder,
+      'host TextDecoder prototype points to the replacement',
+    );
+    assert.equal(
+      compartment.evaluate('TextDecoder'),
+      TextDecoder,
+      'compartment shares the hardened TextDecoder',
+    );
+    assert.equal(
+      otherCompartment.evaluate('TextDecoder'),
+      TextDecoder,
+      'every compartment shares the hardened TextDecoder',
+    );
+    assert(Object.isFrozen(TextDecoder), 'TextDecoder itself is frozen');
+    assert(
+      Object.isFrozen(TextDecoder.prototype),
+      'TextDecoder.prototype is frozen',
+    );
+  }
+  if (
+    hostTextEncoderType === 'function' &&
+    hostTextDecoderType === 'function'
+  ) {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    assert.equal(
+      decoder.decode(encoder.encode('hello')),
+      'hello',
+      'hardened codecs round-trip text',
+    );
+    assert.equal(
+      decoder.decode(encoder.encode('')),
+      '',
+      'hardened codecs round-trip the empty string',
+    );
+  }
+}
+
+print('# compartments receive shared intrinsics from lockdown');
+{
+  const compartment = new Compartment();
+  assert.equal(
+    compartment.evaluate('typeof addedBeforeLockdown'),
+    'undefined',
+    'non-universal global added before lockdown must not leak into compartments',
+  );
+  assert(
+    compartment.evaluate('Date') !== globalThis.Date,
+    'compartments must receive %SharedDate%, not %InitialDate%',
+  );
+  for (const source of ['Date.now()', 'Math.random()']) {
+    const outcome = compartment.evaluate(`
+      try {
+        ${source};
+        'returned';
+      } catch (error) {
+        error.message;
+      }
+    `);
+    assert(
+      outcome.startsWith('secure mode'),
+      `${source} must throw in compartments made after lockdown`,
+    );
+  }
+}
 
 print('# shim compartment can import a shim precompiled module source');
 {
