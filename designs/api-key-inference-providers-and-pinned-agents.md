@@ -9,7 +9,7 @@
 
 ## Summary
 
-“Add agent” is a two-commit workflow, even when presented as one short wizard:
+"Add agent" is a two-commit workflow, even when presented as one short wizard:
 
 1. import an API key and create a reusable **inference provider**; then
 2. create a named **guest agent** attached to a selected provider and harness.
@@ -89,7 +89,7 @@ inventory. Retrying the same idempotency key returns the same provider or agent;
 it never creates a second spend source or responder.
 
 The Lal demo's field validation, provider config, model resolution, and
-manager/worker separation are reusable. Its “server sends a form to the user”
+manager/worker separation are reusable. Its "server sends a form to the user"
 trigger is not: minion.town owns initiation, progress, cancellation, and errors.
 
 ## Provider and secret model
@@ -140,7 +140,7 @@ backup and encryption follow
 deployment must add provider ownership partitioning because the current
 `@secrets` catalog is deliberately root/single-principal.
 
-### “Indelible” and retirement
+### "Indelible" and retirement
 
 Indelible means a created provider's identity, audit trail, and historical
 agent/usage references are append-only through the product API. It does **not**
@@ -156,7 +156,7 @@ mean a leaked key must remain usable.
   crypto-delete revoked backend material under the secret-manager's recovery
   procedure, but does not erase the non-secret tombstone or audit history.
 
-This is revocation by supersession, not “no deletion ever.” It lets a user
+This is revocation by supersession, not "no deletion ever." It lets a user
 retire a leaked key immediately without rewriting history or silently changing
 what an existing provider capability designates.
 
