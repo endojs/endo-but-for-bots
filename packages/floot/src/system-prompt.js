@@ -653,11 +653,11 @@ Rules that are not obvious and will bite you:
 - Applying RESTARTS THE DAEMON. The work area and its commits survive.
   Credential material is process-local, so the start-up setup rotates the
   Forgejo credential in place and a remote holding it keeps working. A push
-  that fails with "Git credential … has been revoked" means the credential
+  that fails with "Git credential ... has been revoked" means the credential
   the remote holds is dead: re-mint the remote once (the setup may have
   re-minted the credential under the same name), and if the push still fails
   that way the forge credential is not provisioned on this host — report
-  that. One that fails with "GitRemote … has been revoked" means the remote
+  that. One that fails with "GitRemote ... has been revoked" means the remote
   itself was revoked: re-mint it the same way:
 \`\`\`
 const endo = await E(powers).lookup('endo');
