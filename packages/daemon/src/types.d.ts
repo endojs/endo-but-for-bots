@@ -2100,10 +2100,12 @@ export interface EndoHost extends EndoAgent {
    * `petName` and an `origin` GitRemote, bound to `origin.petName` when
    * given.  `origin` takes the `provideGitRemote` policy fields except
    * `name`, `url`, `credential` and `allowLocalFileTransport`, which the
-   * clone fixes from the endpoint, and defaults to fetch-only.  Both
-   * names are stored only after the whole composition succeeds; on any
-   * failure after the emptiness check the destination is emptied before
-   * the error is rethrown, so the caller can retry into the same mount.
+   * clone fixes from the endpoint, and defaults to fetch-only.
+   * `origin.petName` must differ from `petName`.  Both names are stored
+   * only after the whole composition succeeds.  The clone is staged inside
+   * the destination and moved into place, so on failure only what the call
+   * created is removed, and a name `origin.petName` replaced is restored,
+   * before the error is rethrown; the caller can retry into the same mount.
    * This leaves the later guest-held GitCloner facet as an additive
    * delegate.
    */
@@ -3295,11 +3297,29 @@ export interface DaemonCore {
   listMountHostEntries: (id: FormulaIdentifier) => Promise<string[]>;
 
   /**
-   * Remove every entry under a `mount` or `scratch-mount` formula's host
-   * path, leaving the directory in place.  `provideGitClone` uses it to
-   * discard a failed clone.
+   * Create a uniquely named, empty staging directory directly under a
+   * `mount` or `scratch-mount` formula's host path and return its entry
+   * name.  `provideGitClone` clones there so that discarding a failed clone
+   * never touches entries another holder of the mount wrote.
    */
-  emptyMountHostPath: (id: FormulaIdentifier) => Promise<void>;
+  makeMountStagingEntry: (id: FormulaIdentifier) => Promise<string>;
+
+  /**
+   * Move every entry of a staging directory up into the mount's host path,
+   * refusing to replace an existing entry.  Each moved name is appended to
+   * `moved` as it lands.
+   */
+  moveMountEntries: (
+    id: FormulaIdentifier,
+    stagingName: string,
+    moved: string[],
+  ) => Promise<void>;
+
+  /**
+   * Remove exactly the named entries directly under a mount's host path.
+   * Symbolic links are unlinked, never followed.
+   */
+  removeMountEntries: (id: FormulaIdentifier, names: string[]) => Promise<void>;
 
   getTypeForId: (id: FormulaIdentifier) => Promise<string>;
 

@@ -8759,18 +8759,68 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Remove every entry under a mount's host path, leaving the directory
-   * itself in place.  `provideGitClone` uses this to return a destination
-   * to the empty state it required on entry.
+   * Create a fresh, uniquely named staging directory directly under a
+   * mount's host path, so an operation can build there without touching
+   * anything another holder of the mount writes alongside it.  Staging
+   * under the mount keeps the later `moveMountEntries` a same-filesystem
+   * rename.
    *
    * @param {FormulaIdentifier} mountId
+   * @returns {Promise<string>} The staging directory's entry name.
+   */
+  const makeMountStagingEntry = async mountId => {
+    const mountPath = getMountHostPath(mountId);
+    const name = `.endo-staging-${(await randomHex256()).slice(0, 32)}`;
+    const stagingPath = filePowers.joinPath(mountPath, name);
+    if (await filePowers.exists(stagingPath)) {
+      throw makeError(X`mount staging entry ${q(name)} already exists`);
+    }
+    await filePowers.makePath(stagingPath);
+    return name;
+  };
+
+  /**
+   * Move every entry of a staging directory up into the mount's host path,
+   * refusing to replace an entry that is already there.  Each moved name is
+   * appended to `moved` as it lands, so a caller whose move fails partway
+   * still knows exactly which entries it owns.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @param {string} stagingName
+   * @param {string[]} moved
    * @returns {Promise<void>}
    */
-  const emptyMountHostPath = async mountId => {
+  const moveMountEntries = async (mountId, stagingName, moved) => {
     const mountPath = getMountHostPath(mountId);
-    const entries = await listMountHostEntries(mountId);
-    for (const entry of entries) {
-      await filePowers.removeDirectory(filePowers.joinPath(mountPath, entry));
+    const stagingPath = filePowers.joinPath(mountPath, stagingName);
+    for (const entry of await filePowers.readDirectory(stagingPath)) {
+      const target = filePowers.joinPath(mountPath, entry);
+      if (await filePowers.exists(target)) {
+        throw makeError(
+          X`mount entry ${q(entry)} appeared while it was being staged`,
+        );
+      }
+      await filePowers.renamePath(
+        filePowers.joinPath(stagingPath, entry),
+        target,
+      );
+      moved.push(entry);
+    }
+  };
+
+  /**
+   * Remove the named entries directly under a mount's host path, and
+   * nothing else.  A symbolic link is unlinked, never followed.  A missing
+   * entry is not an error.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @param {string[]} names
+   * @returns {Promise<void>}
+   */
+  const removeMountEntries = async (mountId, names) => {
+    const mountPath = getMountHostPath(mountId);
+    for (const name of names) {
+      await filePowers.removeDirectory(filePowers.joinPath(mountPath, name));
     }
   };
 
@@ -8848,7 +8898,9 @@ const makeDaemonCore = async (
     getScratchMountPath,
     getMountHostPath,
     listMountHostEntries,
-    emptyMountHostPath,
+    makeMountStagingEntry,
+    moveMountEntries,
+    removeMountEntries,
     getIdForRef,
     traceAggregator,
     secretManager,

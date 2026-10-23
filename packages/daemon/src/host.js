@@ -308,7 +308,9 @@ harden(normalizeHttpClientPolicy);
  * @param {(id: FormulaIdentifier) => string} powers.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} powers.getMountHostPath
  * @param {DaemonCore['listMountHostEntries']} [powers.listMountHostEntries]
- * @param {DaemonCore['emptyMountHostPath']} [powers.emptyMountHostPath]
+ * @param {DaemonCore['makeMountStagingEntry']} [powers.makeMountStagingEntry]
+ * @param {DaemonCore['moveMountEntries']} [powers.moveMountEntries]
+ * @param {DaemonCore['removeMountEntries']} [powers.removeMountEntries]
  * @param {HostToolPowers['gitClone']} [powers.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} powers.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} powers.formulateReadableBlob
@@ -405,8 +407,14 @@ export const makeHostMaker = ({
   listMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
     throw makeError(X`listMountHostEntries not wired into makeHostMaker`);
   },
-  emptyMountHostPath = /** @param {FormulaIdentifier} _id */ async _id => {
-    throw makeError(X`emptyMountHostPath not wired into makeHostMaker`);
+  makeMountStagingEntry = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`makeMountStagingEntry not wired into makeHostMaker`);
+  },
+  moveMountEntries = /** @param {...any} _args */ async (..._args) => {
+    throw makeError(X`moveMountEntries not wired into makeHostMaker`);
+  },
+  removeMountEntries = /** @param {...any} _args */ async (..._args) => {
+    throw makeError(X`removeMountEntries not wired into makeHostMaker`);
   },
   gitClone = /** @param {...any} _args */ (..._args) => {
     throw makeError(X`gitClone not wired into makeHostMaker`);
@@ -1615,34 +1623,38 @@ export const makeHostMaker = ({
      *   allowTags?: boolean,
      *   allowDelete?: boolean,
      *   allowLocalFileTransport?: boolean,
-     * }} opts
+     * }} options
      */
-    const makeGitRemotePolicyRecord = opts =>
+    const makeGitRemotePolicyRecord = options =>
       harden({
-        url: opts.url,
-        allowedDirections: harden([...(opts.allowedDirections || ['fetch'])]),
-        fetchRefspecs: harden([...(opts.fetchRefspecs || [])]),
-        pushRefspecs: harden([...(opts.pushRefspecs || [])]),
-        ...(opts.defaultPullRef !== undefined
-          ? { defaultPullRef: opts.defaultPullRef }
+        url: options.url,
+        allowedDirections: harden([
+          ...(options.allowedDirections || ['fetch']),
+        ]),
+        fetchRefspecs: harden([...(options.fetchRefspecs || [])]),
+        pushRefspecs: harden([...(options.pushRefspecs || [])]),
+        ...(options.defaultPullRef !== undefined
+          ? { defaultPullRef: options.defaultPullRef }
           : {}),
-        ...(opts.allowedBranches !== undefined
-          ? { allowedBranches: harden([...opts.allowedBranches]) }
+        ...(options.allowedBranches !== undefined
+          ? { allowedBranches: harden([...options.allowedBranches]) }
           : {}),
-        ...(opts.allowForcePush !== undefined
-          ? { allowForcePush: opts.allowForcePush }
+        ...(options.allowForcePush !== undefined
+          ? { allowForcePush: options.allowForcePush }
           : {}),
-        ...(opts.allowTags !== undefined ? { allowTags: opts.allowTags } : {}),
-        ...(opts.allowDelete !== undefined
-          ? { allowDelete: opts.allowDelete }
+        ...(options.allowTags !== undefined
+          ? { allowTags: options.allowTags }
           : {}),
-        ...(opts.allowLocalFileTransport !== undefined
-          ? { allowLocalFileTransport: opts.allowLocalFileTransport }
+        ...(options.allowDelete !== undefined
+          ? { allowDelete: options.allowDelete }
+          : {}),
+        ...(options.allowLocalFileTransport !== undefined
+          ? { allowLocalFileTransport: options.allowLocalFileTransport }
           : {}),
       });
 
     /** @type {EndoHost['provideGitRemote']} */
-    const provideGitRemote = async (gitCap, petName, opts) => {
+    const provideGitRemote = async (gitCap, petName, options) => {
       const { namePath } = petNamePathFrom(petName);
       const gitId = getIdForRef(gitCap);
       if (gitId === undefined) {
@@ -1656,10 +1668,10 @@ export const makeHostMaker = ({
         );
       }
       if (
-        !opts ||
-        typeof opts !== 'object' ||
-        typeof opts.name !== 'string' ||
-        typeof opts.url !== 'string'
+        !options ||
+        typeof options !== 'object' ||
+        typeof options.name !== 'string' ||
+        typeof options.url !== 'string'
       ) {
         throw makeError(
           X`provideGitRemote: options must include a string name and url`,
@@ -1667,15 +1679,15 @@ export const makeHostMaker = ({
       }
       /** @type {FormulaIdentifier | undefined} */
       let credentialId;
-      if (opts.credential !== undefined) {
-        credentialId = getIdForRef(opts.credential);
+      if (options.credential !== undefined) {
+        credentialId = getIdForRef(options.credential);
         if (credentialId === undefined) {
           throw makeError(
             X`provideGitRemote: credential must be a daemon-minted Git credential cap`,
           );
         }
       }
-      const policy = makeGitRemotePolicyRecord(opts);
+      const policy = makeGitRemotePolicyRecord(options);
 
       /** @type {DeferredTasks<GitRemoteDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -1686,7 +1698,7 @@ export const makeHostMaker = ({
       const { value } = await formulateGitRemote(
         gitId,
         credentialId,
-        opts.name,
+        options.name,
         policy,
         tasks,
       );
@@ -1738,6 +1750,15 @@ export const makeHostMaker = ({
         origin.petName === undefined
           ? undefined
           : petNamePathFrom(origin.petName).namePath;
+      if (
+        originNamePath !== undefined &&
+        originNamePath.length === namePath.length &&
+        originNamePath.every((name, index) => name === namePath[index])
+      ) {
+        throw makeError(
+          X`provideGitClone: origin.petName must differ from the Git's pet name`,
+        );
+      }
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
         throw makeError(
@@ -1805,12 +1826,19 @@ export const makeHostMaker = ({
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
-      // The emptiness check that `gitClone` repeats is made here so that
-      // discard can never remove content the caller had before the call.
       if ((await listMountHostEntries(destMountId)).length > 0) {
         throw makeError(X`provideGitClone: destMount must be empty`);
       }
 
+      // Another holder of the mount can write to it at any time, so the
+      // emptiness check above does not make the mount this call's to
+      // discard.  The clone is built in a staging directory and its entries
+      // are then moved up one by one.  Discard removes only the staging
+      // directory and the entries this call moved, never anything else.
+      /** @type {string | undefined} */
+      let stagingName;
+      /** @type {string[]} */
+      const movedEntries = [];
       // Formulas minted during the composition stay transiently pinned
       // until their names are stored, or until discard releases them.
       /** @type {FormulaIdentifier[]} */
@@ -1821,7 +1849,26 @@ export const makeHostMaker = ({
       let originId;
       const cloner = makeGitCloner({
         endpoint,
-        clone: gitClone,
+        clone: async input => {
+          stagingName = await makeMountStagingEntry(
+            /** @type {FormulaIdentifier} */ (destMountId),
+          );
+          await gitClone({
+            ...input,
+            destPath: `${destPath}/${stagingName}`,
+          });
+          await moveMountEntries(
+            /** @type {FormulaIdentifier} */ (destMountId),
+            stagingName,
+            movedEntries,
+          );
+          // Every entry has moved up, so the staging directory is empty.
+          await removeMountEntries(
+            /** @type {FormulaIdentifier} */ (destMountId),
+            [stagingName],
+          );
+          stagingName = undefined;
+        },
         makeGit: async () => {
           const { value, id } = await formulateGit(
             destMountId,
@@ -1852,8 +1899,12 @@ export const makeHostMaker = ({
           return value;
         },
       });
-      /** @type {NamePath | undefined} */
-      let storedOriginName;
+      // Storing the origin's name replaces whatever the name held before.
+      // That prior identifier stays pinned until the call settles, so that
+      // discard can restore it.
+      /** @type {FormulaIdentifier | undefined} */
+      let priorOriginId;
+      let storedOriginName = false;
       try {
         const { git, remote } = await cloner.clone({
           destMount,
@@ -1861,13 +1912,20 @@ export const makeHostMaker = ({
         });
         // Naming is the last step, so a failure anywhere above leaves no
         // name bound.  The origin is named first so that, if naming the
-        // Git fails, only the origin's name needs to be removed.
+        // Git fails, only the origin's name needs to be restored.
         if (originNamePath !== undefined) {
+          priorOriginId = /** @type {FormulaIdentifier | undefined} */ (
+            await E(directory).identify(...originNamePath)
+          );
+          if (priorOriginId !== undefined) {
+            pinTransient(priorOriginId);
+            pinned.push(priorOriginId);
+          }
           await E(directory).storeIdentifier(
             originNamePath,
             /** @type {FormulaIdentifier} */ (originId),
           );
-          storedOriginName = originNamePath;
+          storedOriginName = true;
         }
         await E(directory).storeIdentifier(
           namePath,
@@ -1879,22 +1937,36 @@ export const makeHostMaker = ({
         });
       } catch (error) {
         const cleanupErrors = [];
-        if (storedOriginName !== undefined) {
-          await E(directory)
-            .remove(...storedOriginName)
-            .catch(cleanupError => cleanupErrors.push(cleanupError));
+        if (storedOriginName && originNamePath !== undefined) {
+          // Restore the origin's name only while it still holds the
+          // identifier this call stored; a concurrent rebind wins.
+          await (async () => {
+            const current = await E(directory).identify(...originNamePath);
+            if (current !== originId) {
+              return;
+            }
+            await (priorOriginId === undefined
+              ? E(directory).remove(...originNamePath)
+              : E(directory).storeIdentifier(originNamePath, priorOriginId));
+          })().catch(cleanupError => cleanupErrors.push(cleanupError));
         }
         await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
           cleanupError => cleanupErrors.push(cleanupError),
         );
-        await emptyMountHostPath(destMountId).catch(cleanupError =>
-          cleanupErrors.push(cleanupError),
-        );
+        await removeMountEntries(
+          /** @type {FormulaIdentifier} */ (destMountId),
+          stagingName === undefined
+            ? movedEntries
+            : [...movedEntries, stagingName],
+        ).catch(cleanupError => cleanupErrors.push(cleanupError));
         if (cleanupErrors.length > 0) {
-          throw new AggregateError(
-            [error, ...cleanupErrors],
-            'provideGitClone failed and could not discard the partial clone',
-            { cause: error },
+          throw makeError(
+            X`provideGitClone failed and could not discard the partial clone`,
+            AggregateError,
+            {
+              cause: /** @type {Error} */ (error),
+              errors: [error, ...cleanupErrors],
+            },
           );
         }
         throw error;

@@ -1220,12 +1220,16 @@ test.serial(
     // Settles on whichever comes first, so an early rejection fails below
     // rather than hanging here.
     await Promise.race([handshaking.promise, cloneP]);
+    // Another holder of the mount writes while the clone is in flight.
+    // Discarding the failed clone must leave that write in place.
+    await E(destMount).writeText(['writer.txt'], 'concurrent content\n');
     await E(controller).rotate({ token: 'second-token' });
 
     await t.throwsAsync(cloneP, { message: /changed during clone/ });
     // The aborted subprocess drops its connection to the listener.
     await disconnected.promise;
-    t.deepEqual(await fs.promises.readdir(destPath), []);
+    t.deepEqual(await fs.promises.readdir(destPath), ['writer.txt']);
+    t.is(await E(destMount).readText(['writer.txt']), 'concurrent content\n');
     t.false(await E(host).has('rotating-clone-git'));
     t.false(await E(host).has('rotating-clone-origin'));
   },
@@ -1269,6 +1273,100 @@ test.serial(
     t.is(await E(host).lookup('retry-git'), git);
     t.is(await E(host).lookup('retry-origin'), remote);
     t.is((await E(git).currentBranch()).name, 'main');
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone discard restores a name the origin replaced',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    await E(host).storeValue('prior value', 'occupied-origin');
+    const destMount = await E(host).provideScratchMount('restore-destination');
+    // Naming the Git under a directory that does not exist fails after the
+    // origin's name has replaced the prior binding.
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, ['no-such-directory', 'restore-git'], {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        origin: { petName: 'occupied-origin' },
+      }),
+    );
+    t.is(await E(host).lookup('occupied-origin'), 'prior value');
+    t.deepEqual(
+      await fs.promises.readdir(await E(host).provideHostPath(destMount)),
+      [],
+    );
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone rejects an origin pet name equal to the Git pet name',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount('alias-destination');
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, ['alias-name'], {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        origin: { petName: 'alias-name' },
+      }),
+      { message: /origin.petName must differ/ },
+    );
+    t.false(await E(host).has('alias-name'));
+    t.deepEqual(
+      await fs.promises.readdir(await E(host).provideHostPath(destMount)),
+      [],
+    );
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone discard unlinks a cloned symlink without following it',
+  async t => {
+    const victim = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'git-clone-victim-'),
+    );
+    t.teardown(() => fs.promises.rm(victim, { recursive: true, force: true }));
+    await fs.promises.writeFile(path.join(victim, 'keep.txt'), 'victim\n');
+
+    const source = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'git-clone-symlink-'),
+    );
+    t.teardown(() => removeRepoTree(source));
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: source });
+    await quiesceGitMaintenance(source);
+    await fs.promises.symlink(victim, path.join(source, 'escape'));
+    await execFileAsync('git', ['add', 'escape'], { cwd: source });
+    await execFileAsync(
+      'git',
+      ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'link'],
+      { cwd: source },
+    );
+    const remoteRoot = await provisionBareRemote(t, source);
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount('symlink-destination');
+    const destPath = await E(host).provideHostPath(destMount);
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, 'symlink-git', {
+        endpoint: {
+          url: pathToFileURL(remoteRoot).href,
+          allowLocalFileTransport: true,
+        },
+        origin: { petName: ['no-such-directory', 'symlink-origin'] },
+      }),
+    );
+    t.deepEqual(await fs.promises.readdir(destPath), []);
+    t.is(
+      await fs.promises.readFile(path.join(victim, 'keep.txt'), 'utf8'),
+      'victim\n',
+    );
   },
 );
 
