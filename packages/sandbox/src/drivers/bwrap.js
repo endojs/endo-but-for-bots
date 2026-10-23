@@ -33,6 +33,7 @@ import {
 } from './path.js';
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
+/** @import * as NodeFs from 'fs' */
 
 /**
  * `SandboxDriver` for `bubblewrap` (`bwrap`) on Linux.
@@ -112,7 +113,7 @@ const LAUNCHER_STOP_GRACE_MS = 250;
  * Read the scheduler state letter and parent pid from `/proc/<pid>/stat`,
  * or `undefined` when the process is gone.
  *
- * @param {typeof import('fs')} fs
+ * @param {typeof NodeFs} fs
  * @param {number} pid
  * @returns {Promise<{ state: string, ppid: number } | undefined>}
  */
@@ -133,7 +134,7 @@ harden(readProcStat);
 /**
  * Wait until `pid` is stopped, a zombie, or gone, giving up after `milliseconds`.
  *
- * @param {typeof import('fs')} fs
+ * @param {typeof NodeFs} fs
  * @param {number} pid
  * @param {number} milliseconds
  * @returns {Promise<void>}
@@ -154,7 +155,7 @@ harden(waitForStopped);
 /**
  * List the pids whose parent is `pid`.
  *
- * @param {typeof import('fs')} fs
+ * @param {typeof NodeFs} fs
  * @param {number} pid
  * @returns {Promise<number[]>}
  */
@@ -981,8 +982,8 @@ export const makeBwrapDriver = ({
           try {
             process.kill(initPid, 'SIGKILL');
           } catch (e) {
-            const err = /** @type {Error & { code?: string }} */ (e);
-            if (err.code !== 'ESRCH') throw err;
+            const error = /** @type {Error & { code?: string }} */ (e);
+            if (error.code !== 'ESRCH') throw error;
           }
         }
       } finally {

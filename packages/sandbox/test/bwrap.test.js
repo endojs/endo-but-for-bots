@@ -1220,13 +1220,14 @@ test.serial(
       spawn: /** @type {any} */ (
         (
           /** @type {string} */ program,
-          /** @type {string[]} */ args,
+          /** @type {string[]} */ spawnArguments,
           /** @type {object} */ options,
         ) =>
           // A slice launch runs bwrap directly or through `prlimit`.
-          (program === 'bwrap' || args.includes('bwrap')) && args.includes('--')
+          (program === 'bwrap' || spawnArguments.includes('bwrap')) &&
+          spawnArguments.includes('--')
             ? nodeSpawn(launcherPath, [], options)
-            : nodeSpawn(program, args, options)
+            : nodeSpawn(program, spawnArguments, options)
       ),
     };
     const driver = makeBwrapDriver({ env: {}, childProcess });

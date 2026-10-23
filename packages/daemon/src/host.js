@@ -416,13 +416,17 @@ export const makeHostMaker = ({
   makeMountStagingEntry = /** @param {FormulaIdentifier} _id */ async _id => {
     throw makeError(X`makeMountStagingEntry not wired into makeHostMaker`);
   },
-  moveMountEntries = /** @param {...any} _args */ async (..._args) => {
+  moveMountEntries = /** @param {...any} _arguments */ async (
+    ..._arguments
+  ) => {
     throw makeError(X`moveMountEntries not wired into makeHostMaker`);
   },
-  removeMountEntries = /** @param {...any} _args */ async (..._args) => {
+  removeMountEntries = /** @param {...any} _arguments */ async (
+    ..._arguments
+  ) => {
     throw makeError(X`removeMountEntries not wired into makeHostMaker`);
   },
-  gitClone = /** @param {...any} _args */ (..._args) => {
+  gitClone = /** @param {...any} _arguments */ (..._arguments) => {
     throw makeError(X`gitClone not wired into makeHostMaker`);
   },
   getIdForRef = /** @param {unknown} _ref */ _ref => undefined,
