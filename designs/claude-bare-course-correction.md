@@ -51,7 +51,7 @@ This confirms the residual already recorded in
 [`packages/claude/README.md`](../packages/claude/README.md): a subscription
 token presented through `apiKeyHelper` is treated as an API key and rejected.
 The older design's open entitlement and positive-canary gates are therefore
-closed negatively.
+ruled out.
 
 ## Inventory and disposition
 
@@ -144,7 +144,7 @@ outer lifecycle words such as `commit`, `replay`, or `rollback`.
    flags, and Dependabot entry. Keep generalized agents, delegation, responders,
    and the HTTP MCP gateway.
 8. **Deprecate then delete Endo surfaces.** First mark the root CLI surface,
-   CLI backend, bin, and `@endo/agent-mcp-stdio` deprecated for one `llm` pin.
+   CLI backend, bin, and `@endo/agent-mcp-stdio` deprecated for the duration of one `llm` pin interval.
    After minion.town pins past the migration and repository search shows no
    importers, delete them and their changesets/tests. Keep `@endo/inference`,
    the Agent SDK API-key plugin if review retains it, `@endo/agent-tools`' MCP

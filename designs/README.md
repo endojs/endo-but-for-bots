@@ -654,6 +654,8 @@ The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thix
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
 
+The 2026-10-23 pass (PR #1543) adds [claude-bare-course-correction](claude-bare-course-correction.md) (Proposed) and [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md) (Proposed), bringing Proposed to 34 and the indexed records to 253.
+
 
 
 ## Roadmap
