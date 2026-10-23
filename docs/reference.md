@@ -78,7 +78,7 @@ The following are missing or unusable under HardenedJS:
 - Most [Node.js-specific global objects](https://nodejs.org/dist/latest-v14.x/docs/api/globals.html)
 - All [Node.js built-in modules](https://nodejs.org/dist/latest-v14.x/docs/api/) such as `http` and
   `crypto`.
-- [Features from browser environments](https://developer.mozilla.org/en-US/docs/Web/API) presented as names in the global scope including `atob`, `TextEncoder`, and `URL`.
+- [Features from browser environments](https://developer.mozilla.org/en-US/docs/Web/API) presented as names in the global scope including `atob` and `URL`.
 - HTML comments
 - Dynamic `import` expressions
 - Direct evals
@@ -91,6 +91,7 @@ HardenedJS adds the following to JavaScript or changes them significantly:
 - `Compartment`
 - `console`
 - `assert`
+- SES-owned `TextEncoder` and `TextDecoder` constructors when the host provides those codecs.
 - Shared JavaScript primordials are frozen.
 
 ## `lockdown(options)`

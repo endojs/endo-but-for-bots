@@ -252,8 +252,15 @@ Almost all existing JavaScript code runs under Node.js or inside a browser, so
 it's easy to conflate environment features with JavaScript. For example, you may
 be surprised that `Buffer` and `require` are Node.js additions. Also `setTimeout()`,
 `setInterval()`, `URL`, `atob()`, `btoa()`, `TextEncoder`, and `TextDecoder` are additions
-to the programming environment standardized by the web, and are not intrinsic
+to the programming environment standardized by the WHATWG web platform, and are not intrinsic
 to JavaScript.
+
+When the host provides `TextEncoder` and `TextDecoder`, lockdown exposes
+SES-owned stand-ins for those constructors. They preserve host behavior and
+share the host prototypes, but are not identical to constructor references
+captured before lockdown. The
+[hardened text codecs design](https://github.com/endojs/endo-but-for-bots/pull/1431)
+explains why the stand-ins are necessary.
 
 Most Node.js-specific [global objects](https://nodejs.org/dist/latest-v14.x/docs/api/globals.html) are
 **unavailable** including:
@@ -261,7 +268,6 @@ Most Node.js-specific [global objects](https://nodejs.org/dist/latest-v14.x/docs
 * `queueMicrotask`
 * `URL` and `URLSearchParams`
 * `WebAssembly`
-* `TextEncoder` and `TextDecoder`
 * `global`
   * Use `globalThis` instead.
 * `process`
@@ -284,7 +290,7 @@ Most Node.js-specific [global objects](https://nodejs.org/dist/latest-v14.x/docs
 
 None of the huge list of [other Browser environment features](https://developer.mozilla.org/en-US/docs/Web/API)
 presented as names in the global scope (some also added to Node.js) are available in a
-hardened environment. The most surprising removals include `atob`, `TextEncoder`, and `URL`.
+hardened environment. The most surprising removals include `atob` and `URL`.
 
 `debugger` is a first-class JavaScript statement, and behaves as expected.
 
