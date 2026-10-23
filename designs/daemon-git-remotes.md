@@ -545,6 +545,15 @@ It should not become guest authority to clone arbitrary remotes into arbitrary h
 The second flow shipped host-mediated via #538 as `EndoHost.provideGitClone(opts)`: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
 The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half; the residual bootstrap gap is the **commit-identity boundary**, pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ identity: { authorName, authorEmail } }` construction option on `provideGit` / `provideGitClone`, guest-immutable).
 
+**Signature change (PR #1538).**
+The one-object `provideGitClone(opts)` form is removed.
+The method is now `EndoHost.provideGitClone(destMount, petName, { endpoint, identity, origin })`, in the argument order of `provideGit` and `provideGitRemote`, and returns `{ git, remote }`: the writable `Git` over the clone, stored under `petName`, and its `GitRemote`.
+The endpoint supplies the URL, credential and transport; the remote is always named `origin`.
+`origin` carries the remote's `provideGitRemote`-shaped policy plus an optional `petName` for storing the remote, which must differ from `petName`.
+The `origin` remote defaults to fetch-only, so a caller that pushes must grant push explicitly, for example `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
+Both names are stored only once the clone and both capabilities exist.
+The clone is built in a staging directory inside the empty destination and moved into place, so a failure removes only what the call created, never content another holder of the mount wrote, and restores any name that `origin.petName` replaced.
+
 ## Security Model
 
 ### Authority Separation
