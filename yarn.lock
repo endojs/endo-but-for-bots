@@ -1682,6 +1682,7 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/inference": "workspace:^"
     "@endo/init": "workspace:^"
