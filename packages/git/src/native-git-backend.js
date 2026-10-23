@@ -120,6 +120,11 @@ const GIT_BASE_ARGUMENTS = harden([
 // which git tries to exec, producing "external diff died".
 
 const GIT_TIMEOUT_MS = 60_000;
+/**
+ * How long a remote operation's processes get to exit after `SIGTERM`
+ * before `SIGKILL` follows.
+ */
+const GIT_KILL_GRACE_MS = 2000;
 const GIT_MAX_BUFFER = 1024 * 1024;
 const TOOL_OUTPUT_LIMIT = 50_000;
 const MIN_GIT_VERSION = harden([2, 30, 0]);
@@ -421,6 +426,12 @@ harden(remoteProtocolArguments);
  * abort, or an output overflow terminates every process it started.  With
  * credential bytes, GIT_ASKPASS reads them from an inherited anonymous pipe.
  *
+ * Termination starts with `SIGTERM`.  A process can ignore or trap that and
+ * keep the output pipes open, so if they are still open `killGraceMs` later,
+ * `SIGKILL` follows, which no process can refuse.  The call therefore
+ * settles within `timeoutMs + killGraceMs`, or `killGraceMs` after an abort
+ * or an overflow.
+ *
  * @param {object} input
  * @param {string} input.cwd
  * @param {string} input.envRoot
@@ -429,6 +440,7 @@ harden(remoteProtocolArguments);
  * @param {AbortSignal} [input.signal]
  * @param {number} [input.timeoutMs]
  * @param {number} [input.maxOutputBytes]
+ * @param {number} [input.killGraceMs]
  * @param {string} [input.gitExecutable]
  * @returns {Promise<{ stdout: string, stderr: string }>}
  */
@@ -440,6 +452,7 @@ const runRemoteGitAt = ({
   signal,
   timeoutMs = GIT_TIMEOUT_MS,
   maxOutputBytes = GIT_MAX_BUFFER,
+  killGraceMs = GIT_KILL_GRACE_MS,
   gitExecutable = 'git',
 }) => {
   if (signal?.aborted) {
@@ -466,7 +479,8 @@ const runRemoteGitAt = ({
     // child of `git`.  Signalling `git` alone orphans the helper, which keeps
     // the output pipes and the connection open, so the call never settles.
     // On POSIX the child leads its own process group and every kill below
-    // signals the whole group.
+    // signals the whole group.  Windows has no process groups, so there
+    // `taskkill /T /F` ends the tree rooted at `git`.
     const ownGroup = process.platform !== 'win32';
     const child = spawn(
       gitExecutable,
@@ -487,16 +501,38 @@ const runRemoteGitAt = ({
         detached: ownGroup,
       },
     );
-    const kill = () => {
-      if (ownGroup && child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, 'SIGTERM');
+    /** @param {'SIGTERM' | 'SIGKILL'} killSignal */
+    const signalProcesses = killSignal => {
+      if (child.pid !== undefined) {
+        if (ownGroup) {
+          try {
+            process.kill(-child.pid, killSignal);
+            return;
+          } catch {
+            // The group is already gone; fall through to the child itself.
+          }
+        } else {
+          const taskkill = spawn(
+            'taskkill',
+            ['/pid', String(child.pid), '/T', '/F'],
+            { stdio: 'ignore', windowsHide: true },
+          );
+          taskkill.once('error', () => child.kill(killSignal));
           return;
-        } catch {
-          // The group is already gone; fall through to the child itself.
         }
       }
-      child.kill('SIGTERM');
+      child.kill(killSignal);
+    };
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let killEscalation;
+    const kill = () => {
+      if (killEscalation !== undefined) return;
+      signalProcesses('SIGTERM');
+      killEscalation = setTimeout(
+        () => signalProcesses('SIGKILL'),
+        killGraceMs,
+      );
+      killEscalation.unref();
     };
 
     const timeout = setTimeout(() => {
@@ -558,6 +594,7 @@ const runRemoteGitAt = ({
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(killEscalation);
       signal?.removeEventListener('abort', abort);
       credentialPipe?.destroy();
       reject(error);
@@ -566,6 +603,7 @@ const runRemoteGitAt = ({
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(killEscalation);
       signal?.removeEventListener('abort', abort);
       credentialPipe?.destroy();
 
