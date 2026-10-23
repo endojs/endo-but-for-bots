@@ -699,7 +699,7 @@ The public `GitRemote` contract should survive those swaps.
 
 ## Implementation Plan
 
-Phases 1–5 shipped in #365 (see § Implementation Progress and Notes; the unchecked boxes below are the original plan, and `GitRemoteSet` was deferred as that phase allowed).
+Phases 1-5 shipped in #365 (see § Implementation Progress and Notes; the unchecked boxes below are the original plan, and `GitRemoteSet` was deferred as that phase allowed).
 The next increment is not a numbered phase here: adopting a capability URL as a `GitRemote` is designed in [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md).
 
 ### Phase 1: Remote Model (MVA)
@@ -806,7 +806,7 @@ It is not part of the normative design.
   The anonymous-pipe transport has no socket to keep open, so the askpass-socket-lifetime narrowing is structurally satisfied; the OS-user-account boundary (`mkdtemp` 0o700 parent directory) remains the trust model.
 - **#538** (`feat(exo-git): add remote endpoint clone seam` and siblings) — the host-mediated repository bootstrap: `EndoHost.provideGitClone`, the `makeGitCloner` seam in `@endo/exo-git`, the native clone helper in `@endo/git`, read-only-destination rejection, and credential fencing across the cloner lifecycle.
   See § Repository Bootstrap and `clone` for how this resolves the bootstrap follow-up.
-- **#706** — formula-owned commit identity on `provideGit` / `provideGitClone` ([daemon-git-next-steps](daemon-git-next-steps.md) § Commit-identity boundary).
+- **#706**: formula-owned commit identity on `provideGit` / `provideGitClone` ([daemon-git-next-steps](daemon-git-next-steps.md) § Commit-identity boundary).
 - **Hardening and ergonomics since the 2026-07-11 reconciliation:** #532 (independent `file:` fetch of a pushed branch), #633 and #734 (public Git remote and credential types), #929 (policy normalization and `defaultPullRef`), #973 (bounded network-sourced result sizes), #1022 (`help()` on Git capabilities), #1145 (`credentialHealth()`, reporting credential usability without using it).
 - **Agent-facing tiers:** #705 (`makeGitRemoteTool` push tier with force-with-lease) and #958 (named nested Git grants for code mode).
 
