@@ -581,6 +581,8 @@ LLM-agent stack).*
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | In Progress |
 | [endo-claude-inference-backends](endo-claude-inference-backends.md) | 2026-09-28 | 2026-09-30 | Draft |
 | [endo-guest-stdio-mcp](endo-guest-stdio-mcp.md) | 2026-09-08 | 2026-09-24 | In Progress |
+| [claude-bare-course-correction](claude-bare-course-correction.md) | 2026-10-23 | 2026-10-23 | Proposed |
+| [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md) | 2026-10-23 | 2026-10-23 | Proposed |
 | [agent-confined-application-makers](agent-confined-application-makers.md) | 2026-09-24 | 2026-10-01 | Proposed |
 | [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
 | [floot-admin-deploy-workflows](floot-admin-deploy-workflows.md) | 2026-08-18 | 2026-09-07 | In Progress |
