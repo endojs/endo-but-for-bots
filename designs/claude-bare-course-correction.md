@@ -3,6 +3,8 @@
 | | |
 |---|---|
 | **Created** | 2026-10-23 |
+| **Updated** | 2026-10-23 |
+| **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 | **Companion** | [API-key inference providers and pinned guest agents](api-key-inference-providers-and-pinned-agents.md) |
 | **Grounded against** | `endojs/endo-but-for-bots` `llm` at `d5ac41980a`; `kriscendobot/minion.town` `main` at `68c3960bbe` |
@@ -24,6 +26,20 @@ current Claude path, migrate durable guest state, and only then remove the
 subscription-specific CLI, harness image, and guest stdio MCP server.
 
 This design does not change ferry or identity switching.
+
+### Old path to replacement path
+
+Read the inventory below against this map. Each row names one concern of the
+retired path and what takes its place.
+
+| Concern | Old path (retired) | Replacement path |
+|---|---|---|
+| Credential source | Owner's Claude subscription token from `claude setup-token`, held by minion.town's credential vault | Owner's API key, imported once as an inference provider and held only in Endo's `@secrets` |
+| Harness | Claude Code CLI (`@endo/claude`, vendored into minion.town, run in the harness image) | Lal (default) or Fae, running in process over a brokered inference facet |
+| Tool transport | Guest stdio MCP server (`@endo/agent-mcp-stdio`) | Lal and Fae tools derived directly from the guest's powers facet |
+| Wake mechanism | minion.town #165 pinned inbox responder driving a Claude child | The same pinned responder pattern, generalized and attached to a Lal or Fae agent |
+| Spend control | One shared subscription with a busy gate | Per-provider and per-agent caps at the provider broker |
+| Retained | | Bot names, mail, responder cursors, delegation topology, `@endo/inference`, generic confinement, and the HTTP MCP gateway |
 
 ## Evidence
 
@@ -117,14 +133,15 @@ subscriptions, or funds a separate provider is an explicit open question.
 | Browser -> minion.town app | Password input and two explicit POST operations | App admits the signed-in guest and fixed request sizes | No credential state in the browser or app logs | App commits only after daemon/provider creation succeeds | Secret bytes on provider creation; provider id and agent options thereafter |
 | minion.town app -> Endo root | Root-host capability calls | Root decides which guest may create/use a provider | Endo secret manager and provider registry | Endo commits, retires, restarts, and replays | Object-designating provider/admin capabilities, not identity authority |
 | Provider broker -> harness | Provider-neutral inference call | Broker enforces model, spend, rate, and concurrency limits | Usage ledger and secret generation | Broker admits/releases each call | Prompt, tool projection, tagged result; never secret bytes to the agent |
-| Guest -> pinned responder | Endo mail subscription | Guest owner chooses wake-on-message and agent lifecycle | Guest formula, inbox cursor, effect/dedup records | Guest owner dismisses; daemon restarts/replays | One message and the guest's attenuated powers facet |
+| Guest -> pinned responder | Endo mail subscription | Guest owner chooses wake-on-message and agent lifecycle | Guest formula, inbox cursor, effect/dedup records | Agent factory applies the owner's wake and deletion choices; daemon restarts/replays | One message and the guest's attenuated powers facet |
 
 The daemon secret manager owns credential durability. The provider registry
 owns active/retired provider state. The usage ledger owns usage and is its
 single source of truth; the registry keeps no usage copy (companion
-§ Ownership map). The agent factory owns agent creation, wake, and dismissal
-operations. The user-held admin facet owns retirement; the broker owns per-call admit/discard. Endo owns restart and
-formula replay. The harness classifies model execution; the broker decides what
+§ Ownership map). The agent factory owns agent creation, wake, and deletion
+operations, and its `AgentRecord` owns desired wake state. The user-held admin
+facet owns retirement; the broker owns per-call admit/discard. Endo owns
+restart and formula replay. The harness classifies model execution; the broker decides what
 that result permits next. Inner APIs use `inference`, `turn`, and `result`, not
 outer lifecycle words such as `commit`, `replay`, or `rollback`.
 
@@ -156,7 +173,8 @@ outer lifecycle words such as `commit`, `replay`, or `rollback`.
    flags, and Dependabot entry. Keep generalized agents, delegation, responders,
    and the HTTP MCP gateway.
 8. **Deprecate then delete Endo surfaces.** First mark the root CLI surface,
-   CLI backend, bin, and `@endo/agent-mcp-stdio` deprecated for the duration of one `llm` pin interval.
+   CLI backend, bin, and `@endo/agent-mcp-stdio` deprecated for the duration
+   of one `llm` pin interval.
    After minion.town pins past the migration and repository search shows no
    importers, delete them and their changesets/tests. Keep `@endo/inference`,
    the Agent SDK API-key plugin if review retains it, `@endo/agent-tools`' MCP

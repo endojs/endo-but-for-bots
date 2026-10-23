@@ -3,6 +3,8 @@
 | | |
 |---|---|
 | **Created** | 2026-10-23 |
+| **Updated** | 2026-10-23 |
+| **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 | **Parent** | [Course correction after `claude --bare` rejected subscription credentials](claude-bare-course-correction.md) |
 | **Grounded against** | `endojs/endo-but-for-bots` `llm` at `d5ac41980a`; `kriscendobot/minion.town` `main` at `68c3960bbe` |
@@ -25,13 +27,18 @@ principal, and a provider id means nothing outside its owner's directory.
 
 The existing Lal/Fae form design and implementation are useful but not the UI
 contract. [`packages/fae/llm-provider-factory.js`](../packages/fae/llm-provider-factory.js)
-already validates provider fields, calls the daemon secret manager, and stores
-only `authSecretName` in provider configuration. Its own comment also records
-the defect this design must avoid: a daemon form submission is durable before
-the factory processes it, so a typed raw token remains in the form message.
-Reuse its provider validation, `SecretBlob` binding, per-turn reread/rotation in
-`packages/fae/src/provider-owner.js`, and tagged error behavior. Do not reuse the
-unsolicited form transport or persist the raw submission.
+calls the daemon secret manager and stores only `authSecretName` in provider
+configuration. Its validation is narrow: it checks that an OpenRouter host has
+an organization-qualified model and that a referenced secret exists, but it does
+not validate provider name, host, or model in general. Its own comment also
+records the defect this design must avoid: a daemon form submission is durable
+before the factory processes it, so a typed raw token remains in the form
+message. Reuse its `SecretBlob` binding, per-turn reread/rotation in
+`packages/fae/src/provider-owner.js`, and tagged error behavior. The provider
+registry adds the general field validation itself (phase 1): display-name
+length and characters, kind from a closed set, base URL from the kind's
+allowlist, and model from the kind's catalog. Do not reuse the unsolicited form
+transport or persist the raw submission.
 
 Harnesses present on `llm` are:
 
@@ -52,6 +59,14 @@ Lal, and can grow from a server-supplied harness catalog later.
 The signed-in guest page adds one **Add agent** button. It opens a two-step
 dialog; Back never resubmits a secret.
 
+In plain terms, a user makes two choices: which paid API key pays for the
+agent (the provider), and which agent program runs (the harness), plus the
+agent's name and limits. The user does not choose what the agent is allowed
+to do. Each harness comes with a fixed list of permitted actions, its *powers
+profile*, such as reading and sending its own mail; § Confinement and
+wake-on-message gives the full list. A setting that grants extra powers
+(called *endowments* in the Chat wizard) therefore has nothing to offer here.
+
 This dialog is the minion.town presentation of the same three layers as the
 canonical Chat **Add agent** wizard in
 [`chat-inventory-create-menu.md`](chat-inventory-create-menu.md) § Three-pane
@@ -67,7 +82,10 @@ because it opens the same operation.
 ### Step 1: create or choose an inference provider
 
 The page first lists the user's active providers by non-secret display name,
-provider kind, default model, spend summary, and status. The user may select one
+provider kind, default model, spend summary, and status. Before the first
+agent is created, the step states that the key's owner pays the upstream
+provider and that the caps below apply per provider, not per upstream
+account (§ Cost and abuse controls). The user may select one
 or choose **New provider**, which asks for:
 
 - provider name;
@@ -105,7 +123,7 @@ cross-principal denial). Success adds the agent to the guest's inventory.
 Retrying the same idempotency key returns the same provider or agent; it never
 creates a second spend source or responder. The provider operation in
 § Creation and retirement operations and the agent operation in § Agent
-creation, wake, and dismissal operations specify how that holds across crashes
+creation, wake, and deletion operations specify how that holds across crashes
 and lost responses.
 
 ### Agent management
@@ -113,7 +131,7 @@ and lost responses.
 Each agent's detail view, reached from the guest's inventory, shows its
 provider, harness, model, limits, wake state, and unread mail count. Its
 actions are **Wake on messages** (a toggle), **Edit limits**, **Reattach
-provider**, and **Dismiss**.
+provider**, and **Delete agent**.
 
 - **Turning wake off** pauses the agent's responder. The responder stays pinned
   with its cursor and effect records, but stops following the mailbox and
@@ -122,11 +140,27 @@ provider**, and **Dismiss**.
 - **Turning wake on** resumes the responder from its stored cursor. Mail that
   arrived while paused is processed oldest first, each message admitted under
   the agent's normal limits; mail the owner dismissed meanwhile is skipped.
+  Processing queued mail spends the provider's budget, so when any unread mail
+  is queued the toggle first opens a confirmation: "Wake *name*? It will
+  process *N* queued messages, oldest first, using *provider*." It offers
+  **Process queued mail**, **Skip queued mail** (marks those messages read and
+  starts from new mail only), and **Cancel**, which leaves wake off. The count
+  is taken when the dialog opens; the operation records the cursor position the
+  owner confirmed, so mail arriving afterwards is treated as new mail. With no
+  queued mail the toggle applies immediately.
 - An agent **created with wake off** has no responder until wake is first
-  turned on; its mail accumulates the same way.
+  turned on; its mail accumulates the same way, and the first enable shows the
+  same confirmation.
+- **Delete agent** is irreversible and always asks for confirmation naming what
+  is lost: "Delete *name*? Its *N* unread messages and its conversation
+  transcript will be deleted. Usage history is kept." Deleting releases the
+  agent's guest, so unread mail, the responder cursor, and the harness
+  transcript are discarded with it; usage and audit rows stay in the usage
+  ledger (§ Agent creation, wake, and deletion operations). The confirm button
+  is labelled **Delete agent**, and focus starts on **Cancel**.
 
 Each toggle is an idempotent agent operation (§ Agent creation, wake, and
-dismissal operations), so a repeated or interrupted toggle converges on the
+deletion operations), so a repeated or interrupted toggle converges on the
 requested state.
 
 ### Keyboard and assistive technology
@@ -167,14 +201,32 @@ and previous budget periods. Its actions are:
 
 - **Edit limits**: lower or raise provider caps within deployment ceilings;
   agent caps are clamped to the new provider caps on the next admission.
-- **Rotate key**: opens the same password form, creates a superseding provider,
-  and then offers to reattach each listed agent explicitly.
-- **Revoke now**: one confirmation naming the affected agents, then retirement
-  (§ "Indelible" and retirement). This is the leaked-key path; it does not
+- **Replace key**: a guided migration, not an in-place rotation. It opens the
+  same password form and creates a superseding provider. It then shows every
+  agent still attached to the old provider, all preselected, and reattaches
+  the selected ones (each an idempotent reattach operation). The old provider
+  stays usable by any agent left unselected, and the page shows "*N* agents
+  still use the old key" until none do. When none remain, it offers **Disable
+  old key in Endo**, below. The label avoids "rotate" because the old provider
+  is never silently changed to designate the new key.
+- **Disable key in Endo**: one confirmation naming the affected agents, then
+  retirement (§ "Indelible" and retirement). This stops Endo from using the
+  key: every attached agent fails its next call. It does **not** revoke the key
+  at Anthropic or the OpenAI-compatible service, so anyone else holding a
+  leaked copy can still use it and charge the owner's account. The
+  confirmation and the completed state therefore both say so and show the
+  upstream step: "Also revoke this key in the provider's console", with a link
+  to that kind's key-management page from the provider catalog. The provider
+  row shows **Disabled in Endo; upstream revocation not confirmed** until the
+  owner checks **I revoked it upstream**, which is recorded as an owner
+  assertion, not verified. Endo does not call an upstream revocation API in
+  the first release, because that would need provider-specific administrative
+  credentials the user is not asked to supply. This is the leaked-key path; it
+  does not
   require creating a replacement first.
 
 Every action goes through the owner's `InferenceProviderAdmin` facet; none
-displays or re-requests key bytes except **Rotate key**'s new key.
+displays or re-requests key bytes except **Replace key**'s new key.
 
 The Lal demo's field validation, provider config, model resolution, and
 manager/worker separation are reusable. Its "server sends a form to the user"
@@ -182,26 +234,43 @@ trigger is not: minion.town owns initiation, progress, cancellation, and errors.
 
 ## Provider and secret model
 
-The durable, non-secret provider record is versioned data retained in a
-root-private provider registry:
+The durable, non-secret provider data is versioned and retained in a
+root-private provider registry. It is split into an immutable descriptor and a
+mutable lifecycle place, so provider identity and history are never braided
+with current state:
 
 ```ts
-type InferenceProviderRecord = {
+// Written once at creation commit; never changed afterwards.
+type InferenceProviderDescriptor = {
   version: 1;
   providerId: string;       // random object designator, unique per owner
-  ownerId: string;          // owning principal's guest formula id; immutable
+  ownerId: string;          // owning principal's guest formula id
   displayName: string;
   kind: 'anthropic' | 'openai-compatible';
   baseUrl?: string;         // validated, never inferred from key text
   defaultModel: string;
   secretGrantFormulaId: string; // host-private retention edge, never in UI
   createdAt: string;
-  state: 'active' | 'retiring' | 'retired';
   supersedes?: string;
+};
+
+// The only mutable provider data; one per descriptor.
+type InferenceProviderLifecycle = {
+  version: 1;
+  providerId: string;
+  state: 'active' | 'retiring' | 'retired';
+  limits: ProviderLimits;   // changed by Edit limits within deployment ceilings
+  upstreamRevocationAssertedAt?: string; // owner's "I revoked it upstream"
+  updatedAt: string;
 };
 ```
 
-The record's facets are separate:
+Every change to the lifecycle place is also appended to the provider's audit
+log (old value, new value, operation id, time), so history is reconstructible
+even though the current-state place is overwritten. Usage lives only in the
+usage ledger.
+
+The provider's facets are separate:
 
 - `InferenceProviderDirectory`, one per owner, minted when the owner's guest is
   provisioned and held by that owner's signed-in UI capability. It lists, looks
@@ -242,7 +311,7 @@ ownership partitioning is a phase 1 requirement, not a later multi-tenant
 extension.
 
 - **Owner binding.** `ownerId` is set from the directory that runs creation and
-  is never taken from a request field. No API changes it; rotation creates the
+  is never taken from a request field. No API changes it; **Replace key** creates the
   superseding provider in the same owner's directory.
 - **Selection is capability lookup.** A provider id is a name inside one owner's
   directory, not a global designator. The app resolves it as
@@ -296,9 +365,9 @@ Creation proceeds through these commit boundaries:
    If that name already exists, the earlier attempt reached the secret manager,
    and the existing blob is kept; the retry's key bytes are discarded. The
    registry then records `secret-created`.
-3. **Commit.** The registry writes the `active` provider record and marks the
-   operation `committed` in one registry transaction. Success means this commit;
-   the response follows it.
+3. **Commit.** The registry writes the provider descriptor and its `active`
+   lifecycle and marks the operation `committed` in one registry transaction.
+   Success means this commit; the response follows it.
 
 Crash and retry behavior at each boundary:
 
@@ -327,16 +396,23 @@ turns. It then revokes the `SecretBlob` and finally sets `retired`. Recovery
 drives any `retiring` provider forward to `retired`, so the registry can never
 show an `active` provider whose secret is already revoked.
 
-### Agent creation, wake, and dismissal operations
+### Agent creation, wake, and deletion operations
 
 Agent creation spans three stores: the Endo root's guest formulas, the provider
 registry's per-agent inference grants, and the new guest's `@pins` and
 inventory names. The **agent factory** is the single coordinator. It owns a
 root-private agent registry holding the durable `AgentRecord` (agent id, owner,
-guest formula id, provider id, harness, model, limits, wake state, lifecycle
-state) and an operation record for every change; the guest, the provider
-registry, and the responder are participants that each make one idempotent,
-name-keyed effect.
+guest formula id, provider id, harness, model, limits, desired wake state,
+lifecycle state) and an operation record for every change; the guest, the
+provider registry, and the responder are participants that each make one
+idempotent, name-keyed effect.
+
+Wake state has one owner. `AgentRecord.wakeState` is the **desired** state and
+is authoritative. The responder's paused/running flag is only the **applied**
+state, a cache the factory drives toward the desired state and never reads as a
+source of truth. Every operation that changes wake, including creation, ends
+with an *activation* step that applies the desired state to the responder, and
+the operation is not finished until that step is recorded.
 
 ```ts
 type AgentOperation = {
@@ -344,7 +420,7 @@ type AgentOperation = {
   operationId: string;      // random; derives every preallocated name below
   ownerId: string;
   idempotencyKey: string;   // client-supplied, scoped to ownerId
-  kind: 'create' | 'set-wake' | 'dismiss';
+  kind: 'create' | 'set-wake' | 'delete';
   agentId: string;          // preallocated before any external effect
   request: SafeAgentFields; // provider id, harness, bot name, model, limits, wake
   state:
@@ -353,7 +429,8 @@ type AgentOperation = {
     | 'inference-bound'
     | 'responder-ready'
     | 'named'
-    | 'committed'
+    | 'committed'   // AgentRecord written; activation still pending
+    | 'completed'   // desired wake state applied to the responder
     | 'aborting'
     | 'aborted';
   updatedAt: string;
@@ -365,8 +442,8 @@ by a name preallocated at intent, so repeating a step finds its earlier effect
 instead of making a second one.
 
 1. **Intent.** The factory atomically checks `(ownerId, idempotencyKey)` as
-   provider creation does: a committed match returns the agent, a mismatch
-   returns `idempotency-conflict`, an uncommitted match resumes. It resolves
+   provider creation does: a completed match returns the agent, a mismatch
+   returns `idempotency-conflict`, an unfinished match resumes. It resolves
    the provider through the owner's directory and checks the owner match
    (§ Ownership and cross-principal denial), reserves the bot name in the
    owner's agent registry (`agent-name-conflict` if another live agent holds
@@ -384,52 +461,71 @@ instead of making a second one.
 5. **Name.** The factory writes the bot name into the owner's inventory,
    designating the agent. A name already designating this agent is accepted.
    It records `named`.
-6. **Commit.** The factory writes the `active` `AgentRecord` and marks the
-   operation `committed` in one agent-registry transaction, then unpauses the
-   responder. Success means this commit; the response follows it.
+6. **Commit.** The factory writes the `active` `AgentRecord`, with the desired
+   wake state, and marks the operation `committed` in one agent-registry
+   transaction. From here the operation can only roll forward.
+7. **Activate.** The factory applies the desired wake state: it unpauses the
+   responder when wake is on and leaves it paused (or absent) when wake is off.
+   Unpausing an already running responder is a no-op. It then records
+   `completed`. Success means `completed`; the response follows it.
 
 No step after intent needs anything the client holds, so recovery always rolls
 forward. On daemon start and periodically, a factory-owned reconciler resumes
-every uncommitted operation from its recorded state. Crash and retry behavior:
+every operation that is neither `completed` nor `aborted`, including
+`committed` ones, from its recorded state. It also sweeps every `active`
+`AgentRecord` and reapplies its desired wake state to the responder, so an
+applied state that drifted for any reason (a lost unpause, a restored
+backup) converges. Crash and retry behavior:
 
 - Crash before intent: nothing exists; a retry starts fresh.
 - Crash after any later boundary, or between an effect and its state record:
   the retry or the reconciler repeats the next step, which finds the earlier
   effect by its preallocated name and records the state.
-- Lost response after commit: a retry with the same idempotency key returns the
-  committed agent.
-- A step that fails permanently (provider retired or not found, owner mismatch,
-  name conflict, guest creation refused) sets `aborting`. The factory then
-  undoes completed effects in reverse order: it removes the inventory name if
-  this operation wrote it, unpins the responder, disposes the grant, and
-  releases the guest. Then it records `aborted` and returns the fixed error.
-  Recovery drives `aborting` to `aborted` the same way.
+- Crash after commit, before activation: the reconciler or a retry with the
+  same idempotency key performs step 7, so a committed wake-enabled agent is
+  never left paused. A retry does not return success until step 7 completes.
+- Lost response after completion: a retry with the same idempotency key returns
+  the completed agent.
+- A step before commit that fails permanently (provider retired or not found,
+  owner mismatch, name conflict, guest creation refused) sets `aborting`. The
+  factory then undoes the effects already made, in reverse order: it removes the
+  inventory name if this operation wrote it, unpins the responder, disposes the
+  grant, and releases the guest. Then it records `aborted` and returns the
+  fixed error. Recovery drives `aborting` to `aborted` the same way. Activation
+  cannot abort the operation: a responder that fails to start is retried by the
+  reconciler and shown to the owner as `waking`.
 
 Until commit the owner sees the agent as `agent creation in progress`, and no
 responder runs a turn, so a crash can never leave a running agent without an
 `AgentRecord`.
 
-**Wake toggles** (`kind: 'set-wake'`) have a single participant, the responder:
-the factory records the requested state, pins (on first enable), unpauses, or
-pauses the responder, then commits the new wake state to the `AgentRecord`.
-Recovery repeats the responder effect, which is idempotent.
+**Wake toggles** (`kind: 'set-wake'`) follow the same desired-then-applied
+order. The factory first commits the new desired wake state to the
+`AgentRecord` (with the confirmed queued-mail cursor when enabling, § Agent
+management), then pins the responder (on first enable), unpauses, or pauses
+it, and records `completed`. The reconciler finishes a toggle interrupted after
+its commit, and its sweep reapplies desired state for any agent.
 
-**Dismissal** (`kind: 'dismiss'`) first commits the `AgentRecord` as
-`dismissing`, from which the grant refuses new turns. It then cancels any
+**Deletion** (`kind: 'delete'`) first commits the `AgentRecord` as
+`deleting`, from which the grant refuses new turns. It then cancels any
 in-flight turn, unpins the responder, disposes the grant, removes the
-inventory name, and releases the guest, and finally commits `dismissed`.
-Recovery drives `dismissing` forward. Usage and audit rows for the agent remain
-in the usage ledger.
+inventory name, and releases the guest, which discards its unread mail and the
+harness transcript, and finally commits `deleted`. Recovery drives `deleting`
+forward. Usage and audit rows for the agent remain in the usage ledger.
 
 ### "Indelible" and retirement
 
 Indelible means a created provider's identity, audit trail, and historical
 agent/usage references are append-only through the product API. It does **not**
-mean a leaked key must remain usable.
+mean a leaked key must remain usable, and it does not mean nothing about a
+provider ever changes.
 
-- A provider record is never overwritten in place.
-- Rotation creates a new secret and provider record whose `supersedes` points
-  to the prior provider; agents move only by an explicit reattachment.
+- The provider descriptor is never overwritten in place. Only the lifecycle
+  place mutates (`state`, `limits`, and the upstream-revocation assertion), and
+  every mutation is appended to the audit log (§ Provider and secret model).
+- **Replace key** creates a new secret and provider descriptor whose
+  `supersedes` points to the prior provider; agents move only by an explicit
+  reattachment.
 - Retirement marks the provider `retiring`, revokes the old `SecretBlob`, then
   marks it `retired` (§ Creation and retirement operations). New and queued
   turns fail closed from the first step. The old provider id and audit rows
@@ -439,8 +535,10 @@ mean a leaked key must remain usable.
   procedure, but does not erase the non-secret tombstone or audit history.
 
 This is revocation by supersession, not "no deletion ever." It lets a user
-retire a leaked key immediately without rewriting history or silently changing
-what an existing provider capability designates.
+stop Endo using a leaked key immediately without rewriting history or silently
+changing what an existing provider capability designates. Retirement is local:
+the upstream key stays valid until the owner revokes it in the provider's
+console (§ Provider management).
 
 ### Relation to the existing hosted provider broker
 
@@ -498,8 +596,8 @@ provider kind.
 - **Lifecycle and revocation.** Each model call opens one request on the grant.
   The issuer checks grant and provider state per request, so retirement fails
   the agent's next call with a fixed `provider-retired` error, not its next
-  provisioning. Dismissal disposes the grant, after which every call fails
-  with `agent-dismissed`.
+  provisioning. Deletion disposes the grant, after which every call fails
+  with `agent-deleted`.
 - **Accounting.** The issuer's `onReading` and `audit` hooks write
   reservations and settlements to the usage ledger (§ Cost and abuse
   controls). Usage the adapter reports to the harness is informational and is
@@ -539,7 +637,7 @@ an inbox-responder formula is retained in the new guest's `@pins`, stores its
 cursor and effect-dedup records, and follows only that guest's mailbox. A message
 acquires the provider's per-agent slot, runs one bounded turn, records the
 effect, and dismisses only after the reply is durably sent. Restart revives the
-pinned responder; duplicate delivery consults the effect record. Dismissal
+pinned responder; duplicate delivery consults the effect record. Deletion
 cancels an in-flight turn before releasing the guest and responder.
 
 If a loopback bridge is needed, its bearer is a random, revocable designator for
@@ -558,7 +656,7 @@ Endo capabilities where no bearer is needed.
 | UI -> provider endpoint | Password POST and safe summary response | Signed-in guest may create within quota, only in its own directory | None in UI; idempotency key in app | Registry operation commit decides success | Key in request only; safe provider summary back |
 | Provider registry -> `@secrets` | Retained `SecretBlob` lookup formula | Provider admin chooses create/supersede/retire | Secret manager owns bytes/audit; registry owns metadata and operation records | Registry coordinates each create/retire operation; secret manager commits/revokes bytes as a participant; registry reconciler recovers | Secret capability inward; no bytes or admin facet outward |
 | Provider broker -> agent | Per-agent `AgentInference` facet | Broker enforces model, spend, rate, concurrency | Usage ledger per provider and agent | Broker admits, cancels, and releases turns | Bounded prompt/result/usage |
-| Agent factory -> guest, grant, responder | Agent operation records in the agent registry | Owner creates, toggles wake, and dismisses | `AgentRecord` and agent operation records | Factory coordinates create/wake/dismiss; guest, registry grant, and responder commit their effects as participants; factory reconciler recovers | Preallocated names inward; agent summary outward |
+| Agent factory -> guest, grant, responder | Agent operation records in the agent registry | Owner creates, toggles wake, and deletes | `AgentRecord` and agent operation records | Factory coordinates create/wake/delete; guest, registry grant, and responder commit their effects as participants; factory reconciler recovers | Preallocated names inward; agent summary outward |
 | Guest -> responder -> harness | Pinned mailbox subscription over one guest facet | Wake state set through the factory | Guest formula, responder cursor/effects, harness transcript | Endo revives; responder commits mail effect | Message plus explicitly held guest capabilities |
 
 Persistent state has one owner per datum: `@secrets` owns key material; the
@@ -569,7 +667,7 @@ state. The usage ledger is the single source of truth for usage, reservations,
 and settlements: the broker is its only writer, admission and the Providers
 page read it directly, and no other store keeps a usage projection that would
 need rebuilding. The provider admin owns retire; the factory owns agent
-create/wake/dismiss; the broker owns per-turn admit/discard. Endo owns
+create/wake/delete; the broker owns per-turn admit/discard. Endo owns
 formula restart/replay. The harness owns
 execution classification, while the broker owns retry/spend policy. Inner
 types use provider, turn, result, and grant; none are named for outer commit,
@@ -587,7 +685,19 @@ Every provider has a concurrent-turn cap, request-rate bucket, daily token or
 dollar budget, model allowlist, maximum turns, wall clock, and output bytes.
 Every agent receives equal or smaller caps. Admission is atomic at the broker;
 over-limit work is refused before reading the secret or calling upstream.
-Cancellation and dismissal release the slot and terminate streaming work.
+Cancellation and agent deletion release the slot and terminate streaming work.
+
+**Aggregation scope.** Every cap is enforced per provider record and per agent.
+It is not an upstream-account cap. Endo cannot tell whether two provider
+records hold the same API key or two keys on the same upstream account: it
+does not compare key bytes, and storing a key fingerprint for comparison would
+add a durable key derivative this design otherwise avoids. Importing one key
+into two providers therefore gives two independent sets of caps, while the
+upstream account is charged for both. The first release narrows the guarantee
+to match: the Providers page and the step 1 notice state that caps apply per
+provider, that the same key imported twice is capped twice, and that the
+provider-side spend limit is the only account-wide bound. A per-owner
+aggregate cap across all of an owner's providers is open question 7.
 
 Budgets are enforced by **worst-case reservation and settlement**, because
 output usage and final charges are unknown at admission:
@@ -639,6 +749,8 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    Inject a crash at each creation and retirement commit boundary, including a
    lost response, and assert exactly one active provider, no orphan secret
    after reconciliation, and no `active` provider with a revoked secret.
+   Test that a lifecycle change leaves the descriptor byte-identical and
+   appends one audit row.
    Rollback leaves inert records.
 2. **Provider adapters and accounting.** Bind Anthropic API keys through the
    provider-neutral `@endo/inference` contract, usage recorder, model catalog,
@@ -646,40 +758,55 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    provider kind, and Lal's broker-backed `streamFn` (§ Harness adapter
    boundary); test that neither harness can be configured with key material,
    that a retired provider fails the next call, and that a harness abort
-   cancels upstream and releases the slot. Test 401, rate limit, cancellation, unknown
-   usage, concurrency, budget refusal before secret read, and log redaction.
+   cancels upstream and releases the slot. Test 401, rate limit,
+   cancellation, unknown usage, concurrency, budget refusal before secret read, and log redaction.
    Test reservation and settlement: refusal when the worst-case reservation does
    not fit, refusal of an unpriced model under a dollar budget, a streaming
    cancellation charged at full reservation, a late usage report reconciled
    after cancellation, and upstream usage exceeding the reservation.
 3. **minion.town provider endpoint, UI step, and Providers page.** Add the
-   button, provider list, password form, Providers page with limits, rotate,
-   and revoke, CSRF/account gates, request-size bound, fixed errors, and no
-   echo/cache/logging. Use the clip browser recipe against Chromium, Firefox,
-   and WebKit: inspect rendered DOM, network URL/body lifetime, history,
-   console, retry, Back, and reload. Exercise both steps keyboard-only and
+   button, provider list, password form, Providers page with limits,
+   **Replace key**, and **Disable key in Endo**, CSRF/account gates,
+   request-size bound, fixed errors, and no echo/cache/logging. Use the clip
+   browser recipe against Chromium, Firefox, and WebKit: inspect rendered DOM,
+   network URL/body lifetime, history, console, retry, Back, and reload. Exercise both steps keyboard-only and
    with a screen reader (focus order, focus return, announced errors and
    progress). Plant a unique canary key and apply the
    secret-retention check below. Test that a second signed-in principal cannot
-   list, select, or revoke the first principal's provider.
+   list, select, or revoke the first principal's provider. Test **Disable key
+   in Endo** against the fake upstream: the next agent call fails with
+   `provider-retired`, the fake upstream still accepts the same key from
+   outside Endo (demonstrating that the action is local), and the confirmation
+   and the provider row both show the upstream-revocation instruction until
+   the owner records the assertion. Test **Replace key**: the old provider
+   keeps serving unselected agents, and the remaining-agents count reaches
+   zero before disabling is offered. Import the same canary key into two
+   providers and assert that each enforces its own caps and that the page
+   shows the per-provider scope notice.
 4. **Agent factory and UI step.** Add the server-supplied Lal/Fae catalog,
    name/model/limit validation, idempotent agent creation, and exact powers
    profiles, the agent operation records and reconciler, and the agent
    detail view with the wake toggle. Test same-name conflicts, stale provider,
    foreign provider id, model exclusion, and absence of root/secret/sibling
-   methods. Inject a crash at each creation, wake, and dismissal boundary,
+   methods. Inject a crash at each creation, wake, and deletion boundary,
    including a lost response, and assert exactly one guest, grant, and
    responder per agent, no running responder without a committed
-   `AgentRecord`, and no residue after an abort. Test that mail sent while wake
-   is off stays unread and is processed after wake is turned on.
+   `AgentRecord`, and no residue after an abort. Inject a crash after the
+   creation commit and before activation, and assert that the reconciler, and
+   separately a retry, leave a wake-enabled agent running and that no success
+   is returned before activation. Test that mail sent while wake is off stays
+   unread; that enabling wake with queued mail shows the queued count and
+   processes nothing until confirmed; that **Skip queued mail** processes only
+   later mail; and that **Delete agent** names the unread count, defaults
+   focus to **Cancel**, and leaves usage rows after deletion.
 5. **Pinned responder.** Generalize #165 away from Claude names and attach it to
    the created Lal/Fae agent. Test message wake, duplicate delivery, restart,
-   busy/rate-limit refusal, cancellation, effect commit, and dismissal cleanup
+   busy/rate-limit refusal, cancellation, effect commit, and deletion cleanup
    against a real temporary daemon plus fake inference.
 6. **Production canary and UI rollout.** Import a dedicated low-budget key,
    create one Lal and one Fae bot, send messages, restart the daemon and app,
-   rotate by supersession, revoke the old provider, and verify both old agents
-   stop until explicitly reattached. Record usage receipts and the secret-canary
+   replace the key by supersession, disable the old provider, and verify both
+   old agents stop until explicitly reattached. Record usage receipts and the secret-canary
    grep. No broad rollout until all observations pass.
 7. **Legacy migration.** Convert Claude child records into parked generic agent
    records preserving bot names, mail, responder cursors, and delegation
@@ -751,3 +878,6 @@ recorded evidence, not a zero-copy claim:
    within that guest?
 6. **Model catalogs?** Must creation require a live provider model-list check,
    or may a user type a model id when a provider lacks discovery?
+7. **Owner-wide spend cap?** Should the first release add an aggregate cap
+   across all of one owner's providers, bounding duplicate imports of one key,
+   or is the per-provider scope plus a provider-side spend limit enough?

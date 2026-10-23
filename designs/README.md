@@ -578,7 +578,7 @@ LLM-agent stack).*
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
-| [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | In Progress |
+| [endo-claude](endo-claude.md) | 2026-08-16 | 2026-10-23 | Superseded by [claude-bare-course-correction](claude-bare-course-correction.md) (subscription route closed; kept as the legacy migration record) |
 | [endo-claude-inference-backends](endo-claude-inference-backends.md) | 2026-09-28 | 2026-09-30 | Draft |
 | [endo-guest-stdio-mcp](endo-guest-stdio-mcp.md) | 2026-09-08 | 2026-09-24 | In Progress |
 | [claude-bare-course-correction](claude-bare-course-correction.md) | 2026-10-23 | 2026-10-23 | Proposed |
@@ -654,7 +654,13 @@ The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thix
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
 
-The 2026-10-23 pass (PR #1543) adds [claude-bare-course-correction](claude-bare-course-correction.md) (Proposed) and [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md) (Proposed), bringing Proposed to 34 and the indexed records to 253.
+The 2026-10-23 pass (PR #1543) adds
+[claude-bare-course-correction](claude-bare-course-correction.md) (Proposed)
+and
+[api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md)
+(Proposed), bringing Proposed to 34 and the indexed records to 253. The same
+pass marks [endo-claude](endo-claude.md) Superseded, since its subscription
+route is closed, moving one record from In Progress to Superseded.
 
 
 
