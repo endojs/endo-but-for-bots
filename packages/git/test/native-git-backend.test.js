@@ -54,7 +54,7 @@ done
 /bin/sleep 300 >/dev/null 2>&1 &
 printf '%s\\n' "$!" > "$pid_file"
 if [ "$output_bytes" -gt 0 ]; then
-  head -c "$output_bytes" /dev/zero
+  dd if=/dev/zero bs="$output_bytes" count=1 2>/dev/null
 fi
 wait
 `,
@@ -120,7 +120,7 @@ posixTest('remote git timeout kills the process group', async t => {
   const operation = runRemoteGitAt({
     cwd: fixtureRoot,
     envRoot: fixtureRoot,
-    args: [pidFile, '0'],
+    gitArguments: [pidFile, '0'],
     gitExecutable: executable,
     timeoutMs: 100,
   });
@@ -137,7 +137,7 @@ posixTest('remote git output overflow kills the process group', async t => {
   const operation = runRemoteGitAt({
     cwd: fixtureRoot,
     envRoot: fixtureRoot,
-    args: [pidFile, '4096'],
+    gitArguments: [pidFile, '4096'],
     gitExecutable: executable,
     timeoutMs: 4000,
     maxOutputBytes: 1024,
