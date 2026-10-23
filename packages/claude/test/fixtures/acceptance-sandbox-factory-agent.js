@@ -7,11 +7,14 @@ import { spawn } from 'node:child_process';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { M } from '@endo/patterns';
+import { encodeUtf8 } from '@endo/utf8';
+
+/** @import { Readable } from 'node:stream' */
 
 const passableInterface = name =>
   M.interface(name, {}, { defaultGuards: 'passable' });
 
-/** @param {import('node:stream').Readable | null} stream */
+/** @param {Readable | null} stream */
 const readableToBytesReader = stream =>
   bytesReaderFromIterator(
     (async function* read() {
@@ -19,7 +22,7 @@ const readableToBytesReader = stream =>
       for await (const chunk of stream) {
         yield chunk instanceof Uint8Array
           ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-          : new TextEncoder().encode(String(chunk));
+          : encodeUtf8(String(chunk));
       }
     })(),
   );

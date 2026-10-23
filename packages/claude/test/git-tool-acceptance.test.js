@@ -12,6 +12,7 @@ import { makeGuestMcpServer } from '@endo/agent-mcp-stdio';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { encodeUtf8 } from '@endo/utf8';
 
 // Test-only reuse of the real daemon harness keeps this acceptance leg on the
 // same provisioning path as production without exporting test infrastructure.
@@ -186,10 +187,7 @@ test.serial(
     t.regex(result.commitOid, /^[0-9a-f]{40}$/u);
     t.is(result.pushedOid, result.commitOid);
     t.is(result.historicalType, 'file');
-    t.is(
-      result.historicalSize,
-      String(new TextEncoder().encode(edited).length),
-    );
+    t.is(result.historicalSize, String(encodeUtf8(edited).length));
 
     const { stdout: pushedOid } = await execFileAsync(
       'git',
@@ -211,7 +209,7 @@ test('Claude session provisioner refuses a host-engine Shell before binding', as
   /** @type {unknown[][]} */
   const stores = [];
   const guest = makeExo('RefusedClaudeGuest', passableInterface('Guest'), {
-    storeValue: async (...args) => stores.push(args),
+    storeValue: async (...storeArguments) => stores.push(storeArguments),
   });
   const shell = makeExo('HostEngineShell', passableInterface('Shell'), {
     inspect: async () => harden({ engine: 'host' }),
