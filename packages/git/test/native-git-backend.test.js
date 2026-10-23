@@ -31,11 +31,13 @@ const posixTest = process.platform === 'win32' ? test.skip : test;
 /**
  * Create a stand-in for git that starts a long-lived descendant. The final two
  * arguments select the descendant-pid file and the number of bytes to write
- * before waiting.
+ * before waiting.  With `ignoreTerm`, the stand-in and its descendant both
+ * ignore `SIGTERM`.
  *
  * @param {ExecutionContext} t
+ * @param {{ ignoreTerm?: boolean }} [options]
  */
-const makeHangingGit = async t => {
+const makeHangingGit = async (t, { ignoreTerm = false } = {}) => {
   const fixtureRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'native-git-process-group-'),
   );
@@ -51,6 +53,7 @@ for value do
   pid_file=\${output_bytes-}
   output_bytes=$value
 done
+${ignoreTerm ? "trap '' TERM" : ''}
 /bin/sleep 300 >/dev/null 2>&1 &
 printf '%s\\n' "$!" > "$pid_file"
 if [ "$output_bytes" -gt 0 ]; then
@@ -129,6 +132,29 @@ posixTest('remote git timeout kills the process group', async t => {
   await t.throwsAsync(operation, { message: /git operation timed out/ });
   await waitForProcessGone(descendantPid);
 });
+
+posixTest(
+  'remote git timeout escalates to SIGKILL when the processes ignore SIGTERM',
+  async t => {
+    t.timeout(5000);
+    const { runRemoteGitAt } = internalHelpers;
+    const { executable, fixtureRoot, pidFile } = await makeHangingGit(t, {
+      ignoreTerm: true,
+    });
+    const operation = runRemoteGitAt({
+      cwd: fixtureRoot,
+      envRoot: fixtureRoot,
+      gitArguments: [pidFile, '0'],
+      gitExecutable: executable,
+      timeoutMs: 100,
+      killGraceMs: 200,
+    });
+    const descendantPid = await readDescendantPid(pidFile);
+
+    await t.throwsAsync(operation, { message: /git operation timed out/ });
+    await waitForProcessGone(descendantPid);
+  },
+);
 
 posixTest('remote git output overflow kills the process group', async t => {
   t.timeout(5000);
