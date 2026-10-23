@@ -16,7 +16,9 @@ import { promisify as nodePromisify } from 'node:util';
 
 import { E } from '@endo/eventual-send';
 import { makeNativeGitBackend } from '@endo/git';
+import { makeExo } from '@endo/exo';
 import { Far } from '@endo/pass-style';
+import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import {
   assertGitCredentialForUrl,
@@ -995,9 +997,13 @@ test.serial(
 
     const destMount = await E(host).provideScratchMount('clone-destination');
     await t.throwsAsync(
-      E(host).provideGitClone(Far('NotMount', {}), 'clone-git', {
-        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-      }),
+      E(host).provideGitClone(
+        makeExo('NotMount', M.interface('NotMount', {}), {}),
+        'clone-git',
+        {
+          endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        },
+      ),
       { message: /destMount must be a daemon-minted mount cap/ },
     );
     await t.throwsAsync(
