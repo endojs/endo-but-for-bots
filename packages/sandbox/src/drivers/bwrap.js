@@ -155,6 +155,12 @@ harden(waitForStopped);
 /**
  * List the pids whose parent is `pid`.
  *
+ * Each of the process's threads lists its own children in
+ * `/proc/<pid>/task/<tid>/children`, so the lookup reads only as many
+ * files as the process has threads, however many processes the host runs.
+ * A kernel built without `CONFIG_PROC_CHILDREN` lacks those files; only
+ * then does the lookup fall back to reading every host process's `stat`.
+ *
  * @param {typeof NodeFs} fs
  * @param {number} pid
  * @returns {Promise<number[]>}
@@ -162,6 +168,30 @@ harden(waitForStopped);
 const listChildPids = async (fs, pid) => {
   /** @type {number[]} */
   const children = [];
+  let threads;
+  try {
+    threads = await fs.promises.readdir(`/proc/${pid}/task`);
+  } catch {
+    // The process is gone, so it has no children to find.
+    return children;
+  }
+  try {
+    for (const thread of threads) {
+      // eslint-disable-next-line no-await-in-loop
+      const text = await fs.promises.readFile(
+        `/proc/${pid}/task/${thread}/children`,
+        'utf8',
+      );
+      for (const child of text.split(/\s+/)) {
+        if (/^\d+$/.test(child)) children.push(Number(child));
+      }
+    }
+    return children;
+  } catch (e) {
+    const error = /** @type {Error & { code?: string }} */ (e);
+    if (error.code !== 'ENOENT') throw error;
+  }
+  children.length = 0;
   for (const entry of await fs.promises.readdir('/proc')) {
     if (/^\d+$/.test(entry)) {
       // eslint-disable-next-line no-await-in-loop
