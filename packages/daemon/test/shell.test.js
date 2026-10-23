@@ -19,6 +19,7 @@ import { makeFilePowers } from '../src/manager-node-powers.js';
 import { normalizeShellPolicy } from '../src/host.js';
 import { getMountBacking, makeMount } from '../src/mount.js';
 import {
+  assertSandboxBackendAvailable,
   makeSandboxShellEngine,
   SANDBOX_SHELL_WORKDIR,
 } from '../src/shell-engine.js';
@@ -348,4 +349,20 @@ test('sandbox engine: an unavailable backend fails closed, never falling back to
     { message: /no usable sandbox backend.*bwrap not found/ },
   );
   t.is(makeCalls.length, 0, 'no slice was minted');
+});
+
+test('sandbox engine: a factory with no registered backends fails closed', async t => {
+  const factory = harden({ listBackends: async () => harden([]) });
+  await t.throwsAsync(() => assertSandboxBackendAvailable(factory), {
+    message: /no usable sandbox backend.*none registered/,
+  });
+});
+
+test('sandbox engine: an unavailable backend without a reason is named unavailable', async t => {
+  const factory = harden({
+    listBackends: async () => harden([{ name: 'bwrap', available: false }]),
+  });
+  await t.throwsAsync(() => assertSandboxBackendAvailable(factory), {
+    message: /no usable sandbox backend.*bwrap: unavailable/,
+  });
 });
