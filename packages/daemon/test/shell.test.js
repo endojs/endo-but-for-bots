@@ -351,17 +351,27 @@ test('sandbox engine: an unavailable backend fails closed, never falling back to
   t.is(makeCalls.length, 0, 'no slice was minted');
 });
 
+/**
+ * A factory that reports `backends` and fails the test if asked to mint a slice.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {Array<{ name: string; available: boolean; reason?: string }>} backends
+ */
+const makeRefusingFactory = (t, backends) =>
+  harden({
+    listBackends: async () => harden(backends),
+    make: async () => t.fail('a refused factory must not mint a slice'),
+  });
+
 test('sandbox engine: a factory with no registered backends fails closed', async t => {
-  const factory = harden({ listBackends: async () => harden([]) });
+  const factory = makeRefusingFactory(t, []);
   await t.throwsAsync(() => assertSandboxBackendAvailable(factory), {
     message: /no usable sandbox backend.*none registered/,
   });
 });
 
 test('sandbox engine: an unavailable backend without a reason is named unavailable', async t => {
-  const factory = harden({
-    listBackends: async () => harden([{ name: 'bwrap', available: false }]),
-  });
+  const factory = makeRefusingFactory(t, [{ name: 'bwrap', available: false }]);
   await t.throwsAsync(() => assertSandboxBackendAvailable(factory), {
     message: /no usable sandbox backend.*bwrap: unavailable/,
   });
