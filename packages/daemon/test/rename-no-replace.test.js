@@ -6,8 +6,10 @@ import * as path from 'node:path';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 
+/** @import {ExecutionContext} from 'ava' */
+
 /**
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  */
 const makeFixture = async t => {
   const root = await fs.promises.mkdtemp(
