@@ -497,7 +497,13 @@ export const HostInterface = M.interface('EndoHost', {
     M.remotable(),
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
-  ).returns(M.recordOf(M.string(), M.remotable())),
+  ).returns(
+    M.splitRecord(
+      { git: M.remotable('Git'), remote: M.remotable('GitRemote') },
+      {},
+      harden({}),
+    ),
+  ),
   // Mint daemon-private Git credential capabilities.
   provideBearerCredential: M.callWhen(
     NameOrPathShape,
