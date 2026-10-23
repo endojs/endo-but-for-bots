@@ -63,7 +63,7 @@ const main = async () => {
   );
 };
 
-main().catch(err => {
-  console.error('Error running main:', err);
+main().catch(error => {
+  console.error('Error running main:', error);
   process.exitCode = 1;
 });
