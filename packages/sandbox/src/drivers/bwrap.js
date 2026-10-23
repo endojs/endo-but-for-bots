@@ -33,6 +33,7 @@ import {
 } from './path.js';
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
+/** @import { Readable } from 'stream' */
 
 /**
  * `SandboxDriver` for `bubblewrap` (`bwrap`) on Linux.
@@ -123,7 +124,7 @@ const INFO_REPORT_GRACE_MS = 1000;
  * init, or bwrap is too old to report it, and the process-group signal
  * remains the only cleanup available.
  *
- * @param {import('stream').Readable | null | undefined} stream
+ * @param {Readable | null | undefined} stream
  * @returns {Promise<number | undefined>}
  */
 const readSandboxInitPid = stream =>
@@ -935,9 +936,7 @@ export const makeBwrapDriver = ({
     }
 
     const sandboxInit = readSandboxInitPid(
-      /** @type {import('stream').Readable | null | undefined} */ (
-        child.stdio?.[INFO_FD]
-      ),
+      /** @type {Readable | null | undefined} */ (child.stdio?.[INFO_FD]),
     );
 
     /**
