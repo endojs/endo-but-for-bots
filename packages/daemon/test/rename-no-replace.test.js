@@ -21,7 +21,7 @@ const makeFixture = async t => {
   return { root, filePowers, renameNoReplace: filePowers.renameNoReplace };
 };
 
-test('renameNoReplace moves a file, a directory and a symlink, keeping identity', async t => {
+test('renameNoReplace moves a file, a directory and a symlink, reporting the moved identity', async t => {
   const { root, filePowers, renameNoReplace } = await makeFixture(t);
   await fs.promises.writeFile(path.join(root, 'file'), 'file\n');
   await fs.promises.mkdir(path.join(root, 'directory'));
@@ -34,9 +34,13 @@ test('renameNoReplace moves a file, a directory and a symlink, keeping identity'
     // eslint-disable-next-line no-await-in-loop
     const identity = await filePowers.entryIdentity(source);
     // eslint-disable-next-line no-await-in-loop
-    await renameNoReplace(source, target);
+    const movedIdentity = await renameNoReplace(source, target);
     // eslint-disable-next-line no-await-in-loop
-    t.is(await filePowers.entryIdentity(target), identity, name);
+    t.is(await filePowers.entryIdentity(target), movedIdentity, name);
+    if (name !== 'link') {
+      // A symbolic link is recreated; anything else keeps its identity.
+      t.is(movedIdentity, identity, name);
+    }
     t.false(fs.existsSync(source), name);
   }
   t.is(
@@ -56,10 +60,11 @@ test('renameNoReplace refuses every existing target and leaves it intact', async
   const { root, renameNoReplace } = await makeFixture(t);
   await fs.promises.writeFile(path.join(root, 'file'), 'source\n');
   await fs.promises.mkdir(path.join(root, 'directory'));
+  await fs.promises.symlink('/nonexistent', path.join(root, 'link'));
   await fs.promises.writeFile(path.join(root, 'occupied-file'), 'keep\n');
   await fs.promises.mkdir(path.join(root, 'empty-directory'));
 
-  for (const source of ['file', 'directory']) {
+  for (const source of ['file', 'directory', 'link']) {
     for (const target of ['occupied-file', 'empty-directory']) {
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(
@@ -79,6 +84,7 @@ test('renameNoReplace refuses every existing target and leaves it intact', async
   );
   t.is(await fs.promises.readFile(path.join(root, 'file'), 'utf8'), 'source\n');
   t.true(fs.existsSync(path.join(root, 'directory')));
+  t.is(await fs.promises.readlink(path.join(root, 'link')), '/nonexistent');
 });
 
 test('removeEmptyDirectory refuses a directory with content', async t => {

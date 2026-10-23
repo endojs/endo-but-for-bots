@@ -8785,19 +8785,6 @@ const makeDaemonCore = async (
   };
 
   /**
-   * @param {string} source
-   * @param {string} target
-   */
-  const renameMountEntryNoReplace = async (source, target) => {
-    if (filePowers.renameNoReplace === undefined) {
-      throw makeError(
-        X`this daemon's file powers cannot move a mount entry without risking replacing another holder's entry`,
-      );
-    }
-    await filePowers.renameNoReplace(source, target);
-  };
-
-  /**
    * Create a fresh, uniquely named staging directory directly under a
    * mount's host path, so an operation can build there without touching
    * anything another holder of the mount writes alongside it.  Staging
@@ -8860,7 +8847,9 @@ const makeDaemonCore = async (
       const entryPath = filePowers.joinPath(mountPath, name);
       const heldPath = filePowers.joinPath(holdingPath, name);
       try {
-        await renameMountEntryNoReplace(entryPath, heldPath);
+        // A plain rename moves the whole object, keeping its identity; its
+        // target is inside the holding directory this call just made.
+        await filePowers.renamePath(entryPath, heldPath);
       } catch (error) {
         if (/** @type {{ code?: unknown }} */ (error).code !== 'ENOENT') {
           errors.push(error);
@@ -8875,7 +8864,7 @@ const makeDaemonCore = async (
           await forgetMountStagingEntry(name);
         } else {
           try {
-            await renameMountEntryNoReplace(heldPath, entryPath);
+            await filePowers.renameNoReplace(heldPath, entryPath);
           } catch (error) {
             keepHolding = true;
             throw makeError(
@@ -8967,10 +8956,8 @@ const makeDaemonCore = async (
     const mountPath = getMountHostPath(mountId);
     const stagingPath = filePowers.joinPath(mountPath, staging.name);
     for (const name of await filePowers.readDirectory(stagingPath)) {
-      const sourcePath = filePowers.joinPath(stagingPath, name);
-      const identity = await filePowers.entryIdentity(sourcePath);
-      await renameMountEntryNoReplace(
-        sourcePath,
+      const identity = await filePowers.renameNoReplace(
+        filePowers.joinPath(stagingPath, name),
         filePowers.joinPath(mountPath, name),
       );
       moved.push(harden({ name, identity }));
