@@ -426,9 +426,21 @@ harden(remoteProtocolArgs);
  * @param {string[]} input.args
  * @param {Buffer} [input.credentialBytes]
  * @param {AbortSignal} [input.signal]
+ * @param {number} [input.timeoutMs]
+ * @param {number} [input.maxOutputBytes]
+ * @param {string} [input.gitExecutable]
  * @returns {Promise<{ stdout: string, stderr: string }>}
  */
-const runRemoteGitAt = ({ cwd, envRoot, args, credentialBytes, signal }) => {
+const runRemoteGitAt = ({
+  cwd,
+  envRoot,
+  args,
+  credentialBytes,
+  signal,
+  timeoutMs = GIT_TIMEOUT_MS,
+  maxOutputBytes = GIT_MAX_BUFFER,
+  gitExecutable = 'git',
+}) => {
   if (signal?.aborted) {
     return Promise.reject(
       signal.reason instanceof Error
@@ -455,7 +467,7 @@ const runRemoteGitAt = ({ cwd, envRoot, args, credentialBytes, signal }) => {
     // On POSIX the child leads its own process group and every kill below
     // signals the whole group.
     const ownGroup = process.platform !== 'win32';
-    const child = spawn('git', [...GIT_BASE_ARGS, ...args], {
+    const child = spawn(gitExecutable, [...GIT_BASE_ARGS, ...args], {
       cwd,
       env:
         credentialBytes === undefined
@@ -485,7 +497,7 @@ const runRemoteGitAt = ({ cwd, envRoot, args, credentialBytes, signal }) => {
     const timeout = setTimeout(() => {
       timedOut = true;
       kill();
-    }, GIT_TIMEOUT_MS);
+    }, timeoutMs);
     timeout.unref();
 
     const credentialPipe =
@@ -523,7 +535,7 @@ const runRemoteGitAt = ({ cwd, envRoot, args, credentialBytes, signal }) => {
       } else {
         stderrSize += bytes.byteLength;
       }
-      if (stdoutSize + stderrSize > GIT_MAX_BUFFER) {
+      if (stdoutSize + stderrSize > maxOutputBytes) {
         outputTooLarge = true;
         kill();
         return;
@@ -3762,4 +3774,5 @@ export const internalHelpers = harden({
   encodeCredentialRecords,
   credentialBytesFor,
   gitAskpassHelperPath,
+  runRemoteGitAt,
 });
