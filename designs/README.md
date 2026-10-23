@@ -658,9 +658,15 @@ The 2026-10-23 pass (PR #1543) adds
 [claude-bare-course-correction](claude-bare-course-correction.md) (Proposed)
 and
 [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md)
-(Proposed), bringing Proposed to 34 and the indexed records to 253. The same
-pass marks [endo-claude](endo-claude.md) Superseded, since its subscription
-route is closed, moving one record from In Progress to Superseded. It also
+(Proposed). Starting from the totals after the production-cost-model row
+above (32 Proposed, 251 indexed records, 83 In Progress, 5 Superseded), the
+two new rows bring Proposed from 32 to 34 and the indexed records from 251 to
+253. The same pass marks [endo-claude](endo-claude.md) Superseded, since its
+subscription route is closed by policy, moving one record from In Progress to
+Superseded (In Progress 83 -> 82, Superseded 5 -> 6) without changing the
+record count. It also updates the
+[endo-claude-inference-backends](endo-claude-inference-backends.md) row's date,
+leaving it Draft. No other row changes. It also
 updates the roadmap: both new designs join the M3 table, the dependency graph
 (the course correction succeeds `endo-claude`; the provider design builds on
 `endo-claude-inference-backends`, `daemon-guest-bot-incarnation`, and
@@ -1246,7 +1252,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | In Progress | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
 | **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
-| ~~endo-claude~~ | Superseded by [claude-bare-course-correction](claude-bare-course-correction.md) | **Subscription route closed 2026-10-23; kept as the legacy migration record.** **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
+| ~~endo-claude~~ | Superseded by [claude-bare-course-correction](claude-bare-course-correction.md) | **Subscription route closed 2026-10-23; kept as the legacy migration record.** **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface. It is the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite. Its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
 | **claude-bare-course-correction** | Proposed | **Client-side bridge, successor to `endo-claude`.** Records that `claude --bare` excludes subscription credentials, inventories every Endo, minion.town, and garden surface that exists only for the subscription route, maps legacy delegation authority onto the replacement's owner model, and sequences retirement behind feature flags without removing a working path. |
 | **api-key-inference-providers-and-pinned-agents** | Proposed | **Client-side bridge, the replacement in-guest agent.** Owner-scoped API-key inference providers in `@secrets` behind the hosted-agent grant issuer, durable per-agent `AgentInference` grants with broker-side route, schema, model, and output checks, and Lal/Fae agents in dedicated guests whose pinned responders wake on mail. Seven phases; phases 1, 2, 4, and 5 are Endo-side. |
 | **endo-claude-inference-backends** | Draft | **Client-side bridge (back-fill of `endo-claude` from the minion.town Claude CLI and Agent SDK experiments, kriscendobot/minion.town#105 and #106).** Settles a provider-neutral `@endo/inference` seam (interfaces, provider plugins over a `CredentialSource` that owns admission and delivery, mechanism libraries, and enrichers; never-reject tagged `InferResult`, facet as authority and formula id as label only) that four minion.town prototypes shared, with the Claude CLI and Agent SDK backends as plugins in `@endo/claude`; finds the two Claude paths are one engine with two front ends. Credentials live in the daemon secret manager, one backend instance per credential, delivered through a broker lease; the deployed root user runs on the maintainer-approved subscription. The OS slice is required for multi-principal inference (guests bringing their own subscription or API key) and, per `endo-claude` Decision 6, for any guest-influenced prompt whoever pays; Claude Code's credential store does not require it. Stays a draft until a speculative build and deployment supplies production evidence. |
@@ -1279,7 +1285,8 @@ capability-addressed `git push` lands it into an Endo directory
 + the git trio and `daemon-agent-tools` push tier), and a confined
 in-guest agent (originally [endo-claude](endo-claude.md) #1015 + its child-guest
 provisioning #1102; since 2026-10-23 the API-key replacement in
-[api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md)) acts with normal tools directly on the daemon side
+[api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md))
+acts with normal tools directly on the daemon side
 rather than marshaling everything across by value.**
 
 **Estimated duration (1 dev):** 4-5 weeks (the two carved client-side
@@ -2165,7 +2172,8 @@ about one week for review and integration.
 No milestone became newly complete in this pass, so no milestone was moved to
 the archive.  The 2026-10-23 pass (PR #1543) revises only M3's duration, for the
 `endo-claude` supersession and its replacement, and shifts every later target
-by the resulting two weeks; it re-fits no velocity.  M1 and M2 remain the previously completed historical milestones.
+by the resulting two weeks; it re-fits no velocity.  M1 and M2 remain the
+previously completed historical milestones.
 
 ### Timeline
 

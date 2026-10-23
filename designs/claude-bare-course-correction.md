@@ -1,4 +1,4 @@
-# Course correction after `claude --bare` rejected subscription credentials
+# Course correction: retire subscription credentials under `claude --bare`
 
 | | |
 |---|---|
@@ -11,21 +11,29 @@
 
 ## Summary
 
-The subscription-backed guest path must be retired. The `--help` text of
-Claude Code 2.1.296 states that under `--bare`, Anthropic authentication is
-strictly `ANTHROPIC_API_KEY` or `apiKeyHelper`. A clean-home run with only a
-deliberately invalid `CLAUDE_CODE_OAUTH_TOKEN` produced `Not logged in`; the
-same behavior is also reported in the upstream Claude Code repository
-([#82566](https://github.com/anthropics/claude-code/issues/82566)). This is a
-documented mode contract, not a transient minion.town wiring bug.
+The subscription-backed guest path must be retired as a **supportability
+policy**. This design has not observed `--bare` rejecting a valid subscription
+credential. The `--help` text of Claude Code 2.1.296 states that under
+`--bare`, Anthropic authentication is strictly `ANTHROPIC_API_KEY` or
+`apiKeyHelper`, so any subscription route under `--bare` relies on behavior
+the pinned binary documents as unsupported. The same documented restriction
+is reported in the upstream Claude Code repository
+([#82566](https://github.com/anthropics/claude-code/issues/82566)). The only
+local run here supplied a deliberately invalid `CLAUDE_CODE_OAUTH_TOKEN`, so
+it proves neither rejection nor which sources bare mode consults (§ Evidence).
+The decision is therefore not to build a product on an undocumented
+credential path; it is not a finding that the path is technically closed.
 
-This contradicts an earlier observation that this design does not retest.
+This supersedes an earlier statement that the design would not retest the
+behavior.
 [`endo-claude-inference-backends.md`](endo-claude-inference-backends.md)
 § CLI versus Agent SDK records that, on 2.1.280, a subscription OAuth access
 token presented as `ANTHROPIC_AUTH_TOKEN` authenticated under `--bare`, and
 it bases its credential decision on that slot. § Evidence below reconciles
 the two: the retirement rests on the documented contract, not on a claim that
-2.1.296 rejects that variable.
+2.1.296 rejects that variable. A maintainer who wants the route treated as
+technically closed, rather than unsupported, must first run an authorized
+probe with a valid token and the confinement flags; this design does not.
 
 The replacement is the companion design's two-step path: first import a user's
 API key as a reusable inference provider, then create a Lal- or Fae-derived
@@ -99,9 +107,10 @@ the subscription route could ship. The *entitlement* gate asked whether Claude
 subscription terms permit pooling one plan across many concurrent guests
 (§ Pooling subscriptions across concurrent guests). The *positive-canary* gate
 required a live run in which a real subscription token presented through
-`apiKeyHelper` authenticates. The documented mode contract means the canary
-gate cannot pass, so the route is closed and the entitlement question no
-longer needs an answer for it.
+`apiKeyHelper` authenticates. Even a passing canary would demonstrate only
+behavior the documented mode contract excludes, so the canary cannot establish
+a supported route. The route is closed by policy, and the entitlement question
+no longer needs an answer for it.
 
 ## Inventory and disposition
 
@@ -110,7 +119,7 @@ longer needs an answer for it.
 | Surface | Evidence and consumers | Disposition |
 |---|---|---|
 | `@endo/claude` root harness and `endo-claude-turn` | `packages/claude/index.js`, `src/harness.js`, `src/confined-turn.js`, `src/launch.js`, `src/spawn-files.js`, and `bin/endo-claude-turn.js`; added as the confined CLI path in [#1371](https://github.com/endojs/endo-but-for-bots/pull/1371). On `llm`, only its own bin, tests, and documentation import the root surface. minion.town vendors this surface under `vendor/endo-claude/`. | **Remove after minion.town switches.** The CLI wrapper can be removed. Its one deployment consumer is minion.town's vendored copy; there is no other `llm` importer. |
-| `@endo/claude` CLI backend | `packages/claude/src/cli-backend.js` and CLI-only confinement, argv, scratch, response-shape, and stream modules from [#1412](https://github.com/endojs/endo-but-for-bots/pull/1412). No package outside `@endo/claude` imports it. | **Remove.** It exists to run Claude Code, including the rejected subscription route. |
+| `@endo/claude` CLI backend | `packages/claude/src/cli-backend.js` and CLI-only confinement, argv, scratch, response-shape, and stream modules from [#1412](https://github.com/endojs/endo-but-for-bots/pull/1412). No package outside `@endo/claude` imports it. | **Remove.** It exists to run Claude Code, including the unsupported subscription route. |
 | `@endo/claude` Agent SDK backend | `packages/claude/src/sdk-backend.js`, also from #1412, accepts a `CredentialSource` environment and can carry an API key. It still drives a pinned Claude Code executable and shares CLI support modules. | **Keep provisionally, detached from the root CLI wrapper.** It remains a valid API-key `@endo/inference` plugin, but is not the new minion.town default and needs an API-key live canary. Decide in review whether it stays in a smaller `@endo/claude` or moves to a provider plugin package. |
 | `@endo/inference` | `packages/inference/`: provider-neutral request/result guards, credential admission, limits, classification, prompt-origin gate, and usage recorder. | **Keep.** It is independent of subscription acquisition and is the seam the replacement provider broker should satisfy. |
 | Claude/hosted confinement core | `packages/claude-sandbox/`, `packages/hosted-agent/`, and `packages/sandbox/` own slices, provider brokers, transcript/session lifecycle, and tool projections. | **Keep and retarget.** The generic slice, broker, limits, and transcript machinery serve API-key or other hosted backends. Delete only Claude-subscription setup, renewal, and CLI-native-controller pieces proven unused after the migration. |
@@ -171,10 +180,12 @@ outer lifecycle words such as `commit`, `replay`, or `rollback`.
 
 ## Independently shippable sequence
 
-1. **Record the negative gate and freeze new subscription onboarding.** Add a
-   `legacyClaudeSubscription` flag, default-on only for existing production,
-   mark `/account/claude` and Claude-agent creation deprecated, and add the
-   2.1.296 help/repro probe. Do not remove a running responder.
+1. **Record the supportability decision and freeze new subscription
+   onboarding.** Add a `legacyClaudeSubscription` flag, default-on only for
+   existing production, mark `/account/claude` and Claude-agent creation
+   deprecated as relying on an unsupported credential path, and add a probe
+   that fails if the pinned binary's `--bare` help text changes its credential
+   list. Do not remove a running responder.
 2. **Build the companion provider substrate behind
    `apiKeyGuestAgents`.** This is additive and ships behind that disabled
    feature flag. Keep the old path as rollback.
@@ -184,9 +195,12 @@ outer lifecycle words such as `commit`, `replay`, or `rollback`.
    independently, including restart, mail wake, cancellation, usage, and secret
    non-disclosure. Then expose the UI while retaining the legacy path.
 5. **Stop new legacy creation.** Existing Claude children and delegations keep
-   their names and stored mail but show `provider migration required`. The
-   owner, as defined in § Legacy authority mapping, attaches one of its own
-   API-key providers and a harness; the migration creates a new driver behind
+   their names and stored mail but show `provider migration required`. Each
+   record's owner is the root principal of its delegation chain: the
+   signed-in principal whose factory created it directly or through delegated
+   sub-factories. That owner, and no intermediate child, attaches one of its
+   own API-key providers and a harness (details in § Legacy authority
+   mapping); the migration creates a new driver behind
    the old pet name only after its responder is ready. A failed migration
    leaves the legacy record intact.
 6. **Retire legacy authority.** Revoke subscription credentials and delegation
