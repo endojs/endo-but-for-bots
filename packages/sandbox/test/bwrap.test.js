@@ -6,6 +6,7 @@ import { makeExo } from '@endo/exo';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { M } from '@endo/patterns';
 
+import * as nodeChildProcess from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import * as nodeFs from 'node:fs';
@@ -949,18 +950,18 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
   // If disposal wins before spawn settles, spawn rejects; otherwise wait()
   // reports disposal. Either arm must leave the process group gone.
   /** @type {Awaited<typeof spawned> | undefined} */
-  let proc;
+  let sliceProcess;
   /** @type {Error | undefined} */
   let admissionError;
   try {
-    proc = await spawned;
+    sliceProcess = await spawned;
   } catch (e) {
     admissionError = /** @type {Error} */ (e);
   }
   await disposed;
-  if (proc !== undefined) {
-    const pid = await E(proc).pid();
-    await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+  if (sliceProcess !== undefined) {
+    const pid = await E(sliceProcess).pid();
+    await t.throwsAsync(() => E(sliceProcess).wait(), { message: /disposed/ });
     await waitForProcessGroupGone(pid);
   } else {
     t.regex(/** @type {Error} */ (admissionError).message, /disposed/);
@@ -1161,7 +1162,7 @@ test.serial(
 
     for (let i = 0; i < 40; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const proc = await E(handle).spawn(
+      const sliceProcess = await E(handle).spawn(
         harden([
           '/bin/sh',
           '-c',
@@ -1173,9 +1174,11 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       await new Promise(resolve => setTimeout(resolve, i % 8));
       // eslint-disable-next-line no-await-in-loop
-      await E(proc).kill();
+      await E(sliceProcess).kill();
       // eslint-disable-next-line no-await-in-loop
-      await t.throwsAsync(() => E(proc).wait(), { message: /cancelled/ });
+      await t.throwsAsync(() => E(sliceProcess).wait(), {
+        message: /cancelled/,
+      });
     }
 
     // A namespace being torn down by its init's death exits promptly.
@@ -1187,6 +1190,91 @@ test.serial(
       survivors = findMarkedProcesses(marker);
     }
     t.deepEqual(survivors, [], 'no sandbox process outlives its cancellation');
+  },
+);
+
+test.serial(
+  'bwrap kill reaches a sandbox init that left the launcher group before its death signal was armed',
+  async t => {
+    // A stand-in launcher holds the setup window open deterministically.
+    // Like bwrap's init before `--die-with-parent` is armed, its child is
+    // in a session of its own and has no death signal, so a signal to the
+    // launcher's process group alone leaves the child running.
+    t.timeout(30_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const fixtureDirectory = nodeFs.mkdtempSync(
+      nodePath.join(nodeOs.tmpdir(), 'bwrap-launcher-'),
+    );
+    const marker = `7777.${process.pid}${Date.now() % 100_000}`;
+    const launcherPath = nodePath.join(fixtureDirectory, 'launcher.sh');
+    nodeFs.writeFileSync(
+      launcherPath,
+      `#!/bin/sh\nsetsid /bin/sleep ${marker} &\nwait\n`,
+      { mode: 0o755 },
+    );
+    // Not hardened: that would freeze Node's own child_process classes.
+    const childProcess = {
+      ...nodeChildProcess,
+      /** @type {typeof nodeChildProcess.spawn} */
+      spawn: /** @type {any} */ (
+        (
+          /** @type {string} */ program,
+          /** @type {string[]} */ args,
+          /** @type {object} */ options,
+        ) =>
+          // A slice launch runs bwrap directly or through `prlimit`.
+          (program === 'bwrap' || args.includes('bwrap')) && args.includes('--')
+            ? nodeSpawn(launcherPath, [], options)
+            : nodeSpawn(program, args, options)
+      ),
+    };
+    const driver = makeBwrapDriver({ env: {}, childProcess });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    );
+    t.teardown(async () => {
+      for (const pid of findMarkedProcesses(marker)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+      await E(handle).dispose();
+      for (const directory of [...tmpdirs, fixtureDirectory])
+        nodeFs.rmSync(directory, { recursive: true, force: true });
+    });
+
+    const sliceProcess = await E(handle).spawn(
+      harden(['/bin/true']),
+      harden({ captureStdout: false, captureStderr: false }),
+    );
+    let started = findMarkedProcesses(marker);
+    const startDeadline = Date.now() + 5000;
+    while (started.length === 0 && Date.now() < startDeadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 10));
+      started = findMarkedProcesses(marker);
+    }
+    t.is(started.length, 1, 'the stand-in sandbox init is running');
+
+    await E(sliceProcess).kill();
+    await t.throwsAsync(() => E(sliceProcess).wait());
+
+    const deadline = Date.now() + 3000;
+    let survivors = findMarkedProcesses(marker);
+    while (survivors.length > 0 && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 50));
+      survivors = findMarkedProcesses(marker);
+    }
+    t.deepEqual(survivors, [], 'the stand-in sandbox init was killed');
   },
 );
 
