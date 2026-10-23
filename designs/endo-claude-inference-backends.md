@@ -4,11 +4,20 @@
 |---|---|
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
-| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357; Decision 11 settled per [review comment 4149077338](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4149077338)) |
+| **Updated** | 2026-10-23 (credential conclusion superseded by [claude-bare-course-correction](claude-bare-course-correction.md)); 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357; Decision 11 settled per [review comment 4149077338](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4149077338)) |
 | **Status** | In progress: phases 1 and 2 built and in review; later phases are design |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
 ## Status
+
+> **2026-10-23 note.** The credential conclusion below, that a subscription
+> OAuth token in `ANTHROPIC_AUTH_TOKEN` keeps the subscription route open
+> under `--bare`, is superseded by
+> [claude-bare-course-correction](claude-bare-course-correction.md)
+> § Evidence. The 2.1.280 observation stands as recorded, but the 2.1.296
+> help text documents only `ANTHROPIC_API_KEY` and `apiKeyHelper` under
+> `--bare`, so the route depends on behavior the pinned binary excludes and is
+> retired. The `@endo/inference` seam and the API-key backends are unaffected.
 
 Phases 1 and 2 are built, in review: `@endo/inference`
 ([#1403](https://github.com/endojs/endo-but-for-bots/pull/1403)) and the

@@ -54,14 +54,55 @@ Harnesses present on `llm` are:
 `42bc7d5161`. The first UI therefore lists exactly `lal` and `fae`, recommends
 Lal, and can grow from a server-supplied harness catalog later.
 
+## Actors and capabilities
+
+Two different Endo guests appear in this design, and keeping them apart is
+what confines an agent.
+
+- **Owner.** The signed-in minion.town principal. In Endo it is represented by
+  its **owner guest**, the guest minion.town already provisions for every
+  signed-in principal. The owner pays for its providers and is the only party
+  that can create, change, or delete them and its agents.
+- **Provider directory** (`InferenceProviderDirectory`). One per owner, held
+  by the owner's signed-in UI capability. It lists and creates that owner's
+  providers and yields an admin facet for each. It never reaches another
+  owner's providers.
+- **Provider.** A registry record plus a `SecretBlob` holding the API key. The
+  host-side **broker** holds the blob and is the only component that reads it.
+- **Agent guest.** A separate, dedicated guest created for each agent. It is
+  the agent's mailbox and identity, holds only the agent's own pet names, and
+  has no edge to the owner guest's inventory, the provider directory, the
+  broker, or any other agent.
+- **Responder.** A formula pinned in the agent guest's `@pins` that follows
+  that guest's mailbox and starts one harness turn per message.
+- **Harness.** Lal or Fae, run as the agent's driver. It holds exactly two
+  capabilities: the agent guest's attenuated powers facet and the agent's
+  `AgentInference` grant.
+
+| Actor | Holds | Cannot reach |
+|---|---|---|
+| Owner's UI session | Owner guest, provider directory, provider admin facets, agent management operations | Key bytes after submission, other owners' records |
+| Broker | `SecretBlob`, provider use facets, per-agent grants, usage ledger | Any guest's inventory |
+| Agent guest | Own mailbox and pet names | Owner guest, provider directory, broker internals, sibling agents |
+| Responder | Agent guest mailbox, the harness launcher | Anything outside the agent guest |
+| Harness | Agent guest powers facet, `AgentInference` | Key bytes, provider admin, owner guest |
+
+The separation enforces confinement because the owner guest and the agent
+guest are distinct capabilities: a harness running with the agent guest's
+powers has nothing that designates the owner's inventory or providers, so
+even a compromised harness can spend only through its own bounded grant and
+act only through its own mailbox. In the rest of this document, "owner"
+means the signed-in principal and its owner guest, and "agent guest" means
+the dedicated per-agent guest.
+
 ## User experience
 
-The signed-in guest page adds one **Add agent** button. It opens a two-step
+The owner guest's page adds one **Add agent** button. It opens a two-step
 dialog; Back never resubmits a secret.
 
-In plain terms, a user makes two choices: which paid API key pays for the
-agent (the provider), and which agent program runs (the harness), plus the
-agent's name and limits. The user does not choose what the agent is allowed
+In plain terms, a user makes two choices: which provider, and therefore which
+API key, pays for the agent, and which agent program runs (the harness), plus
+the agent's name and limits. The user does not choose what the agent is allowed
 to do. Each harness comes with a fixed list of permitted actions, its *powers
 profile*, such as reading and sending its own mail; § Confinement and
 wake-on-message gives the full list. A setting that grants extra powers
@@ -105,6 +146,33 @@ provider id and safe summary, never the key, a prefix, a hash, or secret-store
 locator. This applies the non-echo rule from minion.town
 [#195](https://github.com/kriscendobot/minion.town/pull/195) to credentials.
 
+**Unknown outcome.** Because the key field is already cleared, a request
+whose response is lost (network error, timeout, closed connection) cannot be
+blindly resent. The dialog keeps the idempotency key and the non-secret fields
+in memory for the life of the dialog, never in storage, and shows "We could
+not confirm that the provider was created" with **Check status** and
+**Cancel**. **Check status** asks the owner's directory for the operation by
+idempotency key, which answers with one of:
+
+- `committed`: the dialog proceeds to step 2 with that provider selected;
+- `in-progress` (the secret is already stored): the dialog waits and polls; no
+  key is requested;
+- `key-needed` (the operation stopped at `intent`, before the secret was
+  stored, § Creation and retirement operations): the dialog asks the owner to
+  re-enter the key and resubmits it with the **same** idempotency key and
+  fields, so the request resumes the existing operation;
+- `not-found`: the request never reached the registry, and the dialog offers
+  a fresh submission with the same idempotency key.
+
+If the owner closes the dialog or reloads the page, the in-memory idempotency
+key is gone, but the pending operation is not: the Providers page lists it as
+**Provider creation in progress** under its display name, with **Re-enter
+key** (resumes that operation in the `key-needed` state; otherwise just shows
+progress) and **Cancel** (aborts an operation still in `intent`). An
+abandoned `intent` expires after the retry window (§ Creation and retirement
+operations) and its row disappears. A key re-entered after the secret was
+already stored is discarded, as step 2 of creation specifies.
+
 ### Step 2: create the agent
 
 After provider selection, the page asks for:
@@ -119,7 +187,7 @@ After provider selection, the page asks for:
 Submit is a separate authenticated operation containing only provider id,
 harness, bot name, model, limits, and an idempotency key. The provider id is
 resolved only through the signed-in owner's provider directory (§ Ownership and
-cross-principal denial). Success adds the agent to the guest's inventory.
+cross-principal denial). Success adds the agent to the owner guest's inventory.
 Retrying the same idempotency key returns the same provider or agent; it never
 creates a second spend source or responder. The provider operation in
 § Creation and retirement operations and the agent operation in § Agent
@@ -128,7 +196,7 @@ and lost responses.
 
 ### Agent management
 
-Each agent's detail view, reached from the guest's inventory, shows its
+Each agent's detail view, reached from the owner guest's inventory, shows its
 provider, harness, model, limits, wake state, and unread mail count. Its
 actions are **Wake on messages** (a toggle), **Edit limits**, **Reattach
 provider**, and **Delete agent**.
@@ -159,9 +227,40 @@ provider**, and **Delete agent**.
   ledger (§ Agent creation, wake, and deletion operations). The confirm button
   is labelled **Delete agent**, and focus starts on **Cancel**.
 
-Each toggle is an idempotent agent operation (§ Agent creation, wake, and
-deletion operations), so a repeated or interrupted toggle converges on the
-requested state.
+- **Reattach provider** moves the agent to a different provider of the same
+  owner, for example after **Replace key** (§ Provider management) or to
+  charge a different account. It opens a dialog that lists, as a radio
+  group, only the owner's providers that are `active`, not the current
+  provider, and of a kind the agent's harness adapter supports; retiring,
+  retired, and still-being-created providers are not listed. Selecting one
+  shows a model `<select>` drawn from that provider's catalog, preselected to
+  the agent's current model when the catalog has it and otherwise to the
+  provider's default, with the text "*model* is not offered by *provider*"
+  in that case. The dialog then shows the effective limits: the agent's
+  current limits clamped to the target provider's caps, listing each limit
+  that will be lowered ("Daily budget: $5.00 becomes $2.00, this provider's
+  cap"). Confirmation reads "Reattach *name* to *provider*? New turns will
+  use *model* and be charged to *provider*. Earlier usage stays with
+  *old provider*." with **Reattach** and **Cancel**.
+
+  Reattaching keeps the agent's name, harness, agent guest, mail, wake state,
+  responder cursor, and conversation transcript. The next turn sends that
+  transcript to the new provider, so its first turn may cost more than a
+  fresh conversation; the confirmation says so when the transcript is
+  non-empty. A turn already running finishes on the old provider. New turns
+  use the new provider once the operation commits. On success the detail
+  view shows the new provider, model, and effective limits, and announces
+  "*name* now uses *provider*" in a polite live region. On failure the agent
+  stays on its old provider unchanged, and the dialog shows a fixed-code
+  error: `provider-not-found` (the target was retired or is not the owner's),
+  `model-not-available`, `provider-kind-unsupported`, or `agent-deleted`.
+  **Replace key** reattaches its selected agents through this same
+  operation, keeping each agent's model, because a superseding provider has
+  the same kind and catalog.
+
+Each toggle, reattachment, and limit change is an idempotent agent operation
+(§ Agent creation, wake, and deletion operations), so a repeated or
+interrupted action converges on the requested state.
 
 ### Keyboard and assistive technology
 
@@ -193,7 +292,7 @@ confirmations and limit forms.
 
 ### Provider management
 
-A **Providers** page, linked from the guest page beside **Add agent** and from
+A **Providers** page, linked from the owner guest's page beside **Add agent** and from
 each agent's detail view, is the standing management surface. For each of the
 owner's providers, active and retired, it shows display name, kind, default
 model, state, attached agents, and per-agent usage and refusals for the current
@@ -281,10 +380,12 @@ The provider's facets are separate:
 - `InferenceProviderUse`, held only by the host-side agent factory/broker,
   creates a per-agent inference facet over a specific guest powers facet,
   harness, model, and budget. It does not vend its `SecretBlob`.
-- `AgentInference`, held by one agent driver, is an `InferenceEndpoint` grant
-  (§ Harness adapter boundary): it accepts bounded provider-wire requests and
-  returns response bytes, with admission, credentials, and accounting applied
-  by the broker. It cannot change provider, model allowlist, or spend policy.
+- `AgentInference`, held by one agent driver, is a durable `InferenceEndpoint`
+  grant (§ Durable grant identity and § Harness adapter boundary): it accepts
+  provider-wire requests that pass the broker's route, schema, model, and
+  output checks and returns response bytes, with admission, credentials, and
+  accounting applied by the broker. It cannot change provider, model
+  allowlist, or spend policy.
 
 The browser endpoint invokes provider creation on the owner's directory, which
 runs the creation operation below and calls `@secrets/create` on the Endo root. The resulting
@@ -420,9 +521,10 @@ type AgentOperation = {
   operationId: string;      // random; derives every preallocated name below
   ownerId: string;
   idempotencyKey: string;   // client-supplied, scoped to ownerId
-  kind: 'create' | 'set-wake' | 'delete';
+  kind: 'create' | 'set-wake' | 'set-limits' | 'reattach' | 'delete';
   agentId: string;          // preallocated before any external effect
   request: SafeAgentFields; // provider id, harness, bot name, model, limits, wake
+  priorGrantId?: string;    // reattach only: the grant this operation revokes
   state:
     | 'intent'
     | 'guest-created'
@@ -452,9 +554,10 @@ instead of making a second one.
 2. **Guest.** The factory asks the Endo root to provide the guest under its
    preallocated, root-private name; an existing guest under that name is the
    earlier attempt's. It records `guest-created`.
-3. **Inference.** The factory asks the provider's `InferenceProviderUse` for the
-   agent's grant under the preallocated grant id; the registry returns the
-   existing grant for a known id. It records `inference-bound`.
+3. **Inference.** The factory asks the provider's `InferenceProviderUse` to
+   create the agent's durable grant record under the preallocated grant id
+   (§ Durable grant identity); the registry returns the existing record for a
+   known id. It records `inference-bound`.
 4. **Responder.** With wake on, the factory pins the responder formula under its
    preallocated name in the guest's `@pins`, in the paused state; with wake off,
    it skips this effect. It records `responder-ready`.
@@ -505,6 +608,18 @@ order. The factory first commits the new desired wake state to the
 management), then pins the responder (on first enable), unpauses, or pauses
 it, and records `completed`. The reconciler finishes a toggle interrupted after
 its commit, and its sweep reapplies desired state for any agent.
+
+**Reattachment** (`kind: 'reattach'`) preallocates a new grant id at intent
+and resolves the target provider through the owner's directory, refusing a
+foreign, retiring, or unsupported provider before any effect. It creates the
+new grant record, then commits the `AgentRecord` with the new provider, model,
+clamped limits, and grant id in one transaction; from that commit, new turns
+are admitted only on the new grant. It then revokes the prior grant record
+(`priorGrantId`) once any turn admitted on it has finished or reached its wall
+clock, and records `completed`. A failure before commit deletes the unused new
+grant record and leaves the agent unchanged. **Limit changes** (`kind:
+'set-limits'`) commit the new caps to the `AgentRecord` and the grant record in
+one registry call and take effect at the next admission.
 
 **Deletion** (`kind: 'delete'`) first commits the `AgentRecord` as
 `deleting`, from which the grant refuses new turns. It then cancels any
@@ -560,13 +675,51 @@ endpoint as an in-process `InferenceEndpoint` exo; phase 1 confirms that it
 serves requests without the slice listener. If it cannot, the gap is closed by
 extending the issuer, not by forking a second broker.
 
+### Durable grant identity
+
+The issuer mints each grant as a process-local exo under a random
+`grant-<uuid>` id (`provider-grant-issuer.js`), and every issuer is rebuilt
+when the daemon starts. A grant held only in that form would vanish on
+restart, and a retried creation step could not find "the existing grant".
+The design therefore separates the durable grant from its live endpoint:
+
+- **Grant record.** The provider registry stores one `InferenceGrantRecord`
+  per agent attachment, keyed by the grant id the agent factory preallocated
+  at intent: `{ grantId, ownerId, providerId, agentId, model allowlist, caps,
+  state: 'active' | 'revoked', generation }`. Creating a record under a known
+  id returns the existing record, which is what makes creation step 3
+  idempotent across crashes.
+- **Durable facet.** `AgentInference` is an Endo formula whose only state is
+  its grant id. Endo revives it on restart like any other formula, so the
+  agent driver's reference survives the daemon and needs no reissue. It never
+  holds the issuer's exo as identity.
+- **Reconstruction and rebinding.** On daemon start the registry rebuilds one
+  issuer per `active` provider. The first call on a revived `AgentInference`
+  reads its grant record and, if both the record and its provider are active,
+  opens a fresh issuer endpoint for it, caching that endpoint under the
+  record's current `generation`. The live endpoint is a cache; dropping it
+  loses nothing.
+- **Fencing.** Every request rechecks the grant record and provider lifecycle
+  against the cached generation before admission. Revoking a grant (agent
+  deletion or reattachment), and moving its provider to `retiring`, first
+  commits the record change and increments `generation`, then revokes the
+  cached endpoint, which cancels its in-flight upstream requests. A revived
+  facet whose record is `revoked`, or whose provider is `retiring` or
+  `retired`, never opens an endpoint and fails every call with
+  `agent-deleted` or `provider-retired`. Reconstruction therefore cannot
+  resurrect a grant that retirement or deletion has already fenced.
+- **Recovery.** The agent factory's reconciler treats a grant record whose
+  agent operation was aborted, or whose `AgentRecord` is `deleted`, as
+  residue and revokes it. The provider reconciler revokes every grant record
+  of a retired provider. Neither ever creates a record.
+
 ### Harness adapter boundary
 
 The issuer's grant surface is an `InferenceEndpoint`
 (`InferenceEndpointInterface` in `packages/hosted-agent/src/subscription-share.js`):
 `request(message)` and `requestByteStream(message)` over a provider-wire
-message `{ method, path, body }`. Neither first-release harness consumes that
-today. Lal builds a Pi agent around a `getApiKey` callback
+message `{ method, path, body }`. Neither first-release harness currently
+consumes this endpoint. Lal builds a Pi agent around a `getApiKey` callback
 (`packages/lal/agent.js`), and Fae's `makeProviderOwner` reads a `SecretBlob`
 per turn and builds a local keyed provider (`packages/fae/src/provider-owner.js`).
 Both would hold key bytes. The bridge is a capability-backed provider adapter
@@ -606,6 +759,40 @@ provider kind.
   cancellation) closes the byte-stream iterator. The issuer then cancels the
   upstream request and releases the admission slot, and settlement charges the
   reservation if no usage arrived.
+
+**Request validation at the broker.** The harness and its adapter run in the
+agent's trust domain, so a compromised harness can send any
+`{ method, path, body }` it likes. The adapter's well-formed requests are a
+convenience, not a control. The broker-side `AgentInference` wrapper checks
+every request before admission, and refuses with a fixed
+`inference-request-refused` code (recorded as a refusal, never forwarded):
+
+- **Route.** The method and path must match the provider kind's route
+  allowlist exactly. For `anthropic` that is `POST /v1/messages` and
+  `POST /v1/messages/count_tokens`; for `openai-compatible`, its chat
+  completion route. Batch, file, model administration, and every other route
+  are refused. This narrows the issuer's existing `policy.routes` per
+  provider kind.
+- **Body schema.** The body must parse as a JSON object within the byte bound
+  and match the kind's request schema: only allowlisted top-level fields
+  (for Messages, `model`, `messages`, `system`, `max_tokens`, `stop_sequences`,
+  `stream`, `temperature`, `top_p`, `top_k`, `tools`, `tool_choice`, and
+  `metadata`), with bounded counts and lengths for messages, tools, and stop
+  sequences. Unknown fields, including any that select a different account,
+  beta feature, or server-side tool with its own billing, are refused rather
+  than stripped.
+- **Model.** `model` must be present and in this grant's model allowlist,
+  which is the agent's model and nothing else. The issuer's own model check
+  is account-catalog admission ("there is no operator model allowlist"), so
+  the per-agent allowlist is enforced here.
+- **Output limit.** `max_tokens` must be present and no greater than the
+  agent's per-turn output cap; a larger value is refused, not clamped, so the
+  reservation (§ Cost and abuse controls) is computed from the value actually
+  sent upstream.
+- **Credentials.** Headers or body fields carrying `x-api-key`,
+  `authorization`, or a base URL are refused, as above.
+
+Phase 2 tests each check with requests crafted to bypass the adapter.
 
 The agent factory refuses a harness configuration that contains
 `authSecretName`, `authToken`, `getApiKey`, or a provider other than
@@ -653,7 +840,7 @@ Endo capabilities where no bearer is needed.
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| UI -> provider endpoint | Password POST and safe summary response | Signed-in guest may create within quota, only in its own directory | None in UI; idempotency key in app | Registry operation commit decides success | Key in request only; safe provider summary back |
+| UI -> provider endpoint | Password POST and safe summary response | Owner may create within quota, only in its own directory | None in UI; idempotency key in app | Registry operation commit decides success | Key in request only; safe provider summary back |
 | Provider registry -> `@secrets` | Retained `SecretBlob` lookup formula | Provider admin chooses create/supersede/retire | Secret manager owns bytes/audit; registry owns metadata and operation records | Registry coordinates each create/retire operation; secret manager commits/revokes bytes as a participant; registry reconciler recovers | Secret capability inward; no bytes or admin facet outward |
 | Provider broker -> agent | Per-agent `AgentInference` facet | Broker enforces model, spend, rate, concurrency | Usage ledger per provider and agent | Broker admits, cancels, and releases turns | Bounded prompt/result/usage |
 | Agent factory -> guest, grant, responder | Agent operation records in the agent registry | Owner creates, toggles wake, and deletes | `AgentRecord` and agent operation records | Factory coordinates create/wake/delete; guest, registry grant, and responder commit their effects as participants; factory reconciler recovers | Preallocated names inward; agent summary outward |
@@ -735,7 +922,8 @@ component deliberately entrusted to present it upstream.
 
 ## Build and acceptance plan
 
-Each phase is one builder-sized job and ends with its own tests and rollback.
+Each phase is an independently assignable unit of work and ends with its own
+tests and rollback.
 
 1. **Endo provider registry, ownership, and facets.** Add durable provider
    metadata with `ownerId`, per-owner `InferenceProviderDirectory`,
@@ -750,7 +938,10 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    lost response, and assert exactly one active provider, no orphan secret
    after reconciliation, and no `active` provider with a revoked secret.
    Test that a lifecycle change leaves the descriptor byte-identical and
-   appends one audit row.
+   appends one audit row. Restart the daemon with grants attached and assert
+   that each revived `AgentInference` rebinds on first call; that a grant
+   revoked, or whose provider was retired, before the restart fails its first
+   call after it; and that revocation during an in-flight request cancels it.
    Rollback leaves inert records.
 2. **Provider adapters and accounting.** Bind Anthropic API keys through the
    provider-neutral `@endo/inference` contract, usage recorder, model catalog,
@@ -760,6 +951,10 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    that a retired provider fails the next call, and that a harness abort
    cancels upstream and releases the slot. Test 401, rate limit,
    cancellation, unknown usage, concurrency, budget refusal before secret read, and log redaction.
+   Bypass the adapter and send raw requests on the grant: an unlisted route,
+   an unknown body field, a model outside the agent's allowlist, a missing or
+   oversized `max_tokens`, and a credential header must each be refused
+   before admission and recorded as refusals.
    Test reservation and settlement: refusal when the worst-case reservation does
    not fit, refusal of an unpriced model under a dollar budget, a streaming
    cancellation charged at full reservation, a late usage report reconciled
@@ -780,7 +975,13 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    and the provider row both show the upstream-revocation instruction until
    the owner records the assertion. Test **Replace key**: the old provider
    keeps serving unselected agents, and the remaining-agents count reaches
-   zero before disabling is offered. Import the same canary key into two
+   zero before disabling is offered. Lose the creation response at each
+   operation state and assert that **Check status** reports `committed`,
+   `in-progress`, `key-needed`, or `not-found` correctly; that re-entering
+   the key under the same idempotency key resumes the operation and creates
+   one provider; and that an abandoned `intent` is listed on the Providers
+   page, can be cancelled there, and expires after the retry window. Import
+   the same canary key into two
    providers and assert that each enforces its own caps and that the page
    shows the per-provider scope notice.
 4. **Agent factory and UI step.** Add the server-supplied Lal/Fae catalog,
@@ -798,7 +999,12 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    unread; that enabling wake with queued mail shows the queued count and
    processes nothing until confirmed; that **Skip queued mail** processes only
    later mail; and that **Delete agent** names the unread count, defaults
-   focus to **Cancel**, and leaves usage rows after deletion.
+   focus to **Cancel**, and leaves usage rows after deletion. Test
+   **Reattach provider**: only eligible providers are listed; the effective
+   limits and any model change are shown before confirmation; a running turn
+   finishes on the old provider while the next uses the new one; usage stays
+   attributed per provider; and a crash at each reattach boundary leaves the
+   agent on exactly one provider with one active grant.
 5. **Pinned responder.** Generalize #165 away from Claude names and attach it to
    the created Lal/Fae agent. Test message wake, duplicate delivery, restart,
    busy/rate-limit refusal, cancellation, effect commit, and deletion cleanup
@@ -810,7 +1016,11 @@ Each phase is one builder-sized job and ends with its own tests and rollback.
    grep. No broad rollout until all observations pass.
 7. **Legacy migration.** Convert Claude child records into parked generic agent
    records preserving bot names, mail, responder cursors, and delegation
-   topology. Require provider/harness selection before wake. Test rollback before
+   topology, each assigned to the owner that the course correction's
+   § Legacy authority mapping derives. Require that owner's provider/harness
+   selection before wake. Test that a delegated grandchild is listed only
+   for its chain's root principal and that an unresolvable chain reaches the
+   operator report. Test rollback before
    swap and crash at every commit boundary.
 
 Acceptance requires all seven phases, a real browser observation for both UI
@@ -873,11 +1083,21 @@ recorded evidence, not a zero-copy claim:
 4. **Default spend caps?** What concurrent-turn, requests-per-minute, and daily
    dollar/token ceilings should a newly imported provider and newly created
    agent receive?
-5. **Provider sharing scope?** May every agent owned by one signed-in guest use
-   the same provider by default, or must each attachment be confirmed even
-   within that guest?
+5. **Provider sharing scope?** May all of one owner's agents use the same
+   provider by default, or must the owner confirm each attachment?
 6. **Model catalogs?** Must creation require a live provider model-list check,
    or may a user type a model id when a provider lacks discovery?
 7. **Owner-wide spend cap?** Should the first release add an aggregate cap
    across all of one owner's providers, bounding duplicate imports of one key,
    or is the per-provider scope plus a provider-side spend limit enough?
+
+## Prompt
+
+This design was produced by the same job as its parent; see
+[claude-bare-course-correction](claude-bare-course-correction.md) § Prompt.
+The replacement half of that prompt asked for:
+
+> Design the replacement as a linked subdesign: a user imports an API key as
+> a reusable inference provider, then creates a Lal- or Fae-based guest agent
+> that uses that provider and is pinned to wake on mail. Cover confinement,
+> secret handling, abuse controls, the UI flow, and builder-sized phases.

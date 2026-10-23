@@ -11,13 +11,21 @@
 
 ## Summary
 
-The subscription-backed guest path must be retired. Claude Code 2.1.296 says
-that `--bare` uses only `ANTHROPIC_API_KEY` or `apiKeyHelper` and never reads
-OAuth. A clean-home run with only a deliberately invalid
-`CLAUDE_CODE_OAUTH_TOKEN` produced `Not logged in`; the same behavior is also
-reported in the upstream Claude Code repository
+The subscription-backed guest path must be retired. The `--help` text of
+Claude Code 2.1.296 states that under `--bare`, Anthropic authentication is
+strictly `ANTHROPIC_API_KEY` or `apiKeyHelper`. A clean-home run with only a
+deliberately invalid `CLAUDE_CODE_OAUTH_TOKEN` produced `Not logged in`; the
+same behavior is also reported in the upstream Claude Code repository
 ([#82566](https://github.com/anthropics/claude-code/issues/82566)). This is a
-mode contract, not a transient minion.town wiring bug.
+documented mode contract, not a transient minion.town wiring bug.
+
+This contradicts an earlier observation that this design does not retest.
+[`endo-claude-inference-backends.md`](endo-claude-inference-backends.md)
+§ CLI versus Agent SDK records that, on 2.1.280, a subscription OAuth access
+token presented as `ANTHROPIC_AUTH_TOKEN` authenticated under `--bare`, and
+it bases its credential decision on that slot. § Evidence below reconciles
+the two: the retirement rests on the documented contract, not on a claim that
+2.1.296 rejects that variable.
 
 The replacement is the companion design's two-step path: first import a user's
 API key as a reusable inference provider, then create a Lal- or Fae-derived
@@ -66,6 +74,22 @@ does not by itself show which credential sources bare mode consults. The
 retirement rests instead on the positive contract in the help text, the
 upstream report, and the residual below. No real credential or paid request
 was used.
+
+**Reconciling the earlier `ANTHROPIC_AUTH_TOKEN` observation.** The older
+design observed, on 2.1.280, that a subscription OAuth access token in
+`ANTHROPIC_AUTH_TOKEN` authenticated under `--bare`. This design did not
+repeat that test on 2.1.296, because doing so needs a real subscription token,
+so it makes no claim about whether the newer binary still honors the variable.
+The 2.1.296 help text no longer lists it: it names `ANTHROPIC_API_KEY` and
+`apiKeyHelper` as the only Anthropic credentials under `--bare`. A route that
+depends on `ANTHROPIC_AUTH_TOKEN` therefore depends on behavior the pinned
+binary's own documentation excludes, and any version bump may remove it
+without notice. The access token it used also expires and must be refreshed
+by an interactive login, which a confined guest cannot perform. The
+retirement does not depend on whether the variable still works: the route
+cannot be a supported product contract either way. This design supersedes the
+older design's credential conclusion, and that document now carries a dated
+note pointing here.
 
 That residual is already recorded in
 [`packages/claude/README.md`](../packages/claude/README.md): a subscription
@@ -152,18 +176,19 @@ outer lifecycle words such as `commit`, `replay`, or `rollback`.
    mark `/account/claude` and Claude-agent creation deprecated, and add the
    2.1.296 help/repro probe. Do not remove a running responder.
 2. **Build the companion provider substrate behind
-   `apiKeyGuestAgents`.** This is additive and ships dark. Keep the old path as
-   rollback.
-3. **Ship the two-step UI and Lal/Fae factories dark.** Exercise creation with
+   `apiKeyGuestAgents`.** This is additive and ships behind that disabled
+   feature flag. Keep the old path as rollback.
+3. **Ship the two-step UI and Lal/Fae factories behind the disabled flag.** Exercise creation with
    a fake provider and browser tests; no production navigation points at it.
 4. **Canary one API-key provider and two pinned agents.** Verify Lal and Fae
    independently, including restart, mail wake, cancellation, usage, and secret
    non-disclosure. Then expose the UI while retaining the legacy path.
 5. **Stop new legacy creation.** Existing Claude children and delegations keep
-   their names and stored mail but show `provider migration required`. The user
-   attaches a selected API-key provider and harness; the migration creates a new
-   driver behind the old pet name only after its responder is ready. A failed
-   migration leaves the legacy record intact.
+   their names and stored mail but show `provider migration required`. The
+   owner, as defined in § Legacy authority mapping, attaches one of its own
+   API-key providers and a harness; the migration creates a new driver behind
+   the old pet name only after its responder is ready. A failed migration
+   leaves the legacy record intact.
 6. **Retire legacy authority.** Revoke subscription credentials and delegation
    grants, stop CLI processes, and remove the account/setup-token UI. Preserve
    audit records and unprocessed mail. Rollback can re-enable the legacy flag
@@ -185,6 +210,44 @@ outer lifecycle words such as `commit`, `replay`, or `rollback`.
 
 Each step is deployable alone. Steps 1-5 only add or gate behavior. Deletions
 start after a successful production canary and a pin containing the replacement.
+
+## Legacy authority mapping
+
+Step 5 claims to preserve delegated topology, so every legacy authority
+relationship must map onto the replacement's rule that a provider attaches
+only to an agent with the same owner (companion § Ownership and
+cross-principal denial). The legacy model in minion.town
+(`src/endo/claude/agents.ts` and `delegation-store.ts`) has three relations:
+a signed-in principal's own Claude children; a revocable sub-factory that
+principal granted to one of its children, through which that child created
+grandchildren; and the shared subscription context that paid for all of them.
+
+| Legacy relation | Owner in the replacement | Who may attach a provider | What is preserved | What is revoked |
+|---|---|---|---|---|
+| Principal's direct child | The signed-in principal that created it | That principal, from its own provider directory | Pet name, mail, responder cursor, place in the principal's inventory | The child's use of the shared subscription |
+| Grandchild created through a delegated sub-factory | The **root principal** of the delegation chain, the signed-in principal whose factory the chain descends from | That root principal only; the intermediate child holds no provider directory | Pet name, mail, cursor, and its parent edge, recorded as a delegation-topology label on the migrated `AgentRecord` | The intermediate child's sub-factory authority to spend |
+| Delegated sub-factory itself | Not migrated as authority | Nobody | The topology label only | The sub-factory and every spend grant derived from it, at step 6 |
+| Shared subscription context | Not migrated | Nobody | Its audit rows | Everything, at step 6 |
+
+Every legacy record is therefore owned by exactly one signed-in principal,
+determined mechanically by walking delegation edges to the chain's root, so
+the same-owner rule always has an owner to check and no delegated record waits
+on an undefined authority. Topology is preserved as data: the migrated
+records keep their names and parent labels so the owner sees the same tree,
+but a migrated child does not regain authority to create or fund
+grandchildren. A delegated child that should create agents again needs a new,
+explicit grant, which is out of scope for the first release (companion
+§ Ownership and cross-principal denial, *Sharing*).
+
+The migration pass computes each record's root owner before step 5 and lists
+every record in that owner's **Provider migration required** view, with
+delegated records grouped under their legacy parent. A record whose chain
+cannot be resolved, for example because the root principal's account was
+deleted, is shown to no one and goes to an operator report instead of
+waiting silently; the operator either assigns it to an existing principal by
+an audited administrative action or retires it at step 6, keeping its mail
+for export. Open question 3 now asks only whether the owner view needs a bulk
+attachment action for a whole subtree, not who holds the authority.
 
 ## Rollout, rollback, and probes
 
@@ -210,9 +273,10 @@ start after a successful production canary and a pin containing the replacement.
 2. **Legacy migration window?** How long may existing Claude child names and
    unread mail remain parked before operators revoke the subscription and
    remove the CLI deployment?
-3. **Existing delegations?** Is preserving their child topology and requiring
-   each owner to select a provider sufficient, or must the UI offer a bulk
-   provider attachment for a whole delegated subtree?
+3. **Bulk attachment for delegations?** § Legacy authority mapping assigns
+   every delegated record to its chain's root principal. Is attaching a
+   provider record by record sufficient for that owner, or must the UI offer a
+   bulk provider attachment for a whole delegated subtree?
 4. **Garden inference sourcing?** After the subsidized guest route is removed,
    should the garden keep direct worker subscriptions, obtain a separately
    budgeted API provider, or deliberately leave guest-backed fleet inference
@@ -220,3 +284,21 @@ start after a successful production canary and a pin containing the replacement.
 5. **Deprecation release boundary?** Is one minion.town Endo-pin interval enough
    before deleting `@endo/agent-mcp-stdio` and the CLI exports, or is a longer
    compatibility interval required?
+
+## Prompt
+
+The verbatim prompt for the originating job,
+`design-claude-bare-retreat-api-key-agents-20261023` (2026-10-23), was not
+retained in the job record. Reconstructed from that job's completion report
+and this PR's description, it asked for:
+
+> `claude --bare` refuses subscription credentials. Design the course
+> correction: verify the behavior on the pinned Claude Code binary, inventory
+> every Endo, minion.town, and garden surface that exists only for the
+> subscription-backed guest path, and sequence its retirement without
+> removing a working path. Design the replacement as a linked subdesign: a
+> user imports an API key as a reusable inference provider, then creates a
+> Lal- or Fae-based guest agent that uses that provider and is pinned to wake
+> on mail. Cover migration, rollback, confinement, secret handling, abuse
+> controls, the UI flow, and builder-sized phases, and keep open questions
+> explicit for maintainer review. Design only; no implementation.
