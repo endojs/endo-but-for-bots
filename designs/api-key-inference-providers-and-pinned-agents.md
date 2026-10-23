@@ -6,12 +6,12 @@
 | **Updated** | 2026-10-23 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
-| **Parent** | [Course correction after `claude --bare` rejected subscription credentials](claude-bare-course-correction.md) |
+| **Parent** | [Course correction: retire subscription credentials under `claude --bare`](claude-bare-course-correction.md) |
 | **Grounded against** | `endojs/endo-but-for-bots` `llm` at `d5ac41980a`; `kriscendobot/minion.town` `main` at `68c3960bbe` |
 
 ## Summary
 
-"Add agent" is a two-step workflow, even when presented as one short wizard:
+"New API-key agent" is a two-step workflow, even when presented as one short wizard:
 
 1. import an API key and create a reusable **inference provider**; then
 2. create a named **guest agent** attached to a selected provider and harness.
@@ -72,7 +72,10 @@ what confines an agent.
 - **Agent guest.** A separate, dedicated guest created for each agent. It is
   the agent's mailbox and identity, holds only the agent's own pet names, and
   has no edge to the owner guest's inventory, the provider directory, the
-  broker, or any other agent.
+  broker, or any other agent. Because the agent guest has a distinct identity,
+  it never says who owns the agent. That binding lives only in the agent
+  registry, as the immutable `AgentRecord.ownerId` (§ Agent creation, wake, and
+  deletion operations).
 - **Responder.** A formula pinned in the agent guest's `@pins` that follows
   that guest's mailbox and starts one harness turn per message.
 - **Harness.** Lal or Fae, run as the agent's driver. It holds exactly two
@@ -97,28 +100,33 @@ the dedicated per-agent guest.
 
 ## User experience
 
-The owner guest's page adds one **Add agent** button. It opens a two-step
-dialog; Back never resubmits a secret.
+The owner guest's page adds one **New API-key agent** button. It opens a
+two-step dialog; Back never resubmits a secret.
 
-In plain terms, a user makes two choices: which provider, and therefore which
-API key, pays for the agent, and which agent program runs (the harness), plus
-the agent's name and limits. The user does not choose what the agent is allowed
-to do. Each harness comes with a fixed list of permitted actions, its *powers
-profile*, such as reading and sending its own mail; § Confinement and
-wake-on-message gives the full list. A setting that grants extra powers
-(called *endowments* in the Chat wizard) therefore has nothing to offer here.
+In plain terms, a user makes two choices. First, the user picks the provider,
+which decides whose API key pays for the agent. Second, the user picks the
+agent program that runs (the harness) and sets the agent's name and limits.
 
-This dialog is the minion.town presentation of the same three layers as the
-canonical Chat **Add agent** wizard in
+The user does not choose what the agent is allowed to do. Each harness comes
+with a fixed list of permitted actions, its *powers profile*, such as reading
+and sending its own mail; § Confinement and wake-on-message gives the full
+list. A setting that grants extra powers (called *endowments* in the Chat
+wizard) therefore has nothing to offer here.
+
+This dialog is a distinct operation from the Chat **Add agent** wizard in
 [`chat-inventory-create-menu.md`](chat-inventory-create-menu.md) § Three-pane
-wizard, not a competing workflow. Step 1 is that wizard's *inference source*
-pane; step 2 combines its *harness* pane with the bot name, and the
-*endowments* pane is fixed by the harness's powers profile (§ Confinement)
-rather than chosen. Both surfaces submit to the same agent factory with the
-same fields. When the Chat wizard adopts API-key providers, its inference-source
-pane lists the owner's providers through the same directory facet; until then,
-Chat's wizard does not offer them. The minion.town label stays **Add agent**
-because it opens the same operation.
+wizard, and it carries a distinct label. Chat's wizard picks a harness first
+and an inference source second, because its inference source is a transient
+credential choice. Here the provider is a reusable, separately managed object
+that pays for the agent, so the dialog picks or creates the provider first and
+the harness second. Giving the reversed order the same name would teach users
+two meanings of one label, so minion.town calls it **New API-key agent**, and
+**Add agent** stays reserved for Chat's harness-first wizard. The *endowments*
+pane has no counterpart here, because the harness's powers profile fixes it
+(§ Confinement). Both operations submit to the same agent factory with the
+same fields. If the Chat wizard adopts API-key providers, its inference-source
+pane lists the owner's providers through the same directory facet, in Chat's
+own harness-first order; until then, Chat's wizard does not offer them.
 
 ### Step 1: create or choose an inference provider
 
@@ -191,8 +199,8 @@ cross-principal denial). Success adds the agent to the owner guest's inventory.
 Retrying the same idempotency key returns the same provider or agent; it never
 creates a second spend source or responder. The provider operation in
 § Creation and retirement operations and the agent operation in § Agent
-creation, wake, and deletion operations specify how that holds across crashes
-and lost responses.
+creation, wake, and deletion operations specify how each operation survives
+crashes and lost responses.
 
 ### Agent management
 
@@ -225,7 +233,7 @@ provider**, and **Delete agent**.
   agent's guest, so unread mail, the responder cursor, and the harness
   transcript are discarded with it; usage and audit rows stay in the usage
   ledger (§ Agent creation, wake, and deletion operations). The confirm button
-  is labelled **Delete agent**, and focus starts on **Cancel**.
+  is labeled **Delete agent**, and focus starts on **Cancel**.
 
 - **Reattach provider** moves the agent to a different provider of the same
   owner, for example after **Replace key** (§ Provider management) or to
@@ -270,15 +278,15 @@ wizard: `Tab` / `Shift-Tab` between fields, arrow keys within a choice list,
 `Enter` on the next or submit button advances, and `Escape` cancels (with a
 confirmation once any field has input). Specifically:
 
-- **Semantics.** The dialog is a modal `<dialog>` labelled by its current step
+- **Semantics.** The dialog is a modal `<dialog>` labeled by its current step
   heading. The provider list and the harness choice are native radio groups
   with visible labels; provider kind and model are native `<select>`
   elements; every input has a `<label>`. Step position is announced as part of
   the heading ("Step 1 of 2: Inference provider").
 - **Focus.** Opening the dialog moves focus to the selected provider, or to
   the first field of **New provider** when the owner has none. Advancing or
-  going Back moves focus to the new step's heading. Closing, cancelling, or
-  succeeding returns focus to the **Add agent** button (or to the new agent's
+  going Back moves focus to the new step's heading. Closing, canceling, or
+  succeeding returns focus to the **New API-key agent** button (or to the new agent's
   inventory entry on success).
 - **Validation and progress.** A field error sets `aria-invalid` and is tied to
   its field through `aria-describedby`; on submit, focus moves to the first
@@ -292,7 +300,7 @@ confirmations and limit forms.
 
 ### Provider management
 
-A **Providers** page, linked from the owner guest's page beside **Add agent** and from
+A **Providers** page, linked from the owner guest's page beside **New API-key agent** and from
 each agent's detail view, is the standing management surface. For each of the
 owner's providers, active and retired, it shows display name, kind, default
 model, state, attached agents, and per-agent usage and refusals for the current
@@ -313,9 +321,10 @@ and previous budget periods. Its actions are:
   key: every attached agent fails its next call. It does **not** revoke the key
   at Anthropic or the OpenAI-compatible service, so anyone else holding a
   leaked copy can still use it and charge the owner's account. The
-  confirmation and the completed state therefore both say so and show the
-  upstream step: "Also revoke this key in the provider's console", with a link
-  to that kind's key-management page from the provider catalog. The provider
+  confirmation and the completed state therefore both state that upstream
+  revocation is still required and show the upstream step: "Also revoke
+  this key in the provider's console", with a link to that kind's
+  key-management page from the provider catalog. The provider
   row shows **Disabled in Endo; upstream revocation not confirmed** until the
   owner checks **I revoked it upstream**, which is recorded as an owner
   assertion, not verified. Endo does not call an upstream revocation API in
@@ -425,10 +434,20 @@ extension.
   `provider-not-found` error with the same timing class, so a caller cannot use
   it as an existence oracle. Listing returns only the owner's records. Usage
   and audit rows are readable only through the owner's admin facets.
-- **Agent binding.** The agent factory accepts an `InferenceProviderUse` only
-  from the same directory as the target guest's owner; a use facet and a guest
-  with different owners are refused with `provider-owner-mismatch` before any
-  guest or responder is created.
+- **Agent binding.** Authority checks for an agent use its principal-owner
+  binding, never the agent guest's identity. The binding is
+  `AgentRecord.ownerId`: the owner guest formula id of the directory that ran
+  the creation operation, written at intent, copied into the agent's grant
+  records, and never changed by any API (reattachment and recovery included).
+  The agent guest is created with no owner field to inherit and no edge to
+  the owner guest, so the separation in § Actors and capabilities holds. The
+  factory accepts an `InferenceProviderUse` only when the provider's `ownerId`
+  equals that binding. At creation, the binding is the creating directory's
+  owner, so a provider from that same directory is accepted for the new,
+  distinct agent guest. At reattachment and at recovery, the factory compares
+  the target or recorded provider's `ownerId` with `AgentRecord.ownerId`. A
+  provider with a different owner is refused with `provider-owner-mismatch`
+  before any guest, grant, or responder is created or changed.
 - **Sharing.** Cross-principal sharing is out of scope for the first release.
   If added later, it must be an explicit attenuated grant from the owner's
   admin facet, never an id another principal can name.
@@ -502,8 +521,9 @@ show an `active` provider whose secret is already revoked.
 Agent creation spans three stores: the Endo root's guest formulas, the provider
 registry's per-agent inference grants, and the new guest's `@pins` and
 inventory names. The **agent factory** is the single coordinator. It owns a
-root-private agent registry holding the durable `AgentRecord` (agent id, owner,
-guest formula id, provider id, harness, model, limits, desired wake state,
+root-private agent registry holding the durable `AgentRecord` (agent id,
+immutable `ownerId` principal-owner binding (§ Ownership and cross-principal
+denial), guest formula id, provider id, harness, model, limits, desired wake state,
 lifecycle state) and an operation record for every change; the guest, the
 provider registry, and the responder are participants that each make one
 idempotent, name-keyed effect.
@@ -610,8 +630,9 @@ it, and records `completed`. The reconciler finishes a toggle interrupted after
 its commit, and its sweep reapplies desired state for any agent.
 
 **Reattachment** (`kind: 'reattach'`) preallocates a new grant id at intent
-and resolves the target provider through the owner's directory, refusing a
-foreign, retiring, or unsupported provider before any effect. It creates the
+and resolves the target provider through the directory of the principal named
+by `AgentRecord.ownerId`, refusing a foreign (`provider-owner-mismatch`),
+retiring, or unsupported provider before any effect. It creates the
 new grant record, then commits the `AgentRecord` with the new provider, model,
 clamped limits, and grant id in one transaction; from that commit, new turns
 are admitted only on the new grant. It then revokes the prior grant record
@@ -710,8 +731,11 @@ The design therefore separates the durable grant from its live endpoint:
   resurrect a grant that retirement or deletion has already fenced.
 - **Recovery.** The agent factory's reconciler treats a grant record whose
   agent operation was aborted, or whose `AgentRecord` is `deleted`, as
-  residue and revokes it. The provider reconciler revokes every grant record
-  of a retired provider. Neither ever creates a record.
+  residue and revokes it. It also revokes, and reports to the operator, any
+  grant whose `ownerId` or whose provider's `ownerId` differs from its
+  agent's `AgentRecord.ownerId`; it never repairs the binding. The
+  provider reconciler revokes every grant record of a retired provider.
+  Neither ever creates a record.
 
 ### Harness adapter boundary
 
@@ -827,6 +851,40 @@ effect, and dismisses only after the reply is durably sent. Restart revives the
 pinned responder; duplicate delivery consults the effect record. Deletion
 cancels an in-flight turn before releasing the guest and responder.
 
+**Admission refusal.** A message whose turn the broker refuses at admission is
+never left both unanswered and undismissed. Before the responder advances its
+cursor past such a message, it writes one durable disposition into the
+message's effect record, and it moves the message to its durable *deferred
+queue* or marks it *refused*:
+
+- **Deferred (transient refusal).** Concurrency slot busy, request rate,
+  agent or provider turn limit, and daily or period budget exhausted are
+  transient. The effect record stores `deferred`, the fixed refusal code, the
+  attempt count, and `retryAt`. Rate and concurrency refusals back off
+  exponentially from 1 minute, doubling to at most 1 hour. A budget refusal
+  sets `retryAt` to the budget period's reset time. Deferred messages are
+  retried oldest first, before new mail, and each retry is a fresh admission
+  under the agent's normal limits. With wake off, no retry runs. Restart
+  revives the queue from the effect records.
+- **Bounded.** After 8 transient refusals, or 72 hours after the first, a
+  deferred message becomes `refused` with code `retry-exhausted`.
+- **Refused (terminal refusal).** A retired or retiring provider, a revoked
+  grant, `inference-request-refused`, `retry-exhausted`, and an unpriced
+  model under a dollar budget are terminal. The effect record stores
+  `refused` and the fixed code; the responder starts no turn for that message
+  again on its own.
+- **Owner-visible status.** The message stays unread in the agent guest. The
+  agent detail view lists deferred messages with their refusal reason and
+  next retry time ("Waiting: daily budget reached; retrying at 00:00 UTC"),
+  and refused messages with their reason. For each, the owner can **Retry
+  now** (one fresh admission, which resets the attempt count) or **Dismiss**.
+  The agent summary in the owner's inventory shows the deferred and refused
+  counts. The responder sends no reply to the message's sender for a refusal,
+  because a reply could leak the owner's budget state to another principal.
+
+Deletion discards the deferred queue with the agent guest; usage and refusal
+rows stay in the usage ledger.
+
 If a loopback bridge is needed, its bearer is a random, revocable designator for
 that one responder or inference object. Possession authorizes calls to that
 object; it does not denote the OAuth subject or authenticate an identity. This
@@ -899,7 +957,7 @@ output usage and final charges are unknown at admission:
   dollar budget. The provider must use a token budget for that model, or the
   model is excluded from its allowlist.
 - **Settlement.** When the upstream reports usage, the reservation is replaced
-  by reported usage at the pinned price. If a turn is cancelled, times out, or
+  by reported usage at the pinned price. If a turn is canceled, times out, or
   ends without usage, the full reservation is charged and marked `estimated`.
   Late usage reports (for example a streaming response the upstream bills after
   cancellation) are reconciled into the ledger when received. If reported usage
@@ -980,7 +1038,7 @@ tests and rollback.
    `in-progress`, `key-needed`, or `not-found` correctly; that re-entering
    the key under the same idempotency key resumes the operation and creates
    one provider; and that an abandoned `intent` is listed on the Providers
-   page, can be cancelled there, and expires after the retry window. Import
+   page, can be canceled there, and expires after the retry window. Import
    the same canary key into two
    providers and assert that each enforces its own caps and that the page
    shows the per-provider scope notice.
@@ -1004,11 +1062,22 @@ tests and rollback.
    limits and any model change are shown before confirmation; a running turn
    finishes on the old provider while the next uses the new one; usage stays
    attributed per provider; and a crash at each reattach boundary leaves the
-   agent on exactly one provider with one active grant.
+   agent on exactly one provider with one active grant. Test the
+   principal-owner binding: a newly created agent guest, which has no edge to
+   its owner, attaches its owner's provider at creation and reattachment and
+   after a daemon restart, while another principal's provider is refused with
+   `provider-owner-mismatch` at creation, at reattachment, and when recovery
+   finds it recorded on a grant.
 5. **Pinned responder.** Generalize #165 away from Claude names and attach it to
    the created Lal/Fae agent. Test message wake, duplicate delivery, restart,
    busy/rate-limit refusal, cancellation, effect commit, and deletion cleanup
-   against a real temporary daemon plus fake inference.
+   against a real temporary daemon plus fake inference. Test admission
+   refusal: a rate or concurrency refusal defers the message with backoff and
+   a later retry processes it; a budget refusal waits for the period reset; a
+   retired provider marks the message `refused`; the eighth transient refusal
+   marks it `retry-exhausted`; the deferred queue survives a restart; and the
+   detail view shows each message's status with working **Retry now** and
+   **Dismiss**.
 6. **Production canary and UI rollout.** Import a dedicated low-budget key,
    create one Lal and one Fae bot, send messages, restart the daemon and app,
    replace the key by supersession, disable the old provider, and verify both
@@ -1023,11 +1092,24 @@ tests and rollback.
    operator report. Test rollback before
    swap and crash at every commit boundary.
 
-Acceptance requires all seven phases, a real browser observation for both UI
-steps, a real-daemon restart/wake observation, a real upstream turn for each
-advertised harness, revocation stopping the next turn, a passing
-secret-retention check, cross-principal denial evidence, and usage/refusal
-evidence. Unit tests alone do not satisfy it.
+Acceptance has two separate gates, matching the parent's rollout, which
+exposes the new path before any legacy record migrates
+([parent](claude-bare-course-correction.md) § Independently shippable
+sequence, steps 4 and 5).
+
+- **Launch acceptance** gates exposing the new UI beyond the canary
+  allowlist. It requires phases 1-6, a real browser observation for both UI
+  steps, a real-daemon restart/wake observation, a real upstream turn for
+  each advertised harness, revocation stopping the next turn, a passing
+  secret-retention check, cross-principal denial evidence, and usage/refusal
+  evidence. Phase 7 is not required, and the legacy path stays available.
+- **Legacy-retirement completion** gates the parent's steps 6-8 (revoking
+  legacy authority and deleting the old machinery). It requires launch
+  acceptance, phase 7, a production migration in which every legacy record
+  either reached a migrated agent or the operator report, and the parent's
+  repository gate showing no remaining importers.
+
+Unit tests alone satisfy neither gate.
 
 **Secret-retention check.** The invariant is about durable or observable
 retention, not about transport. The key necessarily passes through, and may be
