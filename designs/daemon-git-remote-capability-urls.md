@@ -34,7 +34,7 @@ That is half right, and this document corrects it.
 Minion.town § 12 names two directions:
 
 - **Endo as client** (a daemon agent fetching from or pushing to a partition). The git trio already covers this except for one gap: nothing turns a capability URL into a `GitRemote`. `normalizeGitRemoteUrl` in `@endo/exo-git` rejects embedded userinfo, and nothing splits it. **This document closes that gap.**
-- **Endo as server** (§ 12 items 1, 3, 4, 7: the partition primitive, capability-URL minting and revocation, the git-object ↔ CAS database, per-partition reclamation). The trio does not cover any of this. Minion.town's increment 1 implements it outside Endo (`git http-backend` over one bare repo per partition), and its Rust backing is [endor-git-bindings](endor-git-bindings.md) (M11). Moving it into the daemon is a separate design (**to be filed**) and is not on the M3 critical path, because the deployed minion.town server already provides the server half.
+- **Endo as server** (§ 12 items 1, 3, 4, 7: the partition primitive, capability-URL minting and revocation, the git-object <-> CAS database, per-partition reclamation). The trio does not cover any of this. Minion.town's increment 1 implements it outside Endo (`git http-backend` over one bare repo per partition), and its Rust backing is [endor-git-bindings](endor-git-bindings.md) (M11). Moving it into the daemon is a separate design (**to be filed**) and is not on the M3 critical path, because the deployed minion.town server already provides the server half.
 
 Minion.town § 12 item 2 (widening the MCP guest facet with `send` attachments, `request`, and `identify`) belongs to minion.town and to [endo-guest-stdio-mcp](endo-guest-stdio-mcp.md), not to this stack.
 
@@ -113,10 +113,10 @@ sequenceDiagram
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| Host caller → daemon host method | `splitGitCapabilityUrl` in `@endo/exo-git` | Host decides whether to adopt a URL | Formula: kind, audience only | Host (pet-name store, `GitCredentialController`) | The capability URL, once, in a method argument |
-| Daemon → `GitRemote` formula | Landed `provideGitRemote` / `provideGitClone` | Host-stated `allowedDirections`, refspecs, force flags | Formula: credential-free URL + policy | Host via `GitRemoteController` | Credential cap reference; never material |
-| `GitRemote` → minion.town server | Native git over HTTPS, token via fd-pipe askpass | Server-side attenuation (`read` / `readwrite`), partition confinement | Server: refs, objects, token hashes | Minion.town operator (mint, revoke) | Packfiles on the HTTPS data plane; never CapTP |
-| `Git` → guest | Landed `filesystemAt(ref)` | Read-only view | None new | Daemon (view lifetime follows `Git`) | `Filesystem` capability |
+| Host caller -> daemon host method | `splitGitCapabilityUrl` in `@endo/exo-git` | Host decides whether to adopt a URL | Formula: kind, audience only | Host (pet-name store, `GitCredentialController`) | The capability URL, once, in a method argument |
+| Daemon -> `GitRemote` formula | Landed `provideGitRemote` / `provideGitClone` | Host-stated `allowedDirections`, refspecs, force flags | Formula: credential-free URL + policy | Host via `GitRemoteController` | Credential cap reference; never material |
+| `GitRemote` -> minion.town server | Native git over HTTPS, token via fd-pipe askpass | Server-side attenuation (`read` / `readwrite`), partition confinement | Server: refs, objects, token hashes | Minion.town operator (mint, revoke) | Packfiles on the HTTPS data plane; never CapTP |
+| `Git` -> guest | Landed `filesystemAt(ref)` | Read-only view | None new | Daemon (view lifetime follows `Git`) | `Filesystem` capability |
 
 The four ownership questions:
 
