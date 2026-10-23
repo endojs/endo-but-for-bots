@@ -173,3 +173,15 @@ export type InferResult =
 export type GuestFormulaId = string & {
   readonly __brand: 'GuestFormulaId';
 };
+
+export interface ClaudeSessionBindings {
+  workspace: object;
+  git: object;
+  remote: object;
+  shell: object;
+}
+
+export interface ClaudeSessionGrant {
+  codeNames: readonly string[];
+  petNamePaths: readonly (readonly string[])[];
+}
