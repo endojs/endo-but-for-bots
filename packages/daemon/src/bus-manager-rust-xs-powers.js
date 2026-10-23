@@ -355,6 +355,19 @@ export const makeXsFilePowers = () => {
   const entryIdentity = pathIdentity;
 
   /**
+   * The XS host has no rename that refuses an existing target, and a
+   * check before an ordinary rename would leave a window in which another
+   * writer's entry is replaced, so this always refuses.
+   *
+   * @type {FilePowers['renameNoReplace']}
+   */
+  const renameNoReplace = async (source, _target) => {
+    throw new Error(
+      `renameNoReplace: the XS host cannot move ${source} without risking replacing an entry`,
+    );
+  };
+
+  /**
    * The XS host's `remove` is non-recursive, so it refuses a non-empty
    * directory.
    *
@@ -500,6 +513,7 @@ export const makeXsFilePowers = () => {
     readLink,
     pathIdentity,
     entryIdentity,
+    renameNoReplace,
     removeEmptyDirectory,
     statPath,
     isDirectory,

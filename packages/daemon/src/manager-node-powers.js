@@ -591,14 +591,17 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
    * Rename `source` to `target` only if nothing holds `target`, with no
    * window in which an entry another writer creates at `target` is
    * replaced.  A directory claims `target` with an exclusive `mkdir` and
-   * then renames over that empty directory; any other entry is hard-linked,
-   * which refuses an existing `target`, and the source is then unlinked.
-   * The moved entry keeps its device and inode.
+   * then renames over that empty directory.  A symbolic link is recreated
+   * at `target` with `symlink`, and any other entry is hard-linked; both
+   * refuse an existing `target`, and the source is then unlinked.  (`link`
+   * is not used for a symbolic link because some platforms follow it.)
+   * Resolves to the moved entry's `dev:ino` identity, which a directory or
+   * a file keeps and a recreated symbolic link does not.
    *
    * @type {FilePowers['renameNoReplace']}
    */
-  const renameNoReplace = async (source, target) => {
-    await writeJobs.enqueue(async () => {
+  const renameNoReplace = async (source, target) =>
+    writeJobs.enqueue(async () => {
       const sourceStat = await fs.promises.lstat(source, { bigint: true });
       if (sourceStat.isDirectory()) {
         await fs.promises.mkdir(target);
@@ -610,24 +613,18 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
           await fs.promises.rmdir(target).catch(() => {});
           throw error;
         }
-        return;
+        return `${sourceStat.dev}:${sourceStat.ino}`;
+      }
+      if (sourceStat.isSymbolicLink()) {
+        await fs.promises.symlink(await fs.promises.readlink(source), target);
+        const targetStat = await fs.promises.lstat(target, { bigint: true });
+        await fs.promises.unlink(source);
+        return `${targetStat.dev}:${targetStat.ino}`;
       }
       await fs.promises.link(source, target);
-      const targetStat = await fs.promises.lstat(target, { bigint: true });
-      if (
-        targetStat.dev !== sourceStat.dev ||
-        targetStat.ino !== sourceStat.ino
-      ) {
-        // A platform whose `link` follows a symbolic link linked its
-        // referent instead.  Drop that extra link and refuse.
-        await fs.promises.unlink(target);
-        throw new Error(
-          `renameNoReplace cannot move ${JSON.stringify(source)} without following it`,
-        );
-      }
       await fs.promises.unlink(source);
+      return `${sourceStat.dev}:${sourceStat.ino}`;
     });
-  };
 
   /**
    * Remove `path` only if it is an empty directory.

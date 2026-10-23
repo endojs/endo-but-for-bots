@@ -2658,11 +2658,12 @@ export type FilePowers = {
   renamePath: (source: string, target: string) => Promise<void>;
   /**
    * Rename `source` to `target`, failing rather than replacing anything at
-   * `target`, including an entry created concurrently.  The moved entry
-   * keeps its `entryIdentity`.  Optional: the XS powers have no atomic
-   * no-replace primitive, so they omit it.
+   * `target`, including an entry created concurrently, and resolve to the
+   * moved entry's `entryIdentity`.  A symbolic link may be recreated, with
+   * a new identity.  The XS host has no atomic no-replace primitive, so
+   * the XS powers always refuse.
    */
-  renameNoReplace?: (source: string, target: string) => Promise<void>;
+  renameNoReplace: (source: string, target: string) => Promise<string>;
   /** Remove `path` only if it is an empty directory. */
   removeEmptyDirectory: (path: string) => Promise<void>;
   realPath: (path: string) => Promise<string>;
