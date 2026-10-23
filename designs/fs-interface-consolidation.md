@@ -28,7 +28,7 @@ No implementation work remains under this design.
 Later documentation and test refinements, and adjacent enhancements, are
 tracked by their own designs.
 The candidate sections below (C1 through C5) are kept as the historical
-rationale; each one ends with the decision that shipped.
+rationale and state the decision that shipped.
 
 ### Delivery history
 
@@ -106,6 +106,24 @@ The current interface, as delivered by the changes above:
 The extended cap-FS engine's `Directory` / `File` keep their own richer guards
 (eref-returning caps, cursors, `lookupStep` / `subView` / `create`): they are a
 genuinely different surface and are out of scope for the shared records.
+
+### M3 content-layer boundary
+
+The M3 git-remote stack uses that richer `Filesystem` as its content layer; it
+does not replace it with the narrower tree records consolidated here. The live
+worktree path projects `Git.worktree()` through `mountAsFilesystem(...)`, while
+`Git.filesystemAt(ref)` returns a read-only `Filesystem` over a historical git
+tree. Both paths therefore present the same `Filesystem` / `Directory` / `File`
+contract to agent tools. `File.snapshot()` crosses from that path-oriented
+surface to the C4 `BlobRef` content surface, including `sha256()` / `size()` /
+`bytes()` and range attenuation.
+
+The adjacent `Git` capability owns versioning, and `GitRemote` separately owns
+network and credential authority for fetch, pull, and push. This design only
+consolidates the blob and tree contracts those layers exchange; it does not
+fold content, versioning, or network authority into one interface. See
+[daemon-agent-tools.md](daemon-agent-tools.md) for the M3 composition and
+[daemon-git-next-steps.md](daemon-git-next-steps.md) for the layer split.
 
 ## What is the Problem Being Solved?
 
@@ -193,13 +211,13 @@ form of it.
 
 ## Consolidation candidates
 
-### C1 — Name-hub unification
+### C1: Name-hub unification
 
 [namehub-interface-unification.md](namehub-interface-unification.md) supplied
-the accepted shape: a narrower **`ReadableNameHubInterface`** that both mounts
-and name hubs satisfy, `maybeLookup` (the primitive) and `followNameChanges`
-added to `EndoMount`, and `identify` / `locate` / `reverseLookup` kept out of
-mounts (mount entries have no formulas).
+the accepted plan. It called for a narrower **`ReadableNameHubInterface`**
+shared by mounts and name hubs, added `maybeLookup` (the primitive) and
+`followNameChanges` to `EndoMount`, and kept `identify` / `locate` /
+`reverseLookup` out of mounts because mount entries have no formulas.
 
 That design was blocked on the name and signature alignment that
 [fs-interface-reconciliation.md](fs-interface-reconciliation.md) delivered.
@@ -344,14 +362,14 @@ flagged ones and their resolutions:
 
 | Concept | Divergence | Resolution |
 |---|---|---|
-| **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }` — and `getInfo().size` (now `size()`) is bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it; `kind` is kept (the mount stats a path); XS approximates `atime <- mtime` (host stat lacks it). |
+| **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }`; the blob `size()` result is also a bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it. `kind` remains because the mount's stat call classifies a path. XS approximates `atime <- mtime` (host stat lacks it). |
 | **Content hash** | `EndoBlob` exposed both `sha256()` (hex) and `getInfo().hash` (base64); blob vs tree hash encodings differed | **Every public hash accessor is base64; hex is internal-only.** PR #467 first removed `EndoBlob.sha256()` in favor of `getInfo().hash`; PR #1301 then removed `getInfo()` and restored `sha256()` as the single hash accessor, now returning base64. `EndoBlob`, `BlobRef`, `SnapshotBlob`, `SnapshotTree`, and `EndoReadableTree` all report the content hash through `sha256()` in base64. Hex survives only as the on-disk `store-sha256/<hex>` address and the tree-manifest child references; callers convert base64 to hex via `@endo/hex` + `@endo/base64` where the store key is needed. |
 | **Dir-change record** | NameHub `{ add, value: idRecord }` vs mount `{ add, type }` vs extended `WatchEvent { kind, name }` — three shapes | **Live mount feed, separate record.** `followNameChanges` returns the daemon-local `{ add, type } \| { remove }` reader; a common record remains deferred until a shared operation establishes common semantics. |
 | **Listing** | daemon/lite `list()` -> `string[]` vs extended `Cursor`/`DirEntry[]` (name + qid) | **Intentional layer split** (the reconciliation chose names for lite/daemon, rich `Cursor` for the cap-FS engine). Not aligned. |
 
 Other audited items (`getStat`/`getAttrs` narrow-vs-wide, `mkdir`/`unlink`
-aliases, `Qid` vs `getInfo` (now `sha256()` / `size()`), `has`/`exists`, symlink scoping) are
-documented-intentional divergences, not accidental inconsistencies.
+aliases, `Qid` vs blob content metadata, `has`/`exists`, and symlink scoping)
+are documented intentional divergences, not accidental inconsistencies.
 
 ## Consolidated inventory
 
@@ -375,6 +393,10 @@ After C1 through C5 the fs/name-hub interface set is:
   to it. The `BlobRef -> SnapshotBlob` adapter was never needed because the
   shapes converge from below; `BlobRef` itself remains (enriched with `text` /
   `json`).
+- **M3 content projection:** the extended `Filesystem` remains the path-oriented
+  content layer for both a live worktree and `Git.filesystemAt(ref)`. Its
+  `File.snapshot()` returns the rich C4 `BlobRef`; versioning stays on `Git` and
+  network plus credential authority stays on `GitRemote`.
 - **Vocabulary:** records exported from `lite`; the catalog doc is the prose
   vocabulary (C5).
 
@@ -478,11 +500,10 @@ together in PR #467, and the later C1 and C4 changes listed under
 - [x] C1 layering: hoist `readableNameHubMethodGuards` /
       `directoryFileMethodGuards` from `@endo/daemon` to `@endo/platform/fs`;
       genie now imports them from platform (no daemon-internals reach).
-- [x] C5: remove the dead `ContentStore` / `SnapshotStore` / `NameHubInterface`
-      guards.
+- [x] C5: remove the dead `ContentStore` / `SnapshotStore` guards.
 
 ## Prompt
 
 > where's the doc that describes what interfaces exist and how they relate to
 > each other. are there good candidates for reducing overlap and simplifying the
-> inventory of interfaces? … do all
+> inventory of interfaces? ... do all
