@@ -1111,19 +1111,19 @@ test.serial(
  */
 const findMarkedProcesses = marker => {
   /** @type {number[]} */
-  const pids = [];
+  const processIdentifiers = [];
   for (const entry of nodeFs.readdirSync('/proc')) {
     if (/^\d+$/.test(entry)) {
-      let cmdline = '';
+      let commandLine = '';
       try {
-        cmdline = nodeFs.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
+        commandLine = nodeFs.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
       } catch {
         // exited while listing
       }
-      if (cmdline.includes(marker)) pids.push(Number(entry));
+      if (commandLine.includes(marker)) processIdentifiers.push(Number(entry));
     }
   }
-  return pids;
+  return processIdentifiers;
 };
 
 test.serial(
@@ -1136,8 +1136,14 @@ test.serial(
     t.timeout(60_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
+    try {
+      nodeFs.readdirSync('/proc');
+    } catch {
+      t.pass('cannot read host /proc to look for stranded processes');
+      return;
+    }
     const driver = makeBwrapDriver({ env: {} });
-    const { powers, tmpdirs } = makeStubScratchProvider();
+    const { powers, tmpdirs: temporaryDirectories } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
       drivers: harden([driver]),
       scratchProvider: powers,
@@ -1155,13 +1161,13 @@ test.serial(
         }
       }
       await E(handle).dispose();
-      for (const directory of tmpdirs)
+      for (const directory of temporaryDirectories)
         nodeFs.rmSync(directory, { recursive: true, force: true });
     });
 
     for (let i = 0; i < 40; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const proc = await E(handle).spawn(
+      const sandboxProcess = await E(handle).spawn(
         harden([
           '/bin/sh',
           '-c',
@@ -1173,9 +1179,11 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       await new Promise(resolve => setTimeout(resolve, i % 8));
       // eslint-disable-next-line no-await-in-loop
-      await E(proc).kill();
+      await E(sandboxProcess).kill();
       // eslint-disable-next-line no-await-in-loop
-      await t.throwsAsync(() => E(proc).wait(), { message: /cancelled/ });
+      await t.throwsAsync(() => E(sandboxProcess).wait(), {
+        message: /cancelled/,
+      });
     }
 
     // A namespace being torn down by its init's death exits promptly.
@@ -2023,4 +2031,218 @@ test('teardown cleans siblings independently and waits for retained child close'
   await retry;
   t.true(stopped);
   t.is(children[1].listenerCount('close'), 0);
+});
+
+// --- Sandbox init kill, against a fake launcher -----------------------------
+//
+// These replace bwrap with a Node launcher that honours the parts of its
+// contract the driver depends on: it reports a pid on `--info-fd` (fd 3)
+// and lives in the process group the driver created.  Each launcher
+// pins one boundary deterministically instead of racing real bwrap's
+// setup window.
+
+const NEEDS_LINUX_PROC =
+  process.platform === 'linux' && nodeFs.existsSync('/proc/self/stat');
+
+/**
+ * A launcher whose init has already left its process group and armed no
+ * death signal: the window in which real bwrap strands its init.
+ */
+const STRANDING_LAUNCHER = `
+const { spawn } = require('child_process');
+const fs = require('fs');
+const init = spawn('/bin/sh', ['-c', 'exec 3>&- sleep 1000'], {
+  detached: true,
+  stdio: 'ignore',
+});
+fs.writeFileSync(process.argv[1], String(init.pid));
+fs.writeSync(3, JSON.stringify({ 'child-pid': init.pid }));
+fs.closeSync(3);
+setInterval(() => {}, 1000);
+`;
+
+/**
+ * A launcher that reports a pid it does not own, standing in for an init
+ * the launcher already reaped and whose pid the kernel reused.
+ */
+const MISREPORTING_LAUNCHER = `
+const fs = require('fs');
+fs.writeSync(3, JSON.stringify({ 'child-pid': Number(process.argv[1]) }));
+fs.closeSync(3);
+setInterval(() => {}, 1000);
+`;
+
+/** A launcher that holds its report open and never writes it. */
+const SILENT_LAUNCHER = `setInterval(() => {}, 1000);`;
+
+/**
+ * Build a `child_process` stub whose `spawn` runs `script` under Node in
+ * place of bwrap, with the driver's own stdio and process-group options.
+ *
+ * @param {string} script
+ * @param {string} [argument]
+ * @returns {{ childProcess: any, children: any[] }}
+ */
+const makeFakeLauncherChildProcess = (script, argument = '') => {
+  /** @type {any[]} */
+  const children = [];
+  const childProcess = {
+    /**
+     * @param {string} _program
+     * @param {string[]} _args
+     * @param {import('child_process').SpawnOptions} options
+     */
+    spawn: (_program, _args, options) => {
+      const child = nodeSpawn(
+        process.execPath,
+        ['-e', script, argument],
+        options,
+      );
+      children.push(child);
+      return child;
+    },
+  };
+  return { childProcess, children };
+};
+
+/**
+ * Whether `pid` names a process that has not exited.
+ *
+ * @param {number} pid
+ * @returns {boolean}
+ */
+const isProcessLive = pid => {
+  let stat;
+  try {
+    stat = nodeFs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    return false;
+  }
+  return (
+    stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3) !== 'Z'
+  );
+};
+
+/**
+ * @param {number} pid
+ * @param {number} [timeoutMs]
+ */
+const waitForProcessGone = async (pid, timeoutMs = 3000) => {
+  await null;
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessLive(pid)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`process ${pid} survived bounded cleanup`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+};
+
+/**
+ * @param {string} file
+ * @param {number} [timeoutMs]
+ * @returns {Promise<number>}
+ */
+const waitForReportedPid = async (file, timeoutMs = 5000) => {
+  await null;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let text = '';
+    try {
+      text = nodeFs.readFileSync(file, 'utf8');
+    } catch {
+      // not written yet
+    }
+    if (text !== '') return Number(text);
+    if (Date.now() >= deadline) throw new Error(`no pid reported in ${file}`);
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+};
+
+/**
+ * @param {number} pid
+ */
+const killQuietly = pid => {
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // already gone
+  }
+};
+
+test('bwrap kill reaches a sandbox init outside the launcher group', async t => {
+  if (!NEEDS_LINUX_PROC) {
+    t.pass('needs Linux /proc');
+    return;
+  }
+  t.timeout(10_000);
+  const directory = nodeFs.mkdtempSync(
+    nodePath.join(nodeOs.tmpdir(), 'endo-bwrap-init-'),
+  );
+  const reportFile = nodePath.join(directory, 'init-pid');
+  const { childProcess } = makeFakeLauncherChildProcess(
+    STRANDING_LAUNCHER,
+    reportFile,
+  );
+  const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+  const sandboxProcess = await driver.spawn(slice, ['/bin/true'], {});
+  const initPid = await waitForReportedPid(reportFile);
+  t.teardown(async () => {
+    killQuietly(initPid);
+    await driver.teardown(slice);
+    nodeFs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  await sandboxProcess.kill();
+  await sandboxProcess.wait();
+  // A process-group signal alone leaves this init running.
+  await t.notThrowsAsync(
+    waitForProcessGone(initPid),
+    `sandbox init ${initPid} should not outlive its cancellation`,
+  );
+});
+
+test('bwrap kill spares a reported pid the launcher does not own', async t => {
+  if (!NEEDS_LINUX_PROC) {
+    t.pass('needs Linux /proc');
+    return;
+  }
+  t.timeout(10_000);
+  const bystander = nodeSpawn('/bin/sh', ['-c', 'exec sleep 1000'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const bystanderPid = /** @type {number} */ (bystander.pid);
+  const { childProcess } = makeFakeLauncherChildProcess(
+    MISREPORTING_LAUNCHER,
+    String(bystanderPid),
+  );
+  const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+  t.teardown(async () => {
+    killQuietly(bystanderPid);
+    await driver.teardown(slice);
+  });
+  const sandboxProcess = await driver.spawn(slice, ['/bin/true'], {});
+
+  await sandboxProcess.kill();
+  const exit = await sandboxProcess.wait();
+  t.is(exit.signal, 'SIGTERM', 'the stopped launcher resumes to take SIGTERM');
+  await driver.teardown(slice);
+  t.true(
+    isProcessLive(bystanderPid),
+    'a pid that is not the launcher child must never be signalled',
+  );
+});
+
+test('bwrap teardown of a launcher that never reports stays within its grace', async t => {
+  t.timeout(10_000);
+  const { childProcess } = makeFakeLauncherChildProcess(SILENT_LAUNCHER);
+  const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+  await driver.spawn(slice, ['/bin/true'], {});
+
+  // The init-report wait must not consume the close grace, or the group
+  // signal is sent only after teardown has already given up.
+  await t.notThrowsAsync(driver.teardown(slice));
 });
