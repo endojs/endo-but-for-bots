@@ -936,9 +936,7 @@ export const makeBwrapDriver = ({
     }
 
     const sandboxInit = readSandboxInitPid(
-      /** @type {Readable | null | undefined} */ (
-        child.stdio?.[INFO_FD]
-      ),
+      /** @type {Readable | null | undefined} */ (child.stdio?.[INFO_FD]),
     );
 
     /**
