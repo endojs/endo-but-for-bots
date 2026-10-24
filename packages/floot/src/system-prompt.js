@@ -526,7 +526,8 @@ return await E(git).currentBranch();
 \`\`\`
 Naming the mount, the git, and the remote is what lets later exec calls reach
 them; the names are bound only once the whole clone succeeds, and a failed
-clone leaves the mount empty, so the same call can simply be retried. The git carries the author identity you gave it, and the remote is
+clone leaves the mount empty, so the same call can simply be retried. The git
+carries the author identity you gave it, and the remote is
 fenced to the \`agent\` branch, so what you commit and push is attributable
 and reviewable.
 
