@@ -310,6 +310,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['listMountHostEntries']} [powers.listMountHostEntries]
  * @param {DaemonCore['removeStaleMountStagingEntries']} [powers.removeStaleMountStagingEntries]
  * @param {DaemonCore['makeMountStagingEntry']} [powers.makeMountStagingEntry]
+ * @param {DaemonCore['assertMountStagingEntry']} [powers.assertMountStagingEntry]
  * @param {DaemonCore['moveMountEntries']} [powers.moveMountEntries]
  * @param {DaemonCore['discardMountEntries']} [powers.discardMountEntries]
  * @param {HostToolPowers['gitClone']} [powers.gitClone]
@@ -415,6 +416,11 @@ export const makeHostMaker = ({
   },
   makeMountStagingEntry = /** @param {FormulaIdentifier} _id */ async _id => {
     throw makeError(X`makeMountStagingEntry not wired into makeHostMaker`);
+  },
+  assertMountStagingEntry = /** @param {...any} _arguments */ async (
+    ..._arguments
+  ) => {
+    throw makeError(X`assertMountStagingEntry not wired into makeHostMaker`);
   },
   moveMountEntries = /** @param {...any} _arguments */ async (
     ..._arguments
@@ -1876,6 +1882,13 @@ export const makeHostMaker = ({
         clone: async input => {
           staging = await makeMountStagingEntry(
             /** @type {FormulaIdentifier} */ (destMountId),
+          );
+          // Another holder of the mount can see the staging name and
+          // replace the directory, so its recorded identity is re-checked
+          // before git writes into it and again before anything moves out.
+          await assertMountStagingEntry(
+            /** @type {FormulaIdentifier} */ (destMountId),
+            staging,
           );
           await gitClone({
             ...input,
