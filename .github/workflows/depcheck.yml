@@ -30,7 +30,9 @@ jobs:
   build:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['depcheck']) }}
-    runs-on: ubuntu-latest
+    # graphviz 14 on Ubuntu 26.04 splits tred into graphviz-tools and no longer
+    # ships acyclic, but the dependency-cycle check requires both commands.
+    runs-on: ubuntu-24.04
     steps:
       - name: Require successful change detection
         if: needs.changes.result != 'success'
