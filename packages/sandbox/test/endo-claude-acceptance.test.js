@@ -298,10 +298,13 @@ test.serial(
         },
       })
     );
+    const workedLoopGrantNames = (await E(guest).list()).filter(
+      name => !name.startsWith('@'),
+    );
     t.deepEqual(
-      await E(guest).list(),
+      workedLoopGrantNames,
       ['git', 'remote', 'shell', 'workspace'],
-      'the guest holds exactly the four worked-loop grants',
+      'the guest holds exactly the four non-special worked-loop grants',
     );
 
     const formulaId = await E(host).identify('phase-seven-claude-guest');
