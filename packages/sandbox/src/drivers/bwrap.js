@@ -103,109 +103,6 @@ const raceChildClose = (child, milliseconds) =>
 harden(raceChildClose);
 
 /**
- * Bound on how long a kill waits for a `SIGSTOP`ped launcher to reach the
- * stopped state.  Stop delivery is immediate unless the launcher is in an
- * uninterruptible sleep; past the bound the kill proceeds anyway.
- */
-const LAUNCHER_STOP_GRACE_MS = 250;
-
-/**
- * Read the scheduler state letter and parent pid from `/proc/<pid>/stat`,
- * or `undefined` when the process is gone.
- *
- * @param {typeof NodeFs} fs
- * @param {number} pid
- * @returns {Promise<{ state: string, ppid: number } | undefined>}
- */
-const readProcStat = async (fs, pid) => {
-  let stat;
-  try {
-    stat = await fs.promises.readFile(`/proc/${pid}/stat`, 'utf8');
-  } catch {
-    return undefined;
-  }
-  // The command name is parenthesized and may itself hold spaces or
-  // parentheses, so the fields are read after the last `)`.
-  const [state, ppid] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-  return harden({ state, ppid: Number(ppid) });
-};
-harden(readProcStat);
-
-/**
- * Wait until `pid` is stopped, a zombie, or gone, giving up after `milliseconds`.
- *
- * @param {typeof NodeFs} fs
- * @param {number} pid
- * @param {number} milliseconds
- * @returns {Promise<void>}
- */
-const waitForStopped = async (fs, pid, milliseconds) => {
-  const deadline = Date.now() + milliseconds;
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    const stat = await readProcStat(fs, pid);
-    if (stat === undefined || 'TtZX'.includes(stat.state)) return;
-    if (Date.now() >= deadline) return;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise(resolve => setTimeout(resolve, 1));
-  }
-};
-harden(waitForStopped);
-
-/**
- * List the pids whose parent is `pid`.
- *
- * Each of the process's threads lists its own children in
- * `/proc/<pid>/task/<tid>/children`, so the lookup reads only as many
- * files as the process has threads, however many processes the host runs.
- * A kernel built without `CONFIG_PROC_CHILDREN` lacks those files; only
- * then does the lookup fall back to reading every host process's `stat`.
- *
- * @param {typeof NodeFs} fs
- * @param {number} pid
- * @returns {Promise<number[]>}
- */
-const listChildPids = async (fs, pid) => {
-  /** @type {number[]} */
-  const children = [];
-  let threads;
-  try {
-    threads = await fs.promises.readdir(`/proc/${pid}/task`);
-  } catch {
-    // The process is gone, so it has no children to find.
-    return children;
-  }
-  try {
-    for (const thread of threads) {
-      // eslint-disable-next-line no-await-in-loop
-      const text = await fs.promises.readFile(
-        `/proc/${pid}/task/${thread}/children`,
-        'utf8',
-      );
-      for (const child of text.split(/\s+/)) {
-        if (/^\d+$/.test(child)) children.push(Number(child));
-      }
-    }
-    return children;
-  } catch (e) {
-    const error = /** @type {Error & { code?: string }} */ (e);
-    if (error.code !== 'ENOENT') throw error;
-  }
-  children.length = 0;
-  for (const entry of await fs.promises.readdir('/proc')) {
-    if (/^\d+$/.test(entry)) {
-      // eslint-disable-next-line no-await-in-loop
-      const stat = await readProcStat(fs, Number(entry));
-      if (stat !== undefined && stat.ppid === pid) {
-        children.push(Number(entry));
-      }
-    }
-  }
-  return children;
-};
-harden(listChildPids);
-
-/**
  * Inner mount points the driver always installs for a usable rootfs.
  *
  * `--proc /proc` mounts a fresh procfs inside the pid namespace,
@@ -692,13 +589,14 @@ export const makeBwrapDriver = ({
     if (
       helpResult.code !== 0 ||
       !advertises('--die-with-parent') ||
-      !advertises('--new-session')
+      !advertises('--new-session') ||
+      !advertises('--info-fd')
     ) {
       return harden({
         available: false,
         version,
         reason:
-          'bwrap does not advertise required --die-with-parent and --new-session lifecycle support',
+          'bwrap does not advertise required --die-with-parent, --new-session, and --info-fd lifecycle support',
         details: harden({
           lifecycle: harden({
             available: false,
@@ -908,6 +806,11 @@ export const makeBwrapDriver = ({
     /** @type {string[]} */
     const fullArgv = [...slice.sliceArgv];
 
+    // Bubblewrap reports the pid-namespace init on this pipe. Keeping the
+    // report out of stdout/stderr avoids parsing command output and removes
+    // the former dependency on Linux procfs process discovery.
+    fullArgv.push('--info-fd', '3');
+
     // Per-spawn cwd override.  Layer on top of the slice's cwd.
     if (opts.cwd !== undefined) {
       fullArgv.push('--chdir', opts.cwd);
@@ -951,6 +854,7 @@ export const makeBwrapDriver = ({
           'pipe',
           opts.captureStdout === false ? 'ignore' : 'pipe',
           opts.captureStderr === false ? 'ignore' : 'pipe',
+          'pipe',
         ],
         // A distinct host process group lets every termination path signal
         // bwrap, its launcher, and all descendants with one negative pid.
@@ -967,35 +871,47 @@ export const makeBwrapDriver = ({
       );
     }
 
+    const infoStream = /** @type {import('stream').Readable | null} */ (
+      child.stdio?.[3] ?? null
+    );
+    const sandboxInitPid = new Promise(resolve => {
+      if (infoStream === null || infoStream === undefined) {
+        resolve(undefined);
+        return;
+      }
+      let text = '';
+      infoStream.setEncoding('utf8');
+      infoStream.on('data', chunk => {
+        text += chunk;
+        if (text.length > 65_536) infoStream.destroy();
+      });
+      infoStream.once('end', () => {
+        try {
+          const report = JSON.parse(text);
+          resolve(
+            Number.isSafeInteger(report['child-pid'])
+              ? report['child-pid']
+              : undefined,
+          );
+        } catch {
+          resolve(undefined);
+        }
+      });
+      infoStream.once('error', () => resolve(undefined));
+    });
+
     /**
-     * Kill the sandbox init, then signal the launcher's process group.
+     * Preserve the requested signal's meaning. Liveness probes and catchable
+     * signals go only to the launcher's process group. Terminal signals also
+     * kill the reported pid-namespace init, closing the setup window before
+     * `--die-with-parent` is armed.
      *
-     * The host process group holds only the launcher: bwrap's sandbox
-     * init calls `setsid()` for `--new-session`, so a group signal never
-     * reaches the slice.  The slice dies only when its init dies, which
-     * `--die-with-parent` arranges when the launcher dies.  But bwrap
-     * arms that death signal in the init only after the launcher has
-     * finished user-namespace setup.  A launcher that dies first, from
-     * any signal, strands the init: it is reparented, either blocked
-     * forever on setup or running the command with no death signal.
-     * Its leader is then reaped, so `killProcessGroup` declines every
-     * later attempt.
-     *
-     * Signalling the init directly closes that window.  The launcher is
-     * stopped first, so that it can neither reap the init nor clone one:
-     * while the launcher is stopped, the init it has cloned, live or a
-     * zombie, keeps its pid, and the pid cannot name another process.
-     * The init is found as the launcher's child in `/proc`, without
-     * relying on anything the launcher reports, so a launcher at any
-     * point of its setup is handled the same.  Killing a pid namespace's
-     * init kills the whole namespace, whatever session the command is
-     * in.  A soft signal never reached the command anyway, so `SIGKILL`
-     * changes no observable outcome.  The requested signal then reaches
-     * the launcher, which `SIGCONT` resumes to act on it.
+     * Calls are serialized so one kill cannot race another kill.
      *
      * @param {NodeJS.Signals | number} signal
      */
-    const killSlice = async signal => {
+    const killSliceNow = async signal => {
+      await null;
       const { pid } = child;
       if (
         pid === undefined ||
@@ -1004,11 +920,9 @@ export const makeBwrapDriver = ({
       ) {
         return;
       }
-      const fs = fsModule ?? (await import('fs'));
-      killProcessGroup(child, 'SIGSTOP');
-      try {
-        await waitForStopped(fs, pid, LAUNCHER_STOP_GRACE_MS);
-        for (const initPid of await listChildPids(fs, pid)) {
+      if (signal === 'SIGKILL' || signal === 'SIGTERM') {
+        const initPid = await sandboxInitPid;
+        if (initPid !== undefined) {
           try {
             process.kill(initPid, 'SIGKILL');
           } catch (e) {
@@ -1016,10 +930,15 @@ export const makeBwrapDriver = ({
             if (error.code !== 'ESRCH') throw error;
           }
         }
-      } finally {
-        killProcessGroup(child, signal);
-        killProcessGroup(child, 'SIGCONT');
       }
+      killProcessGroup(child, signal);
+    };
+    let killSequence = Promise.resolve();
+    /** @param {NodeJS.Signals | number} signal */
+    const killSlice = signal => {
+      const result = killSequence.then(() => killSliceNow(signal));
+      killSequence = result.catch(() => undefined);
+      return result;
     };
 
     let closed = false;
