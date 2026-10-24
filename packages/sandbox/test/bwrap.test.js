@@ -1029,8 +1029,8 @@ test.serial(
     );
     t.teardown(async () => {
       await E(handle).dispose();
-      for (const dir of tmpdirs)
-        nodeFs.rmSync(dir, { recursive: true, force: true });
+      for (const directory of tmpdirs)
+        nodeFs.rmSync(directory, { recursive: true, force: true });
     });
     const proc = await E(handle).spawn(
       harden([

@@ -32,6 +32,7 @@ import {
   probeMountRootfsBinPaths,
 } from './path.js';
 
+/** @import { Readable } from 'stream' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
 
 /**
@@ -123,7 +124,7 @@ const INFO_REPORT_GRACE_MS = 1000;
  * init, or bwrap is too old to report it, and the process-group signal
  * remains the only cleanup available.
  *
- * @param {import('stream').Readable | null | undefined} stream
+ * @param {Readable | null | undefined} stream
  * @returns {Promise<number | undefined>}
  */
 const readSandboxInitPid = stream =>
@@ -935,7 +936,7 @@ export const makeBwrapDriver = ({
     }
 
     const sandboxInit = readSandboxInitPid(
-      /** @type {import('stream').Readable | null | undefined} */ (
+      /** @type {Readable | null | undefined} */ (
         child.stdio?.[INFO_FD]
       ),
     );
@@ -975,8 +976,8 @@ export const makeBwrapDriver = ({
         try {
           process.kill(initPid, 'SIGKILL');
         } catch (e) {
-          const err = /** @type {Error & { code?: string }} */ (e);
-          if (err.code !== 'ESRCH') throw err;
+          const error = /** @type {Error & { code?: string }} */ (e);
+          if (error.code !== 'ESRCH') throw error;
         }
       }
       killProcessGroup(child, signal);
