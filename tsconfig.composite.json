@@ -105,6 +105,9 @@
       "path": "packages/exo/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-dynamodb/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-git/tsconfig.composite.json"
     },
     {
