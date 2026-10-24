@@ -11,6 +11,9 @@ export type {
   AcquireResult,
   AcquiredSlot,
   Broker,
+  EndoClaudeGuestProvisionOptions,
+  EndoClaudeProvisionHost,
+  EndoClaudeWorkspaceGrantNames,
   GuestFormulaId,
   HarnessOptions,
   HttpTransport,
@@ -24,6 +27,8 @@ export type {
   StdioTransport,
   Subscription,
 } from './src/claude.types.js';
+
+export { provisionEndoClaudeGuest } from './src/claude.types.js';
 
 export type {
   ChildProcessLike,
