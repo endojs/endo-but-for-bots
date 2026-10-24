@@ -230,19 +230,20 @@ export const makeXsFilePowers = () => {
   /**
    * Recursively remove a directory and its contents.  The XS host's
    * `remove` is non-recursive, so emulate `rm -rf` by walking the
-   * tree.  Idempotent: a missing directory is not an error.
+   * tree.  Idempotent: a missing directory is not an error.  A symbolic
+   * link is unlinked, never followed, so the walk cannot leave the tree it
+   * was asked to remove, the same as `rm -rf`.
    *
    * @type {FilePowers['removeDirectory']}
    */
   const removeDirectory = async path => {
-    const isDir = await isDirectory(path);
-    if (!isDir) {
-      // Either missing or a file; defer to removePath which is
-      // already idempotent for missing entries.
-      const present = await exists(path);
-      if (present) {
-        await removePath(path);
-      }
+    // `exists` and `statRaw` both read the link itself, not its target.
+    if (!(await exists(path))) {
+      return;
+    }
+    const { kind } = await statRaw(path);
+    if (kind !== 'directory') {
+      await removePath(path);
       return;
     }
     const entries = await readDirectory(path);
@@ -344,6 +345,40 @@ export const makeXsFilePowers = () => {
   const pathIdentity = async path => {
     const { dev, ino } = await statRaw(path);
     return `${dev}:${ino}`;
+  };
+
+  /**
+   * `pathIdentity` already reads the entry itself, not a link's referent.
+   *
+   * @type {FilePowers['entryIdentity']}
+   */
+  const entryIdentity = pathIdentity;
+
+  /**
+   * The XS host has no rename that refuses an existing target, and a
+   * check before an ordinary rename would leave a window in which another
+   * writer's entry is replaced, so this always refuses.
+   *
+   * @type {FilePowers['renameNoReplace']}
+   */
+  const renameNoReplace = async (source, _target) => {
+    throw new Error(
+      `renameNoReplace: the XS host cannot move ${source} without risking replacing an entry`,
+    );
+  };
+
+  /**
+   * The XS host's `remove` is non-recursive, so it refuses a non-empty
+   * directory.
+   *
+   * @type {FilePowers['removeEmptyDirectory']}
+   */
+  const removeEmptyDirectory = async path => {
+    const { kind } = await statRaw(path);
+    if (kind !== 'directory') {
+      throw new Error(`removeEmptyDirectory: not a directory: ${path}`);
+    }
+    await removePath(path);
   };
 
   /** @type {FilePowers['isDirectory']} */
@@ -477,6 +512,9 @@ export const makeXsFilePowers = () => {
     realPath,
     readLink,
     pathIdentity,
+    entryIdentity,
+    renameNoReplace,
+    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,

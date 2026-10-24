@@ -26,6 +26,154 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const posixTest = process.platform === 'win32' ? test.skip : test;
+
+/**
+ * Create a stand-in for git that starts a long-lived descendant. The final two
+ * arguments select the descendant-pid file and the number of bytes to write
+ * before waiting.  With `ignoreTerm`, the stand-in and its descendant both
+ * ignore `SIGTERM`.
+ *
+ * @param {ExecutionContext} t
+ * @param {{ ignoreTerm?: boolean }} [options]
+ */
+const makeHangingGit = async (t, { ignoreTerm = false } = {}) => {
+  const fixtureRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-process-group-'),
+  );
+  t.teardown(() =>
+    fs.promises.rm(fixtureRoot, { recursive: true, force: true }),
+  );
+  const executable = path.join(fixtureRoot, 'git');
+  await fs.promises.writeFile(
+    executable,
+    `#!/bin/sh
+set -eu
+for value do
+  pid_file=\${output_bytes-}
+  output_bytes=$value
+done
+${ignoreTerm ? "trap '' TERM" : ''}
+/bin/sleep 300 >/dev/null 2>&1 &
+printf '%s\\n' "$!" > "$pid_file"
+if [ "$output_bytes" -gt 0 ]; then
+  dd if=/dev/zero bs="$output_bytes" count=1 2>/dev/null
+fi
+wait
+`,
+    { mode: 0o755 },
+  );
+  return harden({
+    executable,
+    fixtureRoot,
+    pidFile: path.join(fixtureRoot, 'descendant.pid'),
+  });
+};
+
+/**
+ * Wait until the stand-in git records its descendant.
+ *
+ * @param {string} pidFile
+ */
+const readDescendantPid = async pidFile => {
+  await null;
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return Number.parseInt(await fs.promises.readFile(pidFile, 'utf8'), 10);
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('stand-in git did not record its descendant pid');
+};
+
+/**
+ * Wait until a process-group kill has reaped a descendant.
+ *
+ * @param {number} pid
+ */
+const waitForProcessGone = async pid => {
+  await null;
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ESRCH') {
+        return;
+      }
+      throw error;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`git descendant ${pid} survived process-group kill`);
+};
+
+posixTest('remote git timeout kills the process group', async t => {
+  t.timeout(5000);
+  const { runRemoteGitAt } = internalHelpers;
+  const { executable, fixtureRoot, pidFile } = await makeHangingGit(t);
+  const operation = runRemoteGitAt({
+    cwd: fixtureRoot,
+    envRoot: fixtureRoot,
+    gitArguments: [pidFile, '0'],
+    gitExecutable: executable,
+    timeoutMs: 100,
+  });
+  const descendantPid = await readDescendantPid(pidFile);
+
+  await t.throwsAsync(operation, { message: /git operation timed out/ });
+  await waitForProcessGone(descendantPid);
+});
+
+posixTest(
+  'remote git timeout escalates to SIGKILL when the processes ignore SIGTERM',
+  async t => {
+    t.timeout(5000);
+    const { runRemoteGitAt } = internalHelpers;
+    const { executable, fixtureRoot, pidFile } = await makeHangingGit(t, {
+      ignoreTerm: true,
+    });
+    const operation = runRemoteGitAt({
+      cwd: fixtureRoot,
+      envRoot: fixtureRoot,
+      gitArguments: [pidFile, '0'],
+      gitExecutable: executable,
+      timeoutMs: 100,
+      killGraceMs: 200,
+    });
+    const descendantPid = await readDescendantPid(pidFile);
+
+    await t.throwsAsync(operation, { message: /git operation timed out/ });
+    await waitForProcessGone(descendantPid);
+  },
+);
+
+posixTest('remote git output overflow kills the process group', async t => {
+  t.timeout(5000);
+  const { runRemoteGitAt } = internalHelpers;
+  const { executable, fixtureRoot, pidFile } = await makeHangingGit(t);
+  const operation = runRemoteGitAt({
+    cwd: fixtureRoot,
+    envRoot: fixtureRoot,
+    gitArguments: [pidFile, '4096'],
+    gitExecutable: executable,
+    timeoutMs: 4000,
+    maxOutputBytes: 1024,
+  });
+  const descendantPid = await readDescendantPid(pidFile);
+
+  await t.throwsAsync(operation, { message: /git output exceeded max buffer/ });
+  await waitForProcessGone(descendantPid);
+});
+
 test('gitClone rejects unsafe clone boundaries before transport', async t => {
   const nonEmptyDestination = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-clone-nonempty-'),

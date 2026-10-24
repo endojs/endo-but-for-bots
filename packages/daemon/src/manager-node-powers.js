@@ -587,6 +587,57 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     });
   };
 
+  /**
+   * Rename `source` to `target` only if nothing holds `target`, with no
+   * window in which an entry another writer creates at `target` is
+   * replaced.  A directory claims `target` with an exclusive `mkdir` and
+   * then renames over that empty directory.  A symbolic link is recreated
+   * at `target` with `symlink`, and any other entry is hard-linked; both
+   * refuse an existing `target`, and the source is then unlinked.  (`link`
+   * is not used for a symbolic link because some platforms follow it.)
+   * Regular files therefore require hard-link support on the mount. A crash
+   * or unlink failure can leave both names, but cannot replace the target.
+   * Resolves to the moved entry's `dev:ino` identity, which a directory or
+   * a file keeps and a recreated symbolic link does not.
+   *
+   * @type {FilePowers['renameNoReplace']}
+   */
+  const renameNoReplace = async (source, target) =>
+    writeJobs.enqueue(async () => {
+      const sourceStat = await fs.promises.lstat(source, { bigint: true });
+      if (sourceStat.isDirectory()) {
+        await fs.promises.mkdir(target);
+        try {
+          await fs.promises.rename(source, target);
+        } catch (error) {
+          // `rmdir` removes only an empty directory, so this cannot remove
+          // anything another writer put at `target`.
+          await fs.promises.rmdir(target).catch(() => {});
+          throw error;
+        }
+        return `${sourceStat.dev}:${sourceStat.ino}`;
+      }
+      if (sourceStat.isSymbolicLink()) {
+        await fs.promises.symlink(await fs.promises.readlink(source), target);
+        const targetStat = await fs.promises.lstat(target, { bigint: true });
+        await fs.promises.unlink(source);
+        return `${targetStat.dev}:${targetStat.ino}`;
+      }
+      await fs.promises.link(source, target);
+      const targetStat = await fs.promises.lstat(target, { bigint: true });
+      await fs.promises.unlink(source);
+      return `${targetStat.dev}:${targetStat.ino}`;
+    });
+
+  /**
+   * Remove `path` only if it is an empty directory.
+   *
+   * @type {FilePowers['removeEmptyDirectory']}
+   */
+  const removeEmptyDirectory = async path => {
+    await writeJobs.enqueue(async () => fs.promises.rmdir(path));
+  };
+
   const joinPath = (...components) => fspath.join(...components);
 
   /** @param {string} path */
@@ -643,6 +694,17 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
    */
   const pathIdentity = async path => {
     const stat = await fs.promises.stat(path);
+    return `${stat.dev}:${stat.ino}`;
+  };
+
+  /**
+   * The device and inode of the entry at `path` itself; a symbolic link
+   * reports its own identity, not its referent's.
+   *
+   * @type {FilePowers['entryIdentity']}
+   */
+  const entryIdentity = async path => {
+    const stat = await fs.promises.lstat(path, { bigint: true });
     return `${stat.dev}:${stat.ino}`;
   };
 
@@ -874,6 +936,9 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     renamePath,
     realPath,
     pathIdentity,
+    entryIdentity,
+    renameNoReplace,
+    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,

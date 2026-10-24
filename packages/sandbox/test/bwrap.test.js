@@ -6,6 +6,7 @@ import { makeExo } from '@endo/exo';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { M } from '@endo/patterns';
 
+import * as nodeChildProcess from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import * as nodeFs from 'node:fs';
@@ -863,18 +864,22 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // /bin/sh's `ulimit -u` reports RLIMIT_NPROC, the same value
-  // prlimit set.  We assert the cap is in effect rather than
-  // running an actual fork bomb (which would also stress the host
-  // the test process is running on).
-  const result = await runInSlice(t, handle, ['/bin/sh', '-c', 'ulimit -u']);
+  // The `Max processes` row of `/proc/self/limits` reports
+  // RLIMIT_NPROC, the same value prlimit set; `cat` inherits it from
+  // the slice's process tree.  We read procfs rather than a shell
+  // builtin because `ulimit -u` is a bash spelling that dash, the
+  // `/bin/sh` on Debian and Ubuntu, rejects.  We assert the cap is in
+  // effect rather than running an actual fork bomb (which would also
+  // stress the host the test process is running on).
+  const result = await runInSlice(t, handle, ['/bin/cat', '/proc/self/limits']);
   if (result === null) return;
   t.is(
     result.exit.code,
     0,
-    `ulimit -u exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
+    `cat /proc/self/limits exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
   );
-  const reported = Number(result.stdout.trim());
+  const match = result.stdout.match(/^Max processes\s+(\S+)/m);
+  const reported = match === null ? undefined : Number(match[1]);
   t.is(
     reported,
     cap,
@@ -945,18 +950,18 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
   // If disposal wins before spawn settles, spawn rejects; otherwise wait()
   // reports disposal. Either arm must leave the process group gone.
   /** @type {Awaited<typeof spawned> | undefined} */
-  let proc;
+  let sliceProcess;
   /** @type {Error | undefined} */
   let admissionError;
   try {
-    proc = await spawned;
+    sliceProcess = await spawned;
   } catch (e) {
     admissionError = /** @type {Error} */ (e);
   }
   await disposed;
-  if (proc !== undefined) {
-    const pid = await E(proc).pid();
-    await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+  if (sliceProcess !== undefined) {
+    const pid = await E(sliceProcess).pid();
+    await t.throwsAsync(() => E(sliceProcess).wait(), { message: /disposed/ });
     await waitForProcessGroupGone(pid);
   } else {
     t.regex(/** @type {Error} */ (admissionError).message, /disposed/);
@@ -1099,6 +1104,145 @@ test.serial(
   },
 );
 
+/**
+ * List host processes whose command line contains `marker`.
+ *
+ * @param {string} marker
+ * @returns {number[]}
+ */
+const findMarkedProcesses = marker => {
+  /** @type {number[]} */
+  const pids = [];
+  for (const entry of nodeFs.readdirSync('/proc')) {
+    if (/^\d+$/.test(entry)) {
+      let cmdline = '';
+      try {
+        cmdline = nodeFs.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
+      } catch {
+        // exited while listing
+      }
+      if (cmdline.includes(marker)) pids.push(Number(entry));
+    }
+  }
+  return pids;
+};
+
+test.serial(
+  'bwrap kill preserves signal semantics and reaches a reported sandbox init',
+  async t => {
+    // A stand-in launcher holds the setup window open deterministically.
+    // Like bwrap's init before `--die-with-parent` is armed, its child is
+    // in a session of its own and has no death signal, so a signal to the
+    // launcher's process group alone leaves the child running.
+    t.timeout(30_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const fixtureDirectory = nodeFs.mkdtempSync(
+      nodePath.join(nodeOs.tmpdir(), 'bwrap-launcher-'),
+    );
+    const marker = `7777.${process.pid}${Date.now() % 100_000}`;
+    const launcherPath = nodePath.join(fixtureDirectory, 'launcher.sh');
+    const commandPath = nodePath.join(fixtureDirectory, 'command.sh');
+    const signalReceiptPath = nodePath.join(
+      fixtureDirectory,
+      'signal-received',
+    );
+    nodeFs.writeFileSync(
+      commandPath,
+      '#!/bin/sh\ntrap \'printf received > "$2"\' USR1\nwhile :; do read -r _ || :; done\n',
+      { mode: 0o755 },
+    );
+    nodeFs.writeFileSync(
+      launcherPath,
+      `#!/bin/sh\nsetsid ${commandPath} ${marker} ${signalReceiptPath} 3>&- &\ninit_pid=$!\ntrap 'kill -USR1 "$init_pid"' USR1\nprintf '{"child-pid":%s}\\n' "$init_pid" >&3\nexec 3>&-\nwhile kill -0 "$init_pid" 2>/dev/null; do wait "$init_pid" || true; done\n`,
+      { mode: 0o755 },
+    );
+    // Not hardened: that would freeze Node's own child_process classes.
+    const childProcess = {
+      ...nodeChildProcess,
+      /** @type {typeof nodeChildProcess.spawn} */
+      spawn: /** @type {any} */ (
+        (
+          /** @type {string} */ program,
+          /** @type {string[]} */ spawnArguments,
+          /** @type {object} */ options,
+        ) =>
+          // A slice launch runs bwrap directly or through `prlimit`.
+          (program === 'bwrap' || spawnArguments.includes('bwrap')) &&
+          spawnArguments.includes('--')
+            ? nodeSpawn(launcherPath, [], options)
+            : nodeSpawn(program, spawnArguments, options)
+      ),
+    };
+    const driver = makeBwrapDriver({ env: {}, childProcess });
+    const slice = await driver.prepareSlice(
+      makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+    );
+    t.teardown(async () => {
+      for (const pid of findMarkedProcesses(marker)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+      await driver.teardown(slice);
+      nodeFs.rmSync(fixtureDirectory, { recursive: true, force: true });
+    });
+
+    const sliceProcess = await driver.spawn(slice, ['/bin/true'], {
+      captureStdout: false,
+      captureStderr: false,
+    });
+    let started = findMarkedProcesses(marker);
+    const startDeadline = Date.now() + 5000;
+    while (started.length === 0 && Date.now() < startDeadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 10));
+      started = findMarkedProcesses(marker);
+    }
+    t.is(started.length, 1, 'the stand-in sandbox init is running');
+
+    await sliceProcess.kill(0);
+    t.deepEqual(
+      findMarkedProcesses(marker),
+      started,
+      'signal 0 does not terminate the sandbox init',
+    );
+
+    await sliceProcess.kill('SIGUSR1');
+    const signalDeadline = Date.now() + 3000;
+    while (
+      !nodeFs.existsSync(signalReceiptPath) &&
+      Date.now() < signalDeadline
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    t.true(
+      nodeFs.existsSync(signalReceiptPath),
+      'a catchable signal reaches the stand-in command',
+    );
+    t.deepEqual(
+      findMarkedProcesses(marker),
+      started,
+      'a caught signal does not hard-kill the sandbox init',
+    );
+
+    await sliceProcess.kill('SIGTERM');
+    await sliceProcess.wait();
+
+    const deadline = Date.now() + 3000;
+    let survivors = findMarkedProcesses(marker);
+    while (survivors.length > 0 && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 50));
+      survivors = findMarkedProcesses(marker);
+    }
+    t.deepEqual(survivors, [], 'the stand-in sandbox init was killed');
+  },
+);
+
 test.serial('bwrap parent death leaves no owned process group', async t => {
   t.timeout(10_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator
@@ -1146,7 +1290,10 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
   });
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
-  await waitForProcessGroupGone(/** @type {number} */ (pid));
+  await t.notThrowsAsync(
+    waitForProcessGroupGone(/** @type {number} */ (pid)),
+    `process group ${pid} should not outlive its owner`,
+  );
 });
 
 // --- PATH synthesis tests --------------------------------------------------

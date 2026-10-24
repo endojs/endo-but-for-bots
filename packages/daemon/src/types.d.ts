@@ -346,6 +346,39 @@ export type GitCommitIdentity = {
   committerEmail?: string;
 };
 
+/**
+ * Host-chosen policy for the `origin` GitRemote that `provideGitClone`
+ * mints.  These are the `provideGitRemote` policy fields minus `name`
+ * (always `origin`), `url` and `credential` (both from the clone
+ * endpoint), and `allowLocalFileTransport` (inherited from the endpoint).
+ * `allowedDirections` defaults to `['fetch']` and `fetchRefspecs` to
+ * `+refs/heads/*:refs/remotes/origin/*`.
+ */
+export type GitCloneOriginOptions = {
+  /**
+   * Names the origin GitRemote in the host's own pet store; unnamed, it is
+   * reachable only by reference.
+   */
+  petName?: string;
+  allowedDirections?: Array<'fetch' | 'push'>;
+  fetchRefspecs?: string[];
+  pushRefspecs?: string[];
+  allowedBranches?: string[];
+  defaultPullRef?: string;
+  allowForcePush?: boolean;
+  allowTags?: boolean;
+  allowDelete?: boolean;
+};
+
+/**
+ * An entry directly under a mount's host path, with the `dev:ino`
+ * identity of the filesystem object a daemon operation put there.
+ */
+export type MountEntryRecord = {
+  name: string;
+  identity: string;
+};
+
 export type GitProvisionOptions = {
   allowHistoryRewrite?: boolean;
   /**
@@ -2075,25 +2108,37 @@ export interface EndoHost extends EndoAgent {
   ): Promise<GitRemote>;
   /**
    * Host-only constructive clone. Composes a repo-less remote endpoint
-   * with an empty destination mount, returning a fresh Git cap and an
-   * origin-pre-bound GitRemote. The returned origin remote is bound
-   * for fetch and push over `refs/heads/*` only. This leaves the later
+   * with an empty destination mount, returning a fresh Git cap bound to
+   * `petName` and an `origin` GitRemote, bound to `origin.petName` when
+   * given.  `origin` takes the `provideGitRemote` policy fields except
+   * `name`, `url`, `credential` and `allowLocalFileTransport`, which the
+   * clone fixes from the endpoint, and defaults to fetch-only.
+   * `origin.petName` must differ from `petName`.  Both names are stored
+   * only after the whole composition succeeds.  The clone is staged inside
+   * the destination and moved into place, so on failure only what the call
+   * created is removed, and a name `origin.petName` replaced is restored
+   * unless it was rebound meanwhile, before the error is rethrown; the
+   * caller can retry into the same mount.  This leaves the later
    * guest-held GitCloner facet as an additive delegate.
    */
-  provideGitClone(opts: {
-    destMount: EndoMount;
-    endpoint: {
-      url: string;
-      credential?: unknown;
-      allowLocalFileTransport?: boolean;
-    };
-    /**
-     * Formula-owned, guest-immutable commit author/committer identity for the
-     * cloned repository's `Git` cap.  Omitted, commits default to
-     * `Endo <endo@invalid.local>`.
-     */
-    identity?: GitCommitIdentity;
-  }): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
+  provideGitClone(
+    destMount: EndoMount,
+    petName: string | string[],
+    options: {
+      endpoint: {
+        url: string;
+        credential?: unknown;
+        allowLocalFileTransport?: boolean;
+      };
+      /**
+       * Formula-owned, guest-immutable commit author/committer identity for
+       * the cloned repository's `Git` cap.  Omitted, commits default to
+       * `Endo <endo@invalid.local>`.  The `origin` remote carries none.
+       */
+      identity?: GitCommitIdentity;
+      origin?: GitCloneOriginOptions;
+    },
+  ): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
   /**
    * Mint a bearer-token `GitCredential` capability scoped to
    * `audience` (a URL origin) and bind it to `petName`.  Material
@@ -2610,6 +2655,14 @@ export type FilePowers = {
   removePath: (path: string) => Promise<void>;
   removeDirectory: (path: string) => Promise<void>;
   renamePath: (source: string, target: string) => Promise<void>;
+  /**
+   * Rename `source` to `target`, failing rather than replacing anything at
+   * `target`, including an entry created concurrently, and resolve to the
+   * moved entry's `entryIdentity`. A symbolic link may be recreated, with a
+   * new identity. Regular files require same-filesystem hard-link support.
+   */
+  renameNoReplace: (source: string, target: string) => Promise<string>;
+  removeEmptyDirectory: (path: string) => Promise<void>;
   realPath: (path: string) => Promise<string>;
   // Optional: only the XS-backed powers surface readLink today; the
   // Node powers omit it. Declared here so the XS factory's return value
@@ -2625,6 +2678,11 @@ export type FilePowers = {
    */
   search?: import('@endo/platform/fs/search.types').Search;
   pathIdentity: (path: string) => Promise<string>;
+  /**
+   * The `dev:ino` identity of the entry at `path` itself, without following
+   * a symbolic link.
+   */
+  entryIdentity: (path: string) => Promise<string>;
   statPath: (path: string) => Promise<{
     kind: 'file' | 'directory' | 'symlink';
     size: bigint;
@@ -3256,6 +3314,60 @@ export interface DaemonCore {
    * public surface.
    */
   getMountHostPath: (id: FormulaIdentifier) => string;
+
+  /**
+   * List the entry names directly under a `mount` or `scratch-mount`
+   * formula's host path.  A missing directory lists as empty.
+   */
+  listMountHostEntries: (id: FormulaIdentifier) => Promise<string[]>;
+
+  /**
+   * Discard the clone staging directories this daemon recorded for the mount
+   * in host-private state that no operation in the current process owns,
+   * each only while it is still the recorded object.  Unrecorded entries are
+   * never touched, whatever their names.
+   */
+  removeStaleMountStagingEntries: (id: FormulaIdentifier) => Promise<void>;
+
+  /**
+   * Create a uniquely named, empty daemon-private staging directory beside
+   * a `mount` or `scratch-mount`, record it, and return its name and identity.
+   * `provideGitClone` clones there so that discarding a failed clone never
+   * touches entries another holder of the mount wrote.
+   */
+  makeMountStagingEntry: (id: FormulaIdentifier) => Promise<MountEntryRecord>;
+
+  /**
+   * Resolve the host path of a staging directory made by
+   * `makeMountStagingEntry`, refusing unless it still designates the recorded
+   * directory itself.
+   */
+  assertMountStagingEntry: (
+    id: FormulaIdentifier,
+    staging: MountEntryRecord,
+  ) => Promise<string>;
+
+  /**
+   * Move every entry of a staging directory up into the mount's host path,
+   * never replacing an existing entry, then remove the emptied staging
+   * directory.  Each moved entry is appended to `moved`, with its identity,
+   * as it lands.
+   */
+  moveMountEntries: (
+    id: FormulaIdentifier,
+    staging: MountEntryRecord,
+    moved: MountEntryRecord[],
+  ) => Promise<void>;
+
+  /**
+   * Remove each named entry directly under a mount's host path only while
+   * it is still the recorded filesystem object.  An entry another holder
+   * replaced is kept.  Symbolic links are unlinked, never followed.
+   */
+  discardMountEntries: (
+    id: FormulaIdentifier,
+    entries: MountEntryRecord[],
+  ) => Promise<void>;
 
   getTypeForId: (id: FormulaIdentifier) => Promise<string>;
 

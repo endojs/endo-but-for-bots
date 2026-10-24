@@ -33,6 +33,8 @@ import {
 } from './path.js';
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
+/** @import * as NodeFs from 'fs' */
+/** @import { Readable } from 'stream' */
 
 /**
  * `SandboxDriver` for `bubblewrap` (`bwrap`) on Linux.
@@ -72,7 +74,7 @@ const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 const TEARDOWN_CLOSE_GRACE_MS = 1000;
 
 /**
- * Wait for `child` to emit `'close'`, giving up after `ms`.
+ * Wait for `child` to emit `'close'`, giving up after `milliseconds`.
  *
  * Resolves `true` when the stdio closed within the bound and `false`
  * when it did not.  Both outcomes release the timer and the `'close'`
@@ -80,10 +82,10 @@ const TEARDOWN_CLOSE_GRACE_MS = 1000;
  * attached to it.
  *
  * @param {import('child_process').ChildProcess} child
- * @param {number} ms
+ * @param {number} milliseconds
  * @returns {Promise<boolean>}
  */
-const raceChildClose = (child, ms) =>
+const raceChildClose = (child, milliseconds) =>
   new Promise(resolve => {
     /** @type {ReturnType<typeof setTimeout>} */
     let timer;
@@ -94,7 +96,7 @@ const raceChildClose = (child, ms) =>
     timer = setTimeout(() => {
       child.removeListener('close', onClose);
       resolve(false);
-    }, ms);
+    }, milliseconds);
     // Nothing should stay alive merely to keep watching a straggler.
     if (typeof timer.unref === 'function') timer.unref();
     child.once('close', onClose);
@@ -588,13 +590,14 @@ export const makeBwrapDriver = ({
     if (
       helpResult.code !== 0 ||
       !advertises('--die-with-parent') ||
-      !advertises('--new-session')
+      !advertises('--new-session') ||
+      !advertises('--info-fd')
     ) {
       return harden({
         available: false,
         version,
         reason:
-          'bwrap does not advertise required --die-with-parent and --new-session lifecycle support',
+          'bwrap does not advertise required --die-with-parent, --new-session, and --info-fd lifecycle support',
         details: harden({
           lifecycle: harden({
             available: false,
@@ -804,6 +807,11 @@ export const makeBwrapDriver = ({
     /** @type {string[]} */
     const fullArgv = [...slice.sliceArgv];
 
+    // Bubblewrap reports the pid-namespace init on this pipe. Keeping the
+    // report out of stdout/stderr avoids parsing command output and removes
+    // the former dependency on Linux procfs process discovery.
+    fullArgv.push('--info-fd', '3');
+
     // Per-spawn cwd override.  Layer on top of the slice's cwd.
     if (opts.cwd !== undefined) {
       fullArgv.push('--chdir', opts.cwd);
@@ -847,6 +855,7 @@ export const makeBwrapDriver = ({
           'pipe',
           opts.captureStdout === false ? 'ignore' : 'pipe',
           opts.captureStderr === false ? 'ignore' : 'pipe',
+          'pipe',
         ],
         // A distinct host process group lets every termination path signal
         // bwrap, its launcher, and all descendants with one negative pid.
@@ -863,19 +872,92 @@ export const makeBwrapDriver = ({
       );
     }
 
+    const infoStream = /** @type {Readable | null} */ (
+      child.stdio?.[3] ?? null
+    );
+    const sandboxInitPid = new Promise(resolve => {
+      if (infoStream === null || infoStream === undefined) {
+        resolve(undefined);
+        return;
+      }
+      let text = '';
+      infoStream.setEncoding('utf8');
+      infoStream.on('data', chunk => {
+        text += chunk;
+        if (text.length > 65_536) infoStream.destroy();
+      });
+      infoStream.once('end', () => {
+        try {
+          const report = JSON.parse(text);
+          resolve(
+            Number.isSafeInteger(report['child-pid'])
+              ? report['child-pid']
+              : undefined,
+          );
+        } catch {
+          resolve(undefined);
+        }
+      });
+      infoStream.once('error', () => resolve(undefined));
+    });
+
+    /**
+     * Preserve the requested signal's meaning. Liveness probes and catchable
+     * signals go only to the launcher's process group. Terminal signals also
+     * kill the reported pid-namespace init, closing the setup window before
+     * `--die-with-parent` is armed.
+     *
+     * Calls are serialized so one kill cannot race another kill.
+     *
+     * @param {NodeJS.Signals | number} signal
+     */
+    const killSliceNow = async signal => {
+      await null;
+      const { pid } = child;
+      if (
+        pid === undefined ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+      ) {
+        return;
+      }
+      if (signal === 'SIGKILL' || signal === 'SIGTERM') {
+        const initPid = await sandboxInitPid;
+        if (initPid !== undefined) {
+          try {
+            process.kill(initPid, 'SIGKILL');
+          } catch (e) {
+            const error = /** @type {Error & { code?: string }} */ (e);
+            if (error.code !== 'ESRCH') throw error;
+          }
+        }
+      }
+      killProcessGroup(child, signal);
+    };
+    let killSequence = Promise.resolve();
+    /** @param {NodeJS.Signals | number} signal */
+    const killSlice = signal => {
+      const result = killSequence.then(() => killSliceNow(signal));
+      killSequence = result.catch(() => undefined);
+      return result;
+    };
+
     let closed = false;
     const stop = async () => {
       await null;
       if (closed) return;
-      // Arm before signalling. A retry may signal a still-live child, but
-      // killProcessGroup declines a group whose leader Node already reaped.
-      const closing = raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS);
+      // A retry may signal a still-live child, but killProcessGroup
+      // declines a group whose leader Node already reaped.
       try {
-        killProcessGroup(child, 'SIGKILL');
+        await killSlice('SIGKILL');
       } catch {
         // A signal refusal is not a close proof; still wait for close.
       }
-      if (!(await closing)) {
+      // The close deadline starts only once the signal is delivered.  A
+      // close during the kill has already set `closed`, and the check and
+      // the listener below run in one turn, so no close is missed.
+      if (closed) return;
+      if (!(await raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS))) {
         throw makeError(
           X`bwrap teardown could not prove containment: child still held stdio open ${q(TEARDOWN_CLOSE_GRACE_MS)}ms after SIGKILL`,
         );
@@ -914,7 +996,7 @@ export const makeBwrapDriver = ({
       stderr: readableToAsyncIterable(child.stderr),
       wait: () => exited,
       kill: async signal => {
-        killProcessGroup(child, signal ?? 'SIGTERM');
+        await killSlice(signal ?? 'SIGTERM');
       },
       /** @param {Uint8Array} chunk */
       writeStdin: async chunk => {
