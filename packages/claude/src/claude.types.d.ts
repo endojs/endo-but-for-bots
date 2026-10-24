@@ -173,3 +173,36 @@ export type InferResult =
 export type GuestFormulaId = string & {
   readonly __brand: 'GuestFormulaId';
 };
+
+export interface EndoClaudeWorkspaceGrantNames {
+  workspace: string;
+  git: string;
+  remote: string;
+  shell: string;
+}
+
+export interface EndoClaudeGuestProvisionOptions {
+  /** Host pet name for the guest's handle. */
+  handleName: string | string[];
+  /** Host pet name for the guest facet, used by the MCP broker. */
+  agentName: string | string[];
+  /** Host pet names of the four capabilities introduced to the guest. */
+  grants: EndoClaudeWorkspaceGrantNames;
+}
+
+export interface EndoClaudeProvisionHost {
+  has(name: string): ERef<boolean>;
+  lookup(name: string): ERef<unknown>;
+  provideGuest(
+    handleName: string | string[],
+    options: {
+      agentName: string | string[];
+      introducedNames: Record<string, string>;
+    },
+  ): ERef<unknown>;
+}
+
+export declare function provisionEndoClaudeGuest(
+  host: ERef<EndoClaudeProvisionHost>,
+  options: EndoClaudeGuestProvisionOptions,
+): Promise<unknown>;

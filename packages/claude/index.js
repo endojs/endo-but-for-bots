@@ -8,6 +8,8 @@
 // caplet-module contract), which returns a host-only `inferenceProvider` exo.
 // See README.md and designs/endo-claude.md for the confinement contract.
 
+import { provisionEndoClaudeGuest } from './src/workspace-session.js';
+
 export { make } from './src/harness.js';
 
 // Re-exported building blocks (the confinement primitives), so a deployment
@@ -40,6 +42,7 @@ export {
 } from './src/credentials-pool.js';
 export { assertGuestFormulaId, isGuestFormulaId } from './src/formula-id.js';
 export { INFER_RESULT_TYPES } from './src/results.js';
+export { provisionEndoClaudeGuest };
 
 // The confined shape: the harness-owned broker and relay from
 // `@endo/agent-mcp-stdio`, composed with this package's argv, environment, and
