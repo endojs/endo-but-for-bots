@@ -697,11 +697,10 @@ export type DriverProcess = {
   wait(): Promise<{ code: number | null; signal: string | null }>;
   /**
    * Deliver one signal to the whole driver-owned process group or
-   * container. The supervisor owns the escalation ladder, so the same
-   * narrow set of terminal signals it can issue is all a driver has to
-   * accept.
+   * container. Drivers preserve Node signal semantics even though the public
+   * process supervisor exposes only terminal cancellation signals.
    */
-  kill(signal?: TerminationSignal): Promise<void>;
+  kill(signal?: NodeJS.Signals | number): Promise<void>;
 };
 
 /**

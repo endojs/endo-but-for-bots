@@ -1128,7 +1128,7 @@ const findMarkedProcesses = marker => {
 };
 
 test.serial(
-  'bwrap kill reaches a sandbox init that left the launcher group before its death signal was armed',
+  'bwrap kill preserves signal semantics and reaches a reported sandbox init',
   async t => {
     // A stand-in launcher holds the setup window open deterministically.
     // Like bwrap's init before `--die-with-parent` is armed, its child is
@@ -1142,9 +1142,19 @@ test.serial(
     );
     const marker = `7777.${process.pid}${Date.now() % 100_000}`;
     const launcherPath = nodePath.join(fixtureDirectory, 'launcher.sh');
+    const commandPath = nodePath.join(fixtureDirectory, 'command.sh');
+    const signalReceiptPath = nodePath.join(
+      fixtureDirectory,
+      'signal-received',
+    );
+    nodeFs.writeFileSync(
+      commandPath,
+      '#!/bin/sh\ntrap \'printf received > "$2"\' USR1\nwhile :; do sleep 1; done\n',
+      { mode: 0o755 },
+    );
     nodeFs.writeFileSync(
       launcherPath,
-      `#!/bin/sh\nsetsid /bin/sleep ${marker} &\nwait\n`,
+      `#!/bin/sh\nsetsid ${commandPath} ${marker} ${signalReceiptPath} &\ninit_pid=$!\ntrap 'kill -USR1 "$init_pid"' USR1\nprintf '{"child-pid":%s}\\n' "$init_pid" >&3\nexec 3>&-\nwhile kill -0 "$init_pid" 2>/dev/null; do wait "$init_pid" || true; done\n`,
       { mode: 0o755 },
     );
     // Not hardened: that would freeze Node's own child_process classes.
@@ -1165,13 +1175,8 @@ test.serial(
       ),
     };
     const driver = makeBwrapDriver({ env: {}, childProcess });
-    const { powers, tmpdirs } = makeStubScratchProvider();
-    const factory = makeSandboxFactory({
-      drivers: harden([driver]),
-      scratchProvider: powers,
-    });
-    const handle = await E(factory).make(
-      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    const slice = await driver.prepareSlice(
+      makeStubSpec({ rootfs: { kind: 'host-bind' } }),
     );
     t.teardown(async () => {
       for (const pid of findMarkedProcesses(marker)) {
@@ -1181,15 +1186,14 @@ test.serial(
           // already gone
         }
       }
-      await E(handle).dispose();
-      for (const directory of [...tmpdirs, fixtureDirectory])
-        nodeFs.rmSync(directory, { recursive: true, force: true });
+      await driver.teardown(slice);
+      nodeFs.rmSync(fixtureDirectory, { recursive: true, force: true });
     });
 
-    const sliceProcess = await E(handle).spawn(
-      harden(['/bin/true']),
-      harden({ captureStdout: false, captureStderr: false }),
-    );
+    const sliceProcess = await driver.spawn(slice, ['/bin/true'], {
+      captureStdout: false,
+      captureStderr: false,
+    });
     let started = findMarkedProcesses(marker);
     const startDeadline = Date.now() + 5000;
     while (started.length === 0 && Date.now() < startDeadline) {
@@ -1199,8 +1203,34 @@ test.serial(
     }
     t.is(started.length, 1, 'the stand-in sandbox init is running');
 
-    await E(sliceProcess).kill();
-    await t.throwsAsync(() => E(sliceProcess).wait());
+    await sliceProcess.kill(0);
+    t.deepEqual(
+      findMarkedProcesses(marker),
+      started,
+      'signal 0 does not terminate the sandbox init',
+    );
+
+    await sliceProcess.kill('SIGUSR1');
+    const signalDeadline = Date.now() + 3000;
+    while (
+      !nodeFs.existsSync(signalReceiptPath) &&
+      Date.now() < signalDeadline
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    t.true(
+      nodeFs.existsSync(signalReceiptPath),
+      'a catchable signal reaches the stand-in command',
+    );
+    t.deepEqual(
+      findMarkedProcesses(marker),
+      started,
+      'a caught signal does not hard-kill the sandbox init',
+    );
+
+    await sliceProcess.kill('SIGTERM');
+    await sliceProcess.wait();
 
     const deadline = Date.now() + 3000;
     let survivors = findMarkedProcesses(marker);
