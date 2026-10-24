@@ -1651,7 +1651,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/claude@workspace:packages/claude":
+"@endo/claude@workspace:^, @endo/claude@workspace:packages/claude":
   version: 0.0.0-use.local
   resolution: "@endo/claude@workspace:packages/claude"
   dependencies:
@@ -3272,7 +3272,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/sandbox@workspace:packages/sandbox"
   dependencies:
+    "@endo/agent-mcp-stdio": "workspace:^"
     "@endo/cancel": "workspace:^"
+    "@endo/claude": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
