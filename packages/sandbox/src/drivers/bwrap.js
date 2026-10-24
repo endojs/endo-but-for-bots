@@ -33,6 +33,7 @@ import {
 } from './path.js';
 
 /** @import { Readable } from 'stream' */
+/** @import * as NodeFs from 'fs' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
 
 /**
@@ -197,7 +198,7 @@ const LAUNCHER_STOP_GRACE_MS = 100;
  * The command name sits in parentheses and may itself contain spaces or
  * parentheses, so the fixed fields are read after the last `)`.
  *
- * @param {Pick<typeof import('fs'), 'readFileSync'>} fs
+ * @param {Pick<typeof NodeFs, 'readFileSync'>} fs
  * @param {number} pid
  * @returns {{ state: string, ppid: number } | undefined}
  */
@@ -1000,7 +1001,7 @@ export const makeBwrapDriver = ({
      * The caller must resume the launcher afterwards, whatever this
      * returns.
      *
-     * @param {Pick<typeof import('fs'), 'readFileSync'>} fs
+     * @param {Pick<typeof NodeFs, 'readFileSync'>} fs
      * @param {number} launcherPid
      * @param {number} initPid
      * @returns {Promise<boolean>}

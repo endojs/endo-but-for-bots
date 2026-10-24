@@ -17,6 +17,8 @@ import { assembleSliceArgv, makeBwrapDriver } from '../src/drivers/bwrap.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
 
+/** @import { SpawnOptions } from 'node:child_process' */
+
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
   hostPath: M.call().returns(M.string()),
@@ -2089,10 +2091,10 @@ const makeFakeLauncherChildProcess = (script, argument = '') => {
   const childProcess = {
     /**
      * @param {string} _program
-     * @param {string[]} _args
-     * @param {import('child_process').SpawnOptions} options
+     * @param {string[]} _arguments
+     * @param {SpawnOptions} options
      */
-    spawn: (_program, _args, options) => {
+    spawn: (_program, _arguments, options) => {
       const child = nodeSpawn(
         process.execPath,
         ['-e', script, argument],
