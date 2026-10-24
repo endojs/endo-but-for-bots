@@ -2248,3 +2248,39 @@ test('bwrap teardown of a launcher that never reports stays within its grace', a
   // signal is sent only after teardown has already given up.
   await t.notThrowsAsync(driver.teardown(slice));
 });
+
+test('bwrap kill resumes the launcher when its signal is refused', async t => {
+  if (!NEEDS_LINUX_PROC) {
+    t.pass('needs Linux /proc');
+    return;
+  }
+  t.timeout(10_000);
+  const bystander = nodeSpawn('/bin/sh', ['-c', 'exec sleep 1000'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const bystanderPid = /** @type {number} */ (bystander.pid);
+  const { childProcess, children } = makeFakeLauncherChildProcess(
+    MISREPORTING_LAUNCHER,
+    String(bystanderPid),
+  );
+  const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+  t.teardown(async () => {
+    killQuietly(bystanderPid);
+    await driver.teardown(slice);
+  });
+  const sandboxProcess = await driver.spawn(slice, ['/bin/true'], {});
+  const launcherPid = children[0].pid;
+
+  // The kernel rejects an out-of-range signal number with EINVAL after
+  // the kill has already stopped the launcher to inspect its child.
+  await t.throwsAsync(sandboxProcess.kill(/** @type {any} */ (999)), {
+    code: 'EINVAL',
+  });
+  const stat = nodeFs.readFileSync(`/proc/${launcherPid}/stat`, 'utf8');
+  t.not(
+    stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3),
+    'T',
+    'a refused signal must not leave the launcher stopped',
+  );
+});

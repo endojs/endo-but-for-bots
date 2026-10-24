@@ -1075,8 +1075,13 @@ export const makeBwrapDriver = ({
             const error = /** @type {Error & { code?: string }} */ (e);
             if (error.code !== 'ESRCH') throw error;
           } finally {
-            killProcessGroup(child, signal);
-            killProcessGroup(child, 'SIGCONT');
+            try {
+              killProcessGroup(child, signal);
+            } finally {
+              // Resume even when the signal is refused, or the stopped
+              // launcher never exits.
+              killProcessGroup(child, 'SIGCONT');
+            }
           }
           return;
         }
