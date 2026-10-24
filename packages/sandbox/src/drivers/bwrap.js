@@ -34,6 +34,7 @@ import {
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
 /** @import * as NodeFs from 'fs' */
+/** @import { Readable } from 'stream' */
 
 /**
  * `SandboxDriver` for `bubblewrap` (`bwrap`) on Linux.
@@ -871,7 +872,7 @@ export const makeBwrapDriver = ({
       );
     }
 
-    const infoStream = /** @type {import('stream').Readable | null} */ (
+    const infoStream = /** @type {Readable | null} */ (
       child.stdio?.[3] ?? null
     );
     const sandboxInitPid = new Promise(resolve => {
