@@ -2076,6 +2076,7 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/hex": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"

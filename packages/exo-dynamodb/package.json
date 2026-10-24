@@ -48,6 +48,7 @@
     "@endo/errors": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/hex": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/sha256": "workspace:^",

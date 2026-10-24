@@ -4,8 +4,21 @@
 
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 import { passStyleOf } from '@endo/pass-style';
 import { getCopySetKeys, isCopySet, makeCopySet } from '@endo/patterns';
+
+/**
+ * Copy passable bytes out to a fresh mutable array, so SDK code that wraps or
+ * transfers the buffer never sees an immutable one.
+ *
+ * @param {Uint8Array} value
+ * @param {{ binary?: 'base64' | 'bytes' }} options
+ */
+const encodeBinary = (value, options) => {
+  const bytes = thawedBytes(value);
+  return options.binary === 'bytes' ? bytes : encodeBase64(bytes);
+};
 
 /**
  * Marshal a passable value to the JSON form of a DynamoDB AttributeValue.
@@ -27,7 +40,7 @@ export const marshalValue = (value, options = {}) => {
   if (typeof value === 'bigint') return harden({ N: `${value}` });
   if (value instanceof Uint8Array) {
     return harden({
-      B: options.binary === 'bytes' ? value : encodeBase64(value),
+      B: encodeBinary(value, options),
     });
   }
   if (Array.isArray(value)) {
@@ -60,9 +73,7 @@ export const marshalValue = (value, options = {}) => {
     }
     if (values.every(element => element instanceof Uint8Array)) {
       return harden({
-        BS: values.map(element =>
-          options.binary === 'bytes' ? element : encodeBase64(element),
-        ),
+        BS: values.map(element => encodeBinary(element, options)),
       });
     }
     Fail`DynamoDB sets must contain values of one scalar type`;
@@ -87,6 +98,15 @@ export const marshalItem = (item, options = {}) =>
 harden(marshalItem);
 
 /**
+ * Binary values cross the capability boundary as passable byte arrays: frozen
+ * `Uint8Array`s backed by immutable `ArrayBuffer`s.
+ *
+ * @param {Uint8Array | string} value bytes, or base64 text from a JSON wire
+ */
+const decodeBinary = value =>
+  frozenBytes(typeof value === 'string' ? decodeBase64(value) : value);
+
+/**
  * @param {Record<string, any>} attribute
  * @param {{ binary?: 'base64' | 'bytes' }} [options]
  * @returns {DynamoValue}
@@ -104,11 +124,7 @@ export const unmarshalValue = (attribute, options = {}) => {
   }
   if ('BOOL' in attribute) return attribute.BOOL;
   if ('NULL' in attribute) return null;
-  if ('B' in attribute) {
-    return options.binary === 'bytes' || attribute.B instanceof Uint8Array
-      ? attribute.B
-      : decodeBase64(attribute.B);
-  }
+  if ('B' in attribute) return decodeBinary(attribute.B);
   if ('L' in attribute) {
     return harden(attribute.L.map(value => unmarshalValue(value, options)));
   }
@@ -125,13 +141,7 @@ export const unmarshalValue = (attribute, options = {}) => {
     );
   }
   if ('BS' in attribute) {
-    return makeCopySet(
-      attribute.BS.map(value =>
-        options.binary === 'bytes' || value instanceof Uint8Array
-          ? value
-          : decodeBase64(value),
-      ),
-    );
+    return makeCopySet(attribute.BS.map(decodeBinary));
   }
   return Fail`Invalid DynamoDB AttributeValue`;
 };

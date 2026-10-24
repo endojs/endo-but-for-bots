@@ -4,6 +4,7 @@ import '@endo/init';
 
 import test from 'ava';
 import { Far } from '@endo/pass-style';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 import { makeCopySet } from '@endo/patterns';
 
 import { marshalItem, unmarshalItem } from '../index.js';
@@ -13,12 +14,19 @@ test('document values round trip without SDK objects', t => {
     text: 'value',
     integer: 42,
     large: 9_007_199_254_740_993n,
-    binary: new Uint8Array([1, 2, 3]),
+    binary: frozenBytes(new Uint8Array([1, 2, 3])),
     list: harden([true, null]),
     map: harden({ nested: 'yes' }),
     set: makeCopySet(['a', 'b']),
   });
-  t.deepEqual(unmarshalItem(marshalItem(item)), item);
+  const { binary, ...rest } = unmarshalItem(marshalItem(item));
+  const { binary: original, ...expected } = item;
+  t.deepEqual(rest, expected);
+  t.true(Object.isFrozen(binary), 'bytes come back passable');
+  t.deepEqual(
+    [...thawedBytes(/** @type {Uint8Array} */ (binary))],
+    [...thawedBytes(/** @type {Uint8Array} */ (original))],
+  );
 });
 
 test('remotables and invalid numbers are rejected', t => {
