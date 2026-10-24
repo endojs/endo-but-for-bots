@@ -1623,10 +1623,7 @@ export const makeHostMaker = ({
 
     /**
      * Build the persisted `git-remote` policy record from
-     * `provideGitRemote`-shaped options.  `provideGitClone` builds its
-     * `origin` policy through the same function, so the two paths store
-     * the same shape and the `git-remote` maker normalizes both the same
-     * way at incarnation.
+     * `provideGitRemote`-shaped options.
      *
      * @param {{
      *   url: string,
@@ -1721,11 +1718,6 @@ export const makeHostMaker = ({
       return value;
     };
 
-    /**
-     * The `origin` policy fields `provideGitClone` accepts.  `name`, `url`,
-     * `credential` and `allowLocalFileTransport` are absent on purpose: the
-     * clone fixes them from the endpoint.
-     */
     const gitCloneOriginKeys = harden([
       'petName',
       'allowedDirections',
@@ -1762,8 +1754,6 @@ export const makeHostMaker = ({
           );
         }
       }
-      // The origin's name lives in this host's own pet store, where reading
-      // and replacing a binding can happen in one turn; see below.
       if (origin.petName !== undefined && typeof origin.petName !== 'string') {
         throw makeError(
           X`provideGitClone: origin.petName must be a single pet name`,
@@ -1859,12 +1849,9 @@ export const makeHostMaker = ({
         throw makeError(X`provideGitClone: destMount must be empty`);
       }
 
-      // Another holder of the mount can write to it at any time, so the
-      // emptiness check above does not make the mount this call's to
-      // discard.  The clone is built in a staging directory and its entries
-      // are then moved up one by one, never replacing an entry.  Discard
-      // removes only the staging directory and the entries this call moved,
-      // each only while it is still the object this call put there.
+      // Another holder can write to the mount after the emptiness check. The
+      // clone is therefore built in daemon-private staging beside the mount
+      // and published without replacing concurrent entries.
       /** @type {MountEntryRecord | undefined} */
       let staging;
       /** @type {MountEntryRecord[]} */
@@ -1883,16 +1870,13 @@ export const makeHostMaker = ({
           staging = await makeMountStagingEntry(
             /** @type {FormulaIdentifier} */ (destMountId),
           );
-          // Another holder of the mount can see the staging name and
-          // replace the directory, so its recorded identity is re-checked
-          // before git writes into it and again before anything moves out.
-          await assertMountStagingEntry(
+          const stagingPath = await assertMountStagingEntry(
             /** @type {FormulaIdentifier} */ (destMountId),
             staging,
           );
           await gitClone({
             ...input,
-            destPath: `${destPath}/${staging.name}`,
+            destPath: stagingPath,
           });
           await moveMountEntries(
             /** @type {FormulaIdentifier} */ (destMountId),
@@ -1974,9 +1958,8 @@ export const makeHostMaker = ({
       } catch (error) {
         const cleanupErrors = [];
         if (storedOriginName && originName !== undefined) {
-          // Restore the origin's name only while it still holds the
-          // identifier this call stored, so a concurrent rebind wins.  The
-          // check and the restore run in one turn, with no gap between.
+          // Restore only while the name still holds this call's identifier,
+          // so a concurrent rebind wins.
           await (async () => {
             await null;
             if (petStore.identifyLocal(originName) !== originId) {

@@ -8776,6 +8776,17 @@ const makeDaemonCore = async (
   const mountStagingRecordPath = name =>
     filePowers.joinPath(mountStagingRecordsPath, `${name}.json`);
 
+  /**
+   * Put staging beside the mount instead of inside it. The mount capability
+   * cannot reach a sibling path, while the shared parent keeps publication a
+   * same-filesystem operation.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @param {string} name
+   */
+  const mountStagingPath = (mountId, name) =>
+    `${getMountHostPath(mountId)}.${name}`;
+
   /** @param {string} name */
   const forgetMountStagingEntry = async name => {
     const recordPath = mountStagingRecordPath(name);
@@ -8785,20 +8796,16 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Create a fresh, uniquely named staging directory directly under a
-   * mount's host path, so an operation can build there without touching
-   * anything another holder of the mount writes alongside it.  Staging
-   * under the mount keeps the later `moveMountEntries` a same-filesystem
-   * rename.  The directory is registered as live before it is created and
-   * recorded, with its identity, in host-private state once it exists.
+   * Create a fresh staging directory beside the mount. The path remains
+   * private to the daemon but shares the mount's filesystem, so publishing
+   * entries does not need a cross-device fallback.
    *
    * @param {FormulaIdentifier} mountId
    * @returns {Promise<MountEntryRecord>}
    */
   const makeMountStagingEntry = async mountId => {
-    const mountPath = getMountHostPath(mountId);
     const name = `.endo-staging-${(await randomHex256()).slice(0, 32)}`;
-    const stagingPath = filePowers.joinPath(mountPath, name);
+    const stagingPath = mountStagingPath(mountId, name);
     if (await filePowers.exists(stagingPath)) {
       throw makeError(X`mount staging entry ${q(name)} already exists`);
     }
@@ -8811,13 +8818,12 @@ const makeDaemonCore = async (
       identity = await filePowers.entryIdentity(stagingPath);
       await filePowers.writeFileText(
         mountStagingRecordPath(name),
-        JSON.stringify({ mountId, identity }),
+        JSON.stringify({ mountId, identity, stagingPath }),
       );
       return harden({ name, identity });
     } catch (error) {
-      // Without a record the directory could never be discarded later and
-      // would leave the mount non-empty, so remove it now, but only while
-      // it is still the directory this call created and still empty.
+      // Without a record the directory could never be discarded later, so
+      // remove it now, but only while it is still the object this call made.
       if (identity !== undefined) {
         await null;
         try {
@@ -8834,23 +8840,15 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Refuse unless the staging directory's name under the mount still
-   * designates the very directory `makeMountStagingEntry` created.  Another
-   * holder of the mount can see the staging name and replace the directory,
-   * for example with a symbolic link to a host directory outside the mount;
-   * host-authority code must not act through such a replacement.
-   * `entryIdentity` reports a symbolic link's own identity, so a link never
-   * matches.
+   * Refuse unless the daemon-private staging path still designates the
+   * directory `makeMountStagingEntry` created.
    *
    * @param {FormulaIdentifier} mountId
    * @param {MountEntryRecord} staging
    * @returns {Promise<string>} the staging directory's host path
    */
   const assertMountStagingEntry = async (mountId, staging) => {
-    const stagingPath = filePowers.joinPath(
-      getMountHostPath(mountId),
-      staging.name,
-    );
+    const stagingPath = mountStagingPath(mountId, staging.name);
     /** @type {string | undefined} */
     let identity;
     try {
@@ -8860,7 +8858,7 @@ const makeDaemonCore = async (
     }
     if (identity !== staging.identity) {
       throw makeError(
-        X`mount staging entry ${q(staging.name)} was replaced by another holder of the mount`,
+        X`daemon-private mount staging entry ${q(staging.name)} was replaced`,
       );
     }
     return stagingPath;
@@ -8886,12 +8884,45 @@ const makeDaemonCore = async (
       return;
     }
     const mountPath = getMountHostPath(mountId);
-    const holding = await makeMountStagingEntry(mountId);
-    const holdingPath = filePowers.joinPath(mountPath, holding.name);
     /** @type {unknown[]} */
     const errors = [];
+    /** @type {MountEntryRecord[]} */
+    const mountEntries = [];
+    for (const entry of entries) {
+      if (await filePowers.exists(mountStagingRecordPath(entry.name))) {
+        const stagingPath = mountStagingPath(mountId, entry.name);
+        try {
+          if (
+            (await filePowers.entryIdentity(stagingPath)) === entry.identity
+          ) {
+            await filePowers.removeDirectory(stagingPath);
+          }
+        } catch (error) {
+          if (/** @type {{ code?: unknown }} */ (error).code !== 'ENOENT') {
+            errors.push(error);
+          }
+        }
+        await forgetMountStagingEntry(entry.name).catch(error =>
+          errors.push(error),
+        );
+        liveMountStagingPaths.delete(stagingPath);
+      } else {
+        mountEntries.push(entry);
+      }
+    }
+    if (mountEntries.length === 0) {
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw makeError(X`could not discard mount staging`, AggregateError, {
+          errors: /** @type {Error[]} */ (errors),
+        });
+      }
+      return;
+    }
+    const holding = await makeMountStagingEntry(mountId);
+    const holdingPath = mountStagingPath(mountId, holding.name);
     let keepHolding = false;
-    for (const { name, identity } of entries) {
+    for (const { name, identity } of mountEntries) {
       const entryPath = filePowers.joinPath(mountPath, name);
       const heldPath = filePowers.joinPath(holdingPath, name);
       try {
@@ -8902,7 +8933,6 @@ const makeDaemonCore = async (
         if (/** @type {{ code?: unknown }} */ (error).code !== 'ENOENT') {
           errors.push(error);
         }
-        liveMountStagingPaths.delete(entryPath);
         // eslint-disable-next-line no-continue
         continue;
       }
@@ -8916,7 +8946,7 @@ const makeDaemonCore = async (
           } catch (error) {
             keepHolding = true;
             throw makeError(
-              X`mount entry ${q(name)} was replaced by another holder and its name was taken again, so the replacement was kept at ${q(`${holding.name}/${name}`)}`,
+              X`mount entry ${q(name)} was replaced by another holder and its name was taken again, so the replacement was kept in daemon-private staging`,
               undefined,
               { cause: /** @type {Error} */ (error) },
             );
@@ -8924,8 +8954,6 @@ const makeDaemonCore = async (
         }
       } catch (error) {
         errors.push(error);
-      } finally {
-        liveMountStagingPaths.delete(entryPath);
       }
     }
     if (!keepHolding) {
@@ -8954,7 +8982,7 @@ const makeDaemonCore = async (
    * malformed.
    *
    * @param {string} name
-   * @returns {Promise<{ mountId: unknown, identity: string } | undefined>}
+   * @returns {Promise<{ mountId: unknown, identity: string, stagingPath?: string } | undefined>}
    */
   const readMountStagingRecord = async name => {
     const recordPath = mountStagingRecordPath(name);
@@ -8976,7 +9004,13 @@ const makeDaemonCore = async (
       console.warn(`Forgetting malformed mount staging record ${recordPath}`);
       return undefined;
     }
-    return { mountId: record.mountId, identity: record.identity };
+    return {
+      mountId: record.mountId,
+      identity: record.identity,
+      ...(typeof record.stagingPath === 'string'
+        ? { stagingPath: record.stagingPath }
+        : {}),
+    };
   };
 
   /**
@@ -8993,7 +9027,6 @@ const makeDaemonCore = async (
     if (!(await filePowers.exists(mountStagingRecordsPath))) {
       return;
     }
-    const mountPath = getMountHostPath(mountId);
     /** @type {MountEntryRecord[]} */
     const stale = [];
     for (const recordName of await filePowers.readDirectory(
@@ -9002,17 +9035,33 @@ const makeDaemonCore = async (
       const name = recordName.endsWith('.json')
         ? recordName.slice(0, -'.json'.length)
         : undefined;
-      if (
-        name !== undefined &&
-        !liveMountStagingPaths.has(filePowers.joinPath(mountPath, name))
-      ) {
+      if (name !== undefined) {
         // A daemon that stopped mid-write leaves a truncated record.  It
         // proves nothing about any entry, so it is forgotten rather than
         // left to fail every later clone.
         const record = await readMountStagingRecord(name);
         if (record === undefined) {
           await forgetMountStagingEntry(name);
-        } else if (record.mountId === mountId) {
+        } else if (
+          record.stagingPath !== undefined &&
+          record.mountId !== mountId &&
+          !liveMountStagingPaths.has(record.stagingPath)
+        ) {
+          try {
+            if (
+              (await filePowers.entryIdentity(record.stagingPath)) ===
+              record.identity
+            ) {
+              await filePowers.removeDirectory(record.stagingPath);
+            }
+          } catch {
+            // Gone or replaced; the private record no longer proves ownership.
+          }
+          await forgetMountStagingEntry(name);
+        } else if (
+          record.mountId === mountId &&
+          !liveMountStagingPaths.has(mountStagingPath(mountId, name))
+        ) {
           stale.push(harden({ name, identity: record.identity }));
         }
       }
@@ -9025,13 +9074,12 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Move every entry of a staging directory up into the mount's host path,
+   * Move every entry of a daemon-private staging directory into the mount,
    * never replacing an entry that is already there, not even one created
    * concurrently.  Each moved entry is appended to `moved`, with its
    * identity, as it lands, so a caller whose move fails partway still knows
-   * exactly which objects it owns.  Once the staging directory is empty it
-   * is removed; if another holder wrote into it meanwhile, it is left in
-   * place with their content.
+   * exactly which objects it owns. Once the staging directory is empty it
+   * is removed.
    *
    * @param {FormulaIdentifier} mountId
    * @param {MountEntryRecord} staging
@@ -9040,26 +9088,16 @@ const makeDaemonCore = async (
    */
   const moveMountEntries = async (mountId, staging, moved) => {
     const mountPath = getMountHostPath(mountId);
-    // The staging name is visible to every holder of the mount.  Re-check
-    // the recorded identity before listing, after listing, and before each
-    // move, so the move never runs through a directory another holder
-    // swapped in, such as a symbolic link to a host directory.
     const stagingPath = await assertMountStagingEntry(mountId, staging);
     const names = await filePowers.readDirectory(stagingPath);
-    await assertMountStagingEntry(mountId, staging);
     for (const name of names) {
-      await assertMountStagingEntry(mountId, staging);
       const identity = await filePowers.renameNoReplace(
         filePowers.joinPath(stagingPath, name),
         filePowers.joinPath(mountPath, name),
       );
       moved.push(harden({ name, identity }));
     }
-    try {
-      await filePowers.removeEmptyDirectory(stagingPath);
-    } catch {
-      // Another holder wrote into the staging directory; keep their content.
-    }
+    await filePowers.removeEmptyDirectory(stagingPath);
     await forgetMountStagingEntry(staging.name);
     liveMountStagingPaths.delete(stagingPath);
   };

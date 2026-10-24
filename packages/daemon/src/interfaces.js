@@ -490,9 +490,6 @@ export const HostInterface = M.interface('EndoHost', {
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('GitRemote')),
-  // Host-only constructive clone into an empty daemon-minted destination
-  // mount. The pet name names the cloned Git; the options carry the
-  // repo-less remote endpoint, the commit identity and the origin policy.
   provideGitClone: M.callWhen(
     M.remotable(),
     NameOrPathShape,

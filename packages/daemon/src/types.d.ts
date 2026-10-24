@@ -357,8 +357,7 @@ export type GitCommitIdentity = {
 export type GitCloneOriginOptions = {
   /**
    * Names the origin GitRemote in the host's own pet store; unnamed, it is
-   * reachable only by reference.  A single pet name, not a path, so that a
-   * failed clone can restore the name's prior binding atomically.
+   * reachable only by reference.
    */
   petName?: string;
   allowedDirections?: Array<'fetch' | 'push'>;
@@ -2659,12 +2658,10 @@ export type FilePowers = {
   /**
    * Rename `source` to `target`, failing rather than replacing anything at
    * `target`, including an entry created concurrently, and resolve to the
-   * moved entry's `entryIdentity`.  A symbolic link may be recreated, with
-   * a new identity.  The XS host has no atomic no-replace primitive, so
-   * the XS powers always refuse.
+   * moved entry's `entryIdentity`. A symbolic link may be recreated, with a
+   * new identity. Regular files require same-filesystem hard-link support.
    */
   renameNoReplace: (source: string, target: string) => Promise<string>;
-  /** Remove `path` only if it is an empty directory. */
   removeEmptyDirectory: (path: string) => Promise<void>;
   realPath: (path: string) => Promise<string>;
   // Optional: only the XS-backed powers surface readLink today; the
@@ -3333,9 +3330,8 @@ export interface DaemonCore {
   removeStaleMountStagingEntries: (id: FormulaIdentifier) => Promise<void>;
 
   /**
-   * Create a uniquely named, empty staging directory directly under a
-   * `mount` or `scratch-mount` formula's host path, record it in
-   * host-private state, and return its name and identity.
+   * Create a uniquely named, empty daemon-private staging directory beside
+   * a `mount` or `scratch-mount`, record it, and return its name and identity.
    * `provideGitClone` clones there so that discarding a failed clone never
    * touches entries another holder of the mount wrote.
    */
@@ -3343,9 +3339,8 @@ export interface DaemonCore {
 
   /**
    * Resolve the host path of a staging directory made by
-   * `makeMountStagingEntry`, refusing unless that name under the mount
-   * still designates the recorded directory itself (a symbolic link never
-   * matches).
+   * `makeMountStagingEntry`, refusing unless it still designates the recorded
+   * directory itself.
    */
   assertMountStagingEntry: (
     id: FormulaIdentifier,
