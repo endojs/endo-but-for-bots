@@ -666,6 +666,67 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
   t.is(stat.atime, stat.mtime);
 });
 
+test.serial(
+  'XS clone-cleanup file powers execute their platform-specific behavior',
+  async t => {
+    const globalObject = /** @type {any} */ (globalThis);
+    const names = [
+      'hostExists',
+      'hostStat',
+      'hostReadDir',
+      'hostRemove',
+      'hostJoinPath',
+    ];
+    const originals = Object.fromEntries(
+      names.map(name => [name, globalObject[name]]),
+    );
+    t.teardown(() => {
+      for (const name of names) globalObject[name] = originals[name];
+    });
+
+    const kinds = new Map([
+      ['tree', 'directory'],
+      ['tree/link', 'symlink'],
+      ['victim', 'directory'],
+      ['empty', 'directory'],
+      ['file', 'file'],
+    ]);
+    const removed = [];
+    globalObject.hostExists = (_token, targetPath) => kinds.has(targetPath);
+    globalObject.hostStat = (_token, targetPath) =>
+      JSON.stringify({
+        kind: kinds.get(targetPath),
+        sizeBytes: 0,
+        modifiedMs: 0,
+        dev: 1,
+        ino: 1,
+      });
+    globalObject.hostReadDir = (_token, targetPath) =>
+      JSON.stringify(targetPath === 'tree' ? ['link'] : []);
+    globalObject.hostRemove = (_token, targetPath) => {
+      removed.push(targetPath);
+      kinds.delete(targetPath);
+    };
+    globalObject.hostJoinPath = (...components) => components.join('/');
+
+    const xsPowers = makeXsFilePowers();
+    await xsPowers.removeDirectory('/tree');
+    t.deepEqual(removed, ['tree/link', 'tree']);
+    t.true(
+      kinds.has('victim'),
+      'the symlink target survives recursive removal',
+    );
+
+    await xsPowers.removeEmptyDirectory('/empty');
+    await t.throwsAsync(() => xsPowers.removeEmptyDirectory('/file'), {
+      message: /not a directory/,
+    });
+    await t.throwsAsync(() => xsPowers.renameNoReplace('/source', '/target'), {
+      message: /XS host cannot move/,
+    });
+  },
+);
+
 // Suppress unused-import warnings for the platform interfaces; their
 // presence in this file documents the conformance target.
 void PlatformDirectoryInterface;

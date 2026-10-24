@@ -1292,7 +1292,7 @@ test.serial(
     // Stand in for a daemon that stopped mid-clone: the staging directory
     // exists and the daemon's host-private record names it.
     const staleName = '.endo-staging-0123456789abcdef0123456789abcdef';
-    const stalePath = path.join(destPath, staleName);
+    const stalePath = `${destPath}.${staleName}`;
     await fs.promises.mkdir(stalePath);
     await fs.promises.writeFile(
       path.join(stalePath, 'partial-clone'),
@@ -1320,6 +1320,56 @@ test.serial(
 
     t.is((await E(git).currentBranch()).name, 'main');
     t.deepEqual(await fs.promises.readdir(destPath), ['.git']);
+    t.deepEqual(await fs.promises.readdir(recordsPath), []);
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone does not follow a swapped daemon-private staging directory',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host: firstHost, config, restart } = await provisionHostContext(t);
+
+    const destMount = await E(firstHost).provideScratchMount(
+      'swapped-staging-destination',
+    );
+    const destPath = await E(firstHost).provideHostPath(destMount);
+    const staleName = '.endo-staging-abcdef0123456789abcdef0123456789';
+    const stalePath = `${destPath}.${staleName}`;
+    const victimPath = `${destPath}.victim`;
+    await fs.promises.mkdir(stalePath);
+    const { dev, ino } = await fs.promises.lstat(stalePath, { bigint: true });
+    const recordsPath = path.join(config.statePath, 'mount-staging');
+    await fs.promises.mkdir(recordsPath, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(recordsPath, `${staleName}.json`),
+      JSON.stringify({
+        mountId: await E(firstHost).identify('swapped-staging-destination'),
+        identity: `${dev}:${ino}`,
+      }),
+    );
+    await fs.promises.rm(stalePath, { recursive: true });
+    await fs.promises.mkdir(victimPath);
+    await fs.promises.writeFile(path.join(victimPath, 'keep'), 'safe\n');
+    await fs.promises.symlink(victimPath, stalePath);
+
+    const host = await restart();
+    const { git } = await E(host).provideGitClone(
+      await E(host).lookup('swapped-staging-destination'),
+      'swapped-staging-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      },
+    );
+
+    t.is((await E(git).currentBranch()).name, 'main');
+    t.is(
+      await fs.promises.readFile(path.join(victimPath, 'keep'), 'utf8'),
+      'safe\n',
+    );
+    t.is((await fs.promises.lstat(stalePath)).isSymbolicLink(), true);
     t.deepEqual(await fs.promises.readdir(recordsPath), []);
   },
 );

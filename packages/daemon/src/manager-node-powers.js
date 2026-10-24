@@ -595,6 +595,8 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
    * at `target` with `symlink`, and any other entry is hard-linked; both
    * refuse an existing `target`, and the source is then unlinked.  (`link`
    * is not used for a symbolic link because some platforms follow it.)
+   * Regular files therefore require hard-link support on the mount. A crash
+   * or unlink failure can leave both names, but cannot replace the target.
    * Resolves to the moved entry's `dev:ino` identity, which a directory or
    * a file keeps and a recreated symbolic link does not.
    *
@@ -622,8 +624,9 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
         return `${targetStat.dev}:${targetStat.ino}`;
       }
       await fs.promises.link(source, target);
+      const targetStat = await fs.promises.lstat(target, { bigint: true });
       await fs.promises.unlink(source);
-      return `${sourceStat.dev}:${sourceStat.ino}`;
+      return `${targetStat.dev}:${targetStat.ino}`;
     });
 
   /**
