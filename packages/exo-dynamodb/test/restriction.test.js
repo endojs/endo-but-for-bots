@@ -5,7 +5,12 @@ import '@endo/init';
 import test from 'ava';
 import fc from 'fast-check';
 
-import { attenuate } from '../src/restriction.js';
+import {
+  applyFixed,
+  attenuate,
+  keyAllowed,
+  sameValue,
+} from '../src/restriction.js';
 
 const operations = harden([
   'get',
@@ -94,4 +99,45 @@ test('three-level restriction chains monotonically reduce sets and limits', t =>
     ),
     { numRuns: 200 },
   );
+});
+
+test('children cannot reselect tables or contradict fixed fields', t => {
+  const parent = attenuate(
+    undefined,
+    harden({ table: 'app', fixed: harden({ kind: 'coupon' }) }),
+  );
+  t.throws(() => attenuate(parent, harden({ table: 'other' })), {
+    message: 'A child restriction cannot select a table',
+  });
+  t.throws(
+    () => attenuate(parent, harden({ fixed: harden({ kind: 'other' }) })),
+    { message: 'Fixed field "kind" conflicts with its parent' },
+  );
+  t.deepEqual(
+    attenuate(parent, harden({ fixed: harden({ kind: 'coupon' }) })).fixed,
+    { kind: 'coupon' },
+  );
+  t.throws(() => applyFixed(harden({ kind: 'other' }), parent), {
+    message: 'Field "kind" conflicts with a fixed value',
+  });
+});
+
+test('binary and numeric keys compare by value, not identity', t => {
+  const table = harden({
+    partitionKey: harden({ name: 'pk', type: 'binary' }),
+    sortKey: harden({ name: 'sk', type: 'number' }),
+  });
+  const ranges = harden([
+    harden({
+      partition: harden({ prefix: new Uint8Array([1, 2]) }),
+      sort: harden({ exact: 7 }),
+    }),
+  ]);
+  t.true(keyAllowed({ pk: new Uint8Array([1, 2, 3]), sk: 7 }, table, ranges));
+  t.false(keyAllowed({ pk: new Uint8Array([1]), sk: 7 }, table, ranges));
+  t.false(keyAllowed({ pk: new Uint8Array([1, 3]), sk: 7 }, table, ranges));
+  t.false(keyAllowed({ pk: new Uint8Array([1, 2]), sk: 8 }, table, ranges));
+  t.true(sameValue(new Uint8Array([4]), new Uint8Array([4])));
+  t.false(sameValue(new Uint8Array([4]), new Uint8Array([4, 5])));
+  t.true(sameValue(harden({ a: 1n }), harden({ a: 1n })));
 });

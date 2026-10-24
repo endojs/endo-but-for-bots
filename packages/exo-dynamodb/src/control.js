@@ -1,6 +1,6 @@
 // @ts-check
 
-/** @import { DynamoCapability, DynamoControl, DynamoResult, FieldCondition, Item, Key, Operation, Patch, Query, ReadOptions, Restriction, TableCatalog, TransactionGet, TransactionOptions, TransactionWrite, WriteOptions } from '../types.js' */
+/** @import { DynamoCapability, DynamoControl, DynamoResult, FieldCondition, Item, Key, KeyConstraint, Operation, Patch, Query, ReadOptions, Restriction, TableCatalog, TransactionGet, TransactionOptions, TransactionWrite, WriteOptions } from '../types.js' */
 
 import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
@@ -456,6 +456,8 @@ export const makeDynamoControl = powers => {
           }
           /** @type {FieldCondition | undefined} */
           let effectiveSort = request.sort;
+          /** @type {KeyConstraint[]} */
+          const sortBounds = [];
           for (const ancestor of nextChain) {
             const ranges = ancestor.restriction.ranges;
             if (ranges !== undefined) {
@@ -465,48 +467,43 @@ export const makeDynamoControl = powers => {
               matching.length > 0 || Fail`Query partition is outside the grant`;
               if (!matching.some(range => range.sort === undefined)) {
                 const constraints = matching.map(range => range.sort);
-                const first = constraints[0];
+                const first = /** @type {KeyConstraint} */ (constraints[0]);
                 constraints.every(
                   constraint => digest(constraint) === digest(first),
                 ) || Fail`Query must select one allowed sort range`;
-                if (selected.sortKey === undefined) {
-                  return Fail`A sort-restricted grant cannot query an index without a sort key`;
-                }
-                if (first === undefined)
-                  return Fail`Sort restriction is missing`;
-                if ('exact' in first) {
-                  if (effectiveSort === undefined) {
-                    effectiveSort = harden({
-                      op: 'eq',
-                      field: selected.sortKey.name,
-                      value: first.exact,
-                    });
-                  } else {
-                    (effectiveSort.op === 'eq' &&
-                      'value' in effectiveSort &&
-                      matchesConstraint(
-                        /** @type {any} */ (effectiveSort.value),
-                        first,
-                      )) ||
-                      Fail`Sort condition exceeds the grant`;
-                  }
-                } else if (effectiveSort === undefined) {
-                  effectiveSort = harden({
-                    op: 'begins-with',
-                    field: selected.sortKey.name,
-                    value: first.prefix,
-                  });
-                } else {
-                  ((effectiveSort.op === 'eq' ||
-                    effectiveSort.op === 'begins-with') &&
-                    'value' in effectiveSort &&
-                    matchesConstraint(
-                      /** @type {any} */ (effectiveSort.value),
-                      first,
-                    )) ||
-                    Fail`Sort condition exceeds the grant`;
-                }
+                sortBounds.push(first);
               }
+            }
+          }
+          if (sortBounds.length > 0) {
+            const { sortKey } = selected;
+            if (sortKey === undefined) {
+              return Fail`A sort-restricted grant cannot query an index without a sort key`;
+            }
+            if (effectiveSort === undefined) {
+              // The narrowest grant selects the rows, and must lie within
+              // every ancestor's sort range, as checked below.
+              const narrowest = sortBounds[sortBounds.length - 1];
+              effectiveSort =
+                'exact' in narrowest
+                  ? harden({
+                      op: 'eq',
+                      field: sortKey.name,
+                      value: narrowest.exact,
+                    })
+                  : harden({
+                      op: 'begins-with',
+                      field: sortKey.name,
+                      value: narrowest.prefix,
+                    });
+            }
+            for (const bound of sortBounds) {
+              const sort = effectiveSort;
+              ((sort.op === 'eq' ||
+                (sort.op === 'begins-with' && 'prefix' in bound)) &&
+                'value' in sort &&
+                matchesConstraint(/** @type {any} */ (sort.value), bound)) ||
+                Fail`Sort condition exceeds the grant`;
             }
           }
           const pageLimit = restriction.limits?.pageSize ?? 100;

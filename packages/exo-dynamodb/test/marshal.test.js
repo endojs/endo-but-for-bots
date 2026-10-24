@@ -33,3 +33,32 @@ test('remotables and invalid numbers are rejected', t => {
     message: 'DynamoDB numbers must be finite',
   });
 });
+
+test('number sets and fractions round trip with integer precision', t => {
+  const item = harden({
+    numbers: makeCopySet([1, 2.5, 9_007_199_254_740_993n]),
+    fraction: -0.5,
+  });
+  const wire = marshalItem(item);
+  t.deepEqual(wire.fraction, { N: '-0.5' });
+  t.deepEqual([...wire.numbers.NS].sort(), ['1', '2.5', '9007199254740993']);
+  t.deepEqual(unmarshalItem(wire), item);
+  t.throws(() => marshalItem(harden({ empty: makeCopySet([]) })), {
+    message: 'DynamoDB sets cannot be empty',
+  });
+  t.throws(() => marshalItem(harden({ mixed: makeCopySet(['a', 1]) })), {
+    message: 'DynamoDB sets must contain values of one scalar type',
+  });
+});
+
+test('unrecognized wire attributes and pass styles are rejected', t => {
+  t.throws(() => unmarshalItem(harden({ odd: harden({ X: 'y' }) })), {
+    message: 'Invalid DynamoDB AttributeValue',
+  });
+  t.throws(
+    () => marshalItem(/** @type {any} */ (harden({ undef: undefined }))),
+    {
+      message: 'Unsupported DynamoDB value pass style "undefined"',
+    },
+  );
+});
