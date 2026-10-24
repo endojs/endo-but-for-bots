@@ -1149,12 +1149,12 @@ test.serial(
     );
     nodeFs.writeFileSync(
       commandPath,
-      '#!/bin/sh\ntrap \'printf received > "$2"\' USR1\nwhile :; do sleep 1; done\n',
+      '#!/bin/sh\ntrap \'printf received > "$2"\' USR1\nwhile :; do read -r _ || :; done\n',
       { mode: 0o755 },
     );
     nodeFs.writeFileSync(
       launcherPath,
-      `#!/bin/sh\nsetsid ${commandPath} ${marker} ${signalReceiptPath} &\ninit_pid=$!\ntrap 'kill -USR1 "$init_pid"' USR1\nprintf '{"child-pid":%s}\\n' "$init_pid" >&3\nexec 3>&-\nwhile kill -0 "$init_pid" 2>/dev/null; do wait "$init_pid" || true; done\n`,
+      `#!/bin/sh\nsetsid ${commandPath} ${marker} ${signalReceiptPath} 3>&- &\ninit_pid=$!\ntrap 'kill -USR1 "$init_pid"' USR1\nprintf '{"child-pid":%s}\\n' "$init_pid" >&3\nexec 3>&-\nwhile kill -0 "$init_pid" 2>/dev/null; do wait "$init_pid" || true; done\n`,
       { mode: 0o755 },
     );
     // Not hardened: that would freeze Node's own child_process classes.
