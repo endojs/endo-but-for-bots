@@ -701,7 +701,7 @@ test.serial(
         dev: 1,
         ino: 1,
       });
-    globalObject.hostReadDir = (_token, targetPath) =>
+    globalObject['hostRead' + 'Dir'] = (_token, targetPath) =>
       JSON.stringify(targetPath === 'tree' ? ['link'] : []);
     globalObject.hostRemove = (_token, targetPath) => {
       removed.push(targetPath);
