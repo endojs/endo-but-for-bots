@@ -3342,6 +3342,17 @@ export interface DaemonCore {
   makeMountStagingEntry: (id: FormulaIdentifier) => Promise<MountEntryRecord>;
 
   /**
+   * Resolve the host path of a staging directory made by
+   * `makeMountStagingEntry`, refusing unless that name under the mount
+   * still designates the recorded directory itself (a symbolic link never
+   * matches).
+   */
+  assertMountStagingEntry: (
+    id: FormulaIdentifier,
+    staging: MountEntryRecord,
+  ) => Promise<string>;
+
+  /**
    * Move every entry of a staging directory up into the mount's host path,
    * never replacing an existing entry, then remove the emptied staging
    * directory.  Each moved entry is appended to `moved`, with its identity,

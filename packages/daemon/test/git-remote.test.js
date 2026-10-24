@@ -1325,6 +1325,40 @@ test.serial(
 );
 
 test.serial(
+  'EndoHost.provideGitClone forgets a truncated staging record instead of failing',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host: firstHost, config, restart } = await provisionHostContext(t);
+
+    await E(firstHost).provideScratchMount('truncated-record-destination');
+    // Stand in for a daemon that stopped while writing a staging record.
+    const recordsPath = path.join(config.statePath, 'mount-staging');
+    await fs.promises.mkdir(recordsPath, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(
+        recordsPath,
+        '.endo-staging-00112233445566778899aabbccddeeff.json',
+      ),
+      '{"mountId":',
+    );
+
+    const host = await restart();
+    const { git } = await E(host).provideGitClone(
+      await E(host).lookup('truncated-record-destination'),
+      'truncated-record-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      },
+    );
+
+    t.is((await E(git).currentBranch()).name, 'main');
+    t.deepEqual(await fs.promises.readdir(recordsPath), []);
+  },
+);
+
+test.serial(
   'EndoHost.provideGitClone keeps a staging-shaped entry the daemon did not record',
   async t => {
     const { root } = await provisionGitContext(t);

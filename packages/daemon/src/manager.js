@@ -8803,19 +8803,67 @@ const makeDaemonCore = async (
       throw makeError(X`mount staging entry ${q(name)} already exists`);
     }
     liveMountStagingPaths.add(stagingPath);
+    /** @type {string | undefined} */
+    let identity;
     try {
       await filePowers.makePath(mountStagingRecordsPath);
       await filePowers.makePath(stagingPath);
-      const identity = await filePowers.entryIdentity(stagingPath);
+      identity = await filePowers.entryIdentity(stagingPath);
       await filePowers.writeFileText(
         mountStagingRecordPath(name),
         JSON.stringify({ mountId, identity }),
       );
       return harden({ name, identity });
     } catch (error) {
+      // Without a record the directory could never be discarded later and
+      // would leave the mount non-empty, so remove it now, but only while
+      // it is still the directory this call created and still empty.
+      if (identity !== undefined) {
+        await null;
+        try {
+          if ((await filePowers.entryIdentity(stagingPath)) === identity) {
+            await filePowers.removeEmptyDirectory(stagingPath);
+          }
+        } catch {
+          // Gone, replaced, or written into by another holder; keep it.
+        }
+      }
       liveMountStagingPaths.delete(stagingPath);
       throw error;
     }
+  };
+
+  /**
+   * Refuse unless the staging directory's name under the mount still
+   * designates the very directory `makeMountStagingEntry` created.  Another
+   * holder of the mount can see the staging name and replace the directory,
+   * for example with a symbolic link to a host directory outside the mount;
+   * host-authority code must not act through such a replacement.
+   * `entryIdentity` reports a symbolic link's own identity, so a link never
+   * matches.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @param {MountEntryRecord} staging
+   * @returns {Promise<string>} the staging directory's host path
+   */
+  const assertMountStagingEntry = async (mountId, staging) => {
+    const stagingPath = filePowers.joinPath(
+      getMountHostPath(mountId),
+      staging.name,
+    );
+    /** @type {string | undefined} */
+    let identity;
+    try {
+      identity = await filePowers.entryIdentity(stagingPath);
+    } catch {
+      // Missing; reported below.
+    }
+    if (identity !== staging.identity) {
+      throw makeError(
+        X`mount staging entry ${q(staging.name)} was replaced by another holder of the mount`,
+      );
+    }
+    return stagingPath;
   };
 
   /**
@@ -8902,6 +8950,36 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Read a mount staging record, or `undefined` if it is unreadable or
+   * malformed.
+   *
+   * @param {string} name
+   * @returns {Promise<{ mountId: unknown, identity: string } | undefined>}
+   */
+  const readMountStagingRecord = async name => {
+    const recordPath = mountStagingRecordPath(name);
+    /** @type {any} */
+    let record;
+    try {
+      record = JSON.parse(await filePowers.readFileText(recordPath));
+    } catch (error) {
+      console.warn(
+        `Forgetting unreadable mount staging record ${recordPath}: ${/** @type {Error} */ (error).message}`,
+      );
+      return undefined;
+    }
+    if (
+      typeof record !== 'object' ||
+      record === null ||
+      typeof record.identity !== 'string'
+    ) {
+      console.warn(`Forgetting malformed mount staging record ${recordPath}`);
+      return undefined;
+    }
+    return { mountId: record.mountId, identity: record.identity };
+  };
+
+  /**
    * Discard the clone staging directories that this daemon recorded for a
    * mount and that no operation in this process still owns: those a prior
    * daemon process left when it stopped between creating one and removing
@@ -8921,12 +8999,20 @@ const makeDaemonCore = async (
     for (const recordName of await filePowers.readDirectory(
       mountStagingRecordsPath,
     )) {
-      const name = recordName.replace(/\.json$/, '');
-      if (!liveMountStagingPaths.has(filePowers.joinPath(mountPath, name))) {
-        const record = JSON.parse(
-          await filePowers.readFileText(mountStagingRecordPath(name)),
-        );
-        if (record.mountId === mountId) {
+      const name = recordName.endsWith('.json')
+        ? recordName.slice(0, -'.json'.length)
+        : undefined;
+      if (
+        name !== undefined &&
+        !liveMountStagingPaths.has(filePowers.joinPath(mountPath, name))
+      ) {
+        // A daemon that stopped mid-write leaves a truncated record.  It
+        // proves nothing about any entry, so it is forgotten rather than
+        // left to fail every later clone.
+        const record = await readMountStagingRecord(name);
+        if (record === undefined) {
+          await forgetMountStagingEntry(name);
+        } else if (record.mountId === mountId) {
           stale.push(harden({ name, identity: record.identity }));
         }
       }
@@ -8954,8 +9040,15 @@ const makeDaemonCore = async (
    */
   const moveMountEntries = async (mountId, staging, moved) => {
     const mountPath = getMountHostPath(mountId);
-    const stagingPath = filePowers.joinPath(mountPath, staging.name);
-    for (const name of await filePowers.readDirectory(stagingPath)) {
+    // The staging name is visible to every holder of the mount.  Re-check
+    // the recorded identity before listing, after listing, and before each
+    // move, so the move never runs through a directory another holder
+    // swapped in, such as a symbolic link to a host directory.
+    const stagingPath = await assertMountStagingEntry(mountId, staging);
+    const names = await filePowers.readDirectory(stagingPath);
+    await assertMountStagingEntry(mountId, staging);
+    for (const name of names) {
+      await assertMountStagingEntry(mountId, staging);
       const identity = await filePowers.renameNoReplace(
         filePowers.joinPath(stagingPath, name),
         filePowers.joinPath(mountPath, name),
@@ -9047,6 +9140,7 @@ const makeDaemonCore = async (
     listMountHostEntries,
     removeStaleMountStagingEntries,
     makeMountStagingEntry,
+    assertMountStagingEntry,
     moveMountEntries,
     discardMountEntries,
     getIdForRef,
