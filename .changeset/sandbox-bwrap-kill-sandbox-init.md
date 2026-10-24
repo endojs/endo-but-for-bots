@@ -2,11 +2,6 @@
 '@endo/sandbox': patch
 ---
 
-The bwrap driver now kills a slice's sandbox init directly before it signals
-the launcher's process group. bwrap arms `--die-with-parent` in the init only
-after namespace setup, and the init leaves the host process group through
-`setsid()`, so a launcher killed during setup used to strand the init: blocked
-forever on setup, or running the command with no death signal and beyond the
-reach of any later group signal. The driver reads the init's host pid from
-bwrap's `--info-fd` report and kills it first, which tears down the whole pid
-namespace.
+Fix bwrap sandbox processes surviving a cancellation that lands while the
+sandbox is still starting, and let teardown of a bwrap launcher that never
+finishes starting complete within its normal grace.
