@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-29 |
-| **Updated** | 2026-10-23 |
+| **Updated** | 2026-10-24 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 
@@ -24,19 +24,20 @@ Let the host adopt a **git capability URL**
 `GitRemote`.
 The token must never reach a formula, an error message, a git process's
 argv, or the guest.
-One new host method, `provideGitCapabilityCredential`, splits the URL in the
-daemon into a non-extractable `BasicCredential` and a credential-free endpoint
-URL.
-The landed `provideGitRemote` does the rest unchanged; the landed
-`provideGitClone` gains one optional `allowedDirections` option so that a
-fetch-only origin can be minted before it is granted.
-The same slice fixes a live leak: today the embedded-credential rejection
-echoes the whole URL, token included, back over CapTP.
+One new pure helper in `@endo/exo-git`, `splitGitCapabilityUrl`, splits the
+URL into a credential-free endpoint URL and the basic-auth fields.
+The host feeds those fields to the landed `provideBasicCredential`, and the
+landed `provideGitRemote` or `provideGitClone` does the rest.
+For a clone that must be fetch-only before it is granted, the host narrows
+the origin with the landed `GitRemoteController.setAllowedDirections`.
+The slice adds no host method and no `provideGitClone` option.
+It also fixes a live leak: today the embedded-credential rejection echoes
+the whole URL, token included, back over CapTP.
 
 This is the next mergeable slice of M3's `daemon-git-remotes` row.
-It closes the git half of the M3 exit criterion ("a capability-addressed
-`git push` lands an artifact into an Endo directory") using only landed
-substrate.
+It closes the client half of the M3 exit criterion's capability-addressed
+`git push` ("a capability-addressed `git push` lands an artifact into an
+Endo directory") using only landed substrate.
 An external client pushes to a partition.
 A daemon-side `GitRemote` bound to that partition fetches it into a `Git`, and
 that `Git`'s `filesystemAt(ref)` is the Endo directory view.
@@ -59,8 +60,7 @@ and issue #378 carries the hardening follow-ups on the landed code.
 **What the capability-addressed git remote needs from Endo.**
 The `designs/README.md` M3 row states that minion.town § 12's Endo
 follow-on "is the git trio + `makeGitRemoteTool`".
-That is half right, and this document corrects it.
-Minion.town § 12 names two directions:
+That covers only one of the two directions minion.town § 12 names:
 
 - **Endo as client** (a daemon agent fetching from or pushing to a
   partition).
@@ -86,28 +86,32 @@ attachments, `request`, and `identify`) belongs to minion.town and to
 
 ## Design
 
-### `provideGitCapabilityCredential`
+### `splitGitCapabilityUrl`
 
 ```ts
-EndoHost.provideGitCapabilityCredential(
-  petName: PetName | NamePath,
-  options: { capabilityUrl: string },
-): Promise<{ credential: BasicCredential; url: string }>;
+splitGitCapabilityUrl(text: string): {
+  url: string;
+  audience: string;
+  username: string;
+  password: string;
+};
 ```
 
-- Parsing lives in one pure helper in `@endo/exo-git`,
-  `splitGitCapabilityUrl(text)`, next to `normalizeGitRemoteUrl`.
+- A pure function in `@endo/exo-git`, next to `normalizeGitRemoteUrl`, and
+  exported from the package index.
   It accepts only `https:` URLs whose userinfo carries a non-empty password
-  (the token), and returns `{ url, audience, username, password }`.
+  (the token).
   `url` is the input with userinfo removed; `audience` is
   `new URL(url).origin`.
   A missing username defaults to `x-access-token`, the fixed non-secret
   username minion.town mints.
-- The host method mints a `BasicCredential` exactly as
-  `provideBasicCredential` does, stores it under `petName`, and returns it
-  together with the credential-free `url`.
-  The token reaches only the process-local material map in `manager.js`,
-  which is the same place `provideBasicCredential` puts a password.
+- Host code (the CLI, or a caplet holding the host) calls it and passes
+  `{ audience, username, password }` to the landed
+  `provideBasicCredential(petName, ...)`.
+  The capability URL itself never crosses CapTP.
+  The password crosses once, as the landed `provideBasicCredential` argument
+  already does, and reaches only the process-local material map in
+  `manager.js`.
 - `url` is **not a secret**.
   The partition id in its path names a partition and grants nothing, so
   `GitRemote.inspect()` may show it (Design Decision 8 of
@@ -117,58 +121,60 @@ EndoHost.provideGitCapabilityCredential(
   a URL with no token fails with `"capabilityUrl carries no token"`.
   Neither message quotes the argument.
 
-### Fetch-only `provideGitClone`
+A daemon-side compound method (`provideGitCapabilityCredential`, split plus
+mint) was considered and dropped: it would be exactly this helper followed by
+`provideBasicCredential`, and it would add a secret-parsing host entry point,
+which Open question 3 argues against.
 
-The landed `provideGitClone` hard-codes its origin policy to
-`allowedDirections: ['fetch', 'push']` with `pushRefspecs:
+### Fetch-only clone through the landed controller
+
+The landed `provideGitClone` mints its origin with
+`allowedDirections: ['fetch', 'push']` and `pushRefspecs:
 ['refs/heads/*:refs/heads/*']` (`packages/daemon/src/host.js`, the
 `makeRemote` callback).
-Granting that `remote` in an ingestion flow would therefore give the guest
-push authority, whatever the host meant.
-This slice adds one optional field to `provideGitClone`:
+Granting that `remote` unchanged in an ingestion flow would give the guest
+push authority.
+The landed host-side controller already narrows it:
+`getGitRemoteController(remote)` returns a `GitRemoteController` whose
+`setAllowedDirections` validates through the policy normalizer
+(`git-remote-policy.js`), persists through the remote's formula state
+(`persistGitRemoteState` in `manager.js`), and invalidates in-flight
+operations.
+The narrowed policy is formula-owned, so the guest cannot widen it, and a
+restart revives it fetch-only.
 
-```ts
-provideGitClone(opts: {
-  destMount: EndoMount;
-  endpoint: { url: string; credential?: unknown; allowLocalFileTransport?: boolean };
-  identity?: GitCommitIdentity;
-  allowedDirections?: Array<'fetch' | 'push'>; // new; default ['fetch', 'push']
-}): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
-```
-
-- The value is validated by the landed `GitRemote` policy normalizer
-  (`git-remote-policy.js`), so an empty array or an unknown direction fails
-  at construction, before any clone runs.
-- When the value omits `'push'`, the origin's formula records
-  `allowedDirections: ['fetch']` and `pushRefspecs: []`.
-  The policy is formula-owned, so the guest cannot widen it, and a restart
-  revives it fetch-only.
-- The default stays `['fetch', 'push']`, so existing callers are unchanged.
-
-The ingestion flow then mints a fetch-only origin before anything is granted:
+The ingestion flow narrows the origin before anything is granted:
 
 ```js
-const { credential, url } = await E(host).provideGitCapabilityCredential(
-  'inbox-cred', { capabilityUrl },
-);
+import { splitGitCapabilityUrl } from '@endo/exo-git';
+
+const { url, audience, username, password } =
+  splitGitCapabilityUrl(capabilityUrl);
+const credential = await E(host).provideBasicCredential('inbox-cred', {
+  audience,
+  username,
+  password,
+});
 const { git, remote } = await E(host).provideGitClone({
   destMount: scratch,
   endpoint: { url, credential },
-  allowedDirections: ['fetch'],
 });
+const controller = await E(host).getGitRemoteController(remote);
+await E(controller).setAllowedDirections(['fetch']);
 // Grant the guest `E(git).readOnly()` and `remote`. After `remote.fetch()`,
 // `filesystemAt('refs/remotes/origin/main')` is the pushed artifact, and
 // `remote.push()` rejects with "does not permit 'push'".
 ```
 
+Until `setAllowedDirections` resolves, only the host holds `remote`, so the
+interval with push enabled grants nothing.
 The guest receives `readOnly()` of the `Git` rather than the read-write cap,
 because reading the artifact needs no commit authority.
 
+When the host does intend to grant push to an existing worktree,
 `provideGitRemote(git, 'partition', { name: 'origin', url, credential,
 allowedDirections: ['fetch', 'push'], pushRefspecs:
-['refs/heads/main:refs/heads/main'] })` binds a partition to an existing
-worktree the same way when the host does intend to grant push.
-Its landed default is already `['fetch']`.
+['refs/heads/main:refs/heads/main'] })` binds the partition directly.
 
 ### Attenuation is stated, never inferred
 
@@ -176,13 +182,15 @@ A minion.town capability URL does not reveal whether it is a `read` or a
 `readwrite` token; minion.town's attenuation is a field on its server-side
 record.
 The daemon therefore infers nothing from the URL.
-The host states `allowedDirections` on whichever method mints the remote:
-`provideGitRemote` defaults to `['fetch']`, and `provideGitClone` takes the
-new option above.
+The host states the directions: `provideGitRemote` takes
+`allowedDirections` and defaults to `['fetch']`, while `provideGitClone`
+mints fetch+push and the host narrows it through the controller.
+The two landed defaults differ; this slice does not change either, and the
+worked example above shows the narrowing step a fetch-only grant needs.
 The server enforces its own attenuation independently: a `read` token's push
 gets a 403.
-Two gates, each owned by the side that holds the authority, and neither
-trusts the other.
+Each gate is owned by the side that holds the authority, and neither trusts
+the other.
 
 ### Secret hygiene fix on the landed path
 
@@ -195,30 +203,34 @@ crosses CapTP and lands in logs and agent transcripts.
 This slice redacts it: the embedded-credentials message prints the URL with
 username and password replaced by `***`, and the invalid-URL message quotes
 nothing.
-The new message also names `provideGitCapabilityCredential` as the right
-entry point.
+The new message also names `splitGitCapabilityUrl` as the right entry point.
 
 ### Redaction boundary
 
-`capabilityUrl` is the only secret-bearing argument this slice adds.
-Its redaction boundary is the body of `provideGitCapabilityCredential`: the
-method parses the argument, hands the password to the process-local material
-map, and lets no other value derived from the argument leave the method
-except the credential cap and the credential-free `url`.
+The capability URL stays in the host's process; `splitGitCapabilityUrl` is
+the only code that sees it whole.
+The only secret that crosses into the daemon is the password, through the
+landed `provideBasicCredential` argument, whose boundary is the landed
+material map.
 Concretely:
 
 - **Formula records.** The persisted `git-credential` formula is
   `{ type, kind: 'basic', audience }`, the landed shape.
   The username is material, like the password, not formula state.
+  The `GitRemote` formula holds the credential-free `url` and the policy.
 - **Pet-name store.** It records only the pet name and the formula id.
-- **Audit surfaces.** The daemon has no host-call argument log today;
-  CapTP does not record arguments, and the planned controller audit log
-  ([daemon-git-remotes](daemon-git-remotes.md) § Implementation Plan,
-  "Add audit entries") has not landed.
-  When it does, an adoption entry may name only the pet name, the credential
-  kind, the audience, and the credential-free `url`.
-  This document makes that a constraint on the audit design.
-- **Errors.** No message quotes the argument (§ `provideGitCapabilityCredential`).
+- **Audit surfaces.** The landed `GitRemoteController.audit()` log records
+  `create`, `policy`, and `revoke` events, each with a policy snapshot whose
+  `url` is credential-free.
+  The credential controller keeps no audit log, and CapTP does not record
+  arguments.
+  The audit entries for outbound ref updates
+  ([daemon-git-remotes](daemon-git-remotes.md) § Implementation Plan, Phase
+  4) have not landed; when they do, they may name only the pet name, the
+  credential kind, the audience, and the credential-free `url`.
+  This document makes that a constraint on that work.
+- **Errors.** No message quotes the argument (§ `splitGitCapabilityUrl`,
+  § Secret hygiene fix on the landed path).
 - **Git processes.** The token reaches git only through the landed fd-pipe
   askpass, never argv, environment, or a temp file.
 
@@ -228,11 +240,12 @@ bytes and real spawned processes, not against in-memory objects.
 ### Restart behavior
 
 Credential material is process-local by design
-([daemon-git-remotes](daemon-git-remotes.md) § Initial Backend), so after a
-daemon restart a capability-URL credential reports `revoked: true` through
-`credentialHealth()` until the host calls `rotate({ username, password })`.
-For a show-once capability URL, that means the host has to keep the URL
-somewhere to recover.
+([daemon-git-remotes](daemon-git-remotes.md) § Initial Backend).
+After a daemon restart, a capability-URL credential therefore reports
+`revoked: true` through `credentialHealth()`.
+It stays unusable until the host calls `rotate({ username, password })`.
+A capability URL is shown once, so to recover, the host must have kept the
+URL itself.
 This slice keeps the landed invariant and documents the recovery; durable
 custody is the bank item in [daemon-git-next-steps](daemon-git-next-steps.md)
 § Beyond the Loop.
@@ -244,10 +257,12 @@ sequenceDiagram
   participant Host as Endo host
   participant D as daemon (exo-git + askpass)
   participant G as guest
-  Host->>D: provideGitCapabilityCredential(name, capabilityUrl)
-  D-->>Host: credential cap + credential-free url
-  Host->>D: provideGitClone(destMount, url, credential, fetch only)
-  D-->>Host: git + fetch-only remote
+  Host->>Host: splitGitCapabilityUrl(capabilityUrl)
+  Host->>D: provideBasicCredential(name, audience, username, password)
+  D-->>Host: credential cap
+  Host->>D: provideGitClone(destMount, url, credential)
+  D-->>Host: git + remote
+  Host->>D: getGitRemoteController(remote).setAllowedDirections(fetch)
   Host->>G: grant git.readOnly() and remote by pet name
   Ext->>MT: git push (capability URL)
   G->>D: remote.fetch()
@@ -260,8 +275,8 @@ sequenceDiagram
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| Host caller -> daemon host method | `splitGitCapabilityUrl` in `@endo/exo-git` | Host decides whether to adopt a URL | Formula: kind, audience only | Host (pet-name store, `GitCredentialController`) | The capability URL, once, in a method argument |
-| Daemon -> `GitRemote` formula | Landed `provideGitRemote`; `provideGitClone` with the new `allowedDirections` option | Host-stated `allowedDirections`, refspecs, force flags | Formula: credential-free URL + policy | Host via `GitRemoteController` | Credential cap reference; never material |
+| Host code -> daemon host method | `splitGitCapabilityUrl` in `@endo/exo-git` (host side), landed `provideBasicCredential` | Host decides whether to adopt a URL | Formula: kind, audience only | Host (pet-name store, `GitCredentialController`) | Audience, username, and password, once, in the landed method argument; never the whole URL |
+| Daemon -> `GitRemote` formula | Landed `provideGitRemote` / `provideGitClone`, narrowed by the landed `GitRemoteController.setAllowedDirections` | Host-stated `allowedDirections`, refspecs, force flags | Formula: credential-free URL + policy | Host via `GitRemoteController` | Credential cap reference; never material |
 | `GitRemote` -> minion.town server | Native git over HTTPS, token via fd-pipe askpass | Server-side attenuation (`read` / `readwrite`), partition confinement | Server: refs, objects, token hashes | Minion.town operator (mint, revoke) | Packfiles on the HTTPS data plane; never CapTP |
 | `Git` -> guest | Landed `filesystemAt(ref)` | Read-only view | None new | Daemon (view lifetime follows `Git`) | `Filesystem` capability |
 
@@ -287,41 +302,41 @@ The four ownership questions:
 
 ## Implementation plan (one PR, base `llm`)
 
-1. `@endo/exo-git`: `splitGitCapabilityUrl` plus unit tests (userinfo
-   split, default username, `http:` rejected, no token rejected, messages
-   never contain the input).
+1. `@endo/exo-git`: `splitGitCapabilityUrl`, exported from the package
+   index, plus unit tests (userinfo split, default username, `http:`
+   rejected, no token rejected, messages never contain the input).
 2. `@endo/exo-git`: redact both `normalizeGitRemoteUrl` messages.
    Update the existing `/embedded credentials/` assertions in
    `packages/daemon/test/git-remote.test.js` to also assert that the token
    substring is absent.
-3. `@endo/daemon`: `EndoHost.provideGitCapabilityCredential` (interface
-   guard in `interfaces.js`, type in `types.d.ts`, help text via
-   `help-text-data.js`).
-4. `@endo/daemon`: the optional `allowedDirections` on `provideGitClone`
-   (interface guard, type, help text, and the `makeRemote` policy in
-   `host.js`), with `pushRefspecs: []` when `'push'` is absent.
-5. Integration test in `packages/daemon/test/git.test.js`: stand up the
+3. Integration test in `packages/daemon/test/git.test.js`: stand up the
    existing HTTP credential fixture requiring Basic `x-access-token:<token>`,
-   adopt a capability URL, call `provideGitClone` with
-   `allowedDirections: ['fetch']`, push from an independent client, `fetch`,
-   and read the pushed file through `filesystemAt`.
+   split a capability URL, mint the credential with `provideBasicCredential`,
+   call `provideGitClone`, and narrow the origin with
+   `getGitRemoteController(remote).setAllowedDirections(['fetch'])`.
+   Push from an independent client, `fetch`, and read the pushed file through
+   `filesystemAt`.
    Then, holding only what the guest would be granted, assert that
    `remote.push()` rejects with "does not permit 'push'" and that the fixture
    received no `git-receive-pack` request.
-   Repeat the push rejection after a daemon restart, to show the policy is
-   formula-owned.
-6. Redaction test against real serialization, in the same file: after
+   Repeat the push rejection after a daemon restart, to show the narrowed
+   policy is formula-owned.
+4. Redaction test against real serialization, in the same file: after
    adoption, read every file under the daemon's state directory (formula
    records and the pet-name store) and the daemon log as raw bytes, and
    assert the token appears in none of them.
-   Also assert its absence from `inspect()` and from every rejection
-   produced by the error cases.
-7. Argv test: extend the landed fake-git test
+   Also assert its absence from `inspect()`, from
+   `GitRemoteController.audit()`, and from every rejection produced by the
+   error cases.
+5. Argv test: extend the landed fake-git test
    (`NativeGitBackend askpass keeps credential out of argv, env, and temp
-   files`) with a case whose credential comes from
-   `provideGitCapabilityCredential`, so the spawned git process's argv,
-   environment, and temp files are observed directly.
-8. On merge, flip this document's status to Complete and record the PR in
+   files`) with a case whose credential comes from a split capability URL,
+   so the spawned git process's argv, environment, and temp files are
+   observed directly.
+6. Help text: name `splitGitCapabilityUrl` in the `provideBasicCredential`
+   and `provideGitClone` help entries (`help-text-data.js`), including the
+   fetch-only narrowing step and restart recovery through `rotate`.
+7. On merge, flip this document's status to Complete and record the PR in
    [daemon-git-remotes](daemon-git-remotes.md) § Implementation Progress.
    (The reconciliation edits to that document and to the README M3 rows land
    with this design.)
@@ -338,8 +353,8 @@ durable custody.
    on `git.minion.town` are interchangeable to the daemon, and a host
    mis-binding one gets a 404 from the server rather than a construction-time
    refusal.
-   Recommend: add an optional exact-URL scope to credentials minted by this
-   method, as a follow-up, since the server's confinement already fails
+   Recommend: add an optional exact-URL scope to basic credentials, as a
+   follow-up, since the server's confinement already fails
    closed.
 2. **Should git capability URLs join the `#v=1` capability-URL locator
    family?**
@@ -348,11 +363,12 @@ durable custody.
    carries its token in userinfo because stock `git` needs it there.
    Recommend: keep them separate families, and let `endo store --locator`
    recognize a userinfo git URL only after #1360 is accepted.
-3. **Should `provideGitClone` and `provideGitRemote` also accept
-   `{ capabilityUrl }` directly?**
-   It would save the host one call, at the cost of two more places that parse
-   secrets.
-   Recommend: not in this slice.
+3. **Should the daemon accept `{ capabilityUrl }` directly, through a new
+   host method or on `provideGitClone` and `provideGitRemote`?**
+   It would save the host one call, at the cost of daemon-side entry points
+   that parse secrets and a whole token-bearing URL crossing CapTP.
+   Recommend: not in this slice; the host-side helper keeps parsing in one
+   pure function.
 4. **Who keeps a show-once capability URL across a daemon restart before the
    bank lands?**
    Recommend: the adopting operator, as with any other rotated credential;
@@ -362,7 +378,7 @@ durable custody.
 
 | Design | Relationship |
 |---|---|
-| [daemon-git-remotes](daemon-git-remotes.md) | Parent: `GitRemote`, credentials, fd-pipe askpass, `provideGitClone`. This slice adds one host method, one `provideGitClone` option, and a message fix. |
+| [daemon-git-remotes](daemon-git-remotes.md) | Parent: `GitRemote`, credentials, fd-pipe askpass, `provideGitClone`. This slice adds one pure `@endo/exo-git` helper and a message fix, and composes the landed `provideBasicCredential`, `provideGitClone`, and `GitRemoteController`. |
 | [daemon-git-capability](daemon-git-capability.md) | `Git.filesystemAt(ref)`, the Endo directory view of the fetched artifact. |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | Stack roadmap; its bank item owns durable credential custody. |
 | `kriscendobot/minion.town` `designs/git-remote-capability.md` and `designs/git-remote-capability-increment-1.md` | The server this slice talks to: capability-URL shape, `x-access-token` username, server-side attenuation and confinement. |
