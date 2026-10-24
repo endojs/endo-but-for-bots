@@ -323,15 +323,17 @@ shipped (Phases 0-5 + bulk-archive via #364/#365/#367), keeps the
 pin-algorithm caching forward-design note, and points the fix/test/
 legibility follow-ups to issue #378),
 [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md)
-(added 2026-09-29; the next `daemon-git-remotes` slice: a host method that
-splits a minion.town git capability URL into a non-extractable
-`BasicCredential` and a credential-free endpoint, plus redaction of the
-embedded-credential rejection that currently echoes the token; also splits
+(added 2026-09-29; the next `daemon-git-remotes` slice: a pure
+`@endo/exo-git` helper that splits a minion.town git capability URL into a
+credential-free endpoint and the fields for the landed
+`provideBasicCredential`, a fetch-only clone through the landed
+`GitRemoteController`, and redaction of the embedded-credential rejection
+that currently echoes the token; also splits
 the minion.town § 12 dependency into its client half (this stack) and its
 server half (minion.town increment 1 today, a daemon design to be filed)),
 [daemon-git-remotes](daemon-git-remotes.md) (added 2026-05-18, revised
-2026-05-29 and 2026-09-29; implementation progress section reads #365 + #368 as shipped,
-keeps the `LC_ALL=C` and porcelain-flag-gating design spec and the
+2026-05-29 and 2026-09-29; implementation progress section reads #365 +
+#368 as shipped, keeps the `LC_ALL=C` and porcelain-flag-gating design spec and the
 `setUrl` / Windows-port forward-design, and points the fix/test/
 legibility follow-ups to issue #378),
 [daemon-mount-capabilities](daemon-mount-capabilities.md) (added
@@ -440,7 +442,7 @@ LLM-agent stack).*
 | [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-07-06 | In Progress |
 | [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) | 2026-07-29 | 2026-08-24 | **Complete** |
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-09-29 | In Progress |
-| [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md) | 2026-09-29 | 2026-10-23 | Proposed |
+| [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md) | 2026-09-29 | 2026-10-24 | Proposed |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | In Progress |
 | [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) | 2026-09-08 | 2026-09-22 | **Implemented** |
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | 2026-07-10 | 2026-07-10 | In Progress |
@@ -669,7 +671,8 @@ statuses: [cbor-codec](cbor-codec.md) at *Phases 1-2 implemented*,
 [genie-integration](genie-integration.md) as a *Largely realized*
 retrospective, and [durable-posix-environments](durable-posix-environments.md)
 at *Initial implementation complete* (**257 indexed records**).
-The bucket sum is 257, equal to the summary-table row count.
+The twelve named buckets hold 254 records; with the three qualified records
+the total is 257, equal to the summary-table row count.
 These totals replace the 2026-10-16 count and the one-row increments after it,
 which had drifted from the table.
 PR endojs/endo-but-for-bots#1367 contributes one of the 35 Proposed rows,
@@ -1197,13 +1200,14 @@ halves and their directly-dependent companions as its first-to-land work:
   `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR
   [#41](https://github.com/kriscendobot/minion.town/pull/41), merged
   2026-08-18); its § 12 named the endo-side follow-on as "named but not
-  actioned." Its client half is the git trio already in this
+  actioned." That follow-on has a client half and a server half. The
+  client half is the git trio already in this
   milestone (`daemon-git-capability`, `daemon-git-remotes`,
   `daemon-git-next-steps`) plus the `daemon-agent-tools` `makeGitRemoteTool`
   push tier (#705) and capability-URL adoption
   ([daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md),
-  the next slice); its server half runs today in minion.town's deployed
-  increment 1, and its Rust smart-HTTP backing is
+  the next slice). Minion.town's deployed increment 1 runs the server half
+  today. The minion.town design's Rust smart-HTTP backing is
   [endor-git-bindings](endor-git-bindings.md) (home M11, revised
   2026-08-14 after this Minion Town review — the shared `rust/endor-git`
   contract backs Minion Town's smart-HTTP adapter). Read-side companion is
@@ -1252,7 +1256,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | daemon-git-capability | In Progress | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | exo-git-follow-root-advancement | **Complete** | Extends `@endo/platform/fs` with tree identity, atomic method-call transactions, high-level patches, and separate lossless-change / lossy-latest root followers; `GitStage` adds tentative commit metadata and a mutable root whose explicit `commit()` advances the corresponding Git followers |
 | daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps. Phases 1-5 landed (#365, #368, #538, #706, hardening through #1145); next slice is [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md): adopt a minion.town capability URL as a `GitRemote` without exposing its token |
-| daemon-git-remote-capability-urls | Proposed | Next `daemon-git-remotes` slice: `EndoHost.provideGitCapabilityCredential` adopts a minion.town git capability URL as a non-extractable `BasicCredential` plus a credential-free endpoint for the landed `provideGitRemote` / `provideGitClone`, and redacts the token from the landed embedded-credential rejection. Closes the client half of the M3 exit criterion's capability-addressed `git push` using only landed substrate |
+| daemon-git-remote-capability-urls | Proposed | Next `daemon-git-remotes` slice: a pure `@endo/exo-git` helper, `splitGitCapabilityUrl`, turns a minion.town git capability URL into a credential-free endpoint plus the fields for the landed `provideBasicCredential`; the landed `provideGitClone` and `GitRemoteController.setAllowedDirections` then mint a fetch-only origin before grant. Also redacts the token from the landed embedded-credential rejection. Closes the client half of the M3 exit criterion's capability-addressed `git push` using only landed substrate |
 | daemon-git-next-steps | In Progress | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. `provideGitClone` landed in #538 and formula-owned commit identity in #706, so the clone and identity boundary is no longer open work and needs no prerequisite `daemon-git-clone.md`. Open `- [ ]` work: worked bot-fork reference flow, `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
 | **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on splits in two. The **client** half is the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705), plus capability-URL adoption ([daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md), the next slice). The **server** half covers the partition primitive, URL minting and revocation, and the git-object <-> CAS database. Minion.town's own deployed increment 1 (#86, `git.minion.town`) serves it today. Moving the server half into the daemon needs a separate design, not yet filed. That design would use `endor-git-bindings` (home M11) as its Rust backing. Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
 | **endo-claude** | In Progress | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |

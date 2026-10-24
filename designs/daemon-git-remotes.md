@@ -699,8 +699,12 @@ The public `GitRemote` contract should survive those swaps.
 
 ## Implementation Plan
 
-Phases 1-5 shipped in #365 (see § Implementation Progress and Notes; the unchecked boxes below are the original plan, and `GitRemoteSet` was deferred as that phase allowed).
-The next increment is not a numbered phase here: adopting a capability URL as a `GitRemote` is designed in [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md).
+Phases 1-5 shipped in #365 (see § Implementation Progress and Notes; the
+unchecked boxes below are the original plan, and `GitRemoteSet` was
+deferred as that phase allowed).
+The next increment is not a numbered phase here: adopting a capability URL
+as a `GitRemote` is designed in
+[daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md).
 
 ### Phase 1: Remote Model (MVA)
 
