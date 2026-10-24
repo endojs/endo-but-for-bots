@@ -74,7 +74,8 @@ That covers only one of the two directions minion.town § 12 names:
   per-partition reclamation).
   The trio does not cover any of this.
   Minion.town's increment 1 implements it outside Endo (`git http-backend`
-  over one bare repo per partition), and its Rust backing is
+  over one bare repo per partition).
+  If the server half moves into the daemon, its Rust backing is
   [endor-git-bindings](endor-git-bindings.md) (M11).
   Moving it into the daemon is a separate design (**to be filed**) and is not
   on the M3 critical path, because the deployed minion.town server already
@@ -166,8 +167,20 @@ await E(controller).setAllowedDirections(['fetch']);
 // `remote.push()` rejects with "does not permit 'push'".
 ```
 
-Until `setAllowedDirections` resolves, only the host holds `remote`, so the
-interval with push enabled grants nothing.
+Until `setAllowedDirections` resolves, only the host holds `remote`, so push
+is enabled but unreachable by the guest.
+That holds only if the window is not interrupted.
+`provideGitClone` persists the origin formula with fetch+push before the
+narrowing call, so a host crash, a thrown error, or a retry between the two
+calls leaves a durable fetch+push remote behind.
+The rule for host code is therefore: do not name `remote` in the pet-name
+store, and do not grant it, until `setAllowedDirections(['fetch'])` has
+resolved.
+A host that retries after a failure narrows again before granting (the call
+is idempotent), and a remote that never reached a grant is discarded with the
+scratch mount.
+The fallback, if a reviewer judges the window too wide, is the atomic form
+this slice dropped: a policy option on `provideGitClone` (Open question 5).
 The guest receives `readOnly()` of the `Git` rather than the read-write cap,
 because reading the artifact needs no commit authority.
 
@@ -194,16 +207,25 @@ the other.
 
 ### Secret hygiene fix on the landed path
 
-`normalizeGitRemoteUrl` currently fails with
-`must not include embedded credentials: ${q(urlText)}` and
-`is not a valid URL: ${q(urlText)}`.
+`normalizeGitRemoteUrl` (`packages/exo-git/src/git-remote-policy.js`) quotes
+its input in all three of its rejections:
+`is not a valid URL: ${q(urlText)}`,
+`must use https: for the MVP transport: ${q(urlText)}`, and
+`must not include embedded credentials: ${q(urlText)}`.
+The scheme check runs before the credentials check, so
+`http://x-access-token:<token>@host/p` leaks through the scheme message even
+if the credentials message is fixed.
+The same function also backs `normalizeGitRemotePolicy`, which every
+`GitRemoteController` policy update runs, so callers other than the two
+`provide*` methods can reach these messages.
 A host that passes a capability URL straight to `provideGitRemote` or
 `provideGitClone` therefore gets the token back inside a rejection that
 crosses CapTP and lands in logs and agent transcripts.
-This slice redacts it: the embedded-credentials message prints the URL with
-username and password replaced by `***`, and the invalid-URL message quotes
-nothing.
-The new message also names `splitGitCapabilityUrl` as the right entry point.
+This slice routes all three sites through one redacting helper: a URL that
+parses is printed with username and password replaced by `***`, and an
+unparseable input is quoted not at all.
+The embedded-credentials message also names `splitGitCapabilityUrl` as the
+right entry point.
 
 ### Redaction boundary
 
@@ -258,9 +280,9 @@ sequenceDiagram
   participant D as daemon (exo-git + askpass)
   participant G as guest
   Host->>Host: splitGitCapabilityUrl(capabilityUrl)
-  Host->>D: provideBasicCredential(name, audience, username, password)
+  Host->>D: provideBasicCredential(petName, { audience, username, password })
   D-->>Host: credential cap
-  Host->>D: provideGitClone(destMount, url, credential)
+  Host->>D: provideGitClone({ destMount, endpoint: { url, credential } })
   D-->>Host: git + remote
   Host->>D: getGitRemoteController(remote).setAllowedDirections(fetch)
   Host->>G: grant git.readOnly() and remote by pet name
@@ -305,10 +327,17 @@ The four ownership questions:
 1. `@endo/exo-git`: `splitGitCapabilityUrl`, exported from the package
    index, plus unit tests (userinfo split, default username, `http:`
    rejected, no token rejected, messages never contain the input).
-2. `@endo/exo-git`: redact both `normalizeGitRemoteUrl` messages.
+2. `@endo/exo-git`: route all three `normalizeGitRemoteUrl` rejections
+   (invalid URL, non-`https:` scheme, embedded credentials) through one
+   redacting helper.
    Update the existing `/embedded credentials/` assertions in
    `packages/daemon/test/git-remote.test.js` to also assert that the token
-   substring is absent.
+   substring is absent, and add cases for an `http:` URL with userinfo and
+   an unparseable token-bearing string, through both `provideGitRemote` and
+   `normalizeGitRemotePolicy` (the path every `GitRemoteController` policy
+   update runs).
+   Before landing, grep `normalizeGitRemoteUrl` for every remaining
+   `${q(` interpolation; the count must be zero.
 3. Integration test in `packages/daemon/test/git.test.js`: stand up the
    existing HTTP credential fixture requiring Basic `x-access-token:<token>`,
    split a capability URL, mint the credential with `provideBasicCredential`,
@@ -321,6 +350,16 @@ The four ownership questions:
    received no `git-receive-pack` request.
    Repeat the push rejection after a daemon restart, to show the narrowed
    policy is formula-owned.
+   Cover the failure modes this document names:
+   - after the restart, `credentialHealth()` reports `revoked: true` and
+     `fetch` fails; `rotate({ username, password })` restores it;
+   - a token the fixture no longer accepts (rotated or revoked server-side)
+     makes `fetch` reject with the 401 passed through, and the rejection
+     carries no token;
+   - a credential whose audience does not match the remote's origin is
+     refused at `provideGitClone` / `provideGitRemote` construction;
+   - interrupting between `provideGitClone` and `setAllowedDirections`
+     leaves no pet name for `remote`, so nothing grantable carries push.
 4. Redaction test against real serialization, in the same file: after
    adoption, read every file under the daemon's state directory (formula
    records and the pet-name store) and the daemon log as raw bytes, and
@@ -336,6 +375,9 @@ The four ownership questions:
 6. Help text: name `splitGitCapabilityUrl` in the `provideBasicCredential`
    and `provideGitClone` help entries (`help-text-data.js`), including the
    fetch-only narrowing step and restart recovery through `rotate`.
+   The `provideGitClone` entry also says that a host that skips the
+   narrowing step grants push even on a `read` token, and that the server's
+   403 is then the only backstop.
 7. On merge, flip this document's status to Complete and record the PR in
    [daemon-git-remotes](daemon-git-remotes.md) § Implementation Progress.
    (The reconciliation edits to that document and to the README M3 rows land
@@ -358,7 +400,9 @@ durable custody.
    closed.
 2. **Should git capability URLs join the `#v=1` capability-URL locator
    family?**
-   Design PR #1360 (`capability-url-locators`) defines locators as `endo://`
+   Design PR
+   [endojs/endo-but-for-bots#1360](https://github.com/endojs/endo-but-for-bots/pull/1360)
+   (`capability-url-locators`, open, not yet accepted) proposes locators as `endo://`
    or `https` URLs with a `#v=1` fragment, while minion.town's git URL
    carries its token in userinfo because stock `git` needs it there.
    Recommend: keep them separate families, and let `endo store --locator`
@@ -373,6 +417,13 @@ durable custody.
    bank lands?**
    Recommend: the adopting operator, as with any other rotated credential;
    revisit when [daemon-capability-bank](daemon-capability-bank.md) lands.
+5. **Should `provideGitClone` take an `allowedDirections` option so narrowing
+   is atomic?**
+   The two-step form leaves a fetch+push origin persisted if the host fails
+   between the calls (§ Fetch-only clone through the landed controller).
+   Recommend: not in this slice; the host rule (no pet name and no grant
+   before narrowing) and its test close the window, and the option can follow
+   if a second caller needs it.
 
 ## Dependencies
 
@@ -381,9 +432,9 @@ durable custody.
 | [daemon-git-remotes](daemon-git-remotes.md) | Parent: `GitRemote`, credentials, fd-pipe askpass, `provideGitClone`. This slice adds one pure `@endo/exo-git` helper and a message fix, and composes the landed `provideBasicCredential`, `provideGitClone`, and `GitRemoteController`. |
 | [daemon-git-capability](daemon-git-capability.md) | `Git.filesystemAt(ref)`, the Endo directory view of the fetched artifact. |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | Stack roadmap; its bank item owns durable credential custody. |
-| `kriscendobot/minion.town` `designs/git-remote-capability.md` and `designs/git-remote-capability-increment-1.md` | The server this slice talks to: capability-URL shape, `x-access-token` username, server-side attenuation and confinement. |
+| `kriscendobot/minion.town` `designs/git-remote-capability.md` ([kriscendobot/minion.town#41](https://github.com/kriscendobot/minion.town/pull/41)) and its deployed increment 1 ([kriscendobot/minion.town#86](https://github.com/kriscendobot/minion.town/pull/86)) | The server this slice talks to: capability-URL shape, `x-access-token` username, server-side attenuation and confinement. |
 | [endor-git-bindings](endor-git-bindings.md) | Future Rust backing for a daemon-side server half; not needed by this slice. |
-| Design PR #1360 (`capability-url-locators`) | Sibling capability-URL family (`#v=1` fragment); see Open question 2. |
+| Design PR [endojs/endo-but-for-bots#1360](https://github.com/endojs/endo-but-for-bots/pull/1360) (`capability-url-locators`, open) | Sibling capability-URL family (`#v=1` fragment); see Open question 2. |
 
 ## Prompt
 
