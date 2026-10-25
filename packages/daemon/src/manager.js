@@ -8787,6 +8787,24 @@ const makeDaemonCore = async (
   const mountStagingPath = (mountId, name) =>
     `${getMountHostPath(mountId)}.${name}`;
 
+  /** @param {unknown} error */
+  const isMissingEntryError = error =>
+    /** @type {{ code?: unknown }} */ (error).code === 'ENOENT';
+
+  /**
+   * Replace a staging record in one rename, so a daemon that stops mid-write
+   * leaves either the old record or the new one, never a truncated file.
+   *
+   * @param {string} name
+   * @param {object} record
+   */
+  const writeMountStagingRecord = async (name, record) => {
+    const recordPath = mountStagingRecordPath(name);
+    const temporaryPath = `${recordPath}.partial`;
+    await filePowers.writeFileText(temporaryPath, JSON.stringify(record));
+    await filePowers.renamePath(temporaryPath, recordPath);
+  };
+
   /** @param {string} name */
   const forgetMountStagingEntry = async name => {
     const recordPath = mountStagingRecordPath(name);
@@ -8796,9 +8814,9 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Create a fresh staging directory beside the mount. The path remains
-   * private to the daemon but shares the mount's filesystem, so publishing
-   * entries does not need a cross-device fallback.
+   * Create a fresh staging directory beside the mount.  Its record is
+   * written before the directory exists, so a daemon that stops at any
+   * point leaves a record by which a later call removes the directory.
    *
    * @param {FormulaIdentifier} mountId
    * @returns {Promise<MountEntryRecord>}
@@ -8814,24 +8832,27 @@ const makeDaemonCore = async (
     let identity;
     try {
       await filePowers.makePath(mountStagingRecordsPath);
+      await writeMountStagingRecord(name, { mountId, stagingPath });
       await filePowers.makePath(stagingPath);
       identity = await filePowers.entryIdentity(stagingPath);
-      await filePowers.writeFileText(
-        mountStagingRecordPath(name),
-        JSON.stringify({ mountId, identity, stagingPath }),
-      );
+      await writeMountStagingRecord(name, { mountId, identity, stagingPath });
       return harden({ name, identity });
     } catch (error) {
-      // Without a record the directory could never be discarded later, so
-      // remove it now, but only while it is still the object this call made.
+      // Remove the directory now, but only while it is still the object
+      // this call made; a pending record left behind lets a later call
+      // retry the removal.
       if (identity !== undefined) {
         await null;
         try {
           if ((await filePowers.entryIdentity(stagingPath)) === identity) {
             await filePowers.removeEmptyDirectory(stagingPath);
           }
-        } catch {
-          // Gone, replaced, or written into by another holder; keep it.
+        } catch (cleanupError) {
+          if (!isMissingEntryError(cleanupError)) {
+            console.warn(
+              `Could not remove mount staging directory ${stagingPath}: ${/** @type {Error} */ (cleanupError).message}`,
+            );
+          }
         }
       }
       liveMountStagingPaths.delete(stagingPath);
@@ -8853,8 +8874,8 @@ const makeDaemonCore = async (
     let identity;
     try {
       identity = await filePowers.entryIdentity(stagingPath);
-    } catch {
-      // Missing; reported below.
+    } catch (error) {
+      if (!isMissingEntryError(error)) throw error;
     }
     if (identity !== staging.identity) {
       throw makeError(
@@ -8979,10 +9000,11 @@ const makeDaemonCore = async (
 
   /**
    * Read a mount staging record, or `undefined` if it is unreadable or
-   * malformed.
+   * malformed.  A record without an identity is pending: its directory was
+   * being created when the daemon stopped.
    *
    * @param {string} name
-   * @returns {Promise<{ mountId: unknown, identity: string, stagingPath?: string } | undefined>}
+   * @returns {Promise<{ mountId: unknown, identity?: string, stagingPath?: string } | undefined>}
    */
   const readMountStagingRecord = async name => {
     const recordPath = mountStagingRecordPath(name);
@@ -8999,14 +9021,17 @@ const makeDaemonCore = async (
     if (
       typeof record !== 'object' ||
       record === null ||
-      typeof record.identity !== 'string'
+      (typeof record.identity !== 'string' &&
+        typeof record.stagingPath !== 'string')
     ) {
       console.warn(`Forgetting malformed mount staging record ${recordPath}`);
       return undefined;
     }
     return {
       mountId: record.mountId,
-      identity: record.identity,
+      ...(typeof record.identity === 'string'
+        ? { identity: record.identity }
+        : {}),
       ...(typeof record.stagingPath === 'string'
         ? { stagingPath: record.stagingPath }
         : {}),
@@ -9029,45 +9054,78 @@ const makeDaemonCore = async (
     }
     /** @type {MountEntryRecord[]} */
     const stale = [];
+    /**
+     * Run a removal that only a missing path may fail, and report whether
+     * the record that owns the path may be forgotten.  Any other failure is
+     * logged and the record kept, so a later call retries.
+     *
+     * @param {string} path
+     * @param {() => Promise<void>} remove
+     */
+    const removeStaleOrKeep = async (path, remove) => {
+      try {
+        await remove();
+        return true;
+      } catch (error) {
+        if (isMissingEntryError(error)) return true;
+        console.warn(
+          `Keeping mount staging record for ${path}: ${/** @type {Error} */ (error).message}`,
+        );
+        return false;
+      }
+    };
+    /** @param {string} name */
+    const isLiveName = name =>
+      [...liveMountStagingPaths].some(path => path.endsWith(`.${name}`));
     for (const recordName of await filePowers.readDirectory(
       mountStagingRecordsPath,
     )) {
-      const name = recordName.endsWith('.json')
-        ? recordName.slice(0, -'.json'.length)
-        : undefined;
-      if (name !== undefined) {
-        // A daemon that stopped mid-write leaves a truncated record.  It
-        // proves nothing about any entry, so it is forgotten rather than
-        // left to fail every later clone.
+      if (recordName.endsWith('.json.partial')) {
+        // A record write the daemon never finished; the record it would
+        // have replaced, if any, is still in place.
+        const partialPath = filePowers.joinPath(
+          mountStagingRecordsPath,
+          recordName,
+        );
+        if (!isLiveName(recordName.slice(0, -'.json.partial'.length))) {
+          await removeStaleOrKeep(partialPath, () =>
+            filePowers.removePath(partialPath),
+          );
+        }
+      } else if (recordName.endsWith('.json')) {
+        const name = recordName.slice(0, -'.json'.length);
         const record = await readMountStagingRecord(name);
+        const { stagingPath } = record ?? {};
         if (record === undefined) {
           await forgetMountStagingEntry(name);
-        } else if (
-          record.stagingPath !== undefined &&
-          record.mountId !== mountId &&
-          !liveMountStagingPaths.has(record.stagingPath)
-        ) {
-          try {
-            if (
-              (await filePowers.entryIdentity(record.stagingPath)) ===
-              record.identity
-            ) {
-              await filePowers.removeDirectory(record.stagingPath);
-            }
-          } catch {
-            // Gone or replaced; the private record no longer proves ownership.
+        } else if (stagingPath !== undefined && isLiveName(name)) {
+          // An operation in this process still owns it.
+        } else if (record.identity === undefined) {
+          // The daemon stopped while creating this directory, which only it
+          // can reach, so it is still empty and nobody else's.
+          if (
+            stagingPath === undefined ||
+            (await removeStaleOrKeep(stagingPath, () =>
+              filePowers.removeEmptyDirectory(stagingPath),
+            ))
+          ) {
+            await forgetMountStagingEntry(name);
           }
-          await forgetMountStagingEntry(name);
-        } else if (
-          record.mountId === mountId &&
-          !liveMountStagingPaths.has(mountStagingPath(mountId, name))
-        ) {
+        } else if (stagingPath !== undefined && record.mountId !== mountId) {
+          const { identity } = record;
+          const removed = await removeStaleOrKeep(stagingPath, async () => {
+            if ((await filePowers.entryIdentity(stagingPath)) === identity) {
+              await filePowers.removeDirectory(stagingPath);
+            }
+          });
+          // Gone or replaced; the private record no longer proves ownership.
+          if (removed) await forgetMountStagingEntry(name);
+        } else if (record.mountId === mountId && !isLiveName(name)) {
           stale.push(harden({ name, identity: record.identity }));
         }
       }
     }
     await discardMountEntries(mountId, stale);
-    // A recorded entry that was gone or replaced has nothing left to prove.
     for (const { name } of stale) {
       await forgetMountStagingEntry(name);
     }

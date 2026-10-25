@@ -1849,9 +1849,8 @@ export const makeHostMaker = ({
         throw makeError(X`provideGitClone: destMount must be empty`);
       }
 
-      // Another holder can write to the mount after the emptiness check. The
-      // clone is therefore built in daemon-private staging beside the mount
-      // and published without replacing concurrent entries.
+      // See designs/daemon-git-remotes.md § clone for why the clone is
+      // staged beside the mount and published without replacing entries.
       /** @type {MountEntryRecord | undefined} */
       let staging;
       /** @type {MountEntryRecord[]} */
@@ -1989,7 +1988,13 @@ export const makeHostMaker = ({
         }
         throw error;
       } finally {
-        await Promise.all(pinned.map(unpinTransient));
+        // The names are bound by now, so a failed unpin must not report a
+        // published clone as failed.  The catch path has already unpinned.
+        await Promise.all(pinned.map(unpinTransient)).catch(error =>
+          console.warn(
+            `provideGitClone: could not release transient pins: ${/** @type {Error} */ (error).message}`,
+          ),
+        );
       }
     };
 

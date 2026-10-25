@@ -1226,7 +1226,6 @@ test.serial(
     await E(controller).rotate({ token: 'second-token' });
 
     await t.throwsAsync(cloneP, { message: /changed during clone/ });
-    // The aborted subprocess drops its connection to the listener.
     await disconnected.promise;
     t.deepEqual(await fs.promises.readdir(destPath), ['writer.txt']);
     t.is(await E(destMount).readText(['writer.txt']), 'concurrent content\n');
@@ -1298,14 +1297,16 @@ test.serial(
       path.join(stalePath, 'partial-clone'),
       'interrupted\n',
     );
-    const { dev, ino } = await fs.promises.lstat(stalePath, { bigint: true });
+    const { dev, ino, birthtimeNs } = await fs.promises.lstat(stalePath, {
+      bigint: true,
+    });
     const recordsPath = path.join(config.statePath, 'mount-staging');
     await fs.promises.mkdir(recordsPath, { recursive: true });
     await fs.promises.writeFile(
       path.join(recordsPath, `${staleName}.json`),
       JSON.stringify({
         mountId: await E(firstHost).identify('stale-staging-destination'),
-        identity: `${dev}:${ino}`,
+        identity: `${dev}:${ino}:${birthtimeNs}`,
       }),
     );
 
@@ -1320,6 +1321,53 @@ test.serial(
 
     t.is((await E(git).currentBranch()).name, 'main');
     t.deepEqual(await fs.promises.readdir(destPath), ['.git']);
+    t.deepEqual(await fs.promises.readdir(recordsPath), []);
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone removes staging a daemon stopped while creating',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host: firstHost, config, restart } = await provisionHostContext(t);
+
+    const destMount = await E(firstHost).provideScratchMount(
+      'pending-staging-destination',
+    );
+    const destPath = await E(firstHost).provideHostPath(destMount);
+    // The record is written before the directory, so a daemon that stopped
+    // in between leaves a record with no identity yet, and perhaps an
+    // unfinished rewrite of it.
+    const pendingName = '.endo-staging-fedcba9876543210fedcba9876543210';
+    const pendingPath = `${destPath}.${pendingName}`;
+    await fs.promises.mkdir(pendingPath);
+    const recordsPath = path.join(config.statePath, 'mount-staging');
+    await fs.promises.mkdir(recordsPath, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(recordsPath, `${pendingName}.json`),
+      JSON.stringify({
+        mountId: await E(firstHost).identify('pending-staging-destination'),
+        stagingPath: pendingPath,
+      }),
+    );
+    await fs.promises.writeFile(
+      path.join(recordsPath, `${pendingName}.json.partial`),
+      '{"mountId":',
+    );
+
+    const host = await restart();
+    const { git } = await E(host).provideGitClone(
+      await E(host).lookup('pending-staging-destination'),
+      'pending-staging-git',
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      },
+    );
+
+    t.is((await E(git).currentBranch()).name, 'main');
+    await t.throwsAsync(fs.promises.lstat(pendingPath), { code: 'ENOENT' });
     t.deepEqual(await fs.promises.readdir(recordsPath), []);
   },
 );
@@ -1340,14 +1388,16 @@ test.serial(
     const stalePath = `${destPath}.${staleName}`;
     const victimPath = `${destPath}.victim`;
     await fs.promises.mkdir(stalePath);
-    const { dev, ino } = await fs.promises.lstat(stalePath, { bigint: true });
+    const { dev, ino, birthtimeNs } = await fs.promises.lstat(stalePath, {
+      bigint: true,
+    });
     const recordsPath = path.join(config.statePath, 'mount-staging');
     await fs.promises.mkdir(recordsPath, { recursive: true });
     await fs.promises.writeFile(
       path.join(recordsPath, `${staleName}.json`),
       JSON.stringify({
         mountId: await E(firstHost).identify('swapped-staging-destination'),
-        identity: `${dev}:${ino}`,
+        identity: `${dev}:${ino}:${birthtimeNs}`,
       }),
     );
     await fs.promises.rm(stalePath, { recursive: true });
