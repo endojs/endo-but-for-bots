@@ -667,7 +667,7 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
 });
 
 test.serial(
-  'XS clone-cleanup file powers execute their platform-specific behavior',
+  'XS clone-cleanup file powers behave correctly over Node-shimmed host globals',
   async t => {
     const globalObject = /** @type {any} */ (globalThis);
     const names = [
@@ -701,7 +701,7 @@ test.serial(
         dev: 1,
         ino: 1,
       });
-    globalObject['hostRead' + 'Dir'] = (_token, targetPath) =>
+    globalObject.hostReadDir = (_token, targetPath) =>
       JSON.stringify(targetPath === 'tree' ? ['link'] : []);
     globalObject.hostRemove = (_token, targetPath) => {
       removed.push(targetPath);
