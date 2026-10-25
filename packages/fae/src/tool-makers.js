@@ -1526,7 +1526,12 @@ export const describeParseFailure = (code, message) => {
 };
 harden(describeParseFailure);
 
-export const makeExecTool = powers => {
+/**
+ * @param {import('@endo/eventual-send').ERef<object>} powers
+ * @param {{supportsFinishTurn?: boolean}} [options]
+ * @returns {FaeTool}
+ */
+export const makeExecTool = (powers, { supportsFinishTurn = false } = {}) => {
   /** @type {ToolSchema} */
   const toolSchema = harden({
     type: 'function',
@@ -1542,7 +1547,7 @@ export const makeExecTool = powers => {
         '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
         '- E: eventual send — use E(ref).method() for all remote calls\n' +
         '- harden: freeze objects for safe passing\n' +
-        '- console: for logging\n' +
+        '- console: diagnostic logs only; use return for model-visible results\n' +
         '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
         'Nothing else is in scope. A petname is NOT a variable: reach a stored ' +
         'object with const workspace = await E(powers).lookup("workspace"); at ' +
@@ -1584,8 +1589,17 @@ export const makeExecTool = powers => {
             type: 'string',
             description:
               'JavaScript code to execute. Runs as an async function body. ' +
-              'Use E(powers).method() for guest operations. Return a result.',
+              'Use E(powers).method() for guest operations. Explicitly return observations; console.log output is not returned to you.',
           },
+          ...(supportsFinishTurn
+            ? {
+                finishTurn: {
+                  type: 'boolean',
+                  description:
+                    'Fae only: after this exec succeeds, finish the current turn without another model call. Use after completing the requested work and dismissing its inbox message. Errors still receive a repair round.',
+                },
+              }
+            : {}),
         },
         required: ['code'],
         additionalProperties: false,

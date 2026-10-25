@@ -181,6 +181,45 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 const gitOperationsByCap = new WeakMap();
 
 /**
+ * Keep one outbound transport attempt separate from the peer formula that can
+ * survive it when crossed hellos select an incoming connection instead.
+ * @param {Pick<Context, 'id' | 'cancelled'>} context
+ * @param {(attemptContext: FarContext) => Promise<EndoGateway>} connect
+ */
+export const makePeerDialAttempt = (context, connect) => {
+  const { promise: cancelled, reject: cancel } =
+    /** @type {PromiseKit<never>} */ (makePromiseKit());
+  cancelled.catch(() => {});
+  context.cancelled.catch(cancel);
+  const attemptContext = Far('Context', {
+    id: () => context.id,
+    cancel: async (reason = new Error('peer connection lost')) =>
+      cancel(reason),
+    whenCancelled: () => cancelled,
+    whenDisposed: () => cancelled,
+    addDisposalHook: _hook => {},
+  });
+  return harden({
+    cancel,
+    cancelled,
+    getRemoteGateway: async () => {
+      try {
+        // Both directions share the state machine's dial lifetime: a lost
+        // transport resets remote control, and an abandoned dial closes its
+        // transport without directly cancelling the surviving peer formula.
+        return await Promise.race([connect(attemptContext), cancelled]);
+      } catch (error) {
+        // A network can reject its initial connect without calling cancel.
+        // That must still dispose this failed incarnation and allow re-dial.
+        cancel(error);
+        throw error;
+      }
+    },
+  });
+};
+harden(makePeerDialAttempt);
+
+/**
  * Wrap a byte range as a `PassableBytesReader`, the CapTP-passable bytes
  * stream `BlobRef.bytes` returns. Empty ranges yield a reader that is
  * immediately done. Mirrors the extended layer's `makeBytesReaderFromBytes`.
@@ -7322,13 +7361,11 @@ const makeDaemonCore = async (
     // replacement (accepted) connection.  Use a local PromiseKit for
     // the dial attempt's cancellation, distinct from context.cancel.
     const dialAttempt = () => {
-      const { promise: dialCancelled, reject: cancelDial } =
-        /** @type {PromiseKit<never>} */ (makePromiseKit());
-      context.cancelled.catch(cancelDial);
+      const attempt = makePeerDialAttempt(context, getRemoteGatewayViaNetwork);
       return remoteControl.connect(
-        getRemoteGatewayViaNetwork,
-        cancelDial,
-        dialCancelled,
+        attempt.getRemoteGateway,
+        attempt.cancel,
+        attempt.cancelled,
         () => {
           console.log(
             `Endo daemon peer node ${nodeId.slice(0, 8)} connection disposed`,
@@ -7345,8 +7382,11 @@ const makeDaemonCore = async (
         },
       );
     };
-    /** @returns {Promise<EndoGateway>} */
-    const getRemoteGatewayViaNetwork = async () => {
+    /**
+     * @param {FarContext} attemptContext
+     * @returns {Promise<EndoGateway>}
+     */
+    const getRemoteGatewayViaNetwork = async attemptContext => {
       // TODO race networks that support protocol for connection
       // TODO retry, exponential back-off, with full jitter
       const networks = await getAllNetworks(networksDirectoryId);
@@ -7374,33 +7414,11 @@ const makeDaemonCore = async (
             console.log(
               `Endo daemon makePeer ${nodeId.slice(0, 8)}: dialing with network ${networkIndex}/${networks.length}`,
             );
-            // Create a derived context for this specific dial
-            // attempt.  The network worker uses this context to
-            // observe cancellation (tearing down TCP if the peer
-            // dies) and to report connection loss (by cancelling
-            // this context).  Connection loss must NOT cancel the
-            // peer formula itself — crossed-hellos accept bias
-            // routinely abandons dials while the peer stays alive.
-            const { promise: attemptCancelled, reject: cancelAttempt } =
-              /** @type {PromiseKit<never>} */ (makePromiseKit());
-            // Swallow the rejection to avoid unhandled rejection
-            // warnings; the promise is intentionally a signal.
-            attemptCancelled.catch(() => {});
-            // Die with the peer: if the peer context is cancelled,
-            // also cancel this dial attempt.
-            context.cancelled.catch(cancelAttempt);
-            const attemptContext = Far('Context', {
-              id: () => context.id,
-              cancel: cancelAttempt,
-              whenCancelled: () => attemptCancelled,
-              whenDisposed: () => attemptCancelled,
-              addDisposalHook: _hook => {},
-            });
             try {
               // eslint-disable-next-line no-await-in-loop
               const remoteGateway = await E(network).connect(
                 address,
-                /** @type {any} */ (attemptContext),
+                attemptContext,
               );
               console.log(
                 `Endo daemon makePeer ${nodeId.slice(0, 8)}: dial succeeded in ${Date.now() - attemptStartedAt}ms`,

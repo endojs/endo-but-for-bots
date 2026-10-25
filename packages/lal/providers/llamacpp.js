@@ -7,6 +7,8 @@
 
 import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
 
+/** @import { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions' */
+
 /**
  * @typedef {object} CommonTool
  * @property {'function'} type
@@ -29,15 +31,19 @@ import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
  * or set LAL_MAX_MESSAGES to truncate to the last N messages before sending.
  *
  * @param {{ baseURL: string, model: string, apiKey?: string, maxTokens?: number, maxMessages?: number }} options
+ * @param {{ createCompletion?: (request: ChatCompletionCreateParamsNonStreaming) => Promise<any> }} [dependencies]
  * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
  */
-export const makeLlamaCppProvider = ({
-  baseURL,
-  model,
-  apiKey = 'ollama',
-  maxTokens = 4096,
-  maxMessages = undefined,
-}) => {
+export const makeLlamaCppProvider = (
+  {
+    baseURL,
+    model,
+    apiKey = 'ollama',
+    maxTokens = 4096,
+    maxMessages = undefined,
+  },
+  { createCompletion } = {},
+) => {
   let clientP;
 
   const getClient = async () => {
@@ -55,7 +61,7 @@ export const makeLlamaCppProvider = ({
 
   return {
     async chat(messages, tools) {
-      const client = await getClient();
+      await null;
       let sendMessages = messages;
       if (
         typeof maxMessages === 'number' &&
@@ -70,14 +76,27 @@ export const makeLlamaCppProvider = ({
       console.log(`[LAL] Calling llama.cpp at ${baseURL} with model: ${model}`);
       let response;
       try {
-        response = await client.chat.completions.create({
+        const canonicalOpenAI =
+          new URL(baseURL).origin === 'https://api.openai.com';
+        /** @type {ChatCompletionCreateParamsNonStreaming} */
+        const request = {
           model,
-          max_tokens: maxTokens,
+          ...(canonicalOpenAI
+            ? { max_completion_tokens: maxTokens }
+            : { max_tokens: maxTokens }),
+          // Luna's Chat Completions function calling requires reasoning off.
+          // Other endpoints retain their own OpenAI-compatible protocol.
+          ...(canonicalOpenAI && /^gpt-6-luna(?:-|$)/.test(model)
+            ? { reasoning_effort: /** @type {const} */ ('none') }
+            : {}),
           tools,
           messages: toOpenAICompatibleMessages(sendMessages),
-        });
+        };
+        response = createCompletion
+          ? await createCompletion(request)
+          : await (await getClient()).chat.completions.create(request);
       } catch (error) {
-        console.error('[LAL] llama.cpp API error:', error);
+        console.error('[LAL] llama.cpp API request failed.');
         throw error;
       }
       const choice = response.choices?.[0];
@@ -106,3 +125,4 @@ export const makeLlamaCppProvider = ({
     },
   };
 };
+harden(makeLlamaCppProvider);

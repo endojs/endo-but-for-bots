@@ -10,35 +10,12 @@ import harden from '@endo/harden';
 /** @import { EndoHost } from '@endo/daemon' */
 
 import { E } from '@endo/eventual-send';
+import { provisionBook } from '@endo/space-whylip/book-client.js';
 import { assertValidLocator } from '@endo/spaces-util/locator.js';
 import { petNamePathsAutocomplete } from '@endo/spaces-util/petname-paths-autocomplete.js';
 import { ALL_ICONS, IconSelector } from './icon-selector.js';
 import { createSchemePicker } from './scheme-picker.js';
 import { Fragment, h, renderConfined } from './setup-preact-container.js';
-
-const WHYLIP_SYSTEM_PROMPT = `\
-You are The Whylip Primer — an interactive illustrated primer that teaches \
-through story and interactive experience.
-
-You communicate via the reply tool. When you receive a message, use the \
-reply tool and set the strings parameter to a single JSON object:
-{
-  "narrative": "markdown prose explaining the concept",
-  "scene": {
-    "title": "Scene title",
-    "html": "<!-- fully self-contained HTML+CSS+JS document for an iframe -->"
-  }
-}
-
-Set scene to null if no interactive visualization is needed for this response.
-
-IMPORTANT: The JSON object must be the ONLY content in your reply. Do not \
-include any text before or after the JSON. Do not wrap it in code fences. \
-After replying, dismiss the message and stop — do not output anything else.
-
-Scene HTML must be fully self-contained (inline CSS + JS, no external requests). \
-Use canvas, SVG, or DOM manipulation to create interactive visualizations. \
-The scene runs in a sandboxed iframe with no network access.`;
 
 /**
  * @typedef {object} AddSpaceModalAPI
@@ -143,7 +120,7 @@ const SPACE_TYPE_CARDS = harden([
     mode: 'whylip',
     icon: '📖',
     title: 'Whylip Book',
-    desc: 'An interactive illustrated primer powered by a Fae agent',
+    desc: 'A living storybook that grows with your choices',
   },
   {
     mode: 'graph',
@@ -789,10 +766,10 @@ const WhylipForm = ({ view, on }) =>
     h(TextField, {
       id: 'whylip-name',
       label: 'Book Name',
-      placeholder: 'e.g., physics-primer',
+      placeholder: 'e.g., lantern-woods',
       value: view.whylipName,
       onInput: on.whylipNameInput,
-      hint: 'A short name for this primer (letters, numbers, hyphens)',
+      hint: 'A short name for this book (letters, numbers, hyphens)',
       pattern: '[a-zA-Z][a-zA-Z0-9_-]*',
     }),
     h(
@@ -2177,9 +2154,8 @@ export const createAddSpaceModal = ({
 
   /**
    * Handle Whylip Book form submission.
-   * Looks up the fae-factory by petname, calls createAgent with the
-   * whylip system prompt, then creates a host profile with the fae
-   * agent reference written into its pet store.
+   * Resume a durable book host and its dedicated author before adding the
+   * space. Partial provisioning failures can be retried with the same name.
    */
   const handleWhylipSubmit = async () => {
     const name = whylipName.trim();
@@ -2207,64 +2183,12 @@ export const createAddSpaceModal = ({
     render();
 
     try {
-      const faeAgentName = `${name}-agent`;
-      const finalAgentName = `whylip-${name}`;
-
-      // Look up the fae-factory and create an agent with the whylip prompt.
-      const faeFactory = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
-          powers
-        ),
-      ).lookup(factoryPetName);
-
-      const agentProfileName = /** @type {string} */ (
-        await E(
-          /** @type {{ createAgent: (name: string, opts: object) => Promise<string> }} */ (
-            faeFactory
-          ),
-        ).createAgent(
-          faeAgentName,
-          harden({ systemPrompt: WHYLIP_SYSTEM_PROMPT }),
-        )
-      );
-
-      // Get the endo:// locator for the agent profile so we can write
-      // it into the whylip host's pet store.  Per issue #150 reply,
-      // prefer locate()/storeLocator over identify()/storeIdentifier so
-      // the system can drop bare-identifier support in the future.
-      const agentLocator = /** @type {string} */ (
-        await E(
-          /** @type {{ locate: (petName: string) => Promise<string> }} */ (
-            powers
-          ),
-        ).locate(agentProfileName)
-      );
-
-      // Create the whylip host profile.
-      await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
-          powers
-        ),
-      ).provideHost(name, { agentName: finalAgentName });
-
-      // Write the fae agent reference into the whylip host's pet store
-      // under the well-known name "fae".
-      const whylipPowers = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
-          powers
-        ),
-      ).lookup(finalAgentName);
-
-      await E(
-        /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
-          whylipPowers
-        ),
-      ).storeLocator('fae', agentLocator);
+      const { profilePath } = await provisionBook(powers, name, factoryPetName);
 
       await onSubmit({
         name,
         icon: selectedIcon,
-        profilePath: [finalAgentName],
+        profilePath,
         layout: 'whylip',
         scheme: schemePicker ? schemePicker.getValue() : 'auto',
       });

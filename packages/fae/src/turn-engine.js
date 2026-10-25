@@ -12,7 +12,8 @@ harden(DEFAULT_MAX_TOOL_ROUNDS);
  * Persistence, wire encoding, streaming, and inbox policy stay in the caller.
  * This engine owns the invariant that each model response is followed by all
  * of its tool results before another model call, and that exactly one toolless
- * response ends the logical turn.
+ * response ends the logical turn, unless the caller explicitly accepts a
+ * durably committed tool step as the final response.
  *
  * @param {object} options
  * @param {string} options.leafId
@@ -25,6 +26,7 @@ harden(DEFAULT_MAX_TOOL_ROUNDS);
  * @param {(calls: readonly any[], tools: any, round: number) => Promise<any>} options.runTools
  * @param {(leafId: string, message: any, results: any) => Promise<string>} options.commitStep
  * @param {(leafId: string, message: any) => Promise<string>} options.commitFinal
+ * @param {(results: any) => boolean} [options.shouldFinishAfterTools] Explicit caller completion policy, evaluated only after the complete tool step is committed.
  */
 export const runAgenticTurn = async ({
   leafId,
@@ -37,6 +39,7 @@ export const runAgenticTurn = async ({
   runTools,
   commitStep,
   commitFinal,
+  shouldFinishAfterTools = () => false,
 }) => {
   (Number.isInteger(maxRounds) && maxRounds > 0) ||
     Fail`agentic turn maxRounds must be a positive integer`;
@@ -76,6 +79,14 @@ export const runAgenticTurn = async ({
     const results = await runTools(calls, tools, round);
     // eslint-disable-next-line no-await-in-loop
     currentLeafId = await commitStep(currentLeafId, outcome.message, results);
+    signal?.throwIfAborted();
+    if (shouldFinishAfterTools(results)) {
+      return harden({
+        answered: true,
+        exhausted: false,
+        leafId: currentLeafId,
+      });
+    }
   }
   return harden({
     answered: false,

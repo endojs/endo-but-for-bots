@@ -1,273 +1,162 @@
 // @ts-check
-import { h, Fragment } from 'preact';
 
-/** @import { ComponentChildren, VNode } from 'preact' */
+import { HostPassthrough } from '@endo/preact-container/renderer';
+import { h } from 'preact';
+import { useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 
-// SECURITY / FIDELITY NOTE
-// ------------------------
-// The scene `html` is produced by an untrusted model. The old component
-// rendered it verbatim inside a sandboxed `<iframe srcdoc>`. Under the
-// project's CONFINED renderer that approach no longer works AND is no longer
-// the trust boundary: `<iframe>` is not in the renderer's allowed-tag set (it
-// collapses to a Fragment), `ref` is stripped, and the raw-HTML / `srcdoc`
-// attributes are hard-denied — so a raw-HTML injection would be silently
-// dropped rather than rendered.
-//
-// Instead we parse the scene HTML into a vnode tree built only from a small
-// allowlist of structural/text tags, and hand THAT to the confined renderer,
-// which sanitizes attributes (dropping `style`-injection, `on*` handlers,
-// `javascript:` URLs, disallowed tags, etc.) exactly as it does for every
-// other tree in the app. No raw-HTML sink remains.
-//
-// TRADEOFF: scenes are no longer self-contained documents. Embedded
-// `<script>` and `<style>` are dropped (scripts never ran under the old
-// `sandbox="allow-scripts"` iframe either from the host's perspective, but
-// author CSS did apply inside the frame). Model scenes therefore render as
-// sanitized semantic HTML styled by the host's `whylip.css`, not by their own
-// inline stylesheets. This is an intentional fidelity-for-safety trade.
+import { makeSceneRuntime } from './scene-runtime.js';
+import { makeThreeScene } from './three-scene.js';
 
-// Structural/text tags we will emit. Anything else collapses to a Fragment so
-// its (already-parsed, already-sanitized) children still render. This list is
-// a SUBSET of the confined renderer's own allowlist; the renderer remains the
-// authoritative gate.
-const ALLOWED_SCENE_TAGS = harden(
-  new Set([
-    'div',
-    'span',
-    'p',
-    'section',
-    'article',
-    'header',
-    'footer',
-    'main',
-    'aside',
-    'h1',
-    'h2',
-    'h3',
-    'h4',
-    'h5',
-    'h6',
-    'ul',
-    'ol',
-    'li',
-    'dl',
-    'dt',
-    'dd',
-    'table',
-    'thead',
-    'tbody',
-    'tr',
-    'td',
-    'th',
-    'caption',
-    'figure',
-    'figcaption',
-    'blockquote',
-    'pre',
-    'code',
-    'kbd',
-    'samp',
-    'strong',
-    'b',
-    'em',
-    'i',
-    'u',
-    's',
-    'mark',
-    'small',
-    'sub',
-    'sup',
-    'br',
-    'hr',
-    'a',
-    'img',
-    'abbr',
-    'cite',
-    'q',
-    'time',
-    'label',
-  ]),
-);
-
-// Attributes we forward from parsed HTML. The confined renderer enforces its
-// own allowlist on top of this, so this is just to avoid carrying noise.
-const ALLOWED_SCENE_ATTRS = harden(
-  new Set(['class', 'id', 'title', 'href', 'src', 'alt', 'lang', 'dir']),
-);
-
-const VOID_TAGS = harden(new Set(['br', 'hr', 'img']));
+/** @import { SceneProps } from './scene-runtime.js' */
 
 /**
- * Minimal, dependency-free HTML tokenizer/parser that produces a Preact vnode
- * tree. It is intentionally lenient (model output is messy) and conservative
- * (only the allowlisted tags/attrs above survive; everything else degrades to
- * text or a Fragment). It is NOT a security boundary on its own — the confined
- * renderer is — but keeping the parse small means less surface to reason about.
- *
- * @param {string} html
- * @returns {Array<ComponentChildren>}
+ * Only this trusted host component owns the canvas, WebGL context and refs.
+ * The guest receives inert scene descriptions and frozen click coordinates.
+ * @param {{ runtime: ReturnType<typeof makeSceneRuntime> }} props
  */
-const parseSceneHtml = html => {
-  /**
-   * @typedef {object} Frame
-   * @property {string} tag
-   * @property {Record<string, string>} props
-   * @property {Array<ComponentChildren>} children
-   */
-  /** @type {Frame[]} */
-  const stack = [{ tag: '#root', props: {}, children: [] }];
-  const top = () => stack[stack.length - 1];
-
-  const tagRe = /<\/?([a-zA-Z][a-zA-Z0-9]*)((?:[^<>"']|"[^"]*"|'[^']*')*)\/?>/g;
-  let lastIndex = 0;
-  let match = tagRe.exec(html);
-
-  /**
-   * @param {string} text
-   */
-  const pushText = text => {
-    if (!text) return;
-    // Decode the handful of entities a model is likely to emit; leave the
-    // rest literal. Output is plain text in a vnode, so this cannot inject.
-    const decoded = text
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, '&');
-    top().children.push(decoded);
-  };
-
-  /**
-   * @param {string} rawAttrs
-   * @returns {Record<string, string>}
-   */
-  const parseAttrs = rawAttrs => {
-    /** @type {Record<string, string>} */
-    const props = {};
-    const attrRe =
-      /([a-zA-Z][a-zA-Z0-9-]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/g;
-    let a = attrRe.exec(rawAttrs);
-    while (a !== null) {
-      const name = a[1].toLowerCase();
-      let value = a[2] ?? '';
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      // Forward only allowlisted attrs; the confined renderer re-checks
-      // every attribute regardless.
-      if (ALLOWED_SCENE_ATTRS.has(name)) {
-        props[name] = value;
-      }
-      a = attrRe.exec(rawAttrs);
+function ThreeSurface({ runtime }) {
+  /** @type {import('preact').RefObject<HTMLCanvasElement>} */
+  const canvas = useRef(null);
+  /** @type {import('preact').RefObject<ReturnType<typeof makeThreeScene> | null>} */
+  const controller = useRef(null);
+  const interactive = useRef(false);
+  const contextLost = useRef(false);
+  /** @type {import('preact').RefObject<HTMLDivElement>} */
+  const container = useRef(null);
+  /** @type {import('preact').RefObject<HTMLParagraphElement>} */
+  const fallback = useRef(null);
+  /** @param {string} message */
+  const showFailure = message => {
+    interactive.current = false;
+    if (fallback.current) {
+      fallback.current.textContent = message;
+      fallback.current.hidden = false;
     }
-    return props;
   };
-
-  /**
-   * Emit a completed frame as a vnode into its parent's children. Frames for
-   * non-allowlisted tags collapse to a Fragment, preserving their (already
-   * sanitized) children.
-   *
-   * @param {Frame} frame
-   */
-  const emitFrame = frame => {
-    const vnode = ALLOWED_SCENE_TAGS.has(frame.tag)
-      ? h(frame.tag, frame.props, ...frame.children)
-      : h(Fragment, null, ...frame.children);
-    top().children.push(vnode);
-  };
-
-  while (match !== null) {
-    pushText(html.slice(lastIndex, match.index));
-    lastIndex = tagRe.lastIndex;
-
-    const full = match[0];
-    const tag = match[1].toLowerCase();
-    const isClose = full.startsWith('</');
-    const isSelfClose = full.endsWith('/>') || VOID_TAGS.has(tag);
-
-    if (isClose) {
-      // Find the matching open frame; tolerate mis-nesting by closing every
-      // frame above it (inner-first) so their content is not lost.
-      let depth = -1;
-      for (let i = stack.length - 1; i >= 1; i -= 1) {
-        if (stack[i].tag === tag) {
-          depth = i;
-          break;
-        }
+  useLayoutEffect(() => {
+    const element = canvas.current;
+    if (!element) return undefined;
+    let observer;
+    const restored = () => {
+      contextLost.current = false;
+      const scene = runtime.getScene();
+      if (!scene || !controller.current) return;
+      try {
+        controller.current.update(scene);
+        interactive.current = true;
+        if (fallback.current) fallback.current.hidden = true;
+      } catch (_error) {
+        showFailure(
+          'The 3D view could not recover. You can still use the story controls.',
+        );
       }
-      if (depth !== -1) {
-        while (stack.length > depth) {
-          const frame = /** @type {Frame} */ (stack.pop());
-          emitFrame(frame);
-        }
-      }
-      // Unmatched close tag: ignore.
-    } else if (isSelfClose) {
-      const props = parseAttrs(match[2] || '');
-      emitFrame({ tag, props, children: [] });
-    } else {
-      stack.push({ tag, props: parseAttrs(match[2] || ''), children: [] });
-    }
-
-    match = tagRe.exec(html);
-  }
-  pushText(html.slice(lastIndex));
-
-  // Close any still-open frames from the inside out.
-  while (stack.length > 1) {
-    emitFrame(/** @type {Frame} */ (stack.pop()));
-  }
-
-  return stack[0].children;
-};
-
-/**
- * Renders a scene (untrusted model-generated HTML) as a SANITIZED vnode tree.
- *
- * @param {object} props
- * @param {{ title: string, html: string } | null} props.scene
- */
-export function SceneCanvas({ scene }) {
-  if (!scene) {
-    return h(
-      'div',
-      { class: 'whylip-scene whylip-scene-empty' },
-      h(
-        'div',
-        { class: 'scene-placeholder' },
-        h('span', { class: 'scene-placeholder-icon' }, '📖'),
-        h(
-          'p',
-          null,
-          'Scenes will appear here as the primer illustrates concepts.',
+    };
+    const lost = () => {
+      contextLost.current = true;
+      showFailure(
+        'Restoring the 3D view. You can still use the story controls.',
+      );
+    };
+    try {
+      const surface = makeThreeScene(element, {
+        onEvent: event => {
+          if (interactive.current) runtime.dispatchSceneEvent(event);
+        },
+        pixelRatio: Math.max(
+          0.5,
+          Math.min(globalThis.devicePixelRatio || 1, 2),
         ),
-      ),
-    );
-  }
-
-  /** @type {Array<ComponentChildren>} */
-  let body;
-  try {
-    body = parseSceneHtml(scene.html);
-  } catch (err) {
-    console.error('[whylip] scene parse error:', /** @type {Error} */ (err));
-    body = [scene.html];
-  }
-
+      });
+      controller.current = surface;
+      element.addEventListener('webglcontextlost', lost);
+      element.addEventListener('webglcontextrestored', restored);
+      const resize = () => {
+        const rect = element.getBoundingClientRect();
+        try {
+          surface.resize(
+            Math.max(1, Math.min(8192, rect.width)),
+            Math.max(1, Math.min(8192, rect.height)),
+          );
+        } catch (_error) {
+          showFailure(
+            'The 3D view could not resize. You can still use the story controls.',
+          );
+        }
+      };
+      observer = new ResizeObserver(resize);
+      observer.observe(element);
+      resize();
+    } catch (_error) {
+      showFailure(
+        'The 3D view could not start. You can still use the story controls.',
+      );
+    }
+    return () => {
+      observer?.disconnect();
+      element.removeEventListener('webglcontextlost', lost);
+      element.removeEventListener('webglcontextrestored', restored);
+      controller.current?.dispose();
+      controller.current = null;
+      interactive.current = false;
+    };
+  }, [runtime]);
+  useLayoutEffect(() => {
+    const scene = runtime.getScene();
+    if (container.current) container.current.hidden = !scene;
+    if (scene && controller.current && !contextLost.current) {
+      try {
+        controller.current.update(scene);
+        interactive.current = true;
+        if (fallback.current) fallback.current.hidden = true;
+      } catch (_error) {
+        showFailure(
+          'The 3D view could not update. You can still use the story controls.',
+        );
+      }
+    }
+  });
   return h(
     'div',
-    { class: 'whylip-scene' },
+    { class: 'whylip-three-surface', ref: container },
+    h('canvas', {
+      ref: canvas,
+      'aria-label': 'Interactive three-dimensional story scene',
+    }),
+    h('p', {
+      class: 'whylip-three-fallback',
+      role: 'status',
+      ref: fallback,
+      hidden: true,
+    }),
+  );
+}
+
+/**
+ * A persistent scene inside the application's renderConfined tree. Source
+ * changes replace the render implementation, never the component identity.
+ * @param {SceneProps & { onError?: (error: string | null) => void }} props
+ */
+export function SceneCanvas({
+  source,
+  state,
+  assets,
+  onAction,
+  onState,
+  onError,
+}) {
+  const runtime = useMemo(() => makeSceneRuntime(), []);
+  useLayoutEffect(() => {
+    onError?.(runtime.getError());
+  });
+  return h(
+    'div',
+    { class: 'whylip-scene', 'aria-label': 'Interactive story' },
     h(
       'div',
-      { class: 'scene-title-bar' },
-      h('span', { class: 'scene-title' }, scene.title),
+      { class: 'whylip-scene-overlay' },
+      h(runtime.Component, { source, state, assets, onAction, onState }),
     ),
-    h('div', { class: 'scene-content' }, ...body),
+    h(HostPassthrough, null, h(ThreeSurface, { runtime })),
   );
 }
 harden(SceneCanvas);
