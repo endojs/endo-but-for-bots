@@ -131,6 +131,7 @@ export const gunzip = async bytes => {
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { BigIntStats } from 'fs' */
 
 /**
  * @param {object} modules
@@ -587,6 +588,67 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     });
   };
 
+  /**
+   * A filesystem may hand a deleted entry's inode straight to the next
+   * entry created, so the birth time tells a replacement from the original.
+   * Where the filesystem records no birth time it is 0 and only `dev:ino`
+   * distinguishes entries.
+   *
+   * @param {BigIntStats} stat
+   */
+  const statEntryIdentity = stat =>
+    `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+
+  /**
+   * A directory claims `target` with an exclusive `mkdir(2)` and then
+   * renames over that empty directory, relying on the POSIX `rename(2)` rule
+   * that a directory may replace an empty one; Windows `MoveFileEx` does not,
+   * so this is POSIX-only.  A symbolic link is recreated with `symlink`, and
+   * any other entry is hard-linked with `link(2)`, which fails with `EXDEV`
+   * across filesystems and `EPERM` where the filesystem lacks hard links;
+   * both refuse an existing `target` before the source is unlinked.  (`link`
+   * is not used for a symbolic link because some platforms follow it.)  A
+   * crash or unlink failure can leave both names, but cannot replace the
+   * target.
+   *
+   * @type {FilePowers['renameNoReplace']}
+   */
+  const renameNoReplace = async (source, target) =>
+    writeJobs.enqueue(async () => {
+      const sourceStat = await fs.promises.lstat(source, { bigint: true });
+      if (sourceStat.isDirectory()) {
+        await fs.promises.mkdir(target);
+        try {
+          await fs.promises.rename(source, target);
+        } catch (error) {
+          // `rmdir` removes only an empty directory, so this cannot remove
+          // anything another writer put at `target`.
+          await fs.promises.rmdir(target).catch(() => {});
+          throw error;
+        }
+        return statEntryIdentity(sourceStat);
+      }
+      if (sourceStat.isSymbolicLink()) {
+        await fs.promises.symlink(await fs.promises.readlink(source), target);
+        const targetStat = await fs.promises.lstat(target, { bigint: true });
+        await fs.promises.unlink(source);
+        return statEntryIdentity(targetStat);
+      }
+      await fs.promises.link(source, target);
+      const targetStat = await fs.promises.lstat(target, { bigint: true });
+      await fs.promises.unlink(source);
+      return statEntryIdentity(targetStat);
+    });
+
+  /**
+   * Remove `path` only if it is an empty directory.
+   *
+   * @type {FilePowers['removeEmptyDirectory']}
+   */
+  const removeEmptyDirectory = async path => {
+    await writeJobs.enqueue(async () => fs.promises.rmdir(path));
+  };
+
   const joinPath = (...components) => fspath.join(...components);
 
   /** @param {string} path */
@@ -645,6 +707,15 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     const stat = await fs.promises.stat(path);
     return `${stat.dev}:${stat.ino}`;
   };
+
+  /**
+   * The device, inode, and birth time of the entry at `path` itself; a
+   * symbolic link reports its own identity, not its referent's.
+   *
+   * @type {FilePowers['entryIdentity']}
+   */
+  const entryIdentity = async path =>
+    statEntryIdentity(await fs.promises.lstat(path, { bigint: true }));
 
   /** @param {string} path */
   const exists = async path => {
@@ -874,6 +945,9 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     renamePath,
     realPath,
     pathIdentity,
+    entryIdentity,
+    renameNoReplace,
+    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,
