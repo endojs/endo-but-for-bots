@@ -2114,12 +2114,11 @@ export interface EndoHost extends EndoAgent {
    * `name`, `url`, `credential` and `allowLocalFileTransport`, which the
    * clone fixes from the endpoint, and defaults to fetch-only.
    * `origin.petName` must differ from `petName`.  Both names are stored
-   * only after the whole composition succeeds.  The clone is staged inside
-   * the destination and moved into place, so on failure only what the call
-   * created is removed, and a name `origin.petName` replaced is restored
-   * unless it was rebound meanwhile, before the error is rethrown; the
-   * caller can retry into the same mount.  This leaves the later
-   * guest-held GitCloner facet as an additive delegate.
+   * only after the whole composition succeeds.  The clone is staged in
+   * daemon-private staging beside the destination, and publishing never
+   * replaces a destination entry.  On failure only what the call created
+   * is removed, and a name `origin.petName` replaced is restored unless it
+   * was rebound meanwhile, so the caller can retry into the same mount.
    */
   provideGitClone(
     destMount: EndoMount,
@@ -2679,8 +2678,9 @@ export type FilePowers = {
   search?: import('@endo/platform/fs/search.types').Search;
   pathIdentity: (path: string) => Promise<string>;
   /**
-   * The `dev:ino` identity of the entry at `path` itself, without following
-   * a symbolic link.
+   * An identity of the entry at `path` itself, without following a symbolic
+   * link: its device and inode, plus its birth time where the platform
+   * records one, so an inode reused by a replacement reads as different.
    */
   entryIdentity: (path: string) => Promise<string>;
   statPath: (path: string) => Promise<{

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-07-11 |
+| **Updated** | 2026-10-25 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538; Phases 6-7 open) |
 
@@ -542,8 +542,7 @@ The second flow is product-relevant when an agent starts from only a remote repo
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.
 
 The second flow is host-mediated: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
-The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half.
-The **commit-identity boundary** this note once named as the residual bootstrap gap, Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan, has since landed as the formula-owned, guest-immutable `identity` construction option on `provideGit` and `provideGitClone`.
+The **commit-identity boundary** this note once named as the residual bootstrap gap, Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan, has since landed via #706 as the formula-owned, guest-immutable `identity` construction option on `provideGit` and `provideGitClone`.
 
 The method is `EndoHost.provideGitClone(destMount, petName, { endpoint, identity, origin })`, in the argument order of `provideGit` and `provideGitRemote`, and returns `{ git, remote }`: the writable `Git` over the clone, stored under `petName`, and its `GitRemote`.
 The endpoint supplies the URL, credential and transport; the remote is always named `origin`.
@@ -552,10 +551,17 @@ The `origin` remote defaults to fetch-only, so a caller that pushes must grant p
 Both names are stored only once the clone and both capabilities exist.
 Other holders of the destination mount can write to it throughout, so the clone never takes the mount's contents as its own on the strength of a name:
 
-- The clone is built in daemon-private staging beside the destination, recorded with its device and inode in daemon state, and its entries are moved into place without replacing anything at the target, including an entry created concurrently.
+- The clone is built in daemon-private staging beside the destination, recorded with its device, inode, and birth time in daemon state, and its entries are moved into place without replacing anything at the target, including an entry created concurrently.
 - A failure discards each entry the call published, and the staging directory, only while it is still the recorded object: the entry is first renamed aside, which takes whatever object holds the name at that instant, and then its identity is checked.  An object another holder put under the name is renamed back.
 - A later clone into the same mount discards a staging directory that a stopped daemon recorded, under the same identity check.  An entry the daemon did not record is never removed, whatever its name, so the mount is then not empty and the clone refuses.
 - A name that `origin.petName` replaced is restored only while the name still holds the origin; the check and the restore run in one turn of the host's pet store, so a concurrent rebind wins.
+
+Simpler shapes were considered and do not hold the contract.
+Cloning straight into the mount, as `git clone` would, leaves a failed clone's files mixed with a concurrent holder's, with nothing to tell them apart at cleanup.
+Requiring the caller to hold the mount exclusively is not checkable: a mount is a shareable capability with no holder count or lease.
+Cloning into a fresh child directory, or exposing the staging directory itself as the Git's mount, would put the repository somewhere other than the mount the caller named, and every caller expects the worktree at that mount's root.
+Publishing therefore refuses on collision, as `git clone` refuses a non-empty target, and the recorded identities exist only so cleanup can tell the clone's own entries from a holder's.
+Identity is the device, inode, and birth time, because a filesystem may give a deleted entry's inode to its replacement at once; only where the filesystem records no birth time can such a replacement pass for the original; staging directories lie outside every mount, so their recorded identity is only a defensive check.
 
 ## Security Model
 

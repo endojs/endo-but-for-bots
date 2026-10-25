@@ -8,3 +8,5 @@ Migration: replace `provideGitClone({ destMount, endpoint, identity })` with `pr
 The endpoint supplies the URL, credential, and transport, while the remote is named `origin`.
 The `origin` remote defaults to fetch-only; callers that push must opt in, for example with `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
 A failed clone can be retried into the same mount.
+The `origin` option's type is exported as `GitCloneOriginOptions`.
+Alternate `FilePowers` implementations must now provide `renameNoReplace`, `removeEmptyDirectory`, and `entryIdentity`; the XS powers refuse `renameNoReplace`, so cloning is unavailable on XS.
