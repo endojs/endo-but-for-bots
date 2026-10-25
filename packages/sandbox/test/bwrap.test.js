@@ -18,6 +18,8 @@ import { assembleSliceArgv, makeBwrapDriver } from '../src/drivers/bwrap.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
 
+/** @import { ExecutionContext } from 'ava' */
+
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
   hostPath: M.call().returns(M.string()),
@@ -1247,7 +1249,7 @@ test.serial(
  * Spawn a slice whose bwrap is replaced by `launcherScript`, run with
  * bwrap's stdio including the `--info-fd` pipe on fd 3.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} launcherScript
  */
 const spawnWithStandInLauncher = async (t, launcherScript) => {
