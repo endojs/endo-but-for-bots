@@ -1243,6 +1243,116 @@ test.serial(
   },
 );
 
+/**
+ * Spawn a slice whose bwrap is replaced by `launcherScript`, run with
+ * bwrap's stdio including the `--info-fd` pipe on fd 3.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} launcherScript
+ */
+const spawnWithStandInLauncher = async (t, launcherScript) => {
+  const fixtureDirectory = nodeFs.mkdtempSync(
+    nodePath.join(nodeOs.tmpdir(), 'bwrap-launcher-'),
+  );
+  const launcherPath = nodePath.join(fixtureDirectory, 'launcher.sh');
+  nodeFs.writeFileSync(launcherPath, launcherScript, { mode: 0o755 });
+  // Not hardened: that would freeze Node's own child_process classes.
+  const childProcess = {
+    ...nodeChildProcess,
+    /** @type {typeof nodeChildProcess.spawn} */
+    spawn: /** @type {any} */ (
+      (
+        /** @type {string} */ program,
+        /** @type {string[]} */ spawnArguments,
+        /** @type {object} */ options,
+      ) =>
+        (program === 'bwrap' || spawnArguments.includes('bwrap')) &&
+        spawnArguments.includes('--')
+          ? nodeSpawn(launcherPath, [], options)
+          : nodeSpawn(program, spawnArguments, options)
+    ),
+  };
+  const driver = makeBwrapDriver({ env: {}, childProcess });
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  t.teardown(async () => {
+    await driver.teardown(slice);
+    nodeFs.rmSync(fixtureDirectory, { recursive: true, force: true });
+  });
+  return driver.spawn(slice, ['/bin/true'], {
+    captureStdout: false,
+    captureStderr: false,
+  });
+};
+
+/**
+ * Settle `promise` or report that it is still pending after `milliseconds`.
+ *
+ * @param {Promise<unknown>} promise
+ * @param {number} milliseconds
+ */
+const settlesWithin = (promise, milliseconds) =>
+  Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    new Promise(resolve => setTimeout(() => resolve(false), milliseconds)),
+  ]);
+
+for (const [title, launcherScript] of [
+  [
+    'a bwrap that never reports its init',
+    '#!/bin/sh\nwhile :; do sleep 1; done\n',
+  ],
+  [
+    'a bwrap whose report overflows the read bound',
+    `#!/bin/sh\nhead -c 70000 /dev/zero | tr '\\0' x >&3\nwhile :; do sleep 1; done\n`,
+  ],
+]) {
+  test.serial(`bwrap kill reaches the process group past ${title}`, async t => {
+    t.timeout(10_000);
+    // The stand-in launcher replaces bwrap, so this needs only POSIX
+    // process groups, not a working bwrap.
+    if (process.platform === 'win32') {
+      t.pass('SKIP: no POSIX process groups');
+      return;
+    }
+    const sliceProcess = await spawnWithStandInLauncher(t, launcherScript);
+    const { pid } = sliceProcess;
+    t.true(
+      await settlesWithin(sliceProcess.kill('SIGKILL'), 3000),
+      'SIGKILL does not wait on the missing report',
+    );
+    t.true(await settlesWithin(sliceProcess.wait(), 3000), 'the slice exits');
+    await waitForProcessGroupGone(pid);
+  });
+}
+
+test.serial(
+  'bwrap kill ignores a reported child-pid that cannot be the sandbox init',
+  async t => {
+    t.timeout(10_000);
+    // The stand-in launcher replaces bwrap, so this needs only POSIX
+    // process groups, not a working bwrap.
+    if (process.platform === 'win32') {
+      t.pass('SKIP: no POSIX process groups');
+      return;
+    }
+    // Signalling pid 1 as an unprivileged user throws EPERM, so a kill that
+    // trusted this report would reject.
+    const sliceProcess = await spawnWithStandInLauncher(
+      t,
+      `#!/bin/sh\nprintf '{"child-pid":1}' >&3\nexec 3>&-\nwhile :; do sleep 1; done\n`,
+    );
+    const { pid } = sliceProcess;
+    await t.notThrowsAsync(sliceProcess.kill('SIGKILL'));
+    await sliceProcess.wait().catch(() => undefined);
+    await waitForProcessGroupGone(pid);
+  },
+);
+
 test.serial('bwrap parent death leaves no owned process group', async t => {
   t.timeout(10_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator

@@ -74,6 +74,15 @@ const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 const TEARDOWN_CLOSE_GRACE_MS = 1000;
 
 /**
+ * How long a terminal kill waits for bwrap's `--info-fd` report before it
+ * signals the process group without the init pid.  A kill must never wait
+ * on the process being killed, and bwrap writes the report right after it
+ * clones the init, so a report that has not arrived by now is not coming
+ * in time to matter.
+ */
+const INIT_PID_REPORT_GRACE_MS = 250;
+
+/**
  * Wait for `child` to emit `'close'`, giving up after `milliseconds`.
  *
  * Resolves `true` when the stdio closed within the bound and `false`
@@ -875,6 +884,7 @@ export const makeBwrapDriver = ({
     const infoStream = /** @type {Readable | null} */ (
       child.stdio?.[3] ?? null
     );
+    /** @type {Promise<number | undefined>} */
     const sandboxInitPid = new Promise(resolve => {
       if (infoStream === null || infoStream === undefined) {
         resolve(undefined);
@@ -887,43 +897,88 @@ export const makeBwrapDriver = ({
         if (text.length > 65_536) infoStream.destroy();
       });
       infoStream.once('end', () => {
+        // bwrap killed before it reported leaves the pipe empty.
+        if (text === '') {
+          resolve(undefined);
+          return;
+        }
+        /** @type {unknown} */
+        let report;
         try {
-          const report = JSON.parse(text);
-          resolve(
-            Number.isSafeInteger(report['child-pid'])
-              ? report['child-pid']
-              : undefined,
+          report = JSON.parse(text);
+        } catch (e) {
+          console.error(
+            `@endo/sandbox: bwrap ${child.pid} --info-fd report is not JSON; the sandbox init will not be signalled directly`,
+            e,
           );
-        } catch {
+          resolve(undefined);
+          return;
+        }
+        const initPid =
+          typeof report === 'object' && report !== null
+            ? /** @type {Record<string, unknown>} */ (report)['child-pid']
+            : undefined;
+        // Pid 0, pid 1, and negative pids name process groups, the host
+        // init, or every signallable process; none can be the sandbox init.
+        if (
+          typeof initPid === 'number' &&
+          Number.isInteger(initPid) &&
+          initPid > 1
+        ) {
+          resolve(initPid);
+        } else {
+          console.error(
+            `@endo/sandbox: bwrap ${child.pid} --info-fd report has no usable child-pid; the sandbox init will not be signalled directly`,
+          );
           resolve(undefined);
         }
       });
+      // An over-size report is destroyed without an error, so it ends with
+      // `'close'` alone; a report that already ended has resolved first.
+      infoStream.once('close', () => resolve(undefined));
       infoStream.once('error', () => resolve(undefined));
     });
 
+    /** @returns {Promise<number | undefined>} */
+    const raceSandboxInitPid = () =>
+      new Promise(resolve => {
+        const timer = setTimeout(
+          () => resolve(undefined),
+          INIT_PID_REPORT_GRACE_MS,
+        );
+        if (typeof timer.unref === 'function') timer.unref();
+        void sandboxInitPid.then(initPid => {
+          clearTimeout(timer);
+          resolve(initPid);
+        });
+      });
+
     /**
-     * Preserve the requested signal's meaning. Liveness probes and catchable
-     * signals go only to the launcher's process group. Terminal signals also
-     * kill the reported pid-namespace init, closing the setup window before
-     * `--die-with-parent` is armed.
+     * Liveness probes and catchable signals go only to the launcher's
+     * process group.  SIGTERM and SIGKILL also SIGKILL the reported
+     * pid-namespace init, closing the setup window before
+     * `--die-with-parent` is armed.  SIGTERM is therefore not a graceful
+     * request to the workload: once `--die-with-parent` is armed, the
+     * launcher's death on SIGTERM already takes the namespace down, and
+     * the init kill makes the setup window behave the same way.
      *
-     * Calls are serialized so one kill cannot race another kill.
+     * The wait for the init pid is bounded, so the group is always
+     * signalled.  Calls are serialized so one kill cannot race another.
      *
      * @param {NodeJS.Signals | number} signal
      */
     const killSliceNow = async signal => {
       await null;
-      const { pid } = child;
-      if (
-        pid === undefined ||
-        child.exitCode !== null ||
-        child.signalCode !== null
-      ) {
-        return;
-      }
+      const isLive = () =>
+        child.pid !== undefined &&
+        child.exitCode === null &&
+        child.signalCode === null;
+      if (!isLive()) return;
       if (signal === 'SIGKILL' || signal === 'SIGTERM') {
-        const initPid = await sandboxInitPid;
-        if (initPid !== undefined) {
+        const initPid = await raceSandboxInitPid();
+        // bwrap holds the init as its child until it reaps it, so while
+        // bwrap is unreaped the init pid cannot have been recycled.
+        if (initPid !== undefined && isLive()) {
           try {
             process.kill(initPid, 'SIGKILL');
           } catch (e) {
