@@ -104,6 +104,23 @@ impl SymbolName {
     }
 }
 
+impl SymbolName {
+    /// The encoding of `s`, without building a name, when it is `s`'s UTF-8:
+    /// text with no NUL (two bytes here) and nothing past U+FFFF (a surrogate
+    /// pair here, one four-byte sequence in UTF-8).
+    pub fn encoding_of(s: &str) -> Option<&[u8]> {
+        (!s.bytes().any(|byte| byte == 0 || byte >= 0xf0)).then_some(s.as_bytes())
+    }
+}
+
+/// A name hashes and compares as its encoding, so a map keyed by names can be
+/// probed with an encoding ([`SymbolName::encoding_of`]).
+impl std::borrow::Borrow<[u8]> for SymbolName {
+    fn borrow(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<&str> for SymbolName {
     fn from(s: &str) -> Self {
         Self::from_units(&s.encode_utf16().collect::<Vec<_>>())
@@ -187,6 +204,22 @@ mod tests {
             SymbolName::from("😀").as_bytes(),
             &[0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80]
         );
+    }
+
+    #[test]
+    fn text_lends_its_utf8_only_where_that_is_its_encoding() {
+        for scalar in (1..=0xffff).filter_map(char::from_u32) {
+            let text = scalar.to_string();
+            assert_eq!(
+                SymbolName::encoding_of(&text),
+                Some(SymbolName::from(text.as_str()).as_bytes()),
+                "{scalar:?}"
+            );
+        }
+        assert_eq!(SymbolName::encoding_of(""), Some(&[][..]));
+        for text in ["\0", "a\0b", "😀", "a😀", "\u{10ffff}"] {
+            assert_eq!(SymbolName::encoding_of(text), None, "{text:?}");
+        }
     }
 
     #[test]
