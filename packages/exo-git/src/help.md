@@ -404,6 +404,10 @@ Operations in flight are cancelled and every later operation is refused.
 
 Set which directions the remote may run, as a subset of "fetch" and
 "push".
+The change persists with the remote's formula, so a restart revives the
+narrowed policy.
+Use `setAllowedDirections(["fetch"])` to make the fetch+push origin minted
+by provideGitClone fetch-only before granting it.
 
 ## setFetchRefspecs(refspecs) -> Promise<void>
 
@@ -484,6 +488,12 @@ The username and password are held privately and are never exposed
 through this capability; only the audience they are bound to can be read.
 Rotation and revocation belong to the host-private
 GitCredentialController minted alongside it.
+A git capability URL is adopted as a BasicCredential: the host splits it
+with `splitGitCapabilityUrl` (`@endo/exo-git/src/git-remote-policy.js`)
+and passes the resulting audience, username,
+and password to provideBasicCredential.
+The material lives in daemon memory only; after a restart, rotate it back
+in from the host's copy of the capability URL.
 
 ## help(methodName?) -> string
 

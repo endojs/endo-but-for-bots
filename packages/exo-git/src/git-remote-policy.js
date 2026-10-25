@@ -78,6 +78,34 @@ const requirePolicyStringArray = (value, fieldName) => {
 harden(requirePolicyStringArray);
 
 /**
+ * Render a parsed remote URL for an error message without its userinfo.
+ *
+ * Any username and password are replaced by `***`.
+ * Only the embedded-credentials rejection in `normalizeGitRemoteUrl` prints
+ * the URL, and only after the scheme check has confined it to `https:` or
+ * `file:`, whose parsers put userinfo in `username` and `password`.
+ * The scheme rejection prints only the protocol, because a non-special
+ * scheme such as `x-access-token:<token>@host` parses with the token in its
+ * path, and the rejection for text that does not parse prints nothing.
+ * So a capability URL passed where a credential-free URL belongs cannot echo
+ * its token back across CapTP.
+ *
+ * @param {URL} parsed
+ * @returns {string}
+ */
+const redactGitRemoteUrl = parsed => {
+  const redacted = new URL(parsed.href);
+  if (redacted.username !== '') {
+    redacted.username = '***';
+  }
+  if (redacted.password !== '') {
+    redacted.password = '***';
+  }
+  return redacted.href;
+};
+harden(redactGitRemoteUrl);
+
+/**
  * @param {unknown} value
  * @param {boolean} [allowLocalFileTransport]
  * @returns {string}
@@ -91,19 +119,87 @@ export const normalizeGitRemoteUrl = (
   try {
     parsed = new URL(urlText);
   } catch {
-    throw new Error(`GitRemote policy.url is not a valid URL: ${q(urlText)}`);
+    // The unparseable text is withheld: nothing can locate a secret in it.
+    throw new Error('GitRemote policy.url is not a valid URL');
   }
   parsed.protocol === 'https:' ||
     (allowLocalFileTransport && parsed.protocol === 'file:') ||
-    Fail`GitRemote policy.url must use https: for the MVP transport: ${q(urlText)}`;
+    Fail`GitRemote policy.url must use https: for the MVP transport, not ${q(parsed.protocol)}`;
   !(
     matches(parsed.username, NonEmptyStringShape) ||
     matches(parsed.password, NonEmptyStringShape)
   ) ||
-    Fail`GitRemote policy.url must not include embedded credentials: ${q(urlText)}`;
+    Fail`GitRemote policy.url must not include embedded credentials: ${q(redactGitRemoteUrl(parsed))}; split a capability URL with splitGitCapabilityUrl and pass its password to provideBasicCredential`;
   return urlText;
 };
 harden(normalizeGitRemoteUrl);
+
+/**
+ * The fixed, non-secret username minion.town mints into capability URLs.
+ */
+const DEFAULT_CAPABILITY_USERNAME = 'x-access-token';
+
+/**
+ * Split a git capability URL
+ * (`https://x-access-token:<token>@git.minion.town/<partition>`) into a
+ * credential-free endpoint URL and the basic-auth fields that
+ * `provideBasicCredential` takes.
+ *
+ * This is the only code that sees the capability URL whole.
+ * Host code calls it on the host side and passes `{ audience, username,
+ * password }` to `provideBasicCredential` and `url` to `provideGitRemote` or
+ * `provideGitClone`, so the URL itself never crosses CapTP.
+ * The returned `url` is not a secret: the partition id in its path names a
+ * partition and grants nothing.
+ *
+ * Rejections never quote the argument.
+ *
+ * @param {string} text
+ * @returns {{ url: string, audience: string, username: string, password: string }}
+ */
+export const splitGitCapabilityUrl = text => {
+  /** @type {URL | undefined} */
+  let parsed;
+  try {
+    parsed = typeof text === 'string' ? new URL(text) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined || parsed.protocol !== 'https:') {
+    throw new Error('capabilityUrl is not a valid https URL');
+  }
+  /** @type {string} */
+  let username;
+  /** @type {string} */
+  let password;
+  try {
+    username = decodeURIComponent(parsed.username);
+    password = decodeURIComponent(parsed.password);
+  } catch {
+    throw new Error('capabilityUrl is not a valid https URL');
+  }
+  if (password === '') {
+    throw new Error('capabilityUrl carries no token');
+  }
+  if (username === '') {
+    username = DEFAULT_CAPABILITY_USERNAME;
+  }
+  if (/[\0\r\n]/u.test(username) || /[\0\r\n]/u.test(password)) {
+    throw new Error(
+      'capabilityUrl userinfo must not contain NUL or line breaks',
+    );
+  }
+  parsed.username = '';
+  parsed.password = '';
+  const url = parsed.href;
+  try {
+    normalizeGitRemoteUrl(url);
+  } catch {
+    throw new Error('capabilityUrl is not a valid https URL');
+  }
+  return harden({ url, audience: parsed.origin, username, password });
+};
+harden(splitGitCapabilityUrl);
 
 /**
  * @param {unknown} value
