@@ -16,6 +16,7 @@ import type {
   EndoGuest,
   EndoHost,
   EndoTraceReport,
+  GitCloneOriginOptions,
   Form,
   LogChunk,
   Message,
