@@ -131,6 +131,7 @@ export const gunzip = async bytes => {
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { BigIntStats } from 'fs' */
 
 /**
  * @param {object} modules
@@ -588,17 +589,27 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
   };
 
   /**
-   * Rename `source` to `target` only if nothing holds `target`, with no
-   * window in which an entry another writer creates at `target` is
-   * replaced.  A directory claims `target` with an exclusive `mkdir` and
-   * then renames over that empty directory.  A symbolic link is recreated
-   * at `target` with `symlink`, and any other entry is hard-linked; both
-   * refuse an existing `target`, and the source is then unlinked.  (`link`
-   * is not used for a symbolic link because some platforms follow it.)
-   * Regular files therefore require hard-link support on the mount. A crash
-   * or unlink failure can leave both names, but cannot replace the target.
-   * Resolves to the moved entry's `dev:ino` identity, which a directory or
-   * a file keeps and a recreated symbolic link does not.
+   * A filesystem may hand a deleted entry's inode straight to the next
+   * entry created, so the birth time tells a replacement from the original.
+   * Where the filesystem records no birth time it is 0 and only `dev:ino`
+   * distinguishes entries.
+   *
+   * @param {BigIntStats} stat
+   */
+  const statEntryIdentity = stat =>
+    `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+
+  /**
+   * A directory claims `target` with an exclusive `mkdir(2)` and then
+   * renames over that empty directory, relying on the POSIX `rename(2)` rule
+   * that a directory may replace an empty one; Windows `MoveFileEx` does not,
+   * so this is POSIX-only.  A symbolic link is recreated with `symlink`, and
+   * any other entry is hard-linked with `link(2)`, which fails with `EXDEV`
+   * across filesystems and `EPERM` where the filesystem lacks hard links;
+   * both refuse an existing `target` before the source is unlinked.  (`link`
+   * is not used for a symbolic link because some platforms follow it.)  A
+   * crash or unlink failure can leave both names, but cannot replace the
+   * target.
    *
    * @type {FilePowers['renameNoReplace']}
    */
@@ -615,18 +626,18 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
           await fs.promises.rmdir(target).catch(() => {});
           throw error;
         }
-        return `${sourceStat.dev}:${sourceStat.ino}`;
+        return statEntryIdentity(sourceStat);
       }
       if (sourceStat.isSymbolicLink()) {
         await fs.promises.symlink(await fs.promises.readlink(source), target);
         const targetStat = await fs.promises.lstat(target, { bigint: true });
         await fs.promises.unlink(source);
-        return `${targetStat.dev}:${targetStat.ino}`;
+        return statEntryIdentity(targetStat);
       }
       await fs.promises.link(source, target);
       const targetStat = await fs.promises.lstat(target, { bigint: true });
       await fs.promises.unlink(source);
-      return `${targetStat.dev}:${targetStat.ino}`;
+      return statEntryIdentity(targetStat);
     });
 
   /**
@@ -698,15 +709,13 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
   };
 
   /**
-   * The device and inode of the entry at `path` itself; a symbolic link
-   * reports its own identity, not its referent's.
+   * The device, inode, and birth time of the entry at `path` itself; a
+   * symbolic link reports its own identity, not its referent's.
    *
    * @type {FilePowers['entryIdentity']}
    */
-  const entryIdentity = async path => {
-    const stat = await fs.promises.lstat(path, { bigint: true });
-    return `${stat.dev}:${stat.ino}`;
-  };
+  const entryIdentity = async path =>
+    statEntryIdentity(await fs.promises.lstat(path, { bigint: true }));
 
   /** @param {string} path */
   const exists = async path => {
