@@ -73,6 +73,7 @@ export const GIT_READONLY_MEMBERS = harden([
   'status',
   'trackingStatus',
   'diff',
+  'diffText',
   'log',
   'show',
   'revParse',

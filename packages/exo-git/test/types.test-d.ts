@@ -11,6 +11,7 @@ import type {
   GitCommitOptions,
   GitCreateBranchOptions,
   GitDeleteBranchOptions,
+  GitDiff,
   GitDiffOptions,
   GitDirection,
   GitIndexStatus,
@@ -89,6 +90,15 @@ expectTypeOf<GitTrackingStatus>().toEqualTypeOf<{
   behind: number;
   detached: boolean;
 }>();
+expectTypeOf<ReadOnlyEndoGit['diff']>().toEqualTypeOf<
+  (options?: GitDiffOptions) => Promise<GitDiff>
+>();
+expectTypeOf<ReadOnlyEndoGit['diffText']>().toEqualTypeOf<
+  (options?: GitDiffOptions) => Promise<string>
+>();
+expectTypeOf<GitDiff['files'][number]['status']>().toEqualTypeOf<
+  'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged'
+>();
 declare const remotePolicy: RemotePolicy;
 const normalizedRemotePolicy = normalizeGitRemotePolicy({
   name: 'origin',

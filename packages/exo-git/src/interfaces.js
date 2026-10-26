@@ -60,6 +60,45 @@ const GitStatusResultShape = M.splitRecord(
   harden({}),
 );
 
+const GitDiffLineShape = harden({
+  kind: M.or('add', 'context', 'remove'),
+  text: M.string(),
+});
+
+const GitDiffHunkShape = harden({
+  oldStart: M.number(),
+  oldLines: M.number(),
+  newStart: M.number(),
+  newLines: M.number(),
+  lines: M.arrayOf(GitDiffLineShape),
+});
+
+const GitFileDiffShape = M.splitRecord(
+  {
+    status: M.or(
+      'added',
+      'copied',
+      'deleted',
+      'modified',
+      'renamed',
+      'unmerged',
+    ),
+    hunks: M.arrayOf(GitDiffHunkShape),
+  },
+  {
+    oldPath: M.string(),
+    newPath: M.string(),
+    oldMode: M.number(),
+    newMode: M.number(),
+    binary: harden({}),
+  },
+  harden({}),
+);
+
+const GitDiffShape = harden({
+  files: M.arrayOf(GitFileDiffShape),
+});
+
 const GitTrackingStatusShape = M.splitRecord(
   {
     ahead: M.number(),
@@ -152,7 +191,6 @@ export const GitRebaseStartInputShape = M.splitRecord(
   { autosquash: M.boolean() },
   harden({}),
 );
-harden(GitRebaseStartInputShape);
 
 const GitRebaseControlInputShape = M.splitRecord(
   { mode: M.or('continue', 'abort', 'skip') },
@@ -343,6 +381,9 @@ export const GIT_METHOD_GUARDS = harden({
   detach: M.callWhen(RefArgShape).returns(M.undefined()),
   diff: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
+    .returns(GitDiffShape),
+  diffText: M.callWhen()
+    .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   filesystemAt: M.callWhen(RefArgShape).returns(M.remotable('Filesystem')),
   followLatestRoot: M.callWhen()
@@ -406,6 +447,7 @@ export const GIT_READER_METHODS = harden([
   'branches',
   'currentBranch',
   'diff',
+  'diffText',
   'filesystemAt',
   'followLatestRoot',
   'followRootChanges',

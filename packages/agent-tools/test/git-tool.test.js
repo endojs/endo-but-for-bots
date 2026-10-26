@@ -1,7 +1,7 @@
 // @ts-check
 
 // Establish a SES perimeter (provides the `harden` global).
-// eslint-disable-next-line import/order
+
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -84,7 +84,7 @@ const makeStubGit = calls => {
     },
     diff: async (...a) => {
       calls.push(['diff', ...a]);
-      return '';
+      return { files: [] };
     },
     show: async (...a) => {
       calls.push(['show', ...a]);

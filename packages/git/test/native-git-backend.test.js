@@ -689,3 +689,184 @@ test('remotePush refuses a force refspec alongside a force-with-lease', async t 
       ),
   );
 });
+
+test('NativeGitBackend.diff reports structured files under hostile diff config', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  const commit = message =>
+    git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qm',
+      message,
+    ]);
+  // Repository-local settings that would reshape the porcelain rendering if
+  // the structured invocations did not pin their output format.
+  await fs.promises.appendFile(
+    path.join(repoRoot, '.git', 'config'),
+    [
+      '[diff]',
+      '\tnoprefix = true',
+      '\trenames = false',
+      '\tsubmodule = log',
+      '\tsuppressBlankEmpty = true',
+      '[color]',
+      '\tdiff = always',
+      '',
+    ].join('\n'),
+  );
+  const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`);
+  await fs.promises.writeFile(
+    path.join(repoRoot, 'moved.txt'),
+    `${lines.join('\n')}\n`,
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'blank.txt'), 'a\n\nb\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'data.bin'), '\0\x01');
+  await fs.promises.writeFile(path.join(repoRoot, 'link'), 'was a file\n');
+  await git(['add', '.']);
+  await commit('baseline');
+
+  await git(['mv', 'moved.txt', 'renamed.txt']);
+  await fs.promises.chmod(path.join(repoRoot, 'renamed.txt'), 0o755);
+  await fs.promises.writeFile(path.join(repoRoot, 'blank.txt'), 'a\n\nc\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'data.bin'), '\0\x02\x03');
+  await fs.promises.rm(path.join(repoRoot, 'link'));
+  await fs.promises.symlink('renamed.txt', path.join(repoRoot, 'link'));
+  await git(['add', '-A']);
+  // A gitlink without a checked-out submodule repository.
+  await git([
+    'update-index',
+    '--add',
+    '--cacheinfo',
+    `160000,${'1'.repeat(40)},sub`,
+  ]);
+
+  const diff = await backend.diff({ cached: true });
+  t.deepEqual(
+    diff.files.map(({ status, oldPath, newPath, oldMode, newMode }) => ({
+      status,
+      oldPath,
+      newPath,
+      oldMode,
+      newMode,
+    })),
+    [
+      {
+        status: 'modified',
+        oldPath: 'blank.txt',
+        newPath: 'blank.txt',
+        oldMode: 0o10_0644,
+        newMode: 0o10_0644,
+      },
+      {
+        status: 'modified',
+        oldPath: 'data.bin',
+        newPath: 'data.bin',
+        oldMode: 0o10_0644,
+        newMode: 0o10_0644,
+      },
+      {
+        status: 'modified',
+        oldPath: 'link',
+        newPath: 'link',
+        oldMode: 0o10_0644,
+        newMode: 0o12_0000,
+      },
+      {
+        status: 'renamed',
+        oldPath: 'moved.txt',
+        newPath: 'renamed.txt',
+        oldMode: 0o10_0644,
+        newMode: 0o10_0755,
+      },
+      {
+        status: 'added',
+        oldPath: undefined,
+        newPath: 'sub',
+        oldMode: undefined,
+        newMode: 0o16_0000,
+      },
+    ],
+  );
+  const [blank, data, link, renamed, submodule] = diff.files;
+  t.deepEqual(blank.hunks[0].lines, [
+    { kind: 'context', text: 'a' },
+    { kind: 'context', text: '' },
+    { kind: 'remove', text: 'b' },
+    { kind: 'add', text: 'c' },
+  ]);
+  t.deepEqual(data.binary, {});
+  t.deepEqual(data.hunks, []);
+  t.deepEqual(
+    link.hunks.map(hunk => hunk.lines),
+    [
+      [{ kind: 'remove', text: 'was a file' }],
+      [{ kind: 'add', text: 'renamed.txt' }],
+    ],
+  );
+  t.deepEqual(renamed.hunks, []);
+  t.deepEqual(submodule.hunks[0].lines, [
+    { kind: 'add', text: `Subproject commit ${'1'.repeat(40)}` },
+  ]);
+});
+
+test('NativeGitBackend.diff reports an unmerged path without hunks', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  const commit = message =>
+    git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qam',
+      message,
+    ]);
+  await fs.promises.writeFile(path.join(repoRoot, 'f.txt'), 'base\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'g.txt'), 'g\n');
+  await git(['add', '.']);
+  await commit('base');
+  await git(['switch', '-qc', 'side']);
+  await fs.promises.writeFile(path.join(repoRoot, 'f.txt'), 'side\n');
+  await commit('side');
+  await git(['switch', '-q', 'main']);
+  await fs.promises.writeFile(path.join(repoRoot, 'f.txt'), 'main\n');
+  await commit('main');
+  await t.throwsAsync(
+    git(['-c', 'user.email=t@t', '-c', 'user.name=T', 'merge', 'side']),
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'g.txt'), 'g2\n');
+
+  const diff = await backend.diff();
+  t.deepEqual(diff.files, [
+    { status: 'unmerged', oldPath: 'f.txt', newPath: 'f.txt', hunks: [] },
+    {
+      status: 'modified',
+      oldPath: 'g.txt',
+      newPath: 'g.txt',
+      oldMode: 0o10_0644,
+      newMode: 0o10_0644,
+      hunks: [
+        {
+          oldStart: 1,
+          oldLines: 1,
+          newStart: 1,
+          newLines: 1,
+          lines: [
+            { kind: 'remove', text: 'g' },
+            { kind: 'add', text: 'g2' },
+          ],
+        },
+      ],
+    },
+  ]);
+  t.regex(await backend.diffText(), /diff --cc f\.txt/);
+});

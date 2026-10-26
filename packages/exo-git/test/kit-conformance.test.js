@@ -83,7 +83,8 @@ const makeFakeBackend = (worktreeRemove = async () => undefined) =>
     ],
     worktreeAdd: async () => makeFakeBackend(worktreeRemove),
     worktreeRemove,
-    diff: async () => '',
+    diff: async () => ({ files: [] }),
+    diffText: async () => '',
     log: async () => [],
     show: async () => '',
     revParse: async ref => ({
