@@ -428,9 +428,9 @@ type GitShow = {
 type GitConflict = {
   entry: EndoMountEntry;
   base?: { oid: string };
-  ours: { oid: string };
-  theirs: { oid: string };
-  markerStyle: 'merge' | 'diff3';
+  ours?: { oid: string };
+  theirs?: { oid: string };
+  markerStyle: 'merge' | 'diff3' | 'zdiff3';
 };
 
 type GitMergeResult =
@@ -810,7 +810,10 @@ It is not part of the normative design.
 - **Phase 7, structured `show` slice** — `Git.show(ref)` returns `GitShow` (`{ commit, parents, diff }`) and the porcelain moves to `Git.showText(ref)`; the `show` agent tool and code-mode declarations report the structured shape.
   The ref is peeled with `^{commit}`, so `show` describes commits only (an annotated tag shows its commit; a tree or blob is rejected) while `showText` keeps rendering any object.
   `diff` is the commit's changes against its first parent, or against the empty tree for a root commit; a merge commit therefore reports its first-parent diff rather than git's combined diff, which does not fit `GitDiffHunk` (the same reasoning as the `diff` slice's `'unmerged'` status).
-  Remaining Phase 7 work: `GitMergeResult` / `mergeText`, `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
+- **Phase 7, structured `merge` slice** — `Git.merge(ref, options?)` returns `GitMergeResult` and the porcelain moves to `Git.mergeText(ref, options?)`.
+  Successful results distinguish an unchanged head, a fast-forward, and a merge commit; a conflicted merge returns authority-bearing worktree entries, the index-stage object ids, and the configured marker style instead of rejecting.
+  `ours` and `theirs` are optional because modify/delete conflicts omit one of index stages 2 and 3; `markerStyle` includes Git's `zdiff3` spelling rather than collapsing it into `diff3`.
+  Remaining Phase 7 work: `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
 
 ### Forward-design notes
 

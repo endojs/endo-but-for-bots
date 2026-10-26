@@ -49,6 +49,7 @@ import {
  *   GitMakeReadWriteOptions,
  *   GitMakeReadWriteOrHistoryRewriteOptions,
  *   GitMergeOptions,
+ *   GitMergeResult,
  *   GitRebaseInput,
  *   GitRef,
  *   GitRemoteCredential,
@@ -126,6 +127,24 @@ import {
  */
 
 /**
+ * @typedef {object} BackendGitConflict
+ * @property {string} path
+ * @property {{ oid: string }} [base]
+ * @property {{ oid: string }} [ours]
+ * @property {{ oid: string }} [theirs]
+ * @property {'merge' | 'diff3' | 'zdiff3'} markerStyle
+ */
+
+/**
+ * @typedef {(
+ *   | { status: 'up-to-date', head: GitRef }
+ *   | { status: 'fast-forward', head: GitRef }
+ *   | { status: 'merged', head: GitRef, merged: GitCommit }
+ *   | { status: 'conflicts', conflicts: BackendGitConflict[] }
+ * )} GitBackendMergeResult
+ */
+
+/**
  * Backend-facing contract.  Concrete backends (native git, future JS git
  * libraries, daemon-native commit storage) translate the structured
  * operations into their implementation-specific calls.  Path-bearing inputs
@@ -168,7 +187,8 @@ import {
  * @property {(name: string) => Promise<void>} switchBranch
  * @property {(ref: string) => Promise<void>} detach
  * @property {(ref: string) => Promise<void>} switch
- * @property {(ref: string, opts?: GitMergeOptions) => Promise<string>} merge
+ * @property {(ref: string, opts?: GitMergeOptions) => Promise<GitBackendMergeResult>} merge
+ * @property {(ref: string, opts?: GitMergeOptions) => Promise<string>} mergeText
  * @property {(input: GitRebaseInput) => Promise<string>} rebase
  * @property {(opts?: GitBackendStashPushOptions) => Promise<string>} stashPush
  * @property {() => Promise<string[]>} stashList
@@ -910,9 +930,38 @@ async function doSwitch(ref) {
  * @param {unknown} ref
  * @param {GitMergeOptions} options
  * @this {GitMethodThis}
+ * @returns {Promise<GitMergeResult>}
  */
 async function merge(ref, options = {}) {
-  const result = await this.state.backend.merge(refName(ref), options);
+  const { state } = this;
+  const result = await state.backend.merge(refName(ref), options);
+  await notifyRootAfterMutation(this.state);
+  if (result.status === 'conflicts') {
+    const conflicts = await Promise.all(
+      result.conflicts.map(async conflict =>
+        harden({
+          entry: await E(state.mount).entry(
+            harden(designatorToSegments(conflict.path)),
+          ),
+          ...(conflict.base === undefined ? {} : { base: conflict.base }),
+          ...(conflict.ours === undefined ? {} : { ours: conflict.ours }),
+          ...(conflict.theirs === undefined ? {} : { theirs: conflict.theirs }),
+          markerStyle: conflict.markerStyle,
+        }),
+      ),
+    );
+    return harden({ status: 'conflicts', conflicts: harden(conflicts) });
+  }
+  return result;
+}
+
+/**
+ * @param {unknown} ref
+ * @param {GitMergeOptions} options
+ * @this {GitMethodThis}
+ */
+async function mergeText(ref, options = {}) {
+  const result = await this.state.backend.mergeText(refName(ref), options);
   await notifyRootAfterMutation(this.state);
   return result;
 }
@@ -1349,6 +1398,7 @@ const writerMethods = harden({
   detach,
   switch: doSwitch,
   merge,
+  mergeText,
   stashPush,
   stashApply,
   stashPop,
@@ -1598,6 +1648,7 @@ export const makeNotYetImplementedBackend = () => {
     detach: async () => fail('detach'),
     switch: async () => fail('switch'),
     merge: async () => fail('merge'),
+    mergeText: async () => fail('mergeText'),
     rebase: async () => fail('rebase'),
     stashPush: async () => fail('stashPush'),
     stashList: async () => fail('stashList'),

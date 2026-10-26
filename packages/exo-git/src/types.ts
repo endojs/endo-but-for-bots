@@ -214,6 +214,23 @@ export type GitShow = {
   diff: GitDiff;
 };
 
+export type GitConflict = {
+  /** The authority-bearing worktree entry whose index stages conflict. */
+  entry: PathEntry;
+  base?: { oid: string };
+  /** Absent when our side deleted the entry. */
+  ours?: { oid: string };
+  /** Absent when their side deleted the entry. */
+  theirs?: { oid: string };
+  markerStyle: 'merge' | 'diff3' | 'zdiff3';
+};
+
+export type GitMergeResult =
+  | { status: 'up-to-date'; head: GitRef }
+  | { status: 'fast-forward'; head: GitRef }
+  | { status: 'merged'; head: GitRef; merged: GitCommit }
+  | { status: 'conflicts'; conflicts: GitConflict[] };
+
 export type GitLogOptions = {
   maxCount?: number;
   ref?: GitRef | string;
@@ -527,7 +544,15 @@ export type ReadWriteEndoGit = ReadOnlyEndoGit & {
   switchBranch: (name: string) => Promise<void>;
   detach: (ref: GitRef | string) => Promise<void>;
   switch: (ref: GitRef | string) => Promise<void>;
-  merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
+  merge: (
+    ref: GitRef | string,
+    options?: GitMergeOptions,
+  ) => Promise<GitMergeResult>;
+  /** The porcelain `git merge` rendering, for display. */
+  mergeText: (
+    ref: GitRef | string,
+    options?: GitMergeOptions,
+  ) => Promise<string>;
   stashPush: (options?: GitStashPushOptions) => Promise<string>;
   stashApply: (index?: number) => Promise<void>;
   stashPop: (index?: number) => Promise<void>;

@@ -146,6 +146,28 @@ const GitShowShape = harden({
   diff: GitDiffShape,
 });
 
+const GitConflictSideRecordShape = harden({ oid: M.string() });
+
+const GitConflictShape = M.splitRecord(
+  {
+    entry: M.remotable(),
+    markerStyle: M.or('merge', 'diff3', 'zdiff3'),
+  },
+  {
+    base: GitConflictSideRecordShape,
+    ours: GitConflictSideRecordShape,
+    theirs: GitConflictSideRecordShape,
+  },
+  harden({}),
+);
+
+const GitMergeResultShape = M.or(
+  harden({ status: 'up-to-date', head: GitRefShape }),
+  harden({ status: 'fast-forward', head: GitRefShape }),
+  harden({ status: 'merged', head: GitRefShape, merged: GitCommitShape }),
+  harden({ status: 'conflicts', conflicts: M.arrayOf(GitConflictShape) }),
+);
+
 const FollowRootOptionsShape = M.splitRecord(
   {},
   { cancelled: M.promise() },
@@ -404,6 +426,9 @@ export const GIT_METHOD_GUARDS = harden({
     .returns(M.arrayOf(GitCommitShape)),
   merge: M.callWhen(RefArgShape)
     .optional(M.recordOf(M.string(), M.any()))
+    .returns(GitMergeResultShape),
+  mergeText: M.callWhen(RefArgShape)
+    .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   rebase: M.callWhen(GitRebaseInputShape).returns(M.string()),
   readOnly: M.call().returns(M.remotable('Git')),
@@ -481,6 +506,7 @@ export const GIT_WRITER_ONLY_METHODS = harden([
   'deleteBranch',
   'detach',
   'merge',
+  'mergeText',
   'renameBranch',
   'restore',
   'stashApply',

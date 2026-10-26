@@ -871,6 +871,51 @@ test('NativeGitBackend.diff reports an unmerged path without hunks', async t => 
   t.regex(await backend.diffText(), /diff --cc f\.txt/);
 });
 
+test('NativeGitBackend.merge reports delete conflicts and marker style', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  const conflictPath = 'delete\tconflict.txt';
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  const commit = message =>
+    git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qam',
+      message,
+    ]);
+  await fs.promises.writeFile(path.join(repoRoot, conflictPath), 'base\n');
+  await git(['add', conflictPath]);
+  await commit('base');
+  await git(['switch', '-qc', 'side']);
+  await fs.promises.rm(path.join(repoRoot, conflictPath));
+  await commit('delete on side');
+  await git(['switch', '-q', 'main']);
+  await fs.promises.writeFile(path.join(repoRoot, conflictPath), 'main\n');
+  await commit('modify on main');
+  await git(['config', 'merge.conflictStyle', 'zdiff3']);
+
+  const result = await backend.merge('side');
+  t.is(result.status, 'conflicts');
+  if (result.status !== 'conflicts') {
+    throw t.fail('expected a structured delete/modify conflict');
+  }
+  t.deepEqual(result.conflicts, [
+    {
+      path: conflictPath,
+      base: { oid: result.conflicts[0].base?.oid },
+      ours: { oid: result.conflicts[0].ours?.oid },
+      markerStyle: 'zdiff3',
+    },
+  ]);
+  t.truthy(result.conflicts[0].base?.oid);
+  t.truthy(result.conflicts[0].ours?.oid);
+  t.false('theirs' in result.conflicts[0]);
+});
+
 test('NativeGitBackend.diff narrows by revision range and path', async t => {
   const { backend, repoRoot } = await provisionRepo(t);
   /** @param {string[]} commandArguments */

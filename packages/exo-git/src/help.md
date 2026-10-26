@@ -198,11 +198,19 @@ Check out a revision.
 
 Check out a revision with HEAD detached.
 
-## merge(ref, options?) -> Promise<string>
+## merge(ref, options?) -> Promise<GitMergeResult>
 
 Merge a revision into the current branch.
+Returns `up-to-date`, `fast-forward`, `merged`, or structured `conflicts`.
+Conflict entries carry index object ids and the worktree marker style.
 `fastForwardOnly: true` refuses anything but a fast-forward;
 `noFastForward: true` always records a merge commit.
+
+## mergeText(ref, options?) -> Promise<string>
+
+Merge a revision and return Git's porcelain output.
+The options are the same as `merge`; a conflict rejects after leaving the
+worktree and index in their ordinary conflicted state.
 
 ## stashPush(options?) -> Promise<string>
 

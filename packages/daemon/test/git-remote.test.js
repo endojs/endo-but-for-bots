@@ -2,6 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { WritableGitWorktree } from '@endo/exo-git' */
+/** @import { GitBackend } from '@endo/exo-git/src/git.js' */
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
@@ -823,6 +824,7 @@ test('GitRemoteController.revoke during in-flight pull aborts before local integ
     fetchResolve = resolve;
   });
   let mergeCalled = false;
+  /** @type {GitBackend} */
   const backend = harden({
     ...makeNotYetImplementedBackend(),
     remoteFetch: async input => {
@@ -832,7 +834,10 @@ test('GitRemoteController.revoke during in-flight pull aborts before local integ
     },
     merge: async () => {
       mergeCalled = true;
-      return 'merged';
+      return harden({
+        status: 'up-to-date',
+        head: { name: 'main', kind: 'branch', oid: '0'.repeat(40) },
+      });
     },
   });
   const git = makeGit({
