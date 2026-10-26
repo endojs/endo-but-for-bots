@@ -510,3 +510,15 @@ test('a stale retained endowment is replaced before the operation starts', async
   t.is(summary.phase, 'Committed');
   t.is(await E(daemon.host).lookup('c1.0.guest', 'notes'), notes);
 });
+
+test('lifecycle re-derives an operation facet and rejects an unknown key', async t => {
+  const { coordinator, bound } = await setup();
+  const { summary } = await E(bound).create('helper');
+  const lifecycle = coordinator.lifecycle(summary.operationId);
+  t.true(await E(lifecycle).isActive());
+  await E(bound).remove('helper');
+  t.false(await E(lifecycle).isActive());
+  t.throws(() => coordinator.lifecycle('no-such-op'), {
+    message: /^No operation/,
+  });
+});
