@@ -54,6 +54,26 @@ const { handle } = await E(forUi).create('helper', {
 });
 ```
 
+## Driver and spawner adapters
+
+`makeInferenceAgentDriverMaker` closes over an `InferenceBackend` and a
+function that derives a `GuestToolProjection` from the child guest.
+It installs a narrower `ChildInference` capability in the private driver
+guest.
+Every `infer` call derives a new projection, which pins the tool catalog for
+that turn, while the backend retains its `CredentialSource` and releases each
+grant at its own boundary.
+
+`makeChildAgentSpawner` maps each logical child to a fresh derived namespace.
+The namespace contains one child named `agent` and may receive a recursively
+attenuated spawner as an ordinary endowment.
+`stop(name)` revokes that namespace, removing the child and all descendants
+without giving any child an `EndoHost`.
+Fae preserves its existing `SubagentSpawner` methods with an adapter over this
+surface; Lal uses its landed worker loop; and the Claude CLI and Agent SDK
+makers compose the corresponding `@endo/claude` backends rather than copying
+their turn logic.
+
 ## Durability
 
 Each namespace keeps an append-only journal of numbered pet names in the
@@ -86,6 +106,7 @@ and its daemon wiring.
 The state machine is tested against an in-memory daemon with crash injection
 at every effect, and the restart rows of the design's recovery matrix are
 tested against a real daemon.
-The `@endo/inference`, Fae, and Lal maker adapters, the driver turn ledger,
-and reader-side reply collapse are later steps of the design's
-implementation plan.
+The child topology and the `@endo/inference`, Fae, Lal, Claude CLI, and Claude
+Agent SDK maker adapters are present.
+The durable driver turn ledger and reader-side reply collapse are later steps
+of the design's implementation plan.
