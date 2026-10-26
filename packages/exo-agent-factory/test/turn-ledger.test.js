@@ -8,7 +8,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
-import { makeTurnLedgerDriver } from '../turn-ledger.js';
+import { makeTurnLedgerDriver, stringsForInferResult } from '../turn-ledger.js';
 import { Crash, makeFakeDaemon } from './_fake-host.js';
 
 const message = harden({
@@ -218,4 +218,232 @@ test('the backend sees only the child projection and inference request', async t
   t.is(acquired, 1);
   t.is(released, 1);
   t.false(JSON.stringify(observed).includes('API_TOKEN'));
+});
+
+test('every inference result renders a total, provider-free reply', t => {
+  t.deepEqual(stringsForInferResult(harden({ type: 'ok', text: 'Hi.' })), [
+    'Hi.',
+  ]);
+  t.deepEqual(stringsForInferResult(harden({ type: 'needs-auth' })), [
+    'Inference needs authentication.',
+  ]);
+  t.deepEqual(stringsForInferResult(harden({ type: 'usage-exhausted' })), [
+    'Inference usage is exhausted.',
+  ]);
+  t.deepEqual(stringsForInferResult(harden({ type: 'rate-limited' })), [
+    'Inference is rate limited.',
+  ]);
+  t.deepEqual(stringsForInferResult(harden({ type: 'budget-exhausted' })), [
+    'Inference budget is exhausted.',
+  ]);
+  t.deepEqual(
+    stringsForInferResult(
+      harden({ type: 'limit-exceeded', which: 'output-bytes' }),
+    ),
+    ['Inference limit exceeded: output-bytes.'],
+  );
+  t.deepEqual(stringsForInferResult(harden({ type: 'cancelled' })), [
+    'Inference was cancelled.',
+  ]);
+  t.deepEqual(stringsForInferResult(harden({ type: 'needs-containment' })), [
+    'Inference needs containment.',
+  ]);
+  t.deepEqual(
+    stringsForInferResult(harden({ type: 'unavailable', detail: 'offline' })),
+    ['Inference unavailable: offline'],
+  );
+  t.throws(
+    () => stringsForInferResult(/** @type {any} */ (harden({ type: 'odd' }))),
+    { message: /Unknown inference result type "odd"/ },
+  );
+});
+
+test('a non-ok result is recorded and published like any other', async t => {
+  const daemon = makeFakeDaemon();
+  const { agent, replies } = daemon.makeMailbox([message]);
+  const inferenceBackend = Far('Rate-limited backend', {
+    async infer() {
+      return harden({ type: 'rate-limited' });
+    },
+  });
+  await makeDriver(daemon, agent, inferenceBackend).run();
+  t.deepEqual(await E(daemon.host).lookup('turn-41-result'), {
+    type: 'TurnResult',
+    key: 41n,
+    result: { type: 'rate-limited' },
+  });
+  t.deepEqual(replies, [
+    {
+      strings: ['Inference is rate limited.'],
+      replyTo: 'message-41',
+      replyToMessageNumber: 41n,
+    },
+  ]);
+});
+
+test('process fails closed on malformed message numbers', async t => {
+  const daemon = makeFakeDaemon();
+  const { agent } = daemon.makeMailbox([message]);
+  const inferenceBackend = Far('Unreached backend', {
+    async infer() {
+      throw Error('unreached');
+    },
+  });
+  const driver = makeDriver(daemon, agent, inferenceBackend);
+  await t.throwsAsync(
+    driver.process(/** @type {any} */ ({ number: 41, from: 'x' })),
+    { message: 'Message number must be a bigint' },
+  );
+  await t.throwsAsync(driver.process({ number: -1n, from: 'x' }), {
+    message: /Turn key must be a natural message number/,
+  });
+  // A failed turn does not wedge the serial queue.
+  await t.throwsAsync(driver.process({ number: 41n, from: 'x' }), {
+    message: 'unreached',
+  });
+});
+
+test('process fails closed on a forged result record or cursor', async t => {
+  const inferenceBackend = Far('Unreached backend', {
+    async infer() {
+      throw Error('unreached');
+    },
+  });
+
+  const forgedResult = makeFakeDaemon();
+  await E(forgedResult.host).storeValue(
+    harden({ type: 'TurnResult', key: 7n, result: { type: 'ok', text: '' } }),
+    'turn-41-result',
+  );
+  const { agent: agentA, replies: repliesA } = forgedResult.makeMailbox([
+    message,
+  ]);
+  await t.throwsAsync(
+    makeDriver(forgedResult, agentA, inferenceBackend).process(message),
+    { message: /Invalid result record for turn/ },
+  );
+  t.deepEqual(repliesA, []);
+
+  const forgedCursor = makeFakeDaemon();
+  await E(forgedCursor.host).storeValue(
+    harden({ type: 'Published', key: 41n }),
+    'turn-41-published',
+  );
+  await E(forgedCursor.host).storeValue(
+    harden({ type: 'Bogus', key: 41n }),
+    'turn-cursor',
+  );
+  const { agent: agentB } = forgedCursor.makeMailbox([message]);
+  await t.throwsAsync(
+    makeDriver(forgedCursor, agentB, inferenceBackend).process(message),
+    { message: 'Invalid turn cursor' },
+  );
+});
+
+test('the cursor only moves forward', async t => {
+  const daemon = makeFakeDaemon();
+  await E(daemon.host).storeValue(
+    harden({ type: 'Cursor', key: 99n }),
+    'turn-cursor',
+  );
+  const { agent } = daemon.makeMailbox([message]);
+  const inferenceBackend = Far('Fake inference backend', {
+    async infer() {
+      return harden({ type: 'ok', text: 'Late.' });
+    },
+  });
+  t.true(await makeDriver(daemon, agent, inferenceBackend).process(message));
+  t.deepEqual(await E(daemon.host).lookup('turn-cursor'), {
+    type: 'Cursor',
+    key: 99n,
+  });
+});
+
+test('defaults omit instructions, model, and absent strings', async t => {
+  const daemon = makeFakeDaemon();
+  const bare = harden({
+    number: 3n,
+    messageId: 'message-3',
+    from: 'endo://fake/parent',
+  });
+  const { agent, replies } = daemon.makeMailbox([bare]);
+  /** @type {any} */
+  let observed;
+  const inferenceBackend = Far('Observing backend', {
+    async infer(request) {
+      observed = request;
+      return harden({ type: 'ok', text: 'Empty.' });
+    },
+  });
+  await makeTurnLedgerDriver({
+    agent,
+    ledger: daemon.host,
+    lifecycle,
+    inferenceBackend: /** @type {any} */ (inferenceBackend),
+    guest,
+    limits,
+    cancelled: neverCancelled,
+  }).run();
+  t.is(observed.prompt, '');
+  t.false('model' in observed);
+  t.is(replies.length, 1);
+});
+
+test('run skips its own messages and stops when the agent goes inactive', async t => {
+  const own = harden({
+    number: 1n,
+    messageId: 'message-1',
+    from: 'endo://fake/child',
+    strings: ['echo'],
+  });
+  const second = harden({ ...message, number: 42n, messageId: 'message-42' });
+  /** @type {any[]} */
+  const requests = [];
+  const inferenceBackend = Far('Fake inference backend', {
+    async infer(request) {
+      requests.push(request);
+      return harden({ type: 'ok', text: 'Answered.' });
+    },
+  });
+
+  // Inactive before the loop starts: nothing is read or answered.
+  const idle = makeFakeDaemon();
+  const idleMailbox = idle.makeMailbox([message]);
+  await makeTurnLedgerDriver({
+    agent: idleMailbox.agent,
+    ledger: idle.host,
+    lifecycle: Far('Inactive lifecycle', { isActive: () => false }),
+    inferenceBackend: /** @type {any} */ (inferenceBackend),
+    guest,
+    limits,
+    cancelled: neverCancelled,
+  }).run();
+  t.deepEqual(idleMailbox.replies, []);
+  t.is(requests.length, 0);
+
+  // Active for the first three checks, then retired before message 42.
+  const daemon = makeFakeDaemon();
+  const { agent, replies } = daemon.makeMailbox([own, message, second]);
+  let checks = 0;
+  await makeTurnLedgerDriver({
+    agent,
+    ledger: daemon.host,
+    lifecycle: Far('Retiring lifecycle', {
+      isActive: () => {
+        checks += 1;
+        return checks <= 3;
+      },
+    }),
+    inferenceBackend: /** @type {any} */ (inferenceBackend),
+    guest,
+    limits,
+    cancelled: neverCancelled,
+  }).run();
+  t.is(requests.length, 1, 'own message skipped; retired before 42');
+  t.deepEqual(
+    replies.map(reply => reply.replyToMessageNumber),
+    [41n],
+  );
+  t.false(await E(daemon.host).has('turn-1-started'));
+  t.false(await E(daemon.host).has('turn-42-started'));
 });
