@@ -192,10 +192,12 @@ const REBASE_INPUT_PROP = harden({
 
 const REBASE_DESCRIPTION =
   'Manage a rebase with mode "start" (upstream required, autosquash ' +
-  'optional), "continue", "abort", or "skip". If start or continue stops ' +
-  'for conflicts, inspect status, resolve and stage each conflict, then ' +
-  'continue; use skip to omit the stopped commit or abort to restore the ' +
-  'pre-rebase state.';
+  'optional), "continue", "abort", or "skip". The result status is ' +
+  '"completed" with the new head and replayed commits, "conflicts" with ' +
+  'the stopped commit and each conflicted entry, "aborted" with the ' +
+  'restored head, or "in-progress" when Git stopped without a conflict. ' +
+  'After conflicts, resolve and stage each conflict, then continue; use ' +
+  'skip to omit the stopped commit or abort to restore the pre-rebase state.';
 
 /**
  * This package intentionally exposes only a curated JSON-safe writable Git

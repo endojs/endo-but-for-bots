@@ -111,7 +111,10 @@ const makeStubGit = calls => {
     },
     rebase: async (...a) => {
       calls.push(['rebase', ...a]);
-      return '';
+      return {
+        status: /** @type {const} */ ('aborted'),
+        head: { name: 'main', kind: /** @type {const} */ ('branch') },
+      };
     },
     branches: async (...a) => {
       calls.push(['branches', ...a]);

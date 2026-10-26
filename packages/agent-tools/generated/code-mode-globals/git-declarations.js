@@ -507,6 +507,41 @@ type GitRebaseInput = {
     mode: 'continue' | 'abort' | 'skip';
     upstream?: never;
     autosquash?: never;
+};
+type GitRebaseResult = {
+    status: 'completed';
+    head: GitRef;
+    replayed: GitCommit[];
+} | {
+    status: 'conflicts';
+    current: GitCommit;
+    conflicts: GitConflict[];
+} | {
+    status: 'aborted';
+    head: GitRef;
+} | {
+    status: 'in-progress';
+    current: GitCommit;
+};
+type GitPathEntry = GitLitePathEntry;
+type GitConflict = {
+    entry: GitPathEntry;
+    base?: {
+        oid: string;
+    };
+    ours?: {
+        oid: string;
+    };
+    theirs?: {
+        oid: string;
+    };
+    markerStyle: 'merge' | 'diff3' | 'zdiff3';
+};
+type GitLitePathEntry = {
+    segments: () => string[];
+    displayPath: () => string;
+    child: (name: string) => GitLitePathEntry;
+    help: (method?: string) => string;
 };`,
     body: `{
     cherryPick: (ref: GitRef | string, options?: {
@@ -515,7 +550,8 @@ type GitRebaseInput = {
     commit: (message: string, options?: {
         amend?: boolean;
     }) => Promise<GitCommit>;
-    rebase: (input: GitRebaseInput) => Promise<string>;
+    rebase: (input: GitRebaseInput) => Promise<GitRebaseResult>;
+    rebaseText: (input: GitRebaseInput) => Promise<string>;
     reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
 }`,
   },

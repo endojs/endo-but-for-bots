@@ -28,6 +28,7 @@ import type {
   GitOperations,
   GitReadWriteCommitOptions,
   GitRebaseInput,
+  GitRebaseResult,
   GitRef,
   GitRefUpdateResult,
   GitRemote,
@@ -116,6 +117,19 @@ expectTypeOf<ReadWriteEndoGit['merge']>().toEqualTypeOf<
 expectTypeOf<ReadWriteEndoGit['mergeText']>().toEqualTypeOf<
   (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>
 >();
+expectTypeOf<HistoryRewriteEndoGit['rebase']>().toEqualTypeOf<
+  (input: GitRebaseInput) => Promise<GitRebaseResult>
+>();
+expectTypeOf<HistoryRewriteEndoGit['rebaseText']>().toEqualTypeOf<
+  (input: GitRebaseInput) => Promise<string>
+>();
+expectTypeOf<GitRebaseResult>().toEqualTypeOf<
+  | { status: 'completed'; head: GitRef; replayed: GitCommit[] }
+  | { status: 'conflicts'; current: GitCommit; conflicts: GitConflict[] }
+  | { status: 'aborted'; head: GitRef }
+  | { status: 'in-progress'; current: GitCommit }
+>();
+expectTypeOf<ReadWriteEndoGit>().not.toHaveProperty('rebaseText');
 expectTypeOf<GitConflict>().toEqualTypeOf<{
   entry: PathEntry;
   base?: { oid: string };

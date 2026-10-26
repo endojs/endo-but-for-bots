@@ -168,6 +168,21 @@ const GitMergeResultShape = M.or(
   harden({ status: 'conflicts', conflicts: M.arrayOf(GitConflictShape) }),
 );
 
+const GitRebaseResultShape = M.or(
+  harden({
+    status: 'completed',
+    head: GitRefShape,
+    replayed: M.arrayOf(GitCommitShape),
+  }),
+  harden({
+    status: 'conflicts',
+    current: GitCommitShape,
+    conflicts: M.arrayOf(GitConflictShape),
+  }),
+  harden({ status: 'aborted', head: GitRefShape }),
+  harden({ status: 'in-progress', current: GitCommitShape }),
+);
+
 const FollowRootOptionsShape = M.splitRecord(
   {},
   { cancelled: M.promise() },
@@ -433,7 +448,8 @@ export const GIT_METHOD_GUARDS = harden({
   mergeText: M.callWhen(ReferenceArgumentShape)
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
-  rebase: M.callWhen(GitRebaseInputShape).returns(M.string()),
+  rebase: M.callWhen(GitRebaseInputShape).returns(GitRebaseResultShape),
+  rebaseText: M.callWhen(GitRebaseInputShape).returns(M.string()),
   readOnly: M.call().returns(M.remotable('Git')),
   renameBranch: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   restore: M.callWhen(M.arrayOf(M.or(M.remotable(), M.string())))
@@ -531,6 +547,7 @@ export const GIT_WRITER_METHODS = harden([
 export const GIT_REWRITER_ONLY_METHODS = harden([
   'cherryPick',
   'rebase',
+  'rebaseText',
   'reword',
 ]);
 export const GIT_REWRITER_METHODS = harden([

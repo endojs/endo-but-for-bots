@@ -245,11 +245,21 @@ Apply the changes of an existing commit onto the current branch.
 `noCommit: true` leaves the result staged instead of committing it.
 Only the rewriter facet carries this method.
 
-## rebase(input) -> Promise<string>
+## rebase(input) -> Promise<GitRebaseResult>
 
 Drive a rebase one step at a time.
 `{ mode: "start", upstream, autosquash? }` begins one; `{ mode:
 "continue" | "abort" | "skip" }` advances or ends the one in progress.
+Returns `completed` with the replayed commits, `conflicts` with the
+stopped commit and its conflict entries, `aborted`, or `in-progress`
+when Git stopped without a conflict.
+Only the rewriter facet carries this method.
+
+## rebaseText(input) -> Promise<string>
+
+Drive a rebase step and return Git's porcelain output.
+The input is the same as `rebase`; a step that stops rejects after
+leaving the rebase in progress.
 Only the rewriter facet carries this method.
 
 # GitTree - A read-only view of one Git tree object.

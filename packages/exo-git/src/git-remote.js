@@ -846,9 +846,19 @@ export const makeGitRemote = ({
           case 'merge':
             mergeResult = await E(git).merge(branch);
             break;
-          case 'rebase':
-            await E(git).rebase({ mode: 'start', upstream: branch });
+          case 'rebase': {
+            const rebased = await E(git).rebase({
+              mode: 'start',
+              upstream: branch,
+            });
+            if (rebased.status !== 'completed') {
+              // The structured result reports a stop instead of rejecting;
+              // a pull that leaves a rebase in progress has not integrated.
+              appliedLocally = true;
+              Fail`GitRemote.pull rebase stopped with status ${q(rebased.status)}`;
+            }
             break;
+          }
           default:
             throw new Error(
               'GitRemote.pull strategy must be merge, rebase, or ff-only',
