@@ -60,7 +60,10 @@ const makeRemoteHarness = policy => {
       }),
     merge: async ref => {
       mergedRefs.push(ref);
-      return 'merged';
+      return {
+        status: 'up-to-date',
+        head: { name: 'main', kind: 'branch', oid: '0'.repeat(40) },
+      };
     },
   });
   const mount = makeExo('FakeGitRemotePolicyMount', undefined, {});

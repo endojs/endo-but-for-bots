@@ -69,6 +69,24 @@ type GitLogOptions = {
     since?: string;
     until?: string;
 };
+type GitMergeOptions = {
+    fastForwardOnly?: boolean;
+    noFastForward?: boolean;
+};
+type GitMergeResult = {
+    status: 'up-to-date';
+    head: GitRef;
+} | {
+    status: 'fast-forward';
+    head: GitRef;
+} | {
+    status: 'merged';
+    head: GitRef;
+    merged: GitCommit;
+} | {
+    status: 'conflicts';
+    conflicts: GitConflict[];
+};
 type GitReadOnlyEndoGit = {
     help: (method?: string) => string;
     worktree: () => Promise<GitReadOnlyGitWorktree>;
@@ -347,6 +365,19 @@ type GitDiffHunk = {
         text: string;
     }[];
 };
+type GitConflict = {
+    entry: GitPathEntry;
+    base?: {
+        oid: string;
+    };
+    ours?: {
+        oid: string;
+    };
+    theirs?: {
+        oid: string;
+    };
+    markerStyle: 'merge' | 'diff3' | 'zdiff3';
+};
 type GitRootTransition = {
     type: 'transition';
     fromRevision: bigint;
@@ -429,10 +460,8 @@ type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
     followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;
     help: (method?: string) => string;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-    merge: (ref: GitRef | string, options?: {
-        fastForwardOnly?: boolean;
-        noFastForward?: boolean;
-    }) => Promise<string>;
+    merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<GitMergeResult>;
+    mergeText: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
     readOnly: () => GitReadOnlyEndoGit;
     renameBranch: (from: string, to: string) => Promise<void>;
     restore: (designators: GitPathDesignator[], options?: {

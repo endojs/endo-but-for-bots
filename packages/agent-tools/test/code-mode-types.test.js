@@ -333,9 +333,10 @@ test('git status declarations expose copy data without live capabilities', t => 
   const text = declarationText(gitDeclarations.git);
   t.true(text.includes('entries: GitStatusEntry[];'));
   t.true(text.includes('truncated: boolean;'));
-  t.false(text.includes('entry: GitPathEntry;'));
-  t.false(text.includes('node?:'));
-  t.false(text.includes('type GitStatusNode ='));
+  const status = /type GitStatusEntry = \{[\s\S]*?\n\};/u.exec(text)?.[0] || '';
+  t.false(status.includes('entry:'));
+  t.false(status.includes('node?:'));
+  t.false(status.includes('GitStatusNode'));
 });
 
 test('combined Git and workspace declarations have unique alias names', t => {

@@ -9,6 +9,7 @@ import type {
   GitCherryPickOptions,
   GitCommit,
   GitCommitOptions,
+  GitConflict,
   GitCreateBranchOptions,
   GitDeleteBranchOptions,
   GitDiff,
@@ -23,6 +24,7 @@ import type {
   GitMakeReadWriteOptions,
   GitMakeReadWriteOrHistoryRewriteOptions,
   GitMergeOptions,
+  GitMergeResult,
   GitOperations,
   GitReadWriteCommitOptions,
   GitRebaseInput,
@@ -107,6 +109,19 @@ expectTypeOf<GitShow>().toEqualTypeOf<{
   commit: GitCommit;
   parents: string[];
   diff: GitDiff;
+}>();
+expectTypeOf<ReadWriteEndoGit['merge']>().toEqualTypeOf<
+  (ref: GitRef | string, options?: GitMergeOptions) => Promise<GitMergeResult>
+>();
+expectTypeOf<ReadWriteEndoGit['mergeText']>().toEqualTypeOf<
+  (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>
+>();
+expectTypeOf<GitConflict>().toEqualTypeOf<{
+  entry: PathEntry;
+  base?: { oid: string };
+  ours?: { oid: string };
+  theirs?: { oid: string };
+  markerStyle: 'merge' | 'diff3' | 'zdiff3';
 }>();
 expectTypeOf<GitDiff['files'][number]['status']>().toEqualTypeOf<
   'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged'

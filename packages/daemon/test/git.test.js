@@ -1469,9 +1469,18 @@ test('Git.checkoutConflict selects and stages ours in a merge conflict', async t
   const backend = makeNativeGitBackend({ repoRoot });
   const git = makeGit({ mount, backend, lineageOf });
 
-  await t.throwsAsync(E(git).merge('side'), {
-    message: /CONFLICT|Automatic merge failed/,
-  });
+  const mergeResult = await E(git).merge('side');
+  t.is(mergeResult.status, 'conflicts');
+  if (mergeResult.status !== 'conflicts') {
+    throw t.fail('expected a structured merge conflict');
+  }
+  t.is(mergeResult.conflicts.length, 1);
+  const [conflict] = mergeResult.conflicts;
+  t.deepEqual(await E(conflict.entry).segments(), ['conflict.txt']);
+  t.truthy(conflict.base?.oid);
+  t.truthy(conflict.ours?.oid);
+  t.truthy(conflict.theirs?.oid);
+  t.is(conflict.markerStyle, 'merge');
   await E(git).checkoutConflict(['conflict.txt'], 'ours');
 
   t.is(
@@ -2757,7 +2766,7 @@ test('NativeGitBackend.createBranch with startPoint and switchAfterCreate', asyn
   t.is(head.oid, startPoint);
 });
 
-test('NativeGitBackend.merge fast-forwards a local branch', async t => {
+test('NativeGitBackend.merge reports fast-forward, up-to-date, and merged', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await execFileAsync('git', ['switch', '-c', 'feature'], { cwd: repoRoot });
   await fs.promises.writeFile(path.join(repoRoot, 'feature.txt'), 'feature\n');
@@ -2779,11 +2788,44 @@ test('NativeGitBackend.merge fast-forwards a local branch', async t => {
 
   const backend = makeNativeGitBackend({ repoRoot });
   const result = await backend.merge('feature', {});
-  t.regex(result, /Fast-forward|Updating/);
+  t.is(result.status, 'fast-forward');
+  if (result.status !== 'fast-forward') {
+    throw t.fail('expected a structured fast-forward result');
+  }
+  t.is(result.head.name, 'main');
+  t.truthy(result.head.oid);
   t.is(
     await fs.promises.readFile(path.join(repoRoot, 'feature.txt'), 'utf8'),
     'feature\n',
   );
+  const unchanged = await backend.merge('feature', {});
+  t.is(unchanged.status, 'up-to-date');
+  t.regex(await backend.mergeText('feature', {}), /Already up[ -]to[ -]date/i);
+
+  await execFileAsync('git', ['switch', '-c', 'feature-2'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'feature-2.txt'), 'second\n');
+  await execFileAsync('git', ['add', 'feature-2.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'second feature',
+    ],
+    { cwd: repoRoot },
+  );
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+  const merged = await backend.merge('feature-2', { noFastForward: true });
+  t.is(merged.status, 'merged');
+  if (merged.status !== 'merged') {
+    throw t.fail('expected a structured merge-commit result');
+  }
+  t.is(merged.head.oid, merged.merged.oid);
+  t.is(merged.merged.summary, "Merge branch 'feature-2'");
 });
 
 test('NativeGitBackend.rebase rebases a local branch onto upstream', async t => {
@@ -3344,9 +3386,8 @@ test('Git.checkoutConflict accepts a normalized string spelling', async t => {
   const backend = makeNativeGitBackend({ repoRoot });
   const git = makeGit({ mount, backend, lineageOf });
 
-  await t.throwsAsync(E(git).merge('side'), {
-    message: /CONFLICT|Automatic merge failed/,
-  });
+  const mergeResult = await E(git).merge('side');
+  t.is(mergeResult.status, 'conflicts');
   await E(git).checkoutConflict(['./nested//conflict.txt'], 'theirs');
 
   t.is(await fs.promises.readFile(conflictPath, 'utf8'), 'side\n');
@@ -3668,9 +3709,8 @@ test('Git.status reports merge conflicts as copy data', async t => {
   const backend = makeNativeGitBackend({ repoRoot });
   const git = makeGit({ mount, backend, lineageOf });
 
-  await t.throwsAsync(E(git).merge('feature'), {
-    message: /CONFLICT|Automatic merge failed/,
-  });
+  const mergeResult = await E(git).merge('feature');
+  t.is(mergeResult.status, 'conflicts');
   const status = await E(git).status();
   const row = status.entries.find(entry => entry.path === 'conflict.txt');
   if (row === undefined) {

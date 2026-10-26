@@ -54,6 +54,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitBackend,
  *   GitBackendDiffOptions,
  *   GitBackendLogOptions,
+ *   GitBackendMergeResult,
  *   GitBackendStashPushOptions,
  * } from '@endo/exo-git/src/git.js'
  * @import {
@@ -2425,6 +2426,93 @@ export const makeNativeGitBackend = ({
   };
 
   /**
+   * Read HEAD as one fully resolved `GitRef`.  Unlike `currentBranch`, this
+   * record includes the object id so a merge result pins the exact state the
+   * operation produced.
+   *
+   * @returns {Promise<GitRef & { oid: string }>}
+   */
+  const readHeadRef = async () => {
+    const oid = (
+      await runGitRaw([
+        'rev-parse',
+        '--verify',
+        '--end-of-options',
+        'HEAD^{commit}',
+      ])
+    ).trim();
+    try {
+      const name = (
+        await runGitRaw(['symbolic-ref', '--quiet', '--short', 'HEAD'])
+      ).trim();
+      return harden({ name, kind: /** @type {'branch'} */ ('branch'), oid });
+    } catch {
+      return harden({
+        name: 'HEAD',
+        kind: /** @type {'detached'} */ ('detached'),
+        oid,
+      });
+    }
+  };
+
+  /**
+   * Report the unmerged index stages left by a failed merge.  A delete/modify
+   * conflict legitimately omits stage 2 or 3, so the corresponding side is
+   * absent instead of being assigned a fabricated object id.
+   *
+   * @returns {Promise<import('@endo/exo-git/src/git.js').BackendGitConflict[]>}
+   */
+  const readMergeConflicts = async () => {
+    const raw = await runGitRaw(['ls-files', '--unmerged', '-z']);
+    /** @type {Map<string, { path: string, base?: { oid: string }, ours?: { oid: string }, theirs?: { oid: string } }>} */
+    const byPath = new Map();
+    for (const record of raw.split('\0').filter(Boolean)) {
+      const match = /^([0-7]{6}) ([0-9a-f]+) ([123])\t([\s\S]*)$/u.exec(record);
+      if (match === null) {
+        throw new Error(
+          `Could not parse git ls-files --unmerged record: ${q(record)}`,
+        );
+      }
+      const [, , oid, stage, conflictPath] = match;
+      const conflict = byPath.get(conflictPath) || { path: conflictPath };
+      const side = harden({ oid });
+      if (stage === '1') conflict.base = side;
+      if (stage === '2') conflict.ours = side;
+      if (stage === '3') conflict.theirs = side;
+      byPath.set(conflictPath, conflict);
+    }
+    let markerStyle = /** @type {'merge' | 'diff3' | 'zdiff3'} */ ('merge');
+    try {
+      const configured = (
+        await runGitRaw(['config', '--get', 'merge.conflictStyle'])
+      ).trim();
+      if (configured === 'diff3' || configured === 'zdiff3') {
+        markerStyle = configured;
+      }
+    } catch {
+      // An unset key means Git's default `merge` marker style.
+    }
+    return harden(
+      [...byPath.values()].map(conflict =>
+        harden({ ...conflict, markerStyle }),
+      ),
+    );
+  };
+
+  /**
+   * @param {string} target
+   * @param {GitMergeOptions} opts
+   * @returns {string[]}
+   */
+  const mergeArguments = (target, opts) => {
+    const args = ['merge'];
+    if (opts.fastForwardOnly) args.push('--ff-only');
+    if (opts.noFastForward) args.push('--no-ff');
+    args.push('--end-of-options', target);
+    return args;
+  };
+
+  /**
    * `interval` is the absolute byte interval over the git object's bytes this
    * blob exposes: `{ start, end }` with `end === undefined` meaning "to the
    * object's end" — an unattenuated blob over the whole object. A `range` /
@@ -3412,20 +3500,75 @@ export const makeNativeGitBackend = ({
     /**
      * @param {string} ref
      * @param {GitMergeOptions} [opts]
-     * @returns {Promise<string>}
+     * @returns {Promise<GitBackendMergeResult>}
      */
     merge: async (ref, opts = {}) => {
       const target = requireRevision(ref, 'merge.ref');
       await assertNoExecutableRepoConfig();
-      const args = ['merge'];
-      if (opts.fastForwardOnly) {
-        args.push('--ff-only');
+      const targetOid = (
+        await runGitRaw([
+          'rev-parse',
+          '--verify',
+          '--end-of-options',
+          `${target}^{commit}`,
+        ])
+      ).trim();
+      const before = await readHeadRef();
+      try {
+        await runGitRaw(['merge-base', '--is-ancestor', targetOid, before.oid]);
+        return harden({ status: 'up-to-date', head: before });
+      } catch {
+        // A non-zero `--is-ancestor` result means the merge must move HEAD.
       }
-      if (opts.noFastForward) {
-        args.push('--no-ff');
+      let fastForward = false;
+      if (!opts.noFastForward) {
+        try {
+          await runGitRaw([
+            'merge-base',
+            '--is-ancestor',
+            before.oid,
+            targetOid,
+          ]);
+          fastForward = true;
+        } catch {
+          // Divergent histories require a merge commit (or conflict).
+        }
       }
-      args.push('--end-of-options', target);
-      return runGit(args);
+      try {
+        await runGit(mergeArguments(target, opts));
+      } catch (error) {
+        try {
+          await runGitRaw(['rev-parse', '--verify', 'MERGE_HEAD']);
+        } catch {
+          throw error;
+        }
+        const conflicts = await readMergeConflicts();
+        if (conflicts.length === 0) throw error;
+        return harden({ status: 'conflicts', conflicts });
+      }
+      const head = await readHeadRef();
+      if (fastForward) {
+        return harden({ status: 'fast-forward', head });
+      }
+      return harden({
+        status: 'merged',
+        head,
+        merged: await readCommitRecord('HEAD'),
+      });
+    },
+
+    /**
+     * Render the porcelain output of a merge while preserving the original
+     * throw-on-conflict behavior.
+     *
+     * @param {string} ref
+     * @param {GitMergeOptions} [opts]
+     * @returns {Promise<string>}
+     */
+    mergeText: async (ref, opts = {}) => {
+      const target = requireRevision(ref, 'merge.ref');
+      await assertNoExecutableRepoConfig();
+      return runGit(mergeArguments(target, opts));
     },
 
     /**
