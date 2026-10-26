@@ -63,7 +63,10 @@ export const createProvider = env => {
       );
     }
     console.log(`[LAL] Using Anthropic provider with model: ${model}`);
-    return makeAnthropicProvider({ apiKey, model });
+    const maxTokens = env.LAL_MAX_TOKENS
+      ? parseInt(env.LAL_MAX_TOKENS, 10)
+      : 4096;
+    return makeAnthropicProvider({ apiKey, model, maxTokens });
   }
 
   if (providerKind === 'gemini') {
@@ -123,6 +126,8 @@ export const createProvider = env => {
     apiKey,
   });
 };
+
+harden(createProvider);
 
 export { makeAnthropicProvider } from './anthropic.js';
 export { makeGeminiProvider } from './gemini.js';

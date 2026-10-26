@@ -95,10 +95,14 @@ const toAnthropicMessages = messages => {
 
 /**
  * Create an Anthropic-backed chat provider.
- * @param {{ apiKey: string, model: string }} options
+ * @param {{ apiKey: string, model: string, maxTokens?: number }} options
+ * @param {{ createMessage?: (request: Anthropic.MessageCreateParamsNonStreaming) => Promise<any> }} [dependencies]
  * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage, usage?: Record<string, unknown> }> }}
  */
-export const makeAnthropicProvider = ({ apiKey, model }) => {
+export const makeAnthropicProvider = (
+  { apiKey, model, maxTokens = 4096 },
+  { createMessage } = {},
+) => {
   /** @type {Promise<AnthropicClient> | undefined} */
   let clientP;
 
@@ -114,7 +118,7 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
 
   return {
     async chat(messages, tools) {
-      const client = await getClient();
+      await null;
       const { system, messages: anthropicMessages } =
         toAnthropicMessages(messages);
       console.log('[LAL] Calling Anthropic API...');
@@ -125,16 +129,25 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
       /** @type {Anthropic.Message} */
       let response;
       try {
-        response = await client.messages.create({
+        /** @type {Anthropic.MessageCreateParamsNonStreaming} */
+        const request = {
           model,
-          max_tokens: 4096,
+          max_tokens: maxTokens,
+          // This compact adapter stores text/tool history, not signed thinking
+          // blocks. Haiku 5.5 defaults to thinking, so explicitly disable it.
+          ...(/^claude-haiku-5-5(?:-|$)/.test(model)
+            ? { thinking: { type: /** @type {const} */ ('disabled') } }
+            : {}),
           system,
           tools: toAnthropicTools(tools),
           messages: anthropicMessages,
-        });
+        };
+        response = createMessage
+          ? await createMessage(request)
+          : await (await getClient()).messages.create(request);
         console.log('[LAL] Anthropic response received');
       } catch (error) {
-        console.error('[LAL] Anthropic API error:', error);
+        console.error('[LAL] Anthropic API request failed.');
         const err =
           /** @type {{ status?: number, statusCode?: number, error?: { type?: string, message?: string }, body?: { type?: string, message?: string }, message?: string }} */ (
             error
@@ -211,3 +224,5 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
     },
   };
 };
+
+harden(makeAnthropicProvider);

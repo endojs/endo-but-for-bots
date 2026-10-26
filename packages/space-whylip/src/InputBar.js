@@ -1,17 +1,15 @@
 // @ts-check
 import { h } from 'preact';
-import { useState, useCallback } from 'preact/hooks';
+import { useCallback, useState } from 'preact/hooks';
 
 /**
- * Text input bar for Whylip.
- *
+ * Composer in the optional story conversation drawer.
  * @param {object} props
  * @param {(text: string) => void} props.onSend
  * @param {boolean} props.disabled
  */
 export function InputBar({ onSend, disabled }) {
   const [text, setText] = useState('');
-
   const handleSubmit = useCallback(
     /** @param {Event} e */
     e => {
@@ -30,11 +28,11 @@ export function InputBar({ onSend, disabled }) {
     h('input', {
       type: 'text',
       class: 'whylip-input-field',
-      placeholder: 'Ask the Primer anything...',
+      placeholder: 'What if…',
+      'aria-label': 'Message to the storybook',
       value: text,
       /** @param {Event} e */
       onInput: e => setText(/** @type {HTMLInputElement} */ (e.target).value),
-      disabled,
     }),
     h(
       'button',
@@ -42,8 +40,9 @@ export function InputBar({ onSend, disabled }) {
         type: 'submit',
         class: 'whylip-send-button',
         disabled: disabled || !text.trim(),
+        'aria-label': 'Send message to the book',
       },
-      'Send',
+      '↑',
     ),
   );
 }

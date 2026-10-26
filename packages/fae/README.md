@@ -40,6 +40,52 @@ config and agent guest from the driver's namespace, and restarts
 
 ## Configuration
 
+`subscription-provider-service.js` bridges an existing hosted subscription broker to
+the same `chat(messages, tools)` interface.
+Run this caplet on the hosted daemon, endow its guest with only `llm-subscription`, and
+set `PROVIDER_KIND` (`codex` or `claude`), `PROVIDER_MODEL`, and `PROVIDER_SESSION_ID`.
+Only the resulting service is delegated to story drivers.
+Codex requires that hosted release's Lal Responses adapter.
+Credentials and renewal remain with the existing broker.
+`PROVIDER_MAX_TOKENS` limits Claude output; Codex follows its hosted Responses adapter's
+provider limits.
+
+For new integrations, prefer `provider-service.js` over the legacy inline provider form.
+The service exposes only `chat(messages, tools)`, `getInfo()`, and `help()`.
+Its dedicated guest holds a single managed SecretBlob under `llm-auth-secret`.
+Keys are read on each call; rotation and revocation apply to subsequent requests.
+Only public endpoint/model metadata goes into the caplet environment.
+
+The trusted administration helper `provisionProviderService` in `provider-setup.js`
+creates that guest and service.
+Run it on the daemon that owns the secret, using module paths from its deployed release,
+or supply a delegated reader locator to a trusted provider daemon:
+
+```js
+const service = await provisionProviderService(host, {
+  name: 'storybook-openai',
+  kind: 'openai',
+  host: 'https://api.openai.com/v1',
+  model: selectedOpenAIModel,
+}, await E(host).locate('secrets', 'openai-auth'));
+```
+
+For Anthropic use `kind: 'anthropic'`, `host: 'https://api.anthropic.com'`, an explicit
+model ID, and the locator of your Anthropic secret.
+For an unauthenticated local endpoint use `kind: 'local'`, an explicit URL/model, and omit
+the secret argument.
+Optional `maxTokens` and `maxMessages` are positive decimal strings.
+The helper rejects occupied service/guest names, including partial earlier attempts;
+inspect those names before retrying or use a new service name.
+It never reads secret bytes or delegates the secret manager or host to the provider guest.
+
+Bind the service locator to the factory guest's `llm-provider` name.
+New drivers inherit it; existing driver guests can be rebound separately.
+Updated drivers resolve this binding before each model request, so switching services does
+not discard their conversation.
+Legacy record configurations still work, but do not use them to store new API keys.
+The remaining configuration and setup instructions describe that older path.
+
 Fae uses the same LLM provider configuration as `@endo/lal`.
 
 | Variable | Description | Default |

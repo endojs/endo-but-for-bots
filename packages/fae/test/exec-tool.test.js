@@ -41,6 +41,30 @@ test('exec runs a plain multiline snippet', async t => {
   t.is(result, '6');
 });
 
+test('exec explains that diagnostic logs do not return observations to the model', async t => {
+  const tool = makeExecTool(powers);
+  t.regex(tool.schema().function.description, /top-level return/);
+  const result = await tool.execute({
+    code: 'const observation = "local only";',
+  });
+  t.regex(result, /no return value/);
+  t.regex(result, /console output goes to daemon logs/);
+  t.regex(result, /return await E\(powers\).list\(\)/);
+  t.is(
+    await tool.execute({ code: 'return "model visible";' }),
+    '"model visible"',
+  );
+});
+
+test('exec advertises finishTurn only when its caller supports it', t => {
+  const ordinary = makeExecTool(powers).schema().function.parameters;
+  const fae = makeExecTool(powers, { supportsFinishTurn: true }).schema()
+    .function.parameters;
+  t.false(Object.hasOwn(ordinary.properties, 'finishTurn'));
+  t.deepEqual(fae.properties.finishTurn.type, 'boolean');
+  t.deepEqual(fae.required, ['code']);
+});
+
 test('exec strips a markdown code fence before evaluating', async t => {
   const tool = makeExecTool(powers);
   const fenced = [

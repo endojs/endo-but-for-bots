@@ -81,17 +81,26 @@ export const adaptIrohStream = (bi, connection = {}) => {
   });
 
   // --- Write direction ---
+  // A chunked netstring submits its prefix, payload, and comma concurrently.
+  // The native binding does not promise ordering between concurrent writeAll
+  // calls. Serialize byte chunks here, not just complete CapTP messages.
+  // Keep a failed tail rejected so no later chunk follows a partial frame.
+  /** @type {Promise<unknown>} */
+  let writeTail = Promise.resolve();
   /** @type {Writer<Uint8Array>} */
   const writer = harden({
     async next(value) {
-      await null;
       // The binding's `writeAll` takes a plain `Array<number>`, not a
-      // TypedArray.
-      await send.writeAll(Array.from(value));
+      // TypedArray. Copy before queuing so callers cannot mutate pending data.
+      const bytes = Array.from(value);
+      const written = writeTail.then(() => send.writeAll(bytes));
+      writeTail = written;
+      written.catch(() => {});
+      await written;
       return harden({ value: undefined, done: false });
     },
     async return() {
-      await null;
+      await writeTail.catch(() => {});
       try {
         await send.finish();
       } catch {

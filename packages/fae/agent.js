@@ -84,6 +84,9 @@ const decodeSmallcaps = jsonString =>
 
 const FaeFactoryInterface = M.interface('FaeFactory', {
   createAgent: M.callWhen(M.string()).optional(M.record()).returns(M.string()),
+  createAgentCapability: M.callWhen(M.string())
+    .optional(M.record())
+    .returns(M.record()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -346,6 +349,60 @@ export const spawnWorkerLoop = async (
   // root or forgetting admission receipts would rerun old tools after restart.
   let conversation;
 
+  /** @param {any} message */
+  const whylipEnvelope = ({ type, strings, names, ids }) =>
+    type === 'package' &&
+    Array.isArray(strings) &&
+    strings.length === 1 &&
+    typeof strings[0] === 'string' &&
+    (!names || names.length === 0) &&
+    (!ids || ids.length === 0)
+      ? strings[0]
+      : '';
+
+  /** @param {string} text */
+  const parseWhylipWork = text => {
+    if (text.startsWith('WHYLIP_EVENT\n')) {
+      try {
+        const event = JSON.parse(text.split('\n', 2)[1]);
+        if (
+          event &&
+          typeof event.id === 'string' &&
+          /^\d+$/.test(event.id) &&
+          typeof event.name === 'string' &&
+          event.name
+        ) {
+          return { kind: 'event', id: event.id };
+        }
+      } catch {
+        // Malformed or ordinary mail does not control story lifecycle.
+      }
+      return undefined;
+    }
+    const match = /^WHYLIP_DRAFT_TASK (\d+)\n/.exec(text);
+    return match ? { kind: 'task', id: match[1] } : undefined;
+  };
+
+  /** @param {string} text */
+  const parseWhylipNotification = text => {
+    const match = /^WHYLIP_TASK_(COMPLETED|FAILED)\n/.exec(text);
+    if (!match) return undefined;
+    try {
+      const summary = JSON.parse(text.split('\n', 2)[1]);
+      if (
+        summary &&
+        typeof summary.id === 'string' &&
+        /^\d+$/.test(summary.id) &&
+        summary.status === match[1].toLowerCase()
+      ) {
+        return { id: summary.id, status: summary.status };
+      }
+    } catch {
+      // Notification handling is reserved for the canonical summary envelope.
+    }
+    return undefined;
+  };
+
   // Built-in tools: petname ops + mail (no filesystem tools for guest)
   /** @type {Map<string, object>} */
   const localTools = new Map();
@@ -378,7 +435,7 @@ export const spawnWorkerLoop = async (
   localTools.set('dismiss', makeDismissTool(powers));
   localTools.set('editMessage', makeEditMessageTool(powers));
   localTools.set('messageHistory', makeMessageHistoryTool(powers));
-  localTools.set('exec', makeExecTool(powers));
+  localTools.set('exec', makeExecTool(powers, { supportsFinishTurn: true }));
   localTools.set('readChannel', makeReadChannelTool(powers));
 
   // Delegation is capability-gated: without a spawner there are no subagent
@@ -408,11 +465,13 @@ export const spawnWorkerLoop = async (
    *
    * @param {object[]} toolCalls
    * @param {Map<string, object>} toolMap
-   * @returns {Promise<object[]>}
+   * @returns {Promise<{results: object[], finishTurn: boolean}>}
    */
   const processToolCalls = async (toolCalls, toolMap) => {
     /** @type {object[]} */
     const results = [];
+    let finishTurn = false;
+    let hadFailure = false;
 
     for (const toolCall of toolCalls) {
       const { name, arguments: argsRaw } = /** @type {any} */ (toolCall)
@@ -448,6 +507,7 @@ export const spawnWorkerLoop = async (
       } else {
         try {
           result = await executeTool(name, args, toolMap);
+          if (name === 'exec' && args.finishTurn === true) finishTurn = true;
           console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
         } catch (error) {
           const errorMessage =
@@ -458,6 +518,7 @@ export const spawnWorkerLoop = async (
         }
       }
 
+      hadFailure ||= failed;
       results.push({
         role: 'tool',
         content: passableAsJustin(result, false),
@@ -466,7 +527,7 @@ export const spawnWorkerLoop = async (
       });
     }
 
-    return results;
+    return { results, finishTurn: finishTurn && !hadFailure };
   };
 
   /**
@@ -480,9 +541,16 @@ export const spawnWorkerLoop = async (
    * @param {object[]} initialSchemas
    * @param {Map<string, object>} initialToolMap
    * @param {string} leafNodeId - the node to continue from
+   * @param {number} [turnRoundLimit]
    * @returns {Promise<{ answered: boolean, exhausted: boolean, leafId: string, message?: any }>} the turn outcome
    */
-  const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
+  const runAgenticLoop = async (
+    initialSchemas,
+    initialToolMap,
+    leafNodeId,
+    turnRoundLimit = maxToolRounds,
+  ) => {
+    let finishedByTool = false;
     let toolWrite;
     let responseUsage;
     let forced = false;
@@ -493,7 +561,8 @@ export const spawnWorkerLoop = async (
     const outcome = await runAgenticTurn({
       leafId: leafNodeId,
       signal: loopAbort.signal,
-      maxRounds: maxToolRounds,
+      maxRounds: turnRoundLimit,
+      shouldFinishAfterTools: () => finishedByTool,
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
       getContext: async (currentLeafId, tools) => {
@@ -539,7 +608,11 @@ export const spawnWorkerLoop = async (
         const response = await chat(providerContext, tools.schemas);
         loopAbort.signal.throwIfAborted();
         responseUsage = response.usage;
-        const responseMessage = response.message;
+        // Provider-owned responses may be hardened remotable copy records.
+        // Textual tool-call normalization only mutates our local copy.
+        const responseMessage = response.message
+          ? { ...response.message }
+          : undefined;
         if (responseMessage) {
           const rm = /** @type {any} */ (responseMessage);
           if (
@@ -564,7 +637,11 @@ export const spawnWorkerLoop = async (
       runTools: async (calls, tools) => {
         toolWrite = retainWrite();
         try {
-          const results = await processToolCalls(calls, tools.toolMap);
+          const { results, finishTurn } = await processToolCalls(
+            calls,
+            tools.toolMap,
+          );
+          finishedByTool = finishTurn;
           console.log(
             `[fae] tool results: ${JSON.stringify(results, null, 2)}`,
           );
@@ -643,6 +720,46 @@ export const spawnWorkerLoop = async (
   };
 
   /**
+   * Settle only the two explicit Whylip work envelopes through capabilities
+   * already introduced to this worker. Generic mail never changes book state.
+   * Failure reporting must not replace the original provider diagnostic.
+   * @param {string} text
+   * @param {string} reason
+   * @param {boolean} [onlyIfUnfinished]
+   */
+  const reportWhylipFailure = async (
+    text,
+    reason,
+    onlyIfUnfinished = false,
+  ) => {
+    await null;
+    try {
+      const work = parseWhylipWork(text);
+      if (work?.kind === 'event') {
+        const book = await E(powers).lookup('book');
+        if (onlyIfUnfinished) {
+          const current = await E(book).getContext();
+          if (!current.activeEventIds.includes(work.id)) return;
+        }
+        await E(book).failEvent(work.id, reason.slice(0, 1000));
+        return;
+      }
+      if (work?.kind === 'task') {
+        const task = await E(powers).lookup('task');
+        const assignment = await E(task).getContext();
+        if (
+          assignment.id === work.id &&
+          ['queued', 'running'].includes(assignment.status)
+        ) {
+          await E(task).fail(reason.slice(0, 1000));
+        }
+      }
+    } catch (reportError) {
+      console.error('[fae] Could not record Whylip failure:', reportError);
+    }
+  };
+
+  /**
    * Main agent loop: follow messages and process them.
    *
    * @returns {Promise<void>}
@@ -714,7 +831,14 @@ export const spawnWorkerLoop = async (
     if (loopAbort.signal.aborted) return;
     await initializeIntroducedTools();
     if (loopAbort.signal.aborted) return;
-    await E(powers).send('@host', ['Fae agent ready.'], [], []);
+    try {
+      await E(powers).send('@host', ['Fae agent ready.'], [], []);
+    } catch {
+      // A courtesy notice must not keep a revived driver from its inbox.
+      console.error(
+        '[fae] Ready notification unavailable; continuing inbox startup.',
+      );
+    }
 
     /** @type {string | undefined} */
     const selfLocator = await E(powers).locate('@self');
@@ -753,6 +877,14 @@ export const spawnWorkerLoop = async (
 
       console.error(`[fae] New message #${number} from ${fromId}`);
 
+      const workEnvelope = whylipEnvelope(message);
+      const whylipWork = parseWhylipWork(workEnvelope);
+      const whylipNotification = parseWhylipNotification(workEnvelope);
+      const turnRoundLimit =
+        whylipWork || whylipNotification
+          ? Math.min(20, maxToolRounds)
+          : maxToolRounds;
+
       let textContent;
       if (type === 'package' && Array.isArray(strings)) {
         const parts = [];
@@ -767,6 +899,12 @@ export const spawnWorkerLoop = async (
       } else {
         textContent = `(${type || 'unknown'} message)`;
       }
+
+      const responseInstruction = whylipNotification
+        ? `Review task "${whylipNotification.id}" (${whylipNotification.status}) through the book capability. Apply a completed draft if appropriate. In your final exec, await E(powers).dismiss(${number}n), and set finishTurn:true on that exec call. This notification has no reader event to finish. Do not use the reply tool or finish with prose.`
+        : whylipWork
+          ? `Update the ${whylipWork.kind === 'event' ? 'book' : 'draft'} through its capability. In your final exec, ${whylipWork.kind === 'event' ? `await E(book).finishEvent("${whylipWork.id}")` : 'await E(task).complete(summary) or await E(task).fail(reason)'}, then await E(powers).dismiss(${number}n). Set finishTurn:true on that exec call. Do not use the reply tool or finish with prose.`
+          : `Use reply(messageNumber: ${number}, ...) to respond to this message.`;
 
       // Retain admission before provider selection or any effectful tool call.
       // A queued but unadmitted message can run after restart; an admitted one
@@ -783,7 +921,7 @@ export const spawnWorkerLoop = async (
           [
             {
               role: 'user',
-              content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
+              content: `[Inbox message #${number}] ${textContent}\n\n${responseInstruction}`,
             },
           ],
           { messageId, inboundNumber: number },
@@ -807,12 +945,22 @@ export const spawnWorkerLoop = async (
           '[fae] provider unavailable:',
           error instanceof Error ? error.message : String(error),
         );
-        await E(powers).reply(
-          number,
-          ['This agent cannot reach its language model right now.'],
-          [],
-          [],
+        await reportWhylipFailure(
+          workEnvelope,
+          'This agent cannot reach its language model right now.',
         );
+        await E(powers)
+          .reply(
+            number,
+            ['This agent cannot reach its language model right now.'],
+            [],
+            [],
+          )
+          .catch(() => {
+            console.error(
+              '[fae] Provider-unavailable reply unavailable; continuing inbox.',
+            );
+          });
         return;
       }
 
@@ -824,22 +972,35 @@ export const spawnWorkerLoop = async (
         );
         loopAbort.signal.throwIfAborted();
         replyTracker.sent = false;
-        const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
+        const outcome = await runAgenticLoop(
+          toolSchemas,
+          toolMap,
+          userNode.id,
+          turnRoundLimit,
+        );
         loopAbort.signal.throwIfAborted();
         if (!outcome.answered) {
           throw senderVisible(
             Error(
               outcome.exhausted
-                ? `FAE turn exceeded ${maxToolRounds} tool rounds`
+                ? `FAE turn exceeded ${turnRoundLimit} tool rounds`
                 : 'FAE provider returned no assistant message',
             ),
           );
         }
 
+        // A prose-only response must not strand a reader or helper draft.
+        await reportWhylipFailure(
+          workEnvelope,
+          'The storyteller finished without completing this part of the book. Try again.',
+          true,
+        );
+        loopAbort.signal.throwIfAborted();
+
         // If the LLM produced a final response without calling the reply
         // tool, send the content as a fallback reply so the sender
         // (e.g. a Whylip UI) actually receives it.
-        if (!replyTracker.sent) {
+        if (!whylipWork && !whylipNotification && !replyTracker.sent) {
           const finalNode = await tree.getNode(outcome.leafId);
           loopAbort.signal.throwIfAborted();
           if (finalNode) {
@@ -848,7 +1009,13 @@ export const spawnWorkerLoop = async (
               console.error(
                 '[fae] No reply tool called, sending fallback reply',
               );
-              await E(powers).reply(number, [lastMsg.content], [], []);
+              await E(powers)
+                .reply(number, [lastMsg.content], [], [])
+                .catch(() => {
+                  console.error(
+                    '[fae] Fallback reply unavailable; continuing inbox.',
+                  );
+                });
             }
           }
         }
@@ -857,16 +1024,16 @@ export const spawnWorkerLoop = async (
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         console.error('[fae] turn failed:', errorMessage);
-        await E(powers).reply(
-          number,
-          [
-            error instanceof Error && senderVisibleErrors.has(error)
-              ? errorMessage
-              : 'This agent could not complete that request. The reason is in its log.',
-          ],
-          [],
-          [],
-        );
+        const publicError =
+          error instanceof Error && senderVisibleErrors.has(error)
+            ? errorMessage
+            : 'This agent could not complete that request. The reason is in its log.';
+        await reportWhylipFailure(workEnvelope, publicError);
+        await E(powers)
+          .reply(number, [publicError], [], [])
+          .catch(() => {
+            console.error('[fae] Error reply unavailable; continuing inbox.');
+          });
       }
     };
 
@@ -891,6 +1058,10 @@ export const spawnWorkerLoop = async (
         await conversation.finishTurn();
         completion.resolve(undefined);
       } catch (error) {
+        await reportWhylipFailure(
+          whylipEnvelope(message),
+          'The storyteller could not save this turn. Try again once storage is available.',
+        );
         completion.reject(error);
         throw error;
       }
@@ -1127,46 +1298,54 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
 
   const hostAgent = await E(powers).lookup('host-agent');
 
-  return makeExo('FaeFactory', FaeFactoryInterface, {
-    /**
-     * Create a new agent instance with its own guest, driver caplet,
-     * and inbox/LLM loop.
-     *
-     * The driver is a standalone `make-unconfined` formula that holds
-     * capability references to the LLM provider config and the agent
-     * guest.  When `pin: true`, the driver is written to PINS so
-     * `revivePins()` restarts it automatically on daemon reboot.
-     *
-     * @param {string} name - Unique name for this agent
-     * @param {object} [options]
-     * @param {string} [options.systemPrompt] - Override system prompt
-     * @param {boolean} [options.pin] - Pin the driver to PINS for restart survival
-     * @param {number} [options.maxSubagentDepth] - Layers of delegation this
-     *   agent's tree may reach. 0 withholds the subagent tools entirely.
-     * @returns {Promise<string>} The agent's profile petname
-     */
-    async createAgent(name, options = {}) {
-      const { systemPrompt, pin, maxSubagentDepth } =
-        /** @type {{ systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number }} */ (
-          options
-        );
-      // Root and subagent names land in one flat host namespace and must parse
-      // the same way. In particular a root name may carry no dot, which is
-      // what keeps `SUBAGENT_INFIX` a delimiter nobody can forge — two root
-      // agents `p` and `p-sub` would otherwise both claim `p-sub-sub-x`, and
-      // either could enumerate and tear down the other's subagent.
-      assertAgentName(name);
-      const maxDepth =
-        maxSubagentDepth === undefined ? defaultMaxDepth : maxSubagentDepth;
-      if (!Number.isInteger(maxDepth) || maxDepth < 0) {
-        throw new Error('maxSubagentDepth must be a non-negative integer.');
-      }
+  // Coalesce concurrent requests for one durable helper identity. All new
+  // agents still use upstream collision checks, rollback, and delegation policy.
+  const provisioning = new Map();
+  /**
+   * @param {string} name
+   * @param {{systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number}} options
+   * @param {boolean} reuse
+   */
+  const provision = async (name, options, reuse) => {
+    await null;
+    const { systemPrompt, pin, maxSubagentDepth } =
+      /** @type {{ systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number }} */ (
+        options
+      );
+    // Root and subagent names land in one flat host namespace and must parse
+    // the same way. In particular a root name may carry no dot, which is
+    // what keeps `SUBAGENT_INFIX` a delimiter nobody can forge — two root
+    // agents `p` and `p-sub` would otherwise both claim `p-sub-sub-x`, and
+    // either could enumerate and tear down the other's subagent.
+    assertAgentName(name);
+    const maxDepth =
+      maxSubagentDepth === undefined ? defaultMaxDepth : maxSubagentDepth;
+    if (!Number.isInteger(maxDepth) || maxDepth < 0) {
+      throw new Error('maxSubagentDepth must be a non-negative integer.');
+    }
 
+    const pending = provisioning.get(name);
+    if (pending) {
+      if (reuse) return pending;
+      await pending;
+      throw new Error(`Agent "${name}" already exists.`);
+    }
+    const create = async () => {
+      await null;
+      const profileName = `profile-for-${name}`;
+      if (await E(hostAgent).has(`${name}-driver`)) {
+        if (!reuse) throw new Error(`Agent "${name}" already exists.`);
+        return harden({
+          profileName,
+          locator: await E(hostAgent).locate(profileName),
+          agent: await E(hostAgent).lookup(profileName),
+        });
+      }
       // The auth token travels as a capability, not as a value: when the
       // factory holds a SecretBlob, every agent it creates gets the same one,
       // so a rotation or revocation reaches all of them at once.
       const hasAuthSecret = await E(powers).has(AUTH_SECRET_PETNAME);
-      const { profileName } = await provisionFaeAgent({
+      await provisionFaeAgent({
         hostAgent,
         name,
         providerLocator: /** @type {string} */ (
@@ -1192,8 +1371,39 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
         pin,
       });
 
-      console.error(`[fae-factory] Created agent "${name}"`);
-      return profileName;
+      return harden({
+        profileName,
+        locator: await E(hostAgent).locate(profileName),
+        agent: await E(hostAgent).lookup(profileName),
+      });
+    };
+    const pendingCreation = create();
+    provisioning.set(name, pendingCreation);
+    try {
+      return await pendingCreation;
+    } finally {
+      provisioning.delete(name);
+    }
+  };
+
+  return makeExo('FaeFactory', FaeFactoryInterface, {
+    /**
+     * Create a new agent, preserving the existing duplicate-name error.
+     * @param {string} name
+     * @param {{systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number}} [options]
+     */
+    async createAgent(name, options = {}) {
+      const created = await provision(name, options, false);
+      return created.profileName;
+    },
+    /**
+     * Provision or reconnect to a named helper without replacing its options.
+     * The trusted caller can introduce a narrowly scoped task capability.
+     * @param {string} name
+     * @param {{systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number}} [options]
+     */
+    async createAgentCapability(name, options = {}) {
+      return provision(name, options, true);
     },
 
     /**
@@ -1202,10 +1412,13 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Fae factory: creates LLM agent instances bound to a configured LLM provider. Use createAgent(name, { systemPrompt, pin }) to create a new agent.';
+        return 'Fae factory: creates LLM agent instances bound to a configured LLM provider. Use createAgent(name, { systemPrompt, pin }) for a profile petname, or createAgentCapability(name, options) to provision or reconnect to a named agent and receive its guest capability.';
       }
       if (methodName === 'createAgent') {
         return 'createAgent(name, { systemPrompt?, pin? }) — Create a new agent with its own guest, driver caplet, and inbox loop. Pass pin: true to survive daemon restarts. Returns the profile petname.';
+      }
+      if (methodName === 'createAgentCapability') {
+        return 'createAgentCapability(name, { systemPrompt?, pin? }) — Provision or reconnect to a named agent. Returns { profileName, locator, agent }; agent is the guest capability for introducing scoped task capabilities. Repeated names preserve the existing agent and original options. Keep this factory in the trusted host; give workers only the capabilities their tasks need.';
       }
       return `No documentation for method "${methodName}".`;
     },

@@ -785,6 +785,26 @@ function hasSecureBoundaryAncestor(vnode) {
   return false;
 }
 
+/**
+ * An isolated setState render does not rerun its HostPassthrough ancestor.
+ * Recover that island from Preact's actual parent chain, stopping at the
+ * nearest boundary. A confined reentry between here and a trusted island
+ * keeps its descendants confined; guest-controlled marker flags grant no
+ * authority. Bound traversal and fail closed for a malformed parent cycle.
+ * @param {SecureVNode} vnode
+ */
+function hasNearestTrustedBoundary(vnode) {
+  let parent = vnode[VNODE_PARENT];
+  for (let depth = 0; parent && depth < 256; depth += 1) {
+    if (parent.type === SecureBoundary || secureReentryTypes.has(parent.type)) {
+      return false;
+    }
+    if (trustedExitTypes.has(parent.type)) return true;
+    parent = parent[VNODE_PARENT];
+  }
+  return false;
+}
+
 // How deep we are inside a HostPassthrough's render call(s). When > 0, the
 // sanitizer no-ops and `_secureCtx` does not propagate, so descendants
 // render as ordinary host content.
@@ -934,8 +954,8 @@ function install() {
     // attacker who sets that flag on their own function cannot
     // enter this branch.
     else if (
-      vnode.type &&
-      trustedExitTypes.has(vnode.type) &&
+      ((vnode.type && trustedExitTypes.has(vnode.type)) ||
+        (trustedExitDepth === 0 && hasNearestTrustedBoundary(vnode))) &&
       !vnode._trustedExitBracketed
     ) {
       vnode._trustedExitBracketed = true;

@@ -3,6 +3,8 @@
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { RemoteControl, RemoteControlState, EndoGateway } from './types.js' */
 
+/** @typedef {{ follow: (cancelled: Promise<never>, gateway: ERef<EndoGateway>) => void, add: (dispose?: () => void) => void, isEstablished: () => boolean }} ConnectionLifetime */
+
 /** @param {string} id */
 const short = id => id.slice(0, 8);
 
@@ -20,6 +22,62 @@ export const makeRemoteControlProvider = localNodeId => {
     let stateName = 'start';
     const tag = `${short(localNodeId)}→${short(remoteNodeId)}`;
 
+    /**
+     * Pending crossed hellos can transfer peer incarnations to the winning
+     * transport. Once a gateway is established, replacing it must revoke the
+     * old peer incarnations and their remote presences.
+     * @param {Promise<never>} initialCancelled
+     * @param {ERef<EndoGateway>} initialGateway
+     * @returns {ConnectionLifetime}
+     */
+    const makeConnectionLifetime = (initialCancelled, initialGateway) => {
+      /** @type {Promise<never> | undefined} */
+      let observed;
+      /** @type {ERef<EndoGateway> | undefined} */
+      let observedGateway;
+      let established = false;
+      let ended = false;
+      /** @type {Set<() => void>} */
+      const disposals = new Set();
+      /**
+       * @param {Promise<never>} cancelled
+       * @param {ERef<EndoGateway>} gateway
+       */
+      const follow = (cancelled, gateway) => {
+        if (observedGateway !== gateway) {
+          observedGateway = gateway;
+          established = false;
+          Promise.resolve(gateway).then(
+            () => {
+              if (observedGateway === gateway) established = true;
+            },
+            () => {},
+          );
+        }
+        if (observed === cancelled) return;
+        observed = cancelled;
+        ended = false;
+        cancelled.catch(() => {
+          if (observed !== cancelled) return;
+          ended = true;
+          const ending = [...disposals];
+          disposals.clear();
+          // Reset the state before disposal callbacks can reenter connect.
+          for (const dispose of ending) Promise.resolve().then(dispose);
+        });
+      };
+      follow(initialCancelled, initialGateway);
+      return harden({
+        follow,
+        isEstablished: () => established,
+        add: dispose => {
+          if (!dispose) return;
+          if (ended) Promise.resolve().then(dispose);
+          else disposals.add(dispose);
+        },
+      });
+    };
+
     // In this state, we have received a remoteGateway from an ingress
     // connection (and provided our local gateway to them.)
     // We do not have a pending outbound connection attempt.
@@ -28,9 +86,16 @@ export const makeRemoteControlProvider = localNodeId => {
      *   remoteGateway: ERef<EndoGateway>,
      *   cancel: (error: Error) => void | Promise<void>,
      *   cancelled: Promise<never>,
+     *   lifetime?: ConnectionLifetime,
      * ) => RemoteControlState}
      */
-    const accepted = (remoteGateway, cancelCurrent, currentCancelled) => {
+    const accepted = (
+      remoteGateway,
+      cancelCurrent,
+      currentCancelled,
+      lifetime = makeConnectionLifetime(currentCancelled, remoteGateway),
+    ) => {
+      lifetime.follow(currentCancelled, remoteGateway);
       /** @type {import('./types.js').RemoteControlState} */
       const acceptedState = {
         accept(
@@ -52,6 +117,10 @@ export const makeRemoteControlProvider = localNodeId => {
           console.log(
             `Endo remote-control ${tag}: accepted→accepted (replacing connection)`,
           );
+          const nextLifetime = lifetime.isEstablished()
+            ? makeConnectionLifetime(proposedCancelled, proposedRemoteGateway)
+            : lifetime;
+          nextLifetime.follow(proposedCancelled, proposedRemoteGateway);
           cancelCurrent(
             new Error('Connection replaced by new inbound connection.'),
           );
@@ -60,6 +129,7 @@ export const makeRemoteControlProvider = localNodeId => {
             proposedRemoteGateway,
             proposedCancel,
             proposedCancelled,
+            nextLifetime,
           );
         },
         connect(
@@ -73,10 +143,16 @@ export const makeRemoteControlProvider = localNodeId => {
           // incarnation.  Losing the connection must dispose that
           // incarnation, but disposing an unused dial attempt must not close
           // the accepted transport.
-          currentCancelled.catch(proposedCancel).then(proposedDispose);
+          lifetime.add(proposedDispose);
+          currentCancelled.catch(proposedCancel);
           proposedCancelled.catch(() => {});
           return {
-            state: accepted(remoteGateway, cancelCurrent, currentCancelled),
+            state: accepted(
+              remoteGateway,
+              cancelCurrent,
+              currentCancelled,
+              lifetime,
+            ),
             remoteGateway,
           };
         },
@@ -102,11 +178,12 @@ export const makeRemoteControlProvider = localNodeId => {
      *   remoteGateway: ERef<EndoGateway>,
      *   cancel: (error: Error) => void,
      *   cancelled: Promise<never>,
+     *   lifetime: ConnectionLifetime,
      * ) => RemoteControlState}
      */
-    const connected =
+    const makeConnectedState =
       localNodeId > remoteNodeId
-        ? (remoteGateway, cancelCurrent, currentCancelled) => {
+        ? (remoteGateway, cancelCurrent, currentCancelled, lifetime) => {
             // We are biased toward preserving our own outbound connection.
             return {
               accept(
@@ -132,6 +209,7 @@ export const makeRemoteControlProvider = localNodeId => {
                   remoteGateway,
                   cancelCurrent,
                   currentCancelled,
+                  lifetime,
                 );
               },
               connect(
@@ -142,24 +220,24 @@ export const makeRemoteControlProvider = localNodeId => {
               ) {
                 // The corresponding peer is incarnated.
                 // Bind the fates of this incarnation with the existing connection.
+                lifetime.add(proposedDispose);
                 Promise.all([
                   proposedCancelled.catch(cancelCurrent),
                   currentCancelled.catch(proposedCancel),
-                ])
-                  .then(() => {})
-                  .then(proposedDispose);
+                ]).then(() => {});
                 return {
                   state: connected(
                     remoteGateway,
                     proposedCancel,
                     proposedCancelled,
+                    lifetime,
                   ),
                   remoteGateway,
                 };
               },
             };
           }
-        : (remoteGateway, cancelCurrent, currentCancelled) => {
+        : (remoteGateway, cancelCurrent, currentCancelled, lifetime) => {
             // We are biased toward preserving inbound connections.
             /** @type {import('./types.js').RemoteControlState} */
             const connectedState = {
@@ -174,30 +252,24 @@ export const makeRemoteControlProvider = localNodeId => {
                 console.log(
                   `Endo remote-control ${tag}: connected→accepted (accept bias, replacing outbound)`,
                 );
+                const nextLifetime = lifetime.isEstablished()
+                  ? makeConnectionLifetime(
+                      proposedCancelled,
+                      proposedRemoteGateway,
+                    )
+                  : lifetime;
+                nextLifetime.follow(proposedCancelled, proposedRemoteGateway);
                 cancelCurrent(
                   new Error(
                     'Connection abandoned: accepted new connection (crossed hellos, accept bias)',
                   ),
                 );
-                // Arrange to return to the initial state if we lose this new
-                // connection.
-                proposedCancelled
-                  .catch(() => {
-                    if (state === connectedState) {
-                      console.log(
-                        `Endo remote-control ${tag}: connected→start (connection lost, accept bias)`,
-                      );
-                      stateName = 'start';
-                      // I would gladly declare you Tuesday for a call today.
-                      // eslint-disable-next-line no-use-before-define
-                      state = start();
-                    }
-                  })
-                  .then(proposedDispose);
+                proposedCancelled.catch(() => {}).then(proposedDispose);
                 return accepted(
                   proposedRemoteGateway,
                   proposedCancel,
                   proposedCancelled,
+                  nextLifetime,
                 );
               },
               connect(
@@ -208,17 +280,17 @@ export const makeRemoteControlProvider = localNodeId => {
               ) {
                 // We incarnate the corresponding peer.
                 // Bind the fates of the new peer with the existing connection.
+                lifetime.add(proposedDispose);
                 Promise.all([
                   proposedCancelled.catch(cancelCurrent),
                   currentCancelled.catch(proposedCancel),
-                ])
-                  .then(() => {})
-                  .then(proposedDispose);
+                ]).then(() => {});
                 return {
                   state: connected(
                     remoteGateway,
                     proposedCancel,
                     proposedCancelled,
+                    lifetime,
                   ),
                   remoteGateway,
                 };
@@ -226,6 +298,40 @@ export const makeRemoteControlProvider = localNodeId => {
             };
             return connectedState;
           };
+
+    /**
+     * Every connected incarnation owns its cancellation observer. Reusing the
+     * gateway still creates a new state, so an observer attached only by
+     * start.connect would stop resetting after the first reuse. The identity
+     * guard keeps a superseded transport from resetting its replacement.
+     * @param {ERef<EndoGateway>} remoteGateway
+     * @param {(error: Error) => void} cancelCurrent
+     * @param {Promise<never>} currentCancelled
+     * @param {ConnectionLifetime} lifetime
+     * @returns {RemoteControlState}
+     */
+    const connected = (
+      remoteGateway,
+      cancelCurrent,
+      currentCancelled,
+      lifetime,
+    ) => {
+      lifetime.follow(currentCancelled, remoteGateway);
+      const connectedState = makeConnectedState(
+        remoteGateway,
+        cancelCurrent,
+        currentCancelled,
+        lifetime,
+      );
+      currentCancelled.catch(() => {
+        if (state === connectedState) {
+          stateName = 'start';
+          state = start();
+        }
+      });
+      stateName = 'connected';
+      return connectedState;
+    };
 
     /** @type {() => RemoteControlState} */
     const start = () => {
@@ -237,13 +343,7 @@ export const makeRemoteControlProvider = localNodeId => {
           currentCancelled,
           currentDispose,
         ) {
-          currentCancelled
-            .catch(() => {
-              if (state === startState) {
-                state = start();
-              }
-            })
-            .then(currentDispose);
+          currentCancelled.catch(() => {}).then(currentDispose);
           return accepted(
             proposedRemoteGateway,
             cancelCurrent,
@@ -257,26 +357,17 @@ export const makeRemoteControlProvider = localNodeId => {
           currentDispose,
         ) {
           const remoteGateway = getRemoteGateway();
+          const lifetime = makeConnectionLifetime(
+            currentCancelled,
+            remoteGateway,
+          );
+          lifetime.add(currentDispose);
           const connectedState = connected(
             remoteGateway,
             cancelCurrent,
             currentCancelled,
+            lifetime,
           );
-          stateName = 'connected';
-          currentCancelled
-            .then(
-              () => {},
-              () => {
-                if (state === connectedState) {
-                  console.log(
-                    `Endo remote-control ${tag}: connected→start (connection lost)`,
-                  );
-                  stateName = 'start';
-                  state = start();
-                }
-              },
-            )
-            .then(currentDispose);
           return {
             state: connectedState,
             remoteGateway,

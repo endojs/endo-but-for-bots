@@ -1,5 +1,7 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
+import { makePromiseKit } from '@endo/promise-kit';
+import { makeNetstringWriter } from '@endo/netstring';
 
 import { adaptIrohStream } from '../src/networks/iroh-stream-adapter.js';
 import { deriveIrohSecretKey } from '../src/networks/iroh.js';
@@ -156,6 +158,63 @@ test('writer.return finishes the send stream and resolves closed', async t => {
   t.is(send.calls.finished, 1);
   await closed;
   t.pass();
+});
+
+test('chunked netstrings serialize native writes before finishing', async t => {
+  const firstStarted = makePromiseKit();
+  const releaseFirst = makePromiseKit();
+  const calls = [];
+  let active = false;
+  const send = {
+    async writeAll(bytes) {
+      await null;
+      t.false(active, 'native writes must not overlap');
+      active = true;
+      if (calls.length === 0) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      calls.push(new TextDecoder().decode(Uint8Array.from(bytes)));
+      active = false;
+    },
+    async finish() {
+      t.false(active);
+      calls.push('FIN');
+    },
+    reset: makeFakeSend().reset,
+  };
+  const { writer } = adaptIrohStream({ send, recv: makeFakeRecv([]) });
+  const framed = makeNetstringWriter(writer, { chunked: true });
+  const writing = framed.next(new TextEncoder().encode('hello'));
+  await firstStarted.promise;
+  const finishing = writer.return();
+  t.deepEqual(calls, []);
+  releaseFirst.resolve();
+  await Promise.all([writing, finishing]);
+  t.deepEqual(calls, ['5:', 'hello', ',', 'FIN']);
+});
+
+test('failed native write prevents later chunks of a damaged frame', async t => {
+  let writes = 0;
+  const send = makeFakeSend();
+  send.writeAll = async () => {
+    writes += 1;
+    throw Error('native write failed');
+  };
+  const { writer, closed } = adaptIrohStream({ send, recv: makeFakeRecv([]) });
+  const results = await Promise.allSettled([
+    writer.next(new Uint8Array([1])),
+    writer.next(new Uint8Array([2])),
+    writer.next(new Uint8Array([3])),
+  ]);
+  t.deepEqual(
+    results.map(result => result.status),
+    ['rejected', 'rejected', 'rejected'],
+  );
+  t.is(writes, 1);
+  await writer.return();
+  await closed;
+  t.is(send.calls.finished, 1);
 });
 
 test('writer.return swallows a send.finish error and still resolves closed', async t => {

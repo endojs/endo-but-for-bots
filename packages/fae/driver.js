@@ -1,11 +1,38 @@
-// @ts-nocheck
+// @ts-check
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/pass-style';
+import { Far, passStyleOf } from '@endo/pass-style';
 import { parseLocator } from '@endo/daemon/locator.js';
 import { readFaeWorkloadConfig } from './src/workload-config.js';
 
 import { spawnWorkerLoop } from './agent.js';
 import { resolveAuthToken } from './src/credentials.js';
+
+/** @import {ProviderConstructorConfig, SubscriptionProviderConfig} from './agent.js' */
+
+/**
+ * A selected remote service owns its credentials and protocol adapter. Resolve
+ * its current binding on each call so foreground sessions can switch services
+ * without restarting their mailbox loop or discarding their conversation.
+ * Record configurations stay on the driver's provider-owner path below.
+ * @param {any} powers
+ */
+export const makeDriverProvider = powers =>
+  harden({
+    /**
+     * @param {object[]} messages
+     * @param {object[]} tools
+     */
+    async chat(messages, tools) {
+      const provider = await E(powers).lookup('llm-provider');
+      if (passStyleOf(provider) !== 'remotable') {
+        throw Error(
+          'A running remote-provider driver requires a chat service capability.',
+        );
+      }
+      return E(provider).chat(harden(messages), harden(tools));
+    },
+  });
+harden(makeDriverProvider);
 
 /**
  * Fae agent driver caplet.
@@ -14,7 +41,7 @@ import { resolveAuthToken } from './src/credentials.js';
  * a single fae agent.  Its namespace holds two capability references
  * written by the factory at creation time:
  *
- *   - `llm-provider`  – token-free HTTP config or a subscription-capability recipe
+ *   - `llm-provider`  – chat service capability, token-free HTTP config, or subscription recipe
  *   - `agent`          – the agent's EndoGuest (inbox, mail, petstore, tools)
  *
  * and optionally a third:
@@ -33,7 +60,7 @@ import { resolveAuthToken } from './src/credentials.js';
  * this very formula.  Instead, we fire off the async work and return
  * the Far object synchronously.
  *
- * @param {import('@endo/eventual-send').ERef<object>} powers
+ * @param {any} powers
  * @param {Promise<object> | object | undefined} context
  * @param {{ env?: Record<string, string> }} [options]
  * @returns {Promise<object>}
@@ -48,9 +75,13 @@ export const make = async (powers, context, { env } = {}) => {
 
   const startLoop = async () => {
     const providerIdentity = await E(powers).locate('llm-provider');
+    const selectedProvider = await E(powers).lookupByLocator(providerIdentity);
+    const remoteService = passStyleOf(selectedProvider) === 'remotable';
+    // Record recipes are interpreted by the provider owner; the remote-service
+    // branch only delegates chat and never interprets a credential record.
     const storedConfig =
-      /** @type {{ host?: string, model: string, kind?: string, subscription?: object }} */ (
-        await E(powers).lookupByLocator(providerIdentity)
+      /** @type {(ProviderConstructorConfig | SubscriptionProviderConfig) & {authToken?: string}} */ (
+        selectedProvider
       );
     const agentPowers = await E(powers).lookup('agent');
     const spawner = (await E(powers).has('subagent-spawner'))
@@ -60,7 +91,11 @@ export const make = async (powers, context, { env } = {}) => {
     // the inference session. Preserve both fixed-width components without a
     // delimiter to fit the subscription endpoint's 128-character identity.
     let sessionId;
-    if (storedConfig.kind === 'subscription-responses') {
+    if (
+      !remoteService &&
+      'kind' in storedConfig &&
+      storedConfig.kind === 'subscription-responses'
+    ) {
       const { number, node } = parseLocator(await E(powers).locate('agent'));
       sessionId = `${number}${node}`;
     }
@@ -71,7 +106,7 @@ export const make = async (powers, context, { env } = {}) => {
     await spawnWorkerLoop(
       agentPowers,
       context,
-      storedConfig,
+      remoteService ? { provider: makeDriverProvider(powers) } : storedConfig,
       systemPrompt,
       harden({
         forceCompaction: env?.FAE_FORCE_COMPACTION === 'true',
@@ -81,12 +116,14 @@ export const make = async (powers, context, { env } = {}) => {
         requestTimeoutMs,
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
-        ...(sessionId === undefined
-          ? {
-              provideAuthToken: () =>
-                resolveAuthToken({ powers, config: storedConfig }),
-            }
-          : { sessionId }),
+        ...(remoteService
+          ? {}
+          : sessionId === undefined
+            ? {
+                provideAuthToken: () =>
+                  resolveAuthToken({ powers, config: storedConfig }),
+              }
+            : { sessionId }),
       }),
     );
   };

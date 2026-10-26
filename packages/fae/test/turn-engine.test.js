@@ -177,3 +177,64 @@ test('a provider response that arrives after cancellation cannot admit tools or 
   );
   t.deepEqual(trace, []);
 });
+
+test('explicit tool completion stops only after durable step commit, without another provider request', async t => {
+  const trace = [];
+  const outcome = await runAgenticTurn({
+    leafId: 'root',
+    maxRounds: 3,
+    getTools: async () => ({}),
+    getContext: async leafId => ({ leafId, messages: [] }),
+    invoke: async () => {
+      trace.push('invoke');
+      return { message: { calls: ['publish'] } };
+    },
+    getToolCalls: message => message.calls,
+    runTools: async () => {
+      trace.push('tools');
+      return ['published'];
+    },
+    commitStep: async () => {
+      trace.push('commit');
+      return 'published-step';
+    },
+    commitFinal: async () => {
+      throw Error('No prose response is needed');
+    },
+    shouldFinishAfterTools: results => {
+      trace.push('finish');
+      return results[0] === 'published';
+    },
+  });
+  t.deepEqual(trace, ['invoke', 'tools', 'commit', 'finish']);
+  t.deepEqual(outcome, {
+    answered: true,
+    exhausted: false,
+    leafId: 'published-step',
+  });
+});
+
+test('explicit tool completion cannot hide a failed durable step commit', async t => {
+  let finishChecks = 0;
+  await t.throwsAsync(
+    runAgenticTurn({
+      leafId: 'root',
+      maxRounds: 1,
+      getTools: async () => ({}),
+      getContext: async leafId => ({ leafId, messages: [] }),
+      invoke: async () => ({ message: { calls: ['publish'] } }),
+      getToolCalls: message => message.calls,
+      runTools: async () => ['published'],
+      commitStep: async () => {
+        throw Error('Durable write failed');
+      },
+      commitFinal: async () => 'unused',
+      shouldFinishAfterTools: () => {
+        finishChecks += 1;
+        return true;
+      },
+    }),
+    { message: 'Durable write failed' },
+  );
+  t.is(finishChecks, 0);
+});

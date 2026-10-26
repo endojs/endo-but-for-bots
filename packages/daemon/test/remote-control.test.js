@@ -356,3 +356,285 @@ test('remote control connects first, ignores second and third, entagles cancella
   await t.throwsAsync(() => bob2Cancelled);
   await t.throwsAsync(() => bob3Cancelled);
 });
+
+const makeConnection = () => {
+  const { promise: cancelled, reject: cancel } = makePromiseKit();
+  cancelled.catch(() => {});
+  const { promise: disposed, resolve } = _makePromiseKit();
+  return { cancelled, cancel, disposed, dispose: () => resolve(undefined) };
+};
+
+for (const [local, remote] of [
+  ['alice', 'bob'],
+  ['bob', 'alice'],
+]) {
+  for (const cancelledIncarnation of [0, 2]) {
+    test(`remote control ${local}→${remote} resets after repeated connect and cancellation of incarnation ${cancelledIncarnation}`, async t => {
+      t.timeout(5000);
+      const control = makeRemoteControlProvider(local)(remote);
+      const gateway = makeFakeGateway();
+      const connections = [
+        makeConnection(),
+        makeConnection(),
+        makeConnection(),
+      ];
+      let dials = 0;
+      for (const connection of connections) {
+        const actual = control.connect(
+          () => {
+            dials += 1;
+            return gateway;
+          },
+          connection.cancel,
+          connection.cancelled,
+          connection.dispose,
+        );
+        t.is(actual, gateway);
+      }
+      t.is(dials, 1, 'live connection is shared by later incarnations');
+      connections[cancelledIncarnation].cancel(new Error('Transport closed'));
+      await Promise.all(connections.map(connection => connection.disposed));
+      t.is(
+        control.getStateName(),
+        'start',
+        'current state releases the cancelled connection',
+      );
+
+      const next = makeConnection();
+      const nextGateway = makeFakeGateway();
+      const actual = control.connect(
+        () => {
+          dials += 1;
+          return nextGateway;
+        },
+        next.cancel,
+        next.cancelled,
+        next.dispose,
+      );
+      t.is(
+        actual,
+        nextGateway,
+        'retry must dial instead of returning the dead gateway',
+      );
+      t.is(dials, 2);
+      t.is(control.getStateName(), 'connected');
+      next.cancel(new Error('Test complete'));
+      await next.disposed;
+      t.is(control.getStateName(), 'start');
+    });
+  }
+
+  test(`remote control ${local}→${remote} retains the winning connection across repeated accepts and resets when it closes`, async t => {
+    t.timeout(5000);
+    const control = makeRemoteControlProvider(local)(remote);
+    const outgoing = makeConnection();
+    const outgoingGateway = makeFakeGateway();
+    control.connect(
+      () => outgoingGateway,
+      outgoing.cancel,
+      outgoing.cancelled,
+      outgoing.dispose,
+    );
+    const incoming1 = makeConnection();
+    const incoming2 = makeConnection();
+    const incomingGateway1 = makeFakeGateway();
+    const incomingGateway2 = makeFakeGateway();
+    control.accept(
+      incomingGateway1,
+      incoming1.cancel,
+      incoming1.cancelled,
+      incoming1.dispose,
+    );
+    control.accept(
+      incomingGateway2,
+      incoming2.cancel,
+      incoming2.cancelled,
+      incoming2.dispose,
+    );
+    const connectBias = local > remote;
+    await Promise.all(
+      connectBias
+        ? [incoming1.disposed, incoming2.disposed]
+        : [outgoing.cancelled.catch(() => {}), incoming1.disposed],
+    );
+    if (connectBias) {
+      t.is(
+        control.getStateName(),
+        'connected',
+        'rejected inbound cancellation must not reset the outbound state',
+      );
+    } else {
+      t.is(
+        control.getStateName(),
+        'accepted',
+        'superseded transport cancellation must not reset the winning inbound state',
+      );
+    }
+    const rider = makeConnection();
+    t.is(
+      control.connect(
+        () => makeFakeGateway(),
+        rider.cancel,
+        rider.cancelled,
+        rider.dispose,
+      ),
+      connectBias ? outgoingGateway : incomingGateway2,
+    );
+    const winner = connectBias ? outgoing : incoming2;
+    winner.cancel(new Error('Winning transport closed'));
+    await Promise.all([winner.disposed, outgoing.disposed, rider.disposed]);
+    t.is(control.getStateName(), 'start');
+
+    const retry = makeConnection();
+    const freshGateway = makeFakeGateway();
+    t.is(
+      control.connect(
+        () => freshGateway,
+        retry.cancel,
+        retry.cancelled,
+        retry.dispose,
+      ),
+      freshGateway,
+    );
+    retry.cancel(new Error('Test complete'));
+    await retry.disposed;
+  });
+}
+
+test('crossed hellos transfer all peer disposals to the winning accepted transport', async t => {
+  t.timeout(5000);
+  const control = makeRemoteControlProvider('alice')('bob');
+  const peers = [makeConnection(), makeConnection(), makeConnection()];
+  const disposalCounts = [0, 0, 0];
+  const gateway = makeFakeGateway();
+  for (const [index, peer] of peers.entries()) {
+    control.connect(
+      () => gateway,
+      peer.cancel,
+      peer.cancelled,
+      () => {
+        disposalCounts[index] += 1;
+        peer.dispose();
+      },
+    );
+  }
+  const inbound1 = makeConnection();
+  const pendingGateway = makePromiseKit();
+  control.accept(
+    pendingGateway.promise,
+    inbound1.cancel,
+    inbound1.cancelled,
+    inbound1.dispose,
+  );
+  await Promise.all(peers.map(peer => peer.cancelled.catch(() => {})));
+  t.deepEqual(
+    disposalCounts,
+    [0, 0, 0],
+    'abandoned dial must not dispose attached peer formulas',
+  );
+  t.is(control.getStateName(), 'accepted');
+
+  const inbound2 = makeConnection();
+  const winningGateway = makeFakeGateway();
+  control.accept(
+    winningGateway,
+    inbound2.cancel,
+    inbound2.cancelled,
+    inbound2.dispose,
+  );
+  await inbound1.disposed;
+  t.deepEqual(
+    disposalCounts,
+    [0, 0, 0],
+    'second replacement also preserves all peer formulas',
+  );
+  const retry = makeConnection();
+  t.is(
+    control.connect(
+      () => {
+        throw Error('Must reuse accepted gateway');
+      },
+      retry.cancel,
+      retry.cancelled,
+      retry.dispose,
+    ),
+    winningGateway,
+  );
+  inbound2.cancel(new Error('Winning transport lost'));
+  await Promise.all([
+    ...peers.map(peer => peer.disposed),
+    retry.disposed,
+    inbound2.disposed,
+  ]);
+  t.deepEqual(
+    disposalCounts,
+    [1, 1, 1],
+    'every attached incarnation disposes exactly once',
+  );
+  t.is(control.getStateName(), 'start');
+});
+
+test('replacing an established gateway revokes its peer incarnation without resetting the accepted winner', async t => {
+  t.timeout(5000);
+  const control = makeRemoteControlProvider('alice')('bob');
+  const outgoing = makeConnection();
+  const gateway = makeFakeGateway();
+  control.connect(
+    () => gateway,
+    outgoing.cancel,
+    outgoing.cancelled,
+    outgoing.dispose,
+  );
+  // Allow the gateway establishment observer to run before replacement.
+  await Promise.resolve();
+  const inbound = makeConnection();
+  const winner = makeFakeGateway();
+  control.accept(winner, inbound.cancel, inbound.cancelled, inbound.dispose);
+  await outgoing.disposed;
+  t.is(control.getStateName(), 'accepted');
+  const rider = makeConnection();
+  t.is(
+    control.connect(
+      () => {
+        throw Error('Must reuse the accepted winner');
+      },
+      rider.cancel,
+      rider.cancelled,
+      rider.dispose,
+    ),
+    winner,
+  );
+  inbound.cancel(Error('Test complete'));
+  await Promise.all([inbound.disposed, rider.disposed]);
+  t.is(control.getStateName(), 'start');
+});
+
+test('disposal callbacks can reconnect after the current transport resets', async t => {
+  t.timeout(5000);
+  const control = makeRemoteControlProvider('bob')('alice');
+  const first = makeConnection();
+  const next = makeConnection();
+  const nextGateway = makeFakeGateway();
+  let actual;
+  control.connect(
+    () => makeFakeGateway(),
+    first.cancel,
+    first.cancelled,
+    () => {
+      actual = control.connect(
+        () => nextGateway,
+        next.cancel,
+        next.cancelled,
+        next.dispose,
+      );
+      first.dispose();
+    },
+  );
+  first.cancel(Error('Lost transport'));
+  await first.disposed;
+  t.is(actual, nextGateway);
+  t.is(control.getStateName(), 'connected');
+  next.cancel(Error('Test complete'));
+  await next.disposed;
+  t.is(control.getStateName(), 'start');
+});

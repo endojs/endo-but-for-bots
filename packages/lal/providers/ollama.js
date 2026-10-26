@@ -116,7 +116,7 @@ export const makeOllamaProvider = ({ host, model, apiKey }) => {
           tools: toOllamaTools(tools),
         });
       } catch (error) {
-        console.error('[LAL] Ollama API error:', error);
+        console.error('[LAL] Ollama API request failed.');
         throw error;
       }
 

@@ -6,6 +6,12 @@ import react from '@vitejs/plugin-react';
 import { makeEndoPlugin } from './vite-endo-plugin.js';
 
 export default defineConfig({
+  define: {
+    'import.meta.env.WHYLIP_BOOK_PATH': JSON.stringify(
+      process.env.WHYLIP_BOOK_MODULE_URL ||
+        new URL('../space-whylip/src/book-caplet.js', import.meta.url).href,
+    ),
+  },
   plugins: [makeEndoPlugin(), react()],
   base: './',
   resolve: {

@@ -169,6 +169,27 @@ the host fully controls (e.g. transcluding host-supplied content through
 an untrusted component — which `@endo/preact-container/compartment` does
 for its opaque-children mechanism).
 
+For a persistent host-owned canvas, put a trusted component inside the
+passthrough and create its canvas vnode inside that component's render:
+
+```js
+h('section', null,
+  h(HostPassthrough, null, h(TrustedCanvas, { scene })),
+  h(ConfinedOverlay, { state, onAction }),
+);
+```
+
+`TrustedCanvas` owns its DOM ref, renderer, animation loop, and disposal.
+Keep its component identity stable when applying a new scene description so
+Preact preserves the canvas and its graphics context.
+Creating the canvas vnode earlier in a sanitized parent render would strip its
+ref before it reaches the passthrough.
+Pass only validated scene data and narrow action callbacks across the guest
+boundary; never expose the trusted component, `HostPassthrough`, a DOM ref,
+or a graphics library namespace to guest code.
+The confined overlay continues to receive sanitized events and cannot obtain
+the host canvas through a ref.
+
 ### Known gaps — ambient authority (NOT covered)
 
 The sanitizer blocks _direct_ DOM access and HTML injection, but the
