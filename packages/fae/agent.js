@@ -2,6 +2,7 @@
 /* eslint-disable no-await-in-loop */
 
 import { makeExo } from '@endo/exo';
+import { makeReplyCollapseFilter } from '@endo/exo-agent-factory/reply-collapse.js';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
@@ -730,6 +731,7 @@ export const spawnWorkerLoop = async (
      * @type {Set<bigint>}
      */
     const seenInboundNumbers = new Set();
+    const showReply = makeReplyCollapseFilter();
 
     /**
      * Run one inbound message as a turn.
@@ -994,6 +996,14 @@ export const spawnWorkerLoop = async (
         if (loopAbort.signal.aborted) {
           stopping = true;
           return;
+        }
+
+        if (!showReply(message)) {
+          console.error(
+            `[fae] Message #${number} republishes an already visible reply`,
+          );
+          // eslint-disable-next-line no-continue
+          continue;
         }
 
         // Offer every message — including this agent's own outbound mail — to

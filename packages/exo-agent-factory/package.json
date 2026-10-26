@@ -25,6 +25,7 @@
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./reply-collapse.js": "./reply-collapse.js",
     "./turn-ledger.js": "./turn-ledger.js",
     "./package.json": "./package.json"
   },
