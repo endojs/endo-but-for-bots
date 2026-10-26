@@ -59,6 +59,19 @@ const MakeCapletOptionsShape = M.splitRecord(
   },
 );
 
+const MakeFromPackageOptionsShape = M.splitRecord(
+  {},
+  {
+    powersName: NameOrPathShape,
+    resultName: NameOrPathShape,
+    env: EnvShape,
+    workerTrustedShims: M.arrayOf(M.string()),
+    entry: M.string(),
+    registryName: NameOrPathShape,
+    offline: M.boolean(),
+  },
+);
+
 // Shared method guard for evaluate (used by both Host and Guest)
 // Both execute directly in a worker, differing only in namespace
 const EvaluateMethodGuard = M.call(
@@ -543,6 +556,11 @@ export const HostInterface = M.interface('EndoHost', {
   // modules at their referenced paths).
   makeFromTree: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
     .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  // Make a caplet from a ReadableTree or Mount whose root holds a
+  // package.json, resolving its dependencies through a registry.
+  makeFromPackage: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
+    .optional(MakeFromPackageOptionsShape)
     .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
   stageTree: M.call(NameOrPathShape, NameOrPathShape).returns(M.promise()),

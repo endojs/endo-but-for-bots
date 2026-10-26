@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-07-10 |
+| **Updated** | 2026-10-26 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 
 ## Summary
 
@@ -594,6 +594,27 @@ Integration tests at this phase:
   it was directly resolved against.
   This exercises the end-to-end stitch the mapper and the
   worker dispatch make.
+
+**Implementation status (2026-10-26).**
+Phase 2 is built with `EndoHost.makeFromPackage` (Phase 3 item 1)
+so the integration tests can reach it.
+The daemon resolves the source's `package.json` beside `@registry`
+and sends the eager `RegistryResolution` to the worker, which holds
+no registry reference; this is the boundary
+[npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)
+§ *Resolver, mapper, and mockability* requires.
+The formula keeps its `registry` slot so the caplet depends on the
+registry it was resolved against and re-resolves on reincarnation.
+Instead of `mapSnapshot`'s archive-shaped map, the worker
+(`packages/daemon/src/package-read-powers.js`) gives
+compartment-mapper's own `mapNodeModules` walk a synthetic tree:
+the source at `file:///entry/`, each resolved package at
+`file:///packages/<name>@<version>/`, and a virtual
+`node_modules/<name>` under each package root for exactly the
+names that package declares, canonicalized to the resolved
+version satisfying its range.
+No compartment-mapper extension point was needed.
+`makeFromMount`, the CLI, and the Phase 4 snapshot are not built.
 
 ### Phase 3: `makeFromPackage` host method and CLI
 
