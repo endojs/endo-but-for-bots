@@ -266,3 +266,60 @@ test('defaultPullRef rejects invalid, wildcard, missing, and ambiguous selectors
     );
   }
 });
+
+test('pull with rebase rejects when the structured rebase stops', async t => {
+  const head = harden({
+    name: 'main',
+    kind: /** @type {const} */ ('branch'),
+    oid: '0'.repeat(40),
+  });
+  const current = harden({ oid: '1'.repeat(40), summary: 'local change' });
+  /** @type {Awaited<ReturnType<GitBackend['rebase']>>[]} */
+  const outcomes = [
+    harden({ status: 'conflicts', current, conflicts: harden([]) }),
+    harden({ status: 'in-progress', current }),
+    harden({ status: 'completed', head, replayed: harden([]) }),
+  ];
+  /** @type {unknown[]} */
+  const rebaseInputs = [];
+  /** @type {GitBackend} */
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remoteFetch: async () => harden({ updatedRefs: harden([]), text: '' }),
+    revParse: async ref => harden({ name: ref, kind: 'commit', oid: head.oid }),
+    rebase: async input => {
+      rebaseInputs.push(input);
+      const outcome = outcomes.shift();
+      if (outcome === undefined) throw Error('unexpected rebase');
+      return outcome;
+    },
+  });
+  const mount = makeExo('FakeGitRemoteRebaseMount', undefined, {});
+  const git = makeGit(
+    /** @type {Parameters<typeof makeGit>[0]} */ (
+      /** @type {unknown} */ ({ mount, backend, lineageOf: () => undefined })
+    ),
+    { allowHistoryRewrite: true },
+  );
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    policy: makePolicy(),
+  });
+
+  await t.throwsAsync(E(remote).pull({ strategy: 'rebase' }), {
+    message: /rebase stopped with status "conflicts"/,
+  });
+  await t.throwsAsync(E(remote).pull({ strategy: 'rebase' }), {
+    message: /rebase stopped with status "in-progress"/,
+  });
+  const pulled = await E(remote).pull({ strategy: 'rebase' });
+  t.is(pulled.integration, 'up-to-date');
+  t.deepEqual(rebaseInputs, [
+    { mode: 'start', upstream: 'refs/remotes/origin/zeta' },
+    { mode: 'start', upstream: 'refs/remotes/origin/zeta' },
+    { mode: 'start', upstream: 'refs/remotes/origin/zeta' },
+  ]);
+});

@@ -231,6 +231,12 @@ export type GitMergeResult =
   | { status: 'merged'; head: GitRef; merged: GitCommit }
   | { status: 'conflicts'; conflicts: GitConflict[] };
 
+export type GitRebaseResult =
+  | { status: 'completed'; head: GitRef; replayed: GitCommit[] }
+  | { status: 'conflicts'; current: GitCommit; conflicts: GitConflict[] }
+  | { status: 'aborted'; head: GitRef }
+  | { status: 'in-progress'; current: GitCommit };
+
 export type GitLogOptions = {
   maxCount?: number;
   ref?: GitRef | string;
@@ -574,7 +580,9 @@ export type HistoryRewriteEndoGit = ReadWriteEndoGit & {
     ref: GitRef | string,
     options?: GitCherryPickOptions,
   ) => Promise<string>;
-  rebase: (input: GitRebaseInput) => Promise<string>;
+  rebase: (input: GitRebaseInput) => Promise<GitRebaseResult>;
+  /** The porcelain `git rebase` rendering, for display. */
+  rebaseText: (input: GitRebaseInput) => Promise<string>;
 };
 
 /**

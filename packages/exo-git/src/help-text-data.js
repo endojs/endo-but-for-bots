@@ -82,7 +82,9 @@ export const helpTextEntries = harden([
       cherryPick:
         'cherryPick(ref, options?) -> Promise<string>\nApply the changes of an existing commit onto the current branch.\n`noCommit: true` leaves the result staged instead of committing it.\nOnly the rewriter facet carries this method.',
       rebase:
-        'rebase(input) -> Promise<string>\nDrive a rebase one step at a time.\n`{ mode: "start", upstream, autosquash? }` begins one; `{ mode:\n"continue" | "abort" | "skip" }` advances or ends the one in progress.\nOnly the rewriter facet carries this method.',
+        'rebase(input) -> Promise<GitRebaseResult>\nDrive a rebase one step at a time.\n`{ mode: "start", upstream, autosquash? }` begins one; `{ mode:\n"continue" | "abort" | "skip" }` advances or ends the one in progress.\nReturns `completed` with the replayed commits, `conflicts` with the\nstopped commit and its conflict entries, `aborted`, or `in-progress`\nwhen Git stopped without a conflict.\nOnly the rewriter facet carries this method.',
+      rebaseText:
+        "rebaseText(input) -> Promise<string>\nDrive a rebase step and return Git's porcelain output.\nThe input is the same as `rebase`; a step that stops rejects after\nleaving the rebase in progress.\nOnly the rewriter facet carries this method.",
     },
   ],
   [

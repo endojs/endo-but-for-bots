@@ -51,6 +51,7 @@ import {
  *   GitMergeOptions,
  *   GitMergeResult,
  *   GitRebaseInput,
+ *   GitRebaseResult,
  *   GitRef,
  *   GitRemoteCredential,
  *   RemoteOperationResult,
@@ -145,6 +146,15 @@ import {
  */
 
 /**
+ * @typedef {(
+ *   | { status: 'completed', head: GitRef, replayed: GitCommit[] }
+ *   | { status: 'conflicts', current: GitCommit, conflicts: BackendGitConflict[] }
+ *   | { status: 'aborted', head: GitRef }
+ *   | { status: 'in-progress', current: GitCommit }
+ * )} GitBackendRebaseResult
+ */
+
+/**
  * Backend-facing contract.  Concrete backends (native git, future JS git
  * libraries, daemon-native commit storage) translate the structured
  * operations into their implementation-specific calls.  Path-bearing inputs
@@ -189,7 +199,8 @@ import {
  * @property {(ref: string) => Promise<void>} switch
  * @property {(ref: string, opts?: GitMergeOptions) => Promise<GitBackendMergeResult>} merge
  * @property {(ref: string, opts?: GitMergeOptions) => Promise<string>} mergeText
- * @property {(input: GitRebaseInput) => Promise<string>} rebase
+ * @property {(input: GitRebaseInput) => Promise<GitBackendRebaseResult>} rebase
+ * @property {(input: GitRebaseInput) => Promise<string>} rebaseText
  * @property {(opts?: GitBackendStashPushOptions) => Promise<string>} stashPush
  * @property {() => Promise<string[]>} stashList
  * @property {(index?: number) => Promise<string>} stashShow
@@ -927,18 +938,17 @@ async function doSwitch(ref) {
 }
 
 /**
- * @param {unknown} ref
- * @param {GitMergeOptions} options
- * @this {GitMethodThis}
- * @returns {Promise<GitMergeResult>}
+ * Convert backend conflict paths into entries minted by the caller's own
+ * worktree mount, so a conflict report confers no authority beyond the mount
+ * the `Git` capability was already derived from.
+ *
+ * @param {GitState} state
+ * @param {BackendGitConflict[]} conflicts
  */
-async function merge(ref, options = {}) {
-  const { state } = this;
-  const result = await state.backend.merge(refName(ref), options);
-  await notifyRootAfterMutation(this.state);
-  if (result.status === 'conflicts') {
-    const conflicts = await Promise.all(
-      result.conflicts.map(async conflict =>
+const mountConflicts = async (state, conflicts) =>
+  harden(
+    await Promise.all(
+      conflicts.map(async conflict =>
         harden({
           entry: await E(state.mount).entry(
             harden(designatorToSegments(conflict.path)),
@@ -949,8 +959,24 @@ async function merge(ref, options = {}) {
           markerStyle: conflict.markerStyle,
         }),
       ),
-    );
-    return harden({ status: 'conflicts', conflicts: harden(conflicts) });
+    ),
+  );
+
+/**
+ * @param {unknown} ref
+ * @param {GitMergeOptions} options
+ * @this {GitMethodThis}
+ * @returns {Promise<GitMergeResult>}
+ */
+async function merge(ref, options = {}) {
+  const { state } = this;
+  const result = await state.backend.merge(refName(ref), options);
+  await notifyRootAfterMutation(this.state);
+  if (result.status === 'conflicts') {
+    return harden({
+      status: 'conflicts',
+      conflicts: await mountConflicts(state, result.conflicts),
+    });
   }
   return result;
 }
@@ -969,9 +995,28 @@ async function mergeText(ref, options = {}) {
 /**
  * @param {GitRebaseInput} input
  * @this {GitMethodThis}
+ * @returns {Promise<GitRebaseResult>}
  */
 async function rebase(input) {
-  const result = await this.state.backend.rebase(input);
+  const { state } = this;
+  const result = await state.backend.rebase(input);
+  await notifyRootAfterMutation(state);
+  if (result.status === 'conflicts') {
+    return harden({
+      status: 'conflicts',
+      current: result.current,
+      conflicts: await mountConflicts(state, result.conflicts),
+    });
+  }
+  return result;
+}
+
+/**
+ * @param {GitRebaseInput} input
+ * @this {GitMethodThis}
+ */
+async function rebaseText(input) {
+  const result = await this.state.backend.rebaseText(input);
   await notifyRootAfterMutation(this.state);
   return result;
 }
@@ -1411,6 +1456,7 @@ const rewriterMethods = harden({
   reword,
   cherryPick,
   rebase,
+  rebaseText,
 });
 
 /** @type {((exo: unknown, facetName?: string) => boolean) | undefined} */
@@ -1650,6 +1696,7 @@ export const makeNotYetImplementedBackend = () => {
     merge: async () => fail('merge'),
     mergeText: async () => fail('mergeText'),
     rebase: async () => fail('rebase'),
+    rebaseText: async () => fail('rebaseText'),
     stashPush: async () => fail('stashPush'),
     stashList: async () => fail('stashList'),
     stashShow: async () => fail('stashShow'),

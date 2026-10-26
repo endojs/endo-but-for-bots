@@ -95,8 +95,9 @@ test('history Git global explains rebase control and conflict recovery', t => {
     throw new Error('history Git global must include a declaration');
   }
   t.false(description.includes('status('));
-  t.false(declaration.aux?.includes('status:') ?? false);
-  t.false(declaration.body.includes('status:'));
+  // Result records carry a `status` discriminant; only the method is absent.
+  t.false(/\bstatus: \(/u.test(declaration.aux ?? ''));
+  t.false(/\bstatus: \(/u.test(declaration.body));
 });
 
 test('read/write Git global teaches status-path staging', t => {

@@ -40,6 +40,7 @@ export const GIT_HISTORY_MEMBERS = harden([
   'reword',
   'cherryPick',
   'rebase',
+  'rebaseText',
 ]);
 harden(GIT_HISTORY_MEMBERS);
 

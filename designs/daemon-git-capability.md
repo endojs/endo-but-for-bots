@@ -813,7 +813,11 @@ It is not part of the normative design.
 - **Phase 7, structured `merge` slice** — `Git.merge(ref, options?)` returns `GitMergeResult` and the porcelain moves to `Git.mergeText(ref, options?)`.
   Successful results distinguish an unchanged head, a fast-forward, and a merge commit; a conflicted merge returns authority-bearing worktree entries, the index-stage object ids, and the configured marker style instead of rejecting.
   `ours` and `theirs` are optional because modify/delete conflicts omit one of index stages 2 and 3; `markerStyle` includes Git's `zdiff3` spelling rather than collapsing it into `diff3`.
-  Remaining Phase 7 work: `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
+- **Phase 7, structured `rebase` slice** — `Git.rebase(input)` returns `GitRebaseResult` and the porcelain moves to `Git.rebaseText(input)`; both stay on the rewriter facet only, so the history-rewrite attenuation axis is unchanged.
+  `start`, `continue`, and `skip` report `completed` (the new head and the commits Git actually rewrote, oldest first; a branch already on its upstream replays none), `conflicts` (the stopped commit plus the same mount-minted `GitConflict` records `merge` returns), or `in-progress` when Git stops without an unmerged entry; `abort` reports the restored head.
+  A step that fails before any rebase is in progress (a dirty worktree, starting while another rebase is stopped, continuing when none is) still rejects with Git's error.
+  `GitRemote.pull({ strategy: 'rebase' })` rejects when the structured rebase stops, so a pull never records a stopped rebase as an integration.
+  Remaining Phase 7 work: structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
 
 ### Forward-design notes
 

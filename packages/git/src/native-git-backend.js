@@ -55,6 +55,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitBackendDiffOptions,
  *   GitBackendLogOptions,
  *   GitBackendMergeResult,
+ *   GitBackendRebaseResult,
  *   GitBackendStashPushOptions,
  * } from '@endo/exo-git/src/git.js'
  * @import {
@@ -2334,6 +2335,35 @@ export const makeNativeGitBackend = ({
   };
 
   /**
+   * Parse `git log` output rendered with `GIT_COMMIT_LOG_FORMAT`.
+   *
+   * @param {string} rawLog
+   * @returns {GitCommit[]}
+   */
+  const parseCommitLog = rawLog => {
+    /** @type {GitCommit[]} */
+    const commits = [];
+    const fields = rawLog.split('\0');
+    for (let index = 0; index + 3 < fields.length; index += 4) {
+      const [oid, summary, author, committedAtText] = fields.slice(
+        index,
+        index + 4,
+      );
+      commits.push(
+        harden({
+          oid: oid.trim(),
+          summary,
+          author,
+          committedAt: committedAtText
+            ? Number.parseInt(committedAtText, 10)
+            : undefined,
+        }),
+      );
+    }
+    return harden(commits);
+  };
+
+  /**
    * @param {string} ref
    * @returns {Promise<GitCommit>}
    */
@@ -2509,6 +2539,137 @@ export const makeNativeGitBackend = ({
     if (opts.noFastForward) args.push('--no-ff');
     args.push('--end-of-options', target);
     return args;
+  };
+
+  /**
+   * @param {GitRebaseInput} input
+   * @returns {string[]}
+   */
+  const rebaseArguments = input => {
+    if (input.mode === 'start') {
+      const commandArguments = ['rebase'];
+      if (input.autosquash !== undefined) {
+        if (typeof input.autosquash !== 'boolean') {
+          throw new Error('rebase.autosquash must be a boolean');
+        }
+        if (input.autosquash) {
+          commandArguments.push('--autosquash', '--interactive');
+        } else {
+          commandArguments.push('--no-autosquash');
+        }
+      }
+      commandArguments.push(
+        '--end-of-options',
+        requireRevision(input.upstream, 'rebase.upstream'),
+      );
+      return commandArguments;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(input, 'autosquash') &&
+      input.autosquash !== undefined
+    ) {
+      throw new Error('rebase.autosquash is only valid for mode start');
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(input, 'upstream') &&
+      input.upstream !== undefined
+    ) {
+      throw new Error('rebase.upstream is only valid for mode start');
+    }
+    if (input.mode === 'continue') return ['rebase', '--continue'];
+    if (input.mode === 'abort') return ['rebase', '--abort'];
+    if (input.mode === 'skip') return ['rebase', '--skip'];
+    throw new Error('rebase mode must be start, continue, abort, or skip');
+  };
+
+  /**
+   * Read the `onto` and `orig-head` object ids Git records for a rebase in
+   * progress, or `undefined` when no rebase is in progress.  Both the merge
+   * backend (`rebase-merge`) and the apply backend (`rebase-apply`) record
+   * them; `git am` also uses `rebase-apply` but writes no `onto`.
+   *
+   * @returns {Promise<{ onto: string, origHead: string } | undefined>}
+   */
+  const readRebaseState = async () => {
+    const states = await Promise.all(
+      ['rebase-merge', 'rebase-apply'].map(async name => {
+        const stateDirectory = resolveGitPath(
+          (await runGitRaw(['rev-parse', '--git-path', name])).trim(),
+          repoRoot,
+        );
+        try {
+          const [onto, origHead] = await Promise.all(
+            ['onto', 'orig-head'].map(file =>
+              fs.promises.readFile(path.join(stateDirectory, file), 'utf8'),
+            ),
+          );
+          return harden({ onto: onto.trim(), origHead: origHead.trim() });
+        } catch {
+          // This backend has no rebase in progress.
+          return undefined;
+        }
+      }),
+    );
+    return states.find(state => state !== undefined);
+  };
+
+  /**
+   * The commit a stopped rebase was replaying (`REBASE_HEAD`), falling back to
+   * HEAD when Git stopped without one.
+   *
+   * @returns {Promise<GitCommit>}
+   */
+  const readRebaseCurrent = async () => {
+    try {
+      await runGitRaw(['rev-parse', '--verify', '--quiet', 'REBASE_HEAD']);
+      return readCommitRecord('REBASE_HEAD');
+    } catch {
+      return readCommitRecord('HEAD');
+    }
+  };
+
+  /**
+   * Run one rebase step (start, continue, or skip) and classify where it left
+   * the repository.  `replay` is the `onto` / `orig-head` pair of the rebase
+   * the step belongs to, captured before the step because Git deletes it on
+   * completion.  The replayed commits are those now on HEAD that neither
+   * `onto` nor the original branch tip already reached, so a branch Git left
+   * untouched reports none.
+   *
+   * @param {string[]} commandArguments
+   * @param {{ onto: string, origHead: string }} replay
+   * @returns {Promise<GitBackendRebaseResult>}
+   */
+  const runRebaseStep = async (commandArguments, replay) => {
+    try {
+      await runGit(commandArguments);
+    } catch (error) {
+      if ((await readRebaseState()) === undefined) throw error;
+      const current = await readRebaseCurrent();
+      const conflicts = await readMergeConflicts();
+      if (conflicts.length === 0) {
+        return harden({ status: 'in-progress', current });
+      }
+      return harden({ status: 'conflicts', current, conflicts });
+    }
+    if ((await readRebaseState()) !== undefined) {
+      return harden({
+        status: 'in-progress',
+        current: await readRebaseCurrent(),
+      });
+    }
+    const replayed = parseCommitLog(
+      await runGitRaw([
+        'log',
+        '--reverse',
+        GIT_COMMIT_LOG_FORMAT,
+        '--end-of-options',
+        'HEAD',
+        `^${replay.onto}`,
+        `^${replay.origHead}`,
+      ]),
+    );
+    return harden({ status: 'completed', head: await readHeadRef(), replayed });
   };
 
   /**
@@ -2960,29 +3121,7 @@ export const makeNativeGitBackend = ({
         args.push('--end-of-options', requireRevision(options.ref, 'log.ref'));
       }
       const rawLog = await runGitRaw(args);
-      if (rawLog === '') {
-        return harden([]);
-      }
-      /** @type {GitCommit[]} */
-      const commits = [];
-      const fields = rawLog.split('\0');
-      for (let index = 0; index + 3 < fields.length; index += 4) {
-        const [oid, summary, author, committedAtStr] = fields.slice(
-          index,
-          index + 4,
-        );
-        commits.push(
-          harden({
-            oid: oid.trim(),
-            summary,
-            author,
-            committedAt: committedAtStr
-              ? Number.parseInt(committedAtStr, 10)
-              : undefined,
-          }),
-        );
-      }
-      return harden(commits);
+      return parseCommitLog(rawLog);
     },
 
     /**
@@ -3571,50 +3710,52 @@ export const makeNativeGitBackend = ({
 
     /**
      * @param {GitRebaseInput} input
-     * @returns {Promise<string>}
+     * @returns {Promise<GitBackendRebaseResult>}
      */
     rebase: async input => {
       await assertNoExecutableRepoConfig();
-      if (input.mode === 'start') {
-        const args = ['rebase'];
-        if (input.autosquash !== undefined) {
-          if (typeof input.autosquash !== 'boolean') {
-            throw new Error('rebase.autosquash must be a boolean');
-          }
-          if (input.autosquash) {
-            args.push('--autosquash', '--interactive');
-          } else {
-            args.push('--no-autosquash');
-          }
-        }
-        args.push(
-          '--end-of-options',
-          requireRevision(input.upstream, 'rebase.upstream'),
-        );
-        return runGit(args);
-      }
-      if (
-        Object.prototype.hasOwnProperty.call(input, 'autosquash') &&
-        input.autosquash !== undefined
-      ) {
-        throw new Error('rebase.autosquash is only valid for mode start');
-      }
-      if (
-        Object.prototype.hasOwnProperty.call(input, 'upstream') &&
-        input.upstream !== undefined
-      ) {
-        throw new Error('rebase.upstream is only valid for mode start');
-      }
-      if (input.mode === 'continue') {
-        return runGit(['rebase', '--continue']);
-      }
+      const commandArguments = rebaseArguments(input);
+      const inProgress = await readRebaseState();
       if (input.mode === 'abort') {
-        return runGit(['rebase', '--abort']);
+        await runGit(commandArguments);
+        return harden({ status: 'aborted', head: await readHeadRef() });
       }
-      if (input.mode === 'skip') {
-        return runGit(['rebase', '--skip']);
+      if (input.mode === 'start') {
+        // Let Git report its own refusal rather than describing the rebase
+        // that is already in progress as this one's outcome.
+        if (inProgress !== undefined) {
+          await runGit(commandArguments);
+        }
+        const upstream = /** @type {string} */ (commandArguments.at(-1));
+        const onto = (
+          await runGitRaw([
+            'rev-parse',
+            '--verify',
+            '--end-of-options',
+            `${upstream}^{commit}`,
+          ])
+        ).trim();
+        const { oid: origHead } = await readHeadRef();
+        return runRebaseStep(commandArguments, { onto, origHead });
       }
-      throw new Error('rebase mode must be start, continue, abort, or skip');
+      if (inProgress === undefined) {
+        // Git's own "no rebase in progress" error.
+        await runGit(commandArguments);
+        throw new Error(`rebase ${input.mode}: no rebase in progress`);
+      }
+      return runRebaseStep(commandArguments, inProgress);
+    },
+
+    /**
+     * Render the porcelain output of a rebase step while preserving the
+     * original throw-on-stop behavior.
+     *
+     * @param {GitRebaseInput} input
+     * @returns {Promise<string>}
+     */
+    rebaseText: async input => {
+      await assertNoExecutableRepoConfig();
+      return runGit(rebaseArguments(input));
     },
 
     /**
