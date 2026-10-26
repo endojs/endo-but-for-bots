@@ -15,10 +15,16 @@
       "path": "../exo/tsconfig.composite.json"
     },
     {
+      "path": "../exo-stream/tsconfig.composite.json"
+    },
+    {
       "path": "../far/tsconfig.composite.json"
     },
     {
       "path": "../harden/tsconfig.composite.json"
+    },
+    {
+      "path": "../inference/tsconfig.composite.json"
     },
     {
       "path": "../patterns/tsconfig.composite.json"

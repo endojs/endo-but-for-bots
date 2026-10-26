@@ -1,5 +1,10 @@
 // @ts-check
 
+import { makeInferenceAgentDriverMaker } from './src/inference-adapter.js';
+import { makeChildAgentSpawner } from './src/spawner.js';
+
+export { makeInferenceAgentDriverMaker, makeChildAgentSpawner };
+
 export {
   makeChildAgentCoordinator,
   prepareChildAgentCoordinator,

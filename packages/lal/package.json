@@ -17,6 +17,7 @@
   },
   "type": "module",
   "exports": {
+    "./agent-driver-maker.js": "./agent-driver-maker.js",
     "./model-detect.js": "./model-detect.js",
     "./providers/index.js": "./providers/index.js",
     "./tools/mock-powers.js": "./tools/mock-powers.js",
@@ -44,7 +45,9 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-agent-factory": "workspace:^",
     "@endo/exo-stream": "workspace:^",
+    "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hosted-agent": "workspace:^",
     "@endo/marshal": "workspace:^",
