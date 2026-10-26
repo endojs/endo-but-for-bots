@@ -940,3 +940,16 @@ test('the coordinator facet refuses ids it never issued', async t => {
   const { operationId } = (await E(bound).create('helper')).summary;
   t.true(await E(coordinatorFacet.lifecycleFor(operationId)).isActive());
 });
+
+test('the coordinator facet re-derives a lifecycle that observes removal', async t => {
+  const { coordinator, bound } = await setup();
+  const { summary } = await E(bound).create('helper');
+  const { coordinatorFacet } = coordinator;
+  const lifecycle = coordinatorFacet.lifecycleFor(summary.operationId);
+  t.true(await E(lifecycle).isActive());
+  await E(bound).remove('helper');
+  t.false(await E(lifecycle).isActive());
+  t.throws(() => coordinatorFacet.lifecycleFor('no-such-op'), {
+    message: /^Malformed/,
+  });
+});
