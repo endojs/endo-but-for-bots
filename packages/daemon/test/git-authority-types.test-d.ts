@@ -1,5 +1,10 @@
 import { expectTypeOf } from 'expect-type';
-import type { HistoryRewriteEndoGit, ReadWriteEndoGit } from '@endo/exo-git';
+import type {
+  EndoGit,
+  HistoryRewriteEndoGit,
+  ReadOnlyEndoGit,
+  ReadWriteEndoGit,
+} from '@endo/exo-git';
 
 import type { EndoHost, EndoMount, GitProvisionOptions } from '../src/types.js';
 
@@ -22,6 +27,12 @@ const optionsSelectedAtRuntimeResult = host.provideGit(
   mount,
   'options-selected-at-runtime',
   optionsSelectedAtRuntime,
+);
+const readOnly = host.provideGit(mount, 'read-only', { readOnly: true });
+const readOnlyIgnoresHistoryRewrite = host.provideGit(
+  mount,
+  'read-only-ignores-history-rewrite',
+  { readOnly: true, allowHistoryRewrite: true },
 );
 
 // `provideGit`'s overloads pin the caller's `allowHistoryRewrite` argument to
@@ -50,13 +61,20 @@ expectTypeOf(historyRewrite).resolves.toEqualTypeOf<HistoryRewriteEndoGit>();
 expectTypeOf(selectedAtRuntime).resolves.toEqualTypeOf<
   ReadWriteEndoGit | HistoryRewriteEndoGit
 >();
-// The same dynamic-selection contract holds when the whole options bag
-// (not just the boolean field) is decided at runtime: passing a
-// `GitProvisionOptions` value carries no compile-time-visible literal, so the
-// overload resolution must still fall back to the same two-arm union.
-expectTypeOf(optionsSelectedAtRuntimeResult).resolves.toEqualTypeOf<
-  ReadWriteEndoGit | HistoryRewriteEndoGit
->();
+// When the whole options bag (not just one boolean field) is decided at
+// runtime, a `GitProvisionOptions` value may carry `readOnly: true` as well as
+// either `allowHistoryRewrite`, so the honest static type is every posture.
+expectTypeOf(optionsSelectedAtRuntimeResult).resolves.toEqualTypeOf<EndoGit>();
+
+// `readOnly: true` is persisted in the formula and selects the reader facet
+// over any mount, overriding `allowHistoryRewrite`.  The type must drop every
+// mutation method: a caller that hands this result to an auditor relies on
+// the static type to know the auditor cannot commit, stage, switch branches,
+// merge, rebase, or touch the stash.
+expectTypeOf(readOnly).resolves.toEqualTypeOf<ReadOnlyEndoGit>();
+expectTypeOf(
+  readOnlyIgnoresHistoryRewrite,
+).resolves.toEqualTypeOf<ReadOnlyEndoGit>();
 
 // `provideGitClone` always constructs a fresh, unrewritten repository, so its
 // `git` facet can never carry history-rewrite authority regardless of any

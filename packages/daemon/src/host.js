@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { HistoryRewriteEndoGit, ReadWriteEndoGit } from '@endo/exo-git' */
+/** @import { EndoGit, HistoryRewriteEndoGit, ReadOnlyEndoGit, ReadWriteEndoGit } from '@endo/exo-git' */
 /// <reference types="ses"/>
 /* global process */
 
@@ -1323,28 +1323,35 @@ export const makeHostMaker = ({
      * @overload
      * @param {EndoMount} mountCap
      * @param {string | string[]} petName
-     * @param {GitProvisionOptions & {allowHistoryRewrite: true}} options
+     * @param {GitProvisionOptions & {readOnly: true}} options
+     * @returns {Promise<ReadOnlyEndoGit>}
+     */
+    /**
+     * @overload
+     * @param {EndoMount} mountCap
+     * @param {string | string[]} petName
+     * @param {GitProvisionOptions & {readOnly?: false, allowHistoryRewrite: true}} options
      * @returns {Promise<HistoryRewriteEndoGit>}
      */
     /**
      * @overload
      * @param {EndoMount} mountCap
      * @param {string | string[]} petName
-     * @param {GitProvisionOptions & {allowHistoryRewrite?: false}} [options]
+     * @param {GitProvisionOptions & {readOnly?: false, allowHistoryRewrite?: false}} [options]
      * @returns {Promise<ReadWriteEndoGit>}
      */
     /**
      * @overload
      * @param {EndoMount} mountCap
      * @param {string | string[]} petName
-     * @param {GitProvisionOptions & {allowHistoryRewrite: boolean}} options
+     * @param {GitProvisionOptions & {readOnly?: false, allowHistoryRewrite: boolean}} options
      * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
      */
     /**
      * @param {EndoMount} mountCap
      * @param {string | string[]} petName
      * @param {GitProvisionOptions} [options]
-     * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
+     * @returns {Promise<EndoGit>}
      */
     const provideGit = async (mountCap, petName, options = {}) => {
       const { namePath } = petNamePathFrom(petName);
@@ -1369,7 +1376,8 @@ export const makeHostMaker = ({
       // misrepresenting the authority actually granted, the same rationale as
       // provideShell's read-only-mount rejection.  A caller that intends a
       // read-only Git capability opts in with `readOnly: true` to skip this
-      // gate.
+      // gate; the formula then records the read-only posture, so the result
+      // is the reader facet even over a writable mount.
       if (!readOnly) {
         const backing = getMountBacking(mountCap);
         if (backing !== undefined && backing.readOnly) {
@@ -1382,10 +1390,11 @@ export const makeHostMaker = ({
       const { value } = await formulateGit(
         mountId,
         allowHistoryRewrite,
+        readOnly,
         identity,
         tasks,
       );
-      return /** @type {ReadWriteEndoGit | HistoryRewriteEndoGit} */ (value);
+      return value;
     };
 
     /** @type {EndoHost['provideShell']} */
@@ -1737,6 +1746,7 @@ export const makeHostMaker = ({
           const tasks = makeDeferredTasks();
           const { value, id } = await formulateGit(
             destMountId,
+            false,
             false,
             identity,
             tasks,

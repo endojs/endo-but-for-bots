@@ -336,16 +336,17 @@ interface Git {
   filesystemAt(ref: GitRef | string): Promise<Filesystem>;
   tree(ref: GitRef | string): Promise<ReadableTree>;
 
-  // Attenuation to a read-only posture.  Mutation methods on the returned
-  // cap throw at runtime in the first implementation phase; the type
-  // narrows to drop them when structured shapes land in Phase 7.
-  readOnly(): Git;
+  // Attenuation to a read-only posture.  The returned cap's type carries
+  // only the inspection methods (Phase 7); the mutation methods are absent
+  // from the runtime facet as well.
+  readOnly(): ReadOnlyEndoGit;
 }
 ```
 
 `tree(ref)` returns the read surface defined by `GitTreeProvider` below; the interface name remains as the documented shape of the returned read capability even though tree access lives as a method on `Git` itself.
 
-`readOnly()` mirrors the `EndoMount.readOnly()` attenuation idiom ([daemon-mount-capabilities](daemon-mount-capabilities.md) § Design Decision 6): the returned `Git` exposes the same methods, but the mutation methods (`add`, `restore`, `commit`, `reword`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`) throw at runtime initially and are narrowed out of the type when structured shapes land (Phase 7).
+`readOnly()` mirrors the `EndoMount.readOnly()` attenuation idiom ([daemon-mount-capabilities](daemon-mount-capabilities.md) § Design Decision 6): the returned `ReadOnlyEndoGit` (`@endo/exo-git`) keeps the inspection methods, and the mutation methods (`add`, `restore`, `checkoutConflict`, `commit`, `reword`, `cherryPick`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `switch`, `merge`, `mergeText`, `rebase`, `rebaseText`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`, `worktreeAdd`) are narrowed out of its type (Phase 7).
+The runtime keeps the same boundary as defense in depth: the read-only facet does not carry those methods, so a caller that casts the type away still fails the method lookup.
 A read-only auditor agent holds the attenuated `Git`; the operator hands it `await E(git).readOnly()` rather than the unattenuated cap.
 Read-only is one of **two independent attenuation axes** on `Git`; the other is the history-rewrite axis (`allowHistoryRewrite`, withheld by default — Design Decision 11), and `readOnly()` drops both.
 
@@ -391,7 +392,7 @@ const text = await E(oldReadme).text();
 // hand a read-only attenuated Git to an auditor agent
 const auditor = await E(git).readOnly();
 await E(auditor).status();          // ok — read method
-await E(auditor).commit('nope');    // throws — mutation method on read-only
+await E(auditor).commit('nope');    // type error; at runtime, no such method
 ```
 
 ### Structured Result Shapes (Phase 7)
@@ -830,7 +831,11 @@ It is not part of the normative design.
   `GitRemote.pull({ strategy: 'rebase' })` rejects when the structured rebase stops, so a pull never records a stopped rebase as an integration.
 - **Phase 7, structured stash slice.** `Git.stashList()` returns `GitStash[]`, `Git.stashShow(index?)` returns `GitDiff`, and the prior porcelain results move to `stashListText()` / `stashShowText()`.
   A stash record carries the stack index, a resolved `GitRef`, the reflog message, and the stash commit metadata. The structured diff compares the stash commit with its first parent, matching the tracked-change view of `git stash show --patch`.
-  This completes the Phase 7 structured-result work; read-only construction typing remains open.
+  This completes the Phase 7 structured-result work.
+- **Phase 7, `readOnly()` type narrowing** — `readOnly()` on every facet returns `ReadOnlyEndoGit`, whose type carries only the inspection methods; `@endo/exo-git`'s type tests pin its key set exactly, so a mutation method added to the read-only surface fails the type check.
+  `EndoHost.provideGit(mount, name, { readOnly: true })` now has its own overload returning `ReadOnlyEndoGit`, and the `git` formula records `readOnly: true`, so the declared posture holds over a writable mount and across reincarnation (previously the option only skipped the read-only-mount gate, and a writable mount still yielded a writable Git).
+  A runtime-selected `GitProvisionOptions` bag types as the full `EndoGit` union.
+  Runtime defense in depth is unchanged: the reader facet carries no mutation method, and `provideGit` still rejects an undeclared writable request over a read-only mount.
 
 ### Forward-design notes
 
@@ -909,6 +914,8 @@ No open questions remain on this document; revisit if real implementation surfac
    A read-only `Git` can be obtained two ways and the two paths produce the same authority shape (see § Read-only construction paths):
    - **Writable→readOnly path:** `await E(git).readOnly()` returns a read-only attenuation of a `Git` constructed from a writable mount.
    - **Read-only-mount-derived path:** `provideGit(readOnlyMount)` constructs a `Git` whose mutability flag is already false; the formula does not briefly mint a writable `Git` and wrap it.
+   - **Declared path:** `provideGit(mount, name, { readOnly: true })` records the read-only posture in the `git` formula, so the capability is the read-only facet over a writable mount too, before and after reincarnation; `allowHistoryRewrite` is ignored.
+     `EndoHost.provideGit` types this overload as `ReadOnlyEndoGit`.
 
    Allowed on a read-only `Git`: `status`, `diff`, `log`, `show`, `revParse`, `branches`, `currentBranch`, `tree(ref)`, `filesystemAt(ref)`, `readOnly()` (idempotent — see Design Decision 9), and `worktree.snapshot()`.
    Rejected: `add`, `restore`, `checkoutConflict`, `commit`, `reword`, `cherryPick`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`.

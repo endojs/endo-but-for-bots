@@ -46,6 +46,7 @@ import {
 /**
  * @import {EReturn} from '@endo/eventual-send';
  * @import {ExecutionContext} from 'ava';
+ * @import {ReadWriteEndoGit} from '@endo/exo-git';
  * @import {FormulaNumber, NodeNumber} from '../src/types.js';
  */
 
@@ -7960,6 +7961,76 @@ testNeedsNodeWorker(
     await t.throwsAsync(E(gitCap).commit('blocked'), {
       message: /has no method "commit"/,
     });
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit persists a declared read-only posture over a writable mount',
+  async t => {
+    /** @param {unknown} cap */
+    const methodNamesOf = cap =>
+      // eslint-disable-next-line no-underscore-dangle
+      E(/** @type {any} */ (cap)).__getMethodNames__();
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(
+      config.statePath,
+      '..',
+      'git-readonly-writable-mount-repo',
+    );
+    await createGitFixture(repoPath);
+
+    const writableMount = await E(host).provideMount(
+      repoPath,
+      'git-readonly-writable-mount-worktree',
+    );
+    const writableGit = await E(host).provideGit(
+      writableMount,
+      'git-readonly-writable-mount-writer',
+    );
+    const declared = await E(host).provideGit(
+      writableMount,
+      'git-readonly-writable-mount-declared',
+      { readOnly: true },
+    );
+    // `readOnly: true` overrides `allowHistoryRewrite` rather than
+    // combining with it.
+    const declaredOverRewrite = await E(host).provideGit(
+      writableMount,
+      'git-readonly-writable-mount-over-rewrite',
+      { readOnly: true, allowHistoryRewrite: true },
+    );
+
+    // Same-authority-shape invariant: a declared read-only Git exposes
+    // exactly the method set of an in-place `readOnly()` attenuation, so
+    // the narrowed `ReadOnlyEndoGit` type describes both.
+    const attenuated = await E(writableGit).readOnly();
+    const attenuatedMethods = await methodNamesOf(attenuated);
+    t.deepEqual(await methodNamesOf(declared), attenuatedMethods);
+    t.deepEqual(await methodNamesOf(declaredOverRewrite), attenuatedMethods);
+    t.false(attenuatedMethods.includes('commit'));
+
+    const status = await E(declared).status();
+    t.true(Array.isArray(status.entries));
+    // Runtime defense in depth: even a caller that casts the narrowed type
+    // away cannot reach a mutation method, because the reader facet does
+    // not carry one.
+    const runtimeDeclared = /** @type {ReadWriteEndoGit} */ (
+      /** @type {unknown} */ (declared)
+    );
+    await t.throwsAsync(E(runtimeDeclared).commit('blocked'), {
+      message: /has no method "commit"/,
+    });
+    await t.throwsAsync(E(runtimeDeclared).stashPush(), {
+      message: /has no method "stashPush"/,
+    });
+
+    // The posture lives in the formula, so a reincarnated capability is
+    // still read-only even though its mount is writable.
+    await E(host).cancel('git-readonly-writable-mount-declared');
+    const reincarnated = await E(host).lookup(
+      'git-readonly-writable-mount-declared',
+    );
+    t.deepEqual(await methodNamesOf(reincarnated), attenuatedMethods);
   },
 );
 
