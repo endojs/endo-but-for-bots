@@ -870,3 +870,43 @@ test('NativeGitBackend.diff reports an unmerged path without hunks', async t => 
   ]);
   t.regex(await backend.diffText(), /diff --cc f\.txt/);
 });
+
+test('NativeGitBackend.diff narrows by revision range and path', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  const commit = message =>
+    git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qam',
+      message,
+    ]);
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'a\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'b.txt'), 'b\n');
+  await git(['add', '.']);
+  await commit('first');
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'a2\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'b.txt'), 'b2\n');
+  await commit('second');
+
+  const options = { base: 'HEAD~1', head: 'HEAD', paths: ['a.txt'] };
+  const diff = await backend.diff(options);
+  t.deepEqual(
+    diff.files.map(({ status, newPath }) => ({ status, newPath })),
+    [{ status: 'modified', newPath: 'a.txt' }],
+  );
+  t.deepEqual(diff.files[0].hunks[0].lines, [
+    { kind: 'remove', text: 'a' },
+    { kind: 'add', text: 'a2' },
+  ]);
+  const text = await backend.diffText(options);
+  t.regex(text, /diff --git a\/a\.txt b\/a\.txt/);
+  t.notRegex(text, /b\.txt/);
+  await t.throwsAsync(() => backend.diff({ paths: [''] }));
+  await t.throwsAsync(() => backend.diff({ base: '-x' }));
+});
