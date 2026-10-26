@@ -101,8 +101,10 @@ type GitReadOnlyEndoGit = {
     revParse: (ref: GitRef | string) => Promise<GitRef>;
     currentBranch: () => Promise<GitRef | undefined>;
     branches: () => Promise<GitRef[]>;
-    stashList: () => Promise<string[]>;
-    stashShow: (index?: number) => Promise<string>;
+    stashList: () => Promise<GitStash[]>;
+    stashListText: () => Promise<string[]>;
+    stashShow: (index?: number) => Promise<GitDiff>;
+    stashShowText: (index?: number) => Promise<string>;
     tree: (ref: GitRef | string) => Promise<GitTree>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
     followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;
@@ -114,6 +116,12 @@ type GitShow = {
     commit: GitCommit;
     parents: string[];
     diff: GitDiff;
+};
+type GitStash = {
+    index: number;
+    ref: GitRef;
+    message: string;
+    created: GitCommit;
 };
 type GitStashPushOptions = {
     message?: string;
@@ -473,10 +481,12 @@ type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
     showText: (ref: GitRef | string) => Promise<string>;
     stashApply: (index?: number) => Promise<void>;
     stashDrop: (index?: number) => Promise<void>;
-    stashList: () => Promise<string[]>;
+    stashList: () => Promise<GitStash[]>;
+    stashListText: () => Promise<string[]>;
     stashPop: (index?: number) => Promise<void>;
     stashPush: (options?: GitStashPushOptions) => Promise<string>;
-    stashShow: (index?: number) => Promise<string>;
+    stashShow: (index?: number) => Promise<GitDiff>;
+    stashShowText: (index?: number) => Promise<string>;
     status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
     switch: (ref: GitRef | string) => Promise<void>;
     switchBranch: (name: string) => Promise<void>;
@@ -588,6 +598,12 @@ type GitShow = {
     commit: GitCommit;
     parents: string[];
     diff: GitDiff;
+};
+type GitStash = {
+    index: number;
+    ref: GitRef;
+    message: string;
+    created: GitCommit;
 };
 type GitStatusResult = {
     entries: GitStatusEntry[];
@@ -862,8 +878,10 @@ type GitStreamYieldNode<Y = unknown, R = undefined> = {
     scope: (name: 'reader') => typeof gitReadOnly;
     show: (ref: GitRef | string) => Promise<GitShow>;
     showText: (ref: GitRef | string) => Promise<string>;
-    stashList: () => Promise<string[]>;
-    stashShow: (index?: number) => Promise<string>;
+    stashList: () => Promise<GitStash[]>;
+    stashListText: () => Promise<string[]>;
+    stashShow: (index?: number) => Promise<GitDiff>;
+    stashShowText: (index?: number) => Promise<string>;
     status: (options?: {
         untracked?: 'all' | 'normal' | 'no';
         maxCount?: number;

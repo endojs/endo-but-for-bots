@@ -5,7 +5,7 @@
 | **Created** | 2026-05-18 |
 | **Updated** | 2026-07-11 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 0-6 landed via #364/#367/#371 plus the gated history verbs via #644 — see § Implementation Progress; Phase 7 structured shapes open) |
+| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 0-6 landed via #364/#367/#371 plus the gated history verbs via #644 — see § Implementation Progress; Phase 7 structured results complete, read-only construction typing open) |
 
 > **Read in order.**
 > This is doc 2 of 3.
@@ -426,6 +426,13 @@ type GitShow = {
   diff: GitDiff;
 };
 
+type GitStash = {
+  index: number;
+  ref: GitRef;
+  message: string;
+  created: GitCommit;
+};
+
 type GitConflict = {
   entry: EndoMountEntry;
   base?: { oid: string };
@@ -450,8 +457,9 @@ type GitRebaseResult =
 Phase 7 upgrades the `Git` interface in place; the first phase's text-returning methods move under `*Text()` siblings (`diffText`, `showText`, …) so callers that still want the porcelain output for display can keep it.
 The migration is named in `## Migration Strategy` as a discrete step rather than an ambient "we'll structurally-improve later"; consumers who write against the first phase can flip to the structured shapes by replacing one method call per site.
 
-`stashList`'s structured shape, in the same vein, becomes `Promise<Array<{ index: number; ref: GitRef; message: string; created: GitCommit }>>`.
-It ships as part of the same Phase 7 cut.
+`stashList` returns `Promise<GitStash[]>`, and `stashShow` returns the same
+`GitDiff` shape as `diff` for the selected stash's tracked changes.
+They ship as part of the same Phase 7 cut.
 
 ## Why `EndoMountEntry` Is Required
 
@@ -731,10 +739,10 @@ Complete the required phases from [daemon-mount-capabilities](daemon-mount-capab
 
 ### Phase 7: Structured Result Shapes
 
-- [ ] Land the structured shapes named in § Structured Result Shapes (`GitDiff`, `GitFileDiff`, `GitDiffHunk`, `GitShow`, `GitConflict`, `GitMergeResult`, `GitRebaseResult`, structured `stashList`).
-- [ ] Rename the text-returning methods to `*Text` siblings (`diffText`, `showText`, `mergeText`, `rebaseText`, `stashListText`, `stashShowText`) so display consumers can keep the porcelain output.
+- [x] Land the structured shapes named in § Structured Result Shapes (`GitDiff`, `GitFileDiff`, `GitDiffHunk`, `GitShow`, `GitConflict`, `GitMergeResult`, `GitRebaseResult`, structured `stashList`).
+- [x] Rename the text-returning methods to `*Text` siblings (`diffText`, `showText`, `mergeText`, `rebaseText`, `stashListText`, `stashShowText`) so display consumers can keep the porcelain output.
 - [ ] Drop mutation methods from the type of `readOnly()` cap returns; the runtime-throws behavior from Phase 5 stays as a defense-in-depth check.
-- [ ] Migrate every in-tree consumer of the text methods to the structured shape in the same window; the `*Text` siblings remain available for consumers that still need porcelain.
+- [x] Migrate every in-tree consumer of the text methods to the structured shape in the same window; the `*Text` siblings remain available for consumers that still need porcelain.
 
 ## Testing Plan
 
@@ -820,7 +828,9 @@ It is not part of the normative design.
   `start`, `continue`, and `skip` report `completed` (the new head and the commits Git actually rewrote, oldest first; a branch already on its upstream replays none), `conflicts` (the stopped commit plus the same mount-minted `GitConflict` records `merge` returns), or `in-progress` when Git stops without an unmerged entry; `abort` reports the restored head.
   A step that fails before any rebase is in progress (a dirty worktree, starting while another rebase is stopped, continuing when none is) still rejects with Git's error.
   `GitRemote.pull({ strategy: 'rebase' })` rejects when the structured rebase stops, so a pull never records a stopped rebase as an integration.
-  Remaining Phase 7 work: structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
+- **Phase 7, structured stash slice.** `Git.stashList()` returns `GitStash[]`, `Git.stashShow(index?)` returns `GitDiff`, and the prior porcelain results move to `stashListText()` / `stashShowText()`.
+  A stash record carries the stack index, a resolved `GitRef`, the reflog message, and the stash commit metadata. The structured diff compares the stash commit with its first parent, matching the tracked-change view of `git stash show --patch`.
+  This completes the Phase 7 structured-result work; read-only construction typing remains open.
 
 ### Forward-design notes
 
