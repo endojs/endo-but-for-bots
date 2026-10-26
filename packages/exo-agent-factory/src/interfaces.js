@@ -37,9 +37,12 @@ export const DerivedNamespaceSummaryShape = harden({
 });
 
 /**
- * The trusted host-side adapter contract. A maker installs the loop that
- * answers a child's mail and returns the durable responder whose incarnation
- * starts or rejoins that loop. It is never exposed to the child.
+ * The trusted host-side adapter contract. A maker prepares the driver guest
+ * with the adapter capabilities its loop needs and names the loop's module.
+ * The coordinator formulates that module as the child's runner, with the
+ * driver guest as its powers, at a name only the coordinator writes, so a
+ * replay can prove the runner it finds there. It is never exposed to the
+ * child.
  */
 export const AgentDriverMakerInterface = M.interface('AgentDriverMaker', {
   installDriver: M.callWhen(
@@ -47,7 +50,12 @@ export const AgentDriverMakerInterface = M.interface('AgentDriverMaker', {
       { agent: M.remotable(), driverGuest: M.remotable(), lifecycle: M.any() },
       { instructions: M.string() },
     ),
-  ).returns(M.splitRecord({ responder: M.any() })),
+  ).returns(
+    M.splitRecord(
+      { specifier: M.string() },
+      { env: M.recordOf(M.string(), M.string()) },
+    ),
+  ),
 });
 harden(AgentDriverMakerInterface);
 

@@ -44,9 +44,23 @@ import {
  * @property {(...path: string[]) => Promise<string | undefined>} powersOf -
  *   The identifier of the powers an unconfined caplet was formulated with.
  * @property {(value: any, path: string | string[]) => Promise<void>} storeValue
+ * @property {(from: string[], to: string[]) => Promise<void>} copy - Bind
+ *   `to` to the formula `from` names, preserving its identifier.
  * @property {(...path: string[]) => Promise<void>} remove
  * @property {(...path: string[]) => Promise<void>} cancel
  * @property {(name: string) => Promise<any>} provideGuest
+ * @property {(specifier: string, options: { powersName: string,
+ *   resultName: string, env?: Record<string, string> }) => Promise<any>}
+ *   makeUnconfined - Always formulates a new caplet over the named powers,
+ *   then writes the result name. It has no adoption path.
+ */
+
+/**
+ * @typedef {object} DriverDescriptor
+ * What a maker's `installDriver` returns: the module the coordinator
+ * formulates as the child's runner, with the driver guest as its powers.
+ * @property {string} specifier
+ * @property {Record<string, string>} [env]
  */
 
 /**
@@ -132,22 +146,39 @@ const childName = (/** @type {string} */ opKey, /** @type {string} */ piece) =>
  */
 
 /**
- * Create, or revive, the factory coordinator over its private host.
+ * @typedef {object} CoordinatorOptions
+ * @property {PrivateHost} host
+ * @property {ChildAgentPolicy} rootPolicy
+ * @property {() => number} [now]
+ * @property {(opKey: string, path: string[]) => Promise<void>}
+ *   [formulateLifecycle] - Write the lifecycle facet for an operation at
+ *   `path`. A deployment writes a durable formula that re-derives the facet
+ *   from the coordinator; the default stores this incarnation's facet.
+ * @property {(nsId: number) => Promise<any>} [formulateBoundFacet] - Return
+ *   the facet `bind` and `attenuate` hand out for a namespace. A deployment
+ *   returns a durable formula's value; the default is this incarnation's exo.
+ */
+
+/**
+ * Create, or revive, the factory coordinator over its private host, without
+ * waiting for it.
  *
  * The coordinator keeps an append-only journal per namespace in its private
  * directory, rebuilds all state from it, and reconciles every nonterminal
- * record before it answers a facet call. The returned root facet is the
- * deploying host's `ChildAgentFactory`.
+ * record before it answers a facet call: every facet method waits for
+ * `ready`. `replayed` settles first, once the journals are read, which is
+ * all `boundFacet` and `lifecycle` need. A durable facet formula re-derives
+ * its facet through them, and a runner reconciliation starts may resolve its
+ * lifecycle facet, so neither may wait for reconciliation itself.
  *
- * @param {object} options
- * @param {PrivateHost} options.host
- * @param {ChildAgentPolicy} options.rootPolicy
- * @param {() => number} [options.now]
+ * @param {CoordinatorOptions} options
  */
-export const prepareChildAgentCoordinator = async ({
+export const makeChildAgentCoordinator = ({
   host,
   rootPolicy,
   now = () => Date.now(),
+  formulateLifecycle = undefined,
+  formulateBoundFacet = undefined,
 }) => {
   /** @type {Map<number, Namespace>} */
   const namespaces = new Map();
@@ -157,6 +188,8 @@ export const prepareChildAgentCoordinator = async ({
 
   // One queue serializes every mutation. Nested quota spans namespaces, so a
   // per-namespace queue would let two siblings race for an ancestor's last slot.
+  /** @type {Promise<void>} */
+  let ready = new Promise(() => {});
   /** @type {Promise<unknown>} */
   let queue = Promise.resolve();
   /**
@@ -165,7 +198,10 @@ export const prepareChildAgentCoordinator = async ({
    * @returns {Promise<T>}
    */
   const serial = thunk => {
-    const result = queue.then(thunk);
+    const result = queue.then(async () => {
+      await ready;
+      return thunk();
+    });
     queue = result.catch(() => {});
     return result;
   };
@@ -340,8 +376,9 @@ export const prepareChildAgentCoordinator = async ({
           );
         }
       } else {
-        const value = await E(host).lookup(retainedName);
-        await E(host).storeValue(value, [guestName, endowmentName]);
+        // A copy binds the retained formula itself, so a replay compares
+        // equal identifiers instead of two wrappers of one value.
+        await E(host).copy([retainedName], [guestName, endowmentName]);
       }
     }
     const names = await E(host).list(guestName);
@@ -385,10 +422,9 @@ export const prepareChildAgentCoordinator = async ({
     if (op.phase === 'Endowed') {
       const ref = await provideProvedGuest(driverName);
       if (!(await E(host).has(driverName, LIFECYCLE_NAME))) {
-        await E(host).storeValue(lifecycleFor(op), [
-          driverName,
-          LIFECYCLE_NAME,
-        ]);
+        await (formulateLifecycle
+          ? formulateLifecycle(op.key, [driverName, LIFECYCLE_NAME])
+          : E(host).storeValue(lifecycleFor(op), [driverName, LIFECYCLE_NAME]));
       }
       await advanceTo(op, 'DriverCreated', { ref });
     }
@@ -396,7 +432,8 @@ export const prepareChildAgentCoordinator = async ({
       const driverId = await E(host).identify(driverName);
       if (!(await proveOrAbsent(responderName, 'unconfined', driverId))) {
         const maker = await makerFor(op);
-        const { responder } = await E(maker).installDriver(
+        /** @type {DriverDescriptor} */
+        const { specifier, env } = await E(maker).installDriver(
           harden({
             agent: await E(host).lookup(guestName),
             driverGuest: await E(host).lookup(driverName),
@@ -404,7 +441,19 @@ export const prepareChildAgentCoordinator = async ({
             ...(op.instructions ? { instructions: op.instructions } : {}),
           }),
         );
-        await E(host).storeValue(responder, responderName);
+        typeof specifier === 'string' ||
+          Fail`installDriver must return a driver specifier`;
+        // The coordinator formulates the runner at the derived name itself.
+        // A responder value stored by name would be a new wrapper formula
+        // whose type and powers no replay could prove.
+        await E(host).makeUnconfined(
+          specifier,
+          harden({
+            powersName: driverName,
+            resultName: responderName,
+            ...(env ? { env } : {}),
+          }),
+        );
       }
       const ref = await E(host).identify(responderName);
       await advanceTo(op, 'Pinned', { ref });
@@ -657,7 +706,11 @@ export const prepareChildAgentCoordinator = async ({
         await converge(op).catch(() => {});
       }
     }
-    for (const op of operations.values()) {
+  };
+
+  const startRunners = async () => {
+    await null;
+    for (const op of [...operations.values()]) {
       if (isActive(op)) {
         await startRunner(op);
       }
@@ -799,7 +852,7 @@ export const prepareChildAgentCoordinator = async ({
         });
       },
       async lookup(name) {
-        await null;
+        await ready;
         assertLive(nsId);
         const op = ns.children.get(name);
         if (!op || op.phase !== 'Committed') {
@@ -808,7 +861,7 @@ export const prepareChildAgentCoordinator = async ({
         return E(host).lookup(childName(op.key, 'guest'), '@self');
       },
       async list() {
-        await null;
+        await ready;
         assertLive(nsId);
         return harden(
           [...ns.children.values()]
@@ -816,7 +869,8 @@ export const prepareChildAgentCoordinator = async ({
             .map(summarize),
         );
       },
-      remove(name) {
+      async remove(name) {
+        await ready;
         assertLive(nsId);
         const op = ns.children.get(name);
         if (!op) throw Fail`No child named ${q(name)}`;
@@ -843,15 +897,16 @@ export const prepareChildAgentCoordinator = async ({
             derivedPolicy,
             /** @type {number} */ (ns.makerNs),
           );
-          return boundFacetFor(derived.id);
+          return issueFacet(derived.id);
         });
       },
       async listDerived() {
-        await null;
+        await ready;
         assertLive(nsId);
         return listDerivedOf(ns);
       },
-      revokeDerived(name) {
+      async revokeDerived(name) {
+        await ready;
         assertLive(nsId);
         return serial(() => revokeDerivedOf(ns, name));
       },
@@ -860,10 +915,15 @@ export const prepareChildAgentCoordinator = async ({
     return facet;
   };
 
-  await replay();
-  await reconcile();
+  /** @param {number} nsId */
+  const issueFacet = nsId =>
+    formulateBoundFacet ? formulateBoundFacet(nsId) : boundFacetFor(nsId);
 
-  const root = /** @type {Namespace} */ (namespaces.get(ROOT));
+  const replayed = replay();
+  ready = replayed.then(reconcile);
+  const runnersStarted = ready.then(startRunners);
+
+  const rootNamespace = () => /** @type {Namespace} */ (namespaces.get(ROOT));
 
   const rootFacet = makeExo('ChildAgentFactory', ChildAgentFactoryInterface, {
     /**
@@ -872,6 +932,7 @@ export const prepareChildAgentCoordinator = async ({
      */
     bind(maker, policy) {
       return serial(async () => {
+        const root = rootNamespace();
         const id = nextNsId;
         const derived = await derive(
           root,
@@ -880,18 +941,22 @@ export const prepareChildAgentCoordinator = async ({
           id,
           maker,
         );
-        return boundFacetFor(derived.id);
+        return issueFacet(derived.id);
       });
     },
     async listDerived() {
-      return listDerivedOf(root);
+      await ready;
+      return listDerivedOf(rootNamespace());
     },
     revokeDerived(name) {
-      return serial(() => revokeDerivedOf(root, name));
+      return serial(() => revokeDerivedOf(rootNamespace(), name));
     },
   });
 
   return harden({
+    replayed,
+    ready,
+    runnersStarted,
     rootFacet,
     /**
      * Operations reconciliation left reserved because a derived name held the
@@ -899,8 +964,9 @@ export const prepareChildAgentCoordinator = async ({
      */
     faults: () => harden(Object.fromEntries(faults)),
     /**
-     * Re-issue the facet for an existing namespace. Facets are in-memory exos
-     * in this slice; a deployment re-derives them from durable formulas.
+     * This incarnation's facet for an existing namespace, which a durable
+     * facet formula re-derives after `replayed`. A revoked namespace's facet
+     * still exists, and rejects every call.
      *
      * @param {number} nsId
      */
@@ -909,6 +975,30 @@ export const prepareChildAgentCoordinator = async ({
         Fail`No bound namespace ${q(nsId)}`;
       return boundFacetFor(nsId);
     },
+    /**
+     * This incarnation's lifecycle facet for an operation, which a durable
+     * lifecycle formula re-derives after `replayed`. A removed operation's
+     * facet reports inactive.
+     *
+     * @param {string} opKey
+     */
+    lifecycle: opKey => {
+      const op = operations.get(opKey) || Fail`No operation ${q(opKey)}`;
+      return lifecycleFor(op);
+    },
   });
+};
+harden(makeChildAgentCoordinator);
+
+/**
+ * Create, or revive, the factory coordinator over its private host, and wait
+ * until it has reconciled every record and started every committed runner.
+ *
+ * @param {CoordinatorOptions} options
+ */
+export const prepareChildAgentCoordinator = async options => {
+  const coordinator = makeChildAgentCoordinator(options);
+  await coordinator.runnersStarted;
+  return coordinator;
 };
 harden(prepareChildAgentCoordinator);

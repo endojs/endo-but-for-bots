@@ -17,6 +17,7 @@ export class Crash extends Error {}
  * @property {string} type
  * @property {any} value
  * @property {string} [powers]
+ * @property {string} [specifier]
  * @property {Map<string, string>} [names] - Present for guests.
  * @property {boolean} [cancelled]
  * @property {number} incarnations
@@ -178,6 +179,16 @@ export const makeFakeDaemon = () => {
       }
       dir.set(path[path.length - 1], id);
     },
+    /**
+     * @param {string[]} from
+     * @param {string[]} to
+     */
+    async copy(from, to) {
+      const id = idAt(from);
+      if (id === undefined) throw Fail`unknown name ${q(from)}`;
+      effect(`copy ${to.join('/')}`);
+      dirFor(to).set(to[to.length - 1], id);
+    },
     /** @param {string[]} path */
     async remove(...path) {
       effect(`remove ${path.join('/')}`);
@@ -205,6 +216,26 @@ export const makeFakeDaemon = () => {
       effect(`name guest ${name}`);
       return formula.value;
     },
+    /**
+     * The daemon's `makeUnconfined`: always formulates a new caplet, with no
+     * adoption path, then writes the result name.
+     *
+     * @param {string} specifier
+     * @param {{ powersName: string, resultName: string }} options
+     */
+    async makeUnconfined(specifier, { powersName, resultName }) {
+      alive();
+      const powers = names.get(powersName) || Fail`unknown ${q(powersName)}`;
+      const responder = Far('Responder', {});
+      const formula = formulate('unconfined', responder, {
+        powers,
+        specifier,
+      });
+      effect('formulate responder');
+      names.set(resultName, formula.id);
+      effect(`name responder ${resultName}`);
+      return incarnate(formula.id);
+    },
   });
 
   /** @param {string} id */
@@ -221,23 +252,9 @@ export const makeFakeDaemon = () => {
   const isRemotable = value => passStyleOf(value) === 'remotable';
 
   /**
-   * The daemon's `makeUnconfined`: always formulates a new caplet, with no
-   * adoption path, then (optionally) writes the result name.
-   *
-   * @param {any} powers
-   */
-  const makeUnconfined = powers => {
-    alive();
-    const powersId = idOfValue(powers);
-    const responder = Far('Responder', {});
-    const formula = formulate('unconfined', responder, { powers: powersId });
-    effect('formulate responder');
-    return formula;
-  };
-
-  /**
-   * A maker that formulates a responder over the driver guest, as Fae's
-   * `makeUnconfined(..., { powersName })` drivers do.
+   * A maker that names its driver module; the coordinator formulates it over
+   * the driver guest, as Fae's `makeUnconfined(..., { powersName })` drivers
+   * are.
    */
   const makeMaker = () => {
     /** @type {any[]} */
@@ -245,8 +262,7 @@ export const makeFakeDaemon = () => {
     const maker = Far('AgentDriverMaker', {
       async installDriver(/** @type {any} */ context) {
         calls.push(context);
-        const formula = makeUnconfined(context.driverGuest);
-        return harden({ responder: formula.value });
+        return harden({ specifier: 'fake:driver' });
       },
     });
     return { maker, calls };

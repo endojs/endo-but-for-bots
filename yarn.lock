@@ -2072,6 +2072,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/exo-agent-factory@workspace:packages/exo-agent-factory"
   dependencies:
+    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -2080,6 +2081,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
