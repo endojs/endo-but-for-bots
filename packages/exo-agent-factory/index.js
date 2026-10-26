@@ -3,9 +3,15 @@
 // compatibility shim; each name has no older home to deprecate.
 
 export {
+  makeChildAgentCoordinator,
   prepareChildAgentCoordinator,
   LIFECYCLE_NAME,
 } from './src/coordinator.js';
+export { makeDaemonPrivateHost } from './src/daemon-host.js';
+export {
+  installChildAgentFactory,
+  coordinatorSpecifier,
+} from './src/install.js';
 export {
   intersectPolicy,
   makeRootPolicy,

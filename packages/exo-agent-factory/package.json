@@ -43,13 +43,16 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
+    "@endo/daemon": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/pass-style": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",

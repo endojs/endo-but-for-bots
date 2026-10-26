@@ -124,7 +124,7 @@ interface AgentDriverMaker {
     driverGuest: EndoGuest;
     lifecycle: AgentLifecycle;
     instructions?: string;
-  }): Promise<{ responder: Passable }>;
+  }): Promise<{ specifier: string; env?: Record<string, string> }>;
 }
 
 interface ChildAgentFactory {
@@ -275,13 +275,18 @@ deploying host. A parent agent that should delegate receives a facet from
 directory or the maker.
 
 `installDriver` is a trusted host-side adapter contract, not a method exposed to
-the child. It formulates its loop with `driverGuest` as powers and returns the
-durable responder value whose incarnation starts or rejoins that loop. The
-driver formula must depend on the driver guest formula, as Fae's current
-`makeUnconfined(..., { powersName })` drivers do, so cancelling the powers guest
-cannot strand a live runner. The coordinator retains the responder in its own
-private directory (§ Provisioned topology); it does not assume that calling a
-method on the responder starts a turn. `AgentLifecycle` is a read-only facet
+the child. It stores the adapter capabilities its loop needs in `driverGuest`'s
+directory and returns the module specifier of that loop. The coordinator then
+formulates the responder itself with `makeUnconfined(specifier, { powersName:
+<driver guest>, resultName: <derived responder name> })`, so the runner depends
+on the driver guest formula, as Fae's current drivers do, and cancelling the
+powers guest cannot strand a live runner. The maker does not formulate the
+responder: daemon `storeValue` wraps any value in a new `marshal` formula, so a
+responder the maker returned could be retained only behind a wrapper whose
+formula type and powers no replay could prove (§ Durable lifecycle). The
+coordinator retains the responder in its own private directory (§ Provisioned
+topology); it does not assume that calling a method on the responder starts a
+turn. `AgentLifecycle` is a read-only facet
 over the operation state. Every runner checks it before opening its message
 follower and between turns. A runner reincarnated while removal is retrying
 therefore remains quiescent. The facet is itself a durable formula, so a

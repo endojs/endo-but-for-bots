@@ -55,7 +55,30 @@ export interface PrivateHost {
   /** The identifier of the powers an unconfined caplet was formulated with. */
   powersOf(...path: string[]): Promise<string | undefined>;
   storeValue(value: any, path: string | string[]): Promise<void>;
+  /** Bind `to` to the formula `from` names, preserving its identifier. */
+  copy(from: string[], to: string[]): Promise<void>;
   remove(...path: string[]): Promise<void>;
   cancel(...path: string[]): Promise<void>;
   provideGuest(name: string): Promise<any>;
+  /**
+   * Always formulates a new caplet over the named powers, then writes the
+   * result name. It has no adoption path.
+   */
+  makeUnconfined(
+    specifier: string,
+    options: {
+      powersName: string;
+      resultName: string;
+      env?: Record<string, string>;
+    },
+  ): Promise<any>;
+}
+
+/**
+ * What a maker's `installDriver` returns: the module the coordinator
+ * formulates as the child's runner, with the driver guest as its powers.
+ */
+export interface DriverDescriptor {
+  specifier: string;
+  env?: Record<string, string>;
 }

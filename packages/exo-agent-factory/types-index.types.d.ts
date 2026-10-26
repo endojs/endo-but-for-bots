@@ -1,8 +1,14 @@
 export type * from './src/types.js';
 export {
+  makeChildAgentCoordinator,
   prepareChildAgentCoordinator,
   LIFECYCLE_NAME,
 } from './src/coordinator.js';
+export { makeDaemonPrivateHost } from './src/daemon-host.js';
+export {
+  installChildAgentFactory,
+  coordinatorSpecifier,
+} from './src/install.js';
 export {
   intersectPolicy,
   makeRootPolicy,
