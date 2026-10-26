@@ -10,3 +10,5 @@ across derived namespaces and `revokeDerived` reclaiming a derived namespace
 without its facet.
 Every provisioning step is journaled and proved before adoption, so a crash at
 any effect converges to exactly one committed child or none on restart.
+The driver records `TurnStarted`, `TurnResult`, and `Published` by durable
+message number and republishes recorded results with the original reply key.
