@@ -28,7 +28,9 @@ Codex, local models, Fae, or Lal.
 
 PR #1102 began as a recursive Claude-agent factory with a special-name map,
 credential-family identifiers, single-use child leases, and a separate
-revocation protocol. Review narrowed it to guest special names. The daemon then
+revocation protocol. That shape was not merely overtaken: the maintainer
+rejected its breadth in review ("Please narrow the scope of this to just
+endowing a new guest with special names on the options bag"). The daemon then
 landed caller-selected ordinary names, networks, and pins in
 [PR #1306](https://github.com/endojs/endo-but-for-bots/pull/1306), and review
 selected the general endowments-map work in
@@ -58,6 +60,20 @@ The relevant substrate has since changed:
 
 The missing M3 capability is consequently not a Claude-account-specific
 service. It is a generic, durable, capability-authorized composition of these landed parts.
+
+### Scope decision
+
+Restoring a child-agent factory reverses a scope the maintainer narrowed, so
+it is not justified by the new substrate alone. This design responds to a
+later maintainer brief that asked for exactly that reconsideration: "Redesign
+the M3 top-priority child-guest provisioning capability ... after merged PR
+#1015; replace closed design PR #1102 with a current, dependency-ready
+implementation design." What #1102's review rejected — Claude credential
+names, ambient recursion, a bespoke lease and revocation protocol, and a
+child-agent-specific special-name change — stays out (§ Rejected
+alternatives). Maintainer approval of this design is the explicit
+confirmation that the restored, provider-neutral scope is wanted; the
+implementation waits for it.
 
 ## Goals and non-goals
 
@@ -129,7 +145,12 @@ interface BoundChildAgentFactory {
   lookup(name: string): Promise<EndoHandle>;
   list(): Promise<ChildAgentSummary[]>;
   remove(name: string): Promise<void>;
-  attenuate(policy: ChildAgentPolicy): Promise<BoundChildAgentFactory>;
+  attenuate(
+    name: string,
+    policy: ChildAgentPolicy,
+  ): Promise<BoundChildAgentFactory>;
+  listDerived(): Promise<DerivedNamespaceSummary[]>;
+  revokeDerived(name: string): Promise<void>;
 }
 
 interface AgentLifecycle {
@@ -143,9 +164,20 @@ creation time, and a stable operation id. It contains no credential,
 provider-account, formula, or host-private namespace identifiers.
 
 The `handle` is the child guest's ordinary mailbox handle (its `@self`), the
-same contact value a host receives when it names a guest. A parent or UI
-names it in its own pet store and sends to that name to talk to the child and receives replies in its own
-mailbox. The handle designates the child's mailbox only; it carries none of the
+same contact value a host receives when it names a guest. It is an address,
+not a callable object: daemon mail is addressed by pet name, so the caller's
+send path is fixed and has two steps.
+
+```js
+await E(myPowers).storeValue(handle, 'helper'); // name the address once
+await E(myPowers).send('helper', ['Hello.'], [], []); // then mail it
+```
+
+A parent or UI stores the handle in its own pet store and sends messages to
+that name. Replies arrive in the parent's own mailbox. A directly callable
+mail object would have to carry delivery authority the handle deliberately
+omits, so the design keeps the daemon's one send path rather than adding a
+second. The handle designates the child's mailbox only; it carries none of the
 child's powers, its pins, or the driver. `lookup` returns the same handle for a
 committed child of this bound factory, so a holder that discarded the `create`
 result can reach the child again without a second naming system. This mirrors
@@ -167,7 +199,28 @@ over the same maker whose policy is the intersection of its argument with the
 issuing facet's policy. The derived namespace is nested: each child it creates
 also reserves a slot in every ancestor namespace's quota, so attenuation cannot
 multiply the root quota. A bound factory can neither enumerate nor remove the
-children of a namespace it derived; the derived facet's holder owns those.
+individual children of a namespace it derived; the derived facet's holder
+manages those.
+
+The issuing facet nonetheless remains the lifecycle owner of every namespace it
+derives, so losing a derived facet never strands durable state. `attenuate`
+names the derived namespace in the issuer's own derived-namespace index, which
+is separate from its child-name index. `listDerived` reports each derived
+namespace's name, phase, and retained-child count. `DerivedNamespaceSummary`
+carries no namespace id, formula identifier, or child name. `revokeDerived` is
+the reclaiming authority:
+
+1. It appends `Revoking` to the derived namespace's record. From then on the
+   derived facet, and every facet derived from it, rejects every call.
+2. It recursively revokes that namespace's own derived namespaces, depth first.
+3. It removes each of that namespace's children by the ordinary `Removing`
+   sequence (§ Durable lifecycle), releasing each ancestor's quota slot.
+4. It appends `Revoked` once no child or nested namespace remains.
+
+`revokeDerived` resolves at `Revoked`, joins an in-flight revocation, and is
+replayed by reconciliation after a crash like any other nonterminal record. The
+root host, holding the root facet, can therefore reclaim everything below each
+`bind` result by revoking it.
 
 #### Operation semantics
 
@@ -204,7 +257,10 @@ const forUi = await E(root).bind(maker, {
 // The UI or parent agent receives forUi and nothing else.
 await E(host).storeValue(forUi, ['ui-guest-inbox', 'child-agents']);
 
-// Inside the UI, holding only forUi.
+// Inside the UI, holding forUi plus its own unrelated authority. Here the UI
+// already holds `notes`, a capability it received earlier under its own pet
+// name; the factory supplies nothing but the child.
+const notes = await E(uiGuest).lookup('notes');
 const { handle } = await E(forUi).create('helper', {
   instructions: 'Summarize new notes.',
   endowments: { notes },
@@ -239,7 +295,8 @@ never bearer credentials.
 ### Explicit recursion
 
 The service does not automatically install a factory into a new child. A
-creator that intends delegation calls `attenuate` on its own bound factory, then
+creator that intends delegation calls `attenuate` on its own bound factory
+(keeping `revokeDerived` for the result), then
 includes the result in the child's ordinary `endowments` under an
 application-chosen name. A child without that endowment cannot create
 descendants. Because every `attenuate` allocates a fresh namespace, siblings
@@ -342,11 +399,13 @@ last successful step in RAM:
 stateDiagram-v2
     [*] --> Intended
     Intended --> GuestCreated
-    GuestCreated --> DriverCreated
+    GuestCreated --> Endowed
+    Endowed --> DriverCreated
     DriverCreated --> Pinned
     Pinned --> Committed
     Intended --> Removing
     GuestCreated --> Removing
+    Endowed --> Removing
     DriverCreated --> Removing
     Pinned --> Removing
     Committed --> Removing
@@ -368,20 +427,69 @@ user-visible child name is a unique key within that namespace.
 Ownership during recovery is proved by location and intent, not by a reference
 appended after the effect. Only the coordinator writes its private directory:
 it is the coordinator's own powers, and no facet, child, or driver receives it.
-The intent entry names the derived name before the effect runs. Each effect is a
-daemon create-and-name call (`provideGuest` or `makeUnconfined` with that
-derived result name), which returns the existing value when the name is already
-bound and otherwise formulates a value and writes the name. A crash after the
-name is written leaves an entry that only this operation could have written.
-A crash before it leaves no entry, and the unnamed formula is unretained and
-collectible. Replaying the phase therefore re-issues the same create-and-name
-call and adopts whatever it returns. The appended stable reference remains an
-index for removal and audit, not the ownership proof.
+The intent entry names the derived name before the effect runs.
+
+The two daemon creation calls do not behave alike, so neither is treated as an
+adopting primitive. `provideGuest(name)` returns whatever value the name
+already holds, of any formula type, and skips its own option handling in that
+case. `makeUnconfined(..., { resultName })` has no adoption path at all: it
+always formulates a new caplet and only then writes the result name, replacing
+any previous binding. Fae's `provisionFaeAgent` prechecks every owned name for
+the same reason. Each creation phase therefore runs one explicit
+precheck-and-proof step, and never relies on the daemon call alone:
+
+1. Check the derived name with `has` in the coordinator's private directory.
+2. If it is bound, adopt it only after proving its formula type matches the
+   phase (a guest for `GuestCreated`, an unconfined caplet whose powers are the
+   recorded driver guest for `DriverCreated`). Do not call the creation
+   primitive again.
+3. If it is unbound, call the primitive with the derived name and record the
+   resulting stable reference.
+
+The step is race-free because only the coordinator writes its private
+directory and it serializes each namespace's operations. Its crash cases are
+these:
+
+- **Crash before the call.** The name is unbound, so replay creates exactly one
+  value.
+- **Crash after formulation but before the name is written.** The name is
+  unbound and the formula is retained by no name. Nothing in the factory can
+  reach it, and the daemon's collector reclaims it when collection is enabled.
+  Replay creates one replacement, which is the only formula any factory record
+  or name refers to.
+- **Crash after the name is written but before the reference is appended.** The
+  name is bound, so replay adopts by step 2 and never formulates a second
+  caplet over it.
+
+The appended stable reference remains an index for removal and audit, not the
+ownership proof.
 
 An entry at a derived name with the wrong formula type for its phase can arise
 only from a coordinator defect. Reconciliation fails closed on it: the
 operation stays nonterminal and reserved, and the coordinator reports the
-mismatch rather than deleting the entry.
+mismatch rather than deleting or overwriting the entry.
+
+### Installing endowments
+
+Endowment installation is an authority-bearing write that happens after guest
+creation and before any driver exists, so it has its own phase, `Endowed`. The
+`Intended` entry retains the desired endowments themselves, not only their
+names: the coordinator stores each value in the operation's private record
+under a derived name before the operation starts. Recovery therefore never
+depends on the caller's arguments.
+
+During `GuestCreated`, the coordinator installs each endowment into the child
+guest by `storeValue` under its endowment name. Each write is idempotent by
+proof: if the child already binds that name, the coordinator compares the
+child's identifier for it with the identifier of the retained value. An equal
+identifier counts as done, and a different one fails closed. The coordinator
+then lists the child's directory and confirms it holds exactly the daemon's
+built-in special names plus the endowment names. Only then does it append
+`Endowed`. The child has no running driver before `Endowed`, so nothing but the
+coordinator can have written its directory. A crash during installation
+replays the same writes and converges, and the child never runs partially
+endowed. `Removing` releases the retained endowment values with the rest of
+the operation's private record.
 
 At startup and before servicing a mutation, the coordinator reconciles every
 nonterminal operation:
@@ -417,31 +525,49 @@ reconciliation repeats it.
 A driver turn reads one child message, calls `infer`, and publishes the
 resulting reply by daemon `send`. The daemon offers no transactional
 publication, so the driver cannot commit its cursor and the send atomically.
-The contract is therefore **at-least-once publication with a stable turn key**,
-and never a second inference for the same turn:
+The daemon also cannot distinguish an `infer` call that never started from one
+that ran provider work or tool calls and then crashed. The contract is
+therefore **at-least-once inference and at-least-once publication, with at
+most one recorded result per turn**:
 
 1. Each turn's key is the child's message number for the message it answers,
    which the daemon assigns durably and which is stable across replay.
 2. Before calling `infer`, the driver appends `TurnStarted(key)` to its ledger.
    After `infer` returns, it appends `TurnResult(key, result)` holding the
-   `InferResult` before any externally visible effect.
-3. It publishes the reply with the key in the message's structured metadata,
+   `InferResult` before publishing anything.
+3. It publishes the reply by `send` with `replyToMessageNumber` set to the key,
    then appends `Published(key)` and advances its cursor past the message.
 
-On replay, a turn with `Published` is skipped. A turn with `TurnResult` but no
-`Published` republishes the recorded result with the same key, without calling
-`infer` again; this is the only crash cut that can produce a duplicate, and the
-duplicate is byte-identical and carries the same key. A turn with only
-`TurnStarted` re-runs `infer`, because no output was visible. Readers that
-present conversation history, including Fae and Lal views, collapse replies
-with an equal key. Tool calls made during an interrupted `infer` are the tool
-owner's to make idempotent; the factory adds no effect journal for them.
+The key travels in the reply's existing `replyTo` field. Daemon `send` takes
+strings, edge names, capability names, and an optional reply-to message
+number, and accepts no other metadata. The design adds no wire field.
+
+On replay:
+
+- A turn with `Published` is skipped.
+- A turn with `TurnResult` but no `Published` republishes the recorded result
+  with the same reply-to, without calling `infer` again. The duplicate is
+  byte-identical.
+- A turn with only `TurnStarted` re-runs `infer`. If the crash fell after
+  provider work or a tool effect, that work happens twice. Provider usage is
+  billed twice, and a tool call repeats unless its owner made it idempotent.
+  The factory adds no effect journal for either. Each tool facet's owner
+  decides whether its operation needs an idempotency key, and an adapter whose
+  backend offers a request-idempotency key may pass the turn key through.
+
+Once a result is recorded, the turn never calls `infer` again, and no turn
+publishes two different replies. Duplicate publication is resolved on the
+reading side. A driver publishes exactly one reply per turn, and no other
+message carries that turn's reply-to. A reader may therefore collapse
+byte-identical messages from the same sender with the same `replyTo`. Fae and
+Lal conversation views do not do this today. Adding it is an explicit work item
+(§ Implementation plan) with its own acceptance test.
 
 ## Ownership map
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| Caller -> bound factory | `create`, `list`, and `remove` facets | Factory creator binds maker, namespace, quota, instruction bound, and allowed endowment names; `bind` only attenuates | Factory coordinator owns the child-name index and numbered operation journals | Coordinator reserves quota, commits a visible child, and decides roll-forward versus cleanup | `create` options enter; safe `ChildAgentSummary` data leaves |
+| Caller -> bound factory | `create`, `list`, `remove`, `attenuate`, `listDerived`, and `revokeDerived` facets | Factory creator binds maker, namespace, quota, instruction bound, and allowed endowment names; `bind` only attenuates | Factory coordinator owns the child-name index and numbered operation journals | Coordinator reserves quota, commits a visible child, and decides roll-forward versus cleanup | `create` options enter; safe `ChildAgentSummary` data leaves |
 | Factory coordinator -> daemon | `EndoHost`/`EndoDirectory` create, store, pin, and remove operations | Coordinator decides which formulas form one child; daemon applies generic formula rules | Daemon exclusively owns formula/content state; coordinator exclusively owns logical-child phase and stable references | Coordinator owns logical commit/removal; daemon owns individual formula incarnation/cancellation | `EndoGuest`, directory, responder, and stable-reference capabilities, named in daemon vocabulary |
 | Mailbox -> driver | Coordinator revives the retained responder at start; driver follows child mail | Coordinator's durable `AgentLifecycle` admits or quiesces the loop | Daemon owns the mailbox and message numbers; driver owns its cursor and turn ledger | Daemon revives formulas; driver replays from its cursor; coordinator ends the logical child | Mail notification and message number enter the driver; no provider authority crosses |
 | Driver -> inference backend | `InferenceBackend.infer` over a `GuestToolProjection` | `CredentialSource` decides provider admission; held tool facets authorize calls | Driver owns turn ledger and recorded results; provider owns credential and usage records | Driver decides whether to publish/retry an `InferResult`, keyed by message number; backend owns only one execution | `InferRequest` and `InferResult`, named in `@endo/inference`'s execution vocabulary |
@@ -478,13 +604,18 @@ reviewable commits:
    into the package. Preserve the current Fae `SubagentSpawner` surface as an
    adapter; do not widen Fae guests to an `EndoHost`.
 3. Add daemon-backed coordinator wiring: the pinned coordinator formula, durable
-   facet formulas, derived private names, guest and driver creation,
-   lifecycle-gated crash reconciliation, and idempotent removal.
+   facet formulas, derived private names, precheck-and-proof guest and driver
+   creation, the `Endowed` phase, lifecycle-gated crash reconciliation,
+   idempotent removal, and `revokeDerived`.
 4. Add `@endo/inference` and Fae/Lal maker adapters. Claude CLI and Agent SDK
    makers should be thin compositions of the landed backends, not copied loops.
-5. Add the driver turn ledger and keyed publication (§ Turn publication), and
-   a worked deployment example following § Issuance for a consumer such as
-   PR #1543.
+5. Add the driver turn ledger and reply-to-keyed publication (§ Turn
+   publication), and a worked deployment example following § Issuance for a
+   consumer such as PR #1543.
+6. Add reader-side collapse of byte-identical same-sender replies with an
+   equal `replyTo` to the Fae and Lal conversation views. This is the only
+   consumer change the publication contract needs, and it changes no daemon
+   API.
 
 Estimated size is **L, 1-1.5 developer weeks**. Most logic is lifecycle and
 recovery testing; the inference and daemon substrates already exist. This
@@ -507,6 +638,8 @@ replaces work already counted in M3 rather than adding a new milestone.
   named `helper`; neither `list` shows the other's, and neither `remove`
   reaches it. An attenuated namespace's children count against the issuing
   namespace's quota.
+- The issuer of a derived namespace sees it in `listDerived` and reclaims its
+  children and quota with `revokeDerived` without holding the derived facet.
 - The `handle` from `create` and `lookup` delivers mail to the child and
   exposes none of its powers, pins, or driver.
 - `create` and `remove` resolve only at `Committed` and `Removed`; duplicate,
@@ -522,9 +655,17 @@ Inject a crash before and after every state transition and external effect:
   coordinator, with no holder call and no mail;
 - a child that deletes or replaces every entry in its own `@pins` still resumes
   after restart and still answers mail;
-- a crash after a create-and-name effect but before the stable reference is
-  appended rolls forward by adopting the named value, and a crash before the
-  name is written leaves no entry and creates exactly one value on replay;
+- for both `provideGuest` and `makeUnconfined`, a crash after the derived name
+  is written but before the stable reference is appended rolls forward by the
+  precheck adopting the named value, with no second `makeUnconfined` call. A
+  crash between formulation and the name write leaves the name unbound, and
+  replay produces exactly one named value;
+- a crash at each endowment write converges to `Endowed` with exactly the
+  retained endowments installed, and a pre-bound endowment name with a
+  different identifier fails closed;
+- a crash at each step of `revokeDerived` converges to `Revoked`, with every
+  nested namespace and child removed and every ancestor quota slot released;
+  a revoked derived facet rejects every call, including after restart;
 - facets held by a parent and a revived runner's lifecycle facet work after
   restart without being re-issued;
 - a runner reincarnated during a removal retry observes inactive lifecycle and
@@ -546,8 +687,13 @@ Inject a crash before and after every state transition and external effect:
 - Existing Fae subagent tests pass against the adapter, including child quota,
   explicit capability attachment, stop, and recursive cleanup.
 - One Lal or Fae mail loop survives a daemon restart at each turn-ledger crash
-  cut: no turn calls `infer` twice once its result is recorded, and the only
-  republication is the recorded reply with the same message-number key.
+  cut, including a crash inside `infer` after a fake tool effect. No turn calls
+  `infer` again once its result is recorded. A crash before `TurnResult`
+  re-runs `infer` and repeats the fake tool effect, which the test asserts
+  rather than hides. The only republication is the recorded reply with the
+  same `replyTo`.
+- End to end through the daemon, a republished reply reaches the parent with
+  the original `replyTo`. The Fae and Lal views each show it once.
 
 The portable acceptance gate uses fake inference and is suitable for CI. A live
 Claude turn is useful integration evidence but belongs to the Claude backend's
