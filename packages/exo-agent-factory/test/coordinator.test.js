@@ -438,3 +438,74 @@ test('a pre-bound endowment with a different identifier fails closed', async t =
   const [summary] = await E(revived.boundFacet(1)).list();
   t.is(summary.phase, 'GuestCreated');
 });
+
+test('a stray name in the child directory fails closed', async t => {
+  const daemon = makeFakeDaemon();
+  const coordinator = await boot(daemon);
+  const { maker } = daemon.makeMaker();
+  const bound = await E(coordinator.rootFacet).bind(maker);
+  const probe = makeFakeDaemon();
+  const probeBound = await E((await boot(probe)).rootFacet).bind(
+    probe.makeMaker().maker,
+  );
+  const start = probe.effects;
+  await E(probeBound).create('helper', { endowments: { notes: Far('N', {}) } });
+  const cut =
+    probe.trace.findIndex(
+      (label, i) => i >= start && label.startsWith('name guest'),
+    ) -
+    start +
+    2;
+  daemon.crashAfter(cut);
+  await t.throwsAsync(
+    E(bound).create('helper', { endowments: { notes: Far('N', {}) } }),
+    { message: crashPattern },
+  );
+  daemon.restart();
+  daemon.guestWrite('c1.0.guest', 'stray', Far('Stray', {}));
+  const revived = await boot(daemon);
+  t.regex(Object.values(revived.faults())[0], /expected exactly/);
+  const [summary] = await E(revived.boundFacet(1)).list();
+  t.is(summary.phase, 'GuestCreated');
+});
+
+test('a responder formulated with other powers fails closed', async t => {
+  const daemon = makeFakeDaemon();
+  const coordinator = await boot(daemon);
+  const { maker: honest } = daemon.makeMaker();
+  // A defective maker that formulates the responder over the agent guest
+  // rather than the driver guest.
+  const maker = Far('AgentDriverMaker', {
+    installDriver: (/** @type {any} */ context) =>
+      E(honest).installDriver({ ...context, driverGuest: context.agent }),
+  });
+  const bound = await E(coordinator.rootFacet).bind(maker);
+  const probe = makeFakeDaemon();
+  const probeBound = await E((await boot(probe)).rootFacet).bind(
+    probe.makeMaker().maker,
+  );
+  const start = probe.effects;
+  await E(probeBound).create('helper');
+  // Crash at the first effect after the responder name write, so replay
+  // must prove the bound responder.
+  const cut = probe.trace.indexOf('store c1.0.responder', start) - start + 2;
+  daemon.crashAfter(cut);
+  await t.throwsAsync(E(bound).create('helper'), { message: crashPattern });
+  daemon.restart();
+  const revived = await boot(daemon);
+  t.regex(Object.values(revived.faults())[0], /other powers/);
+  const [summary] = await E(revived.boundFacet(1)).list();
+  t.is(summary.phase, 'DriverCreated');
+  t.true(await E(daemon.host).has('c1.0.responder'), 'nothing was deleted');
+});
+
+test('a stale retained endowment is replaced before the operation starts', async t => {
+  const { daemon, bound } = await setup();
+  const notes = Far('Notes', {});
+  await E(daemon.host).storeValue(Far('Stale', {}), 'c1.0.e0');
+  const { summary } = await E(bound).create('helper', {
+    endowments: { notes },
+  });
+  t.is(summary.phase, 'Committed');
+  t.is(await E(daemon.host).lookup('c1.0.guest', 'notes'), notes);
+});
