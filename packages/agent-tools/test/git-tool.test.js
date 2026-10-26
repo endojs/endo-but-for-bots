@@ -88,7 +88,11 @@ const makeStubGit = calls => {
     },
     show: async (...a) => {
       calls.push(['show', ...a]);
-      return '';
+      return {
+        commit: { oid: 'x', summary: 'shown' },
+        parents: [],
+        diff: { files: [] },
+      };
     },
     commit: async (...a) => {
       calls.push(['commit', ...a]);

@@ -807,7 +807,10 @@ It is not part of the normative design.
 - **Phase 7, structured `diff` slice** — `Git.diff(options?)` returns `GitDiff` and the porcelain moves to `Git.diffText(options?)`; in-tree consumers migrated (the agent `diff` tool and code-mode declarations report the structured shape; the conflict-rebase eval keeps byte-identity patch comparison through `diffText`).
   Two deliberate departures from § Structured Result Shapes, matching the landed `status()` copy-data shape rather than the sketch: `GitFileDiff` carries mount-relative `oldPath` / `newPath` strings, not `EndoMountEntry` values; and its `status` adds `'unmerged'` for a conflicted path, which carries no hunks because three-way combined hunks do not fit `GitDiffHunk` (structured conflict state remains `GitConflict`'s job).
   `binary` is reported as an empty record; byte sizes are not yet populated.
-  Remaining Phase 7 work: `GitShow` / `showText`, `GitMergeResult` / `mergeText`, `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
+- **Phase 7, structured `show` slice** — `Git.show(ref)` returns `GitShow` (`{ commit, parents, diff }`) and the porcelain moves to `Git.showText(ref)`; the `show` agent tool and code-mode declarations report the structured shape.
+  The ref is peeled with `^{commit}`, so `show` describes commits only (an annotated tag shows its commit; a tree or blob is rejected) while `showText` keeps rendering any object.
+  `diff` is the commit's changes against its first parent, or against the empty tree for a root commit; a merge commit therefore reports its first-parent diff rather than git's combined diff, which does not fit `GitDiffHunk` (the same reasoning as the `diff` slice's `'unmerged'` status).
+  Remaining Phase 7 work: `GitMergeResult` / `mergeText`, `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
 
 ### Forward-design notes
 

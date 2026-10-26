@@ -64,6 +64,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitDiff,
+ *   GitShow,
  *   GitMergeOptions,
  *   GitRemoteCredential,
  *   GitStatusOptions,
@@ -130,6 +131,8 @@ const GIT_ASKPASS_FD = 3;
 // full OID, subject, author name, and committer time in Unix seconds.
 // Git subjects cannot contain NUL, unlike tabs and newlines.
 const GIT_COMMIT_LOG_FORMAT = '--pretty=tformat:%H%x00%s%x00%an%x00%ct%x00';
+// The same fields followed by the space-separated parent OIDs, for `show`.
+const GIT_SHOW_FORMAT = '--pretty=tformat:%H%x00%s%x00%an%x00%ct%x00%P';
 const gitAskpassHelperPath = fileURLToPath(
   new URL('git-askpass-helper.cjs', import.meta.url),
 );
@@ -2353,6 +2356,74 @@ export const makeNativeGitBackend = ({
   };
 
   /**
+   * Report a diff as structured per-file records.  Git renders the same
+   * comparison twice: `--raw -z` carries exact paths, modes, and statuses
+   * (NUL-delimited, so no path quoting), and the patch carries the hunks.
+   * Both invocations pin `--find-renames`, and the patch pins uncolored
+   * output and the short submodule rendering (a `diff.submodule=log`
+   * summary has no `diff --git` section), so repository diff
+   * configuration cannot desynchronize them.  Unlike
+   * `diffText`, an output larger than the subprocess buffer fails rather
+   * than truncating, because a truncated patch cannot be parsed honestly.
+   *
+   * @param {GitBackendDiffOptions} options
+   * @returns {Promise<GitDiff>}
+   */
+  const readStructuredDiff = async options => {
+    const [rawText, patchText] = await Promise.all([
+      runGitRaw(diffArguments(options, ['--raw', '-z', '--no-abbrev'])),
+      runGitRaw(
+        diffArguments(options, ['--patch', '--no-color', '--submodule=short']),
+      ),
+    ]);
+    return parseGitDiff(rawText, patchText);
+  };
+
+  /**
+   * Read one commit as a `GitShow`: its `GitCommit` record, its parents, and
+   * its changes against the first parent (the empty tree for a root
+   * commit).  The ref is peeled with `^{commit}`, so an annotated tag shows
+   * the commit it points at and a tree or blob is rejected; `showText`
+   * still renders those.  The changes come from `readStructuredDiff` over
+   * the resolved object ids, so they carry the same hardening and pinned
+   * rendering as `diff`.
+   *
+   * @param {string} ref
+   * @returns {Promise<GitShow>}
+   */
+  const readShow = async ref => {
+    const revision = requireRevision(ref, 'show.ref');
+    const raw = await runGitRaw([
+      'log',
+      '-1',
+      GIT_SHOW_FORMAT,
+      '--end-of-options',
+      `${revision}^{commit}`,
+    ]);
+    const [oid, summary, author, committedAtText, parentList] = raw.split('\0');
+    const parents = parentList.trim().split(' ').filter(Boolean);
+    // The empty tree's id depends on the repository's object format, so
+    // ask git for it rather than hard-coding the SHA-1 constant.
+    const base =
+      parents.length > 0
+        ? parents[0]
+        : (await runGitRaw(['hash-object', '-t', 'tree', '/dev/null'])).trim();
+    const diff = await readStructuredDiff({ base, head: oid });
+    return harden({
+      commit: harden({
+        oid,
+        summary,
+        author,
+        committedAt: committedAtText
+          ? Number.parseInt(committedAtText, 10)
+          : undefined,
+      }),
+      parents: harden(parents),
+      diff,
+    });
+  };
+
+  /**
    * `interval` is the absolute byte interval over the git object's bytes this
    * blob exposes: `{ start, end }` with `end === undefined` meaning "to the
    * object's end" — an unattenuated blob over the whole object. A `range` /
@@ -2765,32 +2836,13 @@ export const makeNativeGitBackend = ({
     diffText: async (options = {}) => runGit(diffArguments(options)),
 
     /**
-     * Report a diff as structured per-file records.  Git renders the same
-     * comparison twice: `--raw -z` carries exact paths, modes, and statuses
-     * (NUL-delimited, so no path quoting), and the patch carries the hunks.
-     * Both invocations pin `--find-renames`, and the patch pins uncolored
-     * output and the short submodule rendering (a `diff.submodule=log`
-     * summary has no `diff --git` section), so repository diff
-     * configuration cannot desynchronize them.  Unlike
-     * `diffText`, an output larger than the subprocess buffer fails rather
-     * than truncating, because a truncated patch cannot be parsed honestly.
+     * Report a diff as structured per-file records (see
+     * `readStructuredDiff`).
      *
      * @param {GitBackendDiffOptions} [options]
      * @returns {Promise<GitDiff>}
      */
-    diff: async (options = {}) => {
-      const [rawText, patchText] = await Promise.all([
-        runGitRaw(diffArguments(options, ['--raw', '-z', '--no-abbrev'])),
-        runGitRaw(
-          diffArguments(options, [
-            '--patch',
-            '--no-color',
-            '--submodule=short',
-          ]),
-        ),
-      ]);
-      return parseGitDiff(rawText, patchText);
-    },
+    diff: async (options = {}) => readStructuredDiff(options),
 
     /**
      * @param {GitBackendLogOptions} [options]
@@ -2846,17 +2898,25 @@ export const makeNativeGitBackend = ({
     },
 
     /**
+     * Report one commit as structured data (see `readShow`).
+     *
+     * @param {string} ref
+     * @returns {Promise<GitShow>}
+     */
+    show: async ref => readShow(ref),
+
+    /**
      * Render `git show` for a ref.  `--no-textconv` suppresses a
      * `diff.<driver>.textconv` command that an in-tree `.gitattributes`
      * could bind to a shown path; without it, `git show` of a commit or
      * blob would exec the configured textconv program just as `diff`
-     * would (see the `diff` method's note on why the in-tree attributes
-     * file is not neutralized by `core.attributesFile=/dev/null`).
+     * would (see `diffArguments` for why the in-tree attributes file is
+     * not neutralized by `core.attributesFile=/dev/null`).
      *
      * @param {string} ref
      * @returns {Promise<string>}
      */
-    show: async ref => {
+    showText: async ref => {
       const revision = requireRevision(ref, 'show.ref');
       return runGit(['show', '--no-textconv', '--end-of-options', revision]);
     },

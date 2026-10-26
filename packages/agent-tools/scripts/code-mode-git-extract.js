@@ -76,6 +76,7 @@ export const GIT_READONLY_MEMBERS = harden([
   'diffText',
   'log',
   'show',
+  'showText',
   'revParse',
   'currentBranch',
   'branches',

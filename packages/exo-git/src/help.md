@@ -81,9 +81,21 @@ Takes the same options as `diff`.
 List commits, most recent first.
 Options are `ref`, `maxCount`, `since`, and `until`.
 
-## show(ref) -> Promise<string>
+## show(ref) -> Promise<GitShow>
 
-Render one revision as text, the way `git show` does.
+Report one commit as structured data: `{ commit, parents, diff }`, where
+`commit` is the `GitCommit` record, `parents` lists the parent object ids
+in order, and `diff` is the `GitDiff` of the commit's changes against its
+first parent (against the empty tree for a root commit).
+An annotated tag shows the commit it points at; a tree or blob is
+rejected, so use `showText` for those.
+- show("HEAD") reports the latest commit and its changes
+
+## showText(ref) -> Promise<string>
+
+Render one revision as text, the way `git show` does, for display.
+Accepts any object: a commit, tag, tree, or blob (for example
+`HEAD:README.md`).
 
 ## revParse(ref) -> Promise<GitRef>
 
