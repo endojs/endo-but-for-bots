@@ -472,13 +472,7 @@ test('a stray name in the child directory fails closed', async t => {
 test('a responder formulated with other powers fails closed', async t => {
   const daemon = makeFakeDaemon();
   const coordinator = await boot(daemon);
-  const { maker: honest } = daemon.makeMaker();
-  // A defective maker that formulates the responder over the agent guest
-  // rather than the driver guest.
-  const maker = Far('AgentDriverMaker', {
-    installDriver: (/** @type {any} */ context) =>
-      E(honest).installDriver({ ...context, driverGuest: context.agent }),
-  });
+  const { maker } = daemon.makeMaker();
   const bound = await E(coordinator.rootFacet).bind(maker);
   const probe = makeFakeDaemon();
   const probeBound = await E((await boot(probe)).rootFacet).bind(
@@ -488,10 +482,17 @@ test('a responder formulated with other powers fails closed', async t => {
   await E(probeBound).create('helper');
   // Crash at the first effect after the responder name write, so replay
   // must prove the bound responder.
-  const cut = probe.trace.indexOf('store c1.0.responder', start) - start + 2;
+  const cut =
+    probe.trace.indexOf('name responder c1.0.responder', start) - start + 2;
   daemon.crashAfter(cut);
   await t.throwsAsync(E(bound).create('helper'), { message: crashPattern });
   daemon.restart();
+  // The maker cannot choose the runner's powers, so only a coordinator
+  // defect could leave one formulated over the agent guest at this name.
+  await E(daemon.host).makeUnconfined('fake:driver', {
+    powersName: 'c1.0.guest',
+    resultName: 'c1.0.responder',
+  });
   const revived = await boot(daemon);
   t.regex(Object.values(revived.faults())[0], /other powers/);
   const [summary] = await E(revived.boundFacet(1)).list();
