@@ -246,3 +246,68 @@ test('an entry outside the package root is refused', t => {
     { message: /outside the package root/ },
   );
 });
+
+test('read returns package file bytes and refuses an unreachable location', async t => {
+  const { readPowers } = makePackageReadPowers({
+    entryTree: makeEntryTree(multiMajorIndex),
+    resolution: makeMultiMajorResolution(),
+  });
+  const { read } = /** @type {any} */ (readPowers);
+  const bytes = await read('file:///entry/node_modules/dep-a/index.js');
+  t.is(new TextDecoder().decode(bytes), 'export const major = 1;');
+  await t.throwsAsync(read('file:///outside/index.js'), {
+    message: /no such package file/,
+  });
+});
+
+test('malformed and unknown locations are absent', async t => {
+  const { readPowers } = makePackageReadPowers({
+    entryTree: makeEntryTree(multiMajorIndex),
+    resolution: makeMultiMajorResolution(),
+  });
+  const { maybeRead, canonical } = /** @type {any} */ (readPowers);
+  const unknownPackage = await maybeRead(
+    'file:///packages/dep-z@1.0.0/index.js',
+  );
+  t.is(unknownPackage, undefined);
+  t.is(await maybeRead('file:///packages/%E0%A4%A/index.js'), undefined);
+  t.is(
+    await maybeRead('file:///entry/node_modules/%E0%A4%A/index.js'),
+    undefined,
+  );
+  t.is(await maybeRead('file:///entry/node_modules/@scope'), undefined);
+  t.is(await maybeRead('file:///entry/%E0%A4%A.js'), undefined);
+  t.is(await maybeRead('file:///entry/lib//index.js'), undefined);
+  t.is(
+    await canonical('file:///packages/dep-z@1.0.0/index.js'),
+    'file:///packages/dep-z@1.0.0/index.js',
+  );
+});
+
+test('maybeRead rethrows a read failure on an entry that is not a directory', async t => {
+  const { readPowers } = makePackageReadPowers({
+    entryTree: makeEntryTree(multiMajorIndex, { 'broken.js': 42 }),
+    resolution: makeMultiMajorResolution(),
+  });
+  const { maybeRead } = /** @type {any} */ (readPowers);
+  await t.throwsAsync(maybeRead('file:///entry/broken.js'));
+});
+
+test('a package without an entry module needs an explicit entry', async t => {
+  await t.throwsAsync(
+    importPackage({
+      globals: {},
+      entryTree: makeMemoryTree({
+        'package.json': JSON.stringify({
+          name: 'entry',
+          version: '0.0.0',
+          type: 'module',
+          exports: { './other': './other.js' },
+        }),
+        'other.js': 'export const other = true;',
+      }),
+      resolution: makeMultiMajorResolution(),
+    }),
+    { message: /no entry module/ },
+  );
+});
