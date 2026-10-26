@@ -48,8 +48,17 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.x
+      # Ubuntu 26.04 (graphviz 14) moved `tred` and `acyclic` out of the
+      # `graphviz` package into `graphviz-tools`; older images ship them in
+      # `graphviz` and have no `graphviz-tools`.
       - name: Install graphviz
-        run: sudo apt install -y graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+          if ! command -v tred >/dev/null || ! command -v acyclic >/dev/null; then
+            sudo apt-get install -y graphviz-tools
+          fi
+          command -v dot tred acyclic
 
       - name: Check for cycles
         run: scripts/check-dependency-cycles.sh 0

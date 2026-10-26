@@ -863,19 +863,25 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // Bash's `ulimit -u` reports RLIMIT_NPROC, the same value
-  // prlimit set.  We assert the cap is in effect rather than
-  // running an actual fork bomb (which would also stress the host
-  // the test process is running on). Use Bash explicitly because
-  // /bin/sh implementations such as dash do not support this option.
-  const result = await runInSlice(t, handle, ['/bin/bash', '-c', 'ulimit -u']);
+  // /proc/self/limits reports RLIMIT_NPROC as "Max processes", the
+  // same value prlimit set.  We assert the cap is in effect rather
+  // than running an actual fork bomb (which would also stress the
+  // host the test process is running on).  We read /proc rather than
+  // `ulimit -u` because /bin/sh is dash on Debian and Ubuntu, and
+  // dash spells that flag `-p`.
+  const result = await runInSlice(t, handle, [
+    '/bin/sh',
+    '-c',
+    'cat /proc/self/limits',
+  ]);
   if (result === null) return;
   t.is(
     result.exit.code,
     0,
-    `ulimit -u exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
+    `cat /proc/self/limits exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
   );
-  const reported = Number(result.stdout.trim());
+  const nprocLine = result.stdout.match(/^Max processes\s+(\S+)/m);
+  const reported = Number(nprocLine?.[1]);
   t.is(
     reported,
     cap,
@@ -1145,6 +1151,7 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
       );
     });
   });
+  t.true(Number.isSafeInteger(pid), `owner reported pid ${pid}`);
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
   await t.notThrowsAsync(() =>
