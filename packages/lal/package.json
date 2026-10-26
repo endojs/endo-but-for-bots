@@ -19,6 +19,7 @@
   "exports": {
     "./model-detect.js": "./model-detect.js",
     "./providers/index.js": "./providers/index.js",
+    "./tool-dispatch.js": "./tool-dispatch.js",
     "./tools/mock-powers.js": "./tools/mock-powers.js",
     "./package.json": "./package.json"
   },
@@ -44,6 +45,7 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-agent-factory": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hosted-agent": "workspace:^",
