@@ -59,11 +59,22 @@ Returns undefined when HEAD is detached.
 
 List the repository's branches as refs.
 
-## diff(options?) -> Promise<string>
+## diff(options?) -> Promise<GitDiff>
 
-Render a textual diff.
+Report changes as structured data: `{ files }`, one record per changed
+file with `status`, `oldPath` / `newPath`, `oldMode` / `newMode`, and
+`hunks` of `{ kind: 'context' | 'add' | 'remove', text }` lines.
+A binary file carries `binary` and no hunks; an unmerged path has
+status `unmerged` and no hunks.
 Options are `cached`, `base`, `head`, and either `entries` (PathEntry
 capabilities minted for this worktree) or `paths`.
+- diff({ cached: true }) compares the index with HEAD
+- diff({ base: "HEAD~1", head: "HEAD" }) compares two revisions
+
+## diffText(options?) -> Promise<string>
+
+Render the same comparison as `diff` as `git diff` text, for display.
+Takes the same options as `diff`.
 
 ## log(options?) -> Promise<GitCommit[]>
 

@@ -34,6 +34,7 @@ import {
  *   GitConflictSide,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
+ *   GitDiff,
  *   GitDiffOptions,
  *   FollowRootOptions,
  *   GitCommitPosition,
@@ -145,7 +146,8 @@ import {
  *   mount-relative paths; entries outside the mount are omitted.
  * @property {(destinationSegments: string[], options?: { ref?: string, newBranch?: string }) => Promise<GitBackend>} worktreeAdd
  * @property {(destinationSegments: string[]) => Promise<void>} worktreeRemove
- * @property {(opts?: GitBackendDiffOptions) => Promise<string>} diff
+ * @property {(opts?: GitBackendDiffOptions) => Promise<GitDiff>} diff
+ * @property {(opts?: GitBackendDiffOptions) => Promise<string>} diffText
  * @property {(opts?: GitBackendLogOptions) => Promise<GitCommit[]>} log
  * @property {(ref: string) => Promise<string>} show
  * @property {(ref: string) => Promise<GitRef>} revParse
@@ -676,42 +678,48 @@ async function trackingStatus() {
 }
 
 /**
+ * Translate caller-supplied diff options to the backend shape:
+ * - `base` and `head` accept GitRef-or-string; collapse to a string
+ *   name the backend forwards to git unchanged.
+ * - `entries` (PathEntry[]) get resolved to repo-relative paths with
+ *   the same lineage check `add` uses. `paths` (string[]) passes
+ *   through (callers can use either).
+ *
+ * @param {GitState} state
+ * @param {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} options
+ * @returns {Promise<GitBackendDiffOptions>}
+ */
+const resolveDiffOptions = async (state, options) => {
+  /** @type {GitBackendDiffOptions} */
+  const resolved = {};
+  if (options.cached !== undefined) resolved.cached = options.cached;
+  if (options.base !== undefined) resolved.base = refName(options.base);
+  if (options.head !== undefined) resolved.head = refName(options.head);
+  if (Array.isArray(options.entries) && options.entries.length > 0) {
+    resolved.paths = await entriesToRepoPaths(state, options.entries);
+  } else if (Array.isArray(options.paths) && options.paths.length > 0) {
+    resolved.paths = [...options.paths];
+  }
+  return resolved;
+};
+harden(resolveDiffOptions);
+
+/**
  * @param {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} options
  * @this {GitMethodThis}
  */
 async function diff(options = {}) {
   const { state } = this;
-  // Translate caller-supplied options to the backend shape:
-  // - `base` and `head` accept GitRef-or-string; collapse to a string
-  //   name the backend forwards to git unchanged.
-  // - `entries` (PathEntry[]) get resolved to repo-relative paths with
-  //   the same lineage check `add` uses. `paths` (string[]) passes
-  //   through (callers can use either).
-  const opts =
-    /** @type {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} */ (
-      options
-    );
-  const resolved =
-    /** @type {{ cached?: boolean, base?: string, head?: string, paths?: string[] }} */ ({});
-  if (opts.cached !== undefined) resolved.cached = opts.cached;
-  if (opts.base !== undefined) {
-    resolved.base =
-      typeof opts.base === 'string'
-        ? opts.base
-        : /** @type {{ name: string }} */ (opts.base).name;
-  }
-  if (opts.head !== undefined) {
-    resolved.head =
-      typeof opts.head === 'string'
-        ? opts.head
-        : /** @type {{ name: string }} */ (opts.head).name;
-  }
-  if (Array.isArray(opts.entries) && opts.entries.length > 0) {
-    resolved.paths = await entriesToRepoPaths(state, opts.entries);
-  } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
-    resolved.paths = [...opts.paths];
-  }
-  return state.backend.diff(resolved);
+  return state.backend.diff(await resolveDiffOptions(state, options));
+}
+
+/**
+ * @param {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} options
+ * @this {GitMethodThis}
+ */
+async function diffText(options = {}) {
+  const { state } = this;
+  return state.backend.diffText(await resolveDiffOptions(state, options));
 }
 
 /**
@@ -1297,6 +1305,7 @@ const readerMethods = harden({
   status: statusReadOnly,
   trackingStatus,
   diff,
+  diffText,
   log,
   show,
   revParse,
@@ -1557,6 +1566,7 @@ export const makeNotYetImplementedBackend = () => {
     worktreeAdd: async () => fail('worktreeAdd'),
     worktreeRemove: async () => fail('worktreeRemove'),
     diff: async () => fail('diff'),
+    diffText: async () => fail('diffText'),
     log: async () => fail('log'),
     show: async () => fail('show'),
     revParse: async () => fail('revParse'),

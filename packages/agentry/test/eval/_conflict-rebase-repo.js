@@ -107,7 +107,7 @@ export const provisionConflictRebaseRepo = async (
   const originalFeatureOids = [featureAppOid, featureNoteOid];
   const { git: setupGit } = makePowersOver(repoRoot);
   const diffCommit = oid =>
-    E(/** @type {any} */ (setupGit)).diff({ base: `${oid}^`, head: oid });
+    E(/** @type {any} */ (setupGit)).diffText({ base: `${oid}^`, head: oid });
   const originalFeaturePatches = await Promise.all(
     originalFeatureOids.map(diffCommit),
   );

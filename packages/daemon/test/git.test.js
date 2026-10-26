@@ -121,7 +121,14 @@ test('Git exo advertises the writer facet, cumulative up to the rewriter facet',
   const methods = await E(/** @type {any} */ (git)).__getMethodNames__();
 
   // Inspection
-  for (const name of ['status', 'diff', 'log', 'show', 'revParse']) {
+  for (const name of [
+    'status',
+    'diff',
+    'diffText',
+    'log',
+    'show',
+    'revParse',
+  ]) {
     t.true(methods.includes(name), `Git writer should advertise ${name}`);
   }
 
@@ -2643,10 +2650,34 @@ test('NativeGitBackend.diff returns worktree changes by default', async t => {
   await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'v2\n');
 
   const backend = makeNativeGitBackend({ repoRoot });
-  const out = await backend.diff({});
+  const out = await backend.diffText({});
   t.regex(out, /diff --git/);
   t.regex(out, /-v1/);
   t.regex(out, /\+v2/);
+
+  t.deepEqual(await backend.diff({}), {
+    files: [
+      {
+        status: 'modified',
+        oldPath: 'a.txt',
+        newPath: 'a.txt',
+        oldMode: 0o10_0644,
+        newMode: 0o10_0644,
+        hunks: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [
+              { kind: 'remove', text: 'v1' },
+              { kind: 'add', text: 'v2' },
+            ],
+          },
+        ],
+      },
+    ],
+  });
 });
 
 test('NativeGitBackend.diff with --cached and a path filter', async t => {
@@ -2658,8 +2689,10 @@ test('NativeGitBackend.diff with --cached and a path filter', async t => {
   const backend = makeNativeGitBackend({ repoRoot });
   const out = await backend.diff({ cached: true, paths: ['staged.txt'] });
   // Cached diff sees the staged file only.
-  t.regex(out, /staged\.txt/);
-  t.notRegex(out, /unstaged\.txt/);
+  t.deepEqual(
+    out.files.map(({ status, newPath }) => ({ status, newPath })),
+    [{ status: 'added', newPath: 'staged.txt' }],
+  );
 });
 
 test('NativeGitBackend branch ops: create, list, rename, switch, detach, delete', async t => {
@@ -3035,7 +3068,10 @@ test('Git.diff routes PathEntry inputs through the lineage gate', async t => {
 
   const entry = await E(mount).entry(['tracked.txt']);
   const out = await E(git).diff({ entries: [entry] });
-  t.regex(out, /tracked\.txt/);
+  t.deepEqual(
+    out.files.map(({ newPath }) => newPath),
+    ['tracked.txt'],
+  );
 });
 
 test('NativeGitBackend.add stages files via repo-relative paths', async t => {
@@ -4205,7 +4241,7 @@ test('Git.filesystemAt: Directory.list yields entries in tree order', async t =>
 
   const cursor = /** @type {any} */ (await E(root).list());
   const readerRef = await E(cursor).stream();
-  // eslint-disable-next-line global-require
+
   const { iterateReader } = await import('@endo/exo-stream/iterate-reader.js');
   /** @type {any[]} */
   const collected = [];
@@ -4374,7 +4410,7 @@ test('Git.filesystemAt: an empty tree exposes an empty root', async t => {
   // `list()` returns a Cursor that yields zero entries.
   const cursor = /** @type {any} */ (await E(root).list());
   const readerRef = await E(cursor).stream();
-  // eslint-disable-next-line global-require
+
   const { iterateReader } = await import('@endo/exo-stream/iterate-reader.js');
   const collected = [];
   for await (const value of iterateReader(readerRef)) {
@@ -4587,8 +4623,10 @@ test('Git.diff accepts plain string paths and string refs', async t => {
     paths: ['a.txt'],
     base: 'HEAD',
   });
-  t.regex(out, /a\.txt/);
-  t.notRegex(out, /b\.txt/);
+  t.deepEqual(
+    out.files.map(({ newPath }) => newPath),
+    ['a.txt'],
+  );
 });
 
 test('Git.diff with GitRef objects for base and head collapses to strings', async t => {
@@ -4626,7 +4664,10 @@ test('Git.diff with GitRef objects for base and head collapses to strings', asyn
     base: harden({ name: v1Sha, kind: /** @type {'commit'} */ ('commit') }),
     head: harden({ name: v2Sha, kind: /** @type {'commit'} */ ('commit') }),
   });
-  t.regex(out, /-v1\n\+v2/);
+  t.deepEqual(out.files[0].hunks[0].lines, [
+    { kind: 'remove', text: 'v1' },
+    { kind: 'add', text: 'v2' },
+  ]);
 });
 
 test('NativeGitBackend.status reports rename detection with renamedFrom', async t => {
@@ -4878,6 +4919,12 @@ test('NativeGitBackend.diff and show never invoke a .gitattributes textconv driv
 
   await backend.diff();
   t.false(fs.existsSync(marker), 'diff() must not invoke the textconv driver');
+
+  await backend.diffText();
+  t.false(
+    fs.existsSync(marker),
+    'diffText() must not invoke the textconv driver',
+  );
 
   await backend.show('HEAD');
   t.false(fs.existsSync(marker), 'show() must not invoke the textconv driver');

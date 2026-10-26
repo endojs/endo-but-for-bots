@@ -42,6 +42,8 @@ import {
   makeHelp,
 } from '@endo/exo-git';
 
+import { parseGitDiff } from './parse-diff.js';
+
 // `TextDecoder` is portable across XS, browsers, and SES realms;
 // prefer it over `Buffer.from(...).toString('utf8')` per the project
 // portability preference (root AGENTS.md § Modernisms).
@@ -61,6 +63,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitConflictSide,
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
+ *   GitDiff,
  *   GitMergeOptions,
  *   GitRemoteCredential,
  *   GitStatusOptions,
@@ -115,7 +118,7 @@ const GIT_BASE_ARGS = harden([
   'credential.helper=',
 ]);
 // Note: diff.external is suppressed per-command via `--no-ext-diff`
-// (see `diff`).  Setting it as a -c override resolves to empty-string
+// (see `diffArguments`).  Setting it as a -c override resolves to empty-string
 // which git tries to exec, producing "external diff died".
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -790,6 +793,53 @@ const requireRevision = (value, fieldName) => {
   }
   return revision;
 };
+
+/**
+ * Build the argument vector shared by the text and structured diff
+ * renderings.  `--no-ext-diff` suppresses any external diff program a guest
+ * may have committed into the repo config; `--no-textconv` suppresses a
+ * `diff.<driver>.textconv` command that an in-tree `.gitattributes` could
+ * otherwise bind to a path and have git exec while rendering the diff.
+ * `core.attributesFile=/dev/null` (in `GIT_BASE_ARGS`) only disables the
+ * *external* attributes file, not the in-tree `.gitattributes`, so the
+ * per-command flag is load-bearing here.  Combined with the rest of the
+ * hardening envelope (hooks off, filters off), guests cannot make
+ * `git diff` execute arbitrary code.
+ *
+ * @param {GitBackendDiffOptions} options
+ * @param {string[]} [formatArguments] Output-format flags; the structured
+ *   rendering also pins rename detection so its two invocations agree.
+ * @returns {string[]}
+ */
+const diffArguments = (options, formatArguments = []) => {
+  const commandArguments = ['diff', '--no-ext-diff', '--no-textconv'];
+  if (formatArguments.length > 0) {
+    commandArguments.push('--find-renames', ...formatArguments);
+  }
+  if (options.cached) commandArguments.push('--cached');
+  // `--end-of-options` separates option-shaped flags from the revisions
+  // that follow.  `requireRevision` already rejects refs that begin with
+  // `-`; this is the defense-in-depth boundary git itself enforces when
+  // both sides cooperate.
+  const positionals = [];
+  if (options.base !== undefined) {
+    positionals.push(requireRevision(options.base, 'diff.base'));
+  }
+  if (options.head !== undefined) {
+    positionals.push(requireRevision(options.head, 'diff.head'));
+  }
+  if (positionals.length > 0) {
+    commandArguments.push('--end-of-options', ...positionals);
+  }
+  if (Array.isArray(options.paths) && options.paths.length > 0) {
+    for (const p of options.paths) {
+      requireNonEmptyString(p, 'diff path');
+    }
+    commandArguments.push('--', ...options.paths);
+  }
+  return commandArguments;
+};
+harden(diffArguments);
 
 /**
  * Git tree path segments are selectors into an immutable commit tree.
@@ -2707,43 +2757,39 @@ export const makeNativeGitBackend = ({
     worktreeRemove,
 
     /**
-     * Render a textual diff in `git diff` form.  `--no-ext-diff` suppresses
-     * any external diff program a guest may have committed into the repo
-     * config; `--no-textconv` suppresses a `diff.<driver>.textconv` command
-     * that an in-tree `.gitattributes` could otherwise bind to a path and
-     * have git exec while rendering the diff.  `core.attributesFile=/dev/null`
-     * (in `GIT_BASE_ARGS`) only disables the *external* attributes file, not
-     * the in-tree `.gitattributes`, so the per-command flag is load-bearing
-     * here.  Combined with the rest of the hardening envelope (hooks off,
-     * filters off), guests cannot make `git diff` execute arbitrary code.
+     * Render a textual diff in `git diff` form.
      *
      * @param {GitBackendDiffOptions} [options]
      * @returns {Promise<string>}
      */
+    diffText: async (options = {}) => runGit(diffArguments(options)),
+
+    /**
+     * Report a diff as structured per-file records.  Git renders the same
+     * comparison twice: `--raw -z` carries exact paths, modes, and statuses
+     * (NUL-delimited, so no path quoting), and the patch carries the hunks.
+     * Both invocations pin `--find-renames`, and the patch pins uncolored
+     * output and the short submodule rendering (a `diff.submodule=log`
+     * summary has no `diff --git` section), so repository diff
+     * configuration cannot desynchronize them.  Unlike
+     * `diffText`, an output larger than the subprocess buffer fails rather
+     * than truncating, because a truncated patch cannot be parsed honestly.
+     *
+     * @param {GitBackendDiffOptions} [options]
+     * @returns {Promise<GitDiff>}
+     */
     diff: async (options = {}) => {
-      const args = ['diff', '--no-ext-diff', '--no-textconv'];
-      if (options.cached) args.push('--cached');
-      // `--end-of-options` separates option-shaped flags from the
-      // revisions that follow.  `requireRevision` already rejects
-      // refs that begin with `-`; this is the defense-in-depth
-      // boundary git itself enforces when both sides cooperate.
-      const positionals = [];
-      if (options.base !== undefined) {
-        positionals.push(requireRevision(options.base, 'diff.base'));
-      }
-      if (options.head !== undefined) {
-        positionals.push(requireRevision(options.head, 'diff.head'));
-      }
-      if (positionals.length > 0) {
-        args.push('--end-of-options', ...positionals);
-      }
-      if (Array.isArray(options.paths) && options.paths.length > 0) {
-        for (const p of options.paths) {
-          requireNonEmptyString(p, 'diff path');
-        }
-        args.push('--', ...options.paths);
-      }
-      return runGit(args);
+      const [rawText, patchText] = await Promise.all([
+        runGitRaw(diffArguments(options, ['--raw', '-z', '--no-abbrev'])),
+        runGitRaw(
+          diffArguments(options, [
+            '--patch',
+            '--no-color',
+            '--submodule=short',
+          ]),
+        ),
+      ]);
+      return parseGitDiff(rawText, patchText);
     },
 
     /**

@@ -165,6 +165,44 @@ export type GitDiffOptions = {
   paths?: string[];
 };
 
+export type GitDiffLine = {
+  kind: 'context' | 'add' | 'remove';
+  /** The line without its one-character diff prefix or newline. */
+  text: string;
+};
+
+export type GitDiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: GitDiffLine[];
+};
+
+/**
+ * `unmerged` marks a conflicted path; its three-way hunks do not fit the
+ * two-sided `GitDiffHunk` shape, so it carries none (see `diffText`).
+ */
+export type GitFileDiffStatus =
+  'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged';
+
+export type GitFileDiff = {
+  status: GitFileDiffStatus;
+  /** Mount-relative path before the change; absent for an added file. */
+  oldPath?: string;
+  /** Mount-relative path after the change; absent for a deleted file. */
+  newPath?: string;
+  oldMode?: number;
+  newMode?: number;
+  hunks: GitDiffHunk[];
+  /** Present when git reports the contents as binary; such a file has no hunks. */
+  binary?: {};
+};
+
+export type GitDiff = {
+  files: GitFileDiff[];
+};
+
 export type GitLogOptions = {
   maxCount?: number;
   ref?: GitRef | string;
@@ -413,7 +451,9 @@ export type ReadOnlyEndoGit = {
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
   trackingStatus: () => Promise<GitTrackingStatus>;
   worktreeList: () => Promise<GitWorktreeEntry[]>;
-  diff: (options?: GitDiffOptions) => Promise<string>;
+  diff: (options?: GitDiffOptions) => Promise<GitDiff>;
+  /** The porcelain `git diff` rendering of the same comparison as `diff`. */
+  diffText: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;
   revParse: (ref: GitRef | string) => Promise<GitRef>;

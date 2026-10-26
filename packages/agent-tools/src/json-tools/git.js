@@ -230,7 +230,10 @@ const gitToolSchemas = harden({
     },
   },
   diff: {
-    description: 'Show changes between commits, the index, and the worktree.',
+    description:
+      'Show changes between commits, the index, and the worktree as ' +
+      'per-file records: status, old and new path, and hunks of added, ' +
+      'removed, and context lines.',
     parameters: {
       type: 'object',
       properties: { options: OPTIONS_PROP },
