@@ -132,3 +132,58 @@ test('Fae maker installs only driver capabilities and returns the landed driver'
   ]);
   t.is(stored.get('subagent-spawner'), nestedSpawner);
 });
+
+test('SubagentSpawner adapter describes each method', async t => {
+  const { factory, handles } = makeFactoryTree(1);
+  const spawner = makeSubagentSpawnerAdapter({
+    factory,
+    locateHandle: handle => handles.get(handle),
+  });
+  const [spawnHelp, stopHelp, listHelp, overview] = await Promise.all([
+    E(spawner).help('spawn'),
+    E(spawner).help('stop'),
+    E(spawner).help('list'),
+    E(spawner).help(),
+  ]);
+  t.regex(spawnHelp, /^spawn\(name/);
+  t.regex(stopHelp, /^stop\(name\)/);
+  t.regex(listHelp, /^list\(\)/);
+  t.regex(overview, /^Subagent spawner:/);
+});
+
+test('SubagentSpawner adapter reserves the nested spawner capability name', async t => {
+  const { root, factory, handles } = makeFactoryTree(1);
+  const spawner = makeSubagentSpawnerAdapter({
+    factory,
+    locateHandle: handle => handles.get(handle),
+  });
+  await t.throwsAsync(
+    E(spawner).spawn('helper', {
+      capabilities: [{ name: 'subagent-spawner', value: Far('Forged', {}) }],
+    }),
+    { message: /is reserved/ },
+  );
+  t.is(root.children.size, 0);
+});
+
+test('Fae maker installs an auth secret and omits an empty environment', async t => {
+  const provider = Far('Provider', {});
+  const authSecret = Far('AuthSecret', {});
+  const agent = Far('Agent', { has: () => false });
+  const stored = new Map();
+  const driverGuest = Far('DriverGuest', {
+    storeValue: (value, name) => stored.set(name, value),
+  });
+  const maker = makeFaeAgentDriverMaker({ provider, authSecret });
+  const descriptor = await E(maker).installDriver(
+    harden({ agent, driverGuest, lifecycle: Far('Lifecycle', {}) }),
+  );
+  t.regex(descriptor.specifier, /\/fae\/driver\.js$/);
+  t.false('env' in descriptor);
+  t.deepEqual([...stored.keys()].sort(), [
+    'agent',
+    'llm-auth-secret',
+    'llm-provider',
+  ]);
+  t.is(stored.get('llm-auth-secret'), authSecret);
+});

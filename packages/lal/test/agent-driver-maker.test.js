@@ -7,6 +7,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
 import { makeLalAgentDriverMaker } from '../agent-driver-maker.js';
+import { make as makeLalDriver } from '../driver.js';
 
 test('Lal maker installs the child only in its private driver guest', async t => {
   const agent = Far('Agent', {});
@@ -36,4 +37,19 @@ test('Lal maker installs the child only in its private driver guest', async t =>
     },
   });
   t.deepEqual([...stored.entries()], [['agent', agent]]);
+});
+
+test('Lal driver returns its facet even when the agent lookup fails', async t => {
+  let lookups = 0;
+  const powers = Far('Powers', {
+    lookup: name => {
+      lookups += 1;
+      t.is(name, 'agent');
+      throw Error('no agent');
+    },
+  });
+  const driver = await makeLalDriver(powers, undefined);
+  t.truthy(driver);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.is(lookups, 1);
 });

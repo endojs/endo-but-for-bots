@@ -154,3 +154,69 @@ test('child spawner attaches explicit powers and recursively revokes descendants
     [],
   );
 });
+
+test('inference adapter passes a configured environment to the driver', async t => {
+  const backend = makeExo('Backend', InferenceBackendInterface, {
+    describe: () => harden({ provider: 'test', kind: 'fake' }),
+    async infer() {
+      await null;
+      return harden({ type: 'ok', text: 'done' });
+    },
+  });
+  const maker = makeInferenceAgentDriverMaker({
+    backend,
+    makeGuestToolProjection: () => {
+      throw Error('not reached');
+    },
+    environment: { MODEL: 'test-model' },
+  });
+  const descriptor = await E(maker).installDriver(
+    harden({
+      agent: Far('Agent', {}),
+      driverGuest: Far('DriverGuest', { storeValue: () => {} }),
+      lifecycle: Far('Lifecycle', {}),
+    }),
+  );
+  t.regex(descriptor.specifier, /\/src\/inference-driver\.js$/);
+  t.deepEqual(descriptor.env, { MODEL: 'test-model' });
+});
+
+/** @param {(options: any) => unknown} create */
+const makeRevocationTrackingFactory = create => {
+  const revoked = [];
+  const factory = Far('BoundChildAgentFactory', {
+    attenuate: () => Far('ChildFactory', { create }),
+    revokeDerived: name => {
+      revoked.push(name);
+    },
+    listDerived: () => harden([]),
+  });
+  return { factory, revoked };
+};
+
+test('child spawner rejects a reserved endowment and revokes the namespace', async t => {
+  const { factory, revoked } = makeRevocationTrackingFactory(() => {
+    throw Error('not reached');
+  });
+  const spawner = makeChildAgentSpawner({
+    factory,
+    spawnerEndowmentName: 'subagent-spawner',
+    makeSpawnerEndowment: childSpawner => childSpawner,
+  });
+  await t.throwsAsync(
+    E(spawner).spawn('helper', {
+      endowments: { 'subagent-spawner': Far('Forged', {}) },
+    }),
+    { message: /reserved for its spawner/ },
+  );
+  t.deepEqual(revoked, ['helper']);
+});
+
+test('child spawner revokes the namespace when creation fails', async t => {
+  const { factory, revoked } = makeRevocationTrackingFactory(() => {
+    throw Error('quota');
+  });
+  const spawner = makeChildAgentSpawner({ factory });
+  await t.throwsAsync(E(spawner).spawn('helper'), { message: 'quota' });
+  t.deepEqual(revoked, ['helper']);
+});
