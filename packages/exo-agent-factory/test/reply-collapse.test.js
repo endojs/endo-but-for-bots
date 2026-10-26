@@ -73,3 +73,54 @@ test('stream filter makes the same first-publication choice', t => {
   t.true(showReply(first));
   t.false(showReply(replay));
 });
+
+test('reply collapse distinguishes completion and package shape', t => {
+  const shared = harden(['Shared reply.']);
+  const first = message({ number: 1n, messageId: 'first', strings: shared });
+  const sharedReplay = message({
+    number: 2n,
+    messageId: 'shared-replay',
+    strings: shared,
+  });
+  const notDone = message({
+    number: 3n,
+    messageId: 'not-done',
+    strings: shared,
+    done: false,
+  });
+  const noNames = message({
+    number: 4n,
+    messageId: 'no-names',
+    strings: shared,
+    names: undefined,
+  });
+  const moreIds = message({
+    number: 5n,
+    messageId: 'more-ids',
+    strings: shared,
+    ids: ['id'],
+  });
+  const notPackage = message({
+    number: 6n,
+    messageId: 'not-package',
+    type: 'request',
+  });
+  const notPackageTwin = message({
+    number: 7n,
+    messageId: 'not-package-twin',
+    type: 'request',
+  });
+
+  t.deepEqual(
+    collapseRepublishedReplies([
+      first,
+      sharedReplay,
+      notDone,
+      noNames,
+      moreIds,
+      notPackage,
+      notPackageTwin,
+    ]),
+    [first, notDone, noNames, moreIds, notPackage, notPackageTwin],
+  );
+});
