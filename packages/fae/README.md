@@ -142,6 +142,17 @@ Every agent has these tools available immediately:
 - `send`, `reply`, `listMessages`, `dismiss` — mail operations
 - `adoptTool` — adopt a tool capability from an incoming message
 
+### Inspecting mailbox messages
+
+`listMessages()` returns immediately with mailbox entries, including lifecycle promises.
+`dismissed` resolves only after removal, and a request's `settled` resolves after resolve/reject.
+Do not await these while handling that same message or blindly await every field.
+Read explicit metadata and payload fields; `done` means content complete, not task answered.
+Use `help("listMessages")` for a safe inspection example.
+Reply before dismissal, since `reply(number)` requires the retained mailbox entry.
+Floot automatically replies and dismisses its task after the agent finishes;
+do not dismiss the active task or wait for its dismissal yourself.
+
 ### Creating tool caplets
 
 Create example tools (greet, math, timestamp) in the host's inventory:

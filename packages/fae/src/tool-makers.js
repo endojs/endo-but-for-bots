@@ -1249,6 +1249,16 @@ export const makeMessageHistoryTool = powers => {
 };
 harden(makeMessageHistoryTool);
 
+// Lifecycle promises are notification hooks, not values an inspector should await.
+const mailLifecycleGuidance =
+  'Raw listMessages()/followMessages() entries include lifecycle fields: ' +
+  'dismissed resolves only after removal; request settled resolves after resolve/reject. ' +
+  'Do not blindly await every field or await dismissed/settled while handling that message. ' +
+  'Inspect explicit data fields (number, type, from, strings, names, done) instead. ' +
+  'done means content complete, not task answered. Reply before dismissing. ' +
+  'Floot automatically replies and dismisses its task after you finish; do not dismiss ' +
+  'that task yourself or wait for its dismissal. Early dismissal breaks reply(number).';
+
 /**
  * @param {import('@endo/eventual-send').ERef<object>} powers
  * @returns {FaeTool}
@@ -1261,7 +1271,7 @@ export const makeListMessagesTool = powers => {
       name: 'listMessages',
       description:
         'List messages in your inbox. Returns an array of message summaries ' +
-        'with number, from, and edge names.',
+        `with number, from, and edge names. ${mailLifecycleGuidance}`,
       parameters: {
         type: 'object',
         properties: {},
@@ -1279,7 +1289,7 @@ export const makeListMessagesTool = powers => {
       return E(powers).listMessages();
     },
     help() {
-      return 'List messages in your inbox.';
+      return `List messages in your inbox. ${mailLifecycleGuidance}`;
     },
   });
 };
@@ -1295,7 +1305,7 @@ export const makeDismissTool = powers => {
     type: 'function',
     function: {
       name: 'dismiss',
-      description: 'Dismiss (acknowledge) a message from your inbox by number.',
+      description: `Dismiss a processed message from your inbox by number. ${mailLifecycleGuidance}`,
       parameters: {
         type: 'object',
         properties: {
@@ -1322,7 +1332,7 @@ export const makeDismissTool = powers => {
       return `Dismissed message #${messageNumber}`;
     },
     help() {
-      return 'Dismiss a message from your inbox by number.';
+      return `Dismiss a processed message from your inbox by number. ${mailLifecycleGuidance}`;
     },
   });
 };
@@ -1532,51 +1542,53 @@ export const makeExecTool = powers => {
     type: 'function',
     function: {
       name: 'exec',
-      description:
+      description: [
         'Execute JavaScript code with access to your guest powers. ' +
-        'The code runs as an async function body (top-level await works). ' +
-        'Use a top-level return to produce the tool result, e.g. return await E(powers).list(); ' +
-        'A final expression or an unreturned nested IIFE does not return a result. ' +
-        'console output goes to daemon logs, not the tool result.\n\n' +
-        'Available globals:\n' +
-        '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
-        '- E: eventual send — use E(ref).method() for all remote calls\n' +
-        '- harden: freeze objects for safe passing\n' +
-        '- console: for logging\n' +
-        '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
-        'Nothing else is in scope. A petname is NOT a variable: reach a stored ' +
-        'object with const workspace = await E(powers).lookup("workspace"); at ' +
-        'the top of every call that uses it (each call is a fresh function ' +
-        'body; nothing carries over). A name you never declared does not ' +
-        'throw here, it reads as undefined — so the error Cannot deliver ' +
-        '"someMethod" to target; typeof target is "undefined" means a name in ' +
-        'your code was never declared or looked up.\n\n' +
-        'The code runs under SES lockdown, which surprises callers who expect a ' +
-        'normal environment:\n' +
-        '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
-        'let a capability supply one.\n' +
-        '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
-        'between polls within one call.\n' +
-        '- No import, import() or require: there is no module loader and no ' +
-        'Node built-ins (fs, path, child_process). Files, network and ' +
-        'everything else outside come from capabilities reached through ' +
-        'powers.\n' +
-        '- The code is JavaScript source inside a JSON string. To build a file ' +
-        'that itself contains backticks or ${ (a shader, a template, ' +
-        'markdown), do not put it in a template literal — the inner backtick ' +
-        'ends the literal. Use single-quoted strings joined together, or ' +
-        'escape each inner backtick and ${.\n' +
-        '- The result is JSON-serialized for the model. BigInts render as ' +
-        'decimal strings, so a stat() or workflow status can be returned as ' +
-        'it came. A remote capability is described by its method names.\n\n' +
-        'Example — adopt a channel, join it, and post a reply:\n' +
-        '```\n' +
-        'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
-        'const channel = await E(powers).lookup("my-channel");\n' +
-        'const member = await E(channel).join("fae");\n' +
-        'await E(member).post(["Hello from fae!"], [], []);\n' +
-        'return "Posted to channel";\n' +
-        '```',
+          'The code runs as an async function body (top-level await works). ' +
+          'Use a top-level return to produce the tool result, e.g. return await E(powers).list(); ' +
+          'A final expression or an unreturned nested IIFE does not return a result. ' +
+          'console output goes to daemon logs, not the tool result.\n\n' +
+          'Available globals:\n' +
+          '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
+          '- E: eventual send — use E(ref).method() for all remote calls\n' +
+          '- harden: freeze objects for safe passing\n' +
+          '- console: for logging\n' +
+          '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
+          'Nothing else is in scope. A petname is NOT a variable: reach a stored ' +
+          'object with const workspace = await E(powers).lookup("workspace"); at ' +
+          'the top of every call that uses it (each call is a fresh function ' +
+          'body; nothing carries over). A name you never declared does not ' +
+          'throw here, it reads as undefined — so the error Cannot deliver ' +
+          '"someMethod" to target; typeof target is "undefined" means a name in ' +
+          'your code was never declared or looked up.\n\n' +
+          'The code runs under SES lockdown, which surprises callers who expect a ' +
+          'normal environment:\n' +
+          '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
+          'let a capability supply one.\n' +
+          '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
+          'between polls within one call.\n' +
+          '- No import, import() or require: there is no module loader and no ' +
+          'Node built-ins (fs, path, child_process). Files, network and ' +
+          'everything else outside come from capabilities reached through ' +
+          'powers.\n' +
+          '- The code is JavaScript source inside a JSON string. To build a file ' +
+          'that itself contains backticks or ${ (a shader, a template, ' +
+          'markdown), do not put it in a template literal — the inner backtick ' +
+          'ends the literal. Use single-quoted strings joined together, or ' +
+          'escape each inner backtick and ${.\n' +
+          '- The result is JSON-serialized for the model. BigInts render as ' +
+          'decimal strings, so a stat() or workflow status can be returned as ' +
+          'it came. A remote capability is described by its method names.\n\n' +
+          'Example — adopt a channel, join it, and post a reply:\n' +
+          '```\n' +
+          'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
+          'const channel = await E(powers).lookup("my-channel");\n' +
+          'const member = await E(channel).join("fae");\n' +
+          'await E(member).post(["Hello from fae!"], [], []);\n' +
+          'return "Posted to channel";\n' +
+          '```',
+        mailLifecycleGuidance,
+      ].join('\n\n'),
       parameters: {
         type: 'object',
         properties: {
@@ -1643,7 +1655,7 @@ export const makeExecTool = powers => {
         'Execute JavaScript code with access to guest powers, E, and harden. ' +
         'Use top-level return for the result; console output is only logged. ' +
         'Use for multi-step operations like adopting values, joining channels, ' +
-        'and posting messages in a single call.'
+        `and posting messages in a single call. ${mailLifecycleGuidance}`
       );
     },
   });

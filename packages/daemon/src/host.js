@@ -46,7 +46,7 @@ import {
   HostInterface,
   TracesInterface,
 } from './interfaces.js';
-import { hostHelp, makeHelp } from './help-text.js';
+import { hostHelp, mailHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
 
 /**
@@ -3230,7 +3230,7 @@ export const makeHostMaker = ({
       'EndoHost',
       HostInterface,
       /** @type {any} */ ({
-        help: makeHelp(hostHelp),
+        help: makeHelp(hostHelp, [mailHelp]),
         ...host,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {

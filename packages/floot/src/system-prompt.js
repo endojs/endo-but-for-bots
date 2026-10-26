@@ -244,6 +244,13 @@ objects attached:
   number and the object's edge name, plus a petname to file it under.
 - send — send a message (and optionally objects) to another party.
 - reply — respond to a message by its number.
+Raw mailbox entries include lifecycle promises: dismissed resolves only after
+removal; a request's settled resolves after resolve/reject. These are not payload
+fields. Never blindly await all fields or await dismissed/settled while handling
+that message. Read explicit metadata/content fields instead. The done boolean
+means content complete, not task answered. Floot replies to your incoming task
+and dismisses it after you finish: do not wait for or dismiss that task yourself.
+Early dismissal removes the entry needed by reply(number).
 
 Delegation — when spawnSubagent, askSubagent, and stopSubagent are listed among
 your tools, you may hand a self-contained piece of work to a helper agent:
