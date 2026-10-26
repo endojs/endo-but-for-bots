@@ -146,6 +146,13 @@ const GitShowShape = harden({
   diff: GitDiffShape,
 });
 
+const GitStashShape = harden({
+  index: M.number(),
+  ref: GitRefShape,
+  message: M.string(),
+  created: GitCommitShape,
+});
+
 const GitConflictSideRecordShape = harden({ oid: M.string() });
 
 const GitConflictShape = M.splitRecord(
@@ -461,12 +468,14 @@ export const GIT_METHOD_GUARDS = harden({
   showText: M.callWhen(RefArgShape).returns(M.string()),
   stashApply: M.callWhen().optional(M.number()).returns(M.undefined()),
   stashDrop: M.callWhen().optional(M.number()).returns(M.undefined()),
-  stashList: M.callWhen().returns(M.arrayOf(M.string())),
+  stashList: M.callWhen().returns(M.arrayOf(GitStashShape)),
+  stashListText: M.callWhen().returns(M.arrayOf(M.string())),
   stashPop: M.callWhen().optional(M.number()).returns(M.undefined()),
   stashPush: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
-  stashShow: M.callWhen().optional(M.number()).returns(M.string()),
+  stashShow: M.callWhen().optional(M.number()).returns(GitDiffShape),
+  stashShowText: M.callWhen().optional(M.number()).returns(M.string()),
   status: M.callWhen()
     .optional(GitStatusOptionsShape)
     .returns(GitStatusResultShape),
@@ -507,7 +516,9 @@ export const GIT_READER_METHODS = harden([
   'show',
   'showText',
   'stashList',
+  'stashListText',
   'stashShow',
+  'stashShowText',
   'status',
   'trackingStatus',
   'tree',

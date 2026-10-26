@@ -15,6 +15,7 @@ import type {
   GitDiff,
   GitDiffOptions,
   GitShow,
+  GitStash,
   GitDirection,
   GitIndexStatus,
   GitLogOptions,
@@ -110,6 +111,24 @@ expectTypeOf<GitShow>().toEqualTypeOf<{
   commit: GitCommit;
   parents: string[];
   diff: GitDiff;
+}>();
+expectTypeOf<ReadOnlyEndoGit['stashList']>().toEqualTypeOf<
+  () => Promise<GitStash[]>
+>();
+expectTypeOf<ReadOnlyEndoGit['stashListText']>().toEqualTypeOf<
+  () => Promise<string[]>
+>();
+expectTypeOf<ReadOnlyEndoGit['stashShow']>().toEqualTypeOf<
+  (index?: number) => Promise<GitDiff>
+>();
+expectTypeOf<ReadOnlyEndoGit['stashShowText']>().toEqualTypeOf<
+  (index?: number) => Promise<string>
+>();
+expectTypeOf<GitStash>().toEqualTypeOf<{
+  index: number;
+  ref: GitRef;
+  message: string;
+  created: GitCommit;
 }>();
 expectTypeOf<ReadWriteEndoGit['merge']>().toEqualTypeOf<
   (ref: GitRef | string, options?: GitMergeOptions) => Promise<GitMergeResult>

@@ -67,6 +67,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitDeleteBranchOptions,
  *   GitDiff,
  *   GitShow,
+ *   GitStash,
  *   GitMergeOptions,
  *   GitRemoteCredential,
  *   GitStatusOptions,
@@ -798,6 +799,20 @@ const requireRevision = (value, fieldName) => {
   }
   return revision;
 };
+
+/**
+ * Resolve an optional stash-stack index to Git's revision spelling.
+ *
+ * @param {number | undefined} index
+ * @returns {string}
+ */
+const stashReference = (index = 0) => {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error('stash index must be a non-negative integer');
+  }
+  return `stash@{${index}}`;
+};
+harden(stashReference);
 
 /**
  * Build the argument vector shared by the text and structured diff
@@ -3783,30 +3798,76 @@ export const makeNativeGitBackend = ({
       return runGit(args);
     },
 
-    /**
-     * @returns {Promise<string[]>}
-     */
+    /** @returns {Promise<GitStash[]>} */
     stashList: async () => {
-      const stdout = (await runGitRaw(['stash', 'list'])).trim();
+      const stdout = await runGitRaw([
+        'stash',
+        'list',
+        '-z',
+        '--format=%gd%x00%gs%x00%H%x00%s%x00%an%x00%ct%x00',
+      ]);
       if (stdout === '') {
         return harden([]);
       }
-      return harden(stdout.split('\n'));
+      const fields = stdout.split('\0').filter(field => field !== '');
+      if (fields.length % 6 !== 0) {
+        throw new Error('Could not parse git stash list output');
+      }
+      /** @type {GitStash[]} */
+      const stashes = [];
+      for (let fieldIndex = 0; fieldIndex < fields.length; fieldIndex += 6) {
+        const [name, message, oid, summary, author, committedAtText] =
+          fields.slice(fieldIndex, fieldIndex + 6);
+        const match = /^stash@\{(\d+)\}$/u.exec(name);
+        if (match === null) {
+          throw new Error(`Could not parse git stash reference: ${q(name)}`);
+        }
+        stashes.push(
+          harden({
+            index: Number.parseInt(match[1], 10),
+            ref: harden({
+              name,
+              kind: /** @type {'commit'} */ ('commit'),
+              oid,
+            }),
+            message,
+            created: harden({
+              oid,
+              summary,
+              author,
+              committedAt: Number.parseInt(committedAtText, 10),
+            }),
+          }),
+        );
+      }
+      return harden(stashes);
+    },
+
+    /** @returns {Promise<string[]>} */
+    stashListText: async () => {
+      const stdout = (await runGitRaw(['stash', 'list'])).trim();
+      return stdout === '' ? harden([]) : harden(stdout.split('\n'));
+    },
+
+    /**
+     * @param {number} [index]
+     * @returns {Promise<GitDiff>}
+     */
+    stashShow: async index => {
+      const ref = stashReference(index);
+      return readStructuredDiff({ base: `${ref}^1`, head: ref });
     },
 
     /**
      * @param {number} [index]
      * @returns {Promise<string>}
      */
-    stashShow: async index => {
-      const args = ['stash', 'show', '--patch'];
+    stashShowText: async index => {
+      const commandArguments = ['stash', 'show', '--patch'];
       if (index !== undefined) {
-        if (!Number.isInteger(index) || index < 0) {
-          throw new Error('stash index must be a non-negative integer');
-        }
-        args.push(`stash@{${index}}`);
+        commandArguments.push(stashReference(index));
       }
-      return runGit(args);
+      return runGit(commandArguments);
     },
 
     /**
@@ -3815,14 +3876,11 @@ export const makeNativeGitBackend = ({
      */
     stashApply: async index => {
       await assertNoExecutableRepoConfig();
-      const args = ['stash', 'apply'];
+      const commandArguments = ['stash', 'apply'];
       if (index !== undefined) {
-        if (!Number.isInteger(index) || index < 0) {
-          throw new Error('stash index must be a non-negative integer');
-        }
-        args.push(`stash@{${index}}`);
+        commandArguments.push(stashReference(index));
       }
-      await runGit(args);
+      await runGit(commandArguments);
     },
 
     /**
@@ -3831,14 +3889,11 @@ export const makeNativeGitBackend = ({
      */
     stashPop: async index => {
       await assertNoExecutableRepoConfig();
-      const args = ['stash', 'pop'];
+      const commandArguments = ['stash', 'pop'];
       if (index !== undefined) {
-        if (!Number.isInteger(index) || index < 0) {
-          throw new Error('stash index must be a non-negative integer');
-        }
-        args.push(`stash@{${index}}`);
+        commandArguments.push(stashReference(index));
       }
-      await runGit(args);
+      await runGit(commandArguments);
     },
 
     /**
@@ -3847,14 +3902,11 @@ export const makeNativeGitBackend = ({
      */
     stashDrop: async index => {
       await assertNoExecutableRepoConfig();
-      const args = ['stash', 'drop'];
+      const commandArguments = ['stash', 'drop'];
       if (index !== undefined) {
-        if (!Number.isInteger(index) || index < 0) {
-          throw new Error('stash index must be a non-negative integer');
-        }
-        args.push(`stash@{${index}}`);
+        commandArguments.push(stashReference(index));
       }
-      await runGit(args);
+      await runGit(commandArguments);
     },
 
     /**

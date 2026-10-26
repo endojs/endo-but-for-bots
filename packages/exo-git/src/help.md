@@ -102,13 +102,24 @@ Accepts any object: a commit, tag, tree, or blob (for example
 Resolve a revision expression to a concrete ref with its object id.
 - revParse("HEAD") resolves the current commit
 
-## stashList() -> Promise<string[]>
+## stashList() -> Promise<GitStash[]>
 
-List the stash entries, most recent first.
+List the stash entries as structured records, most recent first.
+Each record carries its zero-based `index`, resolved `ref`, reflog `message`,
+and `created` commit metadata.
 
-## stashShow(index?) -> Promise<string>
+## stashListText() -> Promise<string[]>
 
-Render the diff held by one stash entry.
+List the stash entries as Git's porcelain lines, most recent first.
+
+## stashShow(index?) -> Promise<GitDiff>
+
+Report the diff held by one stash entry as structured data.
+Defaults to the most recent entry.
+
+## stashShowText(index?) -> Promise<string>
+
+Render the diff held by one stash entry as a porcelain patch, for display.
 Defaults to the most recent entry.
 
 ## tree(ref) -> Promise<GitTree>

@@ -34,9 +34,13 @@ export const helpTextEntries = harden([
       revParse:
         'revParse(ref) -> Promise<GitRef>\nResolve a revision expression to a concrete ref with its object id.\n- revParse("HEAD") resolves the current commit',
       stashList:
-        'stashList() -> Promise<string[]>\nList the stash entries, most recent first.',
+        'stashList() -> Promise<GitStash[]>\nList the stash entries as structured records, most recent first.\nEach record carries its zero-based `index`, resolved `ref`, reflog `message`,\nand `created` commit metadata.',
+      stashListText:
+        "stashListText() -> Promise<string[]>\nList the stash entries as Git's porcelain lines, most recent first.",
       stashShow:
-        'stashShow(index?) -> Promise<string>\nRender the diff held by one stash entry.\nDefaults to the most recent entry.',
+        'stashShow(index?) -> Promise<GitDiff>\nReport the diff held by one stash entry as structured data.\nDefaults to the most recent entry.',
+      stashShowText:
+        'stashShowText(index?) -> Promise<string>\nRender the diff held by one stash entry as a porcelain patch, for display.\nDefaults to the most recent entry.',
       tree: 'tree(ref) -> Promise<GitTree>\nGet a read-only GitTree over the tree a revision resolves to.\nNested trees resolve to further GitTree values and files to readable\nblobs.\nPrefer filesystemAt(ref) for general historical reads.',
       filesystemAt:
         'filesystemAt(ref) -> Promise<Filesystem>\nGet a read-only Filesystem pinned to the tree a revision resolves to.\nLater movement of the ref does not affect the returned view, and two\nrevisions with the same tree share one memoized capability.',

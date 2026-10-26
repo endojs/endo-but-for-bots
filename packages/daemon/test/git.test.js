@@ -164,7 +164,9 @@ test('Git exo advertises the writer facet, cumulative up to the rewriter facet',
   for (const name of [
     'stashPush',
     'stashList',
+    'stashListText',
     'stashShow',
+    'stashShowText',
     'stashApply',
     'stashPop',
     'stashDrop',
@@ -3154,9 +3156,29 @@ test('Git stash methods preserve path authority through PathEntry', async t => {
   );
 
   const stashes = await E(git).stashList();
-  t.true(stashes[0].includes('save tracked'));
+  t.is(stashes.length, 1);
+  t.like(stashes[0], {
+    index: 0,
+    message: 'On main: save tracked',
+    ref: { name: 'stash@{0}', kind: 'commit' },
+    created: { summary: 'On main: save tracked' },
+  });
+  t.is(stashes[0].ref.oid, stashes[0].created.oid);
+  t.true(Number.isInteger(stashes[0].created.committedAt));
+  const stashLines = await E(git).stashListText();
+  t.is(stashLines.length, 1);
+  t.true(stashLines[0].includes('save tracked'));
   const patch = await E(git).stashShow(0);
-  t.true(patch.includes('+after'));
+  t.deepEqual(
+    patch.files.map(({ status, newPath }) => ({ status, newPath })),
+    [{ status: 'modified', newPath: 'tracked.txt' }],
+  );
+  t.true(
+    patch.files[0].hunks.some(hunk =>
+      hunk.lines.some(line => line.kind === 'add' && line.text === 'after'),
+    ),
+  );
+  t.true((await E(git).stashShowText(0)).includes('+after'));
 
   await E(git).stashApply(0);
   t.is(
