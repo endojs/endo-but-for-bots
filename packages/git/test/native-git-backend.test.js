@@ -1388,6 +1388,9 @@ test('NativeGitBackend reports structured stash entries and diffs', async t => {
   await git(['add', 'tracked.txt']);
   await git([...identity, 'commit', '-qm', 'base']);
 
+  t.deepEqual(await backend.stashList(), []);
+  t.deepEqual(await backend.stashListText(), []);
+
   await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'first\n');
   await backend.stashPush({ message: 'first saved state' });
   await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'second\n');
