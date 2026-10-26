@@ -255,3 +255,31 @@ test('parseGitDiff refuses raw and patch renderings that disagree', t => {
   const twoSections = 'diff --git a/f b/f\ndiff --git a/g b/g\n';
   t.throws(() => parseGitDiff(raw, twoSections), { message: /more files/ });
 });
+
+test('parseRawDiff refuses a record without its paths', t => {
+  const header = `:100644 100644 ${OLD_OID} ${NEW_OID}`;
+  t.throws(() => parseRawDiff(`${header} M\0`), { message: /names no path/ });
+  t.throws(() => parseRawDiff(`${header} R100\0before.txt\0`), {
+    message: /names no target/,
+  });
+});
+
+test('parsePatchSections refuses malformed sections and hunks', t => {
+  t.throws(() => parsePatchSections('index 1..2\n'), {
+    message: /Unexpected git diff line/,
+  });
+  const header = ['diff --git a/f b/f', '@@ -1,2 +1,2 @@'];
+  t.throws(() => parsePatchSections([...header, ' one', '?two'].join('\n')), {
+    message: /Unexpected line/,
+  });
+  t.throws(() => parsePatchSections([...header, '-a', '-b', '-c'].join('\n')), {
+    message: /overruns its counts/,
+  });
+});
+
+test('parseGitDiff refuses an unsupported raw status letter', t => {
+  const raw = rawText([rawRecord('100644', '100644', 'X', ['f'])]);
+  t.throws(() => parseGitDiff(raw, 'diff --git a/f b/f\n'), {
+    message: /Unsupported git diff status/,
+  });
+});
