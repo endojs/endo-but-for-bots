@@ -29,6 +29,7 @@
       "types": "./types-index.types.d.ts",
       "default": "./index.js"
     },
+    "./turn-ledger.js": "./turn-ledger.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -44,10 +45,12 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/inference": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
+    "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
@@ -62,6 +65,7 @@
     "./*.map",
     "LICENSE*",
     "SECURITY*",
+    "examples",
     "src"
   ],
   "publishConfig": {
