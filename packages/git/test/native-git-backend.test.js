@@ -916,6 +916,47 @@ test('NativeGitBackend.merge reports delete conflicts and marker style', async t
   t.false('theirs' in result.conflicts[0]);
 });
 
+test('NativeGitBackend.merge reports a detached head and rethrows non-conflict failures', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  /**
+   * @param {string} file
+   * @param {string} message
+   */
+  const commitFile = async (file, message) => {
+    await fs.promises.writeFile(path.join(repoRoot, file), `${message}\n`);
+    await git(['add', file]);
+    await git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qm',
+      message,
+    ]);
+  };
+  await commitFile('base.txt', 'base');
+  await git(['switch', '-qc', 'side']);
+  await commitFile('side.txt', 'side');
+  await git(['switch', '-q', 'main']);
+  await commitFile('main.txt', 'main');
+
+  await t.throwsAsync(backend.merge('side', { fastForwardOnly: true }));
+  await t.throwsAsync(git(['rev-parse', '--verify', '-q', 'MERGE_HEAD']));
+
+  await git(['switch', '-q', '--detach', 'main']);
+  const unchanged = await backend.merge('main~1');
+  t.is(unchanged.status, 'up-to-date');
+  if (unchanged.status !== 'up-to-date') {
+    throw t.fail('expected an up-to-date result');
+  }
+  t.is(unchanged.head.kind, 'detached');
+  t.is(unchanged.head.name, 'HEAD');
+});
+
 test('NativeGitBackend.diff narrows by revision range and path', async t => {
   const { backend, repoRoot } = await provisionRepo(t);
   /** @param {string[]} commandArguments */
