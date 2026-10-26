@@ -1113,6 +1113,12 @@ fs.writeFileSync(todo, fs.readFileSync(todo, 'utf8').replace(/^pick /gmu, 'edit 
   t.is(stopped.current.oid, featureTip);
   t.is(stopped.current.summary, 'feature two');
 
+  // Git refusing to continue over an unstaged edit is a stop, not a failure.
+  await fs.promises.writeFile(path.join(repoRoot, 'two.txt'), 'dirty\n');
+  const refused = await backend.rebase({ mode: 'continue' });
+  t.deepEqual(refused, { status: 'in-progress', current: stopped.current });
+  await git(['checkout', '--', 'two.txt']);
+
   // Git reused both commits unchanged, so nothing counts as replayed.
   const completed = await backend.rebase({ mode: 'continue' });
   t.deepEqual(completed, {
@@ -1120,6 +1126,81 @@ fs.writeFileSync(todo, fs.readFileSync(todo, 'utf8').replace(/^pick /gmu, 'edit 
     head: { name: 'feature', kind: 'branch', oid: featureTip },
     replayed: [],
   });
+});
+
+test('NativeGitBackend.rebase folds fixups only when autosquash is requested', async t => {
+  const { backend, git, write } = await provisionDivergedRebase(t);
+  // Give `feature two` a fixup so autosquash has something to fold.
+  await write('two.txt', 'two, fixed\n');
+  await git([
+    '-c',
+    'user.email=t@t',
+    '-c',
+    'user.name=T',
+    'commit',
+    '-qm',
+    'fixup! feature two',
+  ]);
+  const fixupTip = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+
+  await t.throwsAsync(
+    // @ts-expect-error autosquash must be a boolean
+    backend.rebase({ mode: 'start', upstream: 'main', autosquash: 'yes' }),
+    { message: /autosquash must be a boolean/ },
+  );
+  await t.throwsAsync(
+    // @ts-expect-error autosquash belongs to mode start
+    backend.rebase({ mode: 'continue', autosquash: true }),
+    { message: /autosquash is only valid for mode start/ },
+  );
+  await t.throwsAsync(
+    // @ts-expect-error upstream belongs to mode start
+    backend.rebase({ mode: 'skip', upstream: 'main' }),
+    { message: /upstream is only valid for mode start/ },
+  );
+  await t.throwsAsync(
+    // @ts-expect-error not a rebase mode
+    backend.rebase({ mode: 'edit-todo' }),
+    { message: /rebase mode must be start, continue, abort, or skip/ },
+  );
+
+  const kept = await backend.rebase({
+    mode: 'start',
+    upstream: 'main',
+    autosquash: false,
+  });
+  t.is(kept.status, 'conflicts');
+  await write('conflict.txt', 'done\n');
+  const unsquashed = await backend.rebase({ mode: 'continue' });
+  if (unsquashed.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${unsquashed.status}`);
+  }
+  t.deepEqual(
+    unsquashed.replayed.map(commit => commit.summary),
+    ['feature one', 'feature two', 'fixup! feature two'],
+  );
+  await git(['reset', '-q', '--hard', fixupTip]);
+
+  t.is(
+    (
+      await backend.rebase({
+        mode: 'start',
+        upstream: 'main',
+        autosquash: true,
+      })
+    ).status,
+    'conflicts',
+  );
+  await write('conflict.txt', 'done\n');
+  const completed = await backend.rebase({ mode: 'continue' });
+  if (completed.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${completed.status}`);
+  }
+  t.deepEqual(
+    completed.replayed.map(commit => commit.summary),
+    ['feature one', 'feature two'],
+  );
+  t.is((await git(['show', 'HEAD:two.txt'])).stdout, 'two, fixed\n');
 });
 
 test('NativeGitBackend.diff narrows by revision range and path', async t => {
