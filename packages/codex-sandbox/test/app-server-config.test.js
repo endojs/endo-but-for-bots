@@ -22,7 +22,11 @@ const config = harden({
   model_provider: 'endo_broker',
   approval_policy: 'never',
   sandbox_mode: 'danger-full-access',
-  features: { network_proxy: { enabled: false } },
+  features: {
+    network_proxy: { enabled: false },
+    multi_agent: false,
+    multi_agent_v2: false,
+  },
   model_providers: {
     endo_broker: {
       name: 'Endo broker',
@@ -72,6 +76,26 @@ test('public networking uses the host proxy without a second Codex proxy', t => 
   t.is(env.http_proxy, env.HTTP_PROXY);
   t.is(env.NO_PROXY, '127.0.0.1');
   t.notThrows(() => assertBrokerRuntimeConfig(config, endpoint, network));
+});
+
+test('native delegation is disabled and cannot be reenabled by inherited config', t => {
+  const argv = makeBrokerAppServerArgv(endpoint);
+  for (const feature of ['multi_agent', 'multi_agent_v2']) {
+    t.true(argv.includes(`features.${feature}=false`));
+    for (const value of [true, undefined, null]) {
+      t.throws(
+        () =>
+          assertBrokerRuntimeConfig(
+            {
+              ...config,
+              features: { ...config.features, [feature]: value },
+            },
+            endpoint,
+          ),
+        { message: /runtime configuration mismatch/ },
+      );
+    }
+  }
 });
 
 test('public proxy evidence requires canonical loopback without credentials', t => {

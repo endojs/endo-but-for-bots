@@ -356,6 +356,7 @@ export const GuestInterface = M.interface('EndoGuest', {
 });
 
 export const HostInterface = M.interface('EndoHost', {
+  createDirectory: M.call(NameOrPathShape).returns(M.promise()),
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,

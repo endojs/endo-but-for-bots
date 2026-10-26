@@ -7,6 +7,7 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { setImmediate } from 'node:timers';
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 import { makePromiseKit } from './_promise-kit.js';
 
 /**
@@ -17,7 +18,10 @@ import { makePromiseKit } from './_promise-kit.js';
  * @param {boolean} [options.forceCompaction]
  * @param {boolean} [options.development]
  * @param {number} [options.contextLength]
+ * @param {string[]} [options.reasoningEfforts]
+ * @param {string} [options.defaultReasoningEffort]
  * @param {(request: any, ordinal: number) => any[] | undefined} [options.responseOutput]
+ * @param {(ordinal: number) => number} [options.responseStatus]
  * @param {(request: any) => any} [options.responseUsage]
  * @param {string} [options.shellOutput]
  * @param {boolean} [options.refuseCheckpoint]
@@ -32,7 +36,10 @@ const world = (
     forceCompaction = false,
     development = false,
     contextLength = 128_000,
+    reasoningEfforts = ['high'],
+    defaultReasoningEffort = 'high',
     responseOutput = undefined,
+    responseStatus = () => 200,
     responseUsage = /** @type {((request: any) => any) | undefined} */ (
       undefined
     ),
@@ -79,7 +86,7 @@ const world = (
             `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output, ...(responseUsage ? { usage: responseUsage(body) } : {}) } })}\n\n`,
           );
           return harden({
-            status: 200,
+            status: responseStatus(requests.length),
             contentType: 'text/event-stream',
             reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
           });
@@ -109,8 +116,8 @@ const world = (
                 title: 'Luna',
                 description: '',
                 default: true,
-                defaultReasoningEffort: 'high',
-                reasoningEfforts: ['high'],
+                defaultReasoningEffort,
+                reasoningEfforts,
                 contextLength,
               },
             ],
@@ -132,25 +139,22 @@ const world = (
   /** @type {Map<string, Map<string, any>>} */
   const guests = new Map();
   let environments = 0;
+  let disposals = 0;
+  let refuseDisposal = false;
   if (development) store.set('environment-runner', Far('Runner'));
   const host = Far('FlootHost', {
-    has: name => store.has(name),
-    lookup: name => store.get(name),
-    list: () => harden([...store.keys()]),
-    storeValue: (value, name) => {
-      if (
-        refuseCheckpoint &&
-        value.type === 'transcript-record' &&
-        value.kind === 'compaction'
-      ) {
-        checkpointRefusals += 1;
-        throw Error('checkpoint write refused');
-      }
-      store.set(name, value);
-    },
-    remove: name => {
-      store.delete(name);
-    },
+    ...directoryHost(store, {
+      beforeStore: value => {
+        if (
+          refuseCheckpoint &&
+          value.type === 'transcript-record' &&
+          value.kind === 'compaction'
+        ) {
+          checkpointRefusals += 1;
+          throw Error('checkpoint write refused');
+        }
+      },
+    }),
     copy: ([from], [guestName, name]) => {
       if (guests.has(guestName))
         guests.get(guestName)?.set(name, store.get(from));
@@ -160,6 +164,10 @@ const world = (
       store.set(
         adminName,
         Far('EnvironmentAdmin', {
+          dispose: () => {
+            if (refuseDisposal) throw Error('Environment disposal refused');
+            disposals += 1;
+          },
           stop: () => {
             nativeStops += 1;
             return onNativeStop?.();
@@ -253,6 +261,10 @@ const world = (
     cliCreates: () => cliCreates,
     guestCreates: () => guestCreates,
     environments: () => environments,
+    disposals: () => disposals,
+    refuseDisposal: value => {
+      refuseDisposal = value;
+    },
     checkpointRefusals: () => checkpointRefusals,
   };
 };
@@ -418,6 +430,95 @@ test('development factory revival refuses a public Shell with missing private ad
     message: /private admin is missing/,
   });
   await subject.close();
+});
+
+test('Fae picker projects CLI effort aliases and sends only supported wire choices', async t => {
+  const subject = world(t, {
+    reasoningEfforts: ['high', 'ultra', 'max', 'future-effort'],
+    defaultReasoningEffort: 'ultra',
+  });
+  t.teardown(subject.close);
+  const [fae] = await E(subject.factory).listModels('fae-codex');
+  const [cli] = await E(subject.factory).listModels('codex');
+  t.deepEqual(fae.reasoningEfforts, ['high', 'max']);
+  t.is(fae.defaultReasoningEffort, 'max');
+  t.deepEqual(cli.reasoningEfforts, ['high', 'ultra', 'max', 'future-effort']);
+  t.is(cli.defaultReasoningEffort, 'ultra');
+  for (const reasoningEffort of ['ultra', 'future-effort']) {
+    await t.throwsAsync(
+      E(subject.factory).createSession({
+        backendId: 'fae-codex',
+        modelId: 'luna',
+        reasoningEffort,
+      }),
+      { message: /Unsupported reasoning effort/ },
+    );
+  }
+  const session = await E(subject.factory).createSession({
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    reasoningEffort: fae.defaultReasoningEffort,
+  });
+  const run = await E(session).startTurn('Android voice assistant');
+  await E(run).whenFinished();
+  t.falsy((await E(run).getStatus()).error);
+  t.deepEqual(subject.requests[0].reasoning, { effort: 'max' });
+  const id = (await E(session).getInfo()).id;
+  const restored = await E(await subject.restart()).getSession(id);
+  const next = await E(restored).startTurn('Continue');
+  await E(next).whenFinished();
+  t.falsy((await E(next).getStatus()).error);
+  t.deepEqual(subject.requests[1].reasoning, { effort: 'max' });
+  t.is(subject.cliCreates(), 0);
+});
+
+test('a failed Fae session with a retained ultra recipe revives and continues with max', async t => {
+  const subject = world(t, {
+    reasoningEfforts: ['high', 'ultra'],
+    responseStatus: ordinal => (ordinal === 1 ? 400 : 200),
+  });
+  t.teardown(subject.close);
+  const session = await E(subject.factory).createSession({
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    reasoningEffort: 'high',
+  });
+  const first = await E(session).startTurn('Android voice assistant');
+  await E(first).whenFinished();
+  t.truthy((await E(first).getStatus()).error);
+  t.is((await E(session).getTurns())[0].state, 'failed');
+  const { id } = await E(session).getInfo();
+  await subject.close();
+  // Model the on-disk recipe left by the pre-fix Tokyo factory. The new
+  // picker cannot create this alias, but revival must still accept it.
+  const key = [...subject.store.keys()]
+    .filter(name => name.startsWith('floot-sessions-v1-'))
+    .sort()
+    .at(-1);
+  if (key === undefined) throw Error('Missing retained session registry');
+  const snapshot = subject.store.get(key);
+  subject.store.set(
+    key,
+    harden({
+      ...snapshot,
+      sessions: snapshot.sessions.map(entry => ({
+        ...entry,
+        reasoningEffort: 'ultra',
+        inferenceRecipe: { ...entry.inferenceRecipe, reasoningEffort: 'ultra' },
+      })),
+    }),
+  );
+  const restored = await E(await subject.restart()).getSession(id);
+  const next = await E(restored).startTurn('Continue');
+  await E(next).whenFinished();
+  t.falsy((await E(next).getStatus()).error);
+  t.deepEqual(subject.requests[1].reasoning, { effort: 'max' });
+  t.deepEqual(
+    (await E(restored).getTurns()).map(turn => turn.state),
+    ['failed', 'completed'],
+  );
+  t.is(subject.cliCreates(), 0);
+  t.true(subject.endpoints.every(endpoint => endpoint.revoked));
 });
 
 test('Floot Fae Codex pins inference, preserves opaque journal context, and never creates a CLI', async t => {
@@ -779,4 +880,65 @@ test('creating cleanup retains the captured inference recipe', async t => {
   t.is(subject.requests.length, 1);
   await E(factory).deleteSession(id);
   await subject.close();
+});
+
+test('repeated session deletion releases private journals, network audit and environment roots', async t => {
+  const subject = world(t, { development: true });
+  t.teardown(() => subject.close());
+  for (let index = 0; index < 6; index += 1) {
+    const session = await E(subject.factory).createSession({
+      presetId: 'development',
+      backendId: 'fae-codex',
+      modelId: 'luna',
+      networkPolicy: 'off',
+    });
+    const { id } = await E(session).getInfo();
+    const turn = await E(session).startTurn('hello');
+    await E(turn).whenFinished();
+    t.true(subject.store.has(`floot-environment-admin-${id}`));
+    t.true(
+      [...subject.store.keys()].some(name =>
+        name.startsWith(`floot-private-sessions/${id}/floot-network-`),
+      ),
+    );
+    await E(subject.factory).deleteSession(id);
+    t.false([...subject.store.keys()].some(name => name.includes(id)));
+    t.is(subject.disposals(), index + 1);
+    t.true(
+      [...subject.store.keys()].filter(name =>
+        name.startsWith('floot-sessions-v1-'),
+      ).length <= 4,
+    );
+  }
+  t.deepEqual(await E(subject.factory).listSessions(), []);
+  t.true(subject.store.has('floot-private-sessions'));
+  t.false(
+    [...subject.store.keys()].some(name =>
+      name.startsWith('floot-private-sessions/'),
+    ),
+  );
+});
+
+test('failed environment disposal retains its administrator and journal until deletion retry succeeds', async t => {
+  const subject = world(t, { development: true });
+  t.teardown(() => subject.close());
+  const session = await E(subject.factory).createSession({
+    presetId: 'development',
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    networkPolicy: 'off',
+  });
+  const { id } = await E(session).getInfo();
+  subject.refuseDisposal(true);
+  await t.throwsAsync(E(subject.factory).deleteSession(id), {
+    message: /Environment disposal refused/,
+  });
+  t.is((await E(subject.factory).listSessions())[0].lifecycle, 'error');
+  t.true(subject.store.has(`floot-environment-admin-${id}`));
+  t.true(subject.store.has(`floot-private-sessions/${id}/schema`));
+  subject.refuseDisposal(false);
+  await E(subject.factory).deleteSession(id);
+  t.deepEqual(await E(subject.factory).listSessions(), []);
+  t.false([...subject.store.keys()].some(name => name.includes(id)));
+  t.is(subject.disposals(), 1);
 });

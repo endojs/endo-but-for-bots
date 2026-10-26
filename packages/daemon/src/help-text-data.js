@@ -126,6 +126,8 @@ export const helpTextEntries = harden([
     'EndoHost',
     {
       '': 'EndoHost - A privileged agent with full Endo capabilities.\n\nA host has all guest capabilities plus:\n- Create workers for running code\n- Evaluate JavaScript code\n- Create confined guests\n- Store blobs and values\n- Make unconfined or bundled caplets\n- Manage network peers\n- Manage secret blobs through `@secrets` without revealing them in inventory\n\n`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are management\nfacets on the daemon\'s root host only; a host made with provideHost does not\ncarry `@secrets`.\nCreated read capabilities are bound beneath the ordinary `secrets` directory.\nPrefer endowing a formula with a secret capability instead of calling its\n`readBase64()` method in an agent session.\n\nUse help("methodName") for details on specific methods.',
+      createDirectory:
+        'createDirectory(petNamePath) -> Promise<void>\nHost only. Create a directory at the given name or array of path segments.\nLike makeDirectory, this replaces an existing binding: check absence first.\nReturns no directory capability. Use path-based list, lookup, storeValue, and\nremove operations when a worker must survive collection of its owned storage.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the host capabilities\n- help("evaluate") returns documentation for code evaluation',
       storeBlob:
         'storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',

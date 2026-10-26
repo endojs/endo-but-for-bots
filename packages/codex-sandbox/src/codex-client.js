@@ -4,6 +4,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import {
+  pairToolCalls,
   responsesApiItems,
   selectActiveTranscript,
 } from '@endo/hosted-agent/transcript-records.js';
@@ -1604,7 +1605,10 @@ export const makeCodexClient = ({
   // thread does not -- if the stack holds no records then no turn is known to
   // have happened, and a fresh empty thread is the honest result rather than
   // a refusal.
-  const mustRotate = () => catalogChanged() || inheritedThread;
+  const mustRotate = (opts = {}) =>
+    catalogChanged() ||
+    inheritedThread ||
+    Boolean(nativeSnapshot(opts)?.suffix.length);
 
   const transcriptRecords = opts =>
     Array.isArray(opts.transcript)
@@ -1624,8 +1628,12 @@ export const makeCodexClient = ({
     if (records[0]?.kind !== 'native-context') return undefined;
     if (!nativeContext || records[0].format !== 'codex-rollout-v1')
       throw Error('Codex cannot restore this native context format');
-    if (records.length !== 1)
-      throw Error('Codex native context cannot restore an unprojected suffix');
+    const suffix = records.slice(1);
+    // Projection admits only settled recovery evidence. Independently reject
+    // dangling calls and unsupported encodings before touching native state.
+    if (pairToolCalls(suffix, { perTurn: true }).unanswered.length)
+      throw Error('Codex native context cannot restore an unsettled suffix');
+    responsesApiItems(suffix);
     const snapshot = JSON.parse(records[0].payload);
     if (
       !snapshot ||
@@ -1645,7 +1653,7 @@ export const makeCodexClient = ({
       JSON.stringify(snapshot.binding) !== JSON.stringify(nativeBinding(opts))
     )
       throw Error('Codex native context binding changed');
-    return snapshot.capture;
+    return { capture: snapshot.capture, suffix };
   };
   // Records are the only channel. `continuityContext` used to stand in for
   // them as text; it carried nothing a tool call survives, and gating on it
@@ -1661,7 +1669,7 @@ export const makeCodexClient = ({
 
   const ensureThread = async (opts = {}, preserveCatalog = false) => {
     await ensureReady();
-    if (threadReady && threadId && (preserveCatalog || !mustRotate()))
+    if (threadReady && threadId && (preserveCatalog || !mustRotate(opts)))
       return threadId;
     const common = {
       cwd,
@@ -1675,9 +1683,9 @@ export const makeCodexClient = ({
         : {}),
     };
     let rotatedFrom;
-    /** @type {'catalog-changed' | 'thread-inherited' | undefined} */
+    /** @type {'catalog-changed' | 'thread-inherited' | 'recovered-context' | undefined} */
     let rotationReason;
-    if (!preserveCatalog && mustRotate()) {
+    if (!preserveCatalog && mustRotate(opts)) {
       assertContinuity(opts, catalogChanged());
       if (ledger.status().needsReconciliation) {
         throw Error(
@@ -1691,7 +1699,9 @@ export const makeCodexClient = ({
       // for audit and recovery -- it is superseded, never rewritten.
       rotationReason = catalogChanged()
         ? 'catalog-changed'
-        : 'thread-inherited';
+        : inheritedThread
+          ? 'thread-inherited'
+          : 'recovered-context';
       rotatedFrom = threadId;
       continuityCheckpoint =
         opts.acknowledgedCheckpoint || continuityCheckpoint;
@@ -1742,7 +1752,7 @@ export const makeCodexClient = ({
           dynamicTools,
         };
         const restored = await nativeContext.restore({
-          capture: snapshot,
+          capture: snapshot.capture,
           target,
         });
         if (closing || terminated)
@@ -1777,6 +1787,15 @@ export const makeCodexClient = ({
           throw Error('Codex native restoration baseline unavailable');
         restoredBase = baseline.data[0]?.id ?? null;
         threadHasTurns = restoredBase !== null;
+        if (snapshot.suffix.length) {
+          // This writes historical calls/results; it does not execute tools.
+          // Publish this projection only after injection succeeds. A failure
+          // leaves the original checkpoint and journal available for recovery.
+          await request('thread/inject_items', {
+            threadId: target.sessionId,
+            items: responsesApiItems(snapshot.suffix),
+          });
+        }
         replayContinuity = false;
       } else {
         response = await request('thread/start', {
@@ -1908,7 +1927,7 @@ export const makeCodexClient = ({
       let currentThreadId;
       await null;
       try {
-        const rotating = mustRotate();
+        const rotating = mustRotate(opts);
         if (rotating || (replayContinuity && !threadHasTurns)) {
           assertContinuity(opts, catalogChanged());
         }

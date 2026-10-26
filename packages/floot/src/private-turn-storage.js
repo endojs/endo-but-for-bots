@@ -3,35 +3,73 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
+// One host binding, regardless of the number of sessions or journal records.
+const ROOT = 'floot-private-sessions';
+const roots = new WeakMap();
+
 /** @param {string} sessionId */
-const privatePrefix = sessionId => {
+const assertSessionId = sessionId => {
   (typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) ||
     Fail`Invalid journal session ID`;
-  // The length disambiguates IDs that are prefixes of other session IDs.
-  return `floot-private-turn-${sessionId.length}-${sessionId}-`;
+};
+
+/** @param {any} host */
+const createRoot = host => {
+  // Concurrent session creation must not replace a newly published directory.
+  if (!roots.has(host)) {
+    const pending = (async () => {
+      if (!(await E(host).has(ROOT))) await E(host).createDirectory(ROOT);
+    })();
+    roots.set(host, pending);
+    void pending.catch(() => roots.delete(host));
+  }
+  return roots.get(host);
 };
 
 /**
- * Create a new journal namespace, never adopt or overwrite an existing one.
- * The factory must reserve this ID and check registry/guest aliases first.
- * These checks require one factory writer, not concurrent independent factories.
- * A rejected write may have committed: retain that namespace for inspection,
- * and use a new ID for the next creation attempt.
- *
+ * Create a new private session directory. Never adopt or overwrite existing
+ * data. The factory reserves the ID before calling this; one factory owns the
+ * root. A failed publication retains its directory for operator inspection.
  * @param {any} host
  * @param {string} sessionId
  */
 export const createPrivateTurnStorage = async (host, sessionId) => {
-  const prefix = privatePrefix(sessionId);
-  const names = await E(host).list();
-  !names.some(name => name.startsWith(prefix)) ||
+  assertSessionId(sessionId);
+  await createRoot(host);
+  !(await E(host).has(ROOT, sessionId)) ||
     Fail`Private journal namespace already exists`;
+  await E(host).createDirectory(harden([ROOT, sessionId]));
   await E(host).storeValue(
-    harden({ version: 1, sessionId }),
-    `${prefix}schema`,
+    harden({ version: 2, sessionId }),
+    harden([ROOT, sessionId, 'schema']),
   );
 };
 harden(createPrivateTurnStorage);
+
+/** @param {any} host @param {string} sessionId */
+const openDirectory = async (host, sessionId) => {
+  assertSessionId(sessionId);
+  (await E(host).has(ROOT)) ||
+    Fail`Private journal schema missing; session reset required`;
+  (await E(host).has(ROOT, sessionId)) ||
+    Fail`Private journal schema missing; session reset required`;
+  (await E(host).has(ROOT, sessionId, 'schema')) ||
+    Fail`Private journal schema missing; session reset required`;
+  assertSchema(
+    await E(host).lookup(harden([ROOT, sessionId, 'schema'])),
+    sessionId,
+  );
+};
+
+/** @param {string} sessionId @param {unknown} name */
+const assertNetworkName = (sessionId, name) => {
+  const prefix = `floot-network-${sessionId.length}-${sessionId}-`;
+  (typeof name === 'string' &&
+    name.startsWith(prefix) &&
+    /^\d{20}$/.test(name.slice(prefix.length))) ||
+    Fail`Invalid private network value name`;
+  return /** @type {string} */ (name);
+};
 
 /** @param {unknown} name */
 const assertJournalName = name => {
@@ -54,7 +92,7 @@ const assertSchema = (schema, sessionId) => {
     Reflect.ownKeys(schema).length === 2 &&
     Object.hasOwn(schema, 'version') &&
     Object.hasOwn(schema, 'sessionId') &&
-    schema.version === 1 &&
+    schema.version === 2 &&
     schema.sessionId === sessionId) ||
     Fail`Invalid private journal schema; session reset required`;
 };
@@ -62,28 +100,25 @@ const assertSchema = (schema, sessionId) => {
 /**
  * Terminal deletion only, after the factory has durably recorded deletion
  * intent and stopped all writers/backends and closed their storage facets.
- * The schema is removed last, so partial removal can be retried. This function
- * is not a writer fence and must never be used by ordinary incarnation cleanup.
+ * Unlink the whole owned directory in one operation. A lost acknowledgement
+ * is retryable; no partial journal can be exposed by a crash mid-deletion.
+ * The daemon can collect its contents once the closed facets are released.
  * Unknown or ownerless data is retained for operator inspection.
  * @param {any} host
  * @param {string} sessionId
  */
 export const retirePrivateTurnStorage = async (host, sessionId) => {
-  const prefix = privatePrefix(sessionId);
-  const names = (await E(host).list()).filter(name => name.startsWith(prefix));
-  if (names.length === 0) return;
-  const schemaName = `${prefix}schema`;
-  names.includes(schemaName) ||
-    Fail`Private journal retirement requires its schema`;
-  assertSchema(await E(host).lookup(schemaName), sessionId);
-  const values = names.filter(name => name !== schemaName);
-  // Validate the whole namespace before removing any of it.
-  for (const name of values) assertJournalName(name.slice(prefix.length));
-  for (const name of values) {
-    // eslint-disable-next-line no-await-in-loop
-    await E(host).remove(name);
+  assertSessionId(sessionId);
+  if (!(await E(host).has(ROOT))) return;
+  if (!(await E(host).has(ROOT, sessionId))) return;
+  await openDirectory(host, sessionId);
+  for (const name of await E(host).list(ROOT, sessionId)) {
+    if (name !== 'schema') {
+      if (name.startsWith('floot-network-')) assertNetworkName(sessionId, name);
+      else assertJournalName(name);
+    }
   }
-  await E(host).remove(schemaName);
+  await E(host).remove(ROOT, sessionId);
 };
 harden(retirePrivateTurnStorage);
 
@@ -96,17 +131,10 @@ harden(retirePrivateTurnStorage);
  *
  * @param {any} host
  * @param {string} sessionId
+ * @param {(name: unknown) => string} assertName
  */
-export const providePrivateTurnStorage = async (host, sessionId) => {
-  const prefix = privatePrefix(sessionId);
-  !(await E(host).list()).some(name =>
-    name.startsWith(`${prefix}migration-`),
-  ) || Fail`Legacy private journal requires session reset`;
-  const schemaName = `${prefix}schema`;
-  (await E(host).has(schemaName)) ||
-    Fail`Private journal schema missing; session reset required`;
-  const schema = await E(host).lookup(schemaName);
-  assertSchema(schema, sessionId);
+const provideStorage = async (host, sessionId, assertName) => {
+  await openDirectory(host, sessionId);
   let poisoned = false;
   let closed = false;
   let queue = Promise.resolve();
@@ -132,22 +160,29 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     list: () =>
       serialized(async () =>
         harden(
-          (await E(host).list())
-            .filter(name => name.startsWith(`${prefix}floot-turn-`))
-            .map(name => name.slice(prefix.length)),
+          (await E(host).list(ROOT, sessionId)).filter(name => {
+            if (name === 'schema') return false;
+            // The two journals share ownership, not their record inventories.
+            try {
+              assertName(name);
+              return true;
+            } catch {
+              return false;
+            }
+          }),
         ),
       ),
     lookup: name =>
       serialized(async () =>
-        E(host).lookup(`${prefix}${assertJournalName(name)}`),
+        E(host).lookup(harden([ROOT, sessionId, assertName(name)])),
       ),
     storeValue: (value, name) =>
       serialized(async () => {
-        const target = `${prefix}${assertJournalName(name)}`;
-        !(await E(host).has(target)) ||
+        const target = assertName(name);
+        !(await E(host).has(ROOT, sessionId, target)) ||
           Fail`Private journal values are immutable`;
         try {
-          await E(host).storeValue(value, target);
+          await E(host).storeValue(value, harden([ROOT, sessionId, target]));
         } catch (error) {
           poisoned = true;
           throw error;
@@ -157,10 +192,19 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     // failure costs a stray value, not ambiguous history, and does not poison.
     remove: name =>
       serialized(async () => {
-        const target = `${prefix}${assertJournalName(name)}`;
-        (await E(host).has(target)) || Fail`Unknown private journal value`;
-        await E(host).remove(target);
+        const target = assertName(name);
+        (await E(host).has(ROOT, sessionId, target)) ||
+          Fail`Unknown private journal value`;
+        await E(host).remove(ROOT, sessionId, target);
       }),
   });
 };
+/** @param {any} host @param {string} sessionId */
+export const providePrivateTurnStorage = (host, sessionId) =>
+  provideStorage(host, sessionId, assertJournalName);
 harden(providePrivateTurnStorage);
+
+/** @param {any} host @param {string} sessionId */
+export const providePrivateNetworkStorage = (host, sessionId) =>
+  provideStorage(host, sessionId, name => assertNetworkName(sessionId, name));
+harden(providePrivateNetworkStorage);

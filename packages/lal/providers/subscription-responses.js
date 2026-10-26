@@ -6,6 +6,7 @@ import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { usageFromProviderEvent } from '@endo/hosted-agent/provider-usage.js';
 import { canonicalJson } from '@endo/hosted-agent/canonical-json.js';
+import { codexResponsesEffort } from '@endo/hosted-agent/codex-reasoning.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { M, mustMatch } from '@endo/patterns';
 
@@ -395,6 +396,10 @@ export const makeSubscriptionResponsesProvider = ({
     (typeof reasoningEffort === 'string' &&
       reasoningEffortPattern.test(reasoningEffort)) ||
     Fail`Invalid reasoning effort`;
+  const wireEffort = codexResponsesEffort(reasoningEffort);
+  reasoningEffort === undefined ||
+    wireEffort !== undefined ||
+    Fail`Unsupported Responses reasoning effort`;
   contextLength === undefined ||
     (Number.isInteger(contextLength) &&
       Number(contextLength) > 0 &&
@@ -707,7 +712,7 @@ export const makeSubscriptionResponsesProvider = ({
         store: false,
         stream: true,
         include: ['reasoning.encrypted_content'],
-        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+        ...(wireEffort ? { reasoning: { effort: wireEffort } } : {}),
         ...(tools.length ? { tools: wireTools } : {}),
       }),
     });

@@ -5,7 +5,15 @@ For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](./OPENROU
 ## Durable turn recovery
 
 Factory-created sessions keep append-only turn journals in factory-owned storage,
-outside ordinary guest powers. `getTurns()` exposes evidence; on an idle session,
+outside ordinary guest powers.
+One `floot-private-sessions` directory is rooted in the factory host; each
+session has its own directory containing its schema, turn records, and network
+policy audit. Appending history does not grow the host's name inventory or scan
+other sessions. Terminal deletion drains and closes the writers, stops the
+backends, releases environment bindings, and unlinks the session directory so
+its records can be collected. Failed deletion remains retryable after restart.
+Flat journals from older releases are not imported.
+`getTurns()` exposes evidence; on an idle session,
 `resolveTurn(turnId, note)` acknowledges unknown outcomes after independent checks
 of external effects. It never replays or undoes work. Endo tool intents precede
 dispatch; provider-native activity is observation, not write-ahead authorization.
@@ -28,6 +36,10 @@ archived turn counts, and explicit storage provision. There is no event limit:
 long text is stored by reference (`getTurnContent`), replay is bounded by
 snapshots, and settled turns beyond the retained window are archived
 (`getArchivedTurns`). Outcome acknowledgement consumes an event.
+Endo tool outputs and error text are capped at 32,768 UTF-16 code units before
+journaling or delivery to either a provider or hosted model, including an
+explicit truncation notice. The notice asks for filtering or pagination; it
+does not imply that an operation failed. Short outputs are unchanged.
 
 A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.

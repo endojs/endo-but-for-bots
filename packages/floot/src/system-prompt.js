@@ -251,6 +251,9 @@ your tools, you may hand a self-contained piece of work to a helper agent:
 - askSubagent — mail it a task and wait for its reply. It cannot see this
   conversation, so put everything it needs in the task.
 - stopSubagent — release it once its work is done.
+These Endo tools are the delegation mechanism. Do not use a harness-native
+spawn_agent, agent, or task tool to create helpers; those helpers do not have
+Endo-managed sessions, capability grants, or recovery records.
 Use this for work whose details you don't need to keep — a long search, a
 self-contained draft — not for things you can simply do yourself.
 

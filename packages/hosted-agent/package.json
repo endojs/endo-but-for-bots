@@ -31,6 +31,7 @@
     "./openrouter-account-read.js": "./src/openrouter-account-read.js",
     "./openrouter-model-read.js": "./src/openrouter-model-read.js",
     "./codex-model-read.js": "./src/codex-model-read.js",
+    "./codex-reasoning.js": "./src/codex-reasoning.js",
     "./anthropic-model-read.js": "./src/anthropic-model-read.js",
     "./model-catalog.js": "./src/model-catalog.js",
     "./account-authority.js": "./src/account-authority.js",

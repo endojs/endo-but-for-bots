@@ -21,6 +21,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { promisify } from 'node:util';
 
 import { Fail, q } from '@endo/errors';
+import { codexResponsesEffort } from '@endo/hosted-agent/codex-reasoning.js';
 import { claudeToolInput } from '@endo/claude-sandbox/src/claude-tool-input.js';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -75,6 +76,7 @@ import {
   DEVELOPMENT_BACKENDS,
   DEVELOPMENT_NETWORK_POLICIES,
   lookupEnvironmentAdmin,
+  environmentAdminName,
   provideDevelopmentEnvironment,
   makeDevelopmentTools,
 } from './src/development-environment.js';
@@ -102,9 +104,11 @@ import {
 import {
   createPrivateTurnStorage,
   providePrivateTurnStorage,
+  providePrivateNetworkStorage,
   retirePrivateTurnStorage,
 } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
+import { boundToolOutput, MAX_TOOL_OUTPUT_CHARS } from './src/tool-output.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 import { DEFAULT_TRANSCRIPT_LIMITS } from './src/journal-transcript.js';
 import { readFlootWorkloadConfig } from './src/workload-config.js';
@@ -747,9 +751,14 @@ export const makeStreamingAgent = async (
     /** @type {{ result: unknown } | { error: unknown }} */
     let outcome;
     try {
-      outcome = { result: await executeTracked(run) };
+      outcome = { result: boundToolOutput(`${await executeTracked(run)}`) };
     } catch (error) {
-      outcome = { error };
+      const message = error instanceof Error ? error.message : String(error);
+      const bounded = boundToolOutput(
+        message,
+        MAX_TOOL_OUTPUT_CHARS - 'Error: '.length,
+      );
+      outcome = { error: bounded === message ? error : Error(bounded) };
     }
     await turnJournal.append(turnId, {
       type: 'tool-result',
@@ -2085,6 +2094,7 @@ export const makeStreamingAgent = async (
   const getContextTranscript = async excludeTurnId =>
     readContextTranscript(turnJournal, excludeTurnId, {
       portableFallback: portableContextFallback,
+      reconciledNativeSuffix: nativeContextFormat === 'codex-rollout-v1',
       toolArgumentKey:
         nativeContextFormat === 'claude-code-jsonl-v1'
           ? args => JSON.stringify(claudeToolInput(args))
@@ -2773,8 +2783,21 @@ export const make = async (
               // flattened one marks only the direct provider's configured
               // model, which is what an unpinned session runs.
               default: backendId === undefined ? false : model.default,
-              defaultReasoningEffort: model.defaultReasoningEffort,
-              reasoningEfforts: model.reasoningEfforts,
+              defaultReasoningEffort:
+                id === 'fae-codex'
+                  ? (codexResponsesEffort(model.defaultReasoningEffort) ?? null)
+                  : model.defaultReasoningEffort,
+              reasoningEfforts:
+                id === 'fae-codex'
+                  ? [
+                      ...new Set(
+                        model.reasoningEfforts.flatMap(effort => {
+                          const wire = codexResponsesEffort(effort);
+                          return wire === undefined ? [] : [wire];
+                        }),
+                      ),
+                    ]
+                  : model.reasoningEfforts,
               ...(model.contextLength === undefined
                 ? {}
                 : { contextLength: model.contextLength }),
@@ -3457,10 +3480,20 @@ export const make = async (
       // out to be unreadable is not the only record.
       if (sequence >= BigInt(REGISTRY_JOURNAL_DEPTH)) {
         const oldest = sequence - BigInt(REGISTRY_JOURNAL_DEPTH);
-        const staleName = `${REGISTRY_PREFIX}${`${oldest}`.padStart(20, '0')}`;
-        await E(powers)
-          .remove(staleName)
-          .catch(() => undefined);
+        // Retry every obsolete name, including a removal whose acknowledgement
+        // failed in an earlier incarnation. Never revive old snapshot payloads.
+        const staleNames = (await E(powers).list()).filter(
+          staleName =>
+            /^floot-sessions-v1-\d{20}$/.test(staleName) &&
+            BigInt(staleName.slice(REGISTRY_PREFIX.length)) <= oldest,
+        );
+        for (const staleName of staleNames) {
+          await E(powers)
+            .remove(staleName)
+            .catch(error => {
+              console.error('[floot-factory] registry pruning failed:', error);
+            });
+        }
       }
     });
     // Preserve rejection for the caller while keeping later writes possible
@@ -3909,6 +3942,7 @@ export const make = async (
     return executionState(id);
   };
   const networkControllers = new Map();
+  const networkStorages = new Map();
   // Sessions whose incarnation is being replaced: a network policy change or
   // a rebind stops the old one and provisions the next.
   const incarnationChanges = new Set();
@@ -3926,10 +3960,14 @@ export const make = async (
   };
   const networkController = id => {
     if (!networkControllers.has(id)) {
+      const storage = providePrivateNetworkStorage(getHost(), id);
+      // E sends below observe failures; do not leave a rejected open unhandled.
+      void storage.catch(() => {});
+      networkStorages.set(id, storage);
       networkControllers.set(
         id,
         makeSessionNetworkPolicy({
-          host: getHost(),
+          host: storage,
           id,
           onChange: () => touchSession(id, 'network'),
           supported: async () => {
@@ -4926,7 +4964,7 @@ export const make = async (
     return facet;
   };
 
-  const cleanupSessionResources = async entry => {
+  const cleanupSessionResources = async (entry, { terminal = false } = {}) => {
     const { id } = entry;
     const environmentAdmin = await developmentAdmin(id);
     const failures = [];
@@ -5045,6 +5083,9 @@ export const make = async (
     } catch (error) {
       failures.push(error);
     }
+    // A stop preserves the environment's owned native storage for revival.
+    // Terminal deletion must dispose it before dropping the private admin.
+    if (terminal && environmentAdmin) await E(environmentAdmin).dispose();
     const host = getHost();
     for (const name of [`session-${id}`, `session-agent-${id}`]) {
       try {
@@ -5094,7 +5135,10 @@ export const make = async (
       // Still stop live work if intent publication failed during creation
       // rollback. Ordinary cleanup preserves the journal needed by a durable
       // `creating` entry; only namespace retirement requires this acknowledgement.
-      await cleanupSessionResources(entry);
+      await networkControllers.get(id)?.close();
+      await cleanupSessionResources(entry, {
+        terminal: !('error' in terminalIntent),
+      });
       if ('error' in terminalIntent) throw terminalIntent.error;
       for (const [journal, sessionId] of privateJournals) {
         if (sessionId === id) {
@@ -5104,7 +5148,19 @@ export const make = async (
           privateJournals.delete(journal);
         }
       }
+      const networkStorage = networkStorages.get(id);
+      if (networkStorage) await E(networkStorage).close();
+      // These facets were stopped above; only terminal deletion releases their
+      // durable roots. Incarnation replacement must retain them for revival.
+      for (const name of [
+        environmentAdminName(id),
+        `floot-environment-shell-${id}`,
+      ]) {
+        if (await E(getHost()).has(name)) await E(getHost()).remove(name);
+      }
       await retirePrivateTurnStorage(getHost(), id);
+      networkStorages.delete(id);
+      networkControllers.delete(id);
     } catch (error) {
       const current = (registry || []).findIndex(session => session.id === id);
       if (current >= 0) {
@@ -5765,6 +5821,16 @@ export const make = async (
       );
       await Promise.all(
         [...submissions.values()].map(entry => attempt(() => entry.close())),
+      );
+      await Promise.all(
+        [...networkControllers.values()].map(controller =>
+          attempt(() => controller.close()),
+        ),
+      );
+      await Promise.all(
+        [...networkStorages.values()].map(storage =>
+          attempt(() => E(storage).close()),
+        ),
       );
       await Promise.all(
         [...privateJournals.keys()].map(journal =>

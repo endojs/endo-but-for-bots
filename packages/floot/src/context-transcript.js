@@ -1,6 +1,9 @@
 // @ts-check
 import { Fail } from '@endo/errors';
-import { selectActiveTranscript } from '@endo/hosted-agent/transcript-records.js';
+import {
+  pairToolCalls,
+  selectActiveTranscript,
+} from '@endo/hosted-agent/transcript-records.js';
 
 import { recoverTurnTranscript } from './transcript-projection.js';
 import { assertContextEvidence } from './context-evidence.js';
@@ -14,7 +17,7 @@ import { assertContextEvidence } from './context-evidence.js';
  * @param {string} [excludeTurnId]
  * @param {{ turnId: string, ordinal: number, sequence: string }} [initialBoundary]
  * @param {(visit: (turn: any) => Promise<void> | void) => Promise<void>} [selectTurns]
- * @param {{ portableFallback?: boolean, toolArgumentKey?: (args: string) => string }} [options] `portableFallback` is for
+ * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string }} [options] `portableFallback` is for
  *   a backend that rebuilds its conversation from the supplied records on
  *   every turn (`continuity: 'transcript'`). When native context cannot be
  *   restored without hiding evidence, it gets the whole conversation as
@@ -22,7 +25,10 @@ import { assertContextEvidence } from './context-evidence.js';
  *   portable context, and the evidence it could not cover follows as records.
  *   Nothing is hidden; only native fidelity is lost, until the next turn
  *   captures a new checkpoint. A backend that keeps its own thread (Codex's
- *   `opaque-reconciled`) rolls a failed turn back natively and still refuses.
+ *   `opaque-reconciled`) may instead restore a safe native checkpoint and
+ *   inject a settled later suffix when `reconciledNativeSuffix` is enabled.
+ *   Unknown outcomes require an operator resolution; unsafe evidence within
+ *   or before the checkpoint still refuses. The native bytes are never flattened.
  *   `toolArgumentKey` compares arguments through the selected backend's encoding;
  *   without it, argument text must match exactly. Stored records are unchanged.
  */
@@ -32,7 +38,11 @@ const projectContext = async (
   excludeTurnId,
   initialBoundary,
   selectTurns = visitTurns,
-  { portableFallback = false, toolArgumentKey } = {},
+  {
+    portableFallback = false,
+    reconciledNativeSuffix = false,
+    toolArgumentKey,
+  } = {},
 ) => {
   const eligible = turn =>
     turn.state !== 'pending' &&
@@ -62,6 +72,7 @@ const projectContext = async (
   const exceptionGroups = [];
   let activeEvidenceUnsafe = false;
   let checkpointTurnUnsafe = false;
+  let suffixSettled = true;
   /** @type {any} */
   let checkpointTurn;
   let nativeContextRequired = false;
@@ -110,6 +121,14 @@ const projectContext = async (
           checkpointTurnUnsafe = true;
       },
     });
+    if (boundary && BigInt(turn.turnId) > BigInt(boundary.turnId)) {
+      suffixSettled &&=
+        (['completed', 'failed', 'cancelled'].includes(turn.state) ||
+          (turn.state === 'outcome-unknown' &&
+            typeof turn.resolution === 'string')) &&
+        (turn.tools ?? []).every(tool => tool.settled === true) &&
+        pairToolCalls(recovered, { perTurn: true }).unanswered.length === 0;
+    }
     if (recovered.length) {
       const groups = before ? exceptionGroups : activeGroups;
       groups.push({ turnId: turn.turnId, records: recovered });
@@ -130,6 +149,21 @@ const projectContext = async (
   const records = ordered(activeGroups);
   let active = selectActiveTranscript(records).active;
   let exceptions = ordered(exceptionGroups);
+  // A completed native checkpoint and a later, fully accounted-for suffix
+  // are distinct evidence. Codex restores the former into a new thread and
+  // injects the latter as data before starting a new turn. Never reinterpret
+  // an unsafe checkpoint, erase effects, or turn an unsettled call into success.
+  if (
+    reconciledNativeSuffix &&
+    active[0]?.kind === 'native-context' &&
+    active[0].format === 'codex-rollout-v1' &&
+    active.length > 1 &&
+    !checkpointTurnUnsafe &&
+    exceptions.length === 0 &&
+    suffixSettled
+  ) {
+    return harden(active);
+  }
   if (
     (nativeContextRequired ||
       active.some(record => record.kind === 'native-context')) &&
@@ -219,7 +253,7 @@ const projectContext = async (
  * @param {readonly any[]} turns
  * @param {(ref: any) => Promise<string>} readContent
  * @param {string} [excludeTurnId]
- * @param {{ portableFallback?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
+ * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
  */
 export const projectContextTranscript = (
   turns,
@@ -251,7 +285,7 @@ harden(projectContextTranscript);
  * grow with history; superseded metadata is not accumulated in memory.
  * @param {any} journal
  * @param {string} [excludeTurnId]
- * @param {{ portableFallback?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
+ * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
  */
 export const readContextTranscript = async (
   journal,

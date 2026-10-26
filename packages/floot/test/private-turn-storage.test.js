@@ -3,114 +3,209 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { makePromiseKit } from './_promise-kit.js';
-
+import { directoryHost } from './_directory-host.js';
 import {
   createPrivateTurnStorage,
   providePrivateTurnStorage,
+  providePrivateNetworkStorage,
   retirePrivateTurnStorage,
 } from '../src/private-turn-storage.js';
 
+const rootName = 'floot-private-sessions';
+const path = id => `${rootName}/${id}`;
 const eventName = index => `floot-turn-event-${`${index}`.padStart(20, '0')}`;
-const prefix = 'floot-private-turn-7-session-';
-const schemaName = `${prefix}schema`;
+const networkName = index =>
+  `floot-network-7-session-${`${index}`.padStart(20, '0')}`;
+const fixture = (hooks = {}) => {
+  const values = new Map();
+  const powers = Far('TestHost', directoryHost(values, hooks));
+  return { values, powers };
+};
 
-for (const lost of ['none', 'content', 'schema']) {
-  test(`terminal retirement retries uncertain removal, lost=${lost}`, async t => {
-    const contentName = `${prefix}${eventName(1)}`;
-    /** @type {Map<string, unknown>} */
-    const values = new Map();
-    values.set(schemaName, harden({ version: 1, sessionId: 'session' }));
-    values.set(contentName, 'content');
-    values.set('floot-private-turn-8-session2-schema', 'untouched');
+test('concurrent creation shares one root; opening and growth never scan host inventory', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  await Promise.all(
+    ['session', 'session2'].map(id => createPrivateTurnStorage(f.powers, id)),
+  );
+  t.deepEqual(await E(f.powers).list(), [rootName]);
+  const noHostList = Far('NoGlobalScan', {
+    has: (...names) => E(f.powers).has(...names),
+    lookup: (...names) => E(f.powers).lookup(...names),
+    storeValue: (value, name) => E(f.powers).storeValue(value, name),
+    list: (...names) => {
+      if (names.length === 0) throw Error('must not scan global namespace');
+      return E(f.powers).list(...names);
+    },
+    remove: (...names) => E(f.powers).remove(...names),
+  });
+  const first = await providePrivateTurnStorage(noHostList, 'session');
+  const network = await providePrivateNetworkStorage(noHostList, 'session');
+  const second = await providePrivateTurnStorage(noHostList, 'session2');
+  await Promise.all(
+    Array.from({ length: 12_000 }, (_, index) =>
+      E(first).storeValue('event', eventName(index)),
+    ),
+  );
+  await E(network).storeValue(harden({ policy: 'off' }), networkName(1));
+  t.is((await E(first).list()).length, 12_000);
+  t.deepEqual(await E(network).list(), [networkName(1)]);
+  t.deepEqual(await E(second).list(), []);
+  t.deepEqual(await E(f.powers).list(), [rootName]);
+  await t.throwsAsync(createPrivateTurnStorage(f.powers, 'session'), {
+    message: /namespace already exists/,
+  });
+  await Promise.all([E(first).close(), E(second).close(), E(network).close()]);
+  await retirePrivateTurnStorage(noHostList, 'session');
+  t.deepEqual(await E(await E(f.powers).lookup(rootName)).list(), ['session2']);
+  await retirePrivateTurnStorage(f.powers, 'session2');
+  t.deepEqual(await E(await E(f.powers).lookup(rootName)).list(), []);
+  t.is(
+    f.values.size,
+    1,
+    'all session records released; only the shared root remains',
+  );
+});
+
+for (const after of [false, true]) {
+  test(`terminal directory unlink retries across reconstruction, applied=${after}`, async t => {
+    let fail = true;
     const removed = [];
-    let failed = false;
-    const host = Far('RetirementHost', {
-      list: () => harden([...values.keys()]),
-      lookup: name => values.get(name),
-      remove: name => {
-        values.delete(name);
+    const reject = name => {
+      if (fail && name === path('session')) {
+        fail = false;
+        throw Error('Unlink failed');
+      }
+    };
+    const f = fixture({
+      beforeRemove: name => {
         removed.push(name);
-        if (
-          !failed &&
-          name ===
-            (lost === 'content'
-              ? contentName
-              : lost === 'schema'
-                ? schemaName
-                : 'never')
-        ) {
-          failed = true;
-          throw Error('Removal acknowledgement lost');
-        }
+        if (!after) reject(name);
+      },
+      afterRemove: name => {
+        if (after) reject(name);
       },
     });
-    if (lost !== 'none') {
-      await t.throwsAsync(retirePrivateTurnStorage(host, 'session'), {
-        message: /acknowledgement lost/,
-      });
-      if (lost === 'content') t.true(values.has(schemaName));
-    }
-    await retirePrivateTurnStorage(host, 'session');
-    await retirePrivateTurnStorage(host, 'session');
-    t.deepEqual(removed, [contentName, schemaName]);
+    await createPrivateTurnStorage(f.powers, 'session');
+    await createPrivateTurnStorage(f.powers, 'other');
+    const storage = await providePrivateTurnStorage(f.powers, 'session');
+    await E(storage).storeValue('record', eventName(1));
+    await E(storage).close();
+    await t.throwsAsync(retirePrivateTurnStorage(f.powers, 'session'), {
+      message: /Unlink failed/,
+    });
+    t.is(f.values.has(`${path('session')}/schema`), !after);
+    const revivedHost = Far('RevivedHost', directoryHost(f.values));
+    await retirePrivateTurnStorage(revivedHost, 'session');
+    await retirePrivateTurnStorage(revivedHost, 'session');
+    t.false(f.values.has(path('session')));
+    t.true(f.values.has(`${path('other')}/schema`));
     t.deepEqual(
-      [...values],
-      [['floot-private-turn-8-session2-schema', 'untouched']],
+      removed,
+      [path('session')],
+      'retirement unlinks once, not one record at a time',
     );
+    await t.throwsAsync(E(storage).storeValue('late', eventName(2)), {
+      message: /closed/,
+    });
   });
 }
 
-test('retirement refuses missing schema, wrong owner, or unknown data before deletion', async t => {
-  for (const scenario of ['missing', 'wrong-owner', 'unknown']) {
-    /** @type {Map<string, unknown>} */
-    const values = new Map([[`${prefix}${eventName(1)}`, 'content']]);
-    if (scenario !== 'missing')
-      values.set(
-        schemaName,
-        harden({
-          version: 1,
-          sessionId: scenario === 'wrong-owner' ? 'other' : 'session',
-        }),
+test('missing, legacy, malformed, and foreign storage is never adopted or deleted', async t => {
+  for (const scenario of ['missing', 'legacy', 'wrong-owner', 'unknown']) {
+    const f = fixture();
+    if (scenario === 'legacy')
+      f.values.set(
+        'floot-private-turn-7-session-schema',
+        harden({ version: 1, sessionId: 'session' }),
       );
-    if (scenario === 'unknown') values.set(`${prefix}unexpected`, 'preserve');
-    const host = Far('UnsafeRetirementHost', {
-      list: () => harden([...values.keys()]),
-      lookup: name => values.get(name),
-      remove: () => t.fail('must validate every name before deletion'),
-    });
+    if (['wrong-owner', 'unknown'].includes(scenario)) {
+      // eslint-disable-next-line no-await-in-loop
+      await createPrivateTurnStorage(f.powers, 'session');
+      if (scenario === 'wrong-owner')
+        f.values.set(
+          `${path('session')}/schema`,
+          harden({ version: 2, sessionId: 'other' }),
+        );
+      else f.values.set(`${path('session')}/unexpected`, 'preserve');
+    }
+    const before = [...f.values];
+    if (scenario !== 'unknown') {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(providePrivateTurnStorage(f.powers, 'session'), {
+        message: /schema.*reset required/,
+      });
+    }
+    if (['wrong-owner', 'unknown'].includes(scenario)) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(retirePrivateTurnStorage(f.powers, 'session'), {
+        message: /schema|value name/,
+      });
+    }
+    t.deepEqual([...f.values], before);
+  }
+});
+
+test('schema shape, version, and owner are exact', async t => {
+  const f = fixture();
+  await createPrivateTurnStorage(f.powers, 'session');
+  const invalid = harden([
+    null,
+    undefined,
+    true,
+    'schema',
+    [],
+    {},
+    { version: 2 },
+    { sessionId: 'session' },
+    { version: 1, sessionId: 'session' },
+    { version: '2', sessionId: 'session' },
+    { version: 2, sessionId: 'other' },
+    { version: 2, sessionId: 'session', extra: true },
+  ]);
+  for (const schema of invalid) {
+    f.values.set(`${path('session')}/schema`, schema);
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(retirePrivateTurnStorage(host, 'session'), {
-      message: /schema|value name/,
+    await t.throwsAsync(providePrivateTurnStorage(f.powers, 'session'), {
+      message: /Invalid private journal schema/,
     });
   }
 });
 
+test('entrypoints validate IDs before using host authority', async t => {
+  for (const id of ['', '../session', 'a/b', 'a b', 'x'.repeat(129), 5, null]) {
+    for (const operation of [
+      createPrivateTurnStorage,
+      providePrivateTurnStorage,
+      providePrivateNetworkStorage,
+      retirePrivateTurnStorage,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        operation(Far('NoAuthority'), /** @type {any} */ (id)),
+        { message: /Invalid journal session ID/ },
+      );
+    }
+  }
+});
+
 for (const fails of [false, true]) {
-  test(`private storage close drains admitted writes and fences old facet: fails=${fails}`, async t => {
-    const values = new Map([
-      [schemaName, harden({ version: 1, sessionId: 'session' })],
-    ]);
+  test(`close drains admitted writes and fences old facets: fails=${fails}`, async t => {
+    t.timeout(5000);
     const entered = makePromiseKit();
     const release = makePromiseKit();
-    const host = Far('DelayedPrivateStorage', {
-      list: () => harden([...values.keys()]),
-      has: name => values.has(name),
-      lookup: name => values.get(name),
-      storeValue: async (value, name) => {
+    t.teardown(() => release.resolve(undefined));
+    const f = fixture({
+      afterStore: async (_value, name) => {
+        if (!name.endsWith(eventName(0))) return;
         entered.resolve(undefined);
         await release.promise;
-        values.set(name, value);
         if (fails) throw Error('Write acknowledgement lost');
       },
-      remove: name => {
-        values.delete(name);
-      },
     });
-    const storage = await providePrivateTurnStorage(host, 'session');
-    const writing = E(storage).storeValue(
-      harden({ value: 'retained' }),
-      eventName(0),
-    );
+    await createPrivateTurnStorage(f.powers, 'session');
+    const storage = await providePrivateTurnStorage(f.powers, 'session');
+    const writing = E(storage).storeValue('retained', eventName(0));
     void writing.catch(() => {});
     await entered.promise;
     let settled = false;
@@ -130,205 +225,48 @@ for (const fails of [false, true]) {
       await writing;
       await closing;
     }
-    await t.throwsAsync(E(storage).storeValue('late', eventName(1)), {
-      message: /closed/,
-    });
-    const restored = await providePrivateTurnStorage(host, 'session');
-    t.deepEqual(await E(restored).lookup(eventName(0)), { value: 'retained' });
-  });
-}
-const fixture = () => {
-  const values = new Map();
-  const calls = [];
-  let failName;
-  let failRemove = false;
-  const powers = Far('TestPetstore', {
-    list: () => {
-      calls.push(['list']);
-      return harden([...values.keys()]);
-    },
-    has: name => {
-      calls.push(['has', name]);
-      return values.has(name);
-    },
-    lookup: name => {
-      calls.push(['lookup', name]);
-      return values.get(name);
-    },
-    storeValue: (value, name) => {
-      calls.push(['storeValue', name]);
-      values.set(name, value);
-      if (name === failName) throw Error('Lost acknowledgement');
-    },
-    remove: name => {
-      calls.push(['remove', name]);
-      if (failRemove) throw Error('Removal failed');
-      values.delete(name);
-    },
-  });
-  return {
-    values,
-    powers,
-    calls,
-    fail: name => {
-      failName = name;
-    },
-    failRemoval: value => {
-      failRemove = value;
-    },
-  };
-};
-
-test('creation publishes exact schema and opening is read-only', async t => {
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'session');
-  t.deepEqual(host.values.get(schemaName), {
-    version: 1,
-    sessionId: 'session',
-  });
-  t.deepEqual([...host.values.keys()], [schemaName]);
-  host.calls.length = 0;
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  t.deepEqual(await E(storage).list(), []);
-  t.deepEqual(host.calls, [
-    ['list'],
-    ['has', schemaName],
-    ['lookup', schemaName],
-    ['list'],
-  ]);
-  await t.throwsAsync(createPrivateTurnStorage(host.powers, 'session'), {
-    message: /namespace already exists/,
-  });
-  t.false(host.calls.some(([method]) => method === 'storeValue'));
-});
-
-test('missing schema and orphaned values are never adopted', async t => {
-  const host = fixture();
-  await t.throwsAsync(providePrivateTurnStorage(host.powers, 'session'), {
-    message: /schema missing.*reset required/,
-  });
-  host.values.set(`${prefix}${eventName(1)}`, 'orphan');
-  await t.throwsAsync(providePrivateTurnStorage(host.powers, 'session'), {
-    message: /schema missing/,
-  });
-  await t.throwsAsync(createPrivateTurnStorage(host.powers, 'session'), {
-    message: /namespace already exists/,
-  });
-  t.deepEqual([...host.values.values()], ['orphan']);
-  t.false(host.calls.some(([method]) => !['list', 'has'].includes(method)));
-});
-
-for (const marker of ['manifest', 'ready', 'resolution']) {
-  test(`old migration-${marker} is refused even beside valid schema`, async t => {
-    const host = fixture();
-    host.values.set(`${prefix}migration-${marker}`, true);
-    await t.throwsAsync(providePrivateTurnStorage(host.powers, 'session'), {
-      message: /Legacy private journal requires session reset/,
-    });
-    host.values.set(schemaName, harden({ version: 1, sessionId: 'session' }));
-    await t.throwsAsync(providePrivateTurnStorage(host.powers, 'session'), {
-      message: /Legacy private journal requires session reset/,
-    });
-    await t.throwsAsync(createPrivateTurnStorage(host.powers, 'session'), {
-      message: /namespace already exists/,
-    });
-    t.false(host.calls.some(([method]) => method !== 'list'));
+    const restored = await providePrivateTurnStorage(f.powers, 'session');
+    t.is(await E(restored).lookup(eventName(0)), 'retained');
   });
 }
 
-test('schema shape, version, and session identity are exact', async t => {
-  const invalid = harden([
-    null,
-    undefined,
-    true,
-    'schema',
-    [],
-    {},
-    { version: 1 },
-    { sessionId: 'session' },
-    { version: 2, sessionId: 'session' },
-    { version: '1', sessionId: 'session' },
-    { version: 1, sessionId: 'other' },
-    { version: 1, sessionId: 'session', extra: true },
-  ]);
-  for (const schema of invalid) {
-    const host = fixture();
-    host.values.set(schemaName, schema);
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(providePrivateTurnStorage(host.powers, 'session'), {
-      message: /Invalid private journal schema/,
-    });
-    t.deepEqual(host.calls, [
-      ['list'],
-      ['has', schemaName],
-      ['lookup', schemaName],
-    ]);
-  }
-});
-
-test('both entrypoints validate IDs before accessing host authority', async t => {
-  const host = fixture();
-  for (const id of ['', '../session', 'a/b', 'a b', 'x'.repeat(129), 5, null]) {
-    // Deliberately exercise the untyped boundary, including regex coercion.
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(
-      createPrivateTurnStorage(host.powers, /** @type {any} */ (id)),
-      {
-        message: /Invalid journal session ID/,
-      },
-    );
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(
-      providePrivateTurnStorage(host.powers, /** @type {any} */ (id)),
-      {
-        message: /Invalid journal session ID/,
-      },
-    );
-  }
-  t.deepEqual(host.calls, []);
-});
-
-test('lost schema acknowledgement leaves immutable orphan for read-only revival', async t => {
-  const host = fixture();
-  host.fail(schemaName);
-  await t.throwsAsync(createPrivateTurnStorage(host.powers, 'session'), {
-    message: /Lost acknowledgement/,
+test('lost acknowledgement poisons queued operations; revival retains immutable committed record', async t => {
+  t.timeout(5000);
+  let fail = true;
+  const f = fixture({
+    afterStore: (_value, name) => {
+      if (fail && name.endsWith(eventName(1)))
+        throw Error('Lost acknowledgement');
+    },
   });
-  host.fail(undefined);
-  await t.throwsAsync(createPrivateTurnStorage(host.powers, 'session'), {
-    message: /namespace already exists/,
-  });
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  t.deepEqual(await E(storage).list(), []);
-  t.is(host.calls.filter(([method]) => method === 'storeValue').length, 1);
-});
-
-test('ordinary guest copies cannot alter private history, unlike full host authority', async t => {
-  const host = fixture();
-  const guest = fixture();
-  guest.values.set(eventName(1), 'old untrusted history');
-  await createPrivateTurnStorage(host.powers, 'session');
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  t.deepEqual(await E(storage).list(), []);
-  await E(storage).storeValue('private', eventName(1));
-  guest.values.set(eventName(1), 'forged');
-  t.is(await E(storage).lookup(eventName(1)), 'private');
-  guest.values.clear();
-  const revived = await providePrivateTurnStorage(host.powers, 'session');
-  t.is(await E(revived).lookup(eventName(1)), 'private');
-  t.deepEqual(guest.calls, []);
-  // The intentionally endowed full host remains an administrator, not isolated.
-  await E(host.powers).storeValue(
-    'admin modification',
-    `${prefix}${eventName(1)}`,
+  await createPrivateTurnStorage(f.powers, 'session');
+  const storage = await providePrivateTurnStorage(f.powers, 'session');
+  const failed = E(storage).storeValue('committed', eventName(1));
+  const checks = [
+    E(storage).list(),
+    E(storage).lookup(eventName(1)),
+    E(storage).storeValue('not stored', eventName(2)),
+    E(storage).remove(eventName(1)),
+  ].map(operation =>
+    t.throwsAsync(operation, { message: /uncertain storage/ }),
   );
-  t.is(await E(storage).lookup(eventName(1)), 'admin modification');
+  await t.throwsAsync(failed, { message: /Lost acknowledgement/ });
+  await Promise.all(checks);
+  fail = false;
+  const revived = await providePrivateTurnStorage(f.powers, 'session');
+  t.deepEqual(await E(revived).list(), [eventName(1)]);
+  t.is(await E(revived).lookup(eventName(1)), 'committed');
+  await t.throwsAsync(E(revived).storeValue('overwrite', eventName(1)), {
+    message: /immutable/,
+  });
+  await E(revived).storeValue('next', eventName(2));
 });
 
-test('all journal value classes work, schema and arbitrary host names do not', async t => {
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'session');
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
+test('all journal classes are isolated from schema, other sessions and network audit', async t => {
+  const f = fixture();
+  await createPrivateTurnStorage(f.powers, 'session');
+  const storage = await providePrivateTurnStorage(f.powers, 'session');
+  const network = await providePrivateNetworkStorage(f.powers, 'session');
   const valid = [
     eventName(1),
     'floot-turn-content-00000000000000000001-input',
@@ -337,16 +275,11 @@ test('all journal value classes work, schema and arbitrary host names do not', a
   ];
   await Promise.all(valid.map(name => E(storage).storeValue(name, name)));
   t.deepEqual(await E(storage).list(), valid);
-  t.deepEqual(
-    await Promise.all(valid.map(name => E(storage).lookup(name))),
-    valid,
-  );
   for (const name of [
     'schema',
-    schemaName,
-    'migration-ready',
     '../secret',
     'floot-turn-event-1',
+    networkName(1),
     5,
     null,
   ]) {
@@ -359,111 +292,35 @@ test('all journal value classes work, schema and arbitrary host names do not', a
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(E(storage).remove(name), { message: /value name/ });
   }
-  t.deepEqual(await E(storage).list(), valid);
-  t.is(host.values.size, 5);
-});
-
-test('open storage checks current names without retaining the host inventory', async t => {
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'session');
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  const target = `${prefix}${eventName(1)}`;
-  host.values.set(target, 'external');
-  host.values.set(`floot-private-turn-8-session2-${eventName(1)}`, 'other');
-  host.values.set('unrelated-host-name', 'other');
-  t.deepEqual(await E(storage).list(), [eventName(1)]);
-  host.calls.length = 0;
-  await t.throwsAsync(E(storage).storeValue('overwrite', eventName(1)), {
-    message: /immutable/,
+  await t.throwsAsync(E(network).storeValue('wrong', eventName(2)), {
+    message: /value name/,
   });
-  t.is(host.values.get(target), 'external');
-  host.values.delete(target);
-  await t.throwsAsync(E(storage).remove(eventName(1)), {
-    message: /Unknown private journal value/,
-  });
-  await E(storage).storeValue('new', eventName(1));
-  await E(storage).remove(eventName(1));
-  t.false(host.calls.some(([method]) => method === 'list'));
-  t.true(host.calls.some(([method]) => method === 'has'));
-  t.deepEqual(await E(storage).list(), []);
-  t.is(host.values.get('unrelated-host-name'), 'other');
-  t.is(
-    host.values.get(`floot-private-turn-8-session2-${eventName(1)}`),
-    'other',
+  await t.throwsAsync(
+    E(network).storeValue(
+      'other owner',
+      'floot-network-5-other-00000000000000000001',
+    ),
+    { message: /value name/ },
   );
 });
 
-test('serialized writes preserve immutability without poisoning on rejection', async t => {
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'session');
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  const first = E(storage).storeValue('first', eventName(1));
-  const second = E(storage).storeValue('overwrite', eventName(1));
-  await first;
-  await t.throwsAsync(second, { message: /immutable/ });
-  t.is(await E(storage).lookup(eventName(1)), 'first');
-  await E(storage).storeValue('next', eventName(2));
-});
-
-test('lost event acknowledgement poisons every queued operation; revival sees committed value', async t => {
-  t.timeout(10_000);
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'session');
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  host.fail(`${prefix}${eventName(1)}`);
-  const failed = E(storage).storeValue('committed', eventName(1));
-  const checks = [
-    E(storage).list(),
-    E(storage).lookup(eventName(1)),
-    E(storage).storeValue('not stored', eventName(2)),
-    E(storage).remove(eventName(1)),
-  ].map(operation =>
-    t.throwsAsync(operation, { message: /uncertain storage/ }),
-  );
-  await t.throwsAsync(failed, { message: /Lost acknowledgement/ });
-  await Promise.all(checks);
-  host.fail(undefined);
-  const revived = await providePrivateTurnStorage(host.powers, 'session');
-  t.deepEqual(await E(revived).list(), [eventName(1)]);
-  t.is(await E(revived).lookup(eventName(1)), 'committed');
-  await t.throwsAsync(E(revived).storeValue('overwrite', eventName(1)), {
-    message: /immutable/,
+test('snapshot removal failures can be retried without poisoning writes', async t => {
+  let fail = true;
+  const f = fixture({
+    beforeRemove: () => {
+      if (fail) throw Error('Removal failed');
+    },
   });
-  await E(revived).storeValue('next', eventName(2));
-});
-
-test('snapshot-covered removal failure does not poison and can be retried', async t => {
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'session');
-  const storage = await providePrivateTurnStorage(host.powers, 'session');
-  await E(storage).storeValue('covered event', eventName(1));
-  await E(storage).storeValue(
-    'snapshot',
-    'floot-turn-snapshot-00000000000000000001',
-  );
-  host.failRemoval(true);
+  await createPrivateTurnStorage(f.powers, 'session');
+  const storage = await providePrivateTurnStorage(f.powers, 'session');
+  await E(storage).storeValue('covered', eventName(1));
   await t.throwsAsync(E(storage).remove(eventName(1)), {
     message: /Removal failed/,
   });
-  t.is(await E(storage).lookup(eventName(1)), 'covered event');
   await E(storage).storeValue('next', eventName(2));
-  host.failRemoval(false);
+  fail = false;
   await E(storage).remove(eventName(1));
-  t.false((await E(storage).list()).includes(eventName(1)));
   await t.throwsAsync(E(storage).remove(eventName(1)), {
     message: /Unknown private journal value/,
   });
-});
-
-test('prefix-sharing session IDs have disjoint storage', async t => {
-  const host = fixture();
-  await createPrivateTurnStorage(host.powers, 'a-b');
-  const first = await providePrivateTurnStorage(host.powers, 'a-b');
-  await E(first).storeValue('first', eventName(1));
-  await createPrivateTurnStorage(host.powers, 'a');
-  const second = await providePrivateTurnStorage(host.powers, 'a');
-  t.deepEqual(await E(second).list(), []);
-  await E(second).storeValue('second', eventName(1));
-  t.is(await E(first).lookup(eventName(1)), 'first');
-  t.is(await E(second).lookup(eventName(1)), 'second');
 });

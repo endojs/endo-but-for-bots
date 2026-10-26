@@ -6,6 +6,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 
 test('factory facets retain disconnected turns, commit history, and provision delegation tools', async t => {
   t.timeout(5000);
@@ -83,8 +84,8 @@ test('factory facets retain disconnected turns, commit history, and provision de
   const hostStore = new Map();
   for (const sessionId of ['one']) {
     hostStore.set(
-      `floot-private-turn-${sessionId.length}-${sessionId}-schema`,
-      harden({ version: 1, sessionId }),
+      `floot-private-sessions/${sessionId}/schema`,
+      harden({ version: 2, sessionId }),
     );
   }
   hostStore.set(
@@ -109,17 +110,13 @@ test('factory facets retain disconnected turns, commit history, and provision de
   const lookups = [];
   hostStore.set('codex-backend', backend);
   const host = Far('TestHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => {
-      lookups.push(name);
-      return hostStore.get(name);
+    ...directoryHost(hostStore),
+    lookup: (...names) => {
+      lookups.push(names.flat().join('/'));
+      return hostStore.get(names.flat().join('/'));
     },
     provideGuest: (_name, { agentName }) => {
       hostStore.set(agentName, guest);
-    },
-    storeValue: (value, name) => {
-      hostStore.set(name, value);
     },
     remove: name => {
       hostStore.delete(name);

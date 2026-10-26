@@ -2151,6 +2151,8 @@ export interface EndoHost extends EndoAgent {
     opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
+  /** Create a directory without returning its collectible capability to the caller. */
+  createDirectory(petNamePath: string | string[]): Promise<void>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
   evaluate(
     workerPetName: string | string[] | undefined,

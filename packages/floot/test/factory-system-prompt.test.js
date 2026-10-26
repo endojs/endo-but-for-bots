@@ -10,6 +10,7 @@ import {
 import { makePromiseKit } from './_promise-kit.js';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 
 const sandboxed = harden({
   toolNamePrefix: 'mcp__endo__',
@@ -127,19 +128,15 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
     ]),
   );
   const host = Far('PromptHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name =>
-      name === 'llm-provider' && lookupProvider
+    ...directoryHost(hostStore),
+    lookup: (...names) =>
+      names[0] === 'llm-provider' && lookupProvider
         ? lookupProvider()
-        : hostStore.get(name),
+        : hostStore.get(names.flat().join('/')),
     locate: name => `locator:${name}`,
     copy: () => undefined,
     provideGuest: (_name, { agentName }) => {
       if (!hostStore.has(agentName)) hostStore.set(agentName, makeGuest());
-    },
-    storeValue: (value, name) => {
-      hostStore.set(name, value);
     },
     remove: name => {
       hostStore.delete(name);

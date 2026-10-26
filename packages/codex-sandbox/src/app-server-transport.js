@@ -89,6 +89,12 @@ export const makeBrokerAppServerArgv = (
     'sandbox_mode="danger-full-access"',
     '-c',
     'approval_policy="never"',
+    // Delegation belongs to Endo's spawnSubagent/askSubagent/stopSubagent
+    // capabilities. Native children have no Endo session or turn authority.
+    '-c',
+    'features.multi_agent=false',
+    '-c',
+    'features.multi_agent_v2=false',
     '-c',
     'features.network_proxy.enabled=false',
     'app-server',
@@ -115,6 +121,8 @@ export const assertBrokerRuntimeConfig = (
   (config?.model_provider === 'endo_broker' &&
     config.approval_policy === 'never' &&
     config.sandbox_mode === 'danger-full-access' &&
+    config.features?.multi_agent === false &&
+    config.features?.multi_agent_v2 === false &&
     config.features?.network_proxy?.enabled === false) ||
     Fail`Codex broker runtime configuration mismatch`;
   const provider = config.model_providers?.endo_broker;
@@ -205,7 +213,16 @@ export const startAppServerTransport = async ({
     await E(slice).spawn(
       brokerEndpoint
         ? makeBrokerAppServerArgv(brokerEndpoint, executable, lease?.network)
-        : harden([executable, 'app-server', '--listen', 'stdio://']),
+        : harden([
+            executable,
+            '-c',
+            'features.multi_agent=false',
+            '-c',
+            'features.multi_agent_v2=false',
+            'app-server',
+            '--listen',
+            'stdio://',
+          ]),
       harden({
         cwd,
         env: effectiveEnv,

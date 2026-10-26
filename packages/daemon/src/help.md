@@ -394,6 +394,14 @@ Prefer endowing a formula with a secret capability instead of calling its
 
 Use help("methodName") for details on specific methods.
 
+## createDirectory(petNamePath) -> Promise<void>
+
+Host only. Create a directory at the given name or array of path segments.
+Like makeDirectory, this replaces an existing binding: check absence first.
+Returns no directory capability. Use path-based list, lookup, storeValue, and
+remove operations when a worker must survive collection of its owned storage.
+
+
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.

@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable import/no-relative-packages -- Cross-package storage integration. */
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
@@ -9,6 +10,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { makeEndoClient, start, stop } from '../index.js';
+import { createPrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
 
 test.serial(
   'hosted native context and dispatch requirement survive a daemon restart',
@@ -54,10 +56,7 @@ test.serial(
       const sessionId = `native-${mode}`;
       // Explicitly initialize this test's current private-storage schema.
       // eslint-disable-next-line no-await-in-loop
-      await E(host).storeValue(
-        harden({ version: 1, sessionId }),
-        `floot-private-turn-${sessionId.length}-${sessionId}-schema`,
-      );
+      await createPrivateTurnStorage(host, sessionId);
     }
     await E(host).provideWorker('native-context-worker');
     let fixture = await E(host).makeUnconfined(

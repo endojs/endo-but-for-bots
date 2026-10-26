@@ -94,7 +94,7 @@ const fixture = (events, options = {}) => {
     subscription,
     model: MODEL,
     sessionId: 'session1',
-    reasoningEffort: 'high',
+    reasoningEffort: options.reasoningEffort ?? 'high',
     contextLength: 1000,
   });
   return {
@@ -146,6 +146,24 @@ test('subscription Responses streams text and reports disjoint usage without a c
   t.is(body.instructions, 'Instructions');
   t.deepEqual(body.reasoning, { effort: 'high' });
   t.is(subject.revocations(), 1);
+});
+
+test('retained ultra recipes send the pinned CLI wire effort and can continue', async t => {
+  const subject = fixture([completion()], { reasoningEffort: 'ultra' });
+  t.teardown(() => subject.provider.dispose());
+  await subject.provider.chat([{ role: 'user', content: 'First try' }], []);
+  await subject.provider.chat([{ role: 'user', content: 'Continue' }], []);
+  t.deepEqual(
+    subject.requests.map(request => JSON.parse(request.body).reasoning),
+    [{ effort: 'max' }, { effort: 'max' }],
+  );
+  t.is(subject.revocations(), 2);
+});
+
+test('unknown Responses effort fails before acquiring a subscription', t => {
+  t.throws(() => fixture([], { reasoningEffort: 'future-effort' }), {
+    message: /Unsupported Responses reasoning effort/,
+  });
 });
 
 test('subscription Responses preserves opaque reasoning and call identities across tool rounds', async t => {

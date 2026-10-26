@@ -123,7 +123,16 @@ test('transport binds app-server stdio and owns process cleanup', async t => {
   });
 
   t.deepEqual(fixture.getSpawnCall(), {
-    argv: ['/bin/codex', 'app-server', '--listen', 'stdio://'],
+    argv: [
+      '/bin/codex',
+      '-c',
+      'features.multi_agent=false',
+      '-c',
+      'features.multi_agent_v2=false',
+      'app-server',
+      '--listen',
+      'stdio://',
+    ],
     options: {
       cwd: '/work',
       env: {

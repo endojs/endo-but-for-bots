@@ -5,6 +5,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 import { makePromiseKit } from './_promise-kit.js';
 
 /**
@@ -127,30 +128,24 @@ const makeWorld = (
   );
   if (existing && schema)
     hostStore.set(
-      'floot-private-turn-3-one-schema',
-      harden({ version: 1, sessionId: 'one' }),
+      'floot-private-sessions/one/schema',
+      harden({ version: 2, sessionId: 'one' }),
     );
   let guests = 0;
   const host = Far('PrivateJournalHost', {
-    has: name => hostStore.has(name) || extraHas(name),
-    lookup: name => hostStore.get(name),
-    list: () => harden([...hostStore.keys()]),
-    storeValue: async (value, name) => {
-      await beforeStore(value, name);
-      hostStore.set(name, value);
-      await afterStore(value, name);
-    },
-    remove: async name => {
-      await beforeRemove(name);
-      return hostStore.delete(name);
-    },
+    ...directoryHost(hostStore, {
+      beforeStore,
+      afterStore,
+      beforeRemove,
+      extraHas,
+    }),
     provideGuest: (name, { agentName }) => {
       guests += 1;
       const id = name.slice('session-'.length);
-      t.deepEqual(
-        hostStore.get(`floot-private-turn-${id.length}-${id}-schema`),
-        { version: 1, sessionId: id },
-      );
+      t.deepEqual(hostStore.get(`floot-private-sessions/${id}/schema`), {
+        version: 2,
+        sessionId: id,
+      });
       hostStore.set(name, guest);
       hostStore.set(agentName, guest);
     },
@@ -190,15 +185,15 @@ test('terminal deletion retires journal data and schema, not unrelated namespace
   const session = await E(world.factory).getSession('one');
   const turn = await E(session).startTurn('write private history');
   await E(turn).whenFinished();
-  const prefix = 'floot-private-turn-3-one-';
+  const prefix = 'floot-private-sessions/one/';
   t.true(
     [...world.hostStore.keys()].filter(name => name.startsWith(prefix)).length >
       1,
   );
-  world.hostStore.set('floot-private-turn-3-two-schema', 'preserve');
+  world.hostStore.set('floot-private-sessions/two/schema', 'preserve');
   await E(world.factory).deleteSession('one');
   t.false([...world.hostStore.keys()].some(name => name.startsWith(prefix)));
-  t.is(world.hostStore.get('floot-private-turn-3-two-schema'), 'preserve');
+  t.is(world.hostStore.get('floot-private-sessions/two/schema'), 'preserve');
   t.deepEqual(await E(world.factory).listSessions(), []);
 });
 
@@ -213,7 +208,7 @@ test('an admitted account read cannot recreate a journal while deletion is retir
   });
   const world = makeWorld(t, {
     beforeRemove: async name => {
-      if (name === 'floot-private-turn-3-one-schema') {
+      if (name === 'floot-private-sessions/one') {
         removalEntered.resolve(undefined);
         await releaseRemoval.promise;
       }
@@ -350,10 +345,10 @@ test('failed durable deletion intent leaves private journal intact', async t => 
     message: /intent write failed/,
   });
   t.deepEqual(removed, []);
-  t.true(world.hostStore.has('floot-private-turn-3-one-schema'));
+  t.true(world.hostStore.has('floot-private-sessions/one/schema'));
   fail = false;
   await E(world.factory).deleteSession('one');
-  t.false(world.hostStore.has('floot-private-turn-3-one-schema'));
+  t.false(world.hostStore.has('floot-private-sessions/one/schema'));
 });
 
 for (const rejection of [
@@ -386,7 +381,7 @@ for (const rejection of [
       },
     );
     const [entry] = await E(world.factory).listSessions();
-    const prefix = `floot-private-turn-${entry.id.length}-${entry.id}-`;
+    const prefix = `floot-private-sessions/${entry.id}/`;
     t.true(world.hostStore.has(`${prefix}schema`));
     t.false(removed.some(name => name.startsWith(prefix)));
     t.false(
@@ -407,7 +402,7 @@ test('failed journal retirement keeps terminal intent and retries after factory 
   let fail = true;
   const world = makeWorld(t, {
     beforeRemove: async name => {
-      if (fail && name === 'floot-private-turn-3-one-schema')
+      if (fail && name === 'floot-private-sessions/one')
         throw Error('retirement unavailable');
     },
   });
@@ -417,7 +412,7 @@ test('failed journal retirement keeps terminal intent and retries after factory 
     message: /retirement unavailable/,
   });
   t.is((await E(world.factory).listSessions())[0].lifecycle, 'error');
-  t.true(world.hostStore.has('floot-private-turn-3-one-schema'));
+  t.true(world.hostStore.has('floot-private-sessions/one/schema'));
   fail = false;
   const revived = make(world.host);
   for (let i = 0; i < 100; i += 1) {
@@ -427,7 +422,7 @@ test('failed journal retirement keeps terminal intent and retries after factory 
     await new Promise(resolve => setTimeout(resolve, 5));
   }
   t.deepEqual(await E(revived).listSessions(), []);
-  t.false(world.hostStore.has('floot-private-turn-3-one-schema'));
+  t.false(world.hostStore.has('floot-private-sessions/one/schema'));
 });
 
 for (const binding of [undefined, 'session-one', 'session-agent-one']) {
@@ -478,7 +473,7 @@ test('schema publication failure creates neither a registry entry nor a guest', 
   const world = makeWorld(t, {
     existing: false,
     beforeStore: async (_value, name) => {
-      if (name.endsWith('-schema')) throw Error('Schema write failed');
+      if (name.endsWith('/schema')) throw Error('Schema write failed');
     },
   });
   await t.throwsAsync(
@@ -521,11 +516,7 @@ for (const fail of [false, true]) {
     await waiting;
     const [entry] = await E(world.factory).listSessions();
     t.is(entry.lifecycle, 'creating');
-    t.truthy(
-      world.hostStore.get(
-        `floot-private-turn-${entry.id.length}-${entry.id}-schema`,
-      ),
-    );
+    t.truthy(world.hostStore.get(`floot-private-sessions/${entry.id}/schema`));
     await t.throwsAsync(E(world.factory).getSession(entry.id), {
       message: /publication/,
     });
@@ -579,7 +570,7 @@ for (const prefix of ['session-agent-', 'session-']) {
       E(world.factory).createSession({ backendId: 'test', modelId: 'm' }),
       { message: /bindings already exist/ },
     );
-    t.false([...world.hostStore.keys()].some(name => name.endsWith('-schema')));
+    t.false([...world.hostStore.keys()].some(name => name.endsWith('/schema')));
     t.deepEqual(await E(world.factory).listSessions(), []);
     t.deepEqual(world.counts(), { sends: 0, creates: 0, guests: 0 });
   });
@@ -589,7 +580,7 @@ test('lost schema acknowledgement leaves evidence but cannot admit a session', a
   const world = makeWorld(t, {
     existing: false,
     afterStore: async (_value, name) => {
-      if (name.endsWith('-schema')) throw Error('Schema acknowledgement lost');
+      if (name.endsWith('/schema')) throw Error('Schema acknowledgement lost');
     },
   });
   await t.throwsAsync(
@@ -597,7 +588,7 @@ test('lost schema acknowledgement leaves evidence but cannot admit a session', a
     { message: /Schema acknowledgement lost/ },
   );
   t.is(
-    [...world.hostStore.keys()].filter(name => name.endsWith('-schema')).length,
+    [...world.hostStore.keys()].filter(name => name.endsWith('/schema')).length,
     1,
   );
   t.deepEqual(await E(world.factory).listSessions(), []);
@@ -618,7 +609,7 @@ test('concurrent creation has distinct identities before schema acknowledgement'
   const world = makeWorld(t, {
     existing: false,
     beforeStore: async (value, name) => {
-      if (name.endsWith('-schema')) {
+      if (name.endsWith('/schema')) {
         ids.push(value.sessionId);
         if (ids.length === 1) {
           started();
@@ -647,11 +638,36 @@ test('concurrent creation has distinct identities before schema acknowledgement'
   t.is((await E(second).getInfo()).lifecycle, 'ready');
   t.is(world.counts().guests, 2);
   for (const id of ids) {
-    t.deepEqual(
-      world.hostStore.get(`floot-private-turn-${id.length}-${id}-schema`),
-      { version: 1, sessionId: id },
-    );
+    t.deepEqual(world.hostStore.get(`floot-private-sessions/${id}/schema`), {
+      version: 2,
+      sessionId: id,
+    });
     // eslint-disable-next-line no-await-in-loop
     await E(world.factory).deleteSession(id);
   }
+});
+
+test('later registry writes retry obsolete snapshots after a failed prune', async t => {
+  let reject = true;
+  const stale = 'floot-sessions-v1-00000000000000000000';
+  const world = makeWorld(t, {
+    beforeRemove: async name => {
+      if (reject && name === stale) throw Error('prune unavailable');
+    },
+  });
+  for (let index = 0; index < 6; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(world.factory).renameSession('one', `name-${index}`);
+  }
+  t.true(world.hostStore.has(stale));
+  reject = false;
+  await E(world.factory).renameSession('one', 'retry pruning');
+  t.false(world.hostStore.has(stale));
+  t.is(
+    [...world.hostStore.keys()].filter(name =>
+      name.startsWith('floot-sessions-v1-'),
+    ).length,
+    4,
+  );
+  await E(world.factory).deleteSession('one');
 });

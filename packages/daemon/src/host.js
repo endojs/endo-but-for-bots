@@ -2903,6 +2903,12 @@ export const makeHostMaker = ({
       const namePath = namePathFrom(petNameOrPath);
       return makeDirectoryLocal(namePath);
     };
+    /** @type {EndoHost['createDirectory']} */
+    const createDirectory = async petNameOrPath => {
+      // A supervisor must be able to own storage without receiving its formula
+      // presence: collecting that presence would terminate its entire worker.
+      await makeDirectoryLocal(namePathFrom(petNameOrPath));
+    };
     const {
       listMessages,
       followMessages,
@@ -3147,6 +3153,7 @@ export const makeHostMaker = ({
       move,
       copy,
       makeDirectory,
+      createDirectory,
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,

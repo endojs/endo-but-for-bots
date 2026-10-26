@@ -34,6 +34,7 @@ export const makeSessionNetworkPolicy = ({
   let sequence = 0n;
   let loaded = false;
   let poisoned = false;
+  let closed = false;
   let queue = Promise.resolve();
   const load = async () => {
     if (loaded) return;
@@ -71,6 +72,7 @@ export const makeSessionNetworkPolicy = ({
     loaded = true;
   };
   const ordered = operation => {
+    !closed || Fail`Network policy incarnation is closed`;
     const result = queue.then(async () => {
       !poisoned ||
         Fail`Network policy storage is uncertain; revive before retrying`;
@@ -158,6 +160,12 @@ export const makeSessionNetworkPolicy = ({
     return project();
   };
   return harden({
+    close: async () => {
+      closed = true;
+      await queue;
+      !poisoned ||
+        Fail`Network policy storage is uncertain; revive before retrying`;
+    },
     get: () => ordered(project),
     forTurn: () =>
       ordered(async () => {
