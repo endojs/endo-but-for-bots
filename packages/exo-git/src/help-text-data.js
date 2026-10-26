@@ -28,7 +28,9 @@ export const helpTextEntries = harden([
       diffText:
         'diffText(options?) -> Promise<string>\nRender the same comparison as `diff` as `git diff` text, for display.\nThe text is capped at 50,000 characters with a truncation marker.\nTakes the same options as `diff`.',
       log: 'log(options?) -> Promise<GitCommit[]>\nList commits, most recent first.\nOptions are `ref`, `maxCount`, `since`, and `until`.',
-      show: 'show(ref) -> Promise<string>\nRender one revision as text, the way `git show` does.',
+      show: 'show(ref) -> Promise<GitShow>\nReport one commit as structured data: `{ commit, parents, diff }`, where\n`commit` is the `GitCommit` record, `parents` lists the parent object ids\nin order, and `diff` is the `GitDiff` of the commit\'s changes against its\nfirst parent (against the empty tree for a root commit).\nAn annotated tag shows the commit it points at; a tree or blob is\nrejected, so use `showText` for those.\n- show("HEAD") reports the latest commit and its changes',
+      showText:
+        'showText(ref) -> Promise<string>\nRender one revision as text, the way `git show` does, for display.\nAccepts any object: a commit, tag, tree, or blob (for example\n`HEAD:README.md`).',
       revParse:
         'revParse(ref) -> Promise<GitRef>\nResolve a revision expression to a concrete ref with its object id.\n- revParse("HEAD") resolves the current commit',
       stashList:

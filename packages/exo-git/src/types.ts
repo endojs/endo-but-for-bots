@@ -203,6 +203,17 @@ export type GitDiff = {
   files: GitFileDiff[];
 };
 
+export type GitShow = {
+  commit: GitCommit;
+  /** Full object ids of the commit's parents, in order; empty for a root commit. */
+  parents: string[];
+  /**
+   * The commit's changes against its first parent, or against the empty
+   * tree for a root commit.  A merge commit reports its first-parent diff.
+   */
+  diff: GitDiff;
+};
+
 export type GitLogOptions = {
   maxCount?: number;
   ref?: GitRef | string;
@@ -458,7 +469,9 @@ export type ReadOnlyEndoGit = {
    */
   diffText: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-  show: (ref: GitRef | string) => Promise<string>;
+  show: (ref: GitRef | string) => Promise<GitShow>;
+  /** The porcelain `git show` rendering of any object, for display. */
+  showText: (ref: GitRef | string) => Promise<string>;
   revParse: (ref: GitRef | string) => Promise<GitRef>;
   currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;

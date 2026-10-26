@@ -78,7 +78,8 @@ type GitReadOnlyEndoGit = {
     diff: (options?: GitDiffOptions) => Promise<GitDiff>;
     diffText: (options?: GitDiffOptions) => Promise<string>;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-    show: (ref: GitRef | string) => Promise<string>;
+    show: (ref: GitRef | string) => Promise<GitShow>;
+    showText: (ref: GitRef | string) => Promise<string>;
     revParse: (ref: GitRef | string) => Promise<GitRef>;
     currentBranch: () => Promise<GitRef | undefined>;
     branches: () => Promise<GitRef[]>;
@@ -90,6 +91,11 @@ type GitReadOnlyEndoGit = {
     followLatestRoot: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootSnapshot, undefined>>;
     readOnly: () => GitReadOnlyEndoGit;
     scope: (name: 'reader') => GitReadOnlyEndoGit;
+};
+type GitShow = {
+    commit: GitCommit;
+    parents: string[];
+    diff: GitDiff;
 };
 type GitStashPushOptions = {
     message?: string;
@@ -434,7 +440,8 @@ type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
     }) => Promise<void>;
     revParse: (ref: GitRef | string) => Promise<GitRef>;
     scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | typeof git;
-    show: (ref: GitRef | string) => Promise<string>;
+    show: (ref: GitRef | string) => Promise<GitShow>;
+    showText: (ref: GitRef | string) => Promise<string>;
     stashApply: (index?: number) => Promise<void>;
     stashDrop: (index?: number) => Promise<void>;
     stashList: () => Promise<string[]>;
@@ -511,6 +518,11 @@ type GitCommit = {
     summary: string;
     author?: string;
     committedAt?: number;
+};
+type GitShow = {
+    commit: GitCommit;
+    parents: string[];
+    diff: GitDiff;
 };
 type GitStatusResult = {
     entries: GitStatusEntry[];
@@ -783,7 +795,8 @@ type GitStreamYieldNode<Y = unknown, R = undefined> = {
     readOnly: () => typeof gitReadOnly;
     revParse: (ref: GitRef | string) => Promise<GitRef>;
     scope: (name: 'reader') => typeof gitReadOnly;
-    show: (ref: GitRef | string) => Promise<string>;
+    show: (ref: GitRef | string) => Promise<GitShow>;
+    showText: (ref: GitRef | string) => Promise<string>;
     stashList: () => Promise<string[]>;
     stashShow: (index?: number) => Promise<string>;
     status: (options?: {

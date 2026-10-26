@@ -86,7 +86,12 @@ const makeFakeBackend = (worktreeRemove = async () => undefined) =>
     diff: async () => ({ files: [] }),
     diffText: async () => '',
     log: async () => [],
-    show: async () => '',
+    show: async () => ({
+      commit: { oid: 'abc', summary: 'shown' },
+      parents: [],
+      diff: { files: [] },
+    }),
+    showText: async () => '',
     revParse: async ref => ({
       name: typeof ref === 'string' ? ref : ref.name,
       kind: 'commit',

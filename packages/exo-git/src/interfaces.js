@@ -140,6 +140,12 @@ const GitCommitShape = M.splitRecord(
   },
 );
 
+const GitShowShape = harden({
+  commit: GitCommitShape,
+  parents: M.arrayOf(M.string()),
+  diff: GitDiffShape,
+});
+
 const FollowRootOptionsShape = M.splitRecord(
   {},
   { cancelled: M.promise() },
@@ -411,7 +417,8 @@ export const GIT_METHOD_GUARDS = harden({
   scopeReader: M.call(GitReaderScopeNameShape).returns(M.remotable('Git')),
   scopeRewriter: M.call(GitRewriterScopeNameShape).returns(M.remotable('Git')),
   scopeWriter: M.call(GitWriterScopeNameShape).returns(M.remotable('Git')),
-  show: M.callWhen(RefArgShape).returns(M.string()),
+  show: M.callWhen(RefArgShape).returns(GitShowShape),
+  showText: M.callWhen(RefArgShape).returns(M.string()),
   stashApply: M.callWhen().optional(M.number()).returns(M.undefined()),
   stashDrop: M.callWhen().optional(M.number()).returns(M.undefined()),
   stashList: M.callWhen().returns(M.arrayOf(M.string())),
@@ -458,6 +465,7 @@ export const GIT_READER_METHODS = harden([
   'revParse',
   'scope',
   'show',
+  'showText',
   'stashList',
   'stashShow',
   'status',

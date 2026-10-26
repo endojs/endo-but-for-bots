@@ -36,6 +36,7 @@ import {
  *   GitDeleteBranchOptions,
  *   GitDiff,
  *   GitDiffOptions,
+ *   GitShow,
  *   FollowRootOptions,
  *   GitCommitPosition,
  *   GitRootChange,
@@ -149,7 +150,8 @@ import {
  * @property {(opts?: GitBackendDiffOptions) => Promise<GitDiff>} diff
  * @property {(opts?: GitBackendDiffOptions) => Promise<string>} diffText
  * @property {(opts?: GitBackendLogOptions) => Promise<GitCommit[]>} log
- * @property {(ref: string) => Promise<string>} show
+ * @property {(ref: string) => Promise<GitShow>} show
+ * @property {(ref: string) => Promise<string>} showText
  * @property {(ref: string) => Promise<GitRef>} revParse
  * @property {(paths: string[]) => Promise<void>} add
  * @property {(paths: string[], opts?: GitRestoreOptions) => Promise<void>} restore
@@ -744,6 +746,14 @@ async function show(ref) {
  * @param {unknown} ref
  * @this {GitMethodThis}
  */
+async function showText(ref) {
+  return this.state.backend.showText(refName(ref));
+}
+
+/**
+ * @param {unknown} ref
+ * @this {GitMethodThis}
+ */
 async function revParse(ref) {
   return this.state.backend.revParse(refName(ref));
 }
@@ -1307,6 +1317,7 @@ const readerMethods = harden({
   diffText,
   log,
   show,
+  showText,
   revParse,
   currentBranch,
   branches,
@@ -1568,6 +1579,7 @@ export const makeNotYetImplementedBackend = () => {
     diffText: async () => fail('diffText'),
     log: async () => fail('log'),
     show: async () => fail('show'),
+    showText: async () => fail('showText'),
     revParse: async () => fail('revParse'),
     add: async () => fail('add'),
     restore: async () => fail('restore'),

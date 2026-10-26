@@ -910,3 +910,137 @@ test('NativeGitBackend.diff narrows by revision range and path', async t => {
   await t.throwsAsync(() => backend.diff({ paths: [''] }));
   await t.throwsAsync(() => backend.diff({ base: '-x' }));
 });
+
+test('NativeGitBackend.show reports a commit, its parents, and its first-parent diff', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  const identity = ['-c', 'user.email=t@t', '-c', 'user.name=T'];
+  /** @param {string} message */
+  const commit = message => git([...identity, 'commit', '-qam', message]);
+  /** @param {string} ref */
+  const oidOf = async ref => (await git(['rev-parse', ref])).stdout.trim();
+  // Repository-local settings that would reshape the porcelain rendering if
+  // the structured invocations did not pin their output format.
+  await fs.promises.appendFile(
+    path.join(repoRoot, '.git', 'config'),
+    ['[diff]', '\tnoprefix = true', '[color]', '\tdiff = always', ''].join(
+      '\n',
+    ),
+  );
+
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'a\n');
+  await git(['add', '.']);
+  await commit('root');
+  const root = await backend.show('HEAD');
+  t.like(root.commit, {
+    oid: await oidOf('HEAD'),
+    summary: 'root',
+    author: 'T',
+  });
+  t.is(typeof root.commit.committedAt, 'number');
+  t.deepEqual(root.parents, [], 'a root commit has no parents');
+  t.deepEqual(root.diff.files, [
+    {
+      status: 'added',
+      newPath: 'a.txt',
+      newMode: 0o10_0644,
+      hunks: [
+        {
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: 1,
+          lines: [{ kind: 'add', text: 'a' }],
+        },
+      ],
+    },
+  ]);
+
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'a2\n');
+  await commit('second');
+  const second = await backend.show('HEAD');
+  t.is(second.commit.summary, 'second');
+  t.deepEqual(second.parents, [root.commit.oid]);
+  t.deepEqual(
+    second.diff.files.map(({ status, newPath, hunks }) => ({
+      status,
+      newPath,
+      lines: hunks.flatMap(hunk => hunk.lines),
+    })),
+    [
+      {
+        status: 'modified',
+        newPath: 'a.txt',
+        lines: [
+          { kind: 'remove', text: 'a' },
+          { kind: 'add', text: 'a2' },
+        ],
+      },
+    ],
+  );
+
+  // A merge reports both parents and its diff against the first parent:
+  // only what the merged side brought in.  `--no-track` keeps an ambient
+  // `branch.autoSetupMerge` from writing branch config, which would change
+  // the repository identity the backend pinned.
+  await git(['switch', '-q', '--no-track', '-c', 'side']);
+  await fs.promises.writeFile(path.join(repoRoot, 'side.txt'), 'side\n');
+  await git(['add', '.']);
+  await commit('side');
+  await git(['switch', '-q', 'main']);
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'a3\n');
+  await commit('main');
+  const mainOid = await oidOf('HEAD');
+  const sideOid = await oidOf('side');
+  await git([...identity, 'merge', '-q', '--no-edit', 'side']);
+  const merge = await backend.show('HEAD');
+  t.deepEqual(merge.parents, [mainOid, sideOid]);
+  t.deepEqual(
+    merge.diff.files.map(({ status, newPath }) => ({ status, newPath })),
+    [{ status: 'added', newPath: 'side.txt' }],
+  );
+
+  // An annotated tag shows the commit it points at.
+  await git([...identity, 'tag', '-am', 'release', 'v1', second.commit.oid]);
+  t.deepEqual(await backend.show('v1'), second);
+
+  // A blob is not a commit; showText still renders it.
+  await t.throwsAsync(() => backend.show('HEAD:a.txt'));
+  t.is(await backend.showText('HEAD:a.txt'), 'a3');
+  t.regex(await backend.showText('HEAD~1'), /commit [0-9a-f]{40}/);
+  await t.throwsAsync(() => backend.show('-x'), {
+    message: /must not start with "-"/,
+  });
+  await t.throwsAsync(() => backend.showText('-x'), {
+    message: /must not start with "-"/,
+  });
+});
+
+test('NativeGitBackend.show reports a root commit in a SHA-256 repository', async t => {
+  const repoRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-show-sha256-'),
+  );
+  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  await execFileAsync(
+    'git',
+    ['init', '-q', '-b', 'main', '--object-format=sha256'],
+    { cwd: repoRoot },
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'a\n');
+  await execFileAsync('git', ['add', '.'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-qm', 'root'],
+    { cwd: repoRoot },
+  );
+  const backend = makeNativeGitBackend({ repoRoot });
+  const shown = await backend.show('HEAD');
+  t.regex(shown.commit.oid, /^[0-9a-f]{64}$/);
+  t.deepEqual(shown.parents, []);
+  t.deepEqual(
+    shown.diff.files.map(({ status, newPath }) => ({ status, newPath })),
+    [{ status: 'added', newPath: 'a.txt' }],
+  );
+});

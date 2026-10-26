@@ -284,7 +284,8 @@ test('read-only git is a subset of read-write git and omits mutators', t => {
   // mutating surface back into the read-only declaration.
   t.false(gitReadOnly.members.some(member => member.name === 'commit'));
   t.false(gitReadOnly.members.some(member => member.name === 'merge'));
-  t.false(declarationText(gitDeclarations.gitReadOnly).includes('commit:'));
+  // Match the method signature, not `GitShow`'s `commit: GitCommit` field.
+  t.notRegex(declarationText(gitDeclarations.gitReadOnly), /\bcommit: \(/);
   t.true(readOnly.includes('log'));
   t.true(readOnly.includes('diff'));
 });
