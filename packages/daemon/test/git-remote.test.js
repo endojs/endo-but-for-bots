@@ -879,6 +879,65 @@ test('GitRemoteController.revoke during in-flight pull aborts before local integ
   t.like(audit[2], { type: 'pull', outcome: 'error' });
 });
 
+test('GitRemote.pull rejects structured merge conflicts', async t => {
+  /** @type {GitBackend} */
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remoteFetch: async () =>
+      harden({ updatedRefs: harden([]), text: 'fetched' }),
+    revParse: async ref =>
+      harden({ name: ref, kind: 'commit', oid: '0'.repeat(40) }),
+    merge: async () =>
+      harden({
+        status: 'conflicts',
+        conflicts: harden([
+          harden({
+            path: 'conflict.txt',
+            ours: harden({ oid: '1'.repeat(40) }),
+            theirs: harden({ oid: '2'.repeat(40) }),
+            markerStyle: 'merge',
+          }),
+        ]),
+      }),
+  });
+  const git = makeGit({
+    mount: makeFakeGitMount(),
+    backend,
+    lineageOf,
+  });
+  const operations = makeGitOperations({ backend, git });
+
+  /** @param {'merge' | 'ff-only'} strategy */
+  const exerciseStrategy = async strategy => {
+    await null;
+    const { remote, controller } = makeGitRemote({
+      git,
+      operations,
+      name: 'origin',
+      credential: exampleCredential(),
+      policy: {
+        url: 'https://github.com/example/repo.git',
+        allowedDirections: ['fetch'],
+        fetchRefspecs: ['refs/heads/main:refs/remotes/origin/main'],
+        pushRefspecs: [],
+      },
+    });
+
+    await t.throwsAsync(
+      E(remote).pull({
+        branch: 'refs/remotes/origin/main',
+        strategy,
+      }),
+      { message: new RegExp(`GitRemote\\.pull ${strategy} has conflicts`) },
+    );
+    const audit = await E(controller).audit();
+    t.like(audit.at(-1), { type: 'pull', outcome: 'error' });
+  };
+
+  await exerciseStrategy('merge');
+  await exerciseStrategy('ff-only');
+});
+
 test('GitRemote push round-trips to an independent fetcher over file://', async t => {
   t.timeout(2000);
   // Producer worktree pushes a branch to a real file:// bare remote; a second,
