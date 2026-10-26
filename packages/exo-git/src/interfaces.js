@@ -127,7 +127,7 @@ const GitRefShape = M.splitRecord(
     ),
   },
 );
-const RefArgShape = M.or(M.string(), GitRefShape);
+const ReferenceArgumentShape = M.or(M.string(), GitRefShape);
 
 const GitCommitShape = M.splitRecord(
   {
@@ -192,7 +192,7 @@ const GitWorktreeEntryShape = M.splitRecord(
 const GitWorktreeAddOptionsShape = M.splitRecord(
   {},
   {
-    ref: RefArgShape,
+    ref: ReferenceArgumentShape,
     newBranch: M.string(),
   },
   harden({}),
@@ -391,7 +391,7 @@ export const GIT_METHOD_GUARDS = harden({
     M.arrayOf(M.or(M.remotable(), M.string())),
     GitConflictSideShape,
   ).returns(M.undefined()),
-  cherryPick: M.callWhen(RefArgShape)
+  cherryPick: M.callWhen(ReferenceArgumentShape)
     .optional(GitCherryPickOptionsShape)
     .returns(M.string()),
   commit: M.callWhen(M.string())
@@ -407,14 +407,16 @@ export const GIT_METHOD_GUARDS = harden({
   deleteBranch: M.callWhen(M.string())
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.undefined()),
-  detach: M.callWhen(RefArgShape).returns(M.undefined()),
+  detach: M.callWhen(ReferenceArgumentShape).returns(M.undefined()),
   diff: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(GitDiffShape),
   diffText: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
-  filesystemAt: M.callWhen(RefArgShape).returns(M.remotable('Filesystem')),
+  filesystemAt: M.callWhen(ReferenceArgumentShape).returns(
+    M.remotable('Filesystem'),
+  ),
   followLatestRoot: M.callWhen()
     .optional(FollowRootOptionsShape)
     .returns(M.remotable('PassableReader')),
@@ -425,10 +427,10 @@ export const GIT_METHOD_GUARDS = harden({
   log: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.arrayOf(GitCommitShape)),
-  merge: M.callWhen(RefArgShape)
+  merge: M.callWhen(ReferenceArgumentShape)
     .optional(M.recordOf(M.string(), M.any()))
     .returns(GitMergeResultShape),
-  mergeText: M.callWhen(RefArgShape)
+  mergeText: M.callWhen(ReferenceArgumentShape)
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   rebase: M.callWhen(GitRebaseInputShape).returns(M.string()),
@@ -437,13 +439,15 @@ export const GIT_METHOD_GUARDS = harden({
   restore: M.callWhen(M.arrayOf(M.or(M.remotable(), M.string())))
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.undefined()),
-  reword: M.callWhen(RefArgShape, M.string()).returns(GitCommitShape),
-  revParse: M.callWhen(RefArgShape).returns(GitRefShape),
+  reword: M.callWhen(ReferenceArgumentShape, M.string()).returns(
+    GitCommitShape,
+  ),
+  revParse: M.callWhen(ReferenceArgumentShape).returns(GitRefShape),
   scopeReader: M.call(GitReaderScopeNameShape).returns(M.remotable('Git')),
   scopeRewriter: M.call(GitRewriterScopeNameShape).returns(M.remotable('Git')),
   scopeWriter: M.call(GitWriterScopeNameShape).returns(M.remotable('Git')),
-  show: M.callWhen(RefArgShape).returns(GitShowShape),
-  showText: M.callWhen(RefArgShape).returns(M.string()),
+  show: M.callWhen(ReferenceArgumentShape).returns(GitShowShape),
+  showText: M.callWhen(ReferenceArgumentShape).returns(M.string()),
   stashApply: M.callWhen().optional(M.number()).returns(M.undefined()),
   stashDrop: M.callWhen().optional(M.number()).returns(M.undefined()),
   stashList: M.callWhen().returns(M.arrayOf(M.string())),
@@ -455,9 +459,9 @@ export const GIT_METHOD_GUARDS = harden({
   status: M.callWhen()
     .optional(GitStatusOptionsShape)
     .returns(GitStatusResultShape),
-  switch: M.callWhen(RefArgShape).returns(M.undefined()),
+  switch: M.callWhen(ReferenceArgumentShape).returns(M.undefined()),
   switchBranch: M.callWhen(M.string()).returns(M.undefined()),
-  tree: M.callWhen(RefArgShape).returns(M.remotable()),
+  tree: M.callWhen(ReferenceArgumentShape).returns(M.remotable()),
   trackingStatus: M.callWhen().returns(GitTrackingStatusShape),
   // `callWhen` so a read-only Git may resolve its worktree authority
   // through `mount.readOnly()` (which yields a promise of the

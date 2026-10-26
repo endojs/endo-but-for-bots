@@ -51,6 +51,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
 
 /**
  * @import {
+ *   BackendGitConflict,
  *   GitBackend,
  *   GitBackendDiffOptions,
  *   GitBackendLogOptions,
@@ -2460,7 +2461,7 @@ export const makeNativeGitBackend = ({
    * conflict legitimately omits stage 2 or 3, so the corresponding side is
    * absent instead of being assigned a fabricated object id.
    *
-   * @returns {Promise<import('@endo/exo-git/src/git.js').BackendGitConflict[]>}
+   * @returns {Promise<BackendGitConflict[]>}
    */
   const readMergeConflicts = async () => {
     const raw = await runGitRaw(['ls-files', '--unmerged', '-z']);
@@ -2505,11 +2506,11 @@ export const makeNativeGitBackend = ({
    * @returns {string[]}
    */
   const mergeArguments = (target, opts) => {
-    const args = ['merge'];
-    if (opts.fastForwardOnly) args.push('--ff-only');
-    if (opts.noFastForward) args.push('--no-ff');
-    args.push('--end-of-options', target);
-    return args;
+    const commandArguments = ['merge'];
+    if (opts.fastForwardOnly) commandArguments.push('--ff-only');
+    if (opts.noFastForward) commandArguments.push('--no-ff');
+    commandArguments.push('--end-of-options', target);
+    return commandArguments;
   };
 
   /**
