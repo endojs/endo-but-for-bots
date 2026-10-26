@@ -163,6 +163,18 @@ const REGISTRY = {
     helpText: 'Code loaded from a readable tree.',
     propertyList: ['tree', 'powers', 'worker'],
   },
+  'make-from-package': {
+    header: 'Make-from-package',
+    helpText: 'Code loaded from a package.json-rooted tree and its registry.',
+    propertyList: [
+      'source',
+      'registry',
+      'entry',
+      'offline',
+      'powers',
+      'worker',
+    ],
+  },
   peer: {
     header: 'Peer',
     helpText: 'Remote node.',

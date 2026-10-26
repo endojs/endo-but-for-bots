@@ -170,6 +170,17 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       properties.worker = { kind: 'reference', identifier: formula.worker };
       break;
     }
+    case 'make-from-package': {
+      properties.source = { kind: 'reference', identifier: formula.source };
+      properties.registry = { kind: 'reference', identifier: formula.registry };
+      properties.powers = { kind: 'reference', identifier: formula.powers };
+      properties.worker = { kind: 'reference', identifier: formula.worker };
+      if (formula.entry !== undefined) {
+        properties.entry = { kind: 'literal', value: formula.entry };
+      }
+      properties.offline = { kind: 'literal', value: !!formula.offline };
+      break;
+    }
     case 'make-unconfined': {
       properties.specifier = { kind: 'literal', value: formula.specifier };
       properties.powers = { kind: 'reference', identifier: formula.powers };
