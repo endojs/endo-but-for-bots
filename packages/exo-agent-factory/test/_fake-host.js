@@ -1,9 +1,11 @@
 // @ts-check
 
 import harden from '@endo/harden';
+import { makeExo } from '@endo/exo';
 import { Far } from '@endo/far';
 import { passStyleOf } from '@endo/pass-style';
 import { Fail, q } from '@endo/errors';
+import { M } from '@endo/patterns';
 
 /**
  * Thrown by the fake daemon at an injected crash point. Once one is thrown the
@@ -252,9 +254,78 @@ export const makeFakeDaemon = () => {
     return { maker, calls };
   };
 
+  /**
+   * A durable child mailbox backed by the same crash counter as the private
+   * host. Every fresh reader starts at the beginning, as a revived daemon
+   * follower does. The turn ledger must make that replay harmless.
+   *
+   * @param {any[]} messages
+   */
+  const makeMailbox = messages => {
+    /** @type {Array<{ strings: string[], replyTo: string, replyToMessageNumber: bigint }>} */
+    const replies = [];
+    const self = 'endo://fake/child';
+    const agent = makeExo(
+      'Fake child mailbox',
+      M.interface('FakeChildMailbox', {}, { defaultGuards: 'passable' }),
+      {
+        /** @param {string[]} path */
+        async locate(...path) {
+          alive();
+          return path.length === 1 && path[0] === '@self' ? self : undefined;
+        },
+        async followMessages() {
+          alive();
+          let index = 0;
+          return makeExo(
+            'Fake message reader',
+            M.interface(
+              'FakeMessageReader',
+              {},
+              {
+                defaultGuards: 'passable',
+              },
+            ),
+            {
+              async next() {
+                alive();
+                if (index >= messages.length) {
+                  return harden({ done: true, value: undefined });
+                }
+                const value = messages[index];
+                index += 1;
+                return harden({ done: false, value });
+              },
+            },
+          );
+        },
+        /**
+         * @param {bigint} messageNumber
+         * @param {string[]} strings
+         */
+        async reply(messageNumber, strings) {
+          effect(`reply ${messageNumber}`);
+          const message = messages.find(
+            entry => entry.number === messageNumber,
+          );
+          message || Fail`No message numbered ${messageNumber}`;
+          replies.push(
+            harden({
+              strings: [...strings],
+              replyTo: message.messageId,
+              replyToMessageNumber: messageNumber,
+            }),
+          );
+        },
+      },
+    );
+    return { agent, replies, self };
+  };
+
   return {
     host,
     makeMaker,
+    makeMailbox,
     restart: () => {
       dead = false;
       crashAt = Infinity;

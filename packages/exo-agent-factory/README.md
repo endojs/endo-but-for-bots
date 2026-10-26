@@ -46,6 +46,39 @@ const { handle } = await E(forUi).create('helper', {
 });
 ```
 
+## Turn publication
+
+`makeTurnLedgerDriver` supplies the durable mailbox loop shared by provider
+adapters.
+It keys `TurnStarted`, `TurnResult`, and `Published` records by the durable
+message number in the driver's private directory.
+After a result is recorded, replay republishes that result without another
+inference call.
+A crash before `TurnResult` deliberately calls inference again, including any
+provider or tool effect the first call completed.
+
+Replies use the daemon mailbox's `reply` operation.
+That operation addresses the original sender and carries the answered
+message's id in the existing wire `replyTo` field, without adding metadata or
+requiring the sender to be named in the child directory.
+If a crash lands after the reply but before `Published`, replay may emit a
+byte-identical duplicate with the same `replyTo`; conversation views collapse
+that pair in the next implementation slice.
+
+## Provider-backed deployment
+
+[`examples/provider-backed-agent.js`](./examples/provider-backed-agent.js) is
+an executable issuance example for a consumer such as the API-key provider
+registry proposed by
+[PR #1543](https://github.com/endojs/endo-but-for-bots/pull/1543).
+The deploying host composes an already-held `InferenceProviderUse` with a Lal
+or Fae adapter to mint an `AgentDriverMaker`, binds the root factory, and gives
+the owner only the attenuated bound facet.
+The owner uses that facet to create a child and stores only the child's mailbox
+handle.
+Neither the provider-use facet, the maker, nor the root factory crosses into
+the owner guest.
+
 ## Durability
 
 Each namespace keeps an append-only journal of numbered pet names in the
@@ -61,9 +94,9 @@ reserved, nothing is deleted, and `faults()` reports it.
 
 ## Status
 
-This package holds the coordinator state machine and its capability surface,
-tested against an in-memory daemon with crash injection at every effect.
+This package holds the coordinator state machine, its capability surface, and
+the keyed driver turn ledger, tested against an in-memory daemon with crash
+injection at every effect.
 The daemon-backed wiring (the pinned coordinator formula and durable facet
-formulas), the `@endo/inference`, Fae, and Lal maker adapters, the driver turn
-ledger, and reader-side reply collapse are later steps of the design's
-implementation plan.
+formulas), the `@endo/inference`, Fae, and Lal maker adapters, and reader-side
+reply collapse are later steps of the design's implementation plan.

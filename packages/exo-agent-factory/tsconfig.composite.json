@@ -18,6 +18,9 @@
       "path": "../harden/tsconfig.composite.json"
     },
     {
+      "path": "../inference/tsconfig.composite.json"
+    },
+    {
       "path": "../patterns/tsconfig.composite.json"
     }
   ]
