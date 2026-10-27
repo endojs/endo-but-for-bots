@@ -680,11 +680,7 @@ The 2026-10-27 pass adds
 [api-key-agent-workbench](api-key-agent-workbench.md) (Proposed), the
 endowments, budgeted-subagent, and git-VFS-tool follow-on to
 [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md).
-Starting from the totals in the 2026-10-23 paragraph above, Proposed goes
-from 34 to 35 and the indexed records from 253 to 254. No other row changes.
-It joins the M3 table, the dependency graph (it builds on the provider design,
-`hosted-agent-subscriptions`, `endo-reminder`, `mount-stream-glob-grep`, and
-`daemon-git-capability`), and the estimates table. Its Endo-side work (about
+Its Endo-side work (about
 3-3.5 weeks) follows the provider design's phase 5. Like the 2026-09-12
 hosted-sandbox estimate, it is provisional and non-additive until the
 maintainer settles its open questions, so the M3 duration, later targets, and
