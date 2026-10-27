@@ -125,7 +125,9 @@ test('the module entry point disposes its issuers with the formula context', asy
   const hooks = [];
   const context = makeExo(
     'IssuerTestContext',
-    M.interface('IssuerTestContext', { addDisposalHook: M.call(M.any()).returns() }),
+    M.interface('IssuerTestContext', {
+      addDisposalHook: M.call(M.any()).returns(),
+    }),
     {
       addDisposalHook: hook => {
         hooks.push(hook);

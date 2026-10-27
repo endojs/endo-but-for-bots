@@ -302,7 +302,12 @@ test('the pi stream translates harness history and reports a tool-use turn', asy
       role: 'assistant',
       content: [
         { type: 'text', text: 'checking' },
-        { type: 'tool_use', id: 'call-0', name: 'lookup', input: { name: 'a' } },
+        {
+          type: 'tool_use',
+          id: 'call-0',
+          name: 'lookup',
+          input: { name: 'a' },
+        },
       ],
     },
     {
