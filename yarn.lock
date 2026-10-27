@@ -2371,6 +2371,12 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/floot-android@workspace:packages/floot-android":
+  version: 0.0.0-use.local
+  resolution: "@endo/floot-android@workspace:packages/floot-android"
+  languageName: unknown
+  linkType: soft
+
 "@endo/floot@workspace:^, @endo/floot@workspace:packages/floot":
   version: 0.0.0-use.local
   resolution: "@endo/floot@workspace:packages/floot"
@@ -2393,6 +2399,7 @@ __metadata:
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sha256": "workspace:^"
     "@endo/workflow": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
