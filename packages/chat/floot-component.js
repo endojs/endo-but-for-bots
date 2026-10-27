@@ -2050,7 +2050,7 @@ export const flootComponent = (
       if (ownChannel === channel) {
         // A recognizer may finish before VAD silence (for example its own
         // endpoint detector fired). Close that utterance before arming a send.
-        channel.end();
+        channel?.end();
         channel = null;
         speaking = false;
         silenceStart = 0;
@@ -2985,7 +2985,7 @@ export const flootComponent = (
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    send(/** @type {string | undefined} */ text) {
+    send(/** @type {string | undefined} */ text = undefined) {
       submit(
         typeof text === 'string'
           ? textDraft(text)

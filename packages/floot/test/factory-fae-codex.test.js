@@ -1001,7 +1001,7 @@ for (const downgrade of [false, true]) {
       { ...config.presets.find(p => p.id === 'voice'), modelId: 'luna' },
       config.revision,
     );
-    let factory = subject.factory;
+    let factory = await subject.factory;
     let session = await E(factory).createSession({
       presetId: 'voice',
       ...(downgrade ? {} : { networkPolicy: 'off' }),

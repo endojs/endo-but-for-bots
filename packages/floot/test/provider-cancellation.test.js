@@ -188,6 +188,10 @@ for (const [cleanupFails, attachmentFails] of [
         journalPowers: powers,
         extraTools: new Map([['effect', tool]]),
         attachments: harden({
+          owns: () => false,
+          open: async () => {
+            throw Error('No attachments expected');
+          },
           cleanup: async () => {
             if (refuseAttachmentCleanup) throw Error('mailbox unavailable');
           },

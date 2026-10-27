@@ -83,11 +83,12 @@ for (const kind of ['provider', 'hosted']) {
           });
         },
       });
+      /** @type {import('../src/runtime-config.js').RuntimeConfig} */
       const backend =
         kind === 'provider'
-          ? { kind, provideProvider: () => provider }
+          ? { kind: 'provider', provideProvider: () => provider }
           : {
-              kind,
+              kind: 'hosted',
               provideHostedClient: snapshot =>
                 harden({
                   send: async () => {
@@ -95,7 +96,7 @@ for (const kind of ['provider', 'hosted']) {
                     try {
                       seen = await snapshot.execute('large', harden({}));
                     } catch (error) {
-                      seen = `Error: ${error.message}`;
+                      seen = `Error: ${error instanceof Error ? error.message : String(error)}`;
                     }
                     const stream = makeBufferedReader();
                     stream.push(

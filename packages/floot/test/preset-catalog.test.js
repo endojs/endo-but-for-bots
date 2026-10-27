@@ -161,6 +161,7 @@ test('shell presets canonicalize provisioning order and reject missing dependenc
   const { catalog } = setup();
   const { revision } = await catalog.read();
   const voice = BUILTIN_PRESETS.find(p => p.id === 'voice');
+  if (!voice) throw Error('Missing voice preset');
   await t.throwsAsync(
     catalog.save({ ...voice, objects: [voice.objects[1]] }, revision),
     { message: /requires a workspace/ },

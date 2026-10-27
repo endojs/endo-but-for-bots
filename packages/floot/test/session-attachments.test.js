@@ -12,12 +12,14 @@ import { directoryHost } from './_directory-host.js';
 const SELF = `endo://${'a'.repeat(64)}/${'b'.repeat(64)}?type=handle`;
 const message = harden({ strings: ['Read ', ''], names: ['document'] });
 const setup = t => {
-  const storage = new Map([
-    [
-      'floot-private-sessions/one/schema',
-      harden({ version: 2, sessionId: 'one' }),
-    ],
-  ]);
+  const storage = new Map(
+    /** @type {[string, any][]} */ ([
+      [
+        'floot-private-sessions/one/schema',
+        harden({ version: 2, sessionId: 'one' }),
+      ],
+    ]),
+  );
   const values = new Map();
   const inventory = new Map();
   const messages = new Map();
@@ -209,7 +211,7 @@ test('UI attachment package is suppressed by the inbox and visible to normal ado
   t.is(w.inventory.get('notes'), w.object);
   t.is(w.messages.size, 0);
   t.deepEqual(
-    (await agent.getHistory()).find(m => m.role === 'user').meta.message,
+    (await agent.getHistory()).find(m => m.role === 'user')?.meta.message,
     message,
   );
 });
@@ -235,7 +237,7 @@ test('failed preparation cleanup quarantines new turns and remains retryable at 
   const manager = harden({
     owns: w.manager.owns,
     cleanup: w.manager.cleanup,
-    open: async (...args) => {
+    open: async (/** @type {Parameters<typeof w.manager.open>} */ ...args) => {
       opens += 1;
       await w.manager.open(...args);
       w.refuseDismiss(true);

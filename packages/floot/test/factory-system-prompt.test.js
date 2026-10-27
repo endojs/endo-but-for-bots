@@ -1328,10 +1328,9 @@ test('duplicate concurrent names and failed introductions do not leak reservatio
       ),
     );
     t.is(results.filter(r => r.status === 'fulfilled').length, 1);
-    t.regex(
-      results.find(r => r.status === 'rejected').reason.message,
-      /already exists/,
-    );
+    const rejected = results.find(r => r.status === 'rejected');
+    if (!rejected) throw Error('Expected a rejected duplicate spawn');
+    t.regex(rejected.reason.message, /already exists/);
   });
   await world.promptOf(parent);
   t.is((await E(world.factory).listSessions()).length, 2);
@@ -1400,7 +1399,9 @@ test('restart finishes a fenced subtree before reviving its descendants', async 
   const entries = [...world.hostStore.entries()]
     .filter(([name]) => name.startsWith('floot-sessions-v1-'))
     .sort(([a], [b]) => a.localeCompare(b));
-  const [registryName, record] = entries.at(-1);
+  const latest = entries.at(-1);
+  if (!latest) throw Error('Missing session registry');
+  const [registryName, record] = latest;
   // Crash point: deletion intent is durable, but no child has been removed.
   world.hostStore.set(
     registryName,

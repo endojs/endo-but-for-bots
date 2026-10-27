@@ -34,7 +34,7 @@ const turn = (turnId, records, extra = {}) => ({
   transcriptComplete: true,
   input: `input ${turnId}`,
   activity: [],
-  tools: [],
+  tools: /** @type {any[]} */ ([]),
   transcript: records.map((record, index) => ({
     ordinal: `${index}`,
     sequence: `${turnId + index + 1}`,
@@ -612,7 +612,7 @@ test('Codex recovery keeps native bytes and appends a resolved late tool result 
   const pairs = pairToolCalls(records.slice(1), { perTurn: true });
   t.is(pairs.unanswered.length, 0);
   t.is(pairs.pairs.length, 1);
-  t.is(pairs.pairs[0].result.content, 'grep finished after session failure');
+  t.is(resultContent(pairs.pairs[0]), 'grep finished after session failure');
   t.true(
     records.some(
       row => row.kind === 'message' && row.content.includes('outcome-unknown'),

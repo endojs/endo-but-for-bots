@@ -243,7 +243,7 @@ export const makePendingQueue = ({
      * @param {string} text
      * @param {string} requestId
      * @param {{path: string[], identity: string}[]} manifest
-     * @param message
+     * @param {import('./session-mentions.js').ChatMessage} [message]
      */
     receipt: (text, requestId, manifest, message = undefined) =>
       ordered(async () => {

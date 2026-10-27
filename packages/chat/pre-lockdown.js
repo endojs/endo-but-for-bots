@@ -43,11 +43,8 @@ for (const name of ['TextEncoder', 'TextDecoder', 'URLSearchParams', 'URL']) {
           String(key),
         )
       ) {
-        Object.defineProperty(
-          Strict,
-          key,
-          Object.getOwnPropertyDescriptor(Native, key),
-        );
+        const descriptor = Object.getOwnPropertyDescriptor(Native, key);
+        if (descriptor) Object.defineProperty(Strict, key, descriptor);
       }
     }
     Object.defineProperty(Strict, 'prototype', { value: Native.prototype });
