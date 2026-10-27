@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events';
 import { Far } from '@endo/pass-style';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
+import { wrapBackend } from '@endo/platform/fs/extended/wrap-backend.js';
 
 import { serveConnection } from '../src/server.js';
 import { makeWriter, tryParseMessage, wrapMessage } from '../src/wire.js';
@@ -119,6 +120,40 @@ const makePeer = (t, fs, onClose) => {
     });
   return { control, socket, request, send, init, open, walkFile, replies };
 };
+
+test('failed filesystem write keeps its error while connection cleanup releases the writer', async t => {
+  t.timeout(5000);
+  let writes = 0;
+  const fs = wrapBackend(
+    harden({
+      kind: async path => (path.length ? 'file' : 'directory'),
+      async *list() {
+        // This fixture addresses the existing file directly without listing.
+      },
+      read: async () => new Uint8Array(0),
+      write: async () => {
+        writes += 1;
+        throw Error('EIO: backend write failed');
+      },
+      makeDirectory: async () => {},
+      remove: async () => {},
+    }),
+  );
+  const peer = makePeer(t, fs);
+  await peer.init();
+  await peer.walkFile();
+  await peer.open(2, 2);
+  const result = await peer.request(T.Twrite, w => {
+    w.u32(2);
+    w.u64(0n);
+    w.u32(1);
+    w.u8(42);
+  });
+  t.is(result.type, T.Rlerror);
+  await peer.control.close();
+  await peer.control.close();
+  t.is(writes, 1);
+});
 
 for (const trigger of ['control', 'disconnect']) {
   test(`connection ${trigger} waits for and closes a late OpenFile`, async t => {
