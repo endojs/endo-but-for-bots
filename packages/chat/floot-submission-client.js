@@ -8,7 +8,7 @@ import { decodeChatDraft, chatDraftText } from './floot-mentions.js';
  * Persist before sending. Failed/unknown acknowledgements retain the same key.
  * @param {{getItem: (key: string) => string | null, setItem: (key: string, value: string) => void, removeItem: (key: string) => void}} storage
  * @param {() => string} makeId
- * @param {{request: <T>(key: string, work: () => T) => Promise<T>} | undefined} [locks]
+ * @param {{request: <T>(key: string, work: () => T) => Promise<T>} | null | undefined} [locks] Pass null to explicitly disable ambient Web Locks.
  */
 export const makeSubmissionClient = (
   storage,

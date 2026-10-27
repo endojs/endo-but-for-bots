@@ -311,7 +311,7 @@ test('missing Web Locks refuses dispatch, and concurrent views share one claim',
   });
   await t.throwsAsync(
     () =>
-      makeClient(storage, () => 'unsafe', undefined).submit(
+      makeClient(storage, () => 'unsafe', null).submit(
         session,
         's',
         'text',
