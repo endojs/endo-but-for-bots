@@ -8,6 +8,7 @@ import { Far } from '@endo/marshal';
 import {
   assertBrokeredMessagesRecipe,
   makeBrokeredMessagesProvider,
+  makeBrokeredMessagesStream,
 } from '../providers/brokered-messages.js';
 import { spawnWorkerLoop } from '../agent.js';
 
@@ -215,4 +216,175 @@ test('a harness abort cancels a pending broker request', async t => {
   }
   controller.abort(Error('stop now'));
   await t.throwsAsync(pending, { message: 'stop now' });
+});
+
+/** @param {any} stream */
+const drain = async stream => {
+  const seen = [];
+  for await (const event of stream) seen.push(event.type);
+  return { seen, message: await stream.result() };
+};
+
+test('the pi stream translates harness history and reports a tool-use turn', async t => {
+  const subject = fixture();
+  const streamFn = makeBrokeredMessagesStream({
+    inference: subject.inference,
+    model: 'claude-test',
+  });
+  const { seen, message } = await drain(
+    streamFn(undefined, {
+      messages: [
+        {
+          role: 'system',
+          content: 'Be terse',
+          toolsAdded: [
+            { name: 'lookup', description: 'look up', parameters: {} },
+            { name: 'retired', description: 'gone', parameters: {} },
+          ],
+          toolsRemoved: [{ name: 'retired' }],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'first' },
+            { type: 'image', data: 'ignored' },
+            { type: 'text', text: 'second' },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'checking' },
+            {
+              type: 'toolCall',
+              id: 'call-0',
+              name: 'lookup',
+              arguments: { name: 'a' },
+            },
+          ],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-0',
+          content: [{ type: 'text', text: 'found a' }],
+        },
+      ],
+    }),
+  );
+  t.deepEqual(seen, ['start', 'done']);
+  t.is(message.stopReason, 'toolUse');
+  t.deepEqual(message.content, [
+    { type: 'text', text: 'Done now' },
+    {
+      type: 'toolCall',
+      id: 'call-1',
+      name: 'lookup',
+      arguments: { name: 'shell' },
+    },
+  ]);
+  t.like(message.usage, {
+    input: 4,
+    output: 3,
+    cacheRead: 2,
+    cacheWrite: 1,
+    totalTokens: 10,
+  });
+  const body = JSON.parse(subject.requests[0].body);
+  t.is(body.max_tokens, 4096);
+  t.is(body.system, 'Be terse');
+  t.deepEqual(
+    body.tools.map(tool => tool.name),
+    ['lookup'],
+  );
+  t.deepEqual(body.messages, [
+    { role: 'user', content: 'first\nsecond' },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'checking' },
+        { type: 'tool_use', id: 'call-0', name: 'lookup', input: { name: 'a' } },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'call-0', content: 'found a' },
+      ],
+    },
+  ]);
+});
+
+test('the pi stream reports broker failures as an error event', async t => {
+  const subject = fixture(401);
+  const streamFn = makeBrokeredMessagesStream({
+    inference: subject.inference,
+    model: 'claude-test',
+  });
+  const { seen, message } = await drain(
+    streamFn(undefined, { messages: [{ role: 'user', content: 'hello' }] }),
+  );
+  t.deepEqual(seen, ['error']);
+  t.is(message.stopReason, 'error');
+  t.is(message.errorMessage, 'Anthropic authentication failed');
+  t.deepEqual(message.content, []);
+});
+
+test('the pi stream refuses unsupported history before contacting the broker', async t => {
+  const subject = fixture();
+  const streamFn = makeBrokeredMessagesStream({
+    inference: subject.inference,
+    model: 'claude-test',
+  });
+  const { message } = await drain(
+    streamFn(undefined, { messages: [{ role: 'developer', content: 'x' }] }),
+  );
+  t.is(message.errorMessage, 'Unsupported brokered Messages history');
+  t.is(subject.requests.length, 0);
+});
+
+test('the pi stream marks an aborted turn as aborted', async t => {
+  const inference = Far('PendingAgentInference', {
+    requestByteStream: () => new Promise(() => {}),
+  });
+  const streamFn = makeBrokeredMessagesStream({
+    inference,
+    model: 'claude-test',
+  });
+  const controller = new AbortController();
+  const stream = streamFn(
+    undefined,
+    { messages: [{ role: 'user', content: 'hello' }] },
+    { signal: controller.signal },
+  );
+  controller.abort(Error('stop now'));
+  const { seen, message } = await drain(stream);
+  t.deepEqual(seen, ['error']);
+  t.is(message.stopReason, 'aborted');
+  t.is(message.errorMessage, 'stop now');
+});
+
+test('disposal cancels a pending broker request and refuses later turns', async t => {
+  let requested = false;
+  const inference = Far('PendingAgentInference', {
+    requestByteStream: async () => {
+      requested = true;
+      await new Promise(() => {});
+    },
+  });
+  const provider = makeBrokeredMessagesProvider({
+    inference,
+    model: 'claude-test',
+  });
+  const pending = provider.chat([{ role: 'user', content: 'hello' }], []);
+  for (let turn = 0; turn < 10 && !requested; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  await provider.dispose();
+  await t.throwsAsync(pending, {
+    message: 'Brokered Messages provider disposed',
+  });
+  await t.throwsAsync(provider.chat([{ role: 'user', content: 'again' }], []), {
+    message: 'Brokered Messages provider disposed',
+  });
 });

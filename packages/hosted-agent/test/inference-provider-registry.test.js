@@ -746,6 +746,18 @@ test('phase 2 defaults and limit raises require explicit confirmation', async t 
     ).requestsPerMinute,
     21,
   );
+
+  // Changing the daily budget's unit is not comparable, so it is a raise.
+  await t.throwsAsync(
+    () => E(admin).setLimits(harden({ dailyTokens: 1 }), 'switch-kind-1'),
+    { message: /limit-raise-unconfirmed/ },
+  );
+  t.is((await E(admin).getSummary()).limits.dailyDollars, 6);
+  const switched = (
+    await E(admin).setLimits(harden({ dailyTokens: 1 }), 'switch-kind-2', true)
+  ).limits;
+  t.is(switched.dailyTokens, 1);
+  t.false(Object.hasOwn(switched, 'dailyDollars'));
   await registry.close();
 });
 

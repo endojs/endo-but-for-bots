@@ -6,7 +6,10 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
-import { makeAnthropicApiKeyIssuerFactory } from '../src/anthropic-api-key-issuer.js';
+import {
+  make,
+  makeAnthropicApiKeyIssuerFactory,
+} from '../src/anthropic-api-key-issuer.js';
 
 const SecretInterface = M.interface('IssuerTestSecret', {
   readBase64: M.callWhen().returns(M.string()),
@@ -74,4 +77,64 @@ test('Anthropic issuer injects its key and version behind an InferenceEndpoint',
   await t.throwsAsync(() => endpoint.request(message), {
     message: /Inference endpoint revoked/,
   });
+});
+
+test('a provider keeps one issuer and refuses a changed secret', async t => {
+  const makeSecret = () =>
+    makeExo('IssuerTestSecret', SecretInterface, {
+      readBase64: async () => encodeBase64(encodeUtf8('anthropic-canary')),
+    });
+  const secret = makeSecret();
+  const made = makeAnthropicApiKeyIssuerFactory({
+    fetch: async () => {
+      throw Error('no network in this test');
+    },
+  });
+  t.teardown(() => made.close());
+  const provider = harden({
+    providerId: 'provider-one',
+    kind: 'anthropic',
+    defaultModel: 'claude-test',
+  });
+  const first = await made.factory.openEndpoint(provider, secret, {
+    sessionId: 'grant-one',
+  });
+  const second = await made.factory.openEndpoint(provider, secret, {
+    sessionId: 'grant-two',
+  });
+  t.not(first, second);
+  await t.throwsAsync(
+    () =>
+      made.factory.openEndpoint(provider, makeSecret(), {
+        sessionId: 'grant-three',
+      }),
+    { message: /Anthropic provider secret changed/ },
+  );
+  await made.close();
+  const message = harden({
+    method: 'POST',
+    path: '/v1/messages',
+    body: '{"model":"claude-test","max_tokens":1,"messages":[]}',
+  });
+  await t.throwsAsync(() => first.request(message), {
+    message: /Inference endpoint revoked/,
+  });
+});
+
+test('the module entry point disposes its issuers with the formula context', async t => {
+  const hooks = [];
+  const context = makeExo(
+    'IssuerTestContext',
+    M.interface('IssuerTestContext', { addDisposalHook: M.call(M.any()).returns() }),
+    {
+      addDisposalHook: hook => {
+        hooks.push(hook);
+      },
+    },
+  );
+  const factory = await make(undefined, context);
+  t.is(hooks.length, 1);
+  t.truthy(factory.openEndpoint);
+  await hooks[0]();
+  t.truthy(await make(undefined, undefined));
 });

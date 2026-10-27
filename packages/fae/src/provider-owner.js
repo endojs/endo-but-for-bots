@@ -59,8 +59,6 @@ export const makeProviderOwner = ({
     assertBrokeredMessagesRecipe(config);
     provideAuthToken === undefined ||
       Fail`Brokered Messages cannot receive a credential resolver`;
-    !Object.hasOwn(config, 'subscription') ||
-      Fail`Subscription requires the subscription-responses provider kind`;
   } else {
     !Object.hasOwn(config, 'subscription') ||
       Fail`Subscription requires the subscription-responses provider kind`;
