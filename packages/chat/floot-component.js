@@ -9,12 +9,12 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { FlootApp } from '@endo/space-floot';
 import { makeReplyFold } from '@endo/floot/src/reply-fold.js';
 import { applyTranscript } from '@endo/floot/src/transcript-delta.js';
+import { makePresetSettings } from './preset-settings.js';
 import {
   makeSessionDrafts,
   makeSubmissionClient,
 } from './floot-submission-client.js';
 import {
-  ASSISTANT_SESSION,
   pendingAssistantInvocation,
   acknowledgeAssistantInvocation,
   claimAssistantInvocation,
@@ -794,9 +794,7 @@ export const flootComponent = (
     networkPolicy,
     assistantId = '',
   ) => {
-    const selected = assistantId
-      ? ASSISTANT_SESSION
-      : models.find(candidate => candidate.id === model);
+    const selected = models.find(candidate => candidate.id === model);
     if (
       model &&
       (!selected ||
@@ -813,21 +811,23 @@ export const flootComponent = (
     // driven from here, where replies are read aloud. The factory composes
     // the voice rules into the system prompt of a session that says so, and
     // of no other.
-    const facet = await E(factory).createSession({
-      title: title || DEFAULT_TITLE,
-      spoken: true,
-      userInitiated: true,
-      ...(presetId ? { presetId } : {}),
-      ...(selected?.backendId
-        ? {
-            backendId: selected.backendId,
-            modelId: selected.modelId,
-          }
-        : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(subscription && subscription !== 'auto' ? { subscription } : {}),
-      ...(networkPolicy ? { networkPolicy } : {}),
-    });
+    const facet = await (assistantId
+      ? E(factory).createAssistantSession()
+      : E(factory).createSession({
+          title: title || DEFAULT_TITLE,
+          spoken: true,
+          userInitiated: true,
+          ...(presetId ? { presetId } : {}),
+          ...(selected?.backendId
+            ? {
+                backendId: selected.backendId,
+                modelId: selected.modelId,
+              }
+            : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(subscription && subscription !== 'auto' ? { subscription } : {}),
+          ...(networkPolicy ? { networkPolicy } : {}),
+        }));
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
     const session = {
@@ -1032,11 +1032,8 @@ export const flootComponent = (
         lifecycle: s.lifecycle,
       })),
       activeSessionId,
-      presets: presets.map(p => ({
-        id: p.id,
-        title: p.title,
-        description: p.description,
-      })),
+      presets: presets.map(p => ({ ...p })),
+      presetSettings: presetSettings.getState(),
       models: models.map(m => ({
         id: m.id,
         title: m.title,
@@ -2506,7 +2503,7 @@ export const flootComponent = (
             // Start creation and capture in the same admitted lock turn.
             ready = createSession(
               undefined,
-              ASSISTANT_SESSION.presetId,
+              undefined,
               undefined,
               undefined,
               undefined,
@@ -2815,6 +2812,18 @@ export const flootComponent = (
   };
 
   // ── Controller (the view's only handle on the host engine) ───────────────────
+  const presetSettings = makePresetSettings({
+    factory,
+    rootPowers,
+    changed: () => {
+      if (!cancelled) notify();
+    },
+    catalogChanged: async () => {
+      presets = await E(factory).listPresets();
+      if (!cancelled) notify();
+    },
+  });
+
   const controller = harden({
     getState,
     async forgetUnconfirmedSend() {
@@ -3031,6 +3040,21 @@ export const flootComponent = (
     },
     replayMessage(/** @type {string} */ text) {
       replayMessage(text);
+    },
+    loadPresetSettings() {
+      void presetSettings.load();
+    },
+    savePreset(preset) {
+      void presetSettings.save(preset);
+    },
+    deletePreset(id) {
+      void presetSettings.remove(id);
+    },
+    resetPreset(id) {
+      void presetSettings.reset(id);
+    },
+    setVoicePreset(id) {
+      void presetSettings.selectVoice(id);
     },
     toggleSettings() {
       settingsOpen = !settingsOpen;

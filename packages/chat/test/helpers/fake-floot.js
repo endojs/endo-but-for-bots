@@ -135,6 +135,13 @@ export const makeFakeDaemon = ({
   const cancelledTurns = [];
   let nextId = count;
   let failCreation = false;
+  let assistantOptions = harden({
+    presetId: 'voice',
+    backendId: 'fae-codex',
+    modelId: 'gpt-5.6-sol',
+    spoken: true,
+    userInitiated: true,
+  });
   /** @type {(() => Promise<void>) | null} */
   let creationGate = null;
   // Knobs a test turns to put the daemon in an awkward state.
@@ -424,6 +431,7 @@ export const makeFakeDaemon = ({
       parts.get(id)?.watch.end();
       listWatch.touch();
     },
+    createAssistantSession: () => E(factory).createSession(assistantOptions),
     createSession: async (...args) => {
       if (creationGate) await creationGate();
       if (failCreation) throw Error('creation unavailable');
@@ -463,6 +471,13 @@ export const makeFakeDaemon = ({
     touchTranscript: (/** @type {string} */ id) =>
       partsFor(id).watch.touch('transcript'),
     pendingOf: (/** @type {string} */ id) => partsFor(id).submissions.read(),
+    setAssistantOptions: options => {
+      assistantOptions = harden({
+        ...options,
+        spoken: true,
+        userInitiated: true,
+      });
+    },
     setCreationFailure: (/** @type {boolean} */ value) => {
       failCreation = value;
     },

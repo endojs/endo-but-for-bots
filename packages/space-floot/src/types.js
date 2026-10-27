@@ -57,7 +57,7 @@ export {};
  */
 
 /**
- * @typedef {{ id: string, title: string, description?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
+ * @typedef {{ id: string, title: string, description?: string, templateId?: string, backendId?: string, modelId?: string, reasoningEffort?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
  */
 
 /**
@@ -159,6 +159,7 @@ export {};
  *   status: string,
  *   input: string,
  *   settingsOpen: boolean,
+ *   presetSettings?: {busy: boolean, error: string, message: string, configuration: any},
  *   recovery?: FlootRecovery,
  *   network?: FlootNetwork,
  *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
@@ -194,6 +195,11 @@ export {};
  * @property {(name: 'voice' | 'speed' | 'noiseScale' | 'noiseW' |
  *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
+ * @property {() => void} [loadPresetSettings]
+ * @property {(preset: any) => void} [savePreset]
+ * @property {(id: string) => void} [deletePreset]
+ * @property {(id: string) => void} [resetPreset]
+ * @property {(id: string) => void} [setVoicePreset]
  * @property {() => void} toggleSettings
  * @property {() => void} [emergencyStop]
  * @property {() => void} [resumeSession]

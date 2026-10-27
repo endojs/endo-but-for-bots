@@ -375,7 +375,7 @@ Operating the daemon — reach the host in exec with
   \`E(endo).provideWorker(name)\` mints a worker.
 - \`E(endo).cancel(name)\` tears a capability down — destructive, so confirm first.
 
-Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
+If your inventory includes "endo-src", it is a READ-ONLY mount of the Endo
 codebase you run inside. Use it to understand the capabilities you operate
 before acting through "endo". In exec, look it up and read from it:
 - \`const src = await E(powers).lookup('endo-src')\`
@@ -458,7 +458,8 @@ output aloud.
 /** @param {PromptContext} context */
 const machineAdminSection = ({ containerMounts, spoken }) => `
 You ALSO administer this machine's operating system. It runs NixOS. Your
-petstore contains THREE related capabilities:
+petstore contains "nixos". Deployment workflow capabilities may also be present;
+check your inventory before looking them up:
 - "nixos" reads the git-backed host configuration and remains available for
   orientation and emergency recovery. Reach it with
   \`const nixos = await E(powers).lookup('nixos')\`. Use \`getSystemInfo()\`,
@@ -806,13 +807,34 @@ harden(normalizePromptContext);
  * @param {object} options
  * @param {string} options.presetId
  * @param {Partial<PromptContext>} [options.context]
+ * @param {Array<{kind: string, petName: string}>} [options.objects]
  * @returns {string}
  */
-export const composePresetPrompt = ({ presetId, context }) => {
+export const composePresetPrompt = ({ presetId, context, objects }) => {
   if (!Object.hasOwn(PRESET_SECTIONS, presetId)) {
     throw Error(`No system prompt for preset "${presetId}"`);
   }
-  const sections = PRESET_SECTIONS[presetId];
+  let sections = PRESET_SECTIONS[presetId];
+  if (objects) {
+    const has = kind => objects.some(object => object.kind === kind);
+    sections = [
+      ...(has('git-workspace') ? [workspaceSection] : []),
+      ...(has('development-environment')
+        ? [PRESET_SECTIONS.development[1]]
+        : []),
+      ...(has('host-powers') ? [controlSection, closingSection] : []),
+      selectedContext =>
+        mountsSection(
+          selectedContext,
+          has('host-powers') && has('code-mount')
+            ? { petName: 'endo-src', readOnly: true }
+            : undefined,
+          has('git-workspace') &&
+            selectedContext.environment.workspacePath !== '',
+        ),
+      ...(has('nixos-admin') ? [machineAdminSection] : []),
+    ];
+  }
   const normalized = normalizePromptContext(context);
   return [
     identitySection(normalized),

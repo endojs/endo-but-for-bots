@@ -2,6 +2,36 @@
 
 For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](./OPENROUTER.md).
 
+## Assistant presets
+
+In the shared web/Android UI, open Settings → Assistant presets → Manage presets.
+Edit a preset's instructions, model, reasoning effort, default objects and internet policy;
+save a copy to create a custom preset, or reset a built-in preset.
+The Voice shortcut selector chooses which preset Android assistant invocations use.
+
+The built-in voice preset uses Fae Codex / gpt-5.6-sol with an isolated Podman shell,
+a workspace, and public internet enabled.
+Internet policy belongs to the attached shell, independently of the inference backend.
+General presets can include a workspace and shell; the shell requires the workspace.
+Hosted CLI backends keep their own environment and policy controls.
+The new-session picker uses saved defaults unless explicitly overridden.
+
+Additional endowments are explicit object paths, resolved once when granted.
+Editing a name or copying a preset preserves that object identity across devices.
+Presets are scoped to a Floot factory and stored in one bounded record.
+Changes apply to new sessions; existing sessions and their delegates retain their
+original instructions and authority recipe, even after a preset is deleted.
+Delegates inherit their parent's current approved network policy.
+Existing sessions without a shell need a new session to gain one.
+
+Factory API: `getPresetConfiguration()` returns a revision and presets;
+`savePreset(preset, revision)`, `deletePreset(id, revision)`,
+`resetPreset(id, revision)` and `setVoicePreset(id, revision)` reject stale edits.
+After a conflict or uncertain save, reload before retrying.
+`createAssistantSession()` creates a spoken session from the selected voice preset.
+Explicit grants have `{petName, sourcePath, value}` where `value` is an object capability;
+these references stay in the host controller and are never passed to the confined view.
+
 ## Durable turn recovery
 
 Factory-created sessions keep append-only turn journals in factory-owned storage,

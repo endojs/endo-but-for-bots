@@ -139,10 +139,12 @@ const world = (
   /** @type {Map<string, Map<string, any>>} */
   const guests = new Map();
   let environments = 0;
+  const environmentPolicies = [];
   let disposals = 0;
   let refuseDisposal = false;
   if (development) store.set('environment-runner', Far('Runner'));
   const host = Far('FlootHost', {
+    locate: name => `locator:${name}`,
     ...directoryHost(store, {
       beforeStore: value => {
         if (
@@ -159,7 +161,8 @@ const world = (
       if (guests.has(guestName))
         guests.get(guestName)?.set(name, store.get(from));
     },
-    provideEnvironment: (_runner, _mount, adminName, shellName) => {
+    provideEnvironment: (_runner, _mount, adminName, shellName, recipe) => {
+      environmentPolicies.push(recipe.networkPolicy);
       environments += 1;
       store.set(
         adminName,
@@ -172,7 +175,9 @@ const world = (
             nativeStops += 1;
             return onNativeStop?.();
           },
-          setNetworkPolicy: () => {},
+          setNetworkPolicy: policy => {
+            environmentPolicies.push(policy);
+          },
         }),
       );
       store.set(
@@ -261,6 +266,7 @@ const world = (
     cliCreates: () => cliCreates,
     guestCreates: () => guestCreates,
     environments: () => environments,
+    environmentPolicies,
     disposals: () => disposals,
     refuseDisposal: value => {
       refuseDisposal = value;
@@ -942,3 +948,79 @@ test('failed environment disposal retains its administrator and journal until de
   t.false([...subject.store.keys()].some(name => name.includes(id)));
   t.is(subject.disposals(), 1);
 });
+
+test('voice shell owns internet policy independently of inference backend and survives revival', async t => {
+  const subject = world(t, { development: true });
+  t.teardown(() => subject.close());
+  const config = await E(subject.factory).getPresetConfiguration();
+  const voice = config.presets.find(preset => preset.id === 'voice');
+  await E(subject.factory).savePreset(
+    { ...voice, modelId: 'luna' },
+    config.revision,
+  );
+  const session = await E(subject.factory).createAssistantSession();
+  const { id } = await E(session).getInfo();
+  t.is((await E(session).getNetworkPolicy()).policy, 'public-internet');
+  t.deepEqual(subject.environmentPolicies, ['public-internet']);
+  await E(session).setNetworkPolicy('off');
+  t.is(subject.environmentPolicies.at(-1), 'off');
+  const factory = await subject.restart();
+  const restored = await E(factory).getSession(id);
+  t.is((await E(restored).getNetworkPolicy()).policy, 'off');
+  const turn = await E(restored).startTurn('hello');
+  await E(turn).whenFinished();
+  t.is(subject.environments(), 1);
+  t.true(subject.requests[0].tools.some(tool => tool.name === 'runCommand'));
+  t.true((await E(restored).getExecutionState()).supported);
+  await E(factory).deleteSession(id);
+  t.is(subject.disposals(), 1);
+  t.false([...subject.store.keys()].some(name => name.includes(id)));
+});
+
+for (const downgrade of [false, true]) {
+  test(`delegated voice shells inherit parent internet off after ${downgrade ? 'downgrade and revival' : 'explicit creation override'}`, async t => {
+    let spawned = false;
+    const subject = world(t, {
+      development: true,
+      responseOutput: request => {
+        if (spawned || !request.tools?.length) return undefined;
+        spawned = true;
+        return [
+          {
+            type: 'function_call',
+            call_id: 'spawn',
+            name: 'spawnSubagent',
+            arguments: JSON.stringify({ name: 'helper' }),
+          },
+        ];
+      },
+    });
+    t.teardown(() => subject.close());
+    const config = await E(subject.factory).getPresetConfiguration();
+    await E(subject.factory).savePreset(
+      { ...config.presets.find(p => p.id === 'voice'), modelId: 'luna' },
+      config.revision,
+    );
+    let factory = subject.factory;
+    let session = await E(factory).createSession({
+      presetId: 'voice',
+      ...(downgrade ? {} : { networkPolicy: 'off' }),
+    });
+    const { id } = await E(session).getInfo();
+    if (downgrade) {
+      await E(session).setNetworkPolicy('off');
+      factory = await subject.restart();
+      session = await E(factory).getSession(id);
+    }
+    const turn = await E(session).startTurn('Delegate a check');
+    await E(turn).whenFinished();
+    const children = (await E(factory).listSessions()).filter(
+      entry => entry.id !== id,
+    );
+    t.is(children.length, 1);
+    const child = await E(factory).getSession(children[0].id);
+    t.is((await E(child).getNetworkPolicy()).policy, 'off');
+    t.is(subject.environmentPolicies.at(-1), 'off');
+    await E(factory).deleteSession(id);
+  });
+}

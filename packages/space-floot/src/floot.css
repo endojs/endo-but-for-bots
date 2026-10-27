@@ -1452,3 +1452,45 @@
   word-break: break-word;
   font-size: 0.8rem;
 }
+
+.floot-presets fieldset {
+  border: 0;
+  padding: 0;
+  margin-top: 1rem;
+  min-width: 0;
+}
+.floot-preset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+}
+.floot-preset-field input,
+.floot-preset-field select,
+.floot-preset-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem;
+  border-radius: 0.4rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  font: inherit;
+}
+.floot-preset-object {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.floot-preset-endowment {
+  border-inline-start: 2px solid currentColor;
+  padding-inline-start: 0.75rem;
+  margin: 1rem 0;
+}
+.floot-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}

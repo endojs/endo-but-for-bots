@@ -1,15 +1,6 @@
 // @ts-check
 import harden from '@endo/harden';
 
-export const ASSISTANT_SESSION = harden({
-  presetId: 'general',
-  backendId: 'fae-codex',
-  modelId: 'gpt-5.6-sol',
-  spoken: true,
-  userInitiated: true,
-});
-harden(ASSISTANT_SESSION);
-
 /** @returns {{id: string} | undefined} */
 export const pendingAssistantInvocation = () => {
   const request = /** @type {any} */ (window).endoAssistantInvocation;

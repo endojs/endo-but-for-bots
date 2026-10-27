@@ -202,8 +202,14 @@ const PresetModal = ({
     }
   }, [selection, model, effortListed]);
   const [internet, setInternet] = useState(true);
+  const [networkOverride, setNetworkOverride] = useState('');
+  const hasPresetNetwork = presets.some(preset => preset.networkPolicy);
+  const [usePresetModels, setUsePresetModels] = useState(true);
   const visiblePresets = presets.filter(
-    p => !p.backendIds || p.backendIds.includes(backend),
+    p =>
+      (usePresetModels && p.backendId) ||
+      !p.backendIds ||
+      p.backendIds.includes(backend),
   );
   const modelNetworkPolicies = selectedModel?.supportedNetworkPolicies || [];
   const networkPolicies = modelNetworkPolicies.length
@@ -230,6 +236,18 @@ const PresetModal = ({
         onClick: (/** @type {FlootSafeEvent} */ e) => e.stopPropagation(),
       },
       h('div', { class: 'floot-modal-title' }, 'Start a new session'),
+      presets.some(p => p.backendId)
+        ? h(
+            'label',
+            { class: 'floot-preset-object' },
+            h('input', {
+              type: 'checkbox',
+              checked: usePresetModels,
+              onChange: () => setUsePresetModels(value => !value),
+            }),
+            'Use saved preset models (otherwise use the model below)',
+          )
+        : null,
       models.length || catalogs.length
         ? h(
             'label',
@@ -380,30 +398,43 @@ const PresetModal = ({
         'div',
         { class: 'floot-modal-field' },
         h('span', { class: 'floot-modal-label' }, 'Internet access'),
-        h(
-          'button',
-          {
-            type: 'button',
-            role: 'switch',
-            'aria-label': 'Internet access',
-            'aria-checked': supportsInternet && internet,
-            disabled: !supportsInternet,
-            onClick: () => setInternet(value => !value),
-          },
-          supportsInternet && internet
-            ? 'On — public internet only'
-            : networkPolicies.length
-              ? 'Off'
-              : 'Not available',
-        ),
+        hasPresetNetwork
+          ? h(
+              'select',
+              {
+                'aria-label': 'Internet access override',
+                value: networkOverride,
+                onChange: (/** @type {FlootSafeEvent} */ event) =>
+                  setNetworkOverride(event.target.value),
+              },
+              h('option', { value: '' }, 'Use each preset’s default'),
+              h('option', { value: 'off' }, 'Off'),
+              h('option', { value: 'public-internet' }, 'Public internet'),
+            )
+          : h(
+              'button',
+              {
+                type: 'button',
+                role: 'switch',
+                'aria-label': 'Internet access',
+                'aria-checked': supportsInternet && internet,
+                disabled: !supportsInternet,
+                onClick: () => setInternet(value => !value),
+              },
+              supportsInternet && internet
+                ? 'On — public internet only'
+                : networkPolicies.length
+                  ? 'Off'
+                  : 'Not available',
+            ),
         h(
           'small',
           null,
           supportsInternet
             ? modelNetworkPolicies.length
               ? 'Allows public HTTP/HTTPS uploads and downloads. Private networks remain blocked.'
-              : 'Applies to development environments only. Allows public HTTP/HTTPS; private networks remain blocked.'
-            : 'This backend does not offer configurable public-internet access.',
+              : 'Applies to presets with an isolated shell. Allows public HTTP/HTTPS; private networks remain blocked.'
+            : 'Add an isolated shell to a Fae preset to configure its internet access.',
         ),
       ),
       subscriptions.length > 1
@@ -456,25 +487,40 @@ const PresetModal = ({
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              disabled: visibleModels.length === 0 && !unpinnedOffered,
+              disabled:
+                !(usePresetModels && p.backendId) &&
+                visibleModels.length === 0 &&
+                !unpinnedOffered,
               onClick: () =>
                 onPick(
                   p.id,
-                  selection,
-                  reasoningEffort || undefined,
-                  chosenSubscription === 'auto'
+                  usePresetModels && p.backendId ? '' : selection,
+                  usePresetModels && p.backendId
+                    ? undefined
+                    : reasoningEffort || undefined,
+                  (usePresetModels && p.backendId && p.backendId !== backend) ||
+                    chosenSubscription === 'auto'
                     ? undefined
                     : chosenSubscription,
-                  modelNetworkPolicies.length ||
-                    p.supportedNetworkPolicies?.length
-                    ? supportsInternet && internet
-                      ? 'public-internet'
-                      : 'off'
-                    : undefined,
+                  hasPresetNetwork
+                    ? networkOverride || undefined
+                    : p.supportedNetworkPolicies?.length ||
+                        modelNetworkPolicies.length
+                      ? supportsInternet && internet
+                        ? 'public-internet'
+                        : 'off'
+                      : undefined,
                 ),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
             h('div', { class: 'floot-preset-desc' }, p.description || ''),
+            usePresetModels && p.backendId
+              ? h(
+                  'small',
+                  null,
+                  `${p.backendId} · ${p.modelId || 'configured model'}${p.reasoningEffort ? ` · ${p.reasoningEffort}` : ''}${p.networkPolicy ? ` · Internet: ${p.networkPolicy === 'off' ? 'off' : 'on'}` : ''}`,
+                )
+              : null,
           ),
         ),
       ),

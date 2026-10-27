@@ -3411,3 +3411,75 @@ test.serial(
     t.true(opened.every(id => id === 'user'));
   },
 );
+
+test.serial(
+  'saved-model presets honor explicit internet off without backend network controls',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.append(parent);
+    const created = [];
+    const facet = farSession('PresetPickerSession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = farFactory('PresetPickerFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'One' }]),
+      listPresets: () =>
+        harden([
+          {
+            id: 'voice',
+            title: 'Voice',
+            backendId: 'fae-codex',
+            modelId: 'sol',
+            networkPolicy: 'public-internet',
+            supportedNetworkPolicies: ['off', 'public-internet'],
+          },
+        ]),
+      listBackends: () => harden([{ id: 'fae-codex', title: 'Fae Codex' }]),
+      listModels: () =>
+        harden([
+          {
+            id: 'fae-codex:sol',
+            backendId: 'fae-codex',
+            modelId: 'sol',
+            title: 'Sol',
+          },
+        ]),
+      getSession: () => facet,
+      createSession: options => {
+        created.push(options);
+        return facet;
+      },
+    });
+    const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    await waitFor(() => parent.querySelector('.floot-session-item'));
+    await tick(50);
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() =>
+      parent.querySelector('[aria-label="Internet access override"]'),
+    );
+    const select = /** @type {HTMLSelectElement} */ (
+      parent.querySelector('[aria-label="Internet access override"]')
+    );
+    t.is(select.value, '');
+    select.value = 'off';
+    select.dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    await tick();
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 1);
+    t.like(created[0], { presetId: 'voice', networkPolicy: 'off' });
+    t.false('backendId' in created[0]);
+    t.false('modelId' in created[0]);
+  },
+);

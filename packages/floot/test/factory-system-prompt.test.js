@@ -1423,3 +1423,97 @@ test('restart finishes a fenced subtree before reviving its descendants', async 
     ),
   );
 });
+
+test('editable presets snapshot prompt and endowments across restart, later edits, deletion and delegation', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  let config = await E(world.factory).getPresetConfiguration();
+  const general = config.presets.find(preset => preset.id === 'general');
+  const firstGrant = Far('FirstGrant', { read: () => 'first' });
+  const secondGrant = Far('SecondGrant', { read: () => 'second' });
+  const custom = harden({
+    ...general,
+    id: 'custom-helper',
+    title: 'My helper',
+    instructions: 'Standing instruction alpha.',
+    backendId: 'test',
+    modelId: 'm',
+    endowments: [
+      { petName: 'notebook', sourcePath: ['notes'], value: firstGrant },
+    ],
+  });
+  config = await E(world.factory).savePreset(custom, config.revision);
+  config = await E(world.factory).setVoicePreset(custom.id, config.revision);
+  const parent = await E(world.factory).createAssistantSession();
+  const info = await E(parent).getInfo();
+  t.like(info, { presetId: custom.id, backendId: 'test', modelId: 'm' });
+  const guest = world.hostStore.get(`session-agent-${info.id}`);
+  t.is(await E(guest).lookup('notebook'), firstGrant);
+  const firstPrompt = await world.promptOf(parent);
+  t.true(firstPrompt.includes('Standing instruction alpha.'));
+  t.true(firstPrompt.includes('Your replies are spoken aloud'));
+  config = await E(world.factory).savePreset(
+    harden({
+      ...custom,
+      instructions: 'Standing instruction beta.',
+      endowments: [
+        {
+          petName: 'new-notebook',
+          sourcePath: ['new-notes'],
+          value: secondGrant,
+        },
+      ],
+    }),
+    config.revision,
+  );
+  const later = await E(world.factory).createSession(
+    harden({ presetId: custom.id }),
+  );
+  t.true((await world.promptOf(later)).includes('Standing instruction beta.'));
+  const laterGuest = world.hostStore.get(
+    `session-agent-${(await E(later).getInfo()).id}`,
+  );
+  t.is(await E(laterGuest).lookup('new-notebook'), secondGrant);
+  t.false(await E(laterGuest).has('notebook'));
+  config = await E(world.factory).setVoicePreset('voice', config.revision);
+  await E(world.factory).deletePreset(custom.id, config.revision);
+  const revived = await world.revive();
+  const old = await E(revived).getSession(info.id);
+  world.duringNextTurn(async tools => {
+    await E(tools).execute('spawnSubagent', harden({ name: 'helper' }));
+  });
+  t.is(await world.promptOf(old), firstPrompt);
+  const child = (await E(revived).listSessions()).find(
+    session => session.parentSessionId === info.id,
+  );
+  t.truthy(child);
+  const childGuest = world.hostStore.get(`session-agent-${child.id}`);
+  t.is(await E(childGuest).lookup('notebook'), firstGrant);
+  t.false(await E(childGuest).has('new-notebook'));
+  t.false(await E(guest).has('new-notebook'));
+});
+
+test('preset model defaults are overridden only by explicit session identity', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  const config = await E(world.factory).getPresetConfiguration();
+  const general = config.presets.find(preset => preset.id === 'general');
+  await E(world.factory).savePreset(
+    harden({ ...general, backendId: 'missing', modelId: 'missing' }),
+    config.revision,
+  );
+  await t.throwsAsync(
+    E(world.factory).createSession(harden({ presetId: 'general' })),
+    { message: /Unknown hosted backend/ },
+  );
+  t.like(
+    await E(await E(world.factory).createSession(hosted)).getInfo(),
+    hosted,
+  );
+  await t.throwsAsync(
+    E(world.factory).createSession(harden({ presetId: 'deleted', ...hosted })),
+    { message: /Unknown preset/ },
+  );
+});

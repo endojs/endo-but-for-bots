@@ -491,3 +491,23 @@ test('a delegated session keeps the operator prompt and appends the parent’s',
   t.true(withoutRole.includes('recursively fact-check'));
   t.true(delegated.includes('recursively fact-check'));
 });
+
+test('custom preset instructions describe only selected template objects', t => {
+  for (const presetId of ['full-control', 'machine-admin', 'new-project']) {
+    const prompt = composePresetPrompt({ presetId, objects: [] });
+    t.notRegex(
+      prompt,
+      /You hold full control|petstore already contains a writable|## Machine/,
+    );
+  }
+  const prompt = composePresetPrompt({
+    presetId: 'general',
+    objects: [
+      { kind: 'git-workspace', petName: 'workspace' },
+      { kind: 'development-environment', petName: 'shell' },
+    ],
+  });
+  t.regex(prompt, /Development Shell/);
+  t.regex(prompt, /HTTP_PROXY/);
+  t.notRegex(prompt, /You hold full control/);
+});

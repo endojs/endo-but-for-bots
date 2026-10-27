@@ -74,7 +74,6 @@ import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
 import {
-  DEVELOPMENT_PRESET_ID,
   DEVELOPMENT_BACKENDS,
   DEVELOPMENT_NETWORK_POLICIES,
   lookupEnvironmentAdmin,
@@ -114,6 +113,12 @@ import { boundToolOutput, MAX_TOOL_OUTPUT_CHARS } from './src/tool-output.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 import { DEFAULT_TRANSCRIPT_LIMITS } from './src/journal-transcript.js';
 import { readFlootWorkloadConfig } from './src/workload-config.js';
+import {
+  BUILTIN_PRESETS,
+  makePresetCatalog,
+  sessionPreset,
+  presetHasShell,
+} from './src/preset-catalog.js';
 
 // Direct-provider turns share Fae's finite runaway-loop guard. A round is one
 // model response and all of its tool results, not one individual tool call.
@@ -205,6 +210,12 @@ const makeBufferingWriter = () => {
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen(M.record()).returns(M.remotable()),
+  createAssistantSession: M.callWhen().returns(M.remotable()),
+  getPresetConfiguration: M.callWhen().returns(M.record()),
+  savePreset: M.callWhen(M.record(), M.string()).returns(M.record()),
+  deletePreset: M.callWhen(M.string(), M.string()).returns(M.record()),
+  resetPreset: M.callWhen(M.string(), M.string()).returns(M.record()),
+  setVoicePreset: M.callWhen(M.string(), M.string()).returns(M.record()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   watchSessions: M.callWhen().returns(M.remotable()),
   watchAccounts: M.callWhen().returns(M.remotable()),
@@ -291,76 +302,14 @@ const FlootSessionInterface = M.interface('FlootSession', {
 // first time the session's agent is built. Provisioned objects are referenced
 // by the session guest. The development environment additionally keeps its
 // private admin rooted on the factory host for explicit native storage cleanup.
-const PRESETS = [
-  {
-    id: DEVELOPMENT_PRESET_ID,
-    title: 'Development environment',
-    description:
-      'A git workspace and isolated POSIX Shell with a persistent home for installed tools. Native storage cleanup is manual on its private admin.',
-    objects: [
-      { kind: 'git-workspace', petName: 'workspace' },
-      { kind: 'development-environment', petName: 'shell' },
-    ],
-  },
-  {
-    id: 'general',
-    title: 'General assistant',
-    description: 'A blank session with no project workspace.',
-    objects: [],
-  },
-  {
-    id: 'new-project',
-    title: 'New project',
-    description:
-      'Start a project with a writable, git-backed workspace ready to populate.',
-    objects: [{ kind: 'git-workspace', petName: 'workspace' }],
-  },
-  {
-    id: 'full-control',
-    title: 'Full Endo control',
-    description:
-      'Full control of the Endo daemon via an "endo" host reference. High access — handle with care.',
-    objects: [
-      { kind: 'host-powers', petName: 'endo' },
-      { kind: 'code-mount', petName: 'endo-src', required: false },
-    ],
-  },
-  {
-    id: 'machine-admin',
-    title: 'Machine admin (NixOS)',
-    description:
-      "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
-    objects: [
-      { kind: 'host-powers', petName: 'endo' },
-      { kind: 'code-mount', petName: 'endo-src', required: false },
-      // The raw caplet: the session is not a machine admin without it.
-      { kind: 'nixos-admin', petName: 'nixos', grantName: 'nixos-admin' },
-      // The deploy connections: optional, so the session still opens on a
-      // host without the workflow service — its prompt then reports that
-      // deployment is unavailable rather than falling back to the caplet.
-      {
-        kind: 'workflow-factory',
-        petName: 'deploy-endo',
-        grantName: 'deploy-endo-factory',
-        required: false,
-      },
-      {
-        kind: 'workflow-factory',
-        petName: 'change-nixos',
-        grantName: 'change-nixos-factory',
-        required: false,
-      },
-    ],
-  },
-];
 // How many distinct serving models one turn records; a router rarely uses
 // more than a handful, and the record is for reading.
 const MAX_SERVED_BY = 16;
 const DEFAULT_PRESET_ID = 'general';
 export const getPreset = id =>
-  PRESETS.find(p => p.id === id) ||
-  /** @type {(typeof PRESETS)[number]} */ (
-    PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
+  BUILTIN_PRESETS.find(p => p.id === id) ||
+  /** @type {(typeof BUILTIN_PRESETS)[number]} */ (
+    BUILTIN_PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
   );
 harden(getPreset);
 
@@ -2441,6 +2390,7 @@ export const make = async (
   // mail-only Handle after a restart, leaving provideGuest/locate unavailable on
   // revived sessions). `powers` here is the factory's own host.
   const getHost = () => powers;
+  const presetCatalog = makePresetCatalog(powers);
 
   // The provider config (backend kind, default model, auth token) lives behind
   // the `llm-provider` capability handle. Resolve it once and cache it; every
@@ -3000,14 +2950,13 @@ export const make = async (
    *
    * @param {string} id
    * @param {any} sessionGuest
-   * @param {{ id: string, objects: Array<{ kind: string, petName: string }> }} preset
+   * @param {{ id: string, templateId: string, objects: Array<{ kind: string, petName: string }> }} preset
    * @returns {Promise<Map<string, any>>}
    */
   const buildExtraTools = async (id, sessionGuest, preset) => {
-    const tools =
-      preset.id === DEVELOPMENT_PRESET_ID
-        ? makeDevelopmentTools(await E(sessionGuest).lookup('shell'))
-        : new Map();
+    const tools = presetHasShell(preset)
+      ? makeDevelopmentTools(await E(sessionGuest).lookup('shell'))
+      : new Map();
     // A fresh agent replaces the tool instance and nothing else: the
     // publication belongs to the session, is recorded with it, and is served
     // by the asset server whether or not any tool instance exists. It ends
@@ -3364,7 +3313,7 @@ export const make = async (
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, userInitiated?: boolean, presetId?: string, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, userInitiated?: boolean, presetId?: string, presetSnapshot?: any, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3795,8 +3744,7 @@ export const make = async (
     else if (stopFences.has(id)) state = 'stopping';
     return harden({
       state,
-      supported:
-        isHostedSession(entry) || entry?.presetId === DEVELOPMENT_PRESET_ID,
+      supported: isHostedSession(entry) || presetHasShell(sessionPreset(entry)),
     });
   };
   const executionState = async id =>
@@ -3818,7 +3766,7 @@ export const make = async (
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
       const hosted = isHostedSession(entry);
-      if (!hosted && entry.presetId !== DEVELOPMENT_PRESET_ID) {
+      if (!hosted && !presetHasShell(sessionPreset(entry))) {
         stopFences.delete(id);
         throw Error('This backend has no hosted sandbox to stop');
       }
@@ -3953,7 +3901,7 @@ export const make = async (
   const pendingRebinds = new Map();
   const developmentAdmin = async id => {
     const entry = (await loadRegistry()).find(item => item.id === id);
-    return entry?.presetId === DEVELOPMENT_PRESET_ID
+    return presetHasShell(sessionPreset(entry))
       ? lookupEnvironmentAdmin(getHost(), id, { checkGuest: true })
       : undefined;
   };
@@ -3972,7 +3920,7 @@ export const make = async (
           supported: async () => {
             const entry = (await loadRegistry()).find(item => item.id === id);
             if (!entry) throw Error('Unknown Floot session');
-            if (entry.presetId === DEVELOPMENT_PRESET_ID)
+            if (presetHasShell(sessionPreset(entry)))
               return DEVELOPMENT_NETWORK_POLICIES;
             if (!isHostedSession(entry)) return [];
             return (
@@ -4114,15 +4062,15 @@ export const make = async (
         // Resolve the session's preset to pick its system prompt and provision
         // its objects. The prompt was snapshotted into the registry at creation
         // (so catalog edits don't retroactively change live sessions); the
-        // object set is read from the catalog by id (objects are provisioned
-        // once and idempotency makes re-reads harmless).
+        // authority recipe is also snapshotted: edits never grant new powers
+        // to a retained session or its later delegates.
         await loadRegistry();
         const entry = (registry || []).find(s => s.id === id);
         const suspended =
           stopFences.has(id) ||
           (entry?.executionState && entry.executionState !== 'running');
         if (suspended && !observeOnly) assertSessionAdmission(id);
-        const preset = getPreset(entry?.presetId || DEFAULT_PRESET_ID);
+        const preset = sessionPreset(entry);
         const sessionPrompt = entry.systemPrompt;
         await provisionPresetObjects(
           host,
@@ -4137,6 +4085,13 @@ export const make = async (
             shellOutputBytes: workload.shellOutputBytes,
           },
         );
+        for (const endowment of preset.endowments) {
+          if (!(await E(sessionGuest).has(endowment.petName)))
+            await E(sessionGuest).storeValue(
+              endowment.value,
+              endowment.petName,
+            );
+        }
         // Session-scoped extra tools (the bounded workspace publisher for a
         // session with a git workspace). Threaded into the tool registry, so
         // the API tool loop and a hosted backend's pinned tool set see the
@@ -4213,7 +4168,7 @@ export const make = async (
             );
           }
         } catch (error) {
-          if (preset.id === DEVELOPMENT_PRESET_ID) throw error;
+          if (presetHasShell(preset)) throw error;
           console.error(
             `[floot-factory] could not build extra tools for session ${id}:`,
             error instanceof Error ? error.message : String(error),
@@ -4422,7 +4377,7 @@ export const make = async (
             contextLength:
               entry.inferenceRecipe?.contextLength ?? entry.contextLength,
             forceCompaction: env?.FLOOT_FORCE_COMPACTION === 'true',
-            ...(preset.id === DEVELOPMENT_PRESET_ID
+            ...(presetHasShell(preset)
               ? {
                   stopEnvironment: async () => {
                     const admin = await lookupEnvironmentAdmin(host, id, {
@@ -5194,7 +5149,11 @@ export const make = async (
    * @param inheritedInferenceRecipe
    * @returns {Promise<string>} the new session id
    */
-  const provisionSession = async (options, inheritedInferenceRecipe) => {
+  const provisionSession = async (
+    options,
+    inheritedInferenceRecipe = undefined,
+    inheritedPreset = undefined,
+  ) => {
     if (
       options.systemPrompt !== undefined &&
       (typeof options.systemPrompt !== 'string' ||
@@ -5214,8 +5173,27 @@ export const make = async (
       throw Error('createSession userInitiated must be a boolean');
     }
     await loadRegistry();
-    const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
-    if (preset.id === DEVELOPMENT_PRESET_ID) {
+    const preset =
+      inheritedPreset ||
+      (await presetCatalog.get(options.presetId || DEFAULT_PRESET_ID));
+    if (
+      options.backendId === undefined &&
+      options.modelId === undefined &&
+      preset.backendId
+    ) {
+      options = {
+        backendId: preset.backendId,
+        modelId: preset.modelId,
+        ...(preset.reasoningEffort
+          ? { reasoningEffort: preset.reasoningEffort }
+          : {}),
+        ...options,
+      };
+    }
+    if (options.networkPolicy === undefined && preset.networkPolicy) {
+      options = { ...options, networkPolicy: preset.networkPolicy };
+    }
+    if (presetHasShell(preset)) {
       if (!DEVELOPMENT_BACKENDS.includes(options.backendId || 'provider'))
         throw Error(
           'The development preset uses Fae inference; hosted CLI backends already own their environment',
@@ -5383,14 +5361,14 @@ export const make = async (
     }
     if (
       !isHostedSession({ backendId }) &&
-      preset.id !== DEVELOPMENT_PRESET_ID &&
+      !presetHasShell(preset) &&
       options.networkPolicy !== undefined
     ) {
       throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
-    // a live session. The object set is re-read from the catalog by id in
-    // getAgent (objects are provisioned once, idempotently). A model is pinned
+    // a live session. The object set and explicit capabilities are captured
+    // with it for revival and delegation. A model is pinned
     // only when the caller chose a known one; otherwise the session follows
     // the factory's configured default model.
     //
@@ -5406,10 +5384,16 @@ export const make = async (
       containerMounts: isHostedSession({ backendId }),
     });
     const sessionPrompt = composeSessionSystemPrompt({
-      presetPrompt: composePresetPrompt({
-        presetId: preset.id,
-        context: promptContext,
-      }),
+      presetPrompt: [
+        composePresetPrompt({
+          presetId: preset.templateId,
+          objects: preset.objects,
+          context: promptContext,
+        }),
+        preset.instructions,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
       requestedPrompt: options.systemPrompt,
       delegated,
     });
@@ -5422,6 +5406,7 @@ export const make = async (
       createdAt: Date.now(),
       userInitiated: !delegated && options.userInitiated === true,
       presetId: preset.id,
+      presetSnapshot: preset,
       systemPrompt: sessionPrompt,
       // Creation context is descriptive metadata, not a migration recipe.
       promptContext,
@@ -5633,12 +5618,14 @@ export const make = async (
               title: `${parent?.title || 'Session'} / ${name}`,
               presetId: parent?.presetId,
               ...inheritedModel,
+              networkPolicy: await networkController(parentId).forTurn(),
               ...(childPrompt ? { systemPrompt: childPrompt } : {}),
               parentSessionId: parentId,
               subagentName: name,
               subagentDepth: depth,
             },
             parent.inferenceRecipe,
+            sessionPreset(parent),
           );
           try {
             reservation.assertParent();
@@ -5872,6 +5859,7 @@ export const make = async (
         Promise.all([
           registryWrite,
           voicePrefsWrite,
+          presetCatalog.whenIdle(),
           ...publishChains.values(),
         ]),
       );
@@ -5901,6 +5889,32 @@ export const make = async (
      * @param {Record<string, any>} options
      * @returns {Promise<object>} an opaque session facet
      */
+    async createAssistantSession() {
+      const preset = await presetCatalog.voice();
+      return getFacet(
+        await provisionSession(
+          { presetId: preset.id, spoken: true, userInitiated: true },
+          undefined,
+          preset,
+        ),
+      );
+    },
+    async getPresetConfiguration() {
+      return presetCatalog.read();
+    },
+    async savePreset(preset, revision) {
+      return presetCatalog.save(preset, revision);
+    },
+    async deletePreset(id, revision) {
+      return presetCatalog.remove(id, revision);
+    },
+    async resetPreset(id, revision) {
+      return presetCatalog.reset(id, revision);
+    },
+    async setVoicePreset(id, revision) {
+      return presetCatalog.selectVoice(id, revision);
+    },
+
     async createSession(options) {
       // The delegation fields are minted by the spawner, never accepted from a
       // caller: a session that claimed another's parentage would join that
@@ -5972,19 +5986,36 @@ export const make = async (
     async listPresets() {
       const configured = await E(getHost()).has('environment-runner');
       return harden(
-        PRESETS.filter(
-          preset => preset.id !== DEVELOPMENT_PRESET_ID || configured,
-        ).map(({ id, title, description }) => ({
-          id,
-          title,
-          description,
-          ...(id === DEVELOPMENT_PRESET_ID
-            ? {
-                backendIds: DEVELOPMENT_BACKENDS,
-                supportedNetworkPolicies: DEVELOPMENT_NETWORK_POLICIES,
-              }
-            : {}),
-        })),
+        (await presetCatalog.read()).presets
+          .filter(preset => !presetHasShell(preset) || configured)
+          .map(
+            ({
+              id,
+              title,
+              description,
+              templateId,
+              backendId,
+              modelId,
+              reasoningEffort,
+              networkPolicy,
+              objects,
+            }) => ({
+              id,
+              title,
+              description,
+              templateId,
+              backendId,
+              modelId,
+              reasoningEffort,
+              networkPolicy,
+              ...(presetHasShell({ objects })
+                ? {
+                    backendIds: DEVELOPMENT_BACKENDS,
+                    supportedNetworkPolicies: DEVELOPMENT_NETWORK_POLICIES,
+                  }
+                : {}),
+            }),
+          ),
       );
     },
 
@@ -6189,15 +6220,27 @@ export const make = async (
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken,userInitiated}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); setSessionUserInitiated(id,boolean); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken,userInitiated}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); createAssistantSession(); getPresetConfiguration()/savePreset(preset,revision)/deletePreset(id,revision)/resetPreset(id,revision)/setVoicePreset(id,revision); getSession(id); renameSession(id,title); deleteSession(id); setSessionUserInitiated(id,boolean); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
       }
       const docs = {
         createSession:
-          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), spoken, and userInitiated (defaults to false; the UI passes true for conversations the user starts). The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", enforced by the preset’s attached Podman shell or a hosted backend advertising policy controls; omission uses the preset default, otherwise off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), spoken, and userInitiated (defaults to false; the UI passes true for conversations the user starts). The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:
           'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, subscription, lifecycle, activity, pendingCount}] for all sessions, including workflow participants and subagents. `userInitiated` is false for internal sessions; the UI lists only user-initiated roots. `subscription` is "auto" or the id the session was pinned to. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
+        createAssistantSession:
+          'createAssistantSession() — Create a fresh spoken, user-initiated session from the factory’s selected voice preset, including its model and endowment defaults. No fallback to another preset on failure.',
+        getPresetConfiguration:
+          'getPresetConfiguration() — Return {revision, voicePresetId, presets}. Presets include templateId, instructions, model defaults, generated objects, and explicitly granted endowments. Treat returned capabilities as authority, not display data.',
+        savePreset:
+          'savePreset(preset, revision) — Create or edit a preset using the last-read revision. Additional endowments are explicit {petName, sourcePath, value} object capabilities. Changes affect only future sessions and never rewrite existing sessions or their delegated authority. Stale revisions fail; reload before retrying.',
+        deletePreset:
+          'deletePreset(id, revision) — Delete a custom preset. Built-ins and the selected voice preset cannot be deleted. Existing sessions keep their snapshots.',
+        resetPreset:
+          'resetPreset(id, revision) — Restore a built-in preset for future sessions.',
+        setVoicePreset:
+          'setVoicePreset(id, revision) — Select the preset used by Android assistant invocations across devices connected to this factory.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:

@@ -178,7 +178,7 @@ test.serial(
     t.is(daemon.turns[0].text, 'hello assistant');
     t.is(daemon.created.length, 1);
     t.like(daemon.created[0][0], {
-      presetId: 'general',
+      presetId: 'voice',
       backendId: 'fae-codex',
       modelId: 'gpt-5.6-sol',
       spoken: true,
@@ -343,3 +343,27 @@ for (const mode of ['detach', 'suspend']) {
     },
   );
 }
+
+test.serial(
+  'assistant invocation uses the configured preset and model',
+  async t => {
+    const h = setup(t);
+    const daemon = makeFakeDaemon({ count: 1 });
+    daemon.setAssistantOptions({
+      presetId: 'custom-voice',
+      backendId: 'provider',
+      modelId: 'custom/model',
+      spoken: true,
+      userInitiated: true,
+    });
+    h.mount(daemon);
+    h.invoke('custom-preset');
+    await waitFor(() => daemon.created.length === 1);
+    t.like(daemon.created[0][0], {
+      presetId: 'custom-voice',
+      backendId: 'provider',
+      modelId: 'custom/model',
+    });
+    t.is(h.captures(), 1);
+  },
+);
