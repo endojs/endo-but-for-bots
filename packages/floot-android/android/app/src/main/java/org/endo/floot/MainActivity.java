@@ -31,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 public final class MainActivity extends Activity {
     private static final String ORIGIN = "https://appassets.androidplatform.net";
     private WebView web;
+    private String assistantInvocation;
     private PermissionRequest microphone;
     private Connection active;
     private String selectedOrigin = ORIGIN;
@@ -106,6 +107,8 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        assistantInvocation = saved != null ? saved.getString("assistantInvocation")
+            : assistantInvocationFrom(getIntent());
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(getColor(R.color.surface));
@@ -140,6 +143,7 @@ public final class MainActivity extends Activity {
         WebViewAssetLoader assets = new WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this)).build();
         web.setWebViewClient(new WebViewClientCompat() {
+            @Override public void onPageFinished(WebView view, String url) { deliverAssistantInvocation(); }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, androidx.webkit.WebResourceErrorCompat error) {
                 Diagnostics.record(MainActivity.this, "web load", error.getErrorCode() + ": " + error.getDescription());
             }
@@ -186,6 +190,21 @@ public final class MainActivity extends Activity {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             Toast.makeText(this, "Update Android System WebView to run Floot", Toast.LENGTH_LONG).show(); return;
         }
+        // This bridge can only acknowledge a pending launch; it grants no Endo powers.
+        WebViewCompat.addWebMessageListener(web, "AndroidAssistant", Set.of("*"),
+            (view, message, origin, mainFrame, reply) -> {
+                if (!mainFrame || !ConnectionUrl.matchesOrigin(origin.toString(), selectedOrigin)) return;
+                try {
+                    JSONObject result = new JSONObject(message.getData());
+                    if (assistantInvocation == null || !assistantInvocation.equals(result.getString("id"))) return;
+                    assistantInvocation = null;
+                    getIntent().removeExtra("assistantInvocation");
+                    getIntent().setAction(Intent.ACTION_MAIN);
+                    String error = result.optString("error");
+                    Diagnostics.record(this, "assistant launch", error.isEmpty() ? "Launch accepted by Floot UI" : error);
+                    if (!error.isEmpty()) Toast.makeText(this, error, Toast.LENGTH_LONG).show();
+                } catch (Exception error) { Diagnostics.record(this, "assistant launch", error.toString()); }
+            });
         WebViewCompat.addWebMessageListener(web, "AndroidEndo", Set.of(ORIGIN),
             (view, message, origin, mainFrame, reply) -> {
                 if (!mainFrame || !ORIGIN.equals(selectedOrigin) || !ConnectionUrl.matchesOrigin(origin.toString(), ORIGIN)) return;
@@ -211,6 +230,37 @@ public final class MainActivity extends Activity {
             catch (IllegalArgumentException ignored) { selectedOrigin = ORIGIN; }
         }
         web.loadUrl(start);
+    }
+    private String assistantInvocationFrom(Intent intent) {
+        String id = AssistantInvocation.take(intent.getStringExtra("assistantInvocation"));
+        // Exported ACTION_ASSIST intents (Android 10/11 fallback) are forgeable.
+        // They open the UI only; automatic recording requires the protected
+        // VoiceInteractionSession's single-use handoff.
+        return id;
+    }
+    private void deliverAssistantInvocation() {
+        if (web == null || assistantInvocation == null || !hasWindowFocus()) return;
+        if (!ConnectionUrl.matchesOrigin(web.getUrl(), selectedOrigin)) return;
+        // The assistant gesture authorizes immediate recording and spoken replies.
+        web.getSettings().setMediaPlaybackRequiresUserGesture(false);
+        String request = "{id:" + JSONObject.quote(assistantInvocation) + "}";
+        web.evaluateJavascript("window.endoAssistantInvocation=" + request
+            + ";window.dispatchEvent(new Event('endo-assistant'));", null);
+    }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String id = assistantInvocationFrom(intent);
+        if (id != null) assistantInvocation = id;
+        deliverAssistantInvocation();
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) deliverAssistantInvocation();
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putString("assistantInvocation", assistantInvocation);
+        super.onSaveInstanceState(state);
     }
     private boolean isAssistantSelected() {
         RoleManager roles = getSystemService(RoleManager.class);
@@ -241,7 +291,7 @@ public final class MainActivity extends Activity {
         android.app.AlertDialog.Builder dialog = new android.app.AlertDialog.Builder(this)
             .setTitle(selected ? "Floot is your assistant" : "Floot was not selected")
             .setMessage(selected
-                ? "Your assistant shortcut opens Floot. On Samsung, set Settings → Advanced features → Side button → Long press to Digital assistant. Tap the mic in Floot to start listening."
+                ? "Your assistant shortcut opens Floot. On Samsung, set Settings → Advanced features → Side button → Long press to Digital assistant. On Android 12 or newer, the shortcut starts a new General Assistant session with Fae Codex 5.6 Sol and listens immediately. On older Android versions, tap the mic in Floot."
                 : "Android kept your current assistant. Choose Floot in Settings → Apps → Default apps → Digital assistant app.")
             .setNegativeButton("Close", null);
         if (!selected) dialog.setPositiveButton("Open assistant settings", (d, which) -> openAssistantSettings());
@@ -342,6 +392,7 @@ public final class MainActivity extends Activity {
         if (web != null) {
             web.onResume();
             web.evaluateJavascript("window.dispatchEvent(new Event('endo-resume'))", null);
+            deliverAssistantInvocation();
         }
     }
     @Override protected void onDestroy() {

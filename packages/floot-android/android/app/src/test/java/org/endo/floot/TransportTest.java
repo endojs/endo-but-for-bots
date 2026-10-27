@@ -6,6 +6,17 @@ import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
 public class TransportTest {
+    @Test public void assistantInvocationRequiresIssuedSingleUseHandoff() {
+        assertNull(AssistantInvocation.take("forged"));
+        String first = AssistantInvocation.issue();
+        assertEquals(first, AssistantInvocation.take(first));
+        assertNull(AssistantInvocation.take(first));
+        String superseded = AssistantInvocation.issue();
+        String current = AssistantInvocation.issue();
+        assertNull(AssistantInvocation.take(superseded));
+        assertEquals(current, AssistantInvocation.take(current));
+    }
+
     @Test public void assistantMetadataMeetsAndroidParserContract() throws Exception {
         javax.xml.parsers.DocumentBuilder parser = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder();
         org.w3c.dom.Element metadata = parser.parse(new File("src/main/res/xml/voice_interaction.xml")).getDocumentElement();

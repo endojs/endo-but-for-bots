@@ -135,6 +135,8 @@ export const makeFakeDaemon = ({
   const cancelledTurns = [];
   let nextId = count;
   let failCreation = false;
+  /** @type {(() => Promise<void>) | null} */
+  let creationGate = null;
   // Knobs a test turns to put the daemon in an awkward state.
   let transcriptDelayMs = 0;
   let transcriptFailures = 0;
@@ -422,7 +424,8 @@ export const makeFakeDaemon = ({
       parts.get(id)?.watch.end();
       listWatch.touch();
     },
-    createSession: (...args) => {
+    createSession: async (...args) => {
+      if (creationGate) await creationGate();
       if (failCreation) throw Error('creation unavailable');
       creations.push(args);
       const id = `s${nextId}`;
@@ -438,6 +441,10 @@ export const makeFakeDaemon = ({
     turns,
     /** The arguments of every createSession call that got as far as creating. */
     created: creations,
+    /** @param {(() => Promise<void>) | null} gate */
+    setCreationGate: gate => {
+      creationGate = gate;
+    },
     deleted,
     cancelledTurns,
     store,

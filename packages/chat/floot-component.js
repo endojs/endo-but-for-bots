@@ -13,6 +13,12 @@ import {
   makeSessionDrafts,
   makeSubmissionClient,
 } from './floot-submission-client.js';
+import {
+  ASSISTANT_SESSION,
+  pendingAssistantInvocation,
+  acknowledgeAssistantInvocation,
+  claimAssistantInvocation,
+} from './assistant-launch.js';
 import { exportFlootObjects } from './floot-transfer.js';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
@@ -627,6 +633,11 @@ export const flootComponent = (
   let sessions = [];
   /** @type {string | null} */
   let activeSessionId = null;
+  let activeAssistantId = '';
+  let assistantRequested = false;
+  /** @type {Promise<void> | undefined} */
+  let assistantReady;
+  let assistantPreparing = false;
   /** @type {Map<string, 'idle' | 'streaming' | 'error'>} */
   const sessionStatus = new Map();
 
@@ -772,6 +783,7 @@ export const flootComponent = (
    * @param {string} [subscription] one of the backend's subscriptions; absent
    *   or `auto` leaves the choice to the backend
    * @param {string} [networkPolicy]
+   * @param {string} [assistantId]
    */
   const createSession = async (
     title,
@@ -780,8 +792,11 @@ export const flootComponent = (
     reasoningEffort,
     subscription,
     networkPolicy,
+    assistantId = '',
   ) => {
-    const selected = models.find(candidate => candidate.id === model);
+    const selected = assistantId
+      ? ASSISTANT_SESSION
+      : models.find(candidate => candidate.id === model);
     if (
       model &&
       (!selected ||
@@ -835,6 +850,10 @@ export const flootComponent = (
       pending: normalizePending(null),
       displayTurn: null,
     };
+    // A later invocation or unmount owns the UI now; still let the session
+    // watcher expose any successfully created session for inspection.
+    if (assistantId && (cancelled || activeAssistantId !== assistantId))
+      return session;
     // The session list's own subscription reports the new session too, and
     // usually first (`getInfo` above is a second round trip). There must be
     // one record per session: adopt what this call learned into that one.
@@ -1612,6 +1631,10 @@ export const flootComponent = (
   // Hand a message to the daemon. It starts at once if the session is idle and
   // otherwise waits its turn there — whether or not this page stays open.
   const submit = (/** @type {string} */ raw) => {
+    if (assistantPreparing) {
+      setStatus('Starting your assistant session…');
+      return;
+    }
     if (execution.getState().blocked) {
       setStatus(
         'Session stopped or stopping. Inspect Settings before resuming.',
@@ -1886,6 +1909,7 @@ export const flootComponent = (
   // ── Mic input (optional) ─────────────────────────────────────────────────────
   let micActive = false; // mic open and listening
   let speaking = false; // currently inside a detected utterance
+  let voiceCommitId = 0;
   let calibrating = false;
   // Actionable guidance shown when the browser/OS denies mic access (distinct
   // from the transient status line, since it needs to persist until retried).
@@ -1909,6 +1933,7 @@ export const flootComponent = (
   let audioSuspended = false;
   const audioAllowed = () =>
     !cancelled &&
+    $parent.isConnected &&
     !audioSuspended &&
     $parent.ownerDocument.visibilityState !== 'hidden';
   let micInRate = 16_000;
@@ -1967,7 +1992,14 @@ export const flootComponent = (
       if (audioAllowed() && requestId === micRequestId)
         setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
     } finally {
-      if (ownChannel === channel) channel = null;
+      if (ownChannel === channel) {
+        // A recognizer may finish before VAD silence (for example its own
+        // endpoint detector fired). Close that utterance before arming a send.
+        channel.end();
+        channel = null;
+        speaking = false;
+        silenceStart = 0;
+      }
     }
     if (!audioAllowed() || requestId !== micRequestId) return;
     const text = filterTranscript(last);
@@ -2002,15 +2034,33 @@ export const flootComponent = (
     notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
+    voiceCommitId += 1;
+    const commitId = voiceCommitId;
     resumeTimer = window.setTimeout(() => {
       resumeTimer = 0;
-      pendingUtterance = '';
       // The buffer has been sitting in the compose box as ordinary editable
       // text for the whole grace window, so the box IS the buffer: a correction
       // typed there is what sends, and clearing it cancels the send. Sending
       // what was recognized instead would silently discard the edit.
-      const full = inputText.trim();
-      if (full && micActive && audioAllowed()) submit(full);
+      const requestId = micRequestId;
+      // Transcription starts while provisioning runs, but a finalized utterance
+      // may only go to the new session, never the previously selected one.
+      void Promise.resolve(assistantReady)
+        .then(() => {
+          const full = inputText.trim();
+          if (
+            full &&
+            micActive &&
+            audioAllowed() &&
+            requestId === micRequestId &&
+            commitId === voiceCommitId &&
+            !speaking
+          ) {
+            pendingUtterance = '';
+            submit(full);
+          }
+        })
+        .catch(() => {});
     }, VAD.RESUME_GRACE_MS);
   };
 
@@ -2054,6 +2104,7 @@ export const flootComponent = (
       resumeTimer = 0;
     }
     speaking = true;
+    voiceCommitId += 1;
     // Never let a reply talk over a live recording: silence any TTS still
     // playing or scheduled ahead.
     stopTts();
@@ -2106,6 +2157,10 @@ export const flootComponent = (
   // noise-floor drift, onset/barge-in, and end-of-speech silence detection.
   const vadLoop = () => {
     if (!micActive) return;
+    if (!audioAllowed()) {
+      stopAudio();
+      return;
+    }
     const now = Date.now();
     const vol = computeRms();
 
@@ -2163,7 +2218,7 @@ export const flootComponent = (
     rafId = requestAnimationFrame(vadLoop);
   };
 
-  const startMic = async () => {
+  const startMic = async (immediate = false) => {
     if (micActive || !audioServer || !audioAllowed()) return;
     // Preflight the two environment failures that deny the mic *without* a
     // browser prompt, so the user gets an explanation instead of silence:
@@ -2191,7 +2246,7 @@ export const flootComponent = (
     micRequestId += 1;
     const requestId = micRequestId;
     micActive = true;
-    calibrating = true;
+    calibrating = !immediate;
     calibStart = Date.now();
     calibSamples = [];
     noiseFloor = 0;
@@ -2237,6 +2292,14 @@ export const flootComponent = (
       source.connect(analyser);
       source.connect(processor);
       processor.connect(audioCtx.destination);
+      if (immediate) {
+        // Do not discard the first second of an assistant invocation as noise
+        // calibration. Open transcription before the first PCM callback.
+        beginUtterance();
+        setStatus(
+          assistantPreparing ? 'Listening · starting assistant…' : 'listening…',
+        );
+      }
       rafId = requestAnimationFrame(vadLoop);
     } catch (err) {
       if (!audioAllowed() || requestId !== micRequestId) return;
@@ -2421,6 +2484,75 @@ export const flootComponent = (
     stopTts();
     void ttsCtx?.suspend().catch(() => {});
   };
+  const launchAssistant = async () => {
+    const request = pendingAssistantInvocation();
+    if (!request || !audioAllowed() || !hasMic) return;
+    if (activeAssistantId === request.id) return;
+    activeAssistantId = request.id;
+    try {
+      /** @type {Promise<void> | undefined} */
+      let ready;
+      const claimed = await claimAssistantInvocation(
+        localStorage,
+        navigator.locks,
+        request.id,
+        {
+          isCurrent: () => audioAllowed() && activeAssistantId === request.id,
+          start: () => {
+            assistantRequested = true;
+            stopAudio();
+            assistantPreparing = true;
+            // Use the explicit identity without waiting for model discovery.
+            // Start creation and capture in the same admitted lock turn.
+            ready = createSession(
+              undefined,
+              ASSISTANT_SESSION.presetId,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              request.id,
+            ).then(() => {
+              if (cancelled || activeAssistantId !== request.id) return;
+              assistantPreparing = false;
+              const transcript = inputText;
+              openActiveSession();
+              inputText = transcript;
+              setStatus(micActive ? 'listening…' : 'Ready.');
+            });
+            assistantReady = ready;
+            void startMic(true);
+          },
+        },
+      );
+      if (!claimed && (!audioAllowed() || activeAssistantId !== request.id)) {
+        if (activeAssistantId === request.id) activeAssistantId = '';
+        return;
+      }
+      acknowledgeAssistantInvocation(request.id);
+      await ready;
+    } catch (error) {
+      console.error('[floot assistant setup]', error);
+      acknowledgeAssistantInvocation(
+        request.id,
+        `Assistant setup failed: ${/** @type {Error} */ (error).message}`,
+      );
+      if (cancelled || activeAssistantId !== request.id) return;
+      assistantPreparing = false;
+      assistantReady = undefined;
+      const transcript = inputText;
+      stopAudio();
+      inputText = transcript;
+      setStatus(
+        `Assistant setup failed: ${/** @type {Error} */ (error).message}`,
+      );
+    }
+  };
+  const onAssistantInvocation = () => {
+    void launchAssistant();
+  };
+  window.addEventListener('endo-assistant', onAssistantInvocation);
+
   const suspendAudio = () => {
     audioSuspended = true;
     stopAudio();
@@ -3332,21 +3464,23 @@ export const flootComponent = (
       ).length;
       // No session is made just so there is one: the first is the person's
       // to start, with the backend and model they choose.
-      activeSessionId = sessions.length
-        ? (
-            sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
-            sessions[0]
-          ).id
-        : null;
-      // Say so rather than reporting a clean "Ready." over sessions the
-      // factory could not revive; they are still listed by the factory and an
-      // operator has to deal with them.
-      setStatus(
-        strandedCount > 0
-          ? `Ready. ${strandedCount} session(s) could not be recovered.`
-          : readyStatus(),
-      );
-      openActiveSession();
+      if (!assistantRequested) {
+        activeSessionId = sessions.length
+          ? (
+              sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
+              sessions[0]
+            ).id
+          : null;
+        // Say so rather than reporting a clean "Ready." over sessions the
+        // factory could not revive; they are still listed by the factory and an
+        // operator has to deal with them.
+        setStatus(
+          strandedCount > 0
+            ? `Ready. ${strandedCount} session(s) could not be recovered.`
+            : readyStatus(),
+        );
+        openActiveSession();
+      }
       void followSessionList(list);
     } catch (err) {
       if (!cancelled) setStatus(`error: ${/** @type {Error} */ (err).message}`);
@@ -3354,6 +3488,8 @@ export const flootComponent = (
   };
   void loadInitialSessions();
   void followAccounts();
+  // A cold launch may arrive before this space and its listeners are mounted.
+  void launchAssistant();
 
   return () => {
     cancelled = true;
@@ -3366,6 +3502,7 @@ export const flootComponent = (
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
     window.removeEventListener('endo-suspend', suspendAudio);
     window.removeEventListener('endo-resume', resumeAudio);
+    window.removeEventListener('endo-assistant', onAssistantInvocation);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();
     // Closing a subscription detaches this page and nothing else.

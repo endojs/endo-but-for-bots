@@ -731,3 +731,56 @@ test.serial('a boot cache with an unusable scheme keeps the space', async t => {
   t.is(boot.id, '5', 'still opens the space');
   t.is(boot.scheme, undefined, 'but not with a scheme it cannot apply');
 });
+
+for (const cold of [true, false]) {
+  test.serial(
+    `assistant routes ${cold ? 'cold default' : 'warm text-only space'} to voice and ignores detached gutters`,
+    async t => {
+      t.timeout(5000);
+      testDocument.body.replaceChildren();
+      localStorage.clear();
+      const storedValues = new Map([
+        [
+          'spaces/1',
+          harden({
+            id: '1',
+            name: 'Text',
+            icon: 'T',
+            mode: 'floot',
+            profilePath: ['text'],
+          }),
+        ],
+        [
+          'spaces/2',
+          harden({
+            id: '2',
+            name: 'Voice',
+            icon: 'V',
+            mode: 'floot',
+            profilePath: ['voice'],
+            audioPath: ['stt'],
+          }),
+        ],
+      ]);
+      localStorage.setItem('chat-default-space', '1');
+      const old = await setupGutter({ storedValues });
+      old.$container.remove();
+      const oldNavigationCount = old.navigated.length;
+      if (cold) window.endoAssistantInvocation = { id: 'cold-routing' };
+      const current = await setupGutter({ storedValues });
+      if (!cold) {
+        t.is(current.gutter.getActiveSpaceId(), '1');
+        window.endoAssistantInvocation = { id: 'warm-routing' };
+        window.dispatchEvent(new Event('endo-assistant'));
+      }
+      t.teardown(() => {
+        delete window.endoAssistantInvocation;
+        testDocument.body.replaceChildren();
+      });
+      await waitFor(() => current.gutter.getActiveSpaceId() === '2');
+      t.deepEqual(current.navigated.at(-1), ['voice']);
+      if (cold) t.false(current.navigated.some(path => path[0] === 'text'));
+      t.is(old.navigated.length, oldNavigationCount);
+    },
+  );
+}

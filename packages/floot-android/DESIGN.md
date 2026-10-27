@@ -56,8 +56,20 @@ Samsung rejects `createRequestRoleIntent(ROLE_ASSISTANT)` as not requestable eve
 when the role is available.
 Returning from settings re-reads the actual role and shows success or
 non-selection feedback.
-Its session launches the same activity and selected connection, rather than
-creating a separate conversation or automatically submitting an utterance.
+Its protected session service issues a single-use invocation ID to the activity.
+The selected connection's shared UI routes to a voice-enabled Floot space and
+creates a new General Assistant session with `fae-codex` / `gpt-5.6-sol`.
+Capture and transcription start concurrently with creation, without waiting for
+model discovery or the usual initial noise calibration.
+Finalized text waits for successful creation before submitting to the new session.
+Failure stops capture and leaves manual microphone use available.
+A bounded durable set of 32 invocation IDs prevents duplicate creation when
+Android redelivers an invocation or recreates the activity.
+Ambiguous creation is not retried automatically; another shortcut invocation is
+an explicit new request.
+Only the currently attached UI handles delivery after a gateway reconnect.
+Android 10/11's exported activity intent is forgeable, so it opens the UI without
+automatically recording; the user taps the microphone there.
 The UI supplies its existing mic capture, transcription, and spoken reply path.
 Only audio-capture WebView permission requests from the selected origin are
 eligible, and Android's `RECORD_AUDIO` permission is required.

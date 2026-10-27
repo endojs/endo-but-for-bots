@@ -16,8 +16,14 @@ On Samsung, also set **Settings → Advanced features → Side button → Long p
 to **Digital assistant**.
 Android 12+ uses the voice interaction service; Android 10/11 uses an assist
 activity shortcut because those versions require a separate system recognizer.
-System invocation opens the selected connection; recording still starts with the
-Floot mic control, after Android grants microphone permission.
+On Android 12+, the assistant shortcut opens a new **General Assistant** session
+using **Fae Codex / gpt-5.6-sol** and immediately starts recording after microphone
+permission is granted.
+The selected connection must have a Floot space with speech-to-text configured.
+Audio streams to transcription while the new session is being created; the text
+waits for that session before sending.
+Opening the launcher normally never starts recording.
+On Android 10/11, use the Floot mic control after opening the assistant shortcut.
 WebView capture requires both `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS` in the
 APK; the latter is granted at install time, without an additional user prompt.
 Closing or backgrounding the app stops local audio without cancelling accepted
