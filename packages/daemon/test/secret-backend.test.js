@@ -28,6 +28,12 @@ test('local backend encrypts, atomically replaces, and revokes bytes', async t =
   });
   const canary = new TextEncoder().encode('CANARY-backend-plaintext');
   const backendRef = await backend.create('op-create', 'secret-id', canary);
+  const retried = await backend.create(
+    'op-create',
+    'secret-id',
+    new TextEncoder().encode('must-not-replace'),
+  );
+  t.is(retried, backendRef);
   const envelope = await readFile(path.join(temporary, backendRef));
   t.false(envelope.includes(canary));
   t.deepEqual(await backend.read(backendRef), canary);

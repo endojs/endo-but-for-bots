@@ -1818,7 +1818,7 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
 }
 
-export type SecretState = 'active' | 'revoked';
+export type SecretState = 'provisioning' | 'active' | 'revoked';
 
 export type SecretSummary = {
   secretId: string;
@@ -1880,6 +1880,21 @@ export interface SecretImporter {
     name: string,
     description: string,
     bytesBase64: string,
+  ): Promise<SecretSummary>;
+  /**
+   * Import once under caller-preallocated identifiers. Retrying the same
+   * operation completes an interrupted backend write or pet-name binding and
+   * never substitutes later bytes for a secret already written.
+   */
+  provideBase64(
+    name: string,
+    description: string,
+    bytesBase64: string | undefined,
+    stableIds: {
+      secretId: string;
+      grantId: string;
+      operationId: string;
+    },
   ): Promise<SecretSummary>;
 }
 
