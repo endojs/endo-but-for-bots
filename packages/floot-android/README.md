@@ -85,15 +85,20 @@ git submodule update --init --depth 1 c/moddable
 rustup target add aarch64-linux-android
 export ANDROID_HOME=/path/to/android-sdk
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-yarn workspace @endo/floot-android build
+yarn workspace @endo/floot-android build:android
 ```
+
+The general workspace `build` command only prepares the shared web assets.
+Native compilation and JVM tests use the explicit `build:android` and
+`test:android` commands above; the dedicated Android CI job installs their SDK,
+NDK, Java, and Rust target prerequisites and runs both.
 
 The debug APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
 Generated web assets and native binaries are ignored; rebuild them from source.
 Gradle's wrapper is checked in.
 
 ```sh
-yarn workspace @endo/floot-android test
+yarn workspace @endo/floot-android test:android
 yarn workspace @endo/chat test test/unit/android-connection.test.js test/unit/floot-transfer.test.js test/unit/floot-submission-client.test.js
 yarn workspace @endo/floot test test/pending-queue.test.js test/session-submissions.test.js
 ```

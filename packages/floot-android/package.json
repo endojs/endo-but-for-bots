@@ -23,7 +23,8 @@
   "scripts": {
     "build:web": "node scripts/build-web.mjs",
     "build:runtime": "bash scripts/build-runtime.sh",
-    "build": "yarn build:web && yarn build:runtime && cd android && ./gradlew assembleDebug",
-    "test": "cd android && ./gradlew testDebugUnitTest"
+    "build": "yarn build:web",
+    "build:android": "yarn build:web && yarn build:runtime && cd android && ./gradlew assembleDebug",
+    "test:android": "cd android && ./gradlew testDebugUnitTest"
   }
 }
