@@ -10,6 +10,12 @@ The app offers two connection modes:
   The app remembers it and does not start or expose its local daemon in this mode.
 
 Choose **Use as assistant** from the toolbar menu to select Floot as the Android assistant.
+The system picker must confirm Floot; the app then reports whether selection
+succeeded, or offers **Open assistant settings** if it did not.
+On Samsung, also set **Settings → Advanced features → Side button → Long press**
+to **Digital assistant**.
+Android 12+ uses the voice interaction service; Android 10/11 uses an assist
+activity shortcut because those versions require a separate system recognizer.
 System invocation opens the selected connection; recording still starts with the
 Floot mic control, after Android grants microphone permission.
 WebView capture requires both `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS` in the

@@ -121,10 +121,7 @@ public final class MainActivity extends Activity {
         toolbar.setSubtitleTextColor(getColor(R.color.secondary));
         toolbar.getMenu().add("Connection").setOnMenuItemClickListener(item -> { showConnection(toolbar); return true; });
         toolbar.getMenu().add("Use as assistant").setOnMenuItemClickListener(item -> {
-            RoleManager roles = getSystemService(RoleManager.class);
-            if (roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT) && !roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-                startActivityForResult(roles.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT), 2);
-            } else Toast.makeText(this, "Floot is already selected, or assistant selection is unavailable", Toast.LENGTH_SHORT).show();
+            requestAssistant();
             return true;
         });
         toolbar.getMenu().add("Diagnostics").setOnMenuItemClickListener(item -> { showDiagnostics(); return true; });
@@ -215,6 +212,41 @@ public final class MainActivity extends Activity {
         }
         web.loadUrl(start);
     }
+    private boolean isAssistantSelected() {
+        RoleManager roles = getSystemService(RoleManager.class);
+        return roles != null && roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT)
+            && roles.isRoleHeld(RoleManager.ROLE_ASSISTANT);
+    }
+    private void requestAssistant() {
+        if (isAssistantSelected()) { showAssistantResult(); return; }
+        // ASSISTANT can be available but not requestable via createRequestRoleIntent.
+        // Samsung rejects that intent immediately; use the system settings picker.
+        Diagnostics.record(this, "assistant", "Opening default assistant settings");
+        openAssistantSettings();
+    }
+    private void openAssistantSettings() {
+        try {
+            startActivityForResult(new Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS), 4);
+        } catch (android.content.ActivityNotFoundException error) {
+            try {
+                startActivityForResult(new Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS), 4);
+            } catch (android.content.ActivityNotFoundException unavailable) {
+                Toast.makeText(this, "Open Settings → Apps → Default apps → Digital assistant app", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+    private void showAssistantResult() {
+        boolean selected = isAssistantSelected();
+        Diagnostics.record(this, "assistant", "Floot selected: " + selected);
+        android.app.AlertDialog.Builder dialog = new android.app.AlertDialog.Builder(this)
+            .setTitle(selected ? "Floot is your assistant" : "Floot was not selected")
+            .setMessage(selected
+                ? "Your assistant shortcut opens Floot. On Samsung, set Settings → Advanced features → Side button → Long press to Digital assistant. Tap the mic in Floot to start listening."
+                : "Android kept your current assistant. Choose Floot in Settings → Apps → Default apps → Digital assistant app.")
+            .setNegativeButton("Close", null);
+        if (!selected) dialog.setPositiveButton("Open assistant settings", (d, which) -> openAssistantSettings());
+        dialog.show();
+    }
     private void showConnection(android.widget.Toolbar toolbar) {
         EditText remote = new EditText(this);
         remote.setSingleLine(true);
@@ -268,6 +300,12 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == 4) {
+            Diagnostics.record(this, "assistant", "Selection returned: " + result);
+            // Re-read the actual role; RESULT_OK alone is not proof of selection.
+            showAssistantResult();
+            return;
+        }
         if (request != 3) return;
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         // Read after the picker returns, including after Activity recreation.

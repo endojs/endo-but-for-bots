@@ -6,6 +6,49 @@ import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
 public class TransportTest {
+    @Test public void assistantMetadataMeetsAndroidParserContract() throws Exception {
+        javax.xml.parsers.DocumentBuilder parser = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder();
+        org.w3c.dom.Element metadata = parser.parse(new File("src/main/res/xml/voice_interaction.xml")).getDocumentElement();
+        // VoiceInteractionServiceInfo rejects the wrong root and missing recognizer
+        // attribute before the role request can show a selection dialog.
+        assertEquals("voice-interaction-service", metadata.getTagName());
+        assertEquals("true", metadata.getAttribute("android:supportsAssist"));
+        assertEquals("org.endo.floot.FlootSessionService", metadata.getAttribute("android:sessionService"));
+        assertTrue(metadata.hasAttribute("android:recognitionService"));
+        assertEquals("", metadata.getAttribute("android:recognitionService"));
+        // An empty recognizer is supported on Android 12+. Earlier systems use
+        // the ASSIST activity instead of selecting an invalid speech recognizer.
+        org.w3c.dom.Document oldConfig = parser.parse(new File("src/main/res/values/assistant.xml"));
+        org.w3c.dom.Document newConfig = parser.parse(new File("src/main/res/values-v31/assistant.xml"));
+        assertEquals("false", oldConfig.getElementsByTagName("bool").item(0).getTextContent());
+        assertEquals("true", newConfig.getElementsByTagName("bool").item(0).getTextContent());
+        org.w3c.dom.Document manifest = parser.parse(new File("src/main/AndroidManifest.xml"));
+        org.w3c.dom.NodeList services = manifest.getElementsByTagName("service");
+        boolean found = false;
+        for (int i = 0; i < services.getLength(); i++) {
+            org.w3c.dom.Element service = (org.w3c.dom.Element) services.item(i);
+            if (".FlootVoiceService".equals(service.getAttribute("android:name"))) {
+                assertEquals("@bool/voice_interaction_enabled", service.getAttribute("android:enabled"));
+                assertEquals("android.permission.BIND_VOICE_INTERACTION", service.getAttribute("android:permission"));
+                found = true;
+            }
+        }
+        assertTrue(found);
+        org.w3c.dom.Element activity = (org.w3c.dom.Element) manifest.getElementsByTagName("activity").item(0);
+        boolean assist = false;
+        org.w3c.dom.NodeList filters = activity.getElementsByTagName("intent-filter");
+        for (int i = 0; i < filters.getLength(); i++) {
+            org.w3c.dom.Element filter = (org.w3c.dom.Element) filters.item(i);
+            org.w3c.dom.Element action = (org.w3c.dom.Element) filter.getElementsByTagName("action").item(0);
+            if ("android.intent.action.ASSIST".equals(action.getAttribute("android:name"))) {
+                org.w3c.dom.Element category = (org.w3c.dom.Element) filter.getElementsByTagName("category").item(0);
+                assertEquals("android.intent.category.DEFAULT", category.getAttribute("android:name"));
+                assist = true;
+            }
+        }
+        assertTrue(assist);
+    }
+
     @Test public void webViewCaptureDeclaresBothRequiredAndroidPermissions() throws Exception {
         // Chromium refuses device selection without either permission, even if
         // the user has granted RECORD_AUDIO in the runtime permission dialog.

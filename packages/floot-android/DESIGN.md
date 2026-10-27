@@ -46,7 +46,16 @@ flowchart LR
 
 ## Assistant and microphone lifecycle
 
-A lightweight `VoiceInteractionService` registers Floot as an assistant.
+A lightweight `VoiceInteractionService` registers Floot as an assistant on
+Android 12 and later, with an explicitly empty platform recognition service:
+speech recognition belongs to the shared Floot UI.
+Android 10/11 use an `ACTION_ASSIST` activity instead, since selecting a voice
+interaction service there requires a valid platform recognizer.
+The setup button opens Android's voice-input/default-assistant settings directly:
+Samsung rejects `createRequestRoleIntent(ROLE_ASSISTANT)` as not requestable even
+when the role is available.
+Returning from settings re-reads the actual role and shows success or
+non-selection feedback.
 Its session launches the same activity and selected connection, rather than
 creating a separate conversation or automatically submitting an utterance.
 The UI supplies its existing mic capture, transcription, and spoken reply path.

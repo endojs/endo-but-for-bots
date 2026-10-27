@@ -75,6 +75,9 @@ final class Diagnostics {
             + "\nAndroid API: " + android.os.Build.VERSION.SDK_INT + "\n");
         report.append("Microphone permission: ").append(context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
             .append("\nAudio settings permission: ").append(context.checkSelfPermission(android.Manifest.permission.MODIFY_AUDIO_SETTINGS) == android.content.pm.PackageManager.PERMISSION_GRANTED).append("\n");
+        android.app.role.RoleManager roles = context.getSystemService(android.app.role.RoleManager.class);
+        report.append("Floot assistant selected: ").append(roles != null && roles.isRoleAvailable(android.app.role.RoleManager.ROLE_ASSISTANT)
+            && roles.isRoleHeld(android.app.role.RoleManager.ROLE_ASSISTANT)).append("\n");
         android.content.pm.PackageInfo webView = android.webkit.WebView.getCurrentWebViewPackage();
         if (webView != null) report.append("WebView: ").append(webView.packageName).append(" ").append(webView.versionName).append("\n");
         if (limit < LIMIT) report.append("Preview: recent output per log. Save logs for all retained output.\n");

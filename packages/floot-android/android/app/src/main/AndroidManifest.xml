@@ -10,8 +10,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
-        <service android:name=".FlootVoiceService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" android:process=":voice">
+        <service android:name=".FlootVoiceService" android:enabled="@bool/voice_interaction_enabled" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" android:process=":voice">
             <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
             <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction" />
         </service>
