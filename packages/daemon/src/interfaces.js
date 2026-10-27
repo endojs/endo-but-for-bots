@@ -346,7 +346,7 @@ export const GuestInterface = M.interface('EndoGuest', {
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
   // Internal: deliver a message
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
   // Mint a guest-owned invitation (network mediation stays internal)
@@ -394,7 +394,7 @@ export const HostInterface = M.interface('EndoHost', {
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
     NameOrPathShape, // recipientName

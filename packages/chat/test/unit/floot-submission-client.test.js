@@ -3,6 +3,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
+import { encodeChatDraft } from '../../floot-mentions.js';
 import {
   makeSessionDrafts,
   makeSubmissionClient as makeClient,
@@ -378,4 +379,191 @@ test('coalesced sends clear each submitted draft revision without dispatching tw
   await Promise.all([first, second]);
   t.is(calls, 1);
   t.is(makeSessionDrafts(client.draft, storage).select('s', ''), '');
+});
+
+test('inventory submissions reconnect with the same receipt and never fall back to plain text', async t => {
+  t.timeout(5000);
+  const storage = store();
+  const object = Far('Object', {});
+  const references = harden([
+    { path: ['docs'], identity: 'doc-id', value: object },
+  ]);
+  const ids = [];
+  const session = Far('SessionWithMentions', {
+    getSubmissionReceipt: () => null,
+    enqueueOnce: () => {
+      throw Error('must use attachment endpoint');
+    },
+    enqueueMessageOnce: (text, id, mentions) => {
+      t.deepEqual(text, { strings: ['Read ', ''], names: ['docs'] });
+      t.is(mentions[0].value, object);
+      ids.push(id);
+      if (ids.length === 1) throw Error('lost acknowledgement');
+      return harden({ id: 'accepted' });
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      makeSubmissionClient(storage, () => 'original').submit(
+        session,
+        's',
+        encodeChatDraft({
+          strings: ['Read ', ''],
+          petNames: ['docs'],
+          edgeNames: ['docs'],
+        }),
+        () => {},
+        async () => references,
+      ),
+    { message: /lost/ },
+  );
+  await makeSubmissionClient(storage, () => 'wrong').submit(
+    session,
+    's',
+    encodeChatDraft({
+      strings: ['Read ', ''],
+      petNames: ['docs'],
+      edgeNames: ['docs'],
+    }),
+    () => {},
+    async () => references,
+  );
+  t.deepEqual(ids, ['original', 'original']);
+  t.is(storage.getItem('s'), null);
+  let sent = false;
+  const old = Far('OlderSession', {
+    enqueueOnce: () => {
+      sent = true;
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      makeSubmissionClient(storage, () => 'new').submit(
+        old,
+        's',
+        encodeChatDraft({
+          strings: ['Read ', ''],
+          petNames: ['docs'],
+          edgeNames: ['docs'],
+        }),
+        () => {},
+        async () => references,
+      ),
+    { message: /Update the Floot host/ },
+  );
+  t.false(sent);
+  t.is(storage.getItem('s'), null, 'known-unsent reservation is released');
+});
+
+test('an undelivered mention retry cannot follow a rebound name, but accepted receipts survive deletion', async t => {
+  t.timeout(5000);
+  const storage = store();
+  let accepted = false;
+  let deliveries = 0;
+  const session = Far('MentionSession', {
+    enqueueOnce: () => {},
+    getSubmissionReceipt: (text, id, manifest) => {
+      t.is(id, 'original');
+      t.deepEqual(manifest, [{ path: ['docs'], identity: 'A' }]);
+      return accepted ? harden({ id: 'receipt' }) : null;
+    },
+    enqueueMessageOnce: () => {
+      deliveries += 1;
+      throw Error('transport lost');
+    },
+  });
+  const original = harden([
+    { path: ['docs'], identity: 'A', value: Far('A', {}) },
+  ]);
+  const replacement = harden([
+    { path: ['docs'], identity: 'B', value: Far('B', {}) },
+  ]);
+  await t.throwsAsync(
+    () =>
+      makeSubmissionClient(storage, () => 'original').submit(
+        session,
+        's',
+        encodeChatDraft({
+          strings: ['', ''],
+          petNames: ['docs'],
+          edgeNames: ['docs'],
+        }),
+        () => {},
+        async () => original,
+      ),
+    { message: /transport/ },
+  );
+  t.deepEqual(JSON.parse(storage.getItem('s')).manifest, [
+    { path: ['docs'], identity: 'A' },
+  ]);
+  await t.throwsAsync(
+    () =>
+      makeSubmissionClient(storage, () => 'wrong').submit(
+        session,
+        's',
+        encodeChatDraft({
+          strings: ['', ''],
+          petNames: ['docs'],
+          edgeNames: ['docs'],
+        }),
+        () => {},
+        async () => replacement,
+      ),
+    { message: /objects changed/ },
+  );
+  t.is(deliveries, 1);
+  accepted = true;
+  const result = await makeSubmissionClient(storage, () => 'wrong').submit(
+    session,
+    's',
+    encodeChatDraft({
+      strings: ['', ''],
+      petNames: ['docs'],
+      edgeNames: ['docs'],
+    }),
+    () => {},
+    async () => {
+      throw Error('source deleted');
+    },
+  );
+  t.deepEqual(result, { id: 'receipt' });
+  t.is(deliveries, 1);
+  t.is(storage.getItem('s'), null);
+});
+
+test('failed mention lookup before dispatch permits correcting the draft', async t => {
+  t.timeout(5000);
+  const storage = store();
+  let deliveries = 0;
+  const session = Far('MentionSession', {
+    enqueueOnce: () => {
+      deliveries += 1;
+      return harden({ id: 'text' });
+    },
+    getSubmissionReceipt: () => null,
+    enqueueMessageOnce: () => {
+      throw Error('must not dispatch');
+    },
+  });
+  const client = makeSubmissionClient(storage, () => 'request');
+  await t.throwsAsync(
+    () =>
+      client.submit(
+        session,
+        's',
+        encodeChatDraft({
+          strings: ['', ''],
+          petNames: ['missing'],
+          edgeNames: ['missing'],
+        }),
+        () => {},
+        async () => {
+          throw Error('missing object');
+        },
+      ),
+    { message: /missing object/ },
+  );
+  t.is(storage.getItem('s'), null);
+  await client.submit(session, 's', 'corrected');
+  t.is(deliveries, 1);
 });

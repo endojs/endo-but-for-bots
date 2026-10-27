@@ -46,7 +46,10 @@ export const createPrivateTurnStorage = async (host, sessionId) => {
 };
 harden(createPrivateTurnStorage);
 
-/** @param {any} host @param {string} sessionId */
+/**
+ * @param {any} host @param {string} sessionId
+ * @param sessionId
+ */
 const openDirectory = async (host, sessionId) => {
   assertSessionId(sessionId);
   (await E(host).has(ROOT)) ||
@@ -61,7 +64,10 @@ const openDirectory = async (host, sessionId) => {
   );
 };
 
-/** @param {string} sessionId @param {unknown} name */
+/**
+ * @param {string} sessionId @param {unknown} name
+ * @param name
+ */
 const assertNetworkName = (sessionId, name) => {
   const prefix = `floot-network-${sessionId.length}-${sessionId}-`;
   (typeof name === 'string' &&
@@ -113,7 +119,10 @@ export const retirePrivateTurnStorage = async (host, sessionId) => {
   if (!(await E(host).has(ROOT, sessionId))) return;
   await openDirectory(host, sessionId);
   for (const name of await E(host).list(ROOT, sessionId)) {
-    if (name !== 'schema') {
+    if (
+      name !== 'schema' &&
+      !/^floot-attachment-(?:[0-9]|[12][0-9]|3[01])$/.test(name)
+    ) {
       if (name.startsWith('floot-network-')) assertNetworkName(sessionId, name);
       else assertJournalName(name);
     }
@@ -199,12 +208,18 @@ const provideStorage = async (host, sessionId, assertName) => {
       }),
   });
 };
-/** @param {any} host @param {string} sessionId */
+/**
+ * @param {any} host @param {string} sessionId
+ * @param sessionId
+ */
 export const providePrivateTurnStorage = (host, sessionId) =>
   provideStorage(host, sessionId, assertJournalName);
 harden(providePrivateTurnStorage);
 
-/** @param {any} host @param {string} sessionId */
+/**
+ * @param {any} host @param {string} sessionId
+ * @param sessionId
+ */
 export const providePrivateNetworkStorage = (host, sessionId) =>
   provideStorage(host, sessionId, name => assertNetworkName(sessionId, name));
 harden(providePrivateNetworkStorage);

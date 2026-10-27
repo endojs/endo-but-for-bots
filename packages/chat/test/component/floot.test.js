@@ -847,10 +847,52 @@ const must = (element, what) => {
  * @param {string} selector
  * @returns {HTMLTextAreaElement}
  */
-const textareaIn = (parent, selector) =>
-  /** @type {HTMLTextAreaElement} */ (
-    must(parent.querySelector(selector), selector)
+const textareaIn = (parent, selector) => {
+  const el = /** @type {HTMLElement} */ (
+    must(
+      parent.querySelector(
+        selector.replace('textarea.floot-input', '.floot-input'),
+      ),
+      selector,
+    )
   );
+  if (!el.classList.contains('floot-input'))
+    return /** @type {HTMLTextAreaElement} */ (el);
+  // Compatibility facade for the existing tests' text edits; all events still
+  // hit the real contenteditable and the production Chat token controller.
+  const move = (start, end = start) => {
+    el.focus();
+    const range = testDocument.createRange();
+    if (!el.firstChild) el.appendChild(testDocument.createTextNode(''));
+    const child = el.firstChild;
+    if (!child) throw Error('Missing text node');
+    range.setStart(child, start);
+    range.setEnd(child, end);
+    testWindow.getSelection()?.removeAllRanges();
+    testWindow.getSelection()?.addRange(range);
+  };
+  return /** @type {HTMLTextAreaElement} */ (
+    /** @type {unknown} */ (
+      new Proxy(el, {
+        get(target, key) {
+          if (key === 'value') return target.textContent || '';
+          if (key === 'disabled') return target.contentEditable !== 'true';
+          if (key === 'setSelectionRange') return move;
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+        set(target, key, value) {
+          if (key === 'value') {
+            target.textContent = value;
+            move(value.length);
+            return true;
+          }
+          return Reflect.set(target, key, value, target);
+        },
+      })
+    )
+  );
+};
 
 /**
  * A mounted Floot space over a fake daemon (test/helpers/fake-floot.js).
@@ -3481,5 +3523,102 @@ test.serial(
     t.like(created[0], { presetId: 'voice', networkPolicy: 'off' });
     t.false('backendId' in created[0]);
     t.false('modelId' in created[0]);
+  },
+);
+
+test.serial(
+  'inventory picker sends a nested object reference through the confined composer',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.append(parent);
+    const object = Far('Notes', { read: () => 'notes' });
+    const sent = [];
+    const facet = farSession('MentionSession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      enqueueOnce: () => {
+        throw Error('text-only endpoint must not be used');
+      },
+      enqueueMessageOnce: (text, id, mentions) => {
+        sent.push({ text, id, mentions });
+        return harden({ id: 'accepted' });
+      },
+      getSubmissionReceipt: () => null,
+    });
+    const factory = farFactory('MentionFactory', {
+      listSessions: () =>
+        harden([{ id: 'one', title: 'One', userInitiated: true }]),
+      getSession: () => facet,
+      listPresets: () => harden([]),
+      listBackends: () => harden([]),
+      listModels: () => harden([]),
+    });
+    const folder = Far('Folder', { list: () => harden(['notes']) });
+    const root = Far('Inventory', {
+      list: () => harden(['folder']),
+      lookup: path => {
+        if (path === 'floot') return factory;
+        if (JSON.stringify(path) === '["folder"]') return folder;
+        t.deepEqual(path, ['folder', 'notes']);
+        return object;
+      },
+      identify: (...path) => {
+        t.deepEqual(path, ['folder', 'notes']);
+        return 'notes-id';
+      },
+    });
+    const cleanup = flootComponent(parent, root, ['floot'], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 1,
+    );
+    await tick(50);
+    const input = textareaIn(parent, '.floot-input');
+    input.value = 'Read @';
+    input.setSelectionRange(6, 6);
+    input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await waitFor(() =>
+      parent.querySelector('.token-menu-item')?.textContent?.includes('folder'),
+    );
+    input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key: '/',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() =>
+      parent.querySelector('.token-menu-item')?.textContent?.includes('notes'),
+    );
+    input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() => parent.querySelector('.floot-input .chat-token'));
+    t.is(sent.length, 0, 'picker Enter selects without sending');
+    input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() => sent.length === 1);
+    t.deepEqual(sent[0].text, { strings: ['Read ', ''], names: ['notes'] });
+    t.deepEqual(sent[0].mentions[0].path, ['folder', 'notes']);
+    t.is(sent[0].mentions[0].value, object);
+    t.is(sent[0].mentions[0].identity, 'notes-id');
+    t.truthy(
+      parent.querySelector('.floot-msg .chat-token'),
+      'submitted reference remains visible as a chip',
+    );
   },
 );

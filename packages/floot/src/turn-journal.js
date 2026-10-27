@@ -1,9 +1,11 @@
 // @ts-check
+
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { passStyleOf } from '@endo/pass-style';
 import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
+import { validateChatMessage } from './session-mentions.js';
 import { encodeJournalPresentation } from './journal-presentation.js';
 import {
   assertContextEvidence,
@@ -322,6 +324,7 @@ export const makeTurnJournal = (powers, limits = {}) => {
         assertText(event.reasoningEffort);
       if (event.inputRef !== undefined) assertContentRef(event.inputRef);
       assertMailReceipt(event.mail);
+      if (event.message !== undefined) validateChatMessage(event.message);
       const record = {
         turnId,
         dispatchState: 'not-dispatched',
@@ -333,6 +336,7 @@ export const makeTurnJournal = (powers, limits = {}) => {
           ? {}
           : { nativeContextFormat: event.nativeContextFormat }),
         ...(event.mail === undefined ? {} : { mail: event.mail }),
+        ...(event.message === undefined ? {} : { message: event.message }),
         ...(event.reasoningEffort === undefined
           ? {}
           : { reasoningEffort: event.reasoningEffort }),
@@ -570,6 +574,7 @@ export const makeTurnJournal = (powers, limits = {}) => {
         Fail`Invalid turn journal snapshot record`;
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
+      if (record.message !== undefined) validateChatMessage(record.message);
       record.contextEvidence === undefined ||
         Fail`Context evidence certificate requires archive origin`;
       // A turn the snapshotting incarnation still had in flight is one this
@@ -923,6 +928,7 @@ export const makeTurnJournal = (powers, limits = {}) => {
     for (const record of chunkRecords) {
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
+      if (record.message !== undefined) validateChatMessage(record.message);
       assertContextEvidence(record);
       if (!metadataOnly) {
         // eslint-disable-next-line no-await-in-loop
@@ -1089,7 +1095,7 @@ export const makeTurnJournal = (powers, limits = {}) => {
           payload,
         });
       }),
-    /** @param {{ input: string, backendId: string, modelId: string, nativeContextFormat?: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
+    /** @param {{ input: string, backendId: string, modelId: string, nativeContextFormat?: string, reasoningEffort?: string, message?: import('./session-mentions.js').ChatMessage, mail?: {from?: string, messageNumber?: string} }} options */
     begin: options =>
       serialized(async () => {
         // Unknown historical effects are evidence, not a session-wide

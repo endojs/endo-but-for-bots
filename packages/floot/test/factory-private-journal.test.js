@@ -31,6 +31,7 @@ const makeWorld = (
 ) => {
   t.timeout(5000);
   const inboxes = [];
+  const requests = [];
   const guestStore = new Map([['user', harden({})]]);
   const guest = Far('PrivateJournalGuest', {
     has: name => guestStore.has(name),
@@ -82,7 +83,8 @@ const makeWorld = (
       creates += 1;
       return harden({
         run: Far('MigrationRun', {
-          send: () => {
+          send: (text, options) => {
+            requests.push({ text, options });
             sends += 1;
             const stream = makeBufferedReader();
             stream.push(harden({ type: 'text-delta', text: replyText }));
@@ -159,6 +161,7 @@ const makeWorld = (
     host,
     hostStore,
     guestStore,
+    requests,
     counts: () => ({ sends, creates, guests }),
   };
 };
@@ -670,4 +673,41 @@ test('later registry writes retry obsolete snapshots after a failed prune', asyn
     4,
   );
   await E(world.factory).deleteSession('one');
+});
+
+test('journal refusal leaves queued inventory mentions ungranted and cancellable', async t => {
+  const world = makeWorld(t, {
+    beforeStore: async value => {
+      if (value?.type === 'begin') throw Error('journal refused');
+    },
+  });
+  const session = await E(world.factory).getSession('one');
+  const mentions = harden([
+    { path: ['docs'], identity: 'document-id', value: Far('Doc', {}) },
+  ]);
+  const { id } = await E(session).enqueueMessageOnce(
+    harden({ strings: ['Read ', ''], names: ['docs'] }),
+    `${Date.now()}-00000000-0000-4000-8000-000000000000`,
+    mentions,
+  );
+  let refused = false;
+  for (let i = 0; i < 200; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const pending = await E(session).listPending();
+    if (pending.hold?.reason === 'refused') {
+      refused = true;
+      break;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  t.true(refused);
+  t.false(
+    [...world.hostStore.keys()].some(name =>
+      name.includes('/floot-attachment-'),
+    ),
+  );
+  await E(session).cancelPending(id);
+  t.is((await E(session).listPending()).entries.length, 0);
+  t.is(world.counts().sends, 0);
 });

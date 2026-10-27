@@ -20,6 +20,7 @@
     "./src/container-mounts.js": "./src/container-mounts.js",
     "./src/stream.js": "./src/stream.js",
     "./src/session-watch.js": "./src/session-watch.js",
+    "./src/session-mentions.js": "./src/session-mentions.js",
     "./src/reply-fold.js": "./src/reply-fold.js",
     "./src/transcript-delta.js": "./src/transcript-delta.js",
     "./src/pending-queue.js": "./src/pending-queue.js",

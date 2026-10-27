@@ -27,7 +27,7 @@ export {};
  *   pending?: boolean,
  *   pendingId?: number | string,
  *   pendingState?: 'queued' | 'sending' | 'interrupted',
- *   meta?: { mail?: { from?: string }, turnStatus?: boolean, turnState?: string },
+ *   meta?: { message?: {strings: string[], names: string[]}, mail?: { from?: string }, turnStatus?: boolean, turnState?: string },
  * }} FlootMessage
  */
 
@@ -57,7 +57,7 @@ export {};
  */
 
 /**
- * @typedef {{ id: string, title: string, description?: string, templateId?: string, backendId?: string, modelId?: string, reasoningEffort?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
+ * @typedef {{ id: string, title: string, description?: string, templateId?: string, backendId?: string, modelId?: string, reasoningEffort?: string, networkPolicy?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
  */
 
 /**
@@ -107,6 +107,7 @@ export {};
  *   target: { value: string },
  *   key?: string,
  *   shiftKey?: boolean,
+ *   isComposing?: boolean,
  *   preventDefault: () => void,
  *   stopPropagation: () => void,
  * }} FlootSafeEvent

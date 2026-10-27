@@ -394,3 +394,46 @@ Fix service/storage failures outside this UI before retrying or reloading.
 - The `floot/`-directory provisioning runs only against a live daemon (no
   automated test), so it is validated by `node --check` + lint here and a manual
   `endo run` there.
+
+### Inventory mentions
+
+Text uses the same host-owned token composer as Chat with Fae: type `@`,
+select an object, use `/` to browse one directory at a time, and optionally
+choose a label with `:`. Enter selects a result; a subsequent Enter sends.
+The composer and sent messages show chips. The Android app uses this same web UI
+and its system-theme colors. Paste and drop insert plain text only.
+
+Text ingress preserves `{strings, names}` and selected inventory references.
+Voice ingress carries a plain transcript; naming an object in spoken text does
+not attach it. A future voice selection flow can produce the same structured
+message after selecting references explicitly. Both paths share the durable queue.
+
+The client saves its structured draft, retry ID and selected object identities
+before dispatch. The trusted host resolves the selected paths and checks they did
+not change during resolution. Queue observers receive message text and labels,
+never capabilities. A retry recovers an accepted receipt before resolving mutable
+source names; an unaccepted retry rejects changed identities. Receipts retain
+identity metadata only, releasing unadopted references when the turn finishes.
+Hosts without the structured submission endpoint refuse attachments explicitly.
+
+After journal admission, the serial turn stages at most 32 references in fixed
+slots inside its private session directory and delivers an ordinary Endo package
+to its guest. The package's message number and edge labels are supplied as turn
+context. The existing `adopt` and `adoptTool` tools give those references names
+chosen by the agent. Delivery itself creates no guest inventory bindings.
+The normal inbox recognizes the package as owned by the UI turn and does not
+answer or dismiss it independently. Lost delivery acknowledgements are reconciled
+against the mailbox, without blindly delivering again.
+
+The package is dismissed only after model/tool settlement; adopted references
+remain in the guest inventory. Temporary slots are swept after delivery and on
+cleanup. Cleanup failure prevents more turns until lifecycle cleanup succeeds.
+After restart, orphaned self-origin packages are dismissed by the normal inbox
+without starting work, and interrupted queued sends retain their existing recovery
+rules. Session deletion unlinks the owned private directory, including any staging
+slots left by a crash. There is no persistent mention-to-generated-name catalog.
+
+Removing a chip before Send removes the attachment. Queued attachment messages
+must be cancelled and recomposed to change their references; plain queued text
+remains editable. Labels are validated before queue admission and automatic labels
+are unique even when the same object is selected more than once.

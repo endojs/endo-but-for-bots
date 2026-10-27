@@ -121,9 +121,14 @@ test('owned provider shutdown waits for admitted tool evidence', async t => {
   );
 });
 
-for (const cleanupFails of [false, true]) {
-  test(`development cancellation drains native stop and quarantines cleanup failure (${cleanupFails})`, async t => {
+for (const [cleanupFails, attachmentFails] of [
+  [false, false],
+  [true, false],
+  [true, true],
+]) {
+  test(`development cancellation drains native stop and quarantines cleanup failure (environment=${cleanupFails}, attachments=${attachmentFails})`, async t => {
     t.timeout(5000);
+    let refuseAttachmentCleanup = attachmentFails;
     const toolEntered = Promise.withResolvers();
     const toolReleased = Promise.withResolvers();
     const stopEntered = Promise.withResolvers();
@@ -182,6 +187,11 @@ for (const cleanupFails of [false, true]) {
       {
         journalPowers: powers,
         extraTools: new Map([['effect', tool]]),
+        attachments: harden({
+          cleanup: async () => {
+            if (refuseAttachmentCleanup) throw Error('mailbox unavailable');
+          },
+        }),
         stopEnvironment: async () => {
           stopEntered.resolve(undefined);
           toolReleased.resolve(undefined);
@@ -191,6 +201,7 @@ for (const cleanupFails of [false, true]) {
       },
     );
     t.teardown(async () => {
+      refuseAttachmentCleanup = false;
       stopReleased.resolve(undefined);
       toolReleased.resolve(undefined);
       await agent.shutdown(true);
@@ -219,6 +230,11 @@ for (const cleanupFails of [false, true]) {
         message: /cleanup remains pending/,
       });
       t.is(requests, 1);
+      // Recovering attachments cannot erase a separate execution quarantine.
+      refuseAttachmentCleanup = false;
+      await t.throwsAsync(agent.shutdown(), {
+        message: /cleanup remains pending/,
+      });
     }
   });
 }

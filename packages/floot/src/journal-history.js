@@ -90,7 +90,14 @@ export const projectJournalTurnHistory = async (
   const user = content => ({
     role: 'user',
     content,
-    ...(turn.mail === undefined ? {} : { meta: { mail: turn.mail } }),
+    ...(turn.mail || turn.message
+      ? {
+          meta: {
+            ...(turn.mail ? { mail: turn.mail } : {}),
+            ...(turn.message ? { message: turn.message } : {}),
+          },
+        }
+      : {}),
   });
   if (
     !omitInput &&

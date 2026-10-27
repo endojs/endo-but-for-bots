@@ -21,7 +21,11 @@ globalThis.requestAnimationFrame = fn => win.setTimeout(() => fn(0), 0);
 globalThis.cancelAnimationFrame = id => clearTimeout(id);
 test.beforeEach(() => localStorage.clear());
 
-/** @param {ExecutionContext} t @param {object} [options] @param {boolean} [options.tts] */
+/**
+ * @param {ExecutionContext} t
+ * @param {object} [options]
+ * @param {boolean} [options.tts]
+ */
 const setup = async (t, { tts = false } = {}) => {
   t.timeout(5000);
   const parent = doc.createElement('div');
@@ -145,10 +149,10 @@ test.serial(
     });
     const { parent, daemon, speechCalls } = await setup(t, { tts: true });
     const send = text => {
-      const input = /** @type {HTMLTextAreaElement} */ (
+      const input = /** @type {HTMLElement} */ (
         parent.querySelector('.floot-input')
       );
-      input.value = text;
+      input.textContent = text;
       input.dispatchEvent(new win.Event('input', { bubbles: true }));
       input.dispatchEvent(
         new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),

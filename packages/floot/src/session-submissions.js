@@ -41,7 +41,7 @@ const HOLD_MESSAGES = harden({
  * @param {() => string} options.refusal why the session admits no work right
  *   now (stopped, changing network policy), or '' when it does. Transient: the
  *   pump is simply run again when it may have changed.
- * @param {(text: string, options: { pendingId: string, onBegun: () => Promise<void> }) => object} options.startTurn
+ * @param {(text: string, options: { pendingId: string, mentions?: import('./session-mentions.js').SessionMention[], message?: import('./session-mentions.js').ChatMessage, onBegun: () => Promise<void> }) => object} options.startTurn
  *   starts a turn in the slot and returns the FlootTurn; throws if refused
  * @param {() => void} [options.onChange]
  */
@@ -122,7 +122,7 @@ export const makeSessionSubmissions = ({
     }
   };
 
-  /** @param {{ id: string, text: string }} entry */
+  /** @param {{ id: string, text: string, mentions?: import('./session-mentions.js').SessionMention[], message?: import('./session-mentions.js').ChatMessage }} entry */
   const dispatch = async entry => {
     let begun = false;
     /** @type {object} */
@@ -130,6 +130,8 @@ export const makeSessionSubmissions = ({
     try {
       turn = startTurn(entry.text, {
         pendingId: entry.id,
+        mentions: entry.mentions,
+        message: entry.message,
         onBegun: async () => {
           begun = true;
           // The journal has the input now; a failure to let go of it here
@@ -235,20 +237,32 @@ export const makeSessionSubmissions = ({
     /** `{ entries, hold }` as plain data; empty until `ready()`. */
     read: () => harden({ entries: queue.list(), hold }),
     pump,
+    receipt: (text, requestId, manifest, message) =>
+      serial(async () => {
+        await initialise();
+        return queue.receipt(text, requestId, manifest, message);
+      }),
     /**
      * Accept a message. It starts at once if nothing is ahead of it.
      *
      * @param {string} text
      * @param {string} [requestId]
+     * @param {import('./session-mentions.js').SessionMention[]} [mentions]
+     * @param {import('./session-mentions.js').ChatMessage} [message]
      */
-    submit: (text, requestId) =>
+    submit: (text, requestId, mentions, message) =>
       serial(async () => {
         await initialise();
         // The user is here and sending: whatever waited goes first, in order.
         const priorHold = hold;
         const idle =
           !hold && !getCurrentTurn() && !refusal() && queue.list().length === 0;
-        const entry = await queue.enqueue(text, { claim: idle, requestId });
+        const entry = await queue.enqueue(text, {
+          claim: idle,
+          requestId,
+          mentions,
+          message,
+        });
         if ('duplicate' in entry && entry.duplicate)
           return harden({ id: entry.id });
         if (priorHold && priorHold.reason !== 'interrupted') setHold(null);

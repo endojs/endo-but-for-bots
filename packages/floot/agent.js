@@ -85,6 +85,11 @@ import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
 import { makeAccountsWatch } from './src/account-watch.js';
 import { makePendingQueue } from './src/pending-queue.js';
+import {
+  validateChatMessage,
+  chatMessageText,
+} from './src/session-mentions.js';
+import { makeSessionAttachments } from './src/session-attachments.js';
 import { makeSessionSubmissions } from './src/session-submissions.js';
 import {
   PROVIDER_PROMPT_ENVIRONMENT,
@@ -264,6 +269,18 @@ const FlootSessionInterface = M.interface('FlootSession', {
   enqueueOnce: M.callWhen(M.string(MESSAGE_LIMITS), M.string()).returns(
     M.record(),
   ),
+  enqueueMessageOnce: M.callWhen(
+    M.record(),
+    M.string(),
+    M.arrayOf(M.record()),
+  ).returns(M.record()),
+  getSubmissionReceipt: M.callWhen(
+    M.string(MESSAGE_LIMITS),
+    M.string(),
+    M.arrayOf(M.record()),
+  )
+    .optional(M.record())
+    .returns(M.or(M.null(), M.record())),
   listPending: M.callWhen().returns(M.record()),
   editPending: M.callWhen(M.string(), M.string(MESSAGE_LIMITS)).returns(
     M.undefined(),
@@ -485,6 +502,7 @@ const provisionPresetObjects = async (
  * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
  * @param {boolean} [options.portableContextFallback] - The backend rebuilds its conversation from supplied records every turn (`continuity: 'transcript'`), so context it cannot restore natively may be handed over as portable records instead of refused.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
+ * @param {ReturnType<typeof makeSessionAttachments>} [options.attachments] - Private mailbox delivery for structured UI turns.
  * @param {any} options.journalPowers - Explicit journal storage. The caller must
  *   supply private storage not exposed to the session guest. Capability identity
  *   alone does not establish that confinement.
@@ -511,6 +529,7 @@ const provisionPresetObjects = async (
  *     signal?: AbortSignal,
  *     onStart?: (history: Array<Record<string, any>>) => void,
  *     onBegun?: () => Promise<void>,
+ *     references?: import('./src/session-mentions.js').SessionMention[],
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getSettledHistory: () => Promise<Array<Record<string, any>>>,
@@ -552,6 +571,7 @@ export const makeStreamingAgent = async (
     forceCompaction = false,
     stopEnvironment,
     journalPowers,
+    attachments,
     onChange,
   } = { journalPowers: undefined },
 ) => {
@@ -779,6 +799,21 @@ export const makeStreamingAgent = async (
   let turnChain = Promise.resolve();
   let stopped = false;
   let quarantineError;
+  let attachmentQuarantineError;
+  const cleanupAttachments = async () => {
+    try {
+      await attachments?.cleanup();
+    } catch (error) {
+      attachmentQuarantineError = Error(
+        `Attachment cleanup failed: ${error.message}`,
+        { cause: error },
+      );
+      // Attachment recovery must never clear an independent containment failure.
+      quarantineError ??= attachmentQuarantineError;
+      stopInbox();
+      throw attachmentQuarantineError;
+    }
+  };
   const turnControllers = new Set();
 
   // Assemble the user message. A string is used as-is; a reader is drained
@@ -843,7 +878,17 @@ export const makeStreamingAgent = async (
     if (stopped) throw Error('Floot session agent is shutting down');
   };
 
-  const runTurnBody = async (text, writer, meta, signal, turnId) => {
+  const runTurnBody = async (
+    text,
+    writer,
+    meta,
+    signal,
+    turnId,
+    attachmentContext = '',
+  ) => {
+    const turnPrompt = attachmentContext
+      ? `${effectivePrompt}\n\n${attachmentContext}`
+      : effectivePrompt;
     await prepareHostedClient(signal);
     if (stopped || signal?.aborted) return;
     const acknowledgedCheckpoint = hostedClient
@@ -940,7 +985,7 @@ export const makeStreamingAgent = async (
           text: await hostedRecoveryText(text, turnId),
           writer,
           signal,
-          systemPrompt: effectivePrompt,
+          systemPrompt: turnPrompt,
           acknowledgedCheckpoint,
           // The stack owns the transcript: hand the backend this
           // conversation as records it can rebuild its CLI's native store
@@ -1075,7 +1120,7 @@ export const makeStreamingAgent = async (
             runtime.providerFormat,
           );
           context = [
-            { role: 'system', content: effectivePrompt },
+            { role: 'system', content: turnPrompt },
             ...path.filter(message => message.role !== 'system'),
             ...stagedMessages,
           ];
@@ -1363,7 +1408,7 @@ export const makeStreamingAgent = async (
   };
 
   const admissionErrors = new WeakSet();
-  const runTurn = async (input, writer, meta, signal, onBegun) => {
+  const runTurn = async (input, writer, meta, signal, onBegun, references) => {
     const text = await resolveUserText(input);
     try {
       await turnJournal.assertReady();
@@ -1383,6 +1428,7 @@ export const makeStreamingAgent = async (
       ...(nativeContextFormat === undefined ? {} : { nativeContextFormat }),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
+      ...(meta?.message === undefined ? {} : { message: meta.message }),
     });
     activeJournalTurn = turnId;
     activeJournalSignal = signal;
@@ -1423,6 +1469,7 @@ export const makeStreamingAgent = async (
           : {}),
       }),
     );
+    let attachmentPackage;
     let output = '';
     const observedWriter = {
       ...writer,
@@ -1454,7 +1501,26 @@ export const makeStreamingAgent = async (
         });
         return;
       }
-      await runTurnBody(text, observedWriter, meta, signal, turnId);
+      if (references?.length) {
+        if (!attachments || !meta?.message)
+          throw Error('Structured attachments unavailable');
+        attachmentPackage = await attachments.open(
+          meta.message,
+          references,
+          turnId,
+          () => {
+            if (stopped || signal?.aborted) throw Error('Turn cancelled');
+          },
+        );
+      }
+      await runTurnBody(
+        text,
+        observedWriter,
+        meta,
+        signal,
+        turnId,
+        attachmentPackage?.context,
+      );
       await stoppedEnvironment();
       if (signal?.aborted && completedJournalTurn !== turnId) {
         await turnJournal.append(turnId, {
@@ -1496,9 +1562,13 @@ export const makeStreamingAgent = async (
     } finally {
       signal?.removeEventListener('abort', stopOnAbort);
       await environmentStop;
-      activeJournalTurn = undefined;
-      activeJournalSignal = undefined;
-      notifyChange('turn-settled');
+      try {
+        await cleanupAttachments();
+      } finally {
+        activeJournalTurn = undefined;
+        activeJournalSignal = undefined;
+        notifyChange('turn-settled');
+      }
     }
   };
 
@@ -1523,7 +1593,15 @@ export const makeStreamingAgent = async (
     }
   };
 
-  const converse = (input, writer, meta, signal, onStart, onBegun) => {
+  const converse = (
+    input,
+    writer,
+    meta,
+    signal,
+    onStart,
+    onBegun,
+    references,
+  ) => {
     if (recordsOnly) {
       const error = Error('Records-only session cannot run turns');
       writer.abort(error.message);
@@ -1545,37 +1623,42 @@ export const makeStreamingAgent = async (
       if (onStart) onStart(await getHistory());
       return stopped
         ? Promise.reject(Error('Floot session agent is shutting down'))
-        : runTurn(input, writer, meta, turnController.signal, onBegun).catch(
-            err => {
-              // Failed containment is independent of historical uncertainty.
-              // Broken transports can fail this barrier without a user abort.
-              if (
-                err?.name === 'HostedTurnCancellationError' ||
-                `${err?.message || ''}`.includes(
-                  'Hosted turn cancellation failed:',
-                )
-              ) {
-                quarantineError = err;
-                stopped = true;
-                stopInbox();
-                writer.abort(err.message);
-                throw err;
-              }
-              // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
-              // `signal`, tearing down the in-flight provider stream. That's a
-              // clean stop, not a failure, and the turn's owner has already
-              // closed the reply channel, so swallow it.
-              if (turnController.signal.aborted) {
-                if (stopped) writer.abort('Floot session agent shut down');
-                return;
-              }
-              // runTurn has no internal catch, so on failure the writer is still
-              // unsettled — abort it here or every consumer (UI stream and the mail
-              // inbox's turnDone) would hang forever. Rethrow so callers still see it.
-              writer.abort(err instanceof Error ? err.message : String(err));
+        : runTurn(
+            input,
+            writer,
+            meta,
+            turnController.signal,
+            onBegun,
+            references,
+          ).catch(err => {
+            // Failed containment is independent of historical uncertainty.
+            // Broken transports can fail this barrier without a user abort.
+            if (
+              err?.name === 'HostedTurnCancellationError' ||
+              `${err?.message || ''}`.includes(
+                'Hosted turn cancellation failed:',
+              )
+            ) {
+              quarantineError = err;
+              stopped = true;
+              stopInbox();
+              writer.abort(err.message);
               throw err;
-            },
-          );
+            }
+            // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
+            // `signal`, tearing down the in-flight provider stream. That's a
+            // clean stop, not a failure, and the turn's owner has already
+            // closed the reply channel, so swallow it.
+            if (turnController.signal.aborted) {
+              if (stopped) writer.abort('Floot session agent shut down');
+              return;
+            }
+            // runTurn has no internal catch, so on failure the writer is still
+            // unsettled — abort it here or every consumer (UI stream and the mail
+            // inbox's turnDone) would hang forever. Rethrow so callers still see it.
+            writer.abort(err instanceof Error ? err.message : String(err));
+            throw err;
+          });
     });
     const releaseTurn = () => {
       signal?.removeEventListener('abort', forwardAbort);
@@ -1835,6 +1918,10 @@ export const makeStreamingAgent = async (
             continue;
           }
           handled.add(number);
+          // The admitted UI turn owns this package through tool settlement.
+          // It must not be dismissed or dispatched by the ordinary inbox.
+          // eslint-disable-next-line no-continue
+          if (attachments?.owns(message.messageId)) continue;
           // Offer every message — this session's own outbound mail included —
           // to the delegation registry first. It learns a delegation's identity
           // from the echo of the send and consumes the matching reply, which
@@ -1977,6 +2064,14 @@ export const makeStreamingAgent = async (
     const failures = /** @type {PromiseRejectedResult[]} */ (settled)
       .filter(result => result.status === 'rejected')
       .map(result => result.reason);
+    try {
+      await attachments?.cleanup();
+      if (quarantineError === attachmentQuarantineError)
+        quarantineError = undefined;
+      attachmentQuarantineError = undefined;
+    } catch (error) {
+      failures.push(error);
+    }
     if (runtime.kind === 'provider') {
       try {
         await runtime.disposeProvider?.();
@@ -4370,6 +4465,7 @@ export const make = async (
             transcriptLimits: workload.transcriptLimits,
             subagentLimits: workload.subagentLimits,
             journalPowers,
+            attachments: makeSessionAttachments(host, sessionGuest, id),
             backendId: entry.backendId,
             nativeContextFormat,
             portableContextFallback,
@@ -4513,10 +4609,11 @@ export const make = async (
           await agent.converse(
             input,
             writer,
-            undefined,
+            options.message ? harden({ message: options.message }) : undefined,
             signal,
             setHistory,
             options.onBegun,
+            options.mentions,
           );
         },
         () => {
@@ -4680,6 +4777,21 @@ export const make = async (
           await assertSessionReady(id);
           assertSessionAdmission(id);
           return submissionsFor(id).submit(text, requestId);
+        },
+        async enqueueMessageOnce(message, requestId, mentions) {
+          await assertSessionReady(id);
+          assertSessionAdmission(id);
+          message = validateChatMessage(message);
+          return submissionsFor(id).submit(
+            chatMessageText(message),
+            requestId,
+            mentions,
+            message,
+          );
+        },
+        async getSubmissionReceipt(text, requestId, manifest, message) {
+          await assertSessionReady(id);
+          return submissionsFor(id).receipt(text, requestId, manifest, message);
         },
         async listPending() {
           await assertSessionReady(id);
@@ -4891,6 +5003,10 @@ export const make = async (
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')
             return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
+          if (methodName === 'getSubmissionReceipt')
+            return 'getSubmissionReceipt(text, requestId, manifest, message?) — Recover an acknowledgement without resolving source inventory names. Manifest contains the originally persisted {path, identity} pairs. Returns {id} for an accepted matching request, or null if unknown; never starts work or releases restart holds.';
+          if (methodName === 'enqueueMessageOnce')
+            return 'enqueueMessageOnce({strings,names}, requestId, references) — Queue a structured Chat message with captured {path,identity,value} attachments. The admitted turn receives a real Endo package and may adopt or adoptTool its references. Unadopted attachments are dismissed after the turn. Reuse the same request ID, message and references on retry; getSubmissionReceipt recovers an accepted send without resolving changed source names.';
           if (methodName === 'enqueueOnce')
             return 'enqueueOnce(text, requestId) — Durable duplicate-safe enqueue. Generate requestId as Date.now() + a hyphen + crypto.randomUUID() before sending, persist it with the draft, and reuse it only for retries of the same text. Receipts survive dispatch and restart for 24 hours; expired IDs are rejected, never submitted again. A duplicate does not release queue restart holds. Requires an updated Floot host.';
           if (methodName === 'enqueue')
@@ -5147,6 +5263,7 @@ export const make = async (
    *
    * @param {Record<string, any>} options
    * @param inheritedInferenceRecipe
+   * @param inheritedPreset
    * @returns {Promise<string>} the new session id
    */
   const provisionSession = async (

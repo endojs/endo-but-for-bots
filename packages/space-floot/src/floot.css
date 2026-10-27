@@ -1494,3 +1494,75 @@
   gap: 0.5rem;
   margin: 1rem 0;
 }
+
+.floot-compose {
+  position: relative;
+}
+
+/* Shared Chat token UI, scoped to Floot's system-theme palette. */
+.floot-composer-anchor {
+  flex: 1;
+  min-width: 0;
+}
+.floot-composer-editor {
+  position: relative;
+}
+.floot-input {
+  white-space: pre-wrap;
+  overflow-y: auto;
+  min-height: 1.4em;
+}
+.floot-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--fl-text-muted);
+  pointer-events: none;
+}
+.floot-input[aria-disabled='true'] {
+  opacity: 0.6;
+}
+#floot-root .chat-token {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--fl-accent);
+  border-radius: 5px;
+  color: var(--fl-accent);
+  background: var(--fl-surface2);
+  white-space: nowrap;
+}
+#floot-root .chat-token::before {
+  content: '@';
+}
+#floot-root .token-edge::before {
+  content: ':';
+}
+#floot-root .token-menu {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--fl-surface);
+  color: var(--fl-text);
+  border: 1px solid var(--fl-border);
+  border-radius: 10px;
+  z-index: 200;
+}
+#floot-root .token-menu.visible {
+  display: block;
+}
+#floot-root .token-menu-item {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+#floot-root .token-menu-item.selected {
+  background: var(--fl-accent);
+  color: var(--fl-surface);
+}
+#floot-root .token-menu-hint,
+#floot-root .token-menu-empty {
+  padding: 8px 12px;
+  color: var(--fl-text-muted);
+  font-size: 12px;
+}

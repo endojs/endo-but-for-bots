@@ -2,6 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
+import { decodeChatDraft, chatDraftText } from './floot-mentions.js';
 
 /**
  * Persist before sending. Failed/unknown acknowledgements retain the same key.
@@ -44,8 +45,20 @@ export const makeSubmissionClient = (
      * @param {string} key
      * @param {string} text
      * @param {() => void} [onAcknowledged] Synchronous cleanup before the retry ID is removed.
+     * @param {() => Promise<any[]>} [resolveMentions]
      */
-    submit(session, key, text, onAcknowledged = () => {}) {
+    submit(
+      session,
+      key,
+      text,
+      onAcknowledged = () => {},
+      resolveMentions = undefined,
+    ) {
+      const structured = decodeChatDraft(text);
+      const message = resolveMentions
+        ? harden({ strings: structured.strings, names: structured.edgeNames })
+        : undefined;
+      const displayText = chatDraftText(text);
       const current = active.get(key);
       if (current && !current.state.acknowledged) {
         if (current.text !== text)
@@ -81,42 +94,131 @@ export const makeSubmissionClient = (
           storage.setItem(key, JSON.stringify(claimed));
           return { request: claimed, firstClaimant: !saved };
         });
-        // No lock is held over a remote await. An unknown reservation can be
-        // recovered using receipts, but only its first claimant may use enqueue.
-        // eslint-disable-next-line no-underscore-dangle
-        const methods = await E(session).__getMethodNames__();
-        const supportsReceipts = methods.includes('enqueueOnce');
-        await locks.request(key, () => {
-          const saved = storage.getItem(key);
-          const latest = saved ? JSON.parse(saved) : null;
-          if (!latest || latest.id !== request.id) {
-            const error = Error(
-              'Submission was resolved or changed in another view; inspect the conversation',
-            );
-            error.name = 'SubmissionChangedError';
-            throw error;
-          }
-          if (latest.legacy || (!supportsReceipts && !firstClaimant))
-            throw Error(
-              'This older Floot host cannot safely retry an unconfirmed send. Inspect its conversation before clearing the saved draft.',
-            );
+        let result;
+        try {
+          // No lock is held over a remote await. Reserve before discovery so
+          // other views cannot make an older observation into a fresh send.
+          // eslint-disable-next-line no-underscore-dangle
+          const methods = await E(session).__getMethodNames__();
           if (
-            !supportsReceipts &&
-            (latest.phase === 'receipts' || latest.legacy === false)
+            resolveMentions &&
+            (!methods.includes('enqueueMessageOnce') ||
+              !methods.includes('getSubmissionReceipt'))
           )
-            throw Error('This Floot host no longer supports safe retries');
-          storage.setItem(
-            key,
-            JSON.stringify({
-              ...latest,
-              phase: supportsReceipts ? 'receipts' : 'legacy',
-              legacy: !supportsReceipts,
-            }),
-          );
-        });
-        const result = supportsReceipts
-          ? await E(session).enqueueOnce(text, request.id)
-          : await E(session).enqueue(text);
+            throw Error(
+              'Update the Floot host to send inventory mentions. Nothing was sent.',
+            );
+          const supportsReceipts = methods.includes('enqueueOnce');
+          await locks.request(key, () => {
+            const saved = storage.getItem(key);
+            const latest = saved ? JSON.parse(saved) : null;
+            if (!latest || latest.id !== request.id) {
+              const error = Error(
+                'Submission was resolved or changed in another view; inspect the conversation',
+              );
+              error.name = 'SubmissionChangedError';
+              throw error;
+            }
+            if (latest.legacy || (!supportsReceipts && !firstClaimant))
+              throw Error(
+                'This older Floot host cannot safely retry an unconfirmed send. Inspect its conversation before clearing the saved draft.',
+              );
+            if (
+              !supportsReceipts &&
+              (latest.phase === 'receipts' || latest.legacy === false)
+            )
+              throw Error('This Floot host no longer supports safe retries');
+            storage.setItem(
+              key,
+              JSON.stringify({
+                ...latest,
+                phase: resolveMentions
+                  ? 'preparing'
+                  : supportsReceipts
+                    ? 'receipts'
+                    : 'legacy',
+                dispatched:
+                  !resolveMentions ||
+                  !!latest.dispatched ||
+                  latest.phase === 'receipts' ||
+                  latest.phase === 'legacy',
+                legacy: !supportsReceipts,
+              }),
+            );
+          });
+          if (resolveMentions) {
+            // Once accepted, a renamed or removed source is irrelevant. Recover
+            // the receipt before looking up any live inventory name.
+            if (request.manifest)
+              result = await E(session).getSubmissionReceipt(
+                displayText,
+                request.id,
+                harden(request.manifest),
+                message,
+              );
+            if (!result) {
+              const references = harden(await resolveMentions());
+              const manifest = references.map(({ path, identity }) => ({
+                path,
+                identity,
+              }));
+              await locks.request(key, () => {
+                const saved = storage.getItem(key);
+                const latest = saved ? JSON.parse(saved) : null;
+                if (!latest || latest.id !== request.id) {
+                  const error = Error(
+                    'Submission was resolved or changed in another view; inspect the conversation',
+                  );
+                  error.name = 'SubmissionChangedError';
+                  throw error;
+                }
+                if (
+                  latest.manifest &&
+                  JSON.stringify(latest.manifest) !== JSON.stringify(manifest)
+                )
+                  throw Error(
+                    'Inventory objects changed since this submission. Inspect the conversation before clearing the saved send.',
+                  );
+                // Persist identities BEFORE dispatch, including when the first
+                // RPC never reaches the daemon. Rebinding a name cannot silently
+                // change an outstanding grant on a later retry.
+                storage.setItem(
+                  key,
+                  JSON.stringify({
+                    ...latest,
+                    manifest,
+                    phase: 'receipts',
+                    dispatched: true,
+                  }),
+                );
+              });
+              result = await E(session).enqueueMessageOnce(
+                message,
+                request.id,
+                references,
+              );
+            }
+          } else {
+            result = supportsReceipts
+              ? await E(session).enqueueOnce(displayText, request.id)
+              : await E(session).enqueue(displayText);
+          }
+        } catch (error) {
+          if (resolveMentions) {
+            await locks.request(key, () => {
+              const saved = storage.getItem(key);
+              const latest = saved ? JSON.parse(saved) : null;
+              // Only a definitively unsent reservation is safe to release.
+              // Another view may have dispatched while this lookup failed.
+              if (
+                latest?.id === request.id &&
+                (latest.dispatched === false || latest.phase === 'reserved')
+              )
+                storage.removeItem(key);
+            });
+          }
+          throw error;
+        }
         // Another view may already have acknowledged this request and sent
         // the next one. Its durable retry ID must survive our delayed ACK.
         await locks.request(key, () => {

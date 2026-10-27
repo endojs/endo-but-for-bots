@@ -9,6 +9,16 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { FlootApp } from '@endo/space-floot';
 import { makeReplyFold } from '@endo/floot/src/reply-fold.js';
 import { applyTranscript } from '@endo/floot/src/transcript-delta.js';
+import {
+  resolveMentions,
+  validateChatMessage,
+} from '@endo/floot/src/session-mentions.js';
+import {
+  makeFlootComposer,
+  decodeChatDraft,
+  chatDraftText,
+  encodeChatDraft,
+} from './floot-mentions.js';
 import { makePresetSettings } from './preset-settings.js';
 import {
   makeSessionDrafts,
@@ -585,7 +595,7 @@ export const flootComponent = (
   /**
    * @typedef {{ role: 'user' | 'assistant' | 'tool' | 'thinking', text?: string,
    *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
-   *   meta?: { mail?: { from?: string } },
+   *   meta?: { mail?: { from?: string }, message?: {strings: string[], names: string[]} },
    *   name?: string, args?: string, result?: string | null, failed?: boolean }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
    *   model: string, backendId?: string, modelId?: string,
@@ -594,11 +604,11 @@ export const flootComponent = (
    *   lifecycle?: string,
    *   activity?: 'passive' | 'working' | 'error', pendingCount?: number,
    *   transcript: { version: number, messages: readonly any[] } | null,
-   *   current: { input: string | null, turn: any, pendingId?: string } | null,
+   *   current: { input: string | null, message?: {strings: string[], names: string[]}, turn: any, pendingId?: string } | null,
    *   running: { input: string, from?: string } | null,
    *   pending: import('./floot-session-state.js').PendingState,
    *   displayTurn: FlootTurn | null,
-   *   tail?: { input: string | null, turn: FlootTurn } | null,
+   *   tail?: { input: string | null, message?: {strings: string[], names: string[]}, turn: FlootTurn } | null,
    *   transcriptStale?: boolean }}
    *   FlootSession
    *
@@ -642,6 +652,8 @@ export const flootComponent = (
   const sessionStatus = new Map();
 
   let status = 'Loading sessions…';
+  const textDraft = text =>
+    encodeChatDraft({ strings: [text], petNames: [], edgeNames: [] });
   let inputText = '';
   let settingsOpen = false;
   // Whether the transcript should follow new content to the bottom. Tracked
@@ -672,7 +684,9 @@ export const flootComponent = (
   // "Screen wake lock"). A no-op until then, because `notify` runs during setup
   // and reaching a `let` before its declaration would throw.
   let updateWakeLock = () => {};
+  let syncComposer = () => {};
   const notify = () => {
+    syncComposer();
     try {
       updateWakeLock();
     } catch {
@@ -746,6 +760,8 @@ export const flootComponent = (
       Boolean(recovery.getState().resolving || hasOutstandingWork()),
   });
   const execution = makeFlootExecution({ notify });
+  /** @type {ReturnType<typeof makeFlootComposer> | undefined} */
+  let composer;
 
   /**
    * @param {any[]} history
@@ -942,14 +958,24 @@ export const flootComponent = (
     const sent = session ? [...session.messages] : [];
     if (current) {
       if (typeof current.input === 'string') {
-        sent.push({ role: 'user', text: current.input });
+        sent.push({
+          role: 'user',
+          text: current.input,
+          ...(current.message ? { meta: { message: current.message } } : {}),
+        });
       }
       if (shown) sent.push(...shown.messages);
     } else if (session?.tail) {
       // The turn is over but the transcript that contains it could not be
       // read yet: what was on screen stays there until it can.
       if (typeof session.tail.input === 'string') {
-        sent.push({ role: 'user', text: session.tail.input });
+        sent.push({
+          role: 'user',
+          text: session.tail.input,
+          ...(session.tail.message
+            ? { meta: { message: session.tail.message } }
+            : {}),
+        });
       }
       sent.push(...session.tail.turn.messages);
     } else if (session?.running) {
@@ -976,6 +1002,7 @@ export const flootComponent = (
       ...queuedEntries.map(entry => ({
         role: /** @type {const} */ ('user'),
         text: entry.text,
+        ...(entry.message ? { meta: { message: entry.message } } : {}),
         pending: true,
         pendingId: entry.id,
         pendingState:
@@ -992,6 +1019,7 @@ export const flootComponent = (
             .map(send => ({
               role: /** @type {const} */ ('user'),
               text: send.text,
+              ...(send.message ? { meta: { message: send.message } } : {}),
               pending: true,
               pendingId: `local-${send.id}`,
               pendingState: /** @type {const} */ ('sending'),
@@ -1073,7 +1101,7 @@ export const flootComponent = (
       // No session is nothing to load: the pane says hello, not "loading".
       loaded: session ? session.loaded : true,
       status,
-      input: inputText,
+      input: chatDraftText(inputText),
       settingsOpen,
       recovery: recovery.getState(),
       network: network.getState(),
@@ -1135,7 +1163,7 @@ export const flootComponent = (
    * not it.
    *
    * @typedef {{ id: number, sessionId: string, text: string,
-   *   pendingId?: string, acked: boolean, seen: boolean,
+   *   message?: {strings: string[], names: string[]}, pendingId?: string, acked: boolean, seen: boolean,
    *   before: Set<string> }} InFlightSend
    */
   /** @type {InFlightSend[]} */
@@ -1153,6 +1181,7 @@ export const flootComponent = (
     ...session.pending.entries.map(entry => ({
       id: entry.id,
       text: entry.text,
+      ...(entry.message ? { meta: { message: entry.message } } : {}),
     })),
     ...(session.current?.pendingId
       ? [{ id: session.current.pendingId, text: session.current.input }]
@@ -1350,6 +1379,7 @@ export const flootComponent = (
         ? {
             input: typeof reported.input === 'string' ? reported.input : null,
             turn: reported.turn,
+            ...(reported.message ? { message: reported.message } : {}),
             ...(typeof reported.pendingId === 'string'
               ? { pendingId: reported.pendingId }
               : {}),
@@ -1364,7 +1394,11 @@ export const flootComponent = (
       // until it can, rather than the prompt and reply blinking out.
       session.tail =
         previous && session.displayTurn && session.transcriptStale
-          ? { input: previous.input, turn: session.displayTurn }
+          ? {
+              input: previous.input,
+              turn: session.displayTurn,
+              ...(previous.message ? { message: previous.message } : {}),
+            }
           : null;
       session.displayTurn = null;
       if (previous && activeSessionId === session.id && !activeTurn) {
@@ -1509,6 +1543,7 @@ export const flootComponent = (
   // keeps running on the daemon, and its queue with it.
   /** @param {boolean} [reselect] false when reopening the same session */
   const openActiveSession = (reselect = true) => {
+    composer?.close();
     if (sessionView) sessionView.close();
     sessionView = null;
     if (detachActiveTurnView) detachActiveTurnView();
@@ -1663,8 +1698,23 @@ export const flootComponent = (
       resumeTimer = 0;
     }
     pendingUtterance = '';
-    const text = (raw || '').trim();
+    const draft = raw || '';
+    let structured;
+    let text;
+    try {
+      structured = decodeChatDraft(draft);
+      text = chatDraftText(draft);
+      if (structured.petNames.length)
+        validateChatMessage({
+          strings: structured.strings,
+          names: structured.edgeNames,
+        });
+    } catch (error) {
+      setStatus(/** @type {Error} */ (error).message);
+      return;
+    }
     if (!text) return;
+    composer?.close();
     // Create/resume the audio context now, still inside the user's Send
     // gesture: a browser refuses autoplay when the first resume happens only
     // after the remote round trips that start the turn and its speech.
@@ -1673,9 +1723,9 @@ export const flootComponent = (
     /** @type {{key: string, value: string} | null} */
     let savedDraft = null;
     try {
-      savedDraft = sessionDrafts.save(text);
+      savedDraft = sessionDrafts.save(draft);
     } catch {
-      inputText = text;
+      inputText = draft;
       setStatus(
         'This draft could not be saved on this device. Nothing was sent.',
       );
@@ -1690,6 +1740,9 @@ export const flootComponent = (
       id: nextInFlightId,
       sessionId: selected ? selected.id : '',
       text,
+      message: structured.petNames.length
+        ? { strings: structured.strings, names: structured.edgeNames }
+        : undefined,
       acked: false,
       seen: false,
       before: new Set(
@@ -1707,7 +1760,7 @@ export const flootComponent = (
         session = await createSession();
         send.sessionId = session.id;
         openActiveSession();
-        savedDraft = sessionDrafts.save(text);
+        savedDraft = sessionDrafts.save(draft);
       }
       if (session.title === DEFAULT_TITLE) {
         session.title = autoTitle(text);
@@ -1719,8 +1772,11 @@ export const flootComponent = (
       const accepted = await submissionClient.submit(
         facetFor(session),
         `floot-send:${profilePath.join('/')}:${session.id}`,
-        text,
+        draft,
         () => sessionDrafts.acknowledge(savedDraft),
+        structured.petNames.length
+          ? () => resolveMentions(rootPowers, structured.petNames)
+          : undefined,
       );
       send.acked = true;
       if (accepted && typeof accepted.id === 'string') {
@@ -1751,10 +1807,10 @@ export const flootComponent = (
             if (send.sessionId) {
               inputText = sessionDrafts.restore(
                 `floot-send:${profilePath.join('/')}:${send.sessionId}`,
-                text,
+                draft,
                 inputText,
               );
-            } else if (!getActiveSession() && !inputText) inputText = text;
+            } else if (!getActiveSession() && !inputText) inputText = draft;
           } catch {
             // The durable retry remains authoritative when draft storage fails.
           }
@@ -1975,7 +2031,9 @@ export const flootComponent = (
         if (value.type === 'partial' || value.type === 'final') {
           last = value.text;
           // Show buffered continuation text ahead of the live partial.
-          inputText = pendingUtterance ? `${pendingUtterance} ${last}` : last;
+          inputText = textDraft(
+            pendingUtterance ? `${pendingUtterance} ${last}` : last,
+          );
           voiceTranscript = last;
           notify();
         } else if (value.type === 'end') {
@@ -2027,7 +2085,7 @@ export const flootComponent = (
     // Keep the buffered utterance visible in the compose box for the whole
     // grace window. Blanking it made recognized speech vanish for about a
     // second before it sent, which reads as a swallowed message.
-    inputText = pendingUtterance;
+    inputText = textDraft(pendingUtterance);
     notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
@@ -2108,7 +2166,7 @@ export const flootComponent = (
     speechStart = Date.now();
     silenceStart = 0;
     // Preserve any buffered continuation text; a fresh utterance clears it.
-    inputText = pendingUtterance;
+    inputText = textDraft(pendingUtterance);
     notify();
     channel = makeAudioChannel();
     const ownChannel = channel;
@@ -2131,7 +2189,7 @@ export const flootComponent = (
           .return()
           .catch(() => {});
       channel = null;
-      inputText = pendingUtterance;
+      inputText = textDraft(pendingUtterance);
       notify();
       return;
     }
@@ -2928,7 +2986,11 @@ export const flootComponent = (
       return () => listeners.delete(listener);
     },
     send(/** @type {string | undefined} */ text) {
-      submit(typeof text === 'string' ? text : inputText);
+      submit(
+        typeof text === 'string'
+          ? textDraft(text)
+          : (composer?.read() ?? inputText),
+      );
     },
     stop() {
       cancelTurn();
@@ -3095,6 +3157,30 @@ export const flootComponent = (
     allowedAttrs: ['target'],
   });
 
+  composer = makeFlootComposer({
+    document: $parent.ownerDocument,
+    powers: rootPowers,
+    onInput: draft => controller.setInput(draft),
+    onSend: () => controller.send(),
+  });
+  const mountComposer = () => {
+    const anchor = $mount.querySelector('[data-floot-composer]');
+    if (composer && anchor && composer.node.parentNode !== anchor)
+      anchor.appendChild(composer.node);
+  };
+  syncComposer = () => {
+    const state = controller.getState();
+    composer?.sync(
+      inputText,
+      state.unavailable ||
+        state.network?.changing ||
+        state.network?.blocked ||
+        state.recovery?.resolving,
+    );
+  };
+  syncComposer();
+  mountComposer();
+
   // Sticky-bottom transcript scrolling lives HOST-side: the confined view cannot
   // touch DOM nodes (the renderer strips refs), so the host owns `$mount` and
   // nudges `.floot-messages` to the bottom after each render while the reader is
@@ -3111,6 +3197,7 @@ export const flootComponent = (
   $mount.addEventListener('scroll', onScrollCapture, true);
   wakeLockDoc.addEventListener('visibilitychange', onVisibilityChange);
   const scrollObserver = new MutationObserver(() => {
+    mountComposer();
     if (!stick) return;
     const el = /** @type {HTMLElement | null} */ (
       $mount.querySelector('.floot-messages')
@@ -3551,6 +3638,7 @@ export const flootComponent = (
       ttsCtx = null;
     }
     scrollObserver.disconnect();
+    composer?.dispose();
     $mount.removeEventListener('scroll', onScrollCapture, true);
     unmount($mount);
     $mount.remove();
