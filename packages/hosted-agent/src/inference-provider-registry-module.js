@@ -1,4 +1,8 @@
 // @ts-check
+// prefer-endo-primitives-exempt: disposal hooks require callable remotables;
+// makeExo creates method-bearing objects, not callable facets.
+
+/** @import { ERef } from '@endo/eventual-send' */
 
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
@@ -27,7 +31,7 @@ harden(RegistryRootInterface);
  * owns the snapshot namespace and `@secrets`; an issuer factory is retained by
  * name and resolved anew after daemon restart.
  *
- * @param {import('@endo/eventual-send').ERef<any>} powers
+ * @param {ERef<any>} powers
  * @param {any} context
  * @param {{ env?: Record<string, string> }} [options]
  */

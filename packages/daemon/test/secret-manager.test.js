@@ -5,6 +5,7 @@ import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import {
   makeSecretManager,
@@ -728,7 +729,7 @@ test('stable import resumes a lost backend response without replacing bytes', as
     grantId: 'grant-stable-00001',
     operationId: 'operation-stable-1',
   });
-  const original = encodeBase64(new TextEncoder().encode('original'));
+  const original = encodeBase64(encodeUtf8('original'));
   const firstImporter = await E(
     harness.makeDirectory(harness.makeManager(backend)),
   ).lookup('create');
@@ -781,7 +782,7 @@ test('revoking a provisioning import cleans up a lost backend response', async t
       E(importer).provideBase64(
         'stable-cleanup',
         'Stable cleanup',
-        encodeBase64(new TextEncoder().encode('original')),
+        encodeBase64(encodeUtf8('original')),
         stableIds,
       ),
     { message: /CREATE_FAILED/ },
@@ -818,7 +819,7 @@ test('stable import resumes a lost binding response exactly once', async t => {
     grantId: 'grant-stable-00002',
     operationId: 'operation-stable-2',
   });
-  const bytes = encodeBase64(new TextEncoder().encode('original'));
+  const bytes = encodeBase64(encodeUtf8('original'));
   const firstImporter = await E(makeDirectory(harness.makeManager())).lookup(
     'create',
   );
@@ -850,7 +851,7 @@ test('stable import rejects a taken pet name before creating an orphan', async t
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
   const importer = await E(directory).lookup('create');
-  const bytes = encodeBase64(new TextEncoder().encode('original'));
+  const bytes = encodeBase64(encodeUtf8('original'));
   await E(importer).createBase64('taken', 'Existing secret', bytes);
   const beforeRecords = harness.records.size;
   const beforeGrants = harness.grants.size;
@@ -1126,7 +1127,7 @@ test('stable import refuses invalid ids, idempotency conflicts, missing keys, an
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
   const importer = await E(directory).lookup('create');
-  const bytes = encodeBase64(new TextEncoder().encode('original'));
+  const bytes = encodeBase64(encodeUtf8('original'));
   const stableIds = harden({
     secretId: 'secret-stable-0005',
     grantId: 'grant-stable-00005',

@@ -1,13 +1,24 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { makeInferenceProviderRegistry } from '../src/inference-provider-registry.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
+import { InferenceEndpointInterface } from '../src/subscription-share.js';
 
 const limits = harden({ concurrentTurns: 1, dailyTokens: 1000 });
+
+const TestSecretBlobInterface = M.interface('TestSecretBlob', {
+  readBase64: M.callWhen().returns(M.string()),
+  getDescription: M.callWhen().returns(M.string()),
+});
+const TestReaderInterface = M.interface('TestReader', {});
+const TestOrphanBlobInterface = M.interface('TestOrphanBlob', {});
 
 const providerRequest = (overrides = {}) =>
   harden({
@@ -16,7 +27,7 @@ const providerRequest = (overrides = {}) =>
     kind: 'anthropic',
     defaultModel: 'claude-test',
     limits,
-    keyBase64: globalThis.btoa('canary-secret'),
+    keyBase64: encodeBase64(encodeUtf8('canary-secret')),
     ...overrides,
   });
 
@@ -35,7 +46,7 @@ const makeBacking = () => {
       const existing = secrets.get(name);
       if (existing !== undefined) return existing.blob;
       if (bytesBase64 === undefined) throw Error('key needed');
-      const blob = Far('SecretBlob', {
+      const blob = makeExo('SecretBlob', TestSecretBlobInterface, {
         readBase64: async () => bytesBase64,
         getDescription: async () => description,
       });
@@ -77,36 +88,40 @@ const makeIssuerFactory =
         let revoked = false;
         /** @type {Set<() => void>} */
         const cancellations = new Set();
-        const endpoint = Far('InferenceEndpoint', {
-          request: async message => {
-            await null;
-            if (disposed || revoked) throw Error('endpoint revoked');
-            events.push(['request', sessionId, message.path]);
-            if (message.path === '/wait') {
-              await new Promise((resolve, reject) => {
-                cancellations.add(() => reject(Error('request canceled')));
+        const endpoint = makeExo(
+          'InferenceEndpoint',
+          InferenceEndpointInterface,
+          {
+            request: async message => {
+              await null;
+              if (disposed || revoked) throw Error('endpoint revoked');
+              events.push(['request', sessionId, message.path]);
+              if (message.path === '/wait') {
+                await new Promise((resolve, reject) => {
+                  cancellations.add(() => reject(Error('request canceled')));
+                });
+              }
+              return harden({ status: 200, headers: {}, body: 'ok' });
+            },
+            requestByteStream: async message => {
+              if (disposed || revoked) throw Error('endpoint revoked');
+              events.push(['stream', sessionId, message.path]);
+              return harden({
+                status: 200,
+                headers: {},
+                body: makeExo('reader', TestReaderInterface, {}),
               });
-            }
-            return harden({ status: 200, headers: {}, body: 'ok' });
+            },
+            attestation: async () => harden({ version: 'fake-v1', sessionId }),
+            revoke: async () => {
+              revoked = true;
+              for (const cancel of cancellations) cancel();
+              cancellations.clear();
+              live.delete(endpoint);
+              events.push(['revoke', sessionId]);
+            },
           },
-          requestByteStream: async message => {
-            if (disposed || revoked) throw Error('endpoint revoked');
-            events.push(['stream', sessionId, message.path]);
-            return harden({
-              status: 200,
-              headers: {},
-              body: Far('reader', {}),
-            });
-          },
-          attestation: async () => harden({ version: 'fake-v1', sessionId }),
-          revoke: async () => {
-            revoked = true;
-            for (const cancel of cancellations) cancel();
-            cancellations.clear();
-            live.delete(endpoint);
-            events.push(['revoke', sessionId]);
-          },
-        });
+        );
         live.add(endpoint);
         return endpoint;
       },
@@ -187,7 +202,7 @@ test('provider facets preserve ownership, supersession, immutable descriptors, a
     providerRequest({
       idempotencyKey: 'replace-000000001',
       displayName: 'Claude replacement',
-      keyBase64: globalThis.btoa('replacement-secret'),
+      keyBase64: encodeBase64(encodeUtf8('replacement-secret')),
     }),
   );
   t.is(second.supersedes, first.providerId);
@@ -492,7 +507,7 @@ test('expired intent aborts and reconciliation revokes orphan registry secrets',
     { message: 'crash after intent' },
   );
   await registry.close();
-  const orphanBlob = Far('SecretBlob', {});
+  const orphanBlob = makeExo('SecretBlob', TestOrphanBlobInterface, {});
   backing.secrets.set('inference-provider-orphan', {
     blob: orphanBlob,
     state: 'active',
