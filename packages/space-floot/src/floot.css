@@ -642,6 +642,8 @@
   font-size: 1.15rem;
 }
 .floot-mic:hover {
+  /* Override the host page's button:hover, including sticky touch hover. */
+  background: var(--fl-surface2);
   border-color: var(--fl-text-muted);
 }
 .floot-mic.listening {
