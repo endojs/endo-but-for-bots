@@ -3,10 +3,11 @@
 | | |
 |---|---|
 | **Created** | 2026-10-23 |
-| **Updated** | 2026-10-23 |
+| **Updated** | 2026-10-27 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 | **Parent** | [Course correction: retire subscription credentials under `claude --bare`](claude-bare-course-correction.md) |
+| **Decisions** | The maintainer answered all seven open questions on 2026-10-27 ([tracker comment](https://github.com/kriscendobot/minion.town/issues/227#issuecomment-6434171904)); each answer is folded into the section it governs |
 | **Grounded against** | `endojs/endo-but-for-bots` `llm` at `d5ac41980a`; `kriscendobot/minion.town` `main` at `68c3960bbe` |
 
 ## Summary
@@ -22,23 +23,29 @@ facet and its own attenuated guest powers. A daemon-pinned responder wakes the
 agent on mail. Provider creation is driven by an explicit minion.town UI action,
 not by an unsolicited form message. Every provider is owned by exactly one
 principal, and a provider id means nothing outside its owner's directory.
+Nothing is shared implicitly: every capability an agent holds, including its
+provider's inference and its ability to create subagents, reaches it by an
+explicit endowment at creation.
 
 ## Existing substrate and harness choice
 
 The existing Lal/Fae form design and implementation are useful but not the UI
-contract. [`packages/fae/llm-provider-factory.js`](../packages/fae/llm-provider-factory.js)
+contract.
+[`packages/fae/llm-provider-factory.js`](../packages/fae/llm-provider-factory.js)
 calls the daemon secret manager and stores only `authSecretName` in provider
 configuration. Its validation is narrow: it checks that an OpenRouter host has
-an organization-qualified model and that a referenced secret exists, but it does
-not validate provider name, host, or model in general. Its own comment also
-records the defect this design must avoid: a daemon form submission is durable
-before the factory processes it, so a typed raw token remains in the form
-message. Reuse its `SecretBlob` binding, per-turn reread/rotation in
+an organization-qualified model and that a referenced secret exists, but it
+does not validate provider name, host, or model in general. Its own comment
+also records the defect this design must avoid: a daemon form submission is
+durable before the factory processes it, so a typed raw token remains in the
+form message. Reuse its `SecretBlob` binding, per-turn reread/rotation in
 `packages/fae/src/provider-owner.js`, and tagged error behavior. The provider
 registry adds the general field validation itself (phase 1): display-name
-length and characters, kind from a closed set, base URL from the kind's
-allowlist, and model from the kind's catalog. Do not reuse the unsolicited form
-transport or persist the raw submission.
+length and characters, kind from a closed set (only `anthropic` in the first
+release), and a model id of the kind's validated shape. Catalog membership is
+checked against the provider's live model list in phase 2 (§ Model catalogs).
+The base URL is the kind's fixed default and is not a user field. Do not reuse
+the unsolicited form transport or persist the raw submission.
 
 Harnesses present on `llm` are:
 
@@ -51,8 +58,9 @@ Harnesses present on `llm` are:
 | **Agentry** (`packages/agentry/`) | Shared harness construction and code-mode substrate, not a user-facing persona. | Reuse internally; do not list as a harness. |
 
 `@endo/genie` is not an alternative: it was retired on `llm` by commit
-`42bc7d5161`. The first UI therefore lists exactly `lal` and `fae`, recommends
-Lal, and can grow from a server-supplied harness catalog later.
+`42bc7d5161`. The first UI therefore lists exactly `lal` (the default) and
+`fae` (an advanced choice), and can grow from a server-supplied harness catalog
+later. Floot and Jaine stay hidden until each has a dedicated powers profile.
 
 ## Actors and capabilities
 
@@ -78,9 +86,10 @@ what confines an agent.
   deletion operations).
 - **Responder.** A formula pinned in the agent guest's `@pins` that follows
   that guest's mailbox and starts one harness turn per message.
-- **Harness.** Lal or Fae, run as the agent's driver. It holds exactly two
-  capabilities: the agent guest's attenuated powers facet and the agent's
-  `AgentInference` grant.
+- **Harness.** Lal or Fae, run as the agent's driver. It holds exactly the
+  capabilities endowed at creation: the agent guest's attenuated powers facet,
+  the agent's `AgentInference` grant, and the subagent-creation capability
+  (§ Explicit endowment).
 
 | Actor | Holds | Cannot reach |
 |---|---|---|
@@ -88,15 +97,39 @@ what confines an agent.
 | Broker | `SecretBlob`, provider use facets, per-agent grants, usage ledger | Any guest's inventory |
 | Agent guest | Own mailbox and pet names | Owner guest, provider directory, broker internals, sibling agents |
 | Responder | Agent guest mailbox, the harness launcher | Anything outside the agent guest |
-| Harness | Agent guest powers facet, `AgentInference` | Key bytes, provider admin, owner guest |
+| Harness | Agent guest powers facet, `AgentInference`, subagent-creation capability | Key bytes, provider admin, owner guest |
 
 The separation enforces confinement because the owner guest and the agent
 guest are distinct capabilities: a harness running with the agent guest's
 powers has nothing that designates the owner's inventory or providers, so
-even a compromised harness can spend only through its own bounded grant and
-act only through its own mailbox. In the rest of this document, "owner"
+even a compromised harness can spend only through its own bounded grant, act
+only through its own mailbox, and create only subagents whose budget is carved
+from its own. In the rest of this document, "owner"
 means the signed-in principal and its owner guest, and "agent guest" means
 the dedicated per-agent guest.
+
+### Explicit endowment
+
+There is no implicit sharing. A capability reaches an agent only because the
+creation request names it, and the factory endows only what the request names:
+
+- **Provider.** A provider's inference reaches an agent only as the
+  `AgentInference` grant minted from the provider the creation request selects
+  (or a later reattachment selects). No agent can use a provider merely
+  because its owner holds it, and the factory never attaches a provider that
+  the request did not name.
+- **Subagent creation.** Every agent is endowed at creation with a
+  budget-attenuated capability to create subagents. Its slot is part of the
+  creation request and is filled only when the request names it. The
+  capability itself, the spawner, is specified by the agent workbench design
+  (job `design-claude-api-agent-workbench-20261027`), not here. A subagent
+  receives its parent's inference and its own subagent-creation capability the
+  same way: by explicit endowment from the parent, never by inheritance.
+- **UI defaults are not authority.** Where the UI offers a default, such as
+  the selected provider or the **Can create subagents** box, the default is
+  only a pre-checked control in the form. What the submitted request names is
+  what the agent receives; an unchecked box endows nothing, and the server
+  applies no default of its own.
 
 ## User experience
 
@@ -107,11 +140,12 @@ In plain terms, a user makes two choices. First, the user picks the provider,
 which decides whose API key pays for the agent. Second, the user picks the
 agent program that runs (the harness) and sets the agent's name and limits.
 
-The user does not choose what the agent is allowed to do. Each harness comes
-with a fixed list of permitted actions, its *powers profile*, such as reading
-and sending its own mail; § Confinement and wake-on-message gives the full
-list. A setting that grants extra powers (called *endowments* in the Chat
-wizard) therefore has nothing to offer here.
+The agent's guest powers are not a choice. Each harness comes with a fixed
+list of permitted actions on its own guest, its *powers profile*, such as
+reading and sending its own mail; § Confinement and wake-on-message gives the
+full list. Everything beyond that profile is an explicit endowment the form
+shows as a checkbox (§ Explicit endowment). In the first release the only such
+endowment is **Can create subagents**, pre-checked.
 
 This dialog is a distinct operation from the Chat **Add agent** wizard in
 [`chat-inventory-create-menu.md`](chat-inventory-create-menu.md) § Three-pane
@@ -121,28 +155,34 @@ credential choice. Here the provider is a reusable, separately managed object
 that pays for the agent, so the dialog picks or creates the provider first and
 the harness second. Giving the reversed order the same name would teach users
 two meanings of one label, so minion.town calls it **New API-key agent**, and
-**Add agent** stays reserved for Chat's harness-first wizard. The *endowments*
-pane has no counterpart here, because the harness's powers profile fixes it
-(§ Confinement). Both operations submit to the same agent factory with the
-same fields. If the Chat wizard adopts API-key providers, its inference-source
-pane lists the owner's providers through the same directory facet, in Chat's
-own harness-first order; until then, Chat's wizard does not offer them.
+**Add agent** stays reserved for Chat's harness-first wizard. The Chat
+wizard's *endowments* pane corresponds here only to the subagent-creation
+checkbox in step 2; endowing other capabilities from the owner's inventory is
+left to the agent workbench design. Both operations submit to the same agent
+factory with the same fields. If the Chat wizard adopts API-key providers, its
+inference-source pane lists the owner's providers through the same directory
+facet, in Chat's own harness-first order; until then, Chat's wizard does not
+offer them.
 
 ### Step 1: create or choose an inference provider
 
 The page first lists the user's active providers by non-secret display name,
 provider kind, default model, spend summary, and status. Before the first
 agent is created, the step states that the key's owner pays the upstream
-provider and that the caps below apply per provider, not per upstream
-account (§ Cost and abuse controls). The user may select one
+provider, that the caps below apply per provider, not per upstream account,
+and that the owner-wide cap bounds all of the owner's providers together
+(§ Cost and abuse controls). The user may select one
 or choose **New provider**, which asks for:
 
 - provider name;
-- provider kind (`Anthropic` first; `OpenAI-compatible` only when its base URL
-  allowlist and response adapter ship);
-- API key in `<input type="password">`;
-- default model; and
-- base URL only for a supported non-default provider kind.
+- provider kind (`Anthropic` is the only kind in the first release; other
+  kinds, such as an allowlisted OpenAI-compatible base URL, are a later
+  phase);
+- API key in `<input type="password">`; and
+- default model, chosen from the live model list or typed when discovery
+  fails (§ Model catalogs).
+
+There is no base URL field while Anthropic is the only kind.
 
 Submit performs one authenticated HTTPS `POST` with the key and a
 client-generated idempotency key in the body. The client clears the field
@@ -187,13 +227,17 @@ After provider selection, the page asks for:
 
 - bot name;
 - harness: `lal` (recommended) or `fae`;
-- model, chosen from the provider's safe catalog or its default;
+- model, chosen from the provider's live model list or its default, or typed
+  when discovery fails (§ Model catalogs);
 - **Wake on messages**, on by default and changeable later (§ Agent
-  management); and
-- initial spend/rate limits, initialized from deployment defaults.
+  management);
+- **Can create subagents**, a pre-checked box (§ Explicit endowment); and
+- initial spend/rate limits, initialized from the default agent caps
+  (§ Cost and abuse controls).
 
 Submit is a separate authenticated operation containing only provider id,
-harness, bot name, model, limits, and an idempotency key. The provider id is
+harness, bot name, model, limits, the named endowments, and an idempotency
+key. The provider id is
 resolved only through the signed-in owner's provider directory (§ Ownership and
 cross-principal denial). Success adds the agent to the owner guest's inventory.
 Retrying the same idempotency key returns the same provider or agent; it never
@@ -241,12 +285,13 @@ provider**, and **Delete agent**.
   group, only the owner's providers that are `active`, not the current
   provider, and of a kind the agent's harness adapter supports; retiring,
   retired, and still-being-created providers are not listed. Selecting one
-  shows a model `<select>` drawn from that provider's catalog, preselected to
+  shows a model `<select>` drawn from that provider's model list (a text
+  field when discovery fails, § Model catalogs), preselected to
   the agent's current model when the catalog has it and otherwise to the
   provider's default, with the text "*model* is not offered by *provider*"
   in that case. The dialog then shows the effective limits: the agent's
   current limits clamped to the target provider's caps, listing each limit
-  that will be lowered ("Daily budget: $5.00 becomes $2.00, this provider's
+  that will be lowered ("Daily budget: $2.00 becomes $1.00, this provider's
   cap"). Confirmation reads "Reattach *name* to *provider*? New turns will
   use *model* and be charged to *provider*. Earlier usage stays with
   *old provider*." with **Reattach** and **Cancel**.
@@ -308,6 +353,9 @@ and previous budget periods. Its actions are:
 
 - **Edit limits**: lower or raise provider caps within deployment ceilings;
   agent caps are clamped to the new provider caps on the next admission.
+  Lowering applies at once. Raising any cap first opens a confirmation naming
+  each raised cap with its old and new values. The same page edits the
+  owner-wide cap under the same rule (§ Cost and abuse controls).
 - **Replace key**: a guided migration, not an in-place rotation. It opens the
   same password form and creates a superseding provider. It then shows every
   agent still attached to the old provider, all preselected, and reattaches
@@ -319,7 +367,7 @@ and previous budget periods. Its actions are:
 - **Disable key in Endo**: one confirmation naming the affected agents, then
   retirement (§ "Indelible" and retirement). This stops Endo from using the
   key: every attached agent fails its next call. It does **not** revoke the key
-  at Anthropic or the OpenAI-compatible service, so anyone else holding a
+  at Anthropic, so anyone else holding a
   leaked copy can still use it and charge the owner's account. The
   confirmation and the completed state therefore both state that upstream
   revocation is still required and show the upstream step: "Also revoke
@@ -354,9 +402,9 @@ type InferenceProviderDescriptor = {
   providerId: string;       // random object designator, unique per owner
   ownerId: string;          // owning principal's guest formula id
   displayName: string;
-  kind: 'anthropic' | 'openai-compatible';
-  baseUrl?: string;         // validated, never inferred from key text
-  defaultModel: string;
+  kind: 'anthropic';        // closed set; later phases add kinds
+  baseUrl?: string;         // absent for 'anthropic'; reserved for later kinds
+  defaultModel: string;     // validated shape; see § Model catalogs
   secretGrantFormulaId: string; // host-private retention edge, never in UI
   createdAt: string;
   supersedes?: string;
@@ -383,6 +431,8 @@ The provider's facets are separate:
 - `InferenceProviderDirectory`, one per owner, minted when the owner's guest is
   provisioned and held by that owner's signed-in UI capability. It lists, looks
   up, and creates providers whose `ownerId` is that owner, and nothing else.
+  It also reads and sets that owner's owner-wide cap (§ Cost and abuse
+  controls).
 - `InferenceProviderAdmin`, obtained only from the owner's directory, returns
   safe summaries, sets limits, creates a superseding provider, and retires this
   provider. It cannot read key bytes.
@@ -413,6 +463,28 @@ backup and encryption follow
 [`daemon-secret-manager.md`](daemon-secret-manager.md). The `@secrets` catalog
 is deliberately root/single-principal, so the registry, not `@secrets`, carries
 ownership; secret names are registry-assigned and never shown to a principal.
+
+### Model catalogs
+
+Model choice prefers the provider's live model list. When the owner submits a
+provider, and when step 2 or **Reattach provider** opens, the broker asks the
+upstream for its model list through the provider's own credential and returns
+only model ids and display names. The model control is then a `<select>` over
+that list.
+
+Where discovery fails (the upstream lacks a list route, refuses it, or times
+out), the control becomes a text field. A typed model id is accepted only if it
+matches the kind's validated shape (for `anthropic`, 1 to 128 characters of
+lowercase ASCII letters, digits, `-`, `.`, and `_`, starting with a letter or
+digit). It is recorded as
+`unverified` on the provider or agent and verified by its first turn: a
+successful upstream response marks it `verified`, and an upstream
+model-not-found refuses that turn terminally with `model-not-available`,
+which the agent detail view shows with the model id. A typed model has no
+pinned catalog price unless the catalog already pins that id, so the
+unknown-price rule in § Cost and abuse controls applies to it. Because the
+default caps are dollar budgets, the form says so beside such a model: it
+cannot run until the owner sets a token budget for it.
 
 ### Ownership and cross-principal denial
 
@@ -448,9 +520,12 @@ extension.
   the target or recorded provider's `ownerId` with `AgentRecord.ownerId`. A
   provider with a different owner is refused with `provider-owner-mismatch`
   before any guest, grant, or responder is created or changed.
-- **Sharing.** Cross-principal sharing is out of scope for the first release.
-  If added later, it must be an explicit attenuated grant from the owner's
-  admin facet, never an id another principal can name.
+- **Sharing.** There is no implicit sharing, within one owner or across
+  owners (§ Explicit endowment). Even the owner's own agents reach a provider
+  only through an explicit endowment at creation or reattachment.
+  Cross-principal sharing is out of scope for the first release. If added
+  later, it must be an explicit attenuated grant from the owner's admin facet,
+  never an id another principal can name.
 
 ### Creation and retirement operations
 
@@ -666,9 +741,12 @@ provider ever changes.
   marks it `retired` (§ Creation and retirement operations). New and queued
   turns fail closed from the first step. The old provider id and audit rows
   remain so historical spend is intelligible.
-- The ordinary product UI never calls `SecretAdmin.delete`. An operator may
-  crypto-delete revoked backend material under the secret-manager's recovery
-  procedure, but does not erase the non-secret tombstone or audit history.
+- The ordinary product UI never calls `SecretAdmin.delete`. A root operator
+  may call `SecretAdmin.delete` on a provider's secret once the secret is
+  revoked and every backup that could restore it has expired, under the
+  secret-manager's recovery procedure. The provider's non-secret tombstone
+  (descriptor and `retired` lifecycle) and its audit rows remain permanently;
+  nothing in the product or operator path erases them.
 
 This is revocation by supersession, not "no deletion ever." It lets a user
 stop Endo using a leaked key immediately without rewriting history or silently
@@ -755,13 +833,13 @@ provider kind.
 
 - **Adapter.** Add `makeBrokeredMessagesProvider` to `@endo/lal/providers`. It
   takes an `AgentInference` remotable and a model, and speaks the Anthropic
-  Messages wire format (an OpenAI-compatible sibling ships with that provider
-  kind). It translates the harness's messages and tool schemas into a Messages
-  request body, parses the server-sent-event byte stream into the same events
-  and result shape that the direct `anthropic.js` adapter yields, and surfaces
-  the stream's usage events. Its requests carry no `x-api-key`,
-  `authorization`, or base URL. The issuer refuses a request that carries any
-  of them and adds the credential itself.
+  Messages wire format. Adapters for other provider kinds are a later phase
+  and ship with their kind. It translates the harness's messages and tool
+  schemas into a Messages request body, parses the server-sent-event byte
+  stream into the same events and result shape that the direct `anthropic.js`
+  adapter yields, and surfaces the stream's usage events. Its requests carry
+  no `x-api-key`, `authorization`, or base URL. The issuer refuses a request
+  that carries any of them and adds the credential itself.
 - **Fae.** `makeProviderOwner` accepts a new provider kind `brokered-messages`
   whose recipe holds the `AgentInference` capability in place of
   `authSecretName`. Like `subscription-responses`, it takes no
@@ -793,10 +871,10 @@ every request before admission, and refuses with a fixed
 
 - **Route.** The method and path must match the provider kind's route
   allowlist exactly. For `anthropic` that is `POST /v1/messages` and
-  `POST /v1/messages/count_tokens`; for `openai-compatible`, its chat
-  completion route. Batch, file, model administration, and every other route
-  are refused. This narrows the issuer's existing `policy.routes` per
-  provider kind.
+  `POST /v1/messages/count_tokens`. The broker's own model discovery
+  (§ Model catalogs) is not a grant route, so a grant cannot reach it. Batch,
+  file, model administration, and every other route are refused. This
+  narrows the issuer's existing `policy.routes` per provider kind.
 - **Body schema.** The body must parse as a JSON object within the byte bound
   and match the kind's request schema: only allowlisted top-level fields
   (for Messages, `model`, `messages`, `system`, `max_tokens`, `stop_sequences`,
@@ -835,7 +913,8 @@ harness only the methods its declared profile needs:
 | Own mail follow/list/send/dismiss/adopt | yes | yes | Send only through capabilities/pet names the guest holds |
 | Own form/request/evaluation mediation | Lal only | no by default | Evaluation remains host-mediated; no ambient host facet |
 | Dynamic tool adoption | no | yes | A tool must arrive as a capability attachment; discovery grants nothing |
-| Per-agent inference | yes | yes | Fixed provider, model allowlist, limits, and guest projection |
+| Per-agent inference | yes | yes | Fixed provider, model allowlist, limits, and guest projection; endowed only for the provider the creation request names |
+| Subagent creation | yes | yes | Endowed only when the creation request names it (pre-checked in the UI); budget-attenuated from this agent's grant; specified by the agent workbench design |
 | Root provider admin, raw secret, sibling guest lookup, deployment/network/filesystem | no | no | Not present, not checked by identity |
 
 The agent driver receives a `GuestPowers` facet produced at guest creation and
@@ -905,18 +984,18 @@ Endo capabilities where no bearer is needed.
 | Guest -> responder -> harness | Pinned mailbox subscription over one guest facet | Wake state set through the factory | Guest formula, responder cursor/effects, harness transcript | Endo revives; responder commits mail effect | Message plus explicitly held guest capabilities |
 
 Persistent state has one owner per datum: `@secrets` owns key material; the
-provider registry owns provider lifecycle, ownership, and provider operation
-records; the agent factory's registry owns agent lifecycle and agent operation
-records; the usage ledger owns accounting; and the guest owns mail/responder
-state. The usage ledger is the single source of truth for usage, reservations,
-and settlements: the broker is its only writer, admission and the Providers
-page read it directly, and no other store keeps a usage projection that would
-need rebuilding. The provider admin owns retire; the factory owns agent
-create/wake/delete; the broker owns per-turn admit/discard. Endo owns
-formula restart/replay. The harness owns
-execution classification, while the broker owns retry/spend policy. Inner
-types use provider, turn, result, and grant; none are named for outer commit,
-replay, or persistence policy.
+provider registry owns provider lifecycle, ownership, owner-wide limits, and
+provider operation records; the agent factory's registry owns agent lifecycle
+and agent operation records; the usage ledger owns accounting; and the guest
+owns mail/responder state. The usage ledger is the single source of truth for
+usage, reservations, and settlements: the broker is its only writer, admission
+and the Providers page read it directly, and no other store keeps a usage
+projection that would need rebuilding. The provider admin owns retire; the
+factory owns agent create/wake/delete; the broker owns per-turn admit/discard.
+Endo owns formula restart/replay. The harness owns execution classification,
+while the broker owns retry/spend policy. Inner types use provider, turn,
+result, and grant; none are named for outer commit, replay, or persistence
+policy.
 
 ## Cost and abuse controls
 
@@ -932,17 +1011,44 @@ Every agent receives equal or smaller caps. Admission is atomic at the broker;
 over-limit work is refused before reading the secret or calling upstream.
 Cancellation and agent deletion release the slot and terminate streaming work.
 
-**Aggregation scope.** Every cap is enforced per provider record and per agent.
-It is not an upstream-account cap. Endo cannot tell whether two provider
-records hold the same API key or two keys on the same upstream account: it
-does not compare key bytes, and storing a key fingerprint for comparison would
-add a durable key derivative this design otherwise avoids. Importing one key
-into two providers therefore gives two independent sets of caps, while the
-upstream account is charged for both. The first release narrows the guarantee
-to match: the Providers page and the step 1 notice state that caps apply per
-provider, that the same key imported twice is capped twice, and that the
-provider-side spend limit is the only account-wide bound. A per-owner
-aggregate cap across all of an owner's providers is open question 7.
+**Default caps.** A newly imported provider and a newly created agent start
+from conservative defaults:
+
+| Cap | Provider default | Agent default |
+|---|---|---|
+| Concurrent turns | 2 | 1 |
+| Requests per minute | 20 | 10 |
+| Daily dollar budget | $5.00 | $2.00 |
+
+The other caps (maximum turns, wall clock, output bytes, per-turn output
+tokens) keep deployment defaults. The owner may lower any cap at any time
+without confirmation, and the change takes effect at the next admission.
+Raising any cap above its current value, whether on a provider, an agent, or
+the owner-wide cap below, requires an explicit confirmation naming each raised
+cap with its old and new values. The `setLimits` operations enforce this, not
+only the UI: a request that raises a cap without the confirmation flag is
+refused with `limit-raise-unconfirmed` and changes nothing. Deployment
+ceilings bound every raise.
+
+**Aggregation scope.** The provider and agent caps are enforced per provider
+record and per agent. Endo cannot tell whether two provider records hold the
+same API key or two keys on the same upstream account: it does not compare
+key bytes, and storing a key fingerprint for comparison would add a durable
+key derivative this design otherwise avoids. Importing one key into two
+providers would therefore double those caps, so the first release adds an
+**owner-wide cap**: an aggregate concurrent-turn cap, request-rate bucket,
+and daily dollar budget across all of one owner's providers. Its defaults
+equal the provider defaults (2 concurrent turns, 20 requests per minute,
+$5.00 per day), so duplicate imports of one key cannot multiply the budget
+past them. Admission reserves against the agent, its provider, and its
+owner atomically, and is refused if any of the three would be exceeded. The
+owner-wide cap lives in a per-owner `OwnerInferenceLimits` place in the
+provider registry, keyed by `ownerId` and edited only through that owner's
+directory under the lowering and raising rule above; usage against it is
+the sum of the owner's rows in the usage ledger, not a separate projection.
+It is still not an upstream-account cap: the Providers page and the step 1
+notice state that the provider-side spend limit is the only bound covering
+keys used outside this owner's Endo providers.
 
 Budgets are enforced by **worst-case reservation and settlement**, because
 output usage and final charges are unknown at admission:
@@ -984,7 +1090,8 @@ Each phase is an independently assignable unit of work and ends with its own
 tests and rollback.
 
 1. **Endo provider registry, ownership, and facets.** Add durable provider
-   metadata with `ownerId`, per-owner `InferenceProviderDirectory`,
+   metadata with `ownerId` (kind `anthropic` only; model ids validated by
+   shape), per-owner `InferenceProviderDirectory`,
    `InferenceProviderAdmin`/`Use`/`AgentInference` over the existing grant
    issuer, the creation/retirement operation records and reconciler, and
    secret-manager retention. Test restart, supersession, retirement, and
@@ -1009,6 +1116,21 @@ tests and rollback.
    that a retired provider fails the next call, and that a harness abort
    cancels upstream and releases the slot. Test 401, rate limit,
    cancellation, unknown usage, concurrency, budget refusal before secret read, and log redaction.
+   Add live model discovery with the typed-id fallback (§ Model catalogs):
+   test that a listed model is selectable, that a discovery failure accepts
+   only a well-shaped typed id recorded `unverified`, that the first
+   successful turn marks it `verified`, and that an upstream model-not-found
+   refuses that turn with `model-not-available`. Add the default caps, the
+   owner-wide cap with its `OwnerInferenceLimits` place, and the raise
+   confirmation (§ Cost and abuse controls): test that a new provider and a
+   new agent receive exactly the default values (provider 2 concurrent
+   turns, 20 requests per minute, $5.00 per day; agent 1, 10, $2.00); that
+   lowering applies without confirmation; that a raise without the
+   confirmation flag is refused with `limit-raise-unconfirmed` and changes
+   nothing; that admission is refused when the owner-wide cap is exhausted
+   even though the agent and provider caps have room; and that concurrent
+   admissions on two of one owner's providers never together exceed the
+   owner-wide concurrency or budget.
    Bypass the adapter and send raw requests on the grant: an unlisted route,
    an unknown body field, a model outside the agent's allowlist, a missing or
    oversized `max_tokens`, and a credential header must each be refused
@@ -1039,13 +1161,29 @@ tests and rollback.
    the key under the same idempotency key resumes the operation and creates
    one provider; and that an abandoned `intent` is listed on the Providers
    page, can be canceled there, and expires after the retry window. Import
-   the same canary key into two
-   providers and assert that each enforces its own caps and that the page
-   shows the per-provider scope notice.
+   the same canary key into two providers and assert that each enforces its
+   own caps, that the owner-wide cap bounds their combined spend and
+   concurrency at the owner default, and that the page shows the scope
+   notice. Assert that the form shows the default provider caps, that
+   lowering a provider cap or the owner-wide cap saves at once, and that
+   raising one opens a confirmation naming each raised cap, focused on
+   **Cancel**, that saves nothing until confirmed.
 4. **Agent factory and UI step.** Add the server-supplied Lal/Fae catalog,
    name/model/limit validation, idempotent agent creation, and exact powers
    profiles, the agent operation records and reconciler, and the agent
-   detail view with the wake toggle. Test same-name conflicts, stale provider,
+   detail view with the wake toggle. Agent creation endows a
+   subagent-creation capability slot (§ Explicit endowment): the creation
+   request names it, the form shows it as a pre-checked **Can create
+   subagents** box, and the factory fills the slot only when the request
+   names it. The spawner placed in the slot is specified and built under
+   the agent workbench design (`design-claude-api-agent-workbench-20261027`);
+   this phase builds only the slot and its endowment, tested with a fake
+   spawner. Test that a request naming the endowment yields an agent holding
+   the slot's capability; that a request omitting it (the box unchecked)
+   yields an agent with no such capability and that the server adds none by
+   default; that an agent holds `AgentInference` only for the provider its
+   request named; and that the agent's initial limits equal the default
+   agent caps. Test same-name conflicts, stale provider,
    foreign provider id, model exclusion, and absence of root/secret/sibling
    methods. Inject a crash at each creation, wake, and deletion boundary,
    including a lost response, and assert exactly one guest, grant, and
@@ -1152,26 +1290,6 @@ recorded evidence, not a zero-copy claim:
   documented as a known limitation of that browser in the UI copy and the
   canary report; it does not fail the gate, and a clean result is not
   certified as proof of non-retention.
-
-## Open questions
-
-1. **First provider kinds?** Ship Anthropic only as recommended, or include an
-   allowlisted OpenAI-compatible base-URL provider in the first release?
-2. **First harness menu?** Is the recommended `lal` plus advanced `fae` menu
-   correct, with Floot and Jaine hidden until they have dedicated profiles?
-3. **Indelible operator escape hatch?** May a root operator call
-   `SecretAdmin.delete` after revocation and backup expiry, while the provider
-   tombstone/audit remain, or must backend material also remain indefinitely?
-4. **Default spend caps?** What concurrent-turn, requests-per-minute, and daily
-   dollar/token ceilings should a newly imported provider and newly created
-   agent receive?
-5. **Provider sharing scope?** May all of one owner's agents use the same
-   provider by default, or must the owner confirm each attachment?
-6. **Model catalogs?** Must creation require a live provider model-list check,
-   or may a user type a model id when a provider lacks discovery?
-7. **Owner-wide spend cap?** Should the first release add an aggregate cap
-   across all of one owner's providers, bounding duplicate imports of one key,
-   or is the per-provider scope plus a provider-side spend limit enough?
 
 ## Prompt
 
