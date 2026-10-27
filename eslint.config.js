@@ -416,6 +416,8 @@ export default defineConfig(
   {
     ignores: [
       'api-docs/',
+      // Vendored Moddable submodule owns its own lint configuration.
+      'c/moddable/',
       'packages/floot-android/android/app/src/main/assets/chat/',
       'packages/floot-android/android/**/build/',
       'rust/',
