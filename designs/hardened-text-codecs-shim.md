@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-09-29 |
+| **Updated** | 2026-10-27 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Implemented** (Phases 1-2) |
 
@@ -37,13 +37,9 @@ Remaining items:
   path exercises pass-through-and-harden rather than the missing-codecs
   case this design assumed. § Sampling and degradation and Design
   Decision 3 below note this.
-- **Phase 3 (downstream audit, optional):** not performed on `llm`. As of
-  `llm` commit `7ff30afbce`, `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
-  in 10 files. All are Node-host powers, drivers, and backends
-  (`9p-server`, `cli`, `daemon`, `git`, `platform`, `sandbox`, and the
-  `*-sandbox` packages), not
-  code that runs inside a compartment. An audit, if wanted, is a separate
-  cleanup job.
+- **Phase 3 (downstream audit, optional):** performed on `llm` commit
+  `844ce3df7b`; no call site needs migration. § Phase 3 audit result
+  below lists the call sites.
 - **Node `TextDecoder` fast-path flags:** hardening a `TextDecoder`
   *instance* on recent Node releases makes the next `decode()` throw.
   Tracked upstream as
@@ -225,6 +221,38 @@ Optional cleanup; it does not gate the **Implemented** status.
   `TextEncoder`/`TextDecoder` per the project's
   "prefer Uint8Array + TextEncoder/TextDecoder over Buffer"
   convention.
+
+#### Phase 3 audit result
+
+Audited on `llm` commit `844ce3df7b`.
+`packages/*/src` has 22 `Buffer.from(` and `.toString('utf...')` call
+sites in 13 files, not counting comments.
+Every one is in a module that runs on the Node host, in the start
+compartment, where `Buffer` is a host global.
+None runs inside a compartment created after lockdown, so none is a
+migration candidate under this phase.
+
+| File | Sites | Why it runs on the host |
+|---|---|---|
+| `9p-server/src/server.js` | 1 | Loaded only by the unconfined `mount-caplet.js` through `fs-bridge.js`, which imports `node:net`. The daemon worker loads unconfined caplets with a native `import()`. |
+| `9p-server/src/wire.js` | 3 | Same as `server.js`. |
+| `claude/src/launch.js` | 2 | Imports `node:child_process`. |
+| `cli/src/commands/log.js` | 1 | Command-line tool; imports `fs` and `child_process`. |
+| `daemon/src/manager-node-powers.js` | 1 | The daemon's Node powers; imports `node:crypto` and `node:fs/promises`. |
+| `git/src/native-git-backend.js` | 4 | Imports `node:child_process` and `node:fs`. |
+| `hosted-agent/src/mcp-socket.js` | 1 | Imports `node:net`. |
+| `npm-registry-server/src/http.js` | 3 | Imports `node:http` and `node:buffer`. |
+| `npm-registry-server/src/registry.js` | 1 | Imports `Buffer` from `node:buffer`. |
+| `opencode-sandbox/src/opencode-bridge.mjs` | 1 | Imports `node:child_process` and `node:process`. |
+| `platform/src/http-node/backend.js` | 1 | Imports `node:http`. |
+| `sandbox/src/drivers/child-process.js` | 2 | Calls `spawn` on a passed-in Node `child_process` module and collects its output chunks. |
+| `sandbox/src/drivers/podman.js` | 1 | Drives `podman` through `child-process.js` and reads the `process` host global. |
+
+The other matches in `packages/*/src`, in
+`pass-style/src/byteArray.js` and `immutable-arraybuffer/src/lib.js`,
+are comments.
+Migrating host modules to `TextEncoder` and `TextDecoder` is a style
+cleanup that this design does not require.
 
 ## Design Decisions
 
