@@ -115,7 +115,9 @@
     "@endo/stream-node": "workspace:^"
   },
   "devDependencies": {
+    "@endo/base64": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "ava": "catalog:dev",
     "esbuild": "0.28.2",
     "eslint": "catalog:dev",
