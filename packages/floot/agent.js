@@ -5182,12 +5182,13 @@ export const make = async (
       preset.backendId
     ) {
       options = {
+        ...options,
         backendId: preset.backendId,
         modelId: preset.modelId,
-        ...(preset.reasoningEffort
-          ? { reasoningEffort: preset.reasoningEffort }
-          : {}),
-        ...options,
+        reasoningEffort:
+          options.reasoningEffort === undefined
+            ? preset.reasoningEffort || undefined
+            : options.reasoningEffort,
       };
     }
     if (options.networkPolicy === undefined && preset.networkPolicy) {

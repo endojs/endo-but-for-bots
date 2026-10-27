@@ -19,6 +19,7 @@ export const PresetSettings = ({ state, controller }) => {
   const settings = state.presetSettings;
   const config = settings?.configuration;
   const [selected, setSelected] = useState('voice');
+  const [dirty, setDirty] = useState(false);
   const [draft, setDraft] = useState(/** @type {any} */ (null));
   useEffect(() => {
     if (!config) return;
@@ -27,10 +28,14 @@ export const PresetSettings = ({ state, controller }) => {
     if (preset) {
       setSelected(preset.id);
       setDraft({ ...preset });
+      setDirty(false);
     }
   }, [config?.revision, selected]);
   if (!controller.loadPresetSettings || !settings) return null;
-  const change = patch => setDraft({ ...draft, ...patch });
+  const change = patch => {
+    setDraft({ ...draft, ...patch });
+    setDirty(true);
+  };
   const field = (label, control) =>
     h(
       'label',
@@ -48,7 +53,16 @@ export const PresetSettings = ({ state, controller }) => {
           change({ [key]: event.target.value }),
       }),
     );
-  const currentModel = state.models.find(
+  const hasShell = draft?.objects.some(
+    object => object.kind === 'development-environment',
+  );
+  const availableModels = state.models.filter(
+    model =>
+      !hasShell ||
+      model.backendId === 'provider' ||
+      model.backendId === 'fae-codex',
+  );
+  const currentModel = availableModels.find(
     model =>
       model.backendId === draft?.backendId && model.modelId === draft?.modelId,
   );
@@ -68,11 +82,37 @@ export const PresetSettings = ({ state, controller }) => {
       'button',
       {
         type: 'button',
-        disabled: settings.busy,
-        onClick: () => controller.loadPresetSettings?.(),
+        disabled: settings.busy || dirty,
+        onClick: () => {
+          if (!dirty) controller.loadPresetSettings?.();
+        },
       },
       config ? 'Reload presets' : 'Manage presets',
     ),
+    dirty
+      ? h(
+          'p',
+          { role: 'status' },
+          'Unsaved edits. Save or discard them before changing the voice shortcut or loading another preset.',
+        )
+      : null,
+    dirty
+      ? h(
+          'button',
+          {
+            type: 'button',
+            disabled: settings.busy,
+            onClick: () => {
+              const saved = config.presets.find(item => item.id === selected);
+              if (saved) {
+                setDraft({ ...saved });
+                setDirty(false);
+              }
+            },
+          },
+          'Discard edits',
+        )
+      : null,
     settings.error ? h('p', { role: 'alert' }, settings.error) : null,
     settings.message ? h('p', { role: 'status' }, settings.message) : null,
     config
@@ -83,9 +123,10 @@ export const PresetSettings = ({ state, controller }) => {
             {
               'aria-label': 'Voice shortcut preset',
               value: config.voicePresetId,
-              disabled: settings.busy,
-              onChange: (/** @type {FlootSafeEvent} */ event) =>
-                controller.setVoicePreset?.(event.target.value),
+              disabled: settings.busy || dirty,
+              onChange: (/** @type {FlootSafeEvent} */ event) => {
+                if (!dirty) controller.setVoicePreset?.(event.target.value);
+              },
             },
             config.presets.map(preset =>
               h('option', { value: preset.id }, preset.title),
@@ -104,8 +145,10 @@ export const PresetSettings = ({ state, controller }) => {
               {
                 value: selected,
                 'aria-label': 'Edit preset',
-                onChange: (/** @type {FlootSafeEvent} */ event) =>
-                  setSelected(event.target.value),
+                disabled: dirty,
+                onChange: (/** @type {FlootSafeEvent} */ event) => {
+                  if (!dirty) setSelected(event.target.value);
+                },
               },
               config.presets.map(preset =>
                 h('option', { value: preset.id }, preset.title),
@@ -171,7 +214,7 @@ export const PresetSettings = ({ state, controller }) => {
                     `${draft.backendId} · ${draft.modelId || 'configured model'} (not currently listed)`,
                   )
                 : null,
-              state.models
+              availableModels
                 .filter(model => model.backendId && model.modelId)
                 .map(model =>
                   h(
@@ -182,6 +225,13 @@ export const PresetSettings = ({ state, controller }) => {
                 ),
             ),
           ),
+          hasShell
+            ? h(
+                'p',
+                null,
+                'The isolated shell works with Fae models. Hosted backends provide their own environment.',
+              )
+            : null,
           field(
             'Reasoning effort',
             h(

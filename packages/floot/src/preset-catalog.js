@@ -2,7 +2,10 @@
 import { randomUUID } from 'node:crypto';
 import { E } from '@endo/eventual-send';
 import { passStyleOf } from '@endo/pass-style';
-import { DEVELOPMENT_PRESET_ID } from './development-environment.js';
+import {
+  DEVELOPMENT_PRESET_ID,
+  DEVELOPMENT_BACKENDS,
+} from './development-environment.js';
 
 const templates = harden([
   {
@@ -243,6 +246,20 @@ export const presetHasShell = preset =>
   preset.objects.some(object => object.kind === 'development-environment');
 harden(presetHasShell);
 
+// Validate edits without preventing older, incompatible settings from being
+// loaded and repaired. Runtime availability is still checked at creation.
+const assertPresetDefaults = preset => {
+  const fae = DEVELOPMENT_BACKENDS.includes(preset.backendId || 'provider');
+  if (presetHasShell(preset) && !fae)
+    throw Error(
+      'An isolated shell requires a Fae model. Hosted backends own their environment.',
+    );
+  if (!presetHasShell(preset) && fae && preset.networkPolicy)
+    throw Error(
+      'Fae internet policy requires an isolated shell. Add a workspace and shell, or clear the policy.',
+    );
+};
+
 /** One bounded record and a serialized, revision-checked write queue. */
 export const makePresetCatalog = host => {
   let loaded;
@@ -332,6 +349,7 @@ export const makePresetCatalog = host => {
     save: (preset, revision) =>
       change(revision, current => {
         const next = normalizePreset(preset);
+        assertPresetDefaults(next);
         return {
           ...current,
           presets: [
@@ -366,8 +384,9 @@ export const makePresetCatalog = host => {
       }),
     selectVoice: (id, revision) =>
       change(revision, current => {
-        if (!current.presets.some(preset => preset.id === id))
-          throw Error('Unknown voice preset');
+        const preset = current.presets.find(item => item.id === id);
+        if (!preset) throw Error('Unknown voice preset');
+        assertPresetDefaults(preset);
         return { ...current, voicePresetId: id };
       }),
     whenIdle: () => tail,

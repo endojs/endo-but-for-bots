@@ -1517,3 +1517,28 @@ test('preset model defaults are overridden only by explicit session identity', a
     { message: /Unknown preset/ },
   );
 });
+
+test('undefined session identity fields preserve saved preset defaults', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  const config = await E(world.factory).getPresetConfiguration();
+  const general = config.presets.find(p => p.id === 'general');
+  await E(world.factory).savePreset(
+    harden({ ...general, ...hosted }),
+    config.revision,
+  );
+  const omitted = await E(world.factory).createSession(
+    harden({ presetId: 'general' }),
+  );
+  const undefinedKeys = await E(world.factory).createSession(
+    harden({
+      presetId: 'general',
+      backendId: undefined,
+      modelId: undefined,
+      reasoningEffort: undefined,
+    }),
+  );
+  t.like(await E(omitted).getInfo(), hosted);
+  t.like(await E(undefinedKeys).getInfo(), hosted);
+});

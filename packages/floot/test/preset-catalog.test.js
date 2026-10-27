@@ -174,3 +174,41 @@ test('shell presets canonicalize provisioning order and reject missing dependenc
     ['workspace', 'shell'],
   );
 });
+
+test('invalid shell/backend and network-owner edits cannot replace the voice preset', async t => {
+  const { catalog, host, values } = setup();
+  const initial = await catalog.read();
+  const voice = initial.presets.find(preset => preset.id === 'voice');
+  for (const patch of [
+    { backendId: 'codex', modelId: 'sol' },
+    { objects: [] },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      catalog.save({ ...voice, ...patch }, initial.revision),
+      { message: /requires/ },
+    );
+  }
+  t.is((await catalog.read()).revision, initial.revision);
+  t.is((await catalog.voice()).backendId, 'fae-codex');
+  // Previously accepted incompatible data must remain editable after upgrade.
+  values.set(
+    'floot-preset-settings',
+    harden({
+      ...initial,
+      presets: initial.presets.map(p =>
+        p.id === 'voice' ? { ...p, objects: [] } : p,
+      ),
+    }),
+  );
+  const restored = makePresetCatalog(host);
+  const broken = await restored.read();
+  await t.throwsAsync(restored.selectVoice('voice', broken.revision), {
+    message: /requires an isolated shell/,
+  });
+  await restored.save(
+    { ...broken.presets.find(p => p.id === 'voice'), networkPolicy: '' },
+    broken.revision,
+  );
+  t.is((await restored.voice()).networkPolicy, '');
+});
