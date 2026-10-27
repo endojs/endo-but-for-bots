@@ -39,44 +39,6 @@ export const make = async (powers, context, { env } = {}) => {
   const issuerFactoryName =
     env?.INFERENCE_PROVIDER_ISSUER_FACTORY ||
     Fail`Provider registry has no issuer factory`;
-  const configuredKinds = JSON.parse(
-    env?.INFERENCE_PROVIDER_KINDS || Fail`Provider registry has no kind policy`,
-  );
-  (configuredKinds &&
-    typeof configuredKinds === 'object' &&
-    !Array.isArray(configuredKinds)) ||
-    Fail`Invalid provider kind policy`;
-
-  const providerKinds = Object.fromEntries(
-    Object.entries(configuredKinds).map(([kind, value]) => {
-      const { models, baseUrls = [] } = /** @type {any} */ (value);
-      (Array.isArray(models) &&
-        models.length > 0 &&
-        models.every(model => typeof model === 'string') &&
-        Array.isArray(baseUrls) &&
-        baseUrls.every(baseUrl => typeof baseUrl === 'string')) ||
-        Fail`Invalid provider kind policy`;
-      const modelSet = new Set(models);
-      const baseUrlSet = new Set(baseUrls);
-      return [
-        kind,
-        harden({
-          /** @param {unknown} baseUrl */
-          validateBaseUrl: baseUrl => {
-            if (baseUrlSet.size === 0) {
-              baseUrl === undefined || Fail`Invalid provider base URL`;
-              return undefined;
-            }
-            (typeof baseUrl === 'string' && baseUrlSet.has(baseUrl)) ||
-              Fail`Invalid provider base URL`;
-            return /** @type {string} */ (baseUrl);
-          },
-          /** @param {string} model */
-          admitsModel: model => modelSet.has(model),
-        }),
-      ];
-    }),
-  );
 
   const registry = await makeInferenceProviderRegistry({
     journal: makeSnapshotJournal({
@@ -100,7 +62,6 @@ export const make = async (powers, context, { env } = {}) => {
         dispose: () => E(factory).disposeProvider(descriptor.providerId),
       });
     },
-    providerKinds,
     validateLimits: limits => {
       (limits && typeof limits === 'object' && !Array.isArray(limits)) ||
         Fail`Invalid provider limits`;

@@ -10,7 +10,7 @@ import { InferenceEndpointInterface } from './subscription-share.js';
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const GENERATED_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const DISPLAY_NAME_PATTERN = /^[\x20-\x7e]{1,80}$/;
-const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$/;
+const MODEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 
 const fixedError = code =>
   makeError(X`Inference provider operation failed: ${q(code)}`);
@@ -96,15 +96,10 @@ const summarize = (descriptor, lifecycle) =>
  * the existing provider grant issuer. Recreating this object over the same
  * journal is the restart path.
  *
- * `providerKinds` is deployment policy rather than a built-in product choice:
- * the design's open question can narrow the first release without changing the
- * durable record format.
- *
  * @param {object} options
  * @param {{ read(): Promise<any>, write(value: any): Promise<void> }} options.journal
  * @param {{ has(name: string): Promise<boolean>, provide(name: string, description: string, bytesBase64?: string, stableIds?: { secretId: string, grantId: string, operationId: string }): Promise<any>, recover?(name: string, description: string, stableIds: { secretId: string, grantId: string, operationId: string }): Promise<boolean>, revoke(name: string): Promise<void>, revokeStable?(stableIds: { secretId: string, grantId: string, operationId: string }): Promise<void>, state(name: string): Promise<string>, listNames?(): Promise<string[]> }} options.secrets
  * @param {(details: { descriptor: any, lifecycle: any, secret: any }) => Promise<{ openEndpoint(spec: any): Promise<any>, dispose(): Promise<void> | void }> | { openEndpoint(spec: any): Promise<any>, dispose(): Promise<void> | void }} options.makeIssuer
- * @param {Record<string, { validateBaseUrl(value: unknown): string | undefined, admitsModel(model: string): Promise<boolean> | boolean }>} options.providerKinds
  * @param {(limits: any) => any} options.validateLimits
  * @param {() => string} options.randomId
  * @param {() => string} [options.now]
@@ -115,7 +110,6 @@ export const makeInferenceProviderRegistry = async ({
   journal,
   secrets,
   makeIssuer,
-  providerKinds,
   validateLimits,
   randomId,
   now = () => new Date().toISOString(),
@@ -214,27 +208,22 @@ export const makeInferenceProviderRegistry = async ({
       (() => {
         throw fixedError('invalid-display-name');
       })();
-    const kindPolicy = providerKinds[kind];
-    kindPolicy !== undefined ||
+    kind === 'anthropic' ||
       (() => {
         throw fixedError('invalid-kind');
+      })();
+    baseUrl === undefined ||
+      (() => {
+        throw fixedError('invalid-base-url');
       })();
     MODEL_PATTERN.test(defaultModel) ||
       (() => {
         throw fixedError('invalid-model');
       })();
-    (await kindPolicy.admitsModel(defaultModel)) ||
-      (() => {
-        throw fixedError('invalid-model');
-      })();
-    const normalizedBaseUrl = kindPolicy.validateBaseUrl(baseUrl);
     const checkedLimits = validateLimits(limits);
     return harden({
       displayName,
       kind,
-      ...(normalizedBaseUrl === undefined
-        ? {}
-        : { baseUrl: normalizedBaseUrl }),
       defaultModel,
       limits: checkedLimits,
       ...(supersedes === undefined ? {} : { supersedes }),

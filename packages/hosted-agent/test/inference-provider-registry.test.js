@@ -139,15 +139,6 @@ const makeRegistry = (backing, options = {}) => {
     journal: backing.journal,
     secrets: backing.secretParticipant,
     makeIssuer: makeIssuerFactory(events),
-    providerKinds: {
-      anthropic: {
-        validateBaseUrl: value => {
-          if (value !== undefined) throw Error('base URL not allowed');
-          return undefined;
-        },
-        admitsModel: model => model === 'claude-test',
-      },
-    },
     validateLimits: value => harden({ ...value }),
     randomId: options.randomId || makeIds(),
     now: options.now || (() => '2026-10-27T00:00:00.000Z'),
@@ -161,6 +152,42 @@ const makeRegistry = (backing, options = {}) => {
 };
 
 const message = path => harden({ method: 'POST', path, body: '{}' });
+
+test('first release admits only Anthropic and shape-valid model ids', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+
+  await Promise.all(
+    /** @type {Array<[Record<string, unknown>, string]>} */ ([
+      [{ kind: 'openai-compatible' }, 'invalid-kind'],
+      [{ baseUrl: 'https://api.anthropic.com' }, 'invalid-base-url'],
+      [{ defaultModel: 'Claude-Test' }, 'invalid-model'],
+      [{ defaultModel: 'claude/test' }, 'invalid-model'],
+      [{ defaultModel: `a${'a'.repeat(128)}` }, 'invalid-model'],
+    ]).map(([overrides, code], index) =>
+      t.throwsAsync(
+        () =>
+          E(directory).create(
+            providerRequest({
+              idempotencyKey: `refuse-000000000${index}`,
+              ...overrides,
+            }),
+          ),
+        { message: new RegExp(code) },
+      ),
+    ),
+  );
+
+  const provider = await E(directory).create(
+    providerRequest({
+      idempotencyKey: 'create-0000000002',
+      defaultModel: `a${'a'.repeat(127)}`,
+    }),
+  );
+  t.is(provider.defaultModel.length, 128);
+  await registry.close();
+});
 
 test('provider facets preserve ownership, supersession, immutable descriptors, and audit', async t => {
   const backing = makeBacking();
@@ -452,15 +479,6 @@ test('AgentInference uses the existing issuer in-process without a listener', as
         accountRef: descriptor.providerId,
         admits: model => model === descriptor.defaultModel,
       }),
-    providerKinds: {
-      anthropic: {
-        validateBaseUrl: value => {
-          if (value !== undefined) throw Error('base URL not allowed');
-          return undefined;
-        },
-        admitsModel: model => model === 'claude-test',
-      },
-    },
     validateLimits: value => harden({ ...value }),
     randomId: makeIds(),
     now: () => '2026-10-27T00:00:00.000Z',
