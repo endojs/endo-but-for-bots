@@ -679,9 +679,8 @@ every later milestone target and the timeline move out by about 2 weeks.
 [api-key-agent-workbench](api-key-agent-workbench.md) (Proposed), the
 endowments, budgeted-subagent, and git-VFS-tool follow-on to
 [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md),
-follows the provider design's phase 5. Its Endo-side estimate (about 3-3.5
-weeks: W1 2-3 days, W2 3-4 days, W3 about 4 days, W4 about 5 days, W5 1-2
-days) is, like the 2026-09-12 hosted-sandbox estimate, provisional
+comes after the provider design's phase 5. Its Endo-side estimate (about
+3-3.5 weeks) is, like the 2026-09-12 hosted-sandbox estimate, provisional
 and non-additive until the maintainer settles its open questions, so the M3
 duration, later targets, and the timeline are unchanged.
 

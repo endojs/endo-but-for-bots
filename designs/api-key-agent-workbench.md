@@ -26,13 +26,13 @@ The maintainer's scenario (kriskowal, 2026-10-27, arc tracker [minion.town#227](
 
 The parent's phases 1-5 are taken as given.
 The parent is itself an open design (PR #1543, not merged), so none of its phases is built, and this design assumes all of them are unbuilt.
-It changes the parent in exactly one place: it names the broker's admission serialization, which the parent leaves unnamed (§ Budget, *Serialization mechanism*).
+It changes the parent in exactly one place: it names the broker's admission serialization, which the parent leaves unnamed (§ Budget, *Serialization and the broker lease*).
 That edit is proposed for the parent's phase 2 before phase 2 is built.
 This PR proposes that edit; the author of the parent's phase 2 lands it in the parent design.
 If the parent's phase 2 lands first with a broker that is not a single-vat queue per provider, or the parent merges without the edit, W3 is a rewrite of the broker's admission path, not an attenuation, and this design must be revised before W3 starts.
 
 **Terms, and the picture in five sentences.**
-An **owner** is a signed-in minion.town user who has imported an API key; the key is held by a **broker** (one per key, or "provider"), which makes every upstream call and records each call's cost as a row in one **usage ledger**.
+An **owner** is a signed-in minion.town user who has imported an API key; the key is held by a **broker** (one per provider), which makes every upstream call and records each call's cost as a row in one **usage ledger**.
 An **agent** is a Lal or Fae harness running as its own daemon **guest** (a confined identity with its own pet store), and it is **pinned**: a responder answers its mail.
 A **grant** is an agent's right to spend through the broker, up to limits (models, rates, a budget per period); the agent reaches it through an `AgentInference` capability that names no key.
 An **endowment** is a capability the owner hands the agent at creation, under a fixed name in the agent's pet store; the agent's tools are derived from what it holds.
@@ -102,7 +102,7 @@ The harness's tool catalog is derived from what the guest holds, as the parent's
   Its request is one list of endowments to set and one list of names to remove:
   `{ set: [{ as, from }], remove: [as] }`.
   A name that appears in both lists is refused with `endowment-conflict`, so the order of the two lists never matters.
-  `remove` is also how a minted bundle is withdrawn: `remove: ['workbench']` deletes `endowments/workbench`.
+  `remove` is also how a minted bundle is withdrawn: `remove: ['workbench']` deletes `endowments/workbench` and, for a write-tier workbench, its read-only companion `endowments/workbench-read` (§ The workbench, *Children*), because the companion is part of the workbench bundle.
   Each entry resolves the owner pet name `from` **through the owner guest's own powers** (`E(ownerGuest).lookup`), so the owner can endow only what the owner holds, and writes the value into the agent guest under `endowments/<as>`.
   A refusal names the offending entry's `as` and its owner pet name `from`.
   The operation is idempotent under the parent's rules.
@@ -112,7 +112,7 @@ The harness's tool catalog is derived from what the guest holds, as the parent's
   Minting is a different act from copying, so it gets its own operations rather than a variant of `endow`.
   `grant-workbench` mints a workbench (§ The workbench) from the owner's chosen mount, git tier, and subtree root, which are themselves resolved through the owner's powers.
   `grant-spawner` mints a spawner bound to this agent and its grant (§ The budgeted spawner), as `spawn` already binds a child.
-  Each writes its value under a fixed name, `endowments/workbench` or `endowments/spawner`, and is idempotent under the parent's rules.
+  Each writes its value under a fixed name, `endowments/workbench` or `endowments/spawner`, and is idempotent under the parent's rules; a write-tier workbench also writes its read-only companion under `endowments/workbench-read`, as one bundle that is granted, replaced, and removed together.
   So an agent holds at most one workbench and one spawner.
   A second `grant-workbench` with different options replaces the first (the old formula is dropped and its tools vanish at the next turn); a second `grant-spawner` with different options is refused with `spawner-exists`, because the spawner's children are bound to it, and the owner changes the limits behind a spawner with the parent design's `set-limits` on the agent's own grant instead.
   Withdrawal is not a third verb: copied and minted endowments are both withdrawn by `endow` with `remove`, because withdrawal only deletes a name, whatever put it there.
@@ -220,7 +220,7 @@ An entry reads and writes only the broker's own durable store, in the broker's v
 Each entry commits all of its writes as **one durable store transaction**, so a crash leaves either all of an entry's writes or none of them.
 Upstream calls happen after the admission entry has committed its reservation row and returned.
 The same holds for cancellation: an entry that cancels turns (`revoke`, or `pause({ cancelInFlight: true })`) commits the charge and marks each row `estimated`, and the broker aborts the upstream requests only after the entry commits.
-An abort that fails, or that the upstream ignores, cannot extend the charge past the reservation: the row is already charged at its full reservation, and any further usage the upstream later reports is a recorded overrun, as for any turn.
+If an abort fails or the upstream ignores it, the charge stays at the reservation, and any usage the upstream later reports is recorded as an overrun, as for any turn.
 The broker retries a failed abort until the turn's wall clock on the row expires, after which it drops the connection.
 Every grant in a tree shares one provider, because a child inherits its parent's provider and cannot name another, so the chain check runs as part of the admission entry: it reads the ancestor sums, checks them, and writes the reservation row in one step.
 Two concurrent sibling admissions are two entries, and a settlement is a separate entry, so none of them interleaves with another's read-check-write.
@@ -406,7 +406,7 @@ The owner's agent-management capability reaches every descendant through the fac
 
 | Method | Effect | Cascade | In-flight turn |
 |---|---|---|---|
-| `pause()` | Commits the child grant's `state` as `paused`. That one record field is the only fact `pause` writes; wake is not touched | Admissions on the child and every descendant see a non-`active` grant on the path and are **deferred** with code `paused` or `ancestor-paused` | By default, each turn already admitted runs to completion and no further admission is granted, so a tool-using loop stops at its next admission. The worst case is stated in absolute terms below. With `pause({ cancelInFlight: true })`, every in-flight turn whose `grantPath` starts with the child's is cancelled in the same broker queue entry as the `paused` commit, exactly as `revoke` cancels, and settles under the parent's cancellation rule |
+| `pause()` | Commits the child grant's `state` as `paused`. That one record field is the only fact `pause` writes; wake is not touched | Admissions on the child and every descendant see a non-`active` grant on the path and are **deferred** with code `paused` or `ancestor-paused` | By default, each turn already admitted runs to completion and no further admission is granted, so a tool-using loop stops at its next admission. The worst case is stated as a per-period bound below. With `pause({ cancelInFlight: true })`, every in-flight turn whose `grantPath` starts with the child's is cancelled in the same broker queue entry as the `paused` commit, exactly as `revoke` cancels, and settles under the parent's cancellation rule |
 | `resume()` | Commits the grant's `state` back to `active` | Each deferred ask in the subtree is retried at once, oldest first | n/a |
 | `resize(limits)` | The parent's `set-limits` on the child grant, refused with `limits-exceed-parent` if above the limits recorded on the grant's immediate parent. That bound is the same whoever calls `resize`: an owner resizing a grandchild directly is bounded by the child's recorded limits, not the owner-created agent's. Lowering the budget below current usage is allowed, because it is how a parent stops a child for the rest of the period, but it is never silent: `resize` returns the resulting `DelegationSummary`, whose `blockedBy` is `budget` | Descendants' records are not rewritten. Their effective limits are the field-wise minimum along the path, which the chain check enforces and `getStatus()` reports as `effectiveLimits` | Unaffected; the next admission sees it |
 | `revoke()` | The parent's `delete` for the child | The child's grant is committed `revoked` first (the parent's fencing also increments its `generation`, the grant record's counter that every request rechecks before admission, so a cached endpoint from before the fence cannot spend; parent [§ Durable grant identity](api-key-inference-providers-and-pinned-agents.md#durable-grant-identity)), so every descendant fails admission at once with `agent-deleted`. The reconciler then deletes descendants depth-first, leaf first, each as an ordinary `delete` | In the same broker queue entry as the `revoked` commit, every in-flight turn whose `grantPath` starts with the child's is cancelled. Each settles under the parent's cancellation rule (below) |
@@ -554,7 +554,7 @@ The owner picks the mount, the git tier, and a subtree root.
 - **Children.**
   A parent can hand a child a narrower workbench by passing facets narrowed with `subView` in `capabilities`, or the same workbench unattenuated.
   A read-only child workbench is different: until a searchable read-only attenuator exists, it cannot be derived from a write mount, so it requires a read-only mount that already exists.
-  The parent can pass one only if it holds one; `grant-workbench` therefore gives a write-tier workbench a read-only companion facet over the same subtree (the owner's mount created with `readOnly: true`, under `endowments/workbench-read`), so a parent with a write workbench can always hand a child a read-only one.
+  The parent can pass one only if it holds one; `grant-workbench` therefore gives a write-tier workbench a read-only companion facet over the same subtree (the owner's mount created with `readOnly: true`, under `endowments/workbench-read`, part of the same bundle, so `remove: ['workbench']` deletes it too), so a parent with a write workbench can always hand a child a read-only one.
 
 **What backs the mount on minion.town** is open question 3.
 Owners hold no `EndoMount` today.
