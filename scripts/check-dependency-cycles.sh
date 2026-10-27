@@ -4,7 +4,8 @@ set -ueo pipefail
 
 MAX_EDGES=$1
 
-# one of these lines is "Cycles detected"
+# one of these lines is "Cycles detected"; each other line is a package on a
+# dependency loop, so a loop of N packages counts its N edges
 LINE_COUNT=$(scripts/graph.sh |wc -l)
 
 CYCLIC_EDGE_COUNT=$((LINE_COUNT - 1))
