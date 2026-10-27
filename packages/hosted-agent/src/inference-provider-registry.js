@@ -40,6 +40,7 @@ harden(ProviderAdminInterface);
 // eslint-disable-next-line @endo/no-harden-pattern-maker
 harden(ProviderUseInterface);
 
+/** @returns {any} */
 const emptyState = () =>
   harden({
     version: 1,

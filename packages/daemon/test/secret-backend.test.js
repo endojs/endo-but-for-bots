@@ -1,6 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -31,7 +32,7 @@ test('local backend encrypts, atomically replaces, and revokes bytes', async t =
   const retried = await backend.create(
     'op-create',
     'secret-id',
-    new TextEncoder().encode('must-not-replace'),
+    encodeUtf8('must-not-replace'),
   );
   t.is(retried, backendRef);
   const envelope = await readFile(path.join(temporary, backendRef));

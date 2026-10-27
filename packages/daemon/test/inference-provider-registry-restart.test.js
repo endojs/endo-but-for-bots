@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { makeEndoClient, restart, start, stop } from '../index.js';
 
@@ -85,9 +86,7 @@ testNode(
         kind: 'anthropic',
         defaultModel: 'claude-test',
         limits: { concurrentTurns: 1, dailyTokens: 1000 },
-        keyBase64: encodeBase64(
-          new TextEncoder().encode('restart-canary-secret'),
-        ),
+        keyBase64: encodeBase64(encodeUtf8('restart-canary-secret')),
       }),
     );
     const use = await E(registry).useFor('owner-alice', provider.providerId);
