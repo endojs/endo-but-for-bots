@@ -291,3 +291,54 @@ test('a record that cannot be read does not make its session undeletable', async
   await queue.destroy();
   t.false(store.has(NAME));
 });
+
+test('a lost enqueue acknowledgement and reconnect retain one durable submission', async t => {
+  t.timeout(5000);
+  const host = makeHost();
+  const now = () => 1_800_000_000_000;
+  const requestId = '1800000000000-11111111-1111-4111-8111-111111111111';
+  const first = makePendingQueue({ host: host.host, id: 'abc', now });
+  host.loseNextAck();
+  await t.throwsAsync(() => first.enqueue('one', { requestId, claim: true }), {
+    message: /acknowledgement lost/,
+  });
+  const restored = makePendingQueue({ host: host.host, id: 'abc', now });
+  const repeated = await restored.enqueue('one', { requestId });
+  t.true('duplicate' in repeated && repeated.duplicate);
+  t.is(restored.list().length, 1);
+  t.is(restored.list()[0].state, 'interrupted');
+  t.is(repeated.id, restored.list()[0].id);
+  await restored.complete(repeated.id);
+  const third = makePendingQueue({ host: host.host, id: 'abc', now });
+  t.is((await third.enqueue('one', { requestId })).id, repeated.id);
+  t.deepEqual(
+    third.list(),
+    [],
+    'a completed submission cannot be queued twice',
+  );
+  await t.throwsAsync(() => third.enqueue('different', { requestId }), {
+    message: /different text/,
+  });
+  await third.destroy();
+  t.is(host.store.size, 0, 'session deletion removes receipts too');
+});
+
+test('concurrent duplicate sends share an ID and expired IDs are rejected after receipt expiry', async t => {
+  t.timeout(5000);
+  const { host } = makeHost();
+  let clock = 1_800_000_000_000;
+  const requestId = '1800000000000-11111111-1111-4111-8111-111111111111';
+  const queue = makePendingQueue({ host, id: 'abc', now: () => clock });
+  const [a, b] = await Promise.all([
+    queue.enqueue('one', { requestId }),
+    queue.enqueue('one', { requestId }),
+  ]);
+  t.is(a.id, b.id);
+  t.is(queue.list().length, 1);
+  await queue.complete(a.id);
+  clock += 24 * 60 * 60 * 1000;
+  await t.throwsAsync(() => queue.enqueue('one', { requestId }), {
+    message: /expired/,
+  });
+  t.is(queue.list().length, 0);
+});

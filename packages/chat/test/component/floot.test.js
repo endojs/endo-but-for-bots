@@ -26,6 +26,9 @@ import {
 } from '../helpers/dom-setup.js';
 
 const dom = createDOM();
+// Each fake daemon uses the same session IDs; persistent browser state belongs
+// to the test, while remounts within a test deliberately retain it.
+test.beforeEach(() => dom.window.localStorage.clear());
 // Happy DOM implements the browser APIs exercised here; its declaration types
 // carry implementation-specific symbols, so adapt only at the harness boundary.
 const testWindow = /** @type {Window & typeof globalThis} */ (
@@ -971,6 +974,109 @@ const setup = async (t, count = 2, recover = false, prepare = () => {}) => {
     setHistoryReader: daemon.setHistoryReader,
   };
 };
+
+test.serial(
+  'recovered drafts stay in their session and ordinary drafts survive remount',
+  async t => {
+    dom.window.localStorage.setItem(
+      'floot-send::s0',
+      JSON.stringify({
+        id: 'uncertain-request',
+        text: 'uncertain A',
+        legacy: false,
+      }),
+    );
+    const { parent, remount } = await setup(t);
+    t.is(textareaIn(parent, '.floot-input').value, 'uncertain A');
+    const select = async index => {
+      parent
+        .querySelectorAll('.floot-session-item')
+        [index].dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await tick();
+    };
+    await select(1);
+    const input = textareaIn(parent, '.floot-input');
+    t.is(input.value, '');
+    input.value = 'unsent B';
+    input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await tick();
+    await select(0);
+    t.is(textareaIn(parent, '.floot-input').value, 'uncertain A');
+    await select(1);
+    t.is(textareaIn(parent, '.floot-input').value, 'unsent B');
+    remount();
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 2,
+    );
+    await tick(50);
+    await select(1);
+    t.is(textareaIn(parent, '.floot-input').value, 'unsent B');
+  },
+);
+
+test.serial('a late failed send restores only its source session', async t => {
+  const gate = makePromiseKit();
+  let entered = false;
+  const { parent, send } = await setup(t, 2, false, daemon => {
+    daemon.setEnqueueGate(() => {
+      entered = true;
+      return gate.promise;
+    });
+  });
+  await send('uncertain in A');
+  await waitFor(() => entered);
+  parent
+    .querySelectorAll('.floot-session-item')[1]
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await tick();
+  t.is(textareaIn(parent, '.floot-input').value, '');
+  gate.reject(Error('late acknowledgement lost'));
+  await waitFor(() => parent.textContent.includes('late acknowledgement lost'));
+  t.is(textareaIn(parent, '.floot-input').value, '');
+  parent
+    .querySelectorAll('.floot-session-item')[0]
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await tick();
+  t.is(textareaIn(parent, '.floot-input').value, 'uncertain in A');
+});
+
+test.serial(
+  'activity recreation before acquiring the send lock retains the unsent draft',
+  async t => {
+    const gate = makePromiseKit();
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const originalLocks = globalThis.navigator.locks;
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: (key, work) =>
+            gate.promise.then(() => originalLocks.request(key, work)),
+        },
+      },
+    });
+    t.teardown(() => {
+      gate.resolve(undefined);
+      if (previous) Object.defineProperty(globalThis, 'navigator', previous);
+      else delete (/** @type {any} */ (globalThis).navigator);
+    });
+    const { parent, send, remount } = await setup(t);
+    await send('saved before claiming');
+    t.is(
+      JSON.parse(
+        dom.window.localStorage.getItem('floot-draft:floot-send::s0') || '{}',
+      ).text,
+      'saved before claiming',
+    );
+    remount();
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 2,
+    );
+    await tick(50);
+    t.is(textareaIn(parent, '.floot-input').value, 'saved before claiming');
+    gate.resolve(undefined);
+  },
+);
 
 test.serial(
   'deleting the active session releases submissions before the old turn ends',
@@ -2260,7 +2366,7 @@ const stubWakeLock = (t, latencyMs = 0) => {
   };
   const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   Object.defineProperty(globalThis, 'navigator', {
-    value: { wakeLock },
+    value: { wakeLock, locks: globalThis.navigator?.locks },
     configurable: true,
   });
   t.teardown(() => {

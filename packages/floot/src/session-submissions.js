@@ -239,15 +239,19 @@ export const makeSessionSubmissions = ({
      * Accept a message. It starts at once if nothing is ahead of it.
      *
      * @param {string} text
+     * @param {string} [requestId]
      */
-    submit: text =>
+    submit: (text, requestId) =>
       serial(async () => {
         await initialise();
         // The user is here and sending: whatever waited goes first, in order.
-        if (hold && hold.reason !== 'interrupted') setHold(null);
+        const priorHold = hold;
         const idle =
           !hold && !getCurrentTurn() && !refusal() && queue.list().length === 0;
-        const entry = await queue.enqueue(text, { claim: idle });
+        const entry = await queue.enqueue(text, { claim: idle, requestId });
+        if ('duplicate' in entry && entry.duplicate)
+          return harden({ id: entry.id });
+        if (priorHold && priorHold.reason !== 'interrupted') setHold(null);
         if (entry.state !== 'dispatching') {
           await pumpStep();
         } else if (closed || getCurrentTurn() || refusal()) {

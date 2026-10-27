@@ -1,0 +1,29 @@
+{
+  "name": "@endo/floot-android",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Android Endo daemon and shared Floot web interface with local and remote connections",
+  "keywords": [
+    "endo",
+    "floot",
+    "android",
+    "voice"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/floot-android"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "build:runtime": "bash scripts/build-runtime.sh",
+    "build": "yarn build:web && yarn build:runtime && cd android && ./gradlew assembleDebug",
+    "test": "cd android && ./gradlew testDebugUnitTest"
+  }
+}

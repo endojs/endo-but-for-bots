@@ -9,6 +9,11 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { FlootApp } from '@endo/space-floot';
 import { makeReplyFold } from '@endo/floot/src/reply-fold.js';
 import { applyTranscript } from '@endo/floot/src/transcript-delta.js';
+import {
+  makeSessionDrafts,
+  makeSubmissionClient,
+} from './floot-submission-client.js';
+import { exportFlootObjects } from './floot-transfer.js';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
@@ -502,6 +507,11 @@ export const flootComponent = (
   audioPath,
   ttsPath,
 ) => {
+  const submissionClient = makeSubmissionClient(
+    localStorage,
+    () => `${Date.now()}-${crypto.randomUUID()}`,
+  );
+  const sessionDrafts = makeSessionDrafts(submissionClient.draft, localStorage);
   // Resolve the floot factory by walking the profile path.
   /** @type {any} */
   let factory = rootPowers;
@@ -1508,6 +1518,17 @@ export const flootComponent = (
       );
       usage = null;
     }
+    try {
+      inputText = sessionDrafts.select(
+        session ? `floot-send:${profilePath.join('/')}:${session.id}` : null,
+        inputText,
+      );
+    } catch {
+      inputText = '';
+      setStatus(
+        'Saved submission could not be read. Inspect browser storage before retrying.',
+      );
+    }
     if (!session) {
       notify();
       return;
@@ -1629,6 +1650,18 @@ export const flootComponent = (
     // after the remote round trips that start the turn and its speech.
     if (ttsEnabled && ttsServer) prepareTts();
     inputText = '';
+    /** @type {{key: string, value: string} | null} */
+    let savedDraft = null;
+    try {
+      savedDraft = sessionDrafts.save(text);
+    } catch {
+      inputText = text;
+      setStatus(
+        'This draft could not be saved on this device. Nothing was sent.',
+      );
+      notify();
+      return;
+    }
     // Sending a message is an explicit "follow along" intent — re-stick.
     stick = true;
 
@@ -1654,6 +1687,7 @@ export const flootComponent = (
         session = await createSession();
         send.sessionId = session.id;
         openActiveSession();
+        savedDraft = sessionDrafts.save(text);
       }
       if (session.title === DEFAULT_TITLE) {
         session.title = autoTitle(text);
@@ -1662,7 +1696,12 @@ export const flootComponent = (
           .catch(() => {});
         notify();
       }
-      const accepted = await E(facetFor(session)).enqueue(text);
+      const accepted = await submissionClient.submit(
+        facetFor(session),
+        `floot-send:${profilePath.join('/')}:${session.id}`,
+        text,
+        () => sessionDrafts.acknowledge(savedDraft),
+      );
       send.acked = true;
       if (accepted && typeof accepted.id === 'string') {
         send.pendingId = accepted.id;
@@ -1677,10 +1716,29 @@ export const flootComponent = (
       .catch((/** @type {Error} */ error) => {
         if (cancelled) return;
         inFlightSends = inFlightSends.filter(other => other !== send);
-        // Nothing was accepted: the text goes back where it can be sent
-        // again. Unless the daemon has reported it after all (a failure after
-        // it was queued), in which case restoring it would make two of it.
-        if (!send.seen && !inputText) inputText = text;
+        // This failure belongs to the session that submitted it. Selection may
+        // have changed while waiting, and the outcome may still be uncertain.
+        if (error.name === 'SubmissionChangedError') {
+          try {
+            // A delayed discovery must not reoffer a request another view has
+            // already resolved or explicitly discarded with a fresh retry ID.
+            sessionDrafts.acknowledge(savedDraft);
+          } catch {
+            // Still report why this view did not dispatch.
+          }
+        } else if (!send.seen && !send.acked) {
+          try {
+            if (send.sessionId) {
+              inputText = sessionDrafts.restore(
+                `floot-send:${profilePath.join('/')}:${send.sessionId}`,
+                text,
+                inputText,
+              );
+            } else if (!getActiveSession() && !inputText) inputText = text;
+          } catch {
+            // The durable retry remains authoritative when draft storage fails.
+          }
+        }
         setStatus(`error: ${error.message}`);
       })
       .finally(() => {
@@ -1846,6 +1904,13 @@ export const flootComponent = (
   let calibSamples = [];
   /** @type {Uint8Array[]} */
   let preroll = [];
+  // A permission request can outlive pause, stop, a new request, or unmount.
+  let micRequestId = 0;
+  let audioSuspended = false;
+  const audioAllowed = () =>
+    !cancelled &&
+    !audioSuspended &&
+    $parent.ownerDocument.visibilityState !== 'hidden';
   let micInRate = 16_000;
   /** @type {MediaStream | null} */
   let mediaStream = null;
@@ -1878,12 +1943,13 @@ export const flootComponent = (
   const drainTranscript = async (
     /** @type {any} */ textReader,
     /** @type {any} */ ownChannel,
+    /** @type {number} */ requestId,
   ) => {
     let last = '';
     try {
       for await (const raw of iterateReader(textReader, { buffer: 4 })) {
         const value = /** @type {any} */ (raw);
-        if (cancelled) break;
+        if (!audioAllowed() || requestId !== micRequestId) break;
         if (value.type === 'partial' || value.type === 'final') {
           last = value.text;
           // Show buffered continuation text ahead of the live partial.
@@ -1898,10 +1964,12 @@ export const flootComponent = (
         }
       }
     } catch (err) {
-      setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
+      if (audioAllowed() && requestId === micRequestId)
+        setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
     } finally {
       if (ownChannel === channel) channel = null;
     }
+    if (!audioAllowed() || requestId !== micRequestId) return;
     const text = filterTranscript(last);
     inputText = '';
     voiceTranscript = '';
@@ -1942,7 +2010,7 @@ export const flootComponent = (
       // typed there is what sends, and clearing it cancels the send. Sending
       // what was recognized instead would silently discard the edit.
       const full = inputText.trim();
-      if (full) submit(full);
+      if (full && micActive && audioAllowed()) submit(full);
     }, VAD.RESUME_GRACE_MS);
   };
 
@@ -1978,7 +2046,7 @@ export const flootComponent = (
   // Open a fresh transcribe() stream for the utterance just detected and flush
   // the pre-roll so the word's onset isn't clipped.
   const beginUtterance = () => {
-    if (speaking || !audioServer) return;
+    if (speaking || !audioServer || !micActive || !audioAllowed()) return;
     // If we're within the post-utterance grace, this is a continuation of the
     // same thought: cancel the pending send and keep the buffered text.
     if (resumeTimer) {
@@ -1997,7 +2065,7 @@ export const flootComponent = (
     channel = makeAudioChannel();
     const ownChannel = channel;
     const textReader = E(audioServer).transcribe(channel.reader);
-    drainTranscript(textReader, ownChannel);
+    drainTranscript(textReader, ownChannel, micRequestId);
     for (const frame of preroll) ownChannel.writeBytes(frame);
     preroll = [];
   };
@@ -2096,7 +2164,7 @@ export const flootComponent = (
   };
 
   const startMic = async () => {
-    if (micActive || !audioServer) return;
+    if (micActive || !audioServer || !audioAllowed()) return;
     // Preflight the two environment failures that deny the mic *without* a
     // browser prompt, so the user gets an explanation instead of silence:
     //   1. a non-secure context (mic is HTTPS/localhost only), and
@@ -2120,6 +2188,8 @@ export const flootComponent = (
     // Still inside the tap: prime the audio context now, since a hands-free
     // reply starts from the utterance timer, not a gesture.
     if (ttsEnabled && ttsServer) prepareTts();
+    micRequestId += 1;
+    const requestId = micRequestId;
     micActive = true;
     calibrating = true;
     calibStart = Date.now();
@@ -2132,13 +2202,18 @@ export const flootComponent = (
     try {
       // Called synchronously off the tap (no await precedes it) so the user
       // gesture that mobile browsers require is still in effect.
-      mediaStream = await media.getUserMedia({
+      const acquired = await media.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
+      if (!audioAllowed() || requestId !== micRequestId || !micActive) {
+        acquired.getTracks().forEach(track => track.stop());
+        return;
+      }
+      mediaStream = acquired;
       audioCtx = new AudioContext();
       source = audioCtx.createMediaStreamSource(mediaStream);
       analyser = audioCtx.createAnalyser();
@@ -2147,6 +2222,7 @@ export const flootComponent = (
       processor = audioCtx.createScriptProcessor(4096, 1, 1);
       micInRate = audioCtx.sampleRate;
       processor.onaudioprocess = e => {
+        if (!audioAllowed() || requestId !== micRequestId || !micActive) return;
         const data = e.inputBuffer.getChannelData(0);
         const pcm = toPcm16le(data, micInRate, 16_000);
         if (!pcm.length) return;
@@ -2163,8 +2239,9 @@ export const flootComponent = (
       processor.connect(audioCtx.destination);
       rafId = requestAnimationFrame(vadLoop);
     } catch (err) {
-      micActive = false;
-      calibrating = false;
+      if (!audioAllowed() || requestId !== micRequestId) return;
+      stopMic();
+      const failedRequestId = micRequestId;
       const name = /** @type {Error} */ (err).name;
       const message = /** @type {Error} */ (err).message;
       if (name === 'NotAllowedError' || name === 'SecurityError') {
@@ -2186,6 +2263,7 @@ export const flootComponent = (
           // Permissions API unsupported, or 'microphone' isn't a known name on
           // this browser — leave permState empty and give generic guidance.
         }
+        if (!audioAllowed() || failedRequestId !== micRequestId) return;
         const android =
           typeof navigator !== 'undefined' &&
           /android/i.test(navigator.userAgent || '');
@@ -2250,6 +2328,7 @@ export const flootComponent = (
   };
 
   const stopMic = () => {
+    micRequestId += 1;
     if (!micActive) return;
     micActive = false;
     calibrating = false;
@@ -2326,14 +2405,33 @@ export const flootComponent = (
 
   updateWakeLock = () => {
     screenWakeLock.set(
-      !cancelled && Boolean(micActive || ttsSpeaking || isBusy()),
+      audioAllowed() && Boolean(micActive || ttsSpeaking || isBusy()),
     );
   };
 
   // The browser drops the lock when the page is hidden and does not restore it.
   // Registered with the other listeners at mount, below, so a throw during setup
   // cannot strand it on the document with no disposer to remove it.
-  const onVisibilityChange = () => screenWakeLock.refresh();
+  const stopAudio = () => {
+    stopMic();
+    stopTts();
+    void ttsCtx?.suspend().catch(() => {});
+  };
+  const suspendAudio = () => {
+    audioSuspended = true;
+    stopAudio();
+    updateWakeLock();
+  };
+  const resumeAudio = () => {
+    audioSuspended = false;
+    updateWakeLock();
+  };
+  const onVisibilityChange = () => {
+    if (wakeLockDoc.visibilityState === 'hidden') stopAudio();
+    screenWakeLock.refresh();
+  };
+  window.addEventListener('endo-suspend', suspendAudio);
+  window.addEventListener('endo-resume', resumeAudio);
 
   // Each request for playback. stopTts() bumps it too, so a request that
   // resumes after the audio context resumed (mute, Stop, barge-in, or unmount
@@ -2344,6 +2442,7 @@ export const flootComponent = (
   // Create/resume the audio context. Also called synchronously from the Send
   // gesture (see submit) so autoplay is allowed by the time audio arrives.
   const prepareTts = () => {
+    if (!audioAllowed()) return Promise.resolve();
     try {
       if (!ttsCtx) ttsCtx = new AudioContext();
     } catch {
@@ -2392,7 +2491,7 @@ export const flootComponent = (
     /** @type {Uint8Array} */ bytes,
     /** @type {number} */ sampleRate,
   ) => {
-    if (!ttsCtx) return;
+    if (!ttsCtx || !audioAllowed()) return;
     const frames = Math.floor(bytes.length / 2);
     if (!frames) return;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
@@ -2430,12 +2529,17 @@ export const flootComponent = (
     /** @type {any} */ audioReader,
     /** @type {FlootTurn | null} */ speechTurn = null,
   ) => {
-    if (!ttsServer) return;
+    if (!ttsServer || !audioAllowed()) {
+      void iterateReader(audioReader)
+        .return()
+        .catch(() => {});
+      return;
+    }
     ttsRequestSeq += 1;
     const mySeq = ttsRequestSeq;
     await prepareTts();
     if (
-      cancelled ||
+      !audioAllowed() ||
       !ttsCtx ||
       mySeq !== ttsRequestSeq ||
       (speechTurn && !ttsEnabled)
@@ -2458,7 +2562,7 @@ export const flootComponent = (
     try {
       for await (const raw of audio) {
         const value = /** @type {any} */ (raw);
-        if (cancelled || myId !== ttsPlaybackId) break;
+        if (!audioAllowed() || myId !== ttsPlaybackId) break;
         if (value.type === 'bytes') {
           enqueuePcm(base64ToBytes(value.b64), value.sampleRate || 22_050);
         } else if (value.type === 'end' || value.type === 'abort') {
@@ -2484,7 +2588,7 @@ export const flootComponent = (
   // Play a finished message through TTS by feeding its whole text as one delta.
   // Independent of the live turn: starting a replay supersedes any other audio.
   const replayMessage = (/** @type {string} */ text) => {
-    if (!ttsServer || !text.trim()) return;
+    if (!ttsServer || !text.trim() || !audioAllowed()) return;
     const feed = makeTextFeed();
     feed.delta(text);
     feed.end();
@@ -2520,7 +2624,7 @@ export const flootComponent = (
   // that rejects (no such voice, TTS unreachable) just ends the iteration in
   // playAudioStream; the text reply is unaffected.
   const speakTurn = (/** @type {FlootTurn} */ turn) => {
-    if (!ttsServer) return;
+    if (!ttsServer || !audioAllowed()) return;
     playAudioStream(E(turn.ref).speak(ttsServer, currentTtsOptions()), turn);
   };
 
@@ -2577,6 +2681,67 @@ export const flootComponent = (
   // ── Controller (the view's only handle on the host engine) ───────────────────
   const controller = harden({
     getState,
+    async forgetUnconfirmedSend() {
+      const session = getActiveSession();
+      if (
+        !session ||
+        !window.confirm(
+          'The earlier message may already have run. Check the conversation first. Forget its saved retry ID?',
+        )
+      )
+        return;
+      try {
+        await submissionClient.forget(
+          `floot-send:${profilePath.join('/')}:${session.id}`,
+        );
+        setStatus('Saved submission cleared.');
+      } catch (error) {
+        setStatus(/** @type {Error} */ (error).message);
+      }
+    },
+    async exportObjects() {
+      try {
+        const text = await exportFlootObjects(rootPowers, {
+          profilePath,
+          audioPath,
+          ttsPath,
+        });
+        if (cancelled) return;
+        const dialog = document.createElement('dialog');
+        const label = document.createElement('p');
+        label.textContent =
+          'Import this into Floot on another Endo. Anyone with these references can use this controller and the included speech services. Share only with a trusted device.';
+        const content = document.createElement('textarea');
+        content.value = text;
+        content.readOnly = true;
+        content.rows = 12;
+        content.cols = 55;
+        content.style.maxWidth = '100%';
+        content.setAttribute('aria-label', 'Floot object export');
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy export';
+        copy.onclick = () => {
+          void navigator.clipboard.writeText(text).then(
+            () => {
+              copy.textContent = 'Copied';
+            },
+            () => {
+              content.focus();
+              content.select();
+            },
+          );
+        };
+        const close = document.createElement('button');
+        close.textContent = 'Close';
+        close.onclick = () => dialog.close();
+        dialog.onclose = () => dialog.remove();
+        dialog.append(label, content, copy, close);
+        document.body.append(dialog);
+        dialog.showModal();
+      } catch (err) {
+        setStatus(`Export failed: ${/** @type {Error} */ (err).message}`);
+      }
+    },
     refreshDiscovery() {
       void readDiscovery();
     },
@@ -2746,6 +2911,11 @@ export const flootComponent = (
     },
     setInput(/** @type {string} */ text) {
       inputText = text;
+      try {
+        sessionDrafts.save(text);
+      } catch {
+        setStatus('This draft could not be saved on this device.');
+      }
       notify();
     },
   });
@@ -3190,6 +3360,8 @@ export const flootComponent = (
     void network.select(null);
     void execution.select(null);
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('endo-suspend', suspendAudio);
+    window.removeEventListener('endo-resume', resumeAudio);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();
     // Closing a subscription detaches this page and nothing else.

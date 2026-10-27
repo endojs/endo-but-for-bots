@@ -4,18 +4,18 @@
  * imported as a JS side-effect so the package stays loadable under Node.
  */
 .floot-app {
-  --fl-bg: #0f0f10;
-  --fl-surface: #17171a;
-  --fl-surface2: #1f1f23;
-  --fl-surface3: #26262b;
-  --fl-border: #2a2a2e;
-  --fl-border-strong: #3a3a40;
-  --fl-text: #e4e4e7;
-  --fl-text-muted: #8a8a92;
-  --fl-text-faint: #5e5e66;
+  --fl-bg: var(--bg-primary, #0f0f10);
+  --fl-surface: var(--bg-secondary, #17171a);
+  --fl-surface2: var(--bg-sidebar, #1f1f23);
+  --fl-surface3: var(--bg-hover, #26262b);
+  --fl-border: var(--border-color, #2a2a2e);
+  --fl-border-strong: var(--text-muted, #3a3a40);
+  --fl-text: var(--text-primary, #e4e4e7);
+  --fl-text-muted: var(--text-secondary, #8a8a92);
+  --fl-text-faint: var(--text-muted, #5e5e66);
   --fl-user: #2563eb;
   --fl-user-text: #fff;
-  --fl-assistant: #27272a;
+  --fl-assistant: var(--bg-active, #27272a);
   --fl-accent: #3b82f6;
   --fl-red: #ef4444;
   --fl-green: #22c55e;

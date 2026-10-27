@@ -1,6 +1,7 @@
 /* Endo Chat Styles */
 
 :root {
+  color-scheme: light dark;
   /* Colors - Light theme inspired by modern chat apps */
   --bg-primary: #ffffff;
   --bg-secondary: #f8f9fa;
@@ -10792,5 +10793,41 @@ button.btn-spinner::after {
 
   .secrets-header {
     display: grid;
+  }
+}
+
+/* Keep Home usable on a phone: inventory above conversation, not beside it. */
+@media (max-width: 640px) {
+  #pets {
+    width: 100%;
+    height: 30%;
+    bottom: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  #resize-handle {
+    display: none;
+  }
+
+  #messages {
+    left: 0;
+    top: 30%;
+    padding: 16px;
+  }
+
+  #conversation-header {
+    left: 0;
+    top: 30%;
+    padding: 12px 16px;
+  }
+
+  #conversation-header.visible ~ #messages {
+    top: calc(30% + 46px);
+  }
+
+  #chat-bar {
+    left: 0;
+    padding: 12px;
   }
 }

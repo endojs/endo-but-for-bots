@@ -52,7 +52,8 @@
     "@endo/lal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/platform": "workspace:^"
+    "@endo/platform": "workspace:^",
+    "@endo/sha256": "workspace:^"
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",

@@ -176,6 +176,8 @@ export {};
  * @property {() => FlootState} getState
  * @property {(listener: () => void) => () => void} subscribe
  * @property {(text?: string) => void} send
+ * @property {() => void} [forgetUnconfirmedSend]
+ * @property {() => Promise<void>} [exportObjects]
  * @property {() => void} stop
  * @property {(pendingId: number | string) => void} [sendPendingNow]
  * @property {(pendingId: number | string, text: string) => void} [editPending]

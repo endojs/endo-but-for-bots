@@ -292,6 +292,28 @@ export const SettingsPanel = ({ state, controller }) => {
       'div',
       { class: 'floot-settings' },
       h('div', { class: 'floot-modal-title' }, 'Transcription & settings'),
+      controller.forgetUnconfirmedSend
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.forgetUnconfirmedSend?.(),
+            },
+            'Clear unconfirmed submission…',
+          )
+        : null,
+      controller.exportObjects
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.exportObjects?.(),
+            },
+            'Export Floot objects…',
+          )
+        : null,
       state.execution?.supported
         ? h(
             'section',

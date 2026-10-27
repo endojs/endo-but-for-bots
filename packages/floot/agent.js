@@ -250,6 +250,9 @@ const FlootSessionInterface = M.interface('FlootSession', {
   // A message is whatever a person pasted; the default 100k-character limit
   // on a guarded string would refuse a long log. `startTurn` has none either.
   enqueue: M.callWhen(M.string(MESSAGE_LIMITS)).returns(M.record()),
+  enqueueOnce: M.callWhen(M.string(MESSAGE_LIMITS), M.string()).returns(
+    M.record(),
+  ),
   listPending: M.callWhen().returns(M.record()),
   editPending: M.callWhen(M.string(), M.string(MESSAGE_LIMITS)).returns(
     M.undefined(),
@@ -4718,6 +4721,11 @@ export const make = async (
           assertSessionAdmission(id);
           return submissionsFor(id).submit(text);
         },
+        async enqueueOnce(text, requestId) {
+          await assertSessionReady(id);
+          assertSessionAdmission(id);
+          return submissionsFor(id).submit(text, requestId);
+        },
         async listPending() {
           await assertSessionReady(id);
           const entry = submissionsFor(id);
@@ -4928,6 +4936,8 @@ export const make = async (
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')
             return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
+          if (methodName === 'enqueueOnce')
+            return 'enqueueOnce(text, requestId) — Durable duplicate-safe enqueue. Generate requestId as Date.now() + a hyphen + crypto.randomUUID() before sending, persist it with the draft, and reuse it only for retries of the same text. Receipts survive dispatch and restart for 24 hours; expired IDs are rejected, never submitted again. A duplicate does not release queue restart holds. Requires an updated Floot host.';
           if (methodName === 'enqueue')
             return 'enqueue(text) — Accept a message and return { id }. It becomes a turn at once if nothing is ahead of it; otherwise it waits in the session’s durable queue, whether or not the caller stays connected, and runs when its turn comes. The turn it becomes carries the same id as turn.pendingId. Dispatch is at most once: a message the service was sending when it restarted comes back "interrupted" and is never sent again on its own. A queue that comes back from a restart non-empty, a refused turn, or an emergency stop holds the queue until sendPending() or a new enqueue(). Prefer this to startTurn() for anything a person typed.';
           if (methodName === 'listPending')

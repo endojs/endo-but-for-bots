@@ -24,6 +24,7 @@
 
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { sha256 } from '@endo/sha256';
 
 /**
  * @typedef {'queued' | 'dispatching' | 'interrupted'} PendingState
@@ -64,6 +65,13 @@ export const makePendingQueue = ({
   /** @type {PendingEntry[]} */
   let entries = [];
   let nextSequence = 1n;
+  /** @type {{requestId: string, digest: string, id: string, createdAt: number}[]} */
+  let receipts = [];
+  const retryWindow = 24 * 60 * 60 * 1000;
+  const fingerprint = (/** @type {string} */ text) =>
+    [...sha256(new TextEncoder().encode(text))]
+      .map(byte => byte.toString(16).padStart(2, '0'))
+      .join('');
   let loaded = false;
   let chain = Promise.resolve();
 
@@ -77,13 +85,14 @@ export const makePendingQueue = ({
 
   const persist = async () => {
     try {
-      if (entries.length === 0) {
+      if (entries.length === 0 && receipts.length === 0) {
         // Nothing waits: no record. A session that never queues never has one.
         if (await E(host).has(name)) await E(host).remove(name);
       } else {
         await E(host).storeValue(
           harden({
             version: 1,
+            receipts: receipts.map(receipt => ({ ...receipt })),
             nextSequence,
             entries: entries.map(entry => ({ ...entry })),
           }),
@@ -107,12 +116,26 @@ export const makePendingQueue = ({
     let read = [];
     let readSequence = nextSequence;
     let interrupted = false;
+    receipts = [];
     if (await E(host).has(name)) {
       const stored = await E(host).lookup(name);
       (stored?.version === 1 &&
         Array.isArray(stored.entries) &&
         typeof stored.nextSequence === 'bigint') ||
         Fail`Pending queue record ${q(name)} is corrupt`;
+      if (stored.receipts !== undefined) {
+        (Array.isArray(stored.receipts) &&
+          /** @type {any[]} */ (stored.receipts).length <= 4096) ||
+          Fail`Invalid submission receipts`;
+        receipts = stored.receipts.map((/** @type {any} */ receipt) => {
+          (typeof receipt.requestId === 'string' &&
+            typeof receipt.digest === 'string' &&
+            typeof receipt.id === 'string' &&
+            typeof receipt.createdAt === 'number') ||
+            Fail`Invalid submission receipt`;
+          return { ...receipt };
+        });
+      }
       read = stored.entries.map((/** @type {any} */ entry) => {
         (typeof entry?.id === 'string' &&
           typeof entry.text === 'string' &&
@@ -200,13 +223,40 @@ export const makePendingQueue = ({
     isLoaded: () => loaded,
     /**
      * @param {string} text
-     * @param {{ claim?: boolean }} [options] `claim` marks the entry
+     * @param {{ claim?: boolean, requestId?: string }} [options] `claim` marks the entry
      *   `dispatching` in the same write, for a caller about to start its turn;
      *   honoured only when nothing is ahead of it.
      */
-    enqueue: (text, { claim = false } = {}) =>
+    enqueue: (text, { claim = false, requestId } = {}) =>
       ordered(async () => {
         const accepted = assertText(text).trim();
+        if (requestId !== undefined) {
+          /^\d{13}-[a-f0-9-]{36}$/.test(requestId) ||
+            Fail`Invalid submission request ID`;
+          const issued = Number(requestId.slice(0, 13));
+          (issued > now() - retryWindow && issued <= now() + 300_000) ||
+            Fail`Submission retry window expired or device clock is incorrect`;
+          const previous = receipts.find(
+            receipt => receipt.requestId === requestId,
+          );
+          if (previous) {
+            previous.digest === fingerprint(accepted) ||
+              Fail`Submission request ID already used for different text`;
+            return harden({
+              id: previous.id,
+              text: accepted,
+              createdAt: previous.createdAt,
+              state: /** @type {PendingState} */ ('queued'),
+              duplicate: true,
+            });
+          }
+          receipts = receipts.filter(
+            receipt =>
+              Number(receipt.requestId.slice(0, 13)) > now() - retryWindow,
+          );
+          receipts.length < 4096 ||
+            Fail`Submission receipt limit reached; wait for the retry window to expire`;
+        }
         return commit(draft => {
           draft.length < MAX_WAITING ||
             Fail`This session already has ${q(MAX_WAITING)} messages waiting; send or delete some first`;
@@ -224,6 +274,13 @@ export const makePendingQueue = ({
           };
           nextSequence += 1n;
           draft.push(entry);
+          if (requestId)
+            receipts.push({
+              requestId,
+              digest: fingerprint(accepted),
+              id: entry.id,
+              createdAt,
+            });
           return project(entry);
         });
       }),
@@ -319,6 +376,7 @@ export const makePendingQueue = ({
     destroy: () => {
       const result = chain.then(async () => {
         entries = [];
+        receipts = [];
         loaded = true;
         if (await E(host).has(name)) await E(host).remove(name);
         changed();
