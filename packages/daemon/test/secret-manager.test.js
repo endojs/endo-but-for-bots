@@ -1121,3 +1121,86 @@ test('a malformed generation precondition is refused rather than ignored', async
   t.is(new TextDecoder().decode(decodeBase64(after.base64)), canary);
   t.is(after.generation, 1n);
 });
+
+test('stable import refuses invalid ids, idempotency conflicts, missing keys, and revoked records', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const bytes = encodeBase64(new TextEncoder().encode('original'));
+  const stableIds = harden({
+    secretId: 'secret-stable-0005',
+    grantId: 'grant-stable-00005',
+    operationId: 'operation-stable-5',
+  });
+
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-refuse',
+        'Stable refusal',
+        bytes,
+        harden({ ...stableIds, secretId: 'not a stable id' }),
+      ),
+    { message: /INVALID_STABLE_ID/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-missing',
+        'Stable missing key',
+        undefined,
+        harden({
+          secretId: 'secret-stable-0006',
+          grantId: 'grant-stable-00006',
+          operationId: 'operation-stable-6',
+        }),
+      ),
+    { message: /KEY_NEEDED/ },
+  );
+
+  await E(importer).provideBase64(
+    'stable-refuse',
+    'Stable refusal',
+    bytes,
+    stableIds,
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-refuse',
+        'Different description',
+        bytes,
+        stableIds,
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-other',
+        'Stable missing key',
+        bytes,
+        harden({
+          secretId: 'secret-stable-0006',
+          grantId: 'grant-stable-00005',
+          operationId: 'operation-stable-6',
+        }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+
+  const entry = (await E(await E(directory).lookup('catalog')).list()).find(
+    candidate => candidate.secretId === stableIds.secretId,
+  );
+  await E(entry.admin).revoke();
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-refuse',
+        'Stable refusal',
+        bytes,
+        stableIds,
+      ),
+    { message: /REVOKED/ },
+  );
+});
