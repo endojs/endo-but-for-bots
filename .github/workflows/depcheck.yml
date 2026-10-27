@@ -31,8 +31,17 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: .node-version
+      # Ubuntu 26.04 (graphviz 14) moved `tred` out of the `graphviz`
+      # package into `graphviz-tools`; older images ship it in `graphviz`
+      # and have no `graphviz-tools`.
       - name: Install graphviz
-        run: sudo apt install -y graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+          if ! command -v tred >/dev/null; then
+            sudo apt-get install -y graphviz-tools
+          fi
+          for tool in dot tred; do command -v "$tool"; done
 
       - name: Check for cycles
         run: scripts/check-dependency-cycles.sh 0
