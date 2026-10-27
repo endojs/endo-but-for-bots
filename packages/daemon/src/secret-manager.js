@@ -18,6 +18,7 @@ import { assertPetName } from './pet-name.js';
 
 const MAX_SECRET_BYTES = 1024 * 1024;
 const MAX_DESCRIPTION_LENGTH = 200;
+const STABLE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,63}$/;
 
 export const secretBlobHelp =
   'This capability grants access to secret bytes. Prefer proposing a formula that receives it as an endowment. Do not call readBase64() unless the task specifically requires learning the secret value.';
@@ -103,6 +104,10 @@ const withDecodedSecret = async (bytesBase64, operation) => {
 /**
  * @typedef {object} SecretBackend
  * @property {(operationId: string, secretId: string, bytes: Uint8Array) => Promise<string>} create
+ *   Idempotent for one `(operationId, secretId)`: after the backing value is
+ *   installed, a retry returns its reference without replacing its bytes.
+ * @property {(operationId: string, secretId: string) => Promise<string | undefined>} [recover]
+ *   Finds a completed create whose response was lost, without needing bytes.
  * @property {(backendRef: string) => Promise<Uint8Array>} read
  * @property {(operationId: string, backendRef: string, bytes: Uint8Array) => Promise<void>} replace
  * @property {(operationId: string, backendRef: string) => Promise<void>} revoke
@@ -473,7 +478,17 @@ export const makeSecretManager = ({
           // Persist the denial before attempting backend cleanup: fail closed.
           persistence.writeSecretRecord(revoked);
           try {
-            await backend.revoke(operationId, before.backendRef);
+            const backendRef =
+              before.backendRef ||
+              (await backend.recover?.(operationId, secretId));
+            if (backendRef !== undefined) {
+              if (before.backendRef === '') {
+                persistence.writeSecretRecord(
+                  harden({ ...revoked, backendRef }),
+                );
+              }
+              await backend.revoke(operationId, backendRef);
+            }
             await audit(
               secretId,
               'revoke',
@@ -511,7 +526,9 @@ export const makeSecretManager = ({
             // Revocation backends are required to be idempotent. Retrying here
             // prevents deletion from discarding the only cleanup reference
             // after an earlier backend-revocation failure.
-            await backend.revoke(operationId, before.backendRef);
+            if (before.backendRef !== '') {
+              await backend.revoke(operationId, before.backendRef);
+            }
             const paths = (await listKnownGrantPaths()).filter(
               ({ grantId }) =>
                 persistence.getSecretIdForGrant(grantId) === secretId,
@@ -648,6 +665,115 @@ export const makeSecretManager = ({
             });
             throw fixedError('CREATE_FAILED');
           }
+        });
+      },
+      provideBase64: async (
+        name,
+        description,
+        bytesBase64,
+        { secretId, grantId, operationId },
+      ) => {
+        await null;
+        assertPetName(name);
+        assertDescription(description);
+        [secretId, grantId, operationId].every(value =>
+          STABLE_ID_PATTERN.test(value),
+        ) ||
+          (() => {
+            throw fixedError('INVALID_STABLE_ID');
+          })();
+        return serializeMutation(secretId, async () => {
+          const knownPaths = await listKnownGrantPaths();
+          const existing = knownPaths.find(
+            ({ path }) =>
+              path.length === 2 && path[0] === 'secrets' && path[1] === name,
+          );
+          if (existing !== undefined && existing.grantId !== grantId) {
+            throw fixedError('NAME_CONFLICT');
+          }
+          let record = persistence.getSecretRecord(secretId);
+          if (record !== undefined) {
+            record.description === description ||
+              (() => {
+                throw fixedError('IDEMPOTENCY_CONFLICT');
+              })();
+            const recordedSecretId = persistence.getSecretIdForGrant(grantId);
+            recordedSecretId === undefined ||
+              recordedSecretId === secretId ||
+              (() => {
+                throw fixedError('IDEMPOTENCY_CONFLICT');
+              })();
+            if (recordedSecretId === undefined) {
+              persistence.writeSecretGrant(grantId, secretId);
+            }
+            record.state !== 'revoked' ||
+              (() => {
+                throw fixedError('REVOKED');
+              })();
+          } else {
+            const createdAt = now();
+            record = harden(
+              /** @type {SecretRecord} */ ({
+                secretId,
+                backendRef: '',
+                description,
+                state: 'provisioning',
+                generation: 1n,
+                createdAt,
+                updatedAt: createdAt,
+              }),
+            );
+            persistence.writeSecretRecord(record);
+            persistence.writeSecretGrant(grantId, secretId);
+            await audit(secretId, 'create', 'attempted', 1n, operationId);
+          }
+
+          if (record.state === 'provisioning') {
+            try {
+              const backendRef =
+                bytesBase64 === undefined
+                  ? await backend.recover?.(operationId, secretId)
+                  : await withDecodedSecret(bytesBase64, bytes =>
+                      backend.create(operationId, secretId, bytes),
+                    );
+              backendRef !== undefined ||
+                (() => {
+                  throw fixedError('KEY_NEEDED');
+                })();
+              record = harden({
+                ...record,
+                backendRef,
+                state: /** @type {'active'} */ ('active'),
+                updatedAt: now(),
+              });
+              persistence.writeSecretRecord(record);
+            } catch (error) {
+              if (/KEY_NEEDED/.test(/** @type {Error} */ (error).message)) {
+                throw error;
+              }
+              await audit(secretId, 'create', 'failed', 1n, operationId, {
+                reasonCode: 'CREATE_FAILED',
+              });
+              throw fixedError('CREATE_FAILED');
+            }
+          }
+
+          if (existing === undefined) {
+            await bindGrant(grantId, name);
+          }
+          const succeeded = persistence
+            .listSecretAuditEvents(1000)
+            .some(
+              event =>
+                event.secretId === secretId &&
+                event.operationId === operationId &&
+                event.operation === 'create' &&
+                event.outcome === 'succeeded',
+            );
+          if (!succeeded) {
+            await audit(secretId, 'create', 'succeeded', 1n, operationId);
+          }
+          return summaryFor(record);
         });
       },
     });

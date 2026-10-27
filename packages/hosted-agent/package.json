@@ -51,6 +51,8 @@
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
+    "./inference-provider-registry.js": "./src/inference-provider-registry.js",
+    "./inference-provider-registry-module.js": "./src/inference-provider-registry-module.js",
     "./provider-scopes.js": "./src/provider-scopes.js",
     "./session-supervisor.js": "./src/session-supervisor.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",

@@ -196,6 +196,20 @@ export const SecretImporterInterface = M.interface('SecretImporter', {
   createBase64: M.call(M.string(), M.string(), SecretBase64Shape).returns(
     M.promise(),
   ),
+  provideBase64: M.call(
+    M.string(),
+    M.string(),
+    M.or(SecretBase64Shape, M.undefined()),
+    M.splitRecord(
+      {
+        secretId: M.string(),
+        grantId: M.string(),
+        operationId: M.string(),
+      },
+      {},
+      harden({}),
+    ),
+  ).returns(M.promise()),
 });
 
 export const SecretCatalogInterface = M.interface('SecretCatalog', {
