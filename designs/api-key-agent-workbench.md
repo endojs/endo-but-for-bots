@@ -5,10 +5,10 @@
 | **Created** | 2026-10-27 |
 | **Updated** | 2026-10-27 |
 | **Author** | kriscendobot (prompted) |
-| **Status** | Proposed |
+| **Status** | Proposed. Leaving Proposed requires an answer to open question 3 |
 | **Parent** | [API-key inference providers and pinned guest agents](api-key-inference-providers-and-pinned-agents.md) (PR [#1543](https://github.com/endojs/endo-but-for-bots/pull/1543)) |
 | **Companion** | minion.town `designs/agent-chat-clip.md` (the chat Clip) |
-| **Grounded against** | `endojs/endo-but-for-bots` `llm` at `844ce3df7b`, and the #1543 head `81e5e47ae3`, which is this PR's frozen base. The in-repo claims below were rechecked at that base by reading the code and design text; none was verified by execution. The claims that drive design choices (the `readOnly()` view's method set, `glorp` equaling `grep(glob)`, and the `EndoMount.edit` that `hashline.js` promises) are W2's first, gating tests. None of the chat-Clip behavior is verified; W6 is its only real-execution evidence |
+| **Grounded against** | `endojs/endo-but-for-bots` `llm` at `844ce3df7b`, and the #1543 head `81e5e47ae3`, which is this PR's frozen base. The in-repo claims below were rechecked at that base by reading the code and design text; none was verified by execution. W2's first tests check the code claims that drive design choices (see W2). None of the chat-Clip behavior is verified; W6 is its only real-execution evidence |
 
 ## What is the Problem Being Solved?
 
@@ -19,13 +19,16 @@ The maintainer's scenario (kriskowal, 2026-10-27, arc tracker [minion.town#227](
 2. One endowment can be a **token-budgeted subagent spawner**.
    With it, an agent creates subagents, splits its token budget and endowments among them, converses with them, and holds a **control facet** for each delegation (pause, resize the budget, revoke).
 3. Agents work in a **git virtual file system** through tools that mostly exist already: grep, glob, glorp, exact-string edit, and the git reader and writer.
-   (`glorp` is the fused glob-plus-grep search, defined below.)
    Hashline reads and edits, which anchor each line by a short hash of its content (`packages/daemon/src/hashline.js`), are new wiring over existing code.
    Bounded line reads are a small new method.
 4. All of this runs behind a **chat conversation surface integrated as a Clip**.
    That part lives in the minion.town companion design.
 
-The parent's phases 1-5 are taken as given and are not changed here.
+The parent's phases 1-5 are taken as given.
+The parent is itself an open design (PR #1543, not merged), so none of its phases is built, and this design assumes all of them are unbuilt.
+It changes the parent in exactly one place: it names the broker's admission serialization, which the parent leaves unnamed (§ Budget, *Serialization mechanism*).
+That edit is proposed for the parent's phase 2 before phase 2 is built.
+If the parent's phase 2 lands first with a broker that is not a single-vat queue per provider, W3 is a rewrite of the broker's admission path, not an attenuation, and this design must be revised before W3 starts.
 
 ## Reuse inventory
 
@@ -44,7 +47,7 @@ M3 is the current client-side-bridge milestone, where the parent sits.
 | Endowment picker | [chat-inventory-create-menu](chat-inventory-create-menu.md) § Pane 3: Endowment selection | M9 | Proposed for reuse as an optional third step of **New API-key agent** (companion design; this design's open question 5) |
 | Reply-chain transcript per conversation | [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) (Complete) | M1 | None |
 | Streaming a reply | [daemon-message-streaming](daemon-message-streaming.md) (Complete: `editMessage`, `done`) | n/a | The responder streams harness text deltas through `editMessage` |
-| Mount, search, writes | `EndoMount` (`packages/daemon/src/interfaces.js`): `glob`, `grep`, `glorp`, `readText`, `writeText`, `list`, `stat`, `subView`, `readOnly`; [mount-stream-glob-grep](mount-stream-glob-grep.md) | M3 | None for the bundle. The `readOnly()` view keeps only `has`, `list`, `listTree`, and `lookup`, dropping `glob`, `grep`, `glorp`, `stat`, and `readText`, so the bundle grants a mount provided read-only instead ([§ The workbench](#the-workbench-vfs-tool-bundle)) |
+| Mount, search, writes | `EndoMount` (`packages/daemon/src/interfaces.js`): `glob`, `grep`, `glorp`, `readText`, `writeText`, `list`, `stat`, `subView`, `readOnly`; [mount-stream-glob-grep](mount-stream-glob-grep.md) | M3 | None for the bundle. The `readOnly()` view keeps only `has`, `list`, `listTree`, and `lookup`, dropping `glob`, `grep`, `glorp`, `stat`, and `readText`, so the bundle grants a mount created with `readOnly: true` instead ([§ The workbench](#the-workbench-vfs-tool-bundle)) |
 | Exact-string edit | [endopi-edit-tool](endopi-edit-tool.md) (lal `editText`, fae `edit`) | M3 | None |
 | Hashline edit | `packages/daemon/src/hashline.js` (parser, validator, renderer, splice); [cli-edit-verb](cli-edit-verb.md) | M3 | Wire `EndoMount.edit`, which the `hashline.js` header promises and no guard exposes yet, and add `readHashlines` (new) |
 | Git | `@endo/exo-git` reader, then writer, then rewriter facets (each wider than the last); [daemon-git-capability](daemon-git-capability.md), [daemon-git-next-steps](daemon-git-next-steps.md), [agentry-git-verb-gaps](agentry-git-verb-gaps.md) | M3 | None. The bundle picks a tier |
@@ -54,8 +57,7 @@ M3 is the current client-side-bridge milestone, where the parent sits.
 **"Glorp".**
 `glorp` is the fused glob-plus-grep method on `EndoMount`.
 Its signature is `glorp(globPattern, grepPattern, { maxResults?, followSymlinks? })`, and it returns `Array<{ file, line, text }>`.
-It was introduced by commit `d117f74f12` and amended by `8b9241f127` and `3aa902d003` (the PR #713 panel fixes, which touch `mount.js`, `platform/src/fs/search.js`, the lal tool dispatch, and the MCP tool), and its result equals `grep(p, glob(g))`.
-No design document owns it.
+Its result equals `grep(p, glob(g))`, and no design document owns it.
 The workbench depends only on the shipped signature and the `grep(glob)` equality, which W2 tests.
 
 ## Capability graph
@@ -86,11 +88,13 @@ The harness's tool catalog is derived from what the guest holds, as the parent's
   The factory gains an `AgentOperation` kind, `endow`.
   Its request is one list of endowments to set and one list of names to remove:
   `{ set: [{ as, from }], remove: [as] }`.
+  A name that appears in both lists is refused with `endowment-conflict`, so the order of the two lists never matters.
+  `remove` is also how a minted bundle is withdrawn: `remove: ['workbench']` deletes `endowments/workbench`.
   Each entry resolves the owner pet name `from` **through the owner guest's own powers** (`E(ownerGuest).lookup`), so the owner can endow only what the owner holds, and writes the value into the agent guest under `endowments/<as>`.
   A refusal names the offending entry's `as` and its owner pet name `from`.
   The operation is idempotent under the parent's rules.
   Creation with endowments is a `create` followed by an `endow`, both under one client idempotency key.
-  This is the `introducedNames` mechanism ([lal-fae-form-provisioning](lal-fae-form-provisioning.md)), driven by the factory instead of a manager guest that holds the host.
+  This is the `introducedNames` mechanism ([lal-fae-form-provisioning](lal-fae-form-provisioning.md)), driven by the factory instead of by a manager guest that holds the host (that is, one with the host's full authority).
 - **Operations: `grant-workbench` and `grant-spawner` mint new authority.**
   Minting is a different act from copying, so it gets its own operations rather than a variant of `endow`.
   `grant-workbench` mints a workbench (§ The workbench) from the owner's chosen mount, git tier, and subtree root, which are themselves resolved through the owner's powers.
@@ -99,9 +103,12 @@ The harness's tool catalog is derived from what the guest holds, as the parent's
   Because a spawner is created only by `grant-spawner` or by `spawn` with `allowSpawn`, "a spawner bound to this agent's grant" holds by construction, not by inspecting what the owner passes.
 - **No type-based endowment filter.**
   The factory does not inspect endowment values by formula type.
-  Such a filter could catch only the factory's own facets passed directly; a caplet that forwards to one has a different formula type and would pass, so the filter would be a guard that its own design admits is bypassable.
+  Such a filter could catch only the factory's own facets passed directly; a caplet that forwards to one has a different formula type and would pass, so the filter would be a guard that the filter's own design admits is bypassable.
   The consequences are stated plainly instead.
-  Spend is bounded by the chain check (§ Budget), whatever reaches a grant: any inference an endowed `AgentInference`, or a forwarder to one, reaches is charged to that grant and checked against its path.
+  Spend is bounded by the chain check (§ Budget), whatever the grant's holder passes: any inference that an endowed `AgentInference`, or a forwarder to one, reaches is charged to that grant and checked against its path.
+  That includes a grant that belongs to someone else: a parent that holds a sibling subtree's `AgentInference` (or another agent's) and forwards it to a child lets that child spend the sibling's budget.
+  The loss is the forwarding parent's: it is charged to the sibling's grant and every ancestor of that grant, and it is bounded by that grant's chain check.
+  The factory never hands out an `AgentInference` other than an agent's own, so this happens only when a holder chooses to pass one.
   Authority over a delegation is **not** confined by the factory: an owner or parent that passes a `DelegationControl`, directly or through a forwarder, gives that authority away, as it would any capability it holds.
   The factory itself never hands a child its own control or its parent's (§ Spawn).
 - **Durability.**
@@ -148,7 +155,7 @@ A child's spend is recorded in the parent design's one usage ledger, by its one 
 - **Rows across a period reset.**
   A row belongs to the budget period in which its reservation was admitted.
   A turn admitted before a reset and settled after it updates its row in the closed period only.
-  Its late usage, and any overrun beyond the reservation, are recorded against the closed period and never reduces the new period's budget; the Providers page shows it as a closed-period overrun.
+  Its late usage, and any overrun beyond the reservation, are recorded against the closed period and never reduce the new period's budget; the Providers page shows it as a closed-period overrun.
   The 72-hour deferral bound (§ Deferred work under a pause) is measured in wall-clock time and is unaffected by resets.
 - **Serialization mechanism.**
   The parent states that admission is atomic at the broker (parent [§ Cost and abuse controls](api-key-inference-providers-and-pinned-agents.md#cost-and-abuse-controls)) but does not name the mechanism, so this design names it, and the parent's phase 2 adopts it.
@@ -156,16 +163,22 @@ A child's spend is recorded in the parent design's one usage ledger, by its one 
   An entry reads and writes only the broker's own durable store, in the broker's vat; it makes no `E()` call and awaits nothing remote, so a slow CapTP peer cannot hold the queue.
   Each entry commits all of its writes as **one durable store transaction**, so a crash leaves either all of an entry's writes or none of them.
   Upstream calls happen after the admission entry has committed its reservation row and returned.
+  The same holds for cancellation: an entry that cancels turns (`revoke`, or `pause({ cancelInFlight: true })`) commits the charge and marks each row `estimated`, and the broker aborts the upstream requests only after the entry commits.
+  An abort that fails, or that the upstream ignores, cannot extend the charge past the reservation: the row is already charged at its full reservation, and any further usage the upstream later reports is a recorded overrun, as for any turn.
+  The broker retries a failed abort until the turn's wall clock on the row expires, after which it drops the connection.
   Every grant in a tree shares one provider, because a child inherits its parent's provider and cannot name another, so the chain check runs as part of the admission entry: it reads the ancestor sums, checks them, and writes the reservation row in one step.
   Two concurrent sibling admissions are two entries, and a settlement is a separate entry, so none of them interleaves with another's read-check-write.
   This rests on one assumption, stated here so the implementation cannot drop it: **the broker for a provider runs in a single vat**, and the queue is that vat's.
   A deployment that split one provider's broker across vats would need a different serialization mechanism and is out of scope.
+  The assumption is checked, not just stated: on start, a broker writes its incarnation id into the provider record as an exclusive lease, every queue entry commits only if the lease still names its own incarnation, and a second broker that finds a live lease refuses to serve the provider with `broker-not-exclusive`.
 - **Computing the aggregate.**
   The ledger rows are the only store the chain check reads; there is no cached per-grant total.
   The admission entry walks `parentGrantId` from `g` to the root, which is at most four grants because depth is capped at 3 (§ Abuse controls), and for each one sums the current period's rows whose `grantPath` starts with that grant's.
   The store keys rows by `(provider, period, grantPath)`, so each sum is one ordered prefix scan, and a tree holds at most 32 agents (§ Abuse controls).
   Because nothing derived is stored, there is nothing to drift, detect, or rebuild.
-  A running total per grant is a later optimization that needs a benchmark showing the prefix scan is too slow; if it is added, it must be written in the same transaction as its source rows and rebuilt before the first admission after any restart.
+  Expected load is one owner's tree: at most 32 agents, each with a small `maxConcurrentTurns`, so at most a few hundred entries a minute per provider, each scanning at most four prefixes of one period's rows.
+  The queue serializes only one provider's grants; different providers and different owners do not share a queue.
+  A running total per grant is a later optimization that needs a benchmark showing the prefix scan is too slow (the trigger: an admission entry's p99 above 10 ms with a full 32-agent tree on the W3 fake upstream); if it is added, it must be written in the same transaction as its source rows and rebuilt before the first admission after any restart.
 - **Oversubscription is allowed.**
   The sum of the children's caps may exceed the parent's cap.
   The chain check still stops the subtree at the parent's cap.
@@ -174,11 +187,13 @@ A child's spend is recorded in the parent design's one usage ledger, by its one 
   The parent's own turns draw from the same remaining budget as its subtree, and the parent's coordination turn is the one that would `pause` or `revoke` a runaway child.
   So every grant that has a spawner carries a `parentReserve`, an amount of its budget its descendants cannot spend.
   The chain check enforces it: a descendant's admission must leave each strict ancestor's remaining budget at or above that ancestor's reserve, while an ancestor's own turns may spend into its reserve.
-  The default reserve is two worst-case reservations at the grant's own limits, so the parent can always run the turn that issues a control call and one more.
+  The default reserve is two worst-case reservations at the grant's own limits, so the parent can normally run the turn that issues a control call and one more.
+  The reserve is best-effort, not a hard guarantee: it is enforced against reservations at admission, so a descendant's settlement that overruns its reservation, or the parent's own turns, can still spend into it.
+  So the control facet does not depend on it: `pause`, `resume`, `resize`, and `revoke` are calls on the `DelegationControl`, not inference, so they need no budget; what can need budget is the parent's model turn that decides to call one. When the reserve is exhausted, the budget-independent path is the owner's (below).
   `grant-spawner` and `allowSpawn` accept a larger `parentReserve`, which counts as a limit (at most the grant's budget amount).
   `getHeadroom()` reports the reserve and the budget available to children after it.
   Holding a reserve per child is still open (open question 2).
-  The owner's agent-management capability remains a second escape hatch, but only for an owner who is present.
+  The owner's agent-management capability remains the budget-independent escape hatch, but only for an owner who is present.
 - **Attribution.**
   Each row still names its own agent and provider, so the Providers page shows per-agent usage.
   A subtree total is the same prefix sum.
@@ -213,9 +228,13 @@ interface AgentSpawner {
 }
 
 interface DelegationControl {
-  getStatus(): Promise<DelegationSummary>;
-  // Halts admission of new turns in the subtree. With cancelInFlight, also
-  // cancels every in-flight subtree turn in the same broker queue entry.
+  // `verbose` adds `recordedLimits`, the values `resize` merges into.
+  getStatus(options?: { verbose?: boolean }): Promise<DelegationSummary>;
+  // Halts admission of new turns in the subtree; turns already running finish.
+  // With cancelInFlight, also cancels every in-flight subtree turn in the same
+  // broker queue entry. help() and the tool description state the bound in one
+  // sentence: "in-flight turns may still spend up to their reservations, for up
+  // to one turn's wall clock; pass cancelInFlight to stop now."
   pause(options?: { cancelInFlight?: boolean }): Promise<void>;
   resume(): Promise<void>;
   // Merges; omitted fields keep their recorded values. Returns the resulting
@@ -248,8 +267,8 @@ interface DelegationSummary {
   // Why the next admission would wait, when `state` is `active`.
   // Absent when `state` is `paused` or `revoked`, which already say why.
   blockedBy?: 'ancestor-paused' | 'budget' | 'rate' | 'concurrency';
-  limits: ChildLimits;            // effective: field-wise minimum along the grant path; read this one
-  recordedLimits: ChildLimits;    // what this grant's record holds
+  limits: ChildLimits;            // effective: field-wise minimum along the grant path
+  recordedLimits?: ChildLimits;   // only with getStatus({ verbose: true }): the base `resize` merges into
   usage: BudgetReading;
   deferredCount: number;
   children: number;
@@ -257,8 +276,15 @@ interface DelegationSummary {
 ```
 
 **Refusals.**
-Every refusal named in this design (`limits-exceed-parent`, `spawn-depth-exceeded`, `endowment-not-durable`, and the rest) is a thrown `Error` whose `code` property carries the fixed code, the same convention as the parent's refusal codes.
+One rule decides the failure form: **a method throws when the request itself cannot be honored (invalid arguments, limits above the parent's, a ceiling, a target that no longer exists); it returns normally, reporting the state, when the request is valid and the delegation's current state is what blocks progress.**
+A thrown refusal is an `Error` whose `code` property carries the fixed code (`limits-exceed-parent`, `spawn-depth-exceeded`, `endowment-not-durable`, and the rest), the same convention as the parent's refusal codes.
 The harness tool wrappers turn a thrown refusal into a tool result that names the code, so the model sees it.
+Under the rule:
+
+- `askSubagent` to a paused or revoked child returns the tagged `{ status: 'not-sent' }` result (§ What the parent sees); it is the only tool that returns a tag.
+- `resize` below usage succeeds and returns the summary with `blockedBy: 'budget'`, because the new limits are valid.
+- On a revoked delegation, `getStatus()` returns `state: 'revoked'` and `revoke()` is a no-op; `pause`, `resume`, and `resize` throw `agent-deleted`, because the target no longer exists.
+- `spawn` with a name already in use returns the existing child if its options are the same (§ Idempotency), and throws `spawn-name-in-use` if they differ; a revoked child's name stays in use until its deletion completes.
 
 **Idempotency.**
 A `spawn` is keyed by `(parent agent, name)`, which is already unique among a parent's live children, so a retried `spawn` over a flaky CapTP link returns the existing child instead of creating a second one.
@@ -271,7 +297,7 @@ The caller supplies no key.
 Its `ownerId` is copied from the parent and stays immutable, so a child belongs to the same owner, counts against that owner's agent quota, and appears in the owner's agent view as a tree (the companion design).
 The steps are the parent's: guest, grant (here a child grant), responder, name, commit, activate.
 The "name" step binds the child at `subagents/<name>` in the **parent agent's** guest, as Fae does.
-It also binds the control at `subagent-controls/<name>`.
+It also binds the control at `subagent-controls/<name>`; that is the same object `spawn` returns, so a parent that drops its reference recovers it by name.
 The factory never gives the child its own control or the parent's.
 The parent can still pass one in `capabilities`, directly or through a forwarder, and the factory does not prevent that (§ Endowments, "No type-based endowment filter").
 
@@ -302,12 +328,13 @@ The owner's agent-management capability reaches every descendant through the fac
 |---|---|---|---|
 | `pause()` | Commits the child grant's `state` as `paused`. That one record field is the only fact `pause` writes; wake is not touched | Admissions on the child and every descendant see a non-`active` grant on the path and are **deferred** with code `paused` or `ancestor-paused` | By default, each turn already admitted runs to completion and no further admission is granted, so a tool-using loop stops at its next admission. The worst case is stated in absolute terms below. With `pause({ cancelInFlight: true })`, every in-flight turn whose `grantPath` starts with the child's is cancelled in the same broker queue entry as the `paused` commit, exactly as `revoke` cancels, and settles under the parent's cancellation rule |
 | `resume()` | Commits the grant's `state` back to `active` | Each deferred ask in the subtree is retried at once, oldest first | n/a |
-| `resize(limits)` | The parent's `set-limits` on the child grant, refused with `limits-exceed-parent` if above the parent's limits. Lowering the budget below current usage is allowed, because it is how a parent stops a child for the rest of the period, but it is never silent: `resize` returns the resulting `DelegationSummary`, whose `blockedBy` is `budget` | Descendants' records are not rewritten. Their effective limits are the field-wise minimum along the path, which the chain check enforces and `getStatus()` reports as `limits` | Unaffected; the next admission sees it |
+| `resize(limits)` | The parent's `set-limits` on the child grant, refused with `limits-exceed-parent` if above the limits recorded on the grant's immediate parent. That bound is the same whoever calls `resize`: an owner resizing a grandchild directly is bounded by the child's recorded limits, not the owner-created agent's. Lowering the budget below current usage is allowed, because it is how a parent stops a child for the rest of the period, but it is never silent: `resize` returns the resulting `DelegationSummary`, whose `blockedBy` is `budget` | Descendants' records are not rewritten. Their effective limits are the field-wise minimum along the path, which the chain check enforces and `getStatus()` reports as `limits` | Unaffected; the next admission sees it |
 | `revoke()` | The parent's `delete` for the child | The child's grant is committed `revoked` first (the parent's fencing also increments its `generation`), so every descendant fails admission at once with `agent-deleted`. The reconciler then deletes descendants depth-first, leaf first, each as an ordinary `delete` | In the same broker queue entry as the `revoked` commit, every in-flight turn whose `grantPath` starts with the child's is cancelled. Each settles under the parent's cancellation rule (below) |
 
 **The worst-case bound after a default `pause`.**
 In money: the spend after the `paused` commit is at most the sum of the reservations already written for the subtree's in-flight turns, plus any upstream overrun beyond them.
-Each of those reservations passed the chain check, so their sum is at most the paused grant's remaining budget at the moment of the pause.
+Each of those reservations passed the chain check against the limits and period in force when it was admitted, and admissions are serialized, so their sum is at most the paused grant's cap for the period, minus what had already settled.
+A `resize` upward between admissions raises that cap, and so the bound, but it is still the cap in force at the last admission; a period reset does not loosen it, because a row admitted before the reset charges the closed period only (§ Rows across a period reset).
 The number of such turns is at most the subtree's agent count (32 per tree) times each agent's `maxConcurrentTurns`, but the money bound does not grow with it, because every one of them already fits under the paused grant's cap.
 In time: the last of them ends within the largest per-turn wall clock on the subtree's rows, which is at most the paused grant's `wallClockSeconds` at admission, because a child's limits are at most its parent's and the wall clock is fixed on the row at admission.
 The turns run concurrently, so the time bound is one wall clock, not one per turn.
@@ -315,7 +342,7 @@ A parent that cannot accept that bound uses `pause({ cancelInFlight: true })`, w
 
 **Why `pause` writes one fact.**
 Pause and wake are kept separate so a crash cannot leave them disagreeing.
-The grant `state` is authoritative, and the responder needs no wake change: while wake is on, the responder reads the message, the broker defers the turn, and the message enters the parent's durable deferred queue (parent [§ Confinement and wake-on-message](api-key-inference-providers-and-pinned-agents.md#confinement-and-wake-on-message)).
+The grant `state` is authoritative, and the responder needs no wake change: while wake is on, the responder reads the message, the broker defers the turn, and the message enters the child agent's durable deferred queue, which the parent design's responder keeps per agent (parent [§ Confinement and wake-on-message](api-key-inference-providers-and-pinned-agents.md#confinement-and-wake-on-message)).
 The owner's wake toggle stays an independent `set-wake` operation.
 `pause` is kept rather than replaced by "resize to zero" for two reasons.
 It preserves the child's limits, so `resume` restores them without the parent having to remember them.
@@ -344,7 +371,7 @@ The ordering guarantee is limited, and the design states it rather than hiding i
 `getStatus()` reads the same grant records the broker admits against, so a pause committed before the check is always seen.
 A pause committed after the check and before the child's admission is not seen: the message is sent, the child's turn is deferred, and the ask behaves as any unanswered ask does.
 It holds its slot until the ask timeout (for a brokered agent, default 300 s and at most 3600 s; § Abuse controls), never for the 72-hour deferral bound, and a late reply is consumed by the existing late-reply rule.
-The worst case of that race is every child's one slot held for up to 3600 s, eight children at the default fan-out.
+The worst case of that race is one slot per child, eight children at the default fan-out, each held for up to 3600 s.
 That blocks only further asks.
 The parent's control surface takes no ask slot: `pause`, `resume`, `resize`, `revoke`, `getStatus`, `spawn` of another child, and the parent's own turns all proceed, and `revoke` (or the adapter's `stop`) releases that child's slot at once because the child is gone.
 Budget, rate, and concurrency waits are transient and are not pre-checked; an ask that meets one is deferred and retried by the responder as usual.
@@ -359,9 +386,7 @@ The factory's `AgentRecord` `deleting` mark is derived from it: the factory writ
 `resize` is the registry's `set-limits` on the grant.
 So every control method has exactly one committer, the registry, and the factory and reconciler only converge from what it committed.
 
-From the `revoked` commit, every descendant fails admission because its path contains a non-`active` grant, and every descendant turn already in flight was cancelled in the same broker queue entry (§ Control semantics), so neither a crash mid-cascade nor the delay before the next reconciler sweep lets a descendant spend.
-A cancelled descendant turn settles on its own row under the parent's cancellation rule, whatever the state of the grants on its path; its `grantPath` keeps charging the ancestors, as every row does.
-The descendants' guests hold no key material, only their own `AgentInference`, which now fails every call.
+Because the fence and the cancellations share one queue entry (the `revoke()` row), neither a crash mid-cascade nor the delay before the next reconciler sweep lets a descendant spend.
 The reconciler restores one invariant on every sweep: **no `AgentRecord` that is not `deleted` has an ancestor that is `deleting` or `deleted`**.
 It drives each such descendant through the ordinary `delete`, leaf first, so after any crash the remaining descendants are fenced and are then deleted, never left live.
 
@@ -391,12 +416,6 @@ A parent that cycles spawn and revoke therefore spends its own budget, at most o
 Because a cancelled turn is billed at its worst case until the upstream reports, the charge can surprise an owner.
 So the UI contract surfaces it: `DelegationSummary.usage.estimated` is `true` while any such charge is unsettled, and the companion design's Providers page labels those rows "cancelled, charged at reservation pending upstream usage".
 
-Fae's documentation and code disagree about its limits.
-`packages/fae/SUBAGENTS.md` § Bounds documents a delegation depth of 1 and eight live subagents per parent, citing `DEFAULT_MAX_SUBAGENT_DEPTH` and `DEFAULT_MAX_SUBAGENTS`.
-Those constants are defined in `packages/fae/src/subagent-host.js` as `DEFAULT_WORKLOAD_LIMITS.subagentDepth` and `.subagents` from `packages/hosted-agent/src/workload-limits.js`, which are 32 and 1024.
-The code governs, so Fae's unbrokered spawner defaults to depth 32 and 1024 children, and the document is stale.
-The same holds for the ask timeout: the table says 300 s, capped at 3600 s, while `DEFAULT_SUBAGENT_LIMITS` in `packages/fae/src/subagent.js` takes `subagentReplyTimeoutSeconds` (24 hours) and `subagentMaxReplyTimeoutSeconds` (7 days).
-Fixing that document is outside this design; the code's limits stay in place for Fae's own unbrokered spawner.
 For a brokered agent, the adapter passes `makeSubagentDelegations` and `makeSubagentTools` explicit `limits` of `replyTimeoutSeconds: 300` and `maxTimeoutSeconds: 3600`, which is the ask timeout this design's bounds assume.
 A brokered agent's factory configuration refuses the Fae spawner caplet, under the same rule by which the parent refuses `authSecretName` (parent [§ Harness adapter boundary](api-key-inference-providers-and-pinned-agents.md#harness-adapter-boundary)).
 So a brokered agent spawns only through `AgentSpawner`, and only these ceilings apply.
@@ -429,7 +448,7 @@ The owner picks the mount, the git tier, and a subtree root.
   The bound mount is `E(mount).subView(root)`.
   Paths outside it cannot be expressed, and the shared walker's `isConfinedPath` and its `assertSegmentAllowed` check over `defaultDeniedSegments` (`.ssh`, `.env`, and the rest; `packages/daemon/src/mount.js`) apply to every search.
 - **Read-only.**
-  A read tier binds a mount **provided** with `readOnly: true` rather than the `readOnly()` view, because the view drops `glob`, `grep`, `glorp`, `stat`, and `readText` ([mount-stream-glob-grep](mount-stream-glob-grep.md) § Confinement, deny patterns, and attenuations; `packages/daemon/src/mount.js`, where `readOnly()` returns `makeReadableTreeView`, exposing only `has`, `list`, `listTree`, and `lookup`).
+  A read tier binds a mount **created** with `readOnly: true` rather than the `readOnly()` view, because the view drops `glob`, `grep`, `glorp`, `stat`, and `readText` ([mount-stream-glob-grep](mount-stream-glob-grep.md) § Confinement, deny patterns, and attenuations; `packages/daemon/src/mount.js`, where `readOnly()` returns `makeReadableTreeView`, exposing only `has`, `list`, `listTree`, and `lookup`).
   This is a workaround for a missing primitive, a searchable read-only view; a future `readOnlySearchable()` attenuator would replace it, and nothing here depends on its absence.
   The git facet is then `E(git).readOnly()`.
   A read-only workbench never advertises a write tool, as [daemon-agent-tools](daemon-agent-tools.md) already requires.
@@ -475,10 +494,10 @@ W6 needs the parent's phase 6 canary provider, and it is gated on the answer to 
    Tests: a read tier exposes no write or git-write tool; `..`, a symlink escape, and a denied segment are refused; `glorp` equals `grep(glob)` within the subtree; a `maxResults` overrun is truncated and flagged; hashline edits with a stale anchor are refused; a commit lands on the bound worktree only.
 3. **W3: Child grants and chain admission (Endo).**
    `parentGrantId`, `grantPath`, the `paused` state, `createChildGrant`, the per-provider admission queue, the chain check by prefix scan inside it, one durable transaction per queue entry, the parent reserve, and `limits-exceed-parent`.
-   Tests against the parent's fake upstream: a child reservation that fits its own cap but not an ancestor's is refused; 16 sibling admissions issued concurrently against a parent whose remaining budget fits exactly 5 reservations admit exactly 5, with the other 11 refused for budget; a settlement racing an admission leaves every ancestor's remaining budget equal to its cap minus a prefix scan of the rows; a crash injected between two queue entries, and inside one entry before its commit, leaves no partial entry and no over-admission after restart; a descendant admission that would dip into an ancestor's parent reserve is refused while the ancestor's own turn is admitted into it; a turn admitted before a period reset and settled after it charges the closed period only and leaves the new period's budget whole; a paused ancestor defers a grandchild with `ancestor-paused`, does not consume its attempt count, and expires it after 72 hours; revoking the middle of a three-level chain fences the leaf's next call; usage rows sum correctly per agent and per subtree; a restart preserves all of it.
+   Tests against the parent's fake upstream: a child reservation that fits its own cap but not an ancestor's is refused; 16 sibling admissions issued concurrently against a parent whose remaining budget fits exactly 5 reservations admit exactly 5, with the other 11 refused for budget; a settlement racing an admission leaves every ancestor's remaining budget equal to its cap minus a prefix scan of the rows; a crash injected between two queue entries, and inside one entry before its commit, leaves no partial entry and no over-admission after restart; a second broker started against the same provider refuses with `broker-not-exclusive`, and an entry from a broker whose lease was taken does not commit; a failed upstream abort after a cancelling entry leaves the row charged at its reservation and records any later usage as an overrun; a descendant admission that would dip into an ancestor's parent reserve is refused while the ancestor's own turn is admitted into it; a turn admitted before a period reset and settled after it charges the closed period only and leaves the new period's budget whole; a paused ancestor defers a grandchild with `ancestor-paused`, does not consume its attempt count, and expires it after 72 hours; revoking the middle of a three-level chain fences the leaf's next call; usage rows sum correctly per agent and per subtree; a restart preserves all of it.
 4. **W4: Spawner and control facet (Endo).**
    `AgentSpawner`, `DelegationControl`, the parentage fields on `AgentRecord`, the depth-first cascade reconciler and its invariant, the abuse ceilings, Fae compatibility, Lal subagent tools, and the refusal of Fae's own spawner for brokered agents.
-   Tests: every refusal code in the abuse table; a child never holds a capability its parent lacked; an endowed `AgentInference`, passed directly or through a forwarder, has its spend stopped by the chain check of the grant it reaches; the Fae adapter's `stop` equals `revoke`; a retried `spawn` returns the existing child; `askSubagent` to a paused child returns `{ status: 'not-sent', reason: 'paused' }` and sends nothing; a pause committed after `askSubagent`'s check releases the ask at the brokered ask timeout, and with all eight children's slots held that way the parent's `pause`, `revoke`, `spawn`, and own turns still proceed; `revoke` releases the revoked child's slot at once; `pause({ cancelInFlight: true })` cancels every in-flight subtree turn in the pause's queue entry, while a default `pause` lets them settle within the recorded wall clock; `resize` below usage returns `blockedBy: 'budget'`; `getHeadroom()` reports the parent reserve; `resize` merges and keeps omitted fields; `getStatus()` reports the effective `limits` after an ancestor `resize`; revoking a parent cancels its descendants' in-flight turns before the next reconciler sweep; a crash at each spawn and cascade boundary leaves no orphan guest, grant, or responder, and no live descendant of a deleted agent; the owner can revoke a grandchild directly; a late child reply after revoke is consumed, not delivered.
+   Tests: every refusal code in the abuse table; a child never holds a capability its parent lacked; an endowed `AgentInference`, passed directly or through a forwarder, has its spend stopped by the chain check of the grant it reaches; the Fae adapter's `stop` equals `revoke`; a retried `spawn` returns the existing child; `askSubagent` to a paused child returns `{ status: 'not-sent', reason: 'paused' }` and sends nothing; a pause committed after `askSubagent`'s check releases the ask at the brokered ask timeout, and with all eight children's slots held that way the parent's `pause`, `revoke`, `spawn`, and own turns still proceed; `revoke` releases the revoked child's slot at once; `pause({ cancelInFlight: true })` cancels every in-flight subtree turn in the pause's queue entry, while a default `pause` lets them settle within the recorded wall clock; `resize` below usage returns `blockedBy: 'budget'`; the spend after a default `pause` stays within the stated bound when an upward `resize` and a period reset race the in-flight turns; `pause`, `resume`, and `resize` on a revoked child throw `agent-deleted`; a `spawn` reusing a name with different options throws `spawn-name-in-use`; the brokered adapter passes `replyTimeoutSeconds: 300` and `maxTimeoutSeconds: 3600`; `getHeadroom()` reports the parent reserve; `resize` merges and keeps omitted fields; `getStatus()` reports the effective `limits` after an ancestor `resize`; revoking a parent cancels its descendants' in-flight turns before the next reconciler sweep; a crash at each spawn and cascade boundary leaves no orphan guest, grant, or responder, and no live descendant of a deleted agent; the owner can revoke a grandchild directly; a late child reply after revoke is consumed, not delivered.
 5. **W5: Responder streaming (Endo).**
    The pinned responder sends its reply with `done: false` and coalesces harness text deltas into `editMessage` calls, at most four per second, ending with `done: true`.
    A cancelled turn ends with `done: true` and a fixed `turn-cancelled` note.
@@ -509,13 +528,9 @@ W6 needs the parent's phase 6 canary provider, and it is gated on the answer to 
 3. **The parent's `AgentInference` does not mint child grants.**
    Considered and rejected: letting it mint them.
    It would make the request endpoint an administrative facet.
-4. **`pause` can cancel in flight, as an option, in the first release.**
-   A default `pause` lets in-flight turns finish within the bound stated in § Control semantics; `pause({ cancelInFlight: true })` reuses `revoke`'s cancellation path and ends spending at once.
-   Considered and rejected: leaving cancellation to a later release, which would leave `revoke`, an irreversible delete, as the only immediate stop.
+4. **`pause` can cancel in flight, as an option, in the first release** (§ Control semantics).
 5. **Every spawner-bearing grant has a parent reserve from the first release** (§ The parent reserve).
-   Considered and rejected: advising the parent to keep its children's caps below its remaining budget, which `spawn` cannot enforce against oversubscription and which leaves the parent unable to run the coordination turn that would pause or revoke a runaway child.
 6. **No type-based endowment filter** (§ Endowments).
-   Considered and rejected: refusing the factory's own facets by formula type, which a forwarder bypasses; minting moved to its own operations instead, so the property a filter was meant to protect holds by construction.
 
 ## Open questions
 
