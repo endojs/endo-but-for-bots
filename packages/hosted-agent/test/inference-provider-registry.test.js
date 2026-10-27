@@ -513,3 +513,71 @@ test('expired intent aborts and reconciliation revokes orphan registry secrets',
   t.deepEqual(await E(revived.directoryFor('owner-alice')).list(), []);
   await revived.close();
 });
+
+test('re-granting is idempotent, conflicts are refused, and attestation names the grant', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const request = harden({
+    grantId: 'grant-000000001',
+    ownerId: 'owner-alice',
+    agentId: 'agent-alice',
+    model: 'claude-test',
+  });
+  const inference = await E(use).grant(request);
+  t.is(await E(use).grant(request), inference);
+  await t.throwsAsync(
+    () => E(use).grant(harden({ ...request, agentId: 'agent-bob' })),
+    { message: /grant-conflict/ },
+  );
+
+  const attestation = await E(inference).attestation();
+  t.like(attestation, {
+    version: 'fake-v1',
+    grantId: 'grant-000000001',
+    providerId: provider.providerId,
+    agentId: 'agent-alice',
+  });
+  t.is(typeof attestation.generation, 'number');
+
+  await E(inference).revoke();
+  await t.throwsAsync(() => E(use).grant(request), {
+    message: /agent-deleted/,
+  });
+  await registry.close();
+});
+
+test('grants validate owner, agent, and model, and streams flow through', async t => {
+  const backing = makeBacking();
+  const events = [];
+  const registry = await makeRegistry(backing, { events });
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const request = harden({
+    ownerId: 'owner-alice',
+    agentId: 'agent-alice',
+    model: 'claude-test',
+  });
+  await Promise.all(
+    /** @type {const} */ ([
+      [{ ownerId: 'owner-bob' }, 'provider-owner-mismatch'],
+      [{ agentId: 'not an id!' }, 'invalid-agent'],
+      [{ model: 'not a model!' }, 'invalid-model'],
+      [{ model: 'claude-other' }, 'invalid-model'],
+    ]).map(([overrides, code]) =>
+      t.throwsAsync(() => E(use).grant(harden({ ...request, ...overrides })), {
+        message: new RegExp(code),
+      }),
+    ),
+  );
+  const inference = await E(use).grant(request);
+  const response = await E(inference).requestByteStream(message('/stream'));
+  t.is(response.status, 200);
+  t.true(
+    events.some(([kind, , path]) => kind === 'stream' && path === '/stream'),
+  );
+  await registry.close();
+});
