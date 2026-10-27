@@ -71,9 +71,6 @@ testNode(
         resultName: 'inference-provider-registry',
         env: {
           INFERENCE_PROVIDER_ISSUER_FACTORY: 'provider-issuer-factory',
-          INFERENCE_PROVIDER_KINDS: JSON.stringify({
-            anthropic: { models: ['claude-test'] },
-          }),
         },
       },
     );
