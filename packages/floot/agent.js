@@ -58,6 +58,7 @@ import {
 } from '@endo/hosted-agent/openrouter-model-read.js';
 import { addUsage, projectUsage } from '@endo/hosted-agent/token-usage.js';
 
+import { imageResultText } from '@endo/hosted-agent/image-result.js';
 import { createStreamingProvider } from './providers/index.js';
 import { makeSubagentAdmission } from './src/subagent-admission.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
@@ -781,6 +782,8 @@ export const makeStreamingAgent = async (
   );
   const settledMail = new Set();
   const toolRegistry = makeFlootToolRegistry(powers, {
+    // OpenCode's native-context importer currently rejects image attachments.
+    imageInputs: backendId !== 'opencode',
     settledMail,
     ...(extraTools ? { extraTools } : {}),
     ...(spawner ? { spawner, delegations, subagentLimits } : {}),
@@ -1325,7 +1328,7 @@ export const makeStreamingAgent = async (
           writer.toolResult({
             id: call.id,
             name: `${name}`,
-            result: `${resultText}`,
+            result: imageResultText(`${resultText}`),
             failed: 'error' in outcome,
           });
           console.error(

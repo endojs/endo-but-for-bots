@@ -22,6 +22,7 @@ export {
   makeDescribeCapabilityTool,
   makeReadSourcesTool,
 } from './source-tools.js';
+export { makeViewImageTool } from './image-tool.js';
 export { assertToolArguments } from './tool-arguments.js';
 
 /** @import { GrepMatch } from '@endo/platform/fs/search.types.js' */
@@ -1284,7 +1285,7 @@ export const makeListMessagesTool = powers => {
     schema() {
       return toolSchema;
     },
-    // eslint-disable-next-line no-underscore-dangle
+
     async execute(_args) {
       return E(powers).listMessages();
     },

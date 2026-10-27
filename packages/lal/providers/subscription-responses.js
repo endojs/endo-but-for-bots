@@ -1,4 +1,5 @@
 // @ts-check
+import { responsesToolOutput } from '@endo/hosted-agent/image-result.js';
 /* eslint-disable no-await-in-loop */
 
 import { Fail } from '@endo/errors';
@@ -266,7 +267,7 @@ const requestContext = (messages, model) => {
       input.push({
         type: 'function_call_output',
         call_id: message.tool_call_id,
-        output: message.content,
+        output: responsesToolOutput(message.content),
       });
     } else if (
       message.role === 'assistant' &&

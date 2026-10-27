@@ -98,6 +98,7 @@ const NAMED_TOOLS = harden([
   'handoffDesign',
   'reviewStatus',
   'publishWorkspace',
+  'viewImage',
   'attachContainerMount',
   'detachContainerMount',
   'listContainerMounts',
@@ -153,6 +154,15 @@ not throw; it reads as undefined, and the error you then get is
 \`Cannot deliver "someMethod" to target; typeof target is "undefined"\`. exec has
 no \`import\` or \`require\` and no Node built-ins: whatever is outside comes
 through a capability.
+
+For visual pages, scenes, and interfaces, verify the rendered result before claiming
+it works. Discover an available browser capability or use Playwright/Chromium through
+your granted shell. Render at desktop and mobile sizes, collect console/page errors,
+save screenshots to a readable Endo workspace or mount, and use viewImage to inspect
+them. Fix visible defects and render again. A syntax check does not verify rendering.
+If browser access, shell execution, or image input is unavailable, say what could not
+be verified; do not claim you saw the result. Do not publish merely to obtain a
+screenshot unless publishing is part of the user's request.
 
 When a tool result is itself a capability it shows as
 \`[remote capability] callable methods: [...]\` listing the methods you can call

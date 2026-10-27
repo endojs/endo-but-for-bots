@@ -1,5 +1,9 @@
 // @ts-check
 import '@endo/init';
+import {
+  encodeImageResult,
+  imageDataUrl,
+} from '@endo/hosted-agent/image-result.js';
 
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
@@ -4479,4 +4483,56 @@ test('an app-server without inject_items refuses the turn rather than degrading 
   t.is(abort.type, 'abort');
   t.regex(abort.reason, /refused .* restored items/);
   t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
+test('dynamic image tools deliver pixels beyond the text cap and retain replay evidence', async t => {
+  const image = harden({
+    mimeType: /** @type {const} */ ('image/png'),
+    data: 'AAAA'.repeat(600_000),
+  });
+  const encoded = encodeImageResult(image);
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolSetId: 'images-v1',
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'viewImage',
+          description: 'See an image',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: async () => encoded,
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('inspect');
+  fixture.push({
+    id: 993,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'image-call',
+      namespace: null,
+      tool: 'viewImage',
+      arguments: {},
+    },
+  });
+  for (let tries = 0; tries < 30; tries += 1) {
+    if (fixture.sent.some(message => message.id === 993)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.deepEqual(fixture.sent.find(message => message.id === 993)?.result, {
+    success: true,
+    contentItems: [{ type: 'inputImage', imageUrl: imageDataUrl(image) }],
+  });
+  t.is(
+    audit.find(entry => entry.kind === 'tool-result')?.payload.result,
+    encoded,
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
 });

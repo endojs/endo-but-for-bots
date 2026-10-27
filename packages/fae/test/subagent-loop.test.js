@@ -1596,3 +1596,60 @@ test('cancellation around final-node publication never sends a late fallback rep
     mailbox.close();
   }
 });
+
+test('Fae sends image tool output to its provider without quoting the wire envelope', async t => {
+  t.timeout(15_000);
+  const { decodeImageResult } =
+    await import('@endo/hosted-agent/image-result.js');
+  const mailbox = makeLiveMailbox();
+  mailbox.directory.set(
+    'screenshot',
+    bytesReaderFromIterator([
+      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    ]),
+  );
+  let image;
+  const provider = makeScriptedProvider([
+    () =>
+      harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'image',
+              type: 'function',
+              function: {
+                name: 'viewImage',
+                arguments: '{"petName":"screenshot"}',
+              },
+            },
+          ],
+        },
+      }),
+    messages => {
+      image = decodeImageResult(
+        messages.find(message => message.role === 'tool')?.content,
+      );
+      return harden({ message: { role: 'assistant', content: 'inspected' } });
+    },
+  ]);
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['inspect screenshot'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.deepEqual(image, { mimeType: 'image/png', data: 'iVBORw0KGgo=' });
+});

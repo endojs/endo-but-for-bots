@@ -339,3 +339,20 @@ A `SecretBlob` hands its holder the bytes by design, so the way to stop those
 agents using the old token is to **revoke the secret**, which is what the secret
 manager is for; removing the pet name from the provider config is not a
 revocation.
+
+## Image inputs
+
+`viewImage({ petName, path? })` reads a PNG, JPEG, or WebP from an already-held
+Endo readable blob, tree, mount, or git workspace and supplies image input to a
+vision-capable model.
+For example, `{"petName":"workspace","path":["screenshots","mobile.png"]}`
+reads the workspace's worktree; omit `path` for an adopted blob.
+The byte limit is 2 MiB and paths must be relative segments.
+The tool does not fetch URLs or grant filesystem access.
+
+For visual development, use a granted browser or shell to render desktop and
+mobile screenshots, inspect browser errors, call `viewImage`, and iterate.
+Report any unavailable verification instead of claiming that a syntax check
+verified the scene.
+See [Floot's image-input guide](../floot/README.md#reading-images-and-checking-visual-work)
+for transport and recovery details.

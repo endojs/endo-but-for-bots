@@ -1,4 +1,5 @@
 // @ts-check
+import { decodeImageResult } from '@endo/hosted-agent/image-result.js';
 
 /** Includes the truncation marker; measured in JavaScript UTF-16 code units. */
 export const MAX_TOOL_OUTPUT_CHARS = 32_768;
@@ -11,6 +12,8 @@ harden(MAX_TOOL_OUTPUT_CHARS);
  * @param {number} [limit]
  */
 export const boundToolOutput = (text, limit = MAX_TOOL_OUTPUT_CHARS) => {
+  // Images have a separate binary bound; cutting base64 corrupts model input.
+  if (decodeImageResult(text)) return text;
   if (text.length <= limit) return text;
   const marker = `\n[Tool output truncated from ${text.length} characters. Only a prefix is shown; use filtering or pagination for more.]`;
   let end = limit - marker.length;

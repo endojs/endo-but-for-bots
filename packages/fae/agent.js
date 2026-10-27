@@ -18,6 +18,10 @@ import {
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
 
+import {
+  decodeImageResult,
+  imageResultText,
+} from '@endo/hosted-agent/image-result.js';
 import { makeProviderOwner } from './src/provider-owner.js';
 import { restoreInboxConversation } from './src/inbox-conversation.js';
 import { discoverTools, executeTool } from './src/tools.js';
@@ -37,6 +41,7 @@ import {
   makeListMessagesTool,
   makeDismissTool,
   makeExecTool,
+  makeViewImageTool,
   makeReadChannelTool,
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
@@ -102,12 +107,24 @@ reasoning, steps, logs, or recaps to a channel.
 
 ## Tools
 - **exec** — Run JavaScript with powers, E, harden. Use for multi-step tasks.
+- **viewImage** — See a PNG/JPEG/WebP held by an Endo blob, mount, or workspace.
 - **reply** — Private inbox reply to sender by message number.
 - **adopt** — Store a message reference under a pet name.
 - **list/lookup/store/remove** — Manage your pet name directory.
 - **send** — Send unsolicited inbox message to a named agent.
 - **adoptTool** — Install a FaeTool capability from a message.
 - **dismiss** — Dismiss a handled message.
+
+## Images and visual verification
+
+For visual pages, scenes, and interfaces, verify the rendered result before claiming
+it works. Discover an available browser capability or use Playwright/Chromium through
+your granted shell. Render at desktop and mobile sizes, collect console/page errors,
+save screenshots to a readable Endo workspace or mount, and use viewImage to inspect
+them. Fix visible defects and render again. A syntax check does not verify rendering.
+If browser access, shell execution, or image input is unavailable, say what could not
+be verified; do not claim you saw the result. Do not publish merely to obtain a
+screenshot unless publishing is part of the user's request.
 
 ## Subagents (only when the tools below are listed)
 
@@ -379,6 +396,7 @@ export const spawnWorkerLoop = async (
   localTools.set('editMessage', makeEditMessageTool(powers));
   localTools.set('messageHistory', makeMessageHistoryTool(powers));
   localTools.set('exec', makeExecTool(powers));
+  localTools.set('viewImage', makeViewImageTool(powers));
   localTools.set('readChannel', makeReadChannelTool(powers));
 
   // Delegation is capability-gated: without a spawner there are no subagent
@@ -448,7 +466,9 @@ export const spawnWorkerLoop = async (
       } else {
         try {
           result = await executeTool(name, args, toolMap);
-          console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
+          console.log(
+            `[tool] ${name} -> ${decodeImageResult(result) ? imageResultText(result) : passableAsJustin(result, false)}`,
+          );
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -460,7 +480,9 @@ export const spawnWorkerLoop = async (
 
       results.push({
         role: 'tool',
-        content: passableAsJustin(result, false),
+        content: decodeImageResult(result)
+          ? result
+          : passableAsJustin(result, false),
         tool_call_id: /** @type {any} */ (toolCall).id,
         ...(failed ? { failed: true } : {}),
       });

@@ -1,4 +1,5 @@
 // @ts-check
+import { imageResultFromBlocks } from '@endo/hosted-agent/image-result.js';
 
 import { makeError, q, X } from '@endo/errors';
 import {
@@ -119,6 +120,8 @@ harden(encodeJsonLine);
  * @returns {string}
  */
 export const renderToolResult = value => {
+  const image = imageResultFromBlocks(value);
+  if (image !== undefined) return image;
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {

@@ -1,4 +1,8 @@
 // @ts-check
+import {
+  decodeImageResult,
+  imageDataUrl,
+} from '@endo/hosted-agent/image-result.js';
 import { clearTimeout, setTimeout } from 'node:timers';
 
 import { makeError, q, X } from '@endo/errors';
@@ -225,7 +229,8 @@ export const makeCodexClient = ({
   maxEarlyBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
-  maxRequestBytes = 2 * 1024 * 1024,
+  // Includes a 2 MiB image encoded as base64 plus its protocol envelope.
+  maxRequestBytes = 4 * 1024 * 1024,
   toolCallTimeoutMs = 0,
   turnWallTimeoutMs = 0,
 }) => {
@@ -962,8 +967,10 @@ export const makeCodexClient = ({
 
     let projected;
     let text;
+    let image;
     try {
       projected = projectToolResult(result);
+      image = decodeImageResult(projected);
       text = brief(projected, maxToolResultChars);
     } catch (renderError) {
       const reason = brief(
@@ -1010,7 +1017,16 @@ export const makeCodexClient = ({
     }
     return harden({
       success: true,
-      contentItems: harden([{ type: 'inputText', text }]),
+      contentItems: harden(
+        image
+          ? [
+              {
+                type: 'inputImage',
+                imageUrl: imageDataUrl(image),
+              },
+            ]
+          : [{ type: 'inputText', text }],
+      ),
     });
   };
 

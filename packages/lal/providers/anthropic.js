@@ -1,4 +1,5 @@
 // @ts-check
+import { anthropicToolContent } from '@endo/hosted-agent/image-result.js';
 /**
  * Anthropic API provider for the Lal agent.
  * Converts our common message/tool format to Anthropic's API and back.
@@ -83,7 +84,7 @@ const toAnthropicMessages = messages => {
           {
             type: 'tool_result',
             tool_use_id: toolUseId,
-            content: msg.content,
+            content: anthropicToolContent(msg.content),
           },
         ],
       });
@@ -118,10 +119,7 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
       const { system, messages: anthropicMessages } =
         toAnthropicMessages(messages);
       console.log('[LAL] Calling Anthropic API...');
-      console.log(
-        '[LAL] Messages:',
-        JSON.stringify(anthropicMessages, null, 2),
-      );
+      console.log('[LAL] Message count:', anthropicMessages.length);
       /** @type {Anthropic.Message} */
       let response;
       try {

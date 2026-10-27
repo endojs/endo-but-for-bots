@@ -8,6 +8,7 @@ import {
   makeAdoptTool,
   makeDescribeCapabilityTool,
   makeExecTool,
+  makeViewImageTool,
   makeListPetnamesTool,
   makeLookupTool,
   makeRemoveTool,
@@ -211,6 +212,7 @@ harden(makeEndoToolSet);
  *
  * @param {any} powers
  * @param {object} [options]
+ * @param {boolean} [options.imageInputs] Whether the backend can retain image tool results.
  * @param {any} [options.spawner] - A `SubagentSpawner` capability.
  * @param {any} [options.delegations] - The session's delegation registry.
  * @param {any} [options.subagentLimits] Operator delegation budgets.
@@ -226,6 +228,7 @@ harden(makeEndoToolSet);
 export const makeFlootToolRegistry = (
   powers,
   {
+    imageInputs = true,
     spawner,
     delegations,
     subagentLimits,
@@ -237,6 +240,7 @@ export const makeFlootToolRegistry = (
   /** @type {Map<string, any>} */
   const builtins = new Map();
   builtins.set('exec', makeExecTool(powers));
+  if (imageInputs) builtins.set('viewImage', makeViewImageTool(powers));
   builtins.set('list', makeListPetnamesTool(powers));
   builtins.set('lookup', makeLookupTool(powers));
   builtins.set('describeCapability', makeDescribeCapabilityTool(powers));

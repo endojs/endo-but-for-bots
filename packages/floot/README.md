@@ -488,3 +488,44 @@ The preset's prompt is versioned (`promptVersion`): a bump migrates the prompt
 of every existing `machine-admin` session exactly once on the factory's next
 registry load, leaving custom and delegated prompts untouched. Ordinary preset
 edits never reach a live session.
+
+## Reading images and checking visual work
+
+Floot and Fae expose `viewImage` for models that accept image inputs.
+It reads an existing Endo blob, mount, tree, or git workspace:
+
+```json
+{"petName":"workspace","path":["screenshots","mobile.png"]}
+```
+
+Omit `path` when the petname already names a readable blob.
+For a git workspace the tool resolves `worktree()` before looking up the file.
+Paths are relative segments; the tool grants no host filesystem or URL access.
+It accepts PNG, JPEG, and WebP bytes up to 2 MiB, checking the actual streamed
+size as well as the declared size when available.
+Resize larger screenshots before reading them.
+HTML and SVG need rendering first.
+
+When building a scene or interface, the agent should discover a browser capability
+or use Playwright/Chromium through its granted shell, render at desktop and mobile
+sizes, inspect page errors, and read the saved screenshots with `viewImage`.
+It should fix visible defects and repeat the check before reporting the result as
+verified.
+If the browser or shell is unavailable, it must say what remains unverified.
+This feature does not provision a browser or expand the shell's network authority.
+
+The selected model must support vision; provider/model rejections remain errors,
+not a fallback that pretends the image was seen.
+Supported transports are Fae's Responses, OpenAI-compatible, Anthropic, and Ollama
+providers, plus the hosted Codex and Claude tool bridges.
+Hosted OpenCode does not advertise `viewImage` yet because its native recovery
+format rejects image attachments.
+
+Image bytes use a bounded, versioned tool-result envelope across the existing
+text transcript and journal interfaces.
+Provider adapters decode it into native image blocks; ordinary user and assistant
+text is never decoded as an image.
+Text-output truncation does not cut image payloads.
+Live and restored UI history show a short image receipt instead of base64, while
+private session journals retain the bytes for replay without re-reading the file.
+Images therefore follow the same deletion and cleanup lifecycle as the session.

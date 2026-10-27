@@ -1,4 +1,5 @@
 // @ts-check
+import { imageResultText } from '@endo/hosted-agent/image-result.js';
 /* eslint-disable no-await-in-loop */
 
 // Floot consumes this provider-neutral stream contract; Codex-specific JSON-RPC
@@ -497,7 +498,7 @@ export const runHostedTurn = async ({
           writer.toolResult({
             id: `${event.id || ''}`,
             name: `${event.name || 'tool'}`,
-            result,
+            result: imageResultText(result),
             ...toolOutcome,
           });
           break;

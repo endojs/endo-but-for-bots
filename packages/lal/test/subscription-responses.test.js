@@ -1224,3 +1224,37 @@ test('overload cleanup failure fences retry and new inference', async t => {
   t.is(subject.requests.length, 1);
   t.deepEqual(subject.delays, []);
 });
+
+test('subscription Responses sends image tool results as native input_image blocks', async t => {
+  const { encodeImageResult, imageDataUrl } =
+    await import('@endo/hosted-agent/image-result.js');
+  const subject = fixture([completion([callItem])]);
+  const first = await subject.provider.chat(
+    [{ role: 'user', content: 'inspect' }],
+    [],
+  );
+  const image = {
+    mimeType: /** @type {const} */ ('image/png'),
+    data: 'iVBORw0KGgo=',
+  };
+  await subject.provider.chat(
+    [
+      first.message,
+      {
+        role: 'tool',
+        tool_call_id: 'call1',
+        content: encodeImageResult(image),
+      },
+    ],
+    [],
+  );
+  const output = JSON.parse(subject.requests[1].body).input.at(-1);
+  t.deepEqual(output, {
+    type: 'function_call_output',
+    call_id: 'call1',
+    output: [
+      { type: 'input_image', image_url: imageDataUrl(image), detail: 'auto' },
+    ],
+  });
+  t.is(subject.revocations(), 2);
+});
