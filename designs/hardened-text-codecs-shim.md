@@ -92,7 +92,6 @@ compartment.
 ### Permits table
 
 | Constructor | Property | Disposition | Rationale |
-|---|---|---|---|
 | `TextEncoder` | `prototype` | yes | Required for instances. |
 | `TextEncoder` | `prototype.encode`, `encodeInto` | yes | Pure. |
 | `TextEncoder` | `prototype.encoding` | yes | Pure (always `'utf-8'`). |
@@ -216,7 +215,7 @@ Tests live under `packages/ses/test/`.
 Optional cleanup; it does not gate the **Implemented** status.
 
 - Grep the monorepo for `Buffer.from(` and `.toString('utf` in code
-  that runs under SES.
+  that runs inside a compartment created after lockdown.
   These call sites become candidates for migration to
   `TextEncoder`/`TextDecoder` per the project's
   "prefer Uint8Array + TextEncoder/TextDecoder over Buffer"
@@ -225,34 +224,102 @@ Optional cleanup; it does not gate the **Implemented** status.
 #### Phase 3 audit result
 
 Audited on `llm` commit `844ce3df7b`.
-`packages/*/src` has 22 `Buffer.from(` and `.toString('utf...')` call
-sites in 13 files, not counting comments.
-Every one is in a module that runs on the Node host, in the start
-compartment, where `Buffer` is a host global.
-None runs inside a compartment created after lockdown, so none is a
-migration candidate under this phase.
 
-| File | Sites | Why it runs on the host |
-|---|---|---|
-| `9p-server/src/server.js` | 1 | Loaded only by the unconfined `mount-caplet.js` through `fs-bridge.js`, which imports `node:net`. The daemon worker loads unconfined caplets with a native `import()`. |
-| `9p-server/src/wire.js` | 3 | Same as `server.js`. |
-| `claude/src/launch.js` | 2 | Imports `node:child_process`. |
-| `cli/src/commands/log.js` | 1 | Command-line tool; imports `fs` and `child_process`. |
-| `daemon/src/manager-node-powers.js` | 1 | The daemon's Node powers; imports `node:crypto` and `node:fs/promises`. |
-| `git/src/native-git-backend.js` | 4 | Imports `node:child_process` and `node:fs`. |
-| `hosted-agent/src/mcp-socket.js` | 1 | Imports `node:net`. |
-| `npm-registry-server/src/http.js` | 3 | Imports `node:http` and `node:buffer`. |
-| `npm-registry-server/src/registry.js` | 1 | Imports `Buffer` from `node:buffer`. |
-| `opencode-sandbox/src/opencode-bridge.mjs` | 1 | Imports `node:child_process` and `node:process`. |
-| `platform/src/http-node/backend.js` | 1 | Imports `node:http`. |
-| `sandbox/src/drivers/child-process.js` | 2 | Calls `spawn` on a passed-in Node `child_process` module and collects its output chunks. |
-| `sandbox/src/drivers/podman.js` | 1 | Drives `podman` through `child-process.js` and reads the `process` host global. |
+**Scope.**
+The audit covers shipped package code, `packages/*/src`.
+It also checks the other non-test package surfaces (`bench/`,
+`demo/`, `scripts/`, and Markdown) for code that runs inside a
+compartment created after lockdown.
+It excludes `packages/*/test/` (83 matches), because tests are not
+shipped and run on the Node host.
+
+**Criterion.**
+Each match is classified on two separate axes.
+
+- *Execution boundary:* does the code run in the start compartment
+  on the Node host, or inside a compartment created after lockdown?
+  A module that imports a Node builtin (such as `node:net` or
+  `node:child_process`), reads the `process` host global, or is
+  loaded through a native `import()` runs in the start compartment.
+  A compartment created after lockdown cannot import Node builtins
+  unless its policy grants them.
+  The start compartment still runs under SES, but `Buffer` is a host
+  global there.
+- *Conversion:* is the operation a portable UTF-8 conversion, which
+  `TextEncoder` and `TextDecoder` can replace, or does it depend on
+  `Buffer`-specific behavior?
+  `Buffer`-specific behavior includes hex and base64 decoding,
+  zero-copy `Buffer` views handed to Node streams, and
+  `Buffer#copy` into a frame buffer.
+
+A site is a migration candidate under this phase only if it runs
+inside a compartment created after lockdown and performs a portable
+UTF-8 conversion.
+
+**Shipped code.**
+`packages/*/src` has 22 `Buffer.from(` and `.toString('utf...')`
+call sites in 13 files, not counting comments.
+All 22 run in the start compartment.
+
+- `packages/9p-server/src/server.js`, 1 site. `Buffer` view for a socket
+  write. Loaded only by the unconfined `mount-caplet.js` through
+  `fs-bridge.js`, which imports `node:net`. The daemon worker loads
+  unconfined caplets with a native `import()`.
+- `packages/9p-server/src/wire.js`, 3 sites. 2 UTF-8, 1 `Buffer#copy`
+  into a frame. Same as `server.js`.
+- `packages/claude/src/launch.js`, 2 sites. UTF-8 decode. Imports
+  `node:child_process`.
+- `packages/cli/src/commands/log.js`, 1 site. UTF-8 decode. Command-line
+  tool; imports `fs` and `child_process`.
+- `packages/daemon/src/manager-node-powers.js`, 1 site. Hex decode of a
+  DER prefix. The daemon's Node powers; imports `node:crypto` and
+  `node:fs/promises`.
+- `packages/git/src/native-git-backend.js`, 4 sites. UTF-8 encode and
+  decode. Imports `node:child_process` and `node:fs`.
+- `packages/hosted-agent/src/mcp-socket.js`, 1 site. UTF-8 decode.
+  Imports `node:net`.
+- `packages/npm-registry-server/src/http.js`, 3 sites. UTF-8 encode and
+  decode. Imports `node:http` and `node:buffer`.
+- `packages/npm-registry-server/src/registry.js`, 1 site. Base64 decode.
+  Imports `Buffer` from `node:buffer`.
+- `packages/opencode-sandbox/src/opencode-bridge.mjs`, 1 site. Base64
+  encode. Imports `node:child_process` and `node:process`.
+- `packages/platform/src/http-node/backend.js`, 1 site. `Buffer` view
+  for an HTTP write. Imports `node:http`.
+- `packages/sandbox/src/drivers/child-process.js`, 2 sites. UTF-8
+  decode. Calls `spawn` on a passed-in Node `child_process` module and
+  collects its output chunks.
+- `packages/sandbox/src/drivers/podman.js`, 1 site. UTF-8 round trip.
+  Drives `podman` through `child-process.js` and reads the `process`
+  host global.
 
 The other matches in `packages/*/src`, in
-`pass-style/src/byteArray.js` and `immutable-arraybuffer/src/lib.js`,
-are comments.
-Migrating host modules to `TextEncoder` and `TextDecoder` is a style
-cleanup that this design does not require.
+`packages/pass-style/src/byteArray.js` and
+`packages/immutable-arraybuffer/src/lib.js`, are comments.
+
+**Other package surfaces.**
+One match runs inside a compartment created after lockdown.
+`packages/compartment-mapper/demo/policy/index.mjs` calls `lockdown()`
+and then loads `app.js` with `importLocation`.
+`packages/compartment-mapper/demo/policy/app.js` calls `Buffer.from`
+at line 13, through a `Buffer` subset that the demo's policy endows.
+That call decodes a hex string, so it is `Buffer`-specific, and
+`TextEncoder` and `TextDecoder` cannot replace it.
+The demo also exists to show a policy-attenuated `Buffer` endowment,
+so it stays as written.
+The remaining matches are host scripts or prose:
+`packages/9p-server/bench/bench.js`,
+`packages/fae/scripts/debug-llm-logs.js`, and
+`packages/fae/scripts/smoke.test.js` run on the Node host, and
+`packages/immutable-arraybuffer/README.md` and
+`packages/immutable-arraybuffer/designs/immutable-arraybuffer.md` are
+Markdown.
+
+**Conclusion.**
+No site meets the migration criterion.
+The portable UTF-8 sites in the table could still move to
+`TextEncoder` and `TextDecoder` as a style cleanup, following the
+portability convention, but this design does not require it.
 
 ## Design Decisions
 
