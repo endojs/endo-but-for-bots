@@ -21,6 +21,7 @@ import {
   FERAL_EVAL,
   TypeError,
   arrayFilter,
+  freeze,
   globalThis,
   is,
   ownKeys,
@@ -151,18 +152,21 @@ const probeHostEvaluators = () => {
 
 /**
  * @param {LockdownOptions} [options]
- * @param {(
- *   intrinsics: Record<string, any>,
- *   markVirtualizedNativeFunction: (object: object) => void,
- * ) => void} [onIntrinsics] receives the lockdown intrinsics and the
- * native-function marker once repairs are done, for an engine adapter that
- * must build its own start Compartment constructor from them. It is called
+ * @param {(ShimStartCompartment: Compartment['constructor']) => void} [onShimStartCompartment]
+ * receives a start `Compartment` constructor made from the lockdown
+ * intrinsics, for the XS adapter, which must call it without `new` to
+ * initialize native compartments. Unlike the one installed on `globalThis`,
+ * it does not enforce `new`; it is otherwise frozen and marked the same way,
+ * so it carries no authority beyond `globalThis.Compartment`. It is called
  * synchronously, at most once, before `repairIntrinsics` returns. A repeated
  * call throws `SES_ALREADY_LOCKED_DOWN` before reaching it. This module is
  * not exported from `ses`, and the public `lockdown` and `repairIntrinsics`
  * on `globalThis` deliberately do not forward this parameter.
  */
-export const repairIntrinsics = (options = {}, onIntrinsics = undefined) => {
+export const repairIntrinsics = (
+  options = {},
+  onShimStartCompartment = undefined,
+) => {
   // First time, absent options default to 'safe'.
   // Subsequent times, absent options default to first options.
   // Thus, all present options must agree with first options.
@@ -590,8 +594,16 @@ export const repairIntrinsics = (options = {}, onIntrinsics = undefined) => {
     return tamedHarden;
   };
 
-  if (onIntrinsics !== undefined) {
-    onIntrinsics(intrinsics, markVirtualizedNativeFunction);
+  if (onShimStartCompartment !== undefined) {
+    const ShimStartCompartment = freeze(
+      makeCompartmentConstructor(
+        makeCompartmentConstructor,
+        intrinsics,
+        markVirtualizedNativeFunction,
+      ),
+    );
+    markVirtualizedNativeFunction(ShimStartCompartment);
+    onShimStartCompartment(ShimStartCompartment);
   }
 
   return hardenIntrinsics;

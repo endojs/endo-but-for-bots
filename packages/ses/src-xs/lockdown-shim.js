@@ -5,43 +5,29 @@
  * the SES Compartment, depending on the __native__ Compartment constructor
  * option.
  */
-import { freeze, globalThis } from '../src/commons.js';
+import { globalThis } from '../src/commons.js';
 import { NativeStartCompartment } from './commons.js';
 import { repairIntrinsics } from '../src/lockdown.js';
-import { makeCompartmentConstructor } from '../src/compartment.js';
 import { adaptCompartmentConstructors } from './compartment.js';
 
 const lockdown = options => {
-  // The shim Compartment constructor must be made from the lockdown
-  // intrinsics, as on other engines, rather than reuse the one made when SES
-  // was imported, which sampled the then-untamed globals.
-  // Sampling the start compartment's global object after lockdown would not
-  // do either, since it holds the powerful %Initial*% intrinsics where new
-  // compartments must receive the tamed %Shared*% ones.
-  // Nor can we reuse the `Compartment` that `repairIntrinsics` installs on
-  // `globalThis`: it enforces `new`, but `adaptCompartmentConstructors`
+  // New compartments must get their intrinsics from lockdown, as on other
+  // engines, so the shim Compartment constructor cannot be the one made when
+  // SES was imported, which sampled the then-untamed globals.
+  // Nor can it be the `Compartment` that `repairIntrinsics` installs on
+  // `globalThis`: that one enforces `new`, but `adaptCompartmentConstructors`
   // initializes each native compartment by calling the shim constructor as a
-  // function, so this one is made without `enforceNew`. It is otherwise
-  // frozen and marked like the rest of the `Compartment` family.
+  // function. `repairIntrinsics` hands us an otherwise identical constructor
+  // that does not enforce `new`.
   // The prototype methods (`shimEvaluate`, `shimImport`, ...) still come from
   // the import-time constructor in `./compartment.js`; they apply to
   // compartments from this constructor through the module-level
   // `privateFields` WeakMap in `../src/compartment.js`.
-  /** @type {ReturnType<typeof makeCompartmentConstructor> | undefined} */
+  /** @type {Compartment['constructor'] | undefined} */
   let LockdownShimStartCompartment;
-  const hardenIntrinsics = repairIntrinsics(
-    options,
-    (intrinsics, markVirtualizedNativeFunction) => {
-      LockdownShimStartCompartment = freeze(
-        makeCompartmentConstructor(
-          makeCompartmentConstructor,
-          intrinsics,
-          markVirtualizedNativeFunction,
-        ),
-      );
-      markVirtualizedNativeFunction(LockdownShimStartCompartment);
-    },
-  );
+  const hardenIntrinsics = repairIntrinsics(options, ShimStartCompartment => {
+    LockdownShimStartCompartment = ShimStartCompartment;
+  });
   hardenIntrinsics();
   // Replace global Compartment with a version that is hardened and hardens
   // transitive child Compartment.
