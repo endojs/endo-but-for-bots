@@ -73,6 +73,10 @@ final class Diagnostics {
         File directory = new File(context.getNoBackupFilesDir(), "diagnostics");
         StringBuilder report = new StringBuilder("Floot Android diagnostics\nGenerated: " + Instant.now()
             + "\nAndroid API: " + android.os.Build.VERSION.SDK_INT + "\n");
+        report.append("Microphone permission: ").append(context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+            .append("\nAudio settings permission: ").append(context.checkSelfPermission(android.Manifest.permission.MODIFY_AUDIO_SETTINGS) == android.content.pm.PackageManager.PERMISSION_GRANTED).append("\n");
+        android.content.pm.PackageInfo webView = android.webkit.WebView.getCurrentWebViewPackage();
+        if (webView != null) report.append("WebView: ").append(webView.packageName).append(" ").append(webView.versionName).append("\n");
         if (limit < LIMIT) report.append("Preview: recent output per log. Save logs for all retained output.\n");
         return report.append(reportFiles(directory, limit)).toString();
     }

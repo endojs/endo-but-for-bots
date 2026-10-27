@@ -6,6 +6,18 @@ import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
 public class TransportTest {
+    @Test public void webViewCaptureDeclaresBothRequiredAndroidPermissions() throws Exception {
+        // Chromium refuses device selection without either permission, even if
+        // the user has granted RECORD_AUDIO in the runtime permission dialog.
+        org.w3c.dom.Document manifest = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+            .newDocumentBuilder().parse(new File("src/main/AndroidManifest.xml"));
+        org.w3c.dom.NodeList permissions = manifest.getElementsByTagName("uses-permission");
+        java.util.Set<String> names = new java.util.HashSet<>();
+        for (int i = 0; i < permissions.getLength(); i++)
+            names.add(((org.w3c.dom.Element) permissions.item(i)).getAttribute("android:name"));
+        assertTrue(names.contains("android.permission.RECORD_AUDIO"));
+        assertTrue(names.contains("android.permission.MODIFY_AUDIO_SETTINGS"));
+    }
     @Test public void framesCountUtf8BytesAndReadSuccessiveMessages() throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         Netstrings.write(bytes, "hello 🌊"); Netstrings.write(bytes, "next");

@@ -2244,6 +2244,7 @@ export const flootComponent = (
       const failedRequestId = micRequestId;
       const name = /** @type {Error} */ (err).name;
       const message = /** @type {Error} */ (err).message;
+      console.error(`[floot microphone] ${name}: ${message}`);
       if (name === 'NotAllowedError' || name === 'SecurityError') {
         // Say where the block is, as far as this browser will tell. A site
         // permission of 'denied' means the browser's site settings. Chrome
@@ -2318,7 +2319,10 @@ export const flootComponent = (
         micError = 'No microphone was found on this device.';
       } else if (name === 'NotReadableError') {
         micError =
-          'The microphone is in use by another app. Close it and tap 🎤 again.';
+          `The microphone could not start. This can be an app or system audio ` +
+          `configuration problem, or another app using the microphone. ` +
+          `Check microphone access in system settings and try again. ` +
+          `Details: ${name}: ${message}`;
       } else {
         micError = `Could not start the microphone: ${message}`;
       }

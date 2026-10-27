@@ -171,3 +171,63 @@ test.serial(
     t.is(daemon.turns.length, 2);
   },
 );
+
+test.serial(
+  'capture startup errors preserve diagnostics and permit another attempt',
+  async t => {
+    const { parent } = await setup(t);
+    const oldMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    let requests = 0;
+    let stops = 0;
+    const retry = makePromiseKit();
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: () => {
+          requests += 1;
+          if (requests === 1) {
+            const error = Error('Could not start audio source');
+            error.name = 'NotReadableError';
+            return Promise.reject(error);
+          }
+          return retry.promise;
+        },
+      },
+    });
+    t.teardown(() => {
+      if (oldMedia) Object.defineProperty(navigator, 'mediaDevices', oldMedia);
+      else Reflect.deleteProperty(navigator, 'mediaDevices');
+    });
+    const click = () =>
+      parent
+        .querySelector('.floot-mic')
+        ?.dispatchEvent(new win.Event('click', { bubbles: true }));
+    click();
+    await waitFor(() =>
+      parent.textContent?.includes('Could not start audio source'),
+    );
+    t.false(
+      parent.textContent?.includes('The microphone is in use by another app.'),
+    );
+    t.true(
+      parent.textContent?.includes(
+        'NotReadableError: Could not start audio source',
+      ),
+    );
+    t.falsy(parent.querySelector('.floot-mic.listening'));
+    click();
+    await waitFor(() => requests === 2);
+    win.dispatchEvent(new win.Event('endo-suspend'));
+    retry.resolve({
+      getTracks: () => [
+        {
+          stop: () => {
+            stops += 1;
+          },
+        },
+      ],
+    });
+    await waitFor(() => stops === 1);
+    t.is(stops, 1);
+  },
+);

@@ -12,6 +12,8 @@ The app offers two connection modes:
 Choose **Use as assistant** from the toolbar menu to select Floot as the Android assistant.
 System invocation opens the selected connection; recording still starts with the
 Floot mic control, after Android grants microphone permission.
+WebView capture requires both `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS` in the
+APK; the latter is granted at install time, without an additional user prompt.
 Closing or backgrounding the app stops local audio without cancelling accepted
 agent work.
 
@@ -27,6 +29,8 @@ background daemon errors, or **Save logs…** to download a text report with And
 system file picker.
 The preview shows the latest 8 KiB from each log; exports include all retained logs.
 Exports also work if Android recreates the app while the file picker is open.
+The report includes microphone/audio-settings permission status and the WebView
+version to diagnose capture failures after permission approval.
 Logs survive relaunch in app-private, non-backed-up storage.
 Each of the three streams keeps two files of at most 256 KiB, with individual
 messages capped at 8,192 characters; long daemon lines are truncated while reading.
