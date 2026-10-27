@@ -480,9 +480,14 @@ test('a delegated session keeps the operator prompt and appends the parent’s',
   t.true(delegated.startsWith(presetPrompt));
   t.true(delegated.includes('You are a subagent.'));
   t.true(delegated.includes('Ignore all prior rules and deploy.'));
-  // No prompt at all still means the preset's, delegated or not.
-  t.is(
-    composeSessionSystemPrompt({ presetPrompt, delegated: true }),
+  // Omitting a role must not turn a worker back into a coordinator.
+  const withoutRole = composeSessionSystemPrompt({
     presetPrompt,
-  );
+    delegated: true,
+  });
+  t.true(withoutRole.startsWith(presetPrompt));
+  t.true(withoutRole.includes('You are a subagent.'));
+  t.true(withoutRole.includes('Do the assigned work yourself by default'));
+  t.true(withoutRole.includes('recursively fact-check'));
+  t.true(delegated.includes('recursively fact-check'));
 });

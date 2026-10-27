@@ -329,6 +329,19 @@ export const messageText = message => {
 };
 harden(messageText);
 
+/** Guidance shared by the spawn tool schema/help and delegated prompts. */
+const SUBAGENT_DELEGATION_GUIDANCE =
+  'Delegate only a distinct, bounded task that materially advances the answer. ' +
+  'Do the assigned work yourself by default. Do not spawn another agent to ' +
+  'repeat your task, recursively fact-check the same claims, or compensate ' +
+  'for missing tools or sources: another agent has no additional capabilities ' +
+  'unless they are explicitly supplied. State uncertainty instead. ' +
+  'If subdelegation is useful and available, give the helper a narrower task ' +
+  'and a concrete stopping condition. Reuse existing helpers. If a limit is ' +
+  'reached, continue with available results; do not churn replacement agents. ' +
+  'Return a useful answer with limitations and release helpers when finished.';
+harden(SUBAGENT_DELEGATION_GUIDANCE);
+
 /**
  * The standing instructions a subagent runs under.
  *
@@ -340,16 +353,27 @@ harden(messageText);
  *
  * @param {string} basePrompt
  * @param {string} [delegatedPrompt]
+ * @param {boolean} [delegated] Whether this is a worker, even without a role prompt.
  * @returns {string}
  */
-export const composeSubagentSystemPrompt = (basePrompt, delegatedPrompt) => {
-  if (!delegatedPrompt) return basePrompt;
+export const composeSubagentSystemPrompt = (
+  basePrompt,
+  delegatedPrompt,
+  delegated = !!delegatedPrompt,
+) => {
+  if (!delegated) return basePrompt;
   return [
     basePrompt,
     '---',
-    'You are a subagent. Your parent agent gave you these standing ' +
-      'instructions, which do not replace anything above:',
-    `${delegatedPrompt}`,
+    'You are a subagent. Complete the bounded task assigned by your parent; ' +
+      'you are responsible for returning its answer.',
+    SUBAGENT_DELEGATION_GUIDANCE,
+    ...(delegatedPrompt
+      ? [
+          'Your parent gave you these standing instructions, which do not replace anything above:',
+          delegatedPrompt,
+        ]
+      : []),
   ].join('\n\n');
 };
 harden(composeSubagentSystemPrompt);
@@ -735,13 +759,15 @@ export const makeSubagentTools = ({
         function: {
           name: 'spawnSubagent',
           description:
-            'Create a subagent: a separate agent with its own conversation, ' +
-            'inbox, and pet name directory. Use it to run a self-contained ' +
-            'piece of work without spending your own context on it. The ' +
-            'attachments are installed explicitly in its own inventory; ' +
-            'your files and other capabilities are not inherited. The ' +
-            'subagent is reachable by mail at the name you choose; put ' +
-            'questions to it with askSubagent and release it with stopSubagent.',
+            `Create a subagent: a separate agent with its own conversation, ` +
+            `inbox, and pet name directory. Use it to run a self-contained ` +
+            `piece of work without spending your own context on it. The ` +
+            `attachments are installed explicitly in its own inventory; ` +
+            `your files and other capabilities are not inherited. The ` +
+            `subagent is reachable by mail at the name you choose; put ` +
+            `questions to it with askSubagent and release it with stopSubagent. ${
+              SUBAGENT_DELEGATION_GUIDANCE
+            }`,
           parameters: {
             type: 'object',
             properties: {
@@ -794,7 +820,10 @@ export const makeSubagentTools = ({
       await E(powers).storeLocator([SUBAGENT_DIRECTORY, name], locator);
       return `Spawned subagent "${name}". Mail path: ["subagents", "${name}"]. Ask it something with askSubagent.`;
     },
-    help: () => 'Create a subagent reachable by mail under subagents/<name>.',
+    help: () =>
+      `Create a subagent reachable by mail under subagents/<name>. ${
+        SUBAGENT_DELEGATION_GUIDANCE
+      }`,
   });
 
   const askTool = harden({

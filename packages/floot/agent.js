@@ -36,6 +36,7 @@ import {
   SubagentSpawnerInterface,
   assertSubagentCapabilities,
   assertSubagentName,
+  composeSubagentSystemPrompt,
   isSameFormula,
   makeSubagentDelegations,
   DEFAULT_SUBAGENT_LIMITS,
@@ -58,6 +59,7 @@ import {
 import { addUsage, projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
+import { makeSubagentAdmission } from './src/subagent-admission.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
@@ -2360,15 +2362,9 @@ export const composeSessionSystemPrompt = ({
   requestedPrompt,
   delegated = false,
 }) => {
-  if (!requestedPrompt) return presetPrompt;
-  if (!delegated) return `${requestedPrompt}`;
-  return [
-    presetPrompt,
-    '---',
-    'You are a subagent. Your parent agent gave you these standing ' +
-      'instructions, which do not replace anything above:',
-    `${requestedPrompt}`,
-  ].join('\n\n');
+  if (delegated)
+    return composeSubagentSystemPrompt(presetPrompt, requestedPrompt, true);
+  return requestedPrompt ? `${requestedPrompt}` : presetPrompt;
 };
 harden(composeSessionSystemPrompt);
 
@@ -5533,27 +5529,31 @@ export const make = async (
     assertPublished(id);
     const index = (registry || []).findIndex(session => session.id === id);
     if (index === -1) throw Error(`Unknown session "${id}".`);
+    // Fence the parent before any await or recursive teardown. In-flight
+    // spawns must roll back; later spawns cannot enter a deleting subtree.
+    /** @type {any[]} */ (registry)[index] = harden({
+      .../** @type {any[]} */ (registry)[index],
+      lifecycle: 'deleting',
+    });
+    await saveRegistry();
+    await subagentAdmission.waitForChildren(id);
     const children = (registry || []).filter(
       session => session.parentSessionId === id,
     );
     for (const child of children) {
       await releaseSession(child.id);
     }
-    // `finishSessionDeletion` rebinds `registry`, so re-find rather than
-    // reusing the index computed before the recursion.
-    const current = (registry || []).findIndex(session => session.id === id);
-    if (current === -1) return;
-    /** @type {any[]} */ (registry)[current] = harden({
-      .../** @type {any[]} */ (registry)[current],
-      lifecycle: 'deleting',
-    });
-    await saveRegistry();
     await finishSessionDeletion(id);
   };
 
   // Layers of delegation a session tree may reach. 0 withholds the subagent
   // tools from every session.
   const maxSubagentDepth = workload.maxSubagentDepth;
+  const subagentAdmission = makeSubagentAdmission({
+    getSessions: () => registry || [],
+    maxSubagents: workload.maxSubagents,
+    maxDepth: maxSubagentDepth,
+  });
 
   // Provider calls one turn may make before the tool-step fallback. Read once
   // here, where a bad value is a deployment error the operator sees at
@@ -5596,66 +5596,67 @@ export const make = async (
             `Subagent system prompt must be a string of at most ${workload.subagentLimits.maxTaskChars} characters`,
           );
         }
-        const siblings = await listSubagents();
-        if (siblings.some(session => session.subagentName === name)) {
-          throw Error(`Subagent "${name}" already exists.`);
-        }
-        if (siblings.length >= workload.maxSubagents) {
-          throw Error(
-            `Subagent limit of ${workload.maxSubagents} reached; stop one first.`,
-          );
-        }
-        const parent = (registry || []).find(
-          session => session.id === parentId,
-        );
-        if (!parent) throw Error('Parent session no longer exists');
-        // A subagent runs on the same backend and model as its parent: it is
-        // extra context, not a way to reach a backend this session was not
-        // provisioned for.
-        const inheritedModel = {
-          backendId: parent.backendId,
-          modelId: parent.modelId,
-          ...(parent.reasoningEffort
-            ? { reasoningEffort: parent.reasoningEffort }
-            : {}),
-          // And on the same subscription: a session pinned to one must
-          // not have its delegates drain another.
-          ...(parent.subscription ? { subscription: parent.subscription } : {}),
-        };
-        const childId = await provisionSession(
-          {
-            title: `${parent?.title || 'Session'} / ${name}`,
-            presetId: parent?.presetId,
-            ...inheritedModel,
-            ...(childPrompt ? { systemPrompt: childPrompt } : {}),
-            parentSessionId: parentId,
-            subagentName: name,
-            subagentDepth: depth,
-          },
-          parent.inferenceRecipe,
-        );
+        await loadRegistry();
+        const reservation = subagentAdmission.reserve(parentId, name, depth);
         try {
-          const child = await E(getHost()).lookup(`session-agent-${childId}`);
-          for (const capability of capabilities) {
-            !(await E(child).has(capability.name)) ||
-              Fail`Subagent inventory name ${capability.name} already exists`;
-          }
-          for (const capability of capabilities) {
-            await E(child).storeValue(capability.value, capability.name);
-          }
-          const locator = await E(getHost()).locate(`session-${childId}`);
-          return harden({ name, locator });
-        } catch (error) {
+          const parent = (registry || []).find(
+            session => session.id === parentId,
+          );
+          if (!parent) throw Error('Parent session no longer exists');
+          // A subagent runs on the same backend and model as its parent: it is
+          // extra context, not a way to reach a backend this session was not
+          // provisioned for.
+          const inheritedModel = {
+            backendId: parent.backendId,
+            modelId: parent.modelId,
+            ...(parent.reasoningEffort
+              ? { reasoningEffort: parent.reasoningEffort }
+              : {}),
+            // And on the same subscription: a session pinned to one must
+            // not have its delegates drain another.
+            ...(parent.subscription
+              ? { subscription: parent.subscription }
+              : {}),
+          };
+          const childId = await provisionSession(
+            {
+              title: `${parent?.title || 'Session'} / ${name}`,
+              presetId: parent?.presetId,
+              ...inheritedModel,
+              ...(childPrompt ? { systemPrompt: childPrompt } : {}),
+              parentSessionId: parentId,
+              subagentName: name,
+              subagentDepth: depth,
+            },
+            parent.inferenceRecipe,
+          );
           try {
-            await releaseSession(childId);
-          } catch (cleanupError) {
-            throw new AggregateError(
-              [error, cleanupError],
-              'Subagent capability introduction and cleanup failed',
-              { cause: error },
-            );
+            reservation.assertParent();
+            const child = await E(getHost()).lookup(`session-agent-${childId}`);
+            for (const capability of capabilities) {
+              !(await E(child).has(capability.name)) ||
+                Fail`Subagent inventory name ${capability.name} already exists`;
+            }
+            for (const capability of capabilities) {
+              await E(child).storeValue(capability.value, capability.name);
+            }
+            const locator = await E(getHost()).locate(`session-${childId}`);
+            reservation.assertParent();
+            return harden({ name, locator });
+          } catch (error) {
+            try {
+              await releaseSession(childId);
+            } catch (cleanupError) {
+              throw new AggregateError(
+                [error, cleanupError],
+                'Subagent capability introduction and cleanup failed',
+                { cause: error },
+              );
+            }
+            throw error;
           }
-          throw error;
+        } finally {
+          reservation.release();
         }
       },
 
@@ -5681,7 +5682,7 @@ export const make = async (
       /** @param {string} [methodName]  */
       help(methodName) {
         if (methodName === 'spawn') {
-          return 'spawn(name, { systemPrompt?, capabilities?: [{ name, value }] }) — Create a subagent with its own inventory, install only explicit capabilities, and return { name, locator }.';
+          return 'spawn(name, { systemPrompt?, capabilities?: [{ name, value }] }) — Create a subagent with its own inventory, install only explicit capabilities, and return { name, locator }. All descendants share one tree budget; delegate distinct tasks, never recursive fact checking.';
         }
         if (methodName === 'stop') {
           return 'stop(name) — Delete a subagent session and every session beneath it.';
@@ -5699,9 +5700,37 @@ export const make = async (
   // Fire-and-forget: load the registry and build each agent, which starts its
   // inbox loop. New sessions start their loops in getAgent at creation time.
   const startAllInboxes = async () => {
-    const reg = await loadRegistry();
+    await loadRegistry();
     ownership.assertOpen();
-    for (const s of reg) {
+    // A crash can leave a deletion fence above still-live descendants. Finish
+    // the entire subtree before reviving any inbox, not just the fenced row.
+    const failedCleanup = new Set();
+    const cleanupEntries = (registry || []).filter(s =>
+      ['deleting', 'error'].includes(s.lifecycle),
+    );
+    for (const s of cleanupEntries) {
+      if ((registry || []).some(entry => entry.id === s.id)) {
+        try {
+          await releaseSession(s.id);
+        } catch (error) {
+          failedCleanup.add(s.id);
+          console.error(
+            `[floot-factory] cleanup recovery failed for session-${s.id}:`,
+            error,
+          );
+        }
+      }
+    }
+    const reg = registry || [];
+    // A failed teardown retains its records for retry, but cannot restart work.
+    for (;;) {
+      const size = failedCleanup.size;
+      for (const s of reg) {
+        if (failedCleanup.has(s.parentSessionId)) failedCleanup.add(s.id);
+      }
+      if (size === failedCleanup.size) break;
+    }
+    for (const s of reg.filter(entry => !failedCleanup.has(entry.id))) {
       // Read each queue, so the list can say which sessions have messages
       // held over from before the restart. Nothing is dispatched: a queue
       // that comes back non-empty is held until the user sends.
@@ -5727,14 +5756,6 @@ export const make = async (
             );
           });
         }
-      } else if (s.lifecycle === 'deleting' || s.lifecycle === 'error') {
-        ownership.track(finishSessionDeletion(s.id)).catch(error => {
-          console.error(
-            `[floot-factory] cleanup recovery failed for session-${s.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        });
       } else {
         const recoverCreating = async () => {
           if (s.lifecycle === 'creating') {
