@@ -529,3 +529,10 @@ Text-output truncation does not cut image payloads.
 Live and restored UI history show a short image receipt instead of base64, while
 private session journals retain the bytes for replay without re-reading the file.
 Images therefore follow the same deletion and cleanup lifecycle as the session.
+Compaction summarizes image receipts and the agent's observations, never base64
+as text tokens; recent retained images remain intact.
+For API provider sessions, a later turn represents images from an incomplete turn
+as receipts, so a rejected image does not keep every later request failing.
+The agent may explicitly read a corrected image again with `viewImage`.
+Original journal bytes remain available as evidence, including after restart.
+Opaque hosted backend checkpoints retain their native recovery policy.

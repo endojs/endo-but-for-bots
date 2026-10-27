@@ -115,6 +115,51 @@ test('overflow closes the stream and a later call can recover', async t => {
   t.is(decodeImageResult(await tool.execute({ petName: 'blob' }))?.data, PNG);
 });
 
+test('empty-chunk flooding closes the stream and a later call recovers', async t => {
+  t.timeout(5000);
+  let closed = false;
+  let reads = 0;
+  let calls = 0;
+  const powers = Far('Powers', {
+    lookup: () => {
+      calls += 1;
+      if (calls > 1) return bytesReaderFromIterator([bytes]);
+      function* chunks() {
+        try {
+          yield bytes;
+          for (;;) {
+            reads += 1;
+            yield new Uint8Array(0);
+          }
+        } finally {
+          closed = true;
+        }
+      }
+      return bytesReaderFromIterator(chunks());
+    },
+  });
+  const tool = makeViewImageTool(powers);
+  await t.throwsAsync(() => tool.execute({ petName: 'blob' }), {
+    message: /too many empty chunks/,
+  });
+  t.true(closed);
+  t.true(reads < 100, 'stop pulling before the empty stream exhausts memory');
+  t.is(decodeImageResult(await tool.execute({ petName: 'blob' }))?.data, PNG);
+});
+
+test('small chunks and occasional empty chunks preserve exact image bytes', async t => {
+  const powers = Far('Powers', {
+    lookup: () =>
+      bytesReaderFromIterator([
+        new Uint8Array(0),
+        ...Array.from(bytes, byte => Uint8Array.of(byte)),
+        new Uint8Array(0),
+      ]),
+  });
+  const result = await makeViewImageTool(powers).execute({ petName: 'blob' });
+  t.deepEqual(decodeImageResult(result), { mimeType: 'image/png', data: PNG });
+});
+
 test('real Endo mounts stream image bytes and reject a symlink escape', async t => {
   const fs = await import('node:fs');
   const path = await import('node:path');

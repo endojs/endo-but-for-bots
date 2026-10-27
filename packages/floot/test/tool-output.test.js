@@ -149,7 +149,114 @@ for (const kind of ['provider', 'hosted']) {
   }
 }
 
-test('image results survive journaling and reconnect without rereading or text truncation', async t => {
+for (const forceCompaction of [false, true]) {
+  test(`image results survive journaling before compaction=${forceCompaction}`, async t => {
+    const { encodeImageResult, decodeImageResult } =
+      await import('@endo/hosted-agent/image-result.js');
+    const image = encodeImageResult({
+      mimeType: 'image/png',
+      data: 'AAAA'.repeat(forceCompaction ? 699_050 : 20_000),
+    });
+    t.is(boundToolOutput(image), image);
+    const values = new Map();
+    const powers = harden({
+      list: prefix => harden(prefix === 'tools' ? [] : [...values.keys()]),
+      has: name => values.has(name),
+      lookup: name => values.get(name),
+      storeValue: (value, name) => {
+        values.set(name, value);
+      },
+      remove: name => values.delete(name),
+    });
+    let reads = 0;
+    let requests = 0;
+    const seen = [];
+    const tool = harden({
+      schema: () =>
+        harden({
+          type: 'function',
+          function: {
+            name: 'screenshot',
+            description: 'Read a rendered image',
+            parameters: { type: 'object', properties: {} },
+          },
+        }),
+      execute: () => {
+        reads += 1;
+        return image;
+      },
+      help: () => '',
+    });
+    const runtime =
+      /** @type {import('../src/runtime-config.js').RuntimeConfig} */ ({
+        kind: 'provider',
+        provideProvider: () =>
+          harden({
+            chatStream: async messages => {
+              requests += 1;
+              if (requests === 1)
+                return harden({
+                  message: {
+                    role: 'assistant',
+                    content: '',
+                    tool_calls: [
+                      {
+                        id: 'shot',
+                        type: 'function',
+                        function: { name: 'screenshot', arguments: '{}' },
+                      },
+                    ],
+                  },
+                });
+              seen.push(
+                messages.find(message => message.role === 'tool')?.content,
+              );
+              return harden({
+                message: { role: 'assistant', content: 'inspected' },
+              });
+            },
+          }),
+      });
+    const options = {
+      forceCompaction,
+      journalPowers: powers,
+      extraTools: new Map([['screenshot', tool]]),
+    };
+    const agent = await makeStreamingAgent(
+      powers,
+      undefined,
+      runtime,
+      'Test',
+      options,
+    );
+    t.teardown(() => agent.shutdown());
+    await agent.converse('inspect', makeReplyChannel().writer);
+    t.is(
+      decodeImageResult(seen[0])?.data.length,
+      forceCompaction ? 2_796_200 : 80_000,
+    );
+    t.false(JSON.stringify(await agent.getHistory()).includes('AAAA'));
+    const event = [...values.values()].find(
+      value => value.type === 'tool-result',
+    );
+    t.is(await agent.getTurnContent(event.resultRef), image);
+    await agent.shutdown();
+    const restored = await makeStreamingAgent(
+      powers,
+      undefined,
+      runtime,
+      'Test',
+      options,
+    );
+    t.teardown(() => restored.shutdown());
+    if (forceCompaction) return;
+    await restored.converse('what did you see?', makeReplyChannel().writer);
+    t.is(seen[1], image);
+    t.is(reads, 1);
+  });
+}
+
+test('provider image rejection recovers after restart without replaying rejected bytes', async t => {
   const { encodeImageResult, decodeImageResult } =
     await import('@endo/hosted-agent/image-result.js');
   const image = encodeImageResult({
@@ -210,6 +317,8 @@ test('image results survive journaling and reconnect without rereading or text t
             seen.push(
               messages.find(message => message.role === 'tool')?.content,
             );
+            if (requests === 2)
+              throw Error('Provider rejected invalid image data');
             return harden({
               message: { role: 'assistant', content: 'inspected' },
             });
@@ -228,7 +337,9 @@ test('image results survive journaling and reconnect without rereading or text t
     options,
   );
   t.teardown(() => agent.shutdown());
-  await agent.converse('inspect', makeReplyChannel().writer);
+  await t.throwsAsync(agent.converse('inspect', makeReplyChannel().writer), {
+    message: /rejected invalid image/,
+  });
   t.is(decodeImageResult(seen[0])?.data.length, 80_000);
   t.false(JSON.stringify(await agent.getHistory()).includes('AAAA'));
   const event = [...values.values()].find(
@@ -245,6 +356,9 @@ test('image results survive journaling and reconnect without rereading or text t
   );
   t.teardown(() => restored.shutdown());
   await restored.converse('what did you see?', makeReplyChannel().writer);
-  t.is(seen[1], image);
+  t.is(decodeImageResult(seen[1]), undefined);
+  t.regex(seen[1], /Not replayed after an incomplete turn/);
+  t.false(seen[1].includes('AAAA'));
+  t.is(await restored.getTurnContent(event.resultRef), image);
   t.is(reads, 1);
 });

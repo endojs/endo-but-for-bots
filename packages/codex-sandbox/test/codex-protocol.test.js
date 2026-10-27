@@ -17,6 +17,24 @@ const chunks = parts => ({
   },
 });
 
+test('native MCP images outside portable limits become omission receipts', t => {
+  const item = toolFromItem({
+    type: 'mcpToolCall',
+    id: 'gif',
+    server: 'browser',
+    tool: 'screenshot',
+    result: {
+      content: [{ type: 'image', mimeType: 'image/gif', data: 'R0lGODlh' }],
+      isError: false,
+    },
+  });
+  t.regex(
+    renderToolResult(item?.result),
+    /Image pixels are unavailable in this replay/,
+  );
+  t.is(renderToolResult('next result'), 'next result');
+});
+
 test('native tool outcome fields remain distinct from terminality and result text', t => {
   const command = {
     type: 'commandExecution',

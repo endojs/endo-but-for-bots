@@ -80,12 +80,12 @@ export const projectJournalTurnHistory = async (
     ...(row.failed === undefined ? {} : { failed: row.failed }),
     result:
       row.source === 'host' && turn.activity?.length
-        ? `[Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution.]\n${imageResultText(row.result ?? UNKNOWN_TOOL_OUTCOME)}`
+        ? `[Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution.]\n${imageResultText(row.result ?? UNKNOWN_TOOL_OUTCOME, { truncated: row.cut.result })}`
         : row.result === undefined
           ? row.source === 'tree'
             ? UNSETTLED_TOOL_RESULT
             : UNKNOWN_TOOL_OUTCOME
-          : imageResultText(row.result),
+          : imageResultText(row.result, { truncated: row.cut.result }),
   });
   /** @type {any[]} */
   const messages = [];

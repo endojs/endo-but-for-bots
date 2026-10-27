@@ -110,27 +110,31 @@ export const makeViewImageTool = powers => {
         throw Error(
           'Image capability must expose streamBase64(); use a readable Endo blob',
         );
-      const chunks = [];
+      // Bound retained memory independently of the producer's chunk sizes.
+      // Keeping one array per chunk lets tiny or empty chunks defeat the byte
+      // budget. Empty chunks also need a separate progress budget.
+      const bytes = new Uint8Array(MAX_IMAGE_BYTES);
       let size = 0;
+      let emptyChunks = 0;
       for await (const chunk of iterateBytesReader(blob, {
         stringLengthLimit: 4 * Math.ceil(MAX_IMAGE_BYTES / 3),
       })) {
-        size += chunk.length;
-        if (size > MAX_IMAGE_BYTES)
+        if (chunk.length === 0) {
+          emptyChunks += 1;
+          if (emptyChunks > 64)
+            throw Error('Image stream yielded too many empty chunks');
+        }
+        if (chunk.length > MAX_IMAGE_BYTES - size)
           throw Error(
             'Image exceeds the 2 MiB limit; resize it before reading',
           );
-        chunks.push(chunk);
+        bytes.set(chunk, size);
+        size += chunk.length;
       }
-      const bytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const image = bytes.subarray(0, size);
       return encodeImageResult({
-        mimeType: imageType(bytes),
-        data: encodeBase64(bytes),
+        mimeType: imageType(image),
+        data: encodeBase64(image),
       });
     },
   });

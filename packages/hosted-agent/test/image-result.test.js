@@ -57,6 +57,46 @@ test('malformed and oversized image envelopes fail explicitly', t => {
   t.deepEqual(decodeImageResult(large)?.data.length, 400_000);
 });
 
+test('unsupported native images retain an explicit omission receipt without poisoning replay', t => {
+  const oversized = 'AAAA'.repeat(Math.ceil(MAX_IMAGE_BYTES / 3) + 1);
+  for (const block of [
+    { type: 'image', mimeType: 'image/gif', data: 'R0lGODlh' },
+    {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: oversized },
+    },
+    { type: 'image', mimeType: 'image/png', data: 'not base64' },
+    { type: 'inputImage', imageUrl: 'data:image/gif;base64,R0lGODlh' },
+    { type: 'input_image', image_url: 'https://example.com/image.png' },
+  ]) {
+    const receipt = imageResultFromBlocks([block]) ?? '';
+    t.regex(receipt, /Native image omitted from portable transcript/);
+    t.regex(receipt, /pixels are unavailable in this replay/);
+    t.is(decodeImageResult(receipt), undefined);
+    t.is(responsesToolOutput(receipt), receipt);
+    t.is(anthropicToolContent(receipt), receipt);
+  }
+  t.deepEqual(
+    decodeImageResult(imageResultFromBlocks(anthropicToolContent(encoded))),
+    image,
+  );
+});
+
+test('only explicitly truncated journal previews may render without decoding', t => {
+  const preview = encoded.slice(0, -4);
+  t.throws(() => imageResultText(preview));
+  t.is(
+    imageResultText(preview, { truncated: true }),
+    '[Image result; bytes retained for model input]',
+  );
+  t.is(
+    imageResultText('ordinary preview', { truncated: true }),
+    'ordinary preview',
+  );
+  t.throws(() => anthropicToolContent(preview));
+  t.throws(() => responsesToolOutput(preview));
+});
+
 test('Responses replay preserves image output tied to its tool call', t => {
   const records = harden([
     {

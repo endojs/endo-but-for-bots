@@ -58,7 +58,10 @@ import {
 } from '@endo/hosted-agent/openrouter-model-read.js';
 import { addUsage, projectUsage } from '@endo/hosted-agent/token-usage.js';
 
-import { imageResultText } from '@endo/hosted-agent/image-result.js';
+import {
+  decodeImageResult,
+  imageResultText,
+} from '@endo/hosted-agent/image-result.js';
 import { createStreamingProvider } from './providers/index.js';
 import { makeSubagentAdmission } from './src/subagent-admission.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
@@ -1050,6 +1053,7 @@ export const makeStreamingAgent = async (
     let transcriptOrdinal = 0;
     let inputRecorded = false;
     let compactedContext;
+    let unseenImages = false;
     let forced = false;
     let lastRequestContext;
     let requestObservationInitialized = false;
@@ -1136,12 +1140,16 @@ export const makeStreamingAgent = async (
             requestObservationInitialized = true;
           }
         }
-        const plan = planContextCompaction(context, {
-          tools: tools.providerSchemas,
-          windowTokens: contextLength ?? 0,
-          usedTokens: lastRequestContext?.usedTokens ?? 0,
-          force: forceCompaction && !forced,
-        });
+        // The previous usage reading predates new image tool results. Let the
+        // model inspect them once before a summary may replace them with receipts.
+        const plan = unseenImages
+          ? undefined
+          : planContextCompaction(context, {
+              tools: tools.providerSchemas,
+              windowTokens: contextLength ?? 0,
+              usedTokens: lastRequestContext?.usedTokens ?? 0,
+              force: forceCompaction && !forced,
+            });
         if (plan) {
           writer.setPhase('compacting context');
           const checkpoint = await summarizeContext(
@@ -1217,6 +1225,7 @@ export const makeStreamingAgent = async (
               activeJournalUsage = turnUsage;
             },
           );
+          unseenImages = false;
         } catch (error) {
           if (streamed !== '') {
             await recordProviderTranscript({
@@ -1342,6 +1351,9 @@ export const makeStreamingAgent = async (
           };
         };
         const results = await Promise.all(normalizedCalls.map(runOne));
+        unseenImages ||= results.some(result =>
+          decodeImageResult(result.content),
+        );
         for (const result of results) {
           await recordProviderTranscript({
             kind: 'tool-result',
@@ -2146,6 +2158,7 @@ export const makeStreamingAgent = async (
   const getContextTranscript = async excludeTurnId =>
     readContextTranscript(turnJournal, excludeTurnId, {
       portableFallback: portableContextFallback,
+      omitIncompleteImages: runtimeKind === 'provider',
       reconciledNativeSuffix: nativeContextFormat === 'codex-rollout-v1',
       toolArgumentKey:
         nativeContextFormat === 'claude-code-jsonl-v1'

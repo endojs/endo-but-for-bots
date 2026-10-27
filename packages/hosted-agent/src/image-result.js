@@ -56,8 +56,16 @@ export const decodeImageResult = text => {
 };
 harden(decodeImageResult);
 
-/** @param {string} text */
-export const imageResultText = text => {
+/**
+ * Presentation of a journal preview must not parse its incomplete envelope.
+ * `truncated` is only for an explicitly marked durable preview, never a full
+ * provider result; a full malformed result still fails validation.
+ * @param {string} text
+ * @param {{ truncated?: boolean }} [options]
+ */
+export const imageResultText = (text, { truncated = false } = {}) => {
+  if (truncated && text.startsWith(PREFIX))
+    return '[Image result; bytes retained for model input]';
   const image = decodeImageResult(text);
   return image
     ? `[Image ${image.mimeType}; bytes retained for model input]`
@@ -100,28 +108,44 @@ harden(responsesToolOutput);
 /**
  * Recover the single-image result emitted by our provider adapters. Mixed
  * native content remains the adapter's responsibility and is not discarded.
+ * Native tools can emit formats/sizes outside our portable image contract.
+ * Preserve a visible omission receipt in that case, not a fatal session error
+ * or a claim that portable replay still contains the pixels. The adapter's
+ * native audit/context retains the original result separately.
  * @param {unknown} blocks
  */
 export const imageResultFromBlocks = blocks => {
   if (!Array.isArray(blocks) || blocks.length !== 1) return undefined;
   const block = blocks[0];
+  const omitted =
+    '[Native image omitted from portable transcript: unsupported format, invalid data, or size above 2 MiB. Image pixels are unavailable in this replay.]';
+  /** @param {ImageResult} image */
+  const encodeNativeImage = image => {
+    try {
+      return encodeImageResult(image);
+    } catch {
+      return omitted;
+    }
+  };
   if (block?.type === 'image' && block.source?.type === 'base64')
-    return encodeImageResult({
+    return encodeNativeImage({
       mimeType: block.source.media_type,
       data: block.source.data,
     });
   if (block?.type === 'image' && typeof block.data === 'string')
-    return encodeImageResult({ mimeType: block.mimeType, data: block.data });
+    return encodeNativeImage({ mimeType: block.mimeType, data: block.data });
   const url =
     block?.type === 'inputImage'
       ? block.imageUrl
       : block?.type === 'input_image'
         ? block.image_url
         : undefined;
-  if (typeof url !== 'string') return undefined;
+  if (block?.type !== 'inputImage' && block?.type !== 'input_image')
+    return undefined;
+  if (typeof url !== 'string') return omitted;
   const match = /^data:(image\/(?:png|jpeg|webp));base64,(.*)$/.exec(url);
-  if (!match) return undefined;
-  return encodeImageResult({
+  if (!match) return omitted;
+  return encodeNativeImage({
     mimeType: /** @type {ImageResult['mimeType']} */ (match[1]),
     data: match[2],
   });

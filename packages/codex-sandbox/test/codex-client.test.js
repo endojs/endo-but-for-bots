@@ -9,6 +9,10 @@ import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
+import {
+  responsesApiItems,
+  readResponsesApiItems,
+} from '@endo/hosted-agent/transcript-records.js';
 // Internal test harness, deliberately not a runtime package export.
 // eslint-disable-next-line import/no-relative-packages
 import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
@@ -502,7 +506,7 @@ const makeQueue = () => {
 
 /**
  * @param {{
- *   injectFails?: boolean,
+ *   injectFails?: boolean | number,
  *   threadId?: string,
  *   saveThreadState?: Parameters<typeof makeCodexClient>[0]['saveThreadState'],
  *   clientOptions?: Record<string, any>,
@@ -623,7 +627,12 @@ const makeFixture = ({
       case 'thread/inject_items':
         // An app-server too old to know the method refuses it; this one
         // knows it. `injectFails` exercises the other case.
-        if (injectFails) {
+        if (
+          injectFails === true ||
+          (typeof injectFails === 'number' &&
+            sent.filter(entry => entry.method === 'thread/inject_items')
+              .length === injectFails)
+        ) {
           push({
             id: message.id,
             error: { code: -32_601, message: 'method not found' },
@@ -4486,6 +4495,7 @@ test('an app-server without inject_items refuses the turn rather than degrading 
 });
 
 test('dynamic image tools deliver pixels beyond the text cap and retain replay evidence', async t => {
+  t.timeout(5000);
   const image = harden({
     mimeType: /** @type {const} */ ('image/png'),
     data: 'AAAA'.repeat(600_000),
@@ -4508,6 +4518,7 @@ test('dynamic image tools deliver pixels beyond the text cap and retain replay e
     },
   });
   const reader = await fixture.client.send('inspect');
+  t.teardown(() => fixture.client.terminate());
   fixture.push({
     id: 993,
     method: 'item/tool/call',
@@ -4533,6 +4544,164 @@ test('dynamic image tools deliver pixels beyond the text cap and retain replay e
     audit.find(entry => entry.kind === 'tool-result')?.payload.result,
     encoded,
   );
-  await fixture.client.interrupt();
-  await drain(reader);
+  fixture.push({
+    method: 'item/completed',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      item: {
+        type: 'dynamicToolCall',
+        id: 'image-call',
+        tool: 'viewImage',
+        arguments: {},
+        contentItems: [{ type: 'inputImage', imageUrl: imageDataUrl(image) }],
+        success: true,
+      },
+    },
+  });
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  const imageEvent = events.find(event => event.type === 'tool-result');
+  t.is(imageEvent?.result, encoded);
+  const records = harden([
+    {
+      kind: /** @type {const} */ ('tool-call'),
+      id: 'image-call',
+      name: 'viewImage',
+      args: '{}',
+    },
+    {
+      kind: /** @type {const} */ ('tool-result'),
+      id: 'image-call',
+      content: imageEvent.result,
+    },
+  ]);
+  t.deepEqual(readResponsesApiItems(responsesApiItems(records)), records);
+});
+
+for (const mode of ['fresh', 'catalog rotation', 'native suffix']) {
+  test(`${mode} restores multiple large images in ordered bounded requests`, async t => {
+    t.timeout(5000);
+    const native = mode === 'native suffix';
+    const records = [0, 1].flatMap(index => [
+      {
+        kind: /** @type {const} */ ('tool-call'),
+        id: `shot-${index}`,
+        name: 'viewImage',
+        args: '{}',
+      },
+      {
+        kind: /** @type {const} */ ('tool-result'),
+        id: `shot-${index}`,
+        content: encodeImageResult({
+          mimeType: 'image/png',
+          data: (index ? 'BBBB' : 'AAAA').repeat(600_000),
+        }),
+      },
+    ]);
+    const fixture = makeFixture({
+      ...(mode === 'catalog rotation'
+        ? { threadId: 'thread-saved', existingTurnIds: ['turn-1'] }
+        : {}),
+      clientOptions: {
+        ...(mode === 'catalog rotation'
+          ? {
+              savedToolSetId: 'old-tools',
+              toolSetId: 'new-tools',
+              savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+            }
+          : {}),
+        ...(native
+          ? {
+              nativeContext: nativeTestTransport(),
+              makeNativeIdentity: () => ({
+                sessionId: 'fresh-native',
+                timestamp: '2026-10-25T18:40:00.000Z',
+              }),
+            }
+          : {}),
+        callTool: async () => {
+          throw Error('Replay must never execute tools');
+        },
+      },
+    });
+    t.teardown(() => fixture.client.terminate());
+    const reader = await fixture.client.send('continue', {
+      transcript: [...(native ? [nativeTestSnapshot()] : []), ...records],
+    });
+    const requests = fixture.sent.filter(
+      message => message.method === 'thread/inject_items',
+    );
+    t.is(requests.length, 2);
+    t.deepEqual(
+      requests.flatMap(message => message.params.items),
+      responsesApiItems(records),
+    );
+    t.true(
+      requests.every(
+        message =>
+          new TextEncoder().encode(`${JSON.stringify(message)}\n`).length <=
+          4 * 1024 * 1024,
+      ),
+    );
+    const startIndex = fixture.sent.findIndex(
+      message => message.method === 'turn/start',
+    );
+    t.true(startIndex > fixture.sent.indexOf(requests.at(-1)));
+    await fixture.client.interrupt();
+    await drain(reader);
+  });
+}
+
+test('a failed later native image batch leaves the checkpoint unpublished and never starts inference', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const records = [0, 1].flatMap(index => [
+    {
+      kind: /** @type {const} */ ('tool-call'),
+      id: `shot-${index}`,
+      name: 'viewImage',
+      args: '{}',
+    },
+    {
+      kind: /** @type {const} */ ('tool-result'),
+      id: `shot-${index}`,
+      content: encodeImageResult({
+        mimeType: 'image/png',
+        data: 'AAAA'.repeat(600_000),
+      }),
+    },
+  ]);
+  const fixture = makeFixture({
+    injectFails: 2,
+    clientOptions: {
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      saveThreadState: async state => writes.push(state),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot(), ...records],
+      }),
+    { message: /method not found/ },
+  );
+  t.is(
+    fixture.sent.filter(message => message.method === 'thread/inject_items')
+      .length,
+    2,
+  );
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.deepEqual(writes, []);
 });

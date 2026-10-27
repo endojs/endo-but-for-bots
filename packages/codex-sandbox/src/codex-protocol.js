@@ -8,7 +8,9 @@ import {
   tokenCount,
 } from '@endo/hosted-agent/token-usage.js';
 
-export const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
+// A 2 MiB image expands to base64 in both tool replies and completed-item
+// echoes. Keep the client and its real stdio transport on the same bound.
+export const DEFAULT_MAX_LINE_BYTES = 4 * 1024 * 1024;
 harden(DEFAULT_MAX_LINE_BYTES);
 
 /**

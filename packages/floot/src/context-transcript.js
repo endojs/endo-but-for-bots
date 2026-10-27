@@ -1,5 +1,6 @@
 // @ts-check
 import { Fail } from '@endo/errors';
+import { imageResultText } from '@endo/hosted-agent/image-result.js';
 import {
   pairToolCalls,
   selectActiveTranscript,
@@ -17,7 +18,7 @@ import { assertContextEvidence } from './context-evidence.js';
  * @param {string} [excludeTurnId]
  * @param {{ turnId: string, ordinal: number, sequence: string }} [initialBoundary]
  * @param {(visit: (turn: any) => Promise<void> | void) => Promise<void>} [selectTurns]
- * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string }} [options] `portableFallback` is for
+ * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string, omitIncompleteImages?: boolean }} [options] `portableFallback` is for
  *   a backend that rebuilds its conversation from the supplied records on
  *   every turn (`continuity: 'transcript'`). When native context cannot be
  *   restored without hiding evidence, it gets the whole conversation as
@@ -42,6 +43,7 @@ const projectContext = async (
     portableFallback = false,
     reconciledNativeSuffix = false,
     toolArgumentKey,
+    omitIncompleteImages = false,
   } = {},
 ) => {
   const eligible = turn =>
@@ -131,7 +133,33 @@ const projectContext = async (
     }
     if (recovered.length) {
       const groups = before ? exceptionGroups : activeGroups;
-      groups.push({ turnId: turn.turnId, records: recovered });
+      // API providers rebuild their context each request. An image rejected by
+      // a provider must not poison every subsequent request. Keep the durable
+      // evidence, but require an explicit new read in a later turn. Native
+      // opaque checkpoints are deliberately not rewritten by this projection.
+      const recoverImage = record => {
+        if (record.kind === 'tool-result') {
+          const receipt = imageResultText(record.content);
+          if (receipt !== record.content)
+            return {
+              ...record,
+              content: `${receipt} [Not replayed after an incomplete turn; use viewImage again if needed.]`,
+            };
+        }
+        if (record.kind === 'compaction')
+          return {
+            ...record,
+            retainedTail: record.retainedTail.map(recoverImage),
+          };
+        return record;
+      };
+      groups.push({
+        turnId: turn.turnId,
+        records:
+          omitIncompleteImages && turn.state !== 'completed'
+            ? recovered.map(recoverImage)
+            : recovered,
+      });
     }
     if (boundary && turn.turnId === boundary.turnId) checkpointTurn = turn;
   });
@@ -253,7 +281,7 @@ const projectContext = async (
  * @param {readonly any[]} turns
  * @param {(ref: any) => Promise<string>} readContent
  * @param {string} [excludeTurnId]
- * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
+ * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string, omitIncompleteImages?: boolean }} [options] See `projectContext`.
  */
 export const projectContextTranscript = (
   turns,
@@ -285,7 +313,7 @@ harden(projectContextTranscript);
  * grow with history; superseded metadata is not accumulated in memory.
  * @param {any} journal
  * @param {string} [excludeTurnId]
- * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
+ * @param {{ portableFallback?: boolean, reconciledNativeSuffix?: boolean, toolArgumentKey?: (args: string) => string, omitIncompleteImages?: boolean }} [options] See `projectContext`.
  */
 export const readContextTranscript = async (
   journal,

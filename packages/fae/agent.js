@@ -508,6 +508,8 @@ export const spawnWorkerLoop = async (
     let toolWrite;
     let responseUsage;
     let forced = false;
+    const turnImages = new Map();
+    let unseenImages = false;
     const firstTools = harden({
       schemas: initialSchemas,
       toolMap: initialToolMap,
@@ -521,14 +523,18 @@ export const spawnWorkerLoop = async (
       getContext: async (currentLeafId, tools) => {
         let providerContext = await conversation.getContext(currentLeafId);
         const reading = await conversation.getLatestUsage(currentLeafId);
-        const plan = planContextCompaction(providerContext, {
-          tools: tools.schemas,
-          // Only caller-supplied exact next-model catalog metadata is a
-          // capacity guarantee. A router's previous served model is not.
-          windowTokens: providerConfig.contextLength ?? 0,
-          usedTokens: reading?.context?.usedTokens ?? 0,
-          force: forceCompaction && !forced,
-        });
+        // Give a newly read image to the model before any summary can replace
+        // it with a receipt. Prior request usage does not include these pixels.
+        const plan = unseenImages
+          ? undefined
+          : planContextCompaction(providerContext, {
+              tools: tools.schemas,
+              // Only caller-supplied exact next-model catalog metadata is a
+              // capacity guarantee. A router's previous served model is not.
+              windowTokens: providerConfig.contextLength ?? 0,
+              usedTokens: reading?.context?.usedTokens ?? 0,
+              force: forceCompaction && !forced,
+            });
         if (plan) {
           const checkpoint = await summarizeContext(
             plan,
@@ -559,6 +565,7 @@ export const spawnWorkerLoop = async (
       },
       invoke: async (providerContext, tools) => {
         const response = await chat(providerContext, tools.schemas);
+        unseenImages = false;
         loopAbort.signal.throwIfAborted();
         responseUsage = response.usage;
         const responseMessage = response.message;
@@ -587,8 +594,20 @@ export const spawnWorkerLoop = async (
         toolWrite = retainWrite();
         try {
           const results = await processToolCalls(calls, tools.toolMap);
+          for (const result of results) {
+            if (decodeImageResult(result.content)) {
+              unseenImages = true;
+            }
+          }
           console.log(
-            `[fae] tool results: ${JSON.stringify(results, null, 2)}`,
+            `[fae] tool results: ${JSON.stringify(
+              results.map(result => ({
+                ...result,
+                content: imageResultText(result.content),
+              })),
+              null,
+              2,
+            )}`,
           );
           return results;
         } catch (error) {
@@ -603,6 +622,12 @@ export const spawnWorkerLoop = async (
             [message, ...results],
             { providerUsage: responseUsage ?? null },
           );
+          for (const result of results) {
+            if (decodeImageResult(result.content)) {
+              const key = JSON.stringify([result.tool_call_id, result.content]);
+              turnImages.set(key, (turnImages.get(key) ?? 0) + 1);
+            }
+          }
           toolWrite.resolve(undefined);
           return node.id;
         } catch (error) {
@@ -624,6 +649,51 @@ export const spawnWorkerLoop = async (
           throw error;
         }
       },
+    }).catch(async error => {
+      if (turnImages.size === 0) throw error;
+      // handleMessage retains the whole turn completion obligation, so stop
+      // acknowledgement waits for this checkpoint before finishTurn clears
+      // its fence. Never admit another inference or tool while cancelling.
+      // Keep original tool nodes as evidence. On a rejected request, stop
+      // replaying this turn's images via a durable context checkpoint. Match
+      // newest occurrences first so successful earlier images survive even
+      // if a provider reuses tool IDs or reads the same file again.
+      const providerContext = await conversation.getContext(
+        conversation.getLeafId(),
+      );
+      const remaining = new Map(turnImages);
+      let changed = false;
+      const retained = [...providerContext]
+        .reverse()
+        .map(message => {
+          if (message.role !== 'tool') return message;
+          const key = JSON.stringify([message.tool_call_id, message.content]);
+          const count = remaining.get(key) ?? 0;
+          if (!count) return message;
+          remaining.set(key, count - 1);
+          changed = true;
+          return {
+            ...message,
+            content: `${imageResultText(message.content)} [Not replayed after an incomplete turn; use viewImage again if needed.]`,
+          };
+        })
+        .reverse()
+        .filter(message => message.role !== 'system');
+      if (changed) {
+        const write = retainWrite();
+        try {
+          await conversation.appendCheckpoint(
+            conversation.getLeafId(),
+            'The previous turn did not complete. Its new image inputs are represented by receipts below; original tool evidence is retained.',
+            retained,
+          );
+          write.resolve(undefined);
+        } catch (publicationError) {
+          write.reject(publicationError);
+          throw publicationError;
+        }
+      }
+      throw error;
     });
     return outcome;
   };

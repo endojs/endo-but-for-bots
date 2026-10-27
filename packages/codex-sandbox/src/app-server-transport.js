@@ -12,7 +12,11 @@ import {
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
 
-import { encodeJsonLine, parseJsonLines } from './codex-protocol.js';
+import {
+  DEFAULT_MAX_LINE_BYTES,
+  encodeJsonLine,
+  parseJsonLines,
+} from './codex-protocol.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -193,7 +197,7 @@ export const startAppServerTransport = async ({
   maxLineBytes,
   stdoutByteLimit = DEFAULT_STDOUT_LIMIT,
   stderrByteLimit = DEFAULT_STDERR_LIMIT,
-  maxRequestBytes = 2 * 1024 * 1024,
+  maxRequestBytes = DEFAULT_MAX_LINE_BYTES,
   setupTimeoutMs = 30_000,
   teardownTimeoutMs = 30_000,
 }) => {

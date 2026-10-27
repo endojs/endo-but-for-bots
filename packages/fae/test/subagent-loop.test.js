@@ -1639,7 +1639,7 @@ test('Fae sends image tool output to its provider without quoting the wire envel
     null,
     harden({ provider }),
     'test prompt',
-    harden({ timers: inertTimers }),
+    harden({ timers: inertTimers, forceCompaction: true }),
   );
   t.teardown(async () => {
     mailbox.close();
@@ -1652,4 +1652,235 @@ test('Fae sends image tool output to its provider without quoting the wire envel
     ),
   );
   t.deepEqual(image, { mimeType: 'image/png', data: 'iVBORw0KGgo=' });
+});
+
+test('Fae recovers rejected images after restart while preserving earlier successful images', async t => {
+  t.timeout(15_000);
+  const { decodeImageResult } =
+    await import('@endo/hosted-agent/image-result.js');
+  const mailbox = makeLiveMailbox();
+  const installImage = () =>
+    mailbox.directory.set(
+      'screenshot',
+      bytesReaderFromIterator([
+        new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      ]),
+    );
+  const call = () =>
+    harden({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'same-image-id',
+            type: 'function',
+            function: {
+              name: 'viewImage',
+              arguments: '{"petName":"screenshot"}',
+            },
+          },
+        ],
+      },
+    });
+  let recovered;
+  const provider = makeScriptedProvider([
+    call,
+    () =>
+      harden({
+        message: { role: 'assistant', content: 'First image accepted.' },
+      }),
+    call,
+    () => {
+      throw Error('Provider rejected image input');
+    },
+    messages => {
+      recovered = messages.filter(message => message.role === 'tool');
+      return harden({ message: { role: 'assistant', content: 'Recovered.' } });
+    },
+  ]);
+  installImage();
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['inspect first'] });
+  t.true(
+    await until(
+      () =>
+        mailbox.sent.filter(record => record.replyTo !== undefined).length ===
+        1,
+    ),
+  );
+  installImage();
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['inspect again'] });
+  t.true(
+    await until(
+      () =>
+        mailbox.sent.filter(record => record.replyTo !== undefined).length ===
+        2,
+    ),
+  );
+  mailbox.close();
+  await loop;
+  const restored = makeLiveMailbox({
+    storedDirectory: mailbox.directory,
+    firstNumber: 100n,
+  });
+  const restoredLoop = spawnWorkerLoop(
+    restored.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    restored.close();
+    await restoredLoop;
+  });
+  restored.deliver({ from: locatorFor(HOST), strings: ['continue'] });
+  t.true(
+    await until(() =>
+      restored.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.is(recovered.length, 2);
+  t.is(decodeImageResult(recovered[0].content)?.mimeType, 'image/png');
+  t.is(decodeImageResult(recovered[1].content), undefined);
+  t.regex(recovered[1].content, /Not replayed after an incomplete turn/);
+  const originals = [...mailbox.directory.values()].filter(
+    value => value && typeof value === 'object' && 'messages' in value,
+  );
+  t.is(
+    originals
+      .flatMap(node => node.messages)
+      .filter(
+        message =>
+          message.role === 'tool' && decodeImageResult(message.content),
+      ).length,
+    3,
+  );
+});
+
+test('cancelling an image request checkpoints receipts before stop and recovers after restart', async t => {
+  t.timeout(15_000);
+  const { decodeImageResult } =
+    await import('@endo/hosted-agent/image-result.js');
+  const cancelled = makePromiseKit();
+  const started = makePromiseKit();
+  const checkpointStarted = makePromiseKit();
+  const releaseCheckpoint = makePromiseKit();
+  const hooks = [];
+  let acknowledged = false;
+  let writesAfterAcknowledgement = 0;
+  const first = makeLiveMailbox({
+    beforeStore: async value => {
+      if (value.metadata?.compaction) {
+        checkpointStarted.resolve(undefined);
+        await releaseCheckpoint.promise;
+      }
+      if (acknowledged) writesAfterAcknowledgement += 1;
+    },
+  });
+  first.directory.set(
+    'screenshot',
+    bytesReaderFromIterator([
+      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    ]),
+  );
+  const provider = makeScriptedProvider([
+    () =>
+      harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'cancelled-image',
+              type: 'function',
+              function: {
+                name: 'viewImage',
+                arguments: '{"petName":"screenshot"}',
+              },
+            },
+          ],
+        },
+      }),
+    messages => {
+      t.true(
+        messages.some(
+          message =>
+            message.role === 'tool' && decodeImageResult(message.content),
+        ),
+      );
+      started.resolve(undefined);
+      return new Promise(() => {});
+    },
+  ]);
+  const firstLoop = spawnWorkerLoop(
+    first.powers,
+    makeContext({
+      whenCancelled: () => cancelled.promise,
+      addDisposalHook: hook => hooks.push(hook),
+    }),
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    releaseCheckpoint.resolve(undefined);
+    cancelled.reject(Error('cleanup'));
+    first.close();
+    await firstLoop;
+  });
+  first.deliver({ from: locatorFor(HOST), strings: ['inspect image'] });
+  await started.promise;
+  const disposal = E(hooks[0])().then(() => {
+    acknowledged = true;
+  });
+  await checkpointStarted.promise;
+  t.false(acknowledged, 'stop must wait for durable image recovery');
+  releaseCheckpoint.resolve(undefined);
+  await disposal;
+  await firstLoop;
+  t.is(writesAfterAcknowledgement, 0);
+  t.like(first.directory.get('fae-conversation'), { turnActive: false });
+  const second = makeLiveMailbox({
+    storedDirectory: first.directory,
+    firstNumber: 100n,
+  });
+  let recovered;
+  const secondLoop = spawnWorkerLoop(
+    second.powers,
+    null,
+    harden({
+      provider: makeScriptedProvider([
+        messages => {
+          recovered = messages.find(message => message.role === 'tool');
+          return harden({
+            message: { role: 'assistant', content: 'Recovered.' },
+          });
+        },
+      ]),
+    }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    second.close();
+    await secondLoop;
+  });
+  second.deliver({ from: locatorFor(HOST), strings: ['continue'] });
+  t.true(
+    await until(() => second.sent.some(record => record.replyTo !== undefined)),
+  );
+  t.is(decodeImageResult(recovered.content), undefined);
+  t.regex(recovered.content, /Not replayed after an incomplete turn/);
 });

@@ -356,3 +356,11 @@ Report any unavailable verification instead of claiming that a syntax check
 verified the scene.
 See [Floot's image-input guide](../floot/README.md#reading-images-and-checking-visual-work)
 for transport and recovery details.
+
+When inference fails after a new image read, Fae checkpoints a receipt for that
+turn's image inputs so subsequent requests can recover without replaying the
+rejected bytes.
+Earlier successful images and the original immutable tool records remain intact.
+This recovery checkpoint survives restart; the agent may explicitly read a corrected
+image again.
+Compaction and diagnostic logs use image receipts rather than base64 text.

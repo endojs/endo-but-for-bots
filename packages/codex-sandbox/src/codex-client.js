@@ -22,6 +22,7 @@ import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
 import { assertBrokerRuntimeConfig } from './app-server-transport.js';
 import {
+  DEFAULT_MAX_LINE_BYTES,
   renderToolResult,
   toolFromItem,
   usageEventFromTokenUsage,
@@ -229,8 +230,7 @@ export const makeCodexClient = ({
   maxEarlyBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
-  // Includes a 2 MiB image encoded as base64 plus its protocol envelope.
-  maxRequestBytes = 4 * 1024 * 1024,
+  maxRequestBytes = DEFAULT_MAX_LINE_BYTES,
   toolCallTimeoutMs = 0,
   turnWallTimeoutMs = 0,
 }) => {
@@ -658,6 +658,42 @@ export const makeCodexClient = ({
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       pending.delete(id);
+    }
+  };
+
+  /**
+   * Restore ordered history without starting inference between batches. Images
+   * have an individual bound, while a transcript can contain many images.
+   * Preflight every item before the first append; callers publish the restored
+   * projection and start its turn only after every batch is acknowledged.
+   * @param {string} thread
+   * @param {any[]} items
+   */
+  const injectItems = async (thread, items) => {
+    const method = 'thread/inject_items';
+    // Reserve space for a request id and the JSONL newline as well as params.
+    const overhead =
+      byteLength({ id: 0, method, params: { threadId: thread, items: [] } }) +
+      32;
+    const batches = [];
+    let batch = [];
+    let size = overhead;
+    for (const item of items) {
+      const itemBytes = byteLength(item);
+      if (overhead + itemBytes > maxRequestBytes)
+        throw Error('Codex restored item exceeds the request byte limit');
+      if (size + itemBytes + (batch.length ? 1 : 0) > maxRequestBytes) {
+        batches.push(batch);
+        batch = [];
+        size = overhead;
+      }
+      size += itemBytes + (batch.length ? 1 : 0);
+      batch.push(item);
+    }
+    if (batch.length) batches.push(batch);
+    for (const batchItems of batches) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(method, { threadId: thread, items: batchItems });
     }
   };
 
@@ -1198,13 +1234,16 @@ export const makeCodexClient = ({
             result: auditProjection(tool.result),
             ...('ok' in tool ? { ok: tool.ok } : {}),
           });
+          const renderedResult = renderToolResult(tool.result);
           pushTurn({
             type: 'tool-result',
             id: tool.id,
             name: tool.name,
             // The journal above keeps the provider's envelope; the transcript
             // gets the text the model saw.
-            result: brief(renderToolResult(tool.result), maxToolResultChars),
+            result: decodeImageResult(renderedResult)
+              ? renderedResult
+              : brief(renderedResult, maxToolResultChars),
             ...('ok' in tool ? { ok: tool.ok } : {}),
           });
         } else if (
@@ -1807,10 +1846,10 @@ export const makeCodexClient = ({
           // This writes historical calls/results; it does not execute tools.
           // Publish this projection only after injection succeeds. A failure
           // leaves the original checkpoint and journal available for recovery.
-          await request('thread/inject_items', {
-            threadId: target.sessionId,
-            items: responsesApiItems(snapshot.suffix),
-          });
+          await injectItems(
+            target.sessionId,
+            responsesApiItems(snapshot.suffix),
+          );
         }
         replayContinuity = false;
       } else {
@@ -2059,10 +2098,7 @@ export const makeCodexClient = ({
           const items = responsesApiItems(records);
           if (items.length > 0) {
             try {
-              await request('thread/inject_items', {
-                threadId: currentThreadId,
-                items,
-              });
+              await injectItems(currentThreadId, items);
             } catch (cause) {
               // The app-server's own words are the useful part of this: a
               // schema refusal and an unavailable method read very

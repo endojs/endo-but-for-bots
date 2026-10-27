@@ -4,6 +4,7 @@ import '@endo/init';
 import test from 'ava';
 
 import { E } from '@endo/eventual-send';
+import { imageDataUrl } from '@endo/hosted-agent/image-result.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 import { makeSandboxFactory } from '@endo/sandbox/factory.js';
@@ -108,6 +109,44 @@ const makeFixture = ({
     counts: () => ({ stdinReturns, kills, waits }),
   };
 };
+
+test('real stdio transport carries a maximum-sized image reply and completed-item echo', async t => {
+  t.timeout(5000);
+  const contentItems = [
+    {
+      type: 'inputImage',
+      imageUrl: imageDataUrl({
+        mimeType: 'image/png',
+        // Exactly 2 MiB of binary data, beyond both former transport caps.
+        data: `${'AAAA'.repeat(699_050)}AAA=`,
+      }),
+    },
+  ];
+  const reply = { id: 7, result: { success: true, contentItems } };
+  const echo = {
+    method: 'item/completed',
+    params: {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { type: 'dynamicToolCall', id: 'image-1', contentItems },
+    },
+  };
+  const line = `${JSON.stringify(echo)}\n`;
+  const stdout = [];
+  for (let offset = 0; offset < line.length; offset += 64 * 1024) {
+    stdout.push(line.slice(offset, offset + 64 * 1024));
+  }
+  const fixture = makeFixture({ stdout });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+  });
+  t.teardown(() => transport.close());
+  await transport.send(reply);
+  t.deepEqual(JSON.parse(new TextDecoder().decode(fixture.writes[0])), reply);
+  const messages = [];
+  for await (const message of transport.messages) messages.push(message);
+  t.deepEqual(messages, [echo]);
+});
 
 test('transport binds app-server stdio and owns process cleanup', async t => {
   const fixture = makeFixture({
