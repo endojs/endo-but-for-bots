@@ -9,6 +9,8 @@ import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { makePiAgent } from '@endo/agentry/harness';
 
+import { makeBrokeredMessagesStream } from './providers/brokered-messages.js';
+
 import { systemPrompt } from './prompts/system.js';
 import { tools } from './tools/index.js';
 import { makeExecuteTool, toAgentTool } from './tool-dispatch.js';
@@ -55,7 +57,8 @@ const LalInterface = M.interface('Lal', {
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
- * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
+ * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string,
+ *   LAL_INFERENCE?: any, LAL_MAX_TOKENS?: string }} workerEnv
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (powers, context, workerEnv) => {
@@ -76,7 +79,19 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   // from LAL_HOST and a model from LAL_MODEL. The pi-ai registry takes a
   // single "provider/modelId" string instead; we keep accepting the legacy
   // LAL_* variables and translate them.
-  const model = resolveModelString(workerEnv);
+  const brokered = workerEnv.LAL_INFERENCE !== undefined;
+  if (
+    brokered &&
+    (Object.hasOwn(workerEnv, 'LAL_AUTH_TOKEN') ||
+      Object.hasOwn(workerEnv, 'LAL_HOST'))
+  ) {
+    throw Error(
+      'Brokered Lal configuration cannot contain key material or a host',
+    );
+  }
+  const model = brokered
+    ? `anthropic/${workerEnv.LAL_MODEL || ''}`
+    : resolveModelString(workerEnv);
 
   // Bind the tool dispatcher to this guest's powers, then build the
   // AgentTool array pi-agent-core consumes directly. We build the PiAgent via
@@ -95,7 +110,20 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     toAgentTool(name, summary, executeTool),
   );
 
-  const resolvedModel = await resolveModel(model);
+  const resolvedModel = brokered
+    ? harden({
+        id: workerEnv.LAL_MODEL,
+        name: model,
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        baseUrl: '',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 0,
+        maxTokens: Number(workerEnv.LAL_MAX_TOKENS) || 4096,
+      })
+    : await resolveModel(model);
   const isOllama = resolvedModel.name?.startsWith('ollama/');
 
   // The worker's API key is resolved through the read-only `Credentials` seam
@@ -103,18 +131,24 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   // mutation. An ollama model keeps the harmless 'ollama' sentinel; any other
   // provider takes a pre-existing real `<PROVIDER>_API_KEY` over the worker's
   // LAL_AUTH_TOKEN (see `makeWorkerGetApiKey`).
-  const credentials = makeWorkerCredentials();
-  const getApiKey = makeWorkerGetApiKey(
-    credentials,
-    workerEnv.LAL_AUTH_TOKEN,
-    isOllama,
-  );
+  const credentials = brokered ? undefined : makeWorkerCredentials();
+  const getApiKey = brokered
+    ? undefined
+    : makeWorkerGetApiKey(credentials, workerEnv.LAL_AUTH_TOKEN, isOllama);
+  const streamFn = brokered
+    ? makeBrokeredMessagesStream({
+        inference: workerEnv.LAL_INFERENCE,
+        model: workerEnv.LAL_MODEL || '',
+        maxTokens: Number(workerEnv.LAL_MAX_TOKENS) || 4096,
+      })
+    : undefined;
 
   const piAgent = makePiAgent({
     systemPrompt,
     model: resolvedModel,
     tools: agentTools,
-    getApiKey,
+    ...(getApiKey === undefined ? {} : { getApiKey }),
+    ...(streamFn === undefined ? {} : { streamFn }),
   });
 
   /**

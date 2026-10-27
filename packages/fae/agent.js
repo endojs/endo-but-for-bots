@@ -196,6 +196,14 @@ Example: if a message says "Here is @counter for you", adopt it:
  */
 
 /**
+ * @typedef {object} BrokeredProviderConfig
+ * @property {'brokered-messages'} kind
+ * @property {any} inference - AgentInference capability; never credentials.
+ * @property {string} model
+ * @property {number} [maxTokens]
+ */
+
+/**
  * @typedef {object} InjectedProviderConfig
  * @property {{ chat: (messages: object[], tools: object[]) => Promise<{ message: object }> }} provider - Pre-built provider (e.g. for tests).
  */
@@ -206,7 +214,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | undefined} context - Context for cancellation
- * @param {ProviderConstructorConfig | SubscriptionProviderConfig | InjectedProviderConfig} providerConfig - Token-free HTTP config, subscription recipe, or an injected provider.
+ * @param {ProviderConstructorConfig | SubscriptionProviderConfig | BrokeredProviderConfig | InjectedProviderConfig} providerConfig - Token-free HTTP config, capability-backed recipe, or an injected provider.
  * @param {string} [systemPrompt] - Override system prompt (defaults to guestSystemPrompt)
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Present only

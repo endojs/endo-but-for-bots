@@ -62,6 +62,20 @@ export const make = async (powers, context, { env } = {}) => {
         dispose: () => E(factory).disposeProvider(descriptor.providerId),
       });
     },
+    discoverModels: async ({ descriptor, secret }) => {
+      const factory = await E(powers).lookup(issuerFactoryName);
+      return E(factory).discoverModels(
+        harden({
+          providerId: descriptor.providerId,
+          kind: descriptor.kind,
+        }),
+        secret,
+      );
+    },
+    modelPrices:
+      env?.INFERENCE_PROVIDER_MODEL_PRICES === undefined
+        ? harden({})
+        : harden(JSON.parse(env.INFERENCE_PROVIDER_MODEL_PRICES)),
     validateLimits: limits => {
       (limits && typeof limits === 'object' && !Array.isArray(limits)) ||
         Fail`Invalid provider limits`;

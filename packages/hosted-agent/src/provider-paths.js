@@ -9,6 +9,7 @@
 export const INFERENCE_PATHS = harden([
   '/v1/responses',
   '/v1/messages',
+  '/v1/messages/count_tokens',
   '/v1/chat/completions',
   '/api/v1/chat/completions',
 ]);

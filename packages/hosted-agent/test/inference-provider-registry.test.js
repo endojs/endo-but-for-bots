@@ -77,7 +77,7 @@ const makeIds = () => {
 };
 
 const makeIssuerFactory =
-  events =>
+  (events, behavior = {}) =>
   async ({ descriptor }) => {
     events.push(['issuer', descriptor.providerId]);
     const live = new Set();
@@ -96,16 +96,26 @@ const makeIssuerFactory =
               await null;
               if (disposed || revoked) throw Error('endpoint revoked');
               events.push(['request', sessionId, message.path]);
-              if (message.path === '/wait') {
+              if (message.body.includes('wait')) {
                 await new Promise((resolve, reject) => {
                   cancellations.add(() => reject(Error('request canceled')));
                 });
               }
-              return harden({ status: 200, headers: {}, body: 'ok' });
+              return harden({
+                status: behavior.status?.(message) ?? 200,
+                headers: {},
+                body: 'ok',
+                ...(behavior.usage === undefined
+                  ? {}
+                  : { usage: behavior.usage(message) }),
+              });
             },
             requestByteStream: async message => {
               if (disposed || revoked) throw Error('endpoint revoked');
               events.push(['stream', sessionId, message.path]);
+              if (behavior.streamResponse !== undefined) {
+                return harden(behavior.streamResponse(message));
+              }
               return harden({
                 status: 200,
                 headers: {},
@@ -138,10 +148,21 @@ const makeRegistry = (backing, options = {}) => {
   return makeInferenceProviderRegistry({
     journal: backing.journal,
     secrets: backing.secretParticipant,
-    makeIssuer: makeIssuerFactory(events),
+    makeIssuer: makeIssuerFactory(events, options.behavior),
     validateLimits: value => harden({ ...value }),
     randomId: options.randomId || makeIds(),
     now: options.now || (() => '2026-10-27T00:00:00.000Z'),
+    modelPrices:
+      options.modelPrices ||
+      harden({
+        'claude-test': { inputPerMillion: 1, outputPerMillion: 1 },
+      }),
+    ...(options.nowMillis === undefined
+      ? {}
+      : { nowMillis: options.nowMillis }),
+    ...(options.discoverModels === undefined
+      ? {}
+      : { discoverModels: options.discoverModels }),
     ...(options.afterCommit === undefined
       ? {}
       : { afterCommit: options.afterCommit }),
@@ -151,7 +172,16 @@ const makeRegistry = (backing, options = {}) => {
   });
 };
 
-const message = path => harden({ method: 'POST', path, body: '{}' });
+const message = marker =>
+  harden({
+    method: 'POST',
+    path: '/v1/messages',
+    body: JSON.stringify({
+      model: 'claude-test',
+      max_tokens: 1,
+      messages: [{ role: 'user', content: marker }],
+    }),
+  });
 
 test('first release admits only Anthropic and shape-valid model ids', async t => {
   const backing = makeBacking();
@@ -411,9 +441,8 @@ test('retirement cancels an in-flight grant and fences it across restart', async
   const registry = await makeRegistry(backing, { events });
   const directory = registry.directoryFor('owner-alice');
   const provider = await E(directory).create(providerRequest());
-  const inference = await E(
-    registry.useFor('owner-alice', provider.providerId),
-  ).grant(
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const inference = await E(use).grant(
     harden({
       grantId: 'grant-000000001',
       ownerId: 'owner-alice',
@@ -482,12 +511,14 @@ test('AgentInference uses the existing issuer in-process without a listener', as
     validateLimits: value => harden({ ...value }),
     randomId: makeIds(),
     now: () => '2026-10-27T00:00:00.000Z',
+    modelPrices: harden({
+      'claude-test': { inputPerMillion: 1, outputPerMillion: 1 },
+    }),
   });
   const directory = registry.directoryFor('owner-alice');
   const provider = await E(directory).create(providerRequest());
-  const inference = await E(
-    registry.useFor('owner-alice', provider.providerId),
-  ).grant(
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const inference = await E(use).grant(
     harden({
       grantId: 'grant-000000001',
       ownerId: 'owner-alice',
@@ -599,7 +630,6 @@ test('grants validate owner, agent, and model, and streams flow through', async 
       [{ ownerId: 'owner-bob' }, 'provider-owner-mismatch'],
       [{ agentId: 'not an id!' }, 'invalid-agent'],
       [{ model: 'not a model!' }, 'invalid-model'],
-      [{ model: 'claude-other' }, 'invalid-model'],
     ]).map(([overrides, code]) =>
       t.throwsAsync(() => E(use).grant(harden({ ...request, ...overrides })), {
         message: new RegExp(code),
@@ -610,7 +640,412 @@ test('grants validate owner, agent, and model, and streams flow through', async 
   const response = await E(inference).requestByteStream(message('/stream'));
   t.is(response.status, 200);
   t.true(
-    events.some(([kind, , path]) => kind === 'stream' && path === '/stream'),
+    events.some(
+      ([kind, , path]) => kind === 'stream' && path === '/v1/messages',
+    ),
+  );
+  await registry.close();
+});
+
+test('phase 2 defaults and limit raises require explicit confirmation', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(
+    providerRequest({ limits: undefined }),
+  );
+  t.like(provider.limits, {
+    concurrentTurns: 2,
+    requestsPerMinute: 20,
+    dailyDollars: 5,
+  });
+  t.like(await E(directory).getOwnerLimits(), {
+    concurrentTurns: 2,
+    requestsPerMinute: 20,
+    dailyDollars: 5,
+  });
+
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const inference = await E(use).grant(
+    harden({
+      grantId: 'grant-defaults-1',
+      ownerId: 'owner-alice',
+      agentId: 'agent-alice',
+      model: 'claude-test',
+    }),
+  );
+  t.truthy(inference);
+  t.like(registry.inspect().grants['grant-defaults-1'].caps, {
+    concurrentTurns: 1,
+    requestsPerMinute: 10,
+    dailyDollars: 2,
+  });
+  t.is(
+    (
+      await E(use).setGrantLimits(
+        'grant-defaults-1',
+        harden({ dailyDollars: 1 }),
+        'lower-agent-1',
+      )
+    ).caps.dailyDollars,
+    1,
+  );
+  await t.throwsAsync(
+    () =>
+      E(use).setGrantLimits(
+        'grant-defaults-1',
+        harden({ dailyDollars: 2 }),
+        'raise-agent-1',
+      ),
+    { message: /limit-raise-unconfirmed/ },
+  );
+  t.is(registry.inspect().grants['grant-defaults-1'].caps.dailyDollars, 1);
+  t.is(
+    (
+      await E(use).setGrantLimits(
+        'grant-defaults-1',
+        harden({ dailyDollars: 2 }),
+        'raise-agent-2',
+        true,
+      )
+    ).caps.dailyDollars,
+    2,
+  );
+
+  const admin = await E(directory).adminFor(provider.providerId);
+  await t.throwsAsync(
+    () => E(admin).setLimits(harden({ dailyDollars: 6 }), 'raise-provider-1'),
+    { message: /limit-raise-unconfirmed/ },
+  );
+  t.is((await E(admin).getSummary()).limits.dailyDollars, 5);
+  t.is(
+    (
+      await E(admin).setLimits(
+        harden({ dailyDollars: 6 }),
+        'raise-provider-2',
+        true,
+      )
+    ).limits.dailyDollars,
+    6,
+  );
+  await t.throwsAsync(
+    () =>
+      E(directory).setOwnerLimits(
+        harden({ requestsPerMinute: 21 }),
+        'raise-owner-1',
+      ),
+    { message: /limit-raise-unconfirmed/ },
+  );
+  t.is(
+    (
+      await E(directory).setOwnerLimits(
+        harden({ requestsPerMinute: 21 }),
+        'raise-owner-2',
+        true,
+      )
+    ).requestsPerMinute,
+    21,
+  );
+  await registry.close();
+});
+
+test('raw requests are refused before opening the secret-backed issuer', async t => {
+  const backing = makeBacking();
+  const events = [];
+  const registry = await makeRegistry(backing, { events });
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const inference = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(
+    harden({
+      grantId: 'grant-validation-1',
+      ownerId: 'owner-alice',
+      agentId: 'agent-alice',
+      model: 'claude-test',
+    }),
+  );
+  const invalid = [
+    harden({ method: 'GET', path: '/v1/messages', body: '{}' }),
+    harden({ method: 'POST', path: '/v1/complete', body: '{}' }),
+    harden({
+      method: 'POST',
+      path: '/v1/messages',
+      headers: { 'x-api-key': 'stolen' },
+      body: message('valid').body,
+    }),
+    harden({
+      method: 'POST',
+      path: '/v1/messages',
+      body: '{"model":"claude-other","max_tokens":1,"messages":[]}',
+    }),
+    harden({
+      method: 'POST',
+      path: '/v1/messages',
+      body: '{"model":"claude-test","messages":[]}',
+    }),
+    harden({
+      method: 'POST',
+      path: '/v1/messages',
+      body: '{"model":"claude-test","max_tokens":1,"messages":[],"key":"secret"}',
+    }),
+    harden({
+      method: 'POST',
+      path: '/v1/messages',
+      body: '{"model":"claude-test","max_tokens":5000,"messages":[]}',
+    }),
+  ];
+  for (const request of invalid) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(inference).request(request), {
+      message: /inference-request-refused/,
+    });
+  }
+  t.deepEqual(events, []);
+  const usage = await E(directory).getUsage();
+  t.is(usage.turns.length, 0);
+  t.is(usage.refusals.length, invalid.length);
+  await registry.close();
+});
+
+test('owner-wide admission spans providers and cancellation releases its slot', async t => {
+  const backing = makeBacking();
+  const events = [];
+  const registry = await makeRegistry(backing, { events });
+  const directory = registry.directoryFor('owner-alice');
+  await E(directory).setOwnerLimits(
+    harden({ concurrentTurns: 1, dailyTokens: 1000 }),
+    'owner-token-limits-1',
+    true,
+  );
+  const firstProvider = await E(directory).create(providerRequest());
+  const secondProvider = await E(directory).create(
+    providerRequest({
+      idempotencyKey: 'create-owner-wide-2',
+      displayName: 'Claude second',
+    }),
+  );
+  const grant = async (providerId, suffix) =>
+    E(registry.useFor('owner-alice', providerId)).grant(
+      harden({
+        grantId: `grant-owner-${suffix}`,
+        ownerId: 'owner-alice',
+        agentId: `agent-${suffix}`,
+        model: 'claude-test',
+      }),
+    );
+  const first = await grant(firstProvider.providerId, 'first');
+  const second = await grant(secondProvider.providerId, 'second');
+  const waiting = E(first).request(message('wait'));
+  for (
+    let turn = 0;
+    turn < 20 && !events.some(event => event[0] === 'request');
+    turn += 1
+  ) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  await t.throwsAsync(() => E(second).request(message('second')), {
+    message: /inference-request-refused/,
+  });
+  const firstAdmin = await E(directory).adminFor(firstProvider.providerId);
+  await E(firstAdmin).retire('retire-owner-wide-1');
+  await t.throwsAsync(waiting, { message: 'request canceled' });
+  const usage = await E(directory).getUsage();
+  t.true(
+    usage.turns.some(
+      turn =>
+        turn.disposition === 'estimated' &&
+        turn.chargedTokens === turn.reservedTokens,
+    ),
+  );
+  t.true(
+    usage.refusals.some(
+      refusal => refusal.reason === 'owner-concurrency-exhausted',
+    ),
+  );
+  await registry.close();
+});
+
+test('model discovery is optional and typed fallback is verified on success', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing, {
+    discoverModels: async () =>
+      harden({
+        observedAt: 1234,
+        models: [{ id: 'claude-catalog', title: 'Catalog Claude' }],
+      }),
+  });
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const admin = await E(directory).adminFor(provider.providerId);
+  t.deepEqual(await E(admin).discoverModels(), {
+    catalogState: 'current',
+    observedAt: 1234,
+    models: [{ id: 'claude-catalog', title: 'Catalog Claude' }],
+    verification: {
+      'claude-test': 'unverified',
+      'claude-catalog': 'verified',
+    },
+  });
+  const fallback = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(
+    harden({
+      grantId: 'grant-typed-fallback-1',
+      ownerId: 'owner-alice',
+      agentId: 'agent-fallback',
+      model: 'claude-typed-fallback',
+    }),
+  );
+  t.truthy(fallback);
+  t.is(
+    registry.inspect().modelStates[provider.providerId].verification[
+      'claude-typed-fallback'
+    ],
+    'unverified',
+  );
+  await registry.close();
+});
+
+test('admission refuses worst-case reservations and unpriced dollar models before secret read', async t => {
+  const tokenBacking = makeBacking();
+  const tokenEvents = [];
+  const tokenRegistry = await makeRegistry(tokenBacking, {
+    events: tokenEvents,
+  });
+  const tokenDirectory = tokenRegistry.directoryFor('owner-alice');
+  await E(tokenDirectory).setOwnerLimits(
+    harden({ dailyTokens: 1000 }),
+    'owner-token-budget-1',
+    true,
+  );
+  const tokenProvider = await E(tokenDirectory).create(
+    providerRequest({ limits: { ...limits, dailyTokens: 50 } }),
+  );
+  const tokenInference = await E(
+    tokenRegistry.useFor('owner-alice', tokenProvider.providerId),
+  ).grant(
+    harden({
+      ownerId: 'owner-alice',
+      agentId: 'agent-token-budget',
+      model: 'claude-test',
+    }),
+  );
+  await t.throwsAsync(
+    () => E(tokenInference).request(message('reservation is conservative')),
+    { message: /inference-request-refused/ },
+  );
+  t.deepEqual(tokenEvents, []);
+  await tokenRegistry.close();
+
+  const dollarBacking = makeBacking();
+  const dollarEvents = [];
+  const dollarRegistry = await makeRegistry(dollarBacking, {
+    events: dollarEvents,
+    modelPrices: harden({}),
+  });
+  const dollarDirectory = dollarRegistry.directoryFor('owner-alice');
+  const dollarProvider = await E(dollarDirectory).create(
+    providerRequest({ limits: undefined }),
+  );
+  const dollarInference = await E(
+    dollarRegistry.useFor('owner-alice', dollarProvider.providerId),
+  ).grant(
+    harden({
+      ownerId: 'owner-alice',
+      agentId: 'agent-dollar-budget',
+      model: 'claude-unpriced',
+    }),
+  );
+  await t.throwsAsync(
+    () =>
+      E(dollarInference).request(
+        harden({
+          ...message('unpriced'),
+          body: message('unpriced').body.replace(
+            'claude-test',
+            'claude-unpriced',
+          ),
+        }),
+      ),
+    { message: /inference-request-refused/ },
+  );
+  t.deepEqual(dollarEvents, []);
+  const dollarUsage = await E(dollarDirectory).getUsage();
+  t.true(
+    dollarUsage.refusals.some(refusal => refusal.reason === 'unpriced-model'),
+  );
+  await dollarRegistry.close();
+});
+
+test('settlement records unknown usage, late reports, overruns, and model 404', async t => {
+  const backing = makeBacking();
+  /** @type {(value: any) => void} */
+  let resolveLate = () => {};
+  const lateUsage = new Promise(resolve => {
+    resolveLate = resolve;
+  });
+  const registry = await makeRegistry(backing, {
+    behavior: {
+      status: request => (request.body.includes('missing') ? 404 : 200),
+      usage: request =>
+        request.body.includes('overrun')
+          ? harden({ inputTokens: 5000, outputTokens: 1 })
+          : undefined,
+      streamResponse: () => ({
+        status: 200,
+        headers: {},
+        body: makeExo('reader', TestReaderInterface, {}),
+        usage: lateUsage,
+      }),
+    },
+  });
+  const directory = registry.directoryFor('owner-alice');
+  await E(directory).setOwnerLimits(
+    harden({ dailyTokens: 20_000 }),
+    'settlement-owner-1',
+    true,
+  );
+  const provider = await E(directory).create(
+    providerRequest({ limits: { ...limits, dailyTokens: 20_000 } }),
+  );
+  const inference = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(
+    harden({
+      ownerId: 'owner-alice',
+      agentId: 'agent-settlement',
+      model: 'claude-test',
+      caps: { dailyTokens: 20_000 },
+    }),
+  );
+  await E(inference).request(message('unknown'));
+  await E(inference).request(message('overrun'));
+  const stream = await E(inference).requestByteStream(message('late'));
+  let usage = await E(directory).getUsage();
+  t.true(usage.turns.some(turn => turn.state === 'reserved'));
+  resolveLate(harden({ inputTokens: 7, outputTokens: 2 }));
+  await stream.usage;
+  await t.throwsAsync(() => E(inference).request(message('missing')), {
+    message: /model-not-available/,
+  });
+  usage = await E(directory).getUsage();
+  t.true(
+    usage.turns.some(
+      turn =>
+        turn.disposition === 'estimated' &&
+        turn.chargedTokens === turn.reservedTokens,
+    ),
+  );
+  t.true(usage.turns.some(turn => turn.overrun === true));
+  t.true(
+    usage.turns.some(
+      turn => turn.disposition === 'reported' && turn.chargedTokens === 9,
+    ),
+  );
+  t.true(
+    usage.refusals.some(refusal => refusal.reason === 'model-not-available'),
   );
   await registry.close();
 });

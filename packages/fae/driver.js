@@ -49,7 +49,7 @@ export const make = async (powers, context, { env } = {}) => {
   const startLoop = async () => {
     const providerIdentity = await E(powers).locate('llm-provider');
     const storedConfig =
-      /** @type {{ host?: string, model: string, kind?: string, subscription?: object }} */ (
+      /** @type {{ host?: string, model: string, kind?: string, subscription?: object, inference?: object }} */ (
         await E(powers).lookupByLocator(providerIdentity)
       );
     const agentPowers = await E(powers).lookup('agent');
@@ -81,12 +81,14 @@ export const make = async (powers, context, { env } = {}) => {
         requestTimeoutMs,
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
-        ...(sessionId === undefined
+        ...(sessionId === undefined && storedConfig.kind !== 'brokered-messages'
           ? {
               provideAuthToken: () =>
                 resolveAuthToken({ powers, config: storedConfig }),
             }
-          : { sessionId }),
+          : sessionId === undefined
+            ? {}
+            : { sessionId }),
       }),
     );
   };

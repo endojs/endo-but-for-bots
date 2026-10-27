@@ -34,6 +34,7 @@
     "./codex-model-read.js": "./src/codex-model-read.js",
     "./codex-reasoning.js": "./src/codex-reasoning.js",
     "./anthropic-model-read.js": "./src/anthropic-model-read.js",
+    "./anthropic-api-key-issuer.js": "./src/anthropic-api-key-issuer.js",
     "./model-catalog.js": "./src/model-catalog.js",
     "./account-authority.js": "./src/account-authority.js",
     "./backend-catalog.js": "./src/backend-catalog.js",
@@ -54,6 +55,7 @@
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
     "./inference-provider-registry.js": "./src/inference-provider-registry.js",
+    "./inference-provider-policy.js": "./src/inference-provider-policy.js",
     "./inference-provider-registry-module.js": "./src/inference-provider-registry-module.js",
     "./provider-scopes.js": "./src/provider-scopes.js",
     "./session-supervisor.js": "./src/session-supervisor.js",
@@ -101,6 +103,7 @@
   },
   "dependencies": {
     "@endo/9p-server": "workspace:^",
+    "@endo/base64": "workspace:^",
     "@endo/captp": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
@@ -114,12 +117,11 @@
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/sandbox": "workspace:^",
-    "@endo/stream-node": "workspace:^"
+    "@endo/stream-node": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
-    "@endo/base64": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@endo/utf8": "workspace:^",
     "ava": "catalog:dev",
     "esbuild": "0.28.2",
     "eslint": "catalog:dev",
