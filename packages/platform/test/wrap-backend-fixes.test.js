@@ -654,7 +654,9 @@ for (const fails of [false, true]) {
     const started = new Promise(resolve => {
       entered = resolve;
     });
-    let settle;
+    let settle = () => {
+      t.fail('backend commit gate must be initialized');
+    };
     const pending = new Promise((resolve, reject) => {
       settle = () =>
         fails ? reject(Error('backend commit failed')) : resolve(undefined);
