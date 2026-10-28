@@ -114,6 +114,12 @@ await E(revoke).revoke(); // or, later and from anywhere: E(publisher).release(i
 // GET ${url}style.css       -> 404
 ```
 
+Directory requests without a trailing slash redirect to the same capability
+path with a slash, preserving the query string so relative asset URLs resolve
+inside the published directory.
+GET and HEAD use the same canonical path; missing files and directories without
+a readable index remain 404 responses.
+
 `getAddress()` reports `{ host, port, origin }` (useful when the server
 was started on the OS-assigned port `0`).
 
