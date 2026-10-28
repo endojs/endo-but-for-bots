@@ -459,11 +459,24 @@ test('createSession rejects the obsolete model option even beside canonical fiel
 
 test('createSession never infers a hosted backend from a colon in modelId', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  let fetches = 0;
+  const world = makeWorld({
+    promptEnvironment: sandboxed,
+    lookupProvider: () =>
+      harden({
+        provider: 'unsupported-test-provider',
+        model: 'test:m',
+      }),
+    fetch: async () => {
+      fetches += 1;
+      throw Error('Unexpected provider request');
+    },
+  });
   t.teardown(world.close);
   await t.throwsAsync(E(world.factory).createSession({ modelId: 'test:m' }), {
     message: /provider backend|provider kind/,
   });
+  t.is(fetches, 0);
   t.deepEqual(await E(world.factory).listSessions(), []);
 });
 

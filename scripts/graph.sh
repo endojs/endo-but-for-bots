@@ -6,22 +6,24 @@
 # often helps to understand the full picture.
 set -ueo pipefail
 DIR=$(dirname -- "${BASH_SOURCE[0]}")
+# One "from to" line per dependency between local packages.
+EDGES=$(cat "$DIR"/../packages/*/package.json | jq -r --slurp '
+    . as $all |
+    [.[] | {(.name): true}] | add as $locals |
+
+    $all[] |
+    .name as $from |
+    (.dependencies // {}) |
+    keys[] |
+    {$from, to: .} |
+    select($locals[.from] and $locals[.to]) |
+    "\(.from) \(.to)"
+')
 {
     echo 'digraph {'
     # Left is depended upon the least and right the most.
     echo 'rankdir=LR'
-    cat "$DIR"/../packages/*/package.json | jq -r --slurp '
-        . as $all |
-        [.[] | {(.name): true}] | add as $locals |
-
-        $all[] |
-        .name as $from |
-        (.dependencies // {}) |
-        keys[] |
-        {$from, to: .} |
-        select($locals[.from] and $locals[.to]) |
-        "\"\(.from)\" -> \"\(.to)\""
-    '
+    sed 's/^\(.*\) \(.*\)$/"\1" -> "\2"/' <<<"$EDGES"
     echo '}'
     # normalize
 } | dot -Tcanon > packages-graph.dot
@@ -33,9 +35,15 @@ tred <packages-graph.dot > packages-graph-tred.dot
 dot -Tpng <packages-graph-tred.dot > "$DIR"/../packages-graph-tred.png
 dot -Tsvg <packages-graph-tred.dot > "$DIR"/../packages-graph-tred.svg
 
-if acyclic packages-graph.dot | dot -Tcanon > packages-graph-sans-cycles.dot; then
+# Detect cycles with tsort rather than Graphviz's `acyclic`, which some
+# distributions no longer package (Ubuntu 26.04's graphviz 14 omits it).
+# tsort reports each loop it has to break as a header line followed by
+# one line per package on the loop, so a loop of N packages yields N lines
+# (one per cyclic edge) after the header is dropped.
+if cycles=$(tsort <<<"$EDGES" 2>&1 >/dev/null); then
     echo "No cycles in 'dependencies' of packages."
 else
-    echo "Cycles detected. These lines appear only in the original graph and not the acyclic variant:"
-    comm -23 <(sort packages-graph.dot) <(sort packages-graph-sans-cycles.dot)
+    echo "Cycles detected. These packages lie on dependency loops:"
+    grep -v -e 'input contains a loop' -e 'cycle in data' <<<"$cycles" |
+        sed 's/^tsort: //'
 fi
