@@ -76,6 +76,10 @@ import { WorkerHaltError } from './worker-engine.js';
  *   once this many deliveries have accrued since its last snapshot, so a
  *   worker that never idles still bounds its journal, and the replay a
  *   restart needs; omitted means an awake worker snapshots only at sleep
+ * @param {number} [options.maxDeliveryAttempts] record a failure, as a halt
+ *   does, once one journal frame has failed this many times without a halt
+ *   and without progress past it; omitted means a frame that fails on every
+ *   attempt is retried on every later frame
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = (
@@ -88,6 +92,7 @@ export const makeDurableWorkerTransport = (
     onFrames = undefined,
     idleSleepMs = undefined,
     snapshotEveryDeliveries = undefined,
+    maxDeliveryAttempts = undefined,
     debugLabel = undefined,
     resident = false,
     onFatal = () => {},
@@ -109,6 +114,15 @@ export const makeDurableWorkerTransport = (
   /** Absolute journal index the recorded snapshot subsumes (from meta). */
   let snapshotCut = store.getMeta().snapshot?.cut ?? 0;
   let checkpointQueued = false;
+  /**
+   * The journal frame whose delivery last failed without a halt, and how
+   * many times in a row it has; a delivery of that frame clears it.
+   */
+  let failing = { index: -1, attempts: 0 };
+  /** @param {number} index a journal frame just delivered */
+  const noteDelivered = index => {
+    if (index === failing.index) failing = { index: -1, attempts: 0 };
+  };
   let deliveredHubSequence = String(store.getMeta().hubDelivery ?? '0');
   let receivedHubSequence = BigInt(deliveredHubSequence);
   for (const { hubSequence } of store.readJournal()) {
@@ -204,15 +218,40 @@ export const makeDurableWorkerTransport = (
    * failed): drop it so the next operation restarts from the snapshot
    * plus the journal suffix instead of wedging on a dead process.
    *
+   * That replay is the right answer to a one-off crash. A frame that fails
+   * on every attempt (the process is killed, or misses its request deadline,
+   * each time it reaches that frame) would instead make every later frame
+   * replay up to it and fail again, so after `maxDeliveryAttempts` failures
+   * of one frame without progress past it, the failure is recorded as a
+   * halt's is.
+   *
    * @param {unknown} error
+   * @param {number} [index] the journal frame whose delivery failed
    * @returns {never}
    */
-  const abandonIncarnation = error => {
+  const abandonIncarnation = (error, index = undefined) => {
     void terminateIncarnation().catch(() => {});
+    /** @type {string | undefined} */
+    let failure;
     if (error instanceof WorkerHaltError) {
       // Preserve the last snapshot for inspection, but do not endlessly
       // replay an input known to exhaust its budget or hit an engine gap.
-      store.setMeta({ ...store.getMeta(), failure: error.message });
+      failure = error.message;
+    } else if (index !== undefined && maxDeliveryAttempts !== undefined) {
+      failing =
+        failing.index === index
+          ? { index, attempts: failing.attempts + 1 }
+          : { index, attempts: 1 };
+      if (failing.attempts >= maxDeliveryAttempts) {
+        const reason = error instanceof Error ? error.message : String(error);
+        failure = `journal frame ${index} failed ${failing.attempts} times without progress: ${reason}`;
+        logging.error(
+          `thixotrope worker transport ${debugName}: quarantined; ${failure}`,
+        );
+      }
+    }
+    if (failure !== undefined) {
+      store.setMeta({ ...store.getMeta(), failure });
       onFatal();
     }
     throw error;
@@ -275,6 +314,9 @@ export const makeDurableWorkerTransport = (
     // frames can reach userland before the replay loop returns, and an
     // observer reacting to one must see the worker awake.
     incarnation = started;
+    // The journal frame being delivered when a failure interrupts the wake;
+    // a failed `init` counts against the first frame it precedes.
+    let position = cut;
     try {
       if (snapshotRef === null) {
         // The peer boots from the init message on first incarnation (or
@@ -289,10 +331,12 @@ export const makeDurableWorkerTransport = (
         // eslint-disable-next-line no-await-in-loop
         await started.deliver(harden({ t: 'f', b64 }));
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
+        noteDelivered(deliveredUpTo);
         deliveredUpTo += 1;
+        position = deliveredUpTo;
       }
     } catch (error) {
-      abandonIncarnation(error);
+      abandonIncarnation(error, position);
     }
     return started;
   };
@@ -336,8 +380,9 @@ export const makeDurableWorkerTransport = (
         } catch (error) {
           // The frame stays in the journal; the wake this failure
           // provokes replays it against a fresh incarnation.
-          abandonIncarnation(error);
+          abandonIncarnation(error, index);
         }
+        noteDelivered(index);
         deliveredUpTo = index + 1;
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
         if (

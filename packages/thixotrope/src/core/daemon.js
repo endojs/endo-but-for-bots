@@ -154,6 +154,10 @@ const START_NOTICE_MS = 10_000;
  *   once this many deliveries have accrued since its last snapshot (see the
  *   transport's cadence policy); omitted means an awake worker snapshots
  *   only at sleep
+ * @param {number} [options.maxDeliveryAttempts] record a worker's failure
+ *   once one journal frame has failed this many times without a halt and
+ *   without progress past it (see the transport); omitted means retry on
+ *   every later frame
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -168,6 +172,7 @@ const buildDaemon = async (
     adapterProcesses,
     idleSleepMs = undefined,
     snapshotEveryDeliveries = undefined,
+    maxDeliveryAttempts = undefined,
     verbose = false,
   },
 ) => {
@@ -221,6 +226,7 @@ const buildDaemon = async (
           engine,
           idleSleepMs,
           snapshotEveryDeliveries,
+          maxDeliveryAttempts,
           debugLabel: workerStore.getMeta().debugLabel,
           // An ephemeral worker is resident by construction. Its state is
           // discarded at the next startup regardless, so snapshotting it on
