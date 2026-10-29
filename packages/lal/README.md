@@ -23,11 +23,18 @@ The Endo capability tool surface (the `help`, `list`, `lookup`, `send`,
 are SmallCaps-decoded per call so BigInt-shaped strings (`"+5"`) and
 `"#undefined"` continue to round-trip correctly.
 
-`packages/lal/providers/` remains in place as a stable surface for downstream
-consumers (jaine, fae).
+Two `providers/` subpaths are exported for downstream consumers (jaine, fae):
+
+| Subpath | Exports |
+|---|---|
+| `@endo/lal/providers/index.js` | `createProvider` and the per-backend provider factories it re-exports |
+| `@endo/lal/providers/brokered-messages.js` | `makeBrokeredMessagesProvider`, `makeBrokeredMessagesStream`, and `assertBrokeredMessagesRecipe` for the credential-free Anthropic Messages path over an inference grant |
+
+Nothing else in `providers/` is a subpath; the Anthropic message conversion
+helpers in `providers/anthropic.js` (`toAnthropicMessages`, `toAnthropicTools`)
+are internal.
 Lal's own agent loop goes through pi-ai's multi-provider registry, except for
-the brokered Anthropic path, which uses `providers/brokered-messages.js` and
-the Anthropic message conversion in `providers/anthropic.js`.
+the brokered Anthropic path, which uses `providers/brokered-messages.js`.
 
 ## Configuration
 

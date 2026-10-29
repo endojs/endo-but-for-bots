@@ -672,7 +672,6 @@ test('brokered Lal drives a turn through the broker with no API key', async t =>
       ]),
     ),
   });
-  // The mock inbox delivers one message and then ends, which ends the loop.
   const { powers } = makeMockPowers({
     initialMessage: {
       number: 1,
