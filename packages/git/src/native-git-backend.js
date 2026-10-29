@@ -805,8 +805,7 @@ const requireRevision = (value, fieldName) => {
  * per-command flag is load-bearing here.
  *
  * @param {GitBackendDiffOptions} options
- * @param {string[]} [formatArguments] Output-format flags; the structured
- *   rendering also pins rename detection so its two invocations agree.
+ * @param {string[]} [formatArguments] Output-format flags.
  * @returns {string[]}
  */
 const diffArguments = (options, formatArguments = []) => {

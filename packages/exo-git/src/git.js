@@ -679,8 +679,7 @@ async function trackingStatus() {
 
 /**
  * Translate caller-supplied diff options to the backend shape:
- * - `base` and `head` accept GitRef-or-string; collapse to a string
- *   name the backend forwards to git unchanged.
+ * - `base` and `head` accept GitRef-or-string.
  * - `entries` (PathEntry[]) get resolved to repo-relative paths with
  *   the same lineage check `add` uses. `paths` (string[]) passes
  *   through.

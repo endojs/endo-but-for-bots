@@ -334,8 +334,8 @@ ${
 }- \`E(workspace).status()\` returns \`{ entries, truncated }\`; each entry is
   copy data with \`path\`, \`index\`, and \`worktree\` fields, and \`truncated\`
   tells you whether the result was limited. \`E(workspace).diff()\` returns
-  \`{ files }\`, each with \`status\`, \`oldPath\`/\`newPath\`, and \`hunks\` of
-  \`{ kind, text }\` lines; \`E(workspace).diffText()\` renders it as text.
+  \`{ files }\`, each with \`status\` and \`hunks\`;
+  \`E(workspace).diffText()\` renders it as text.
 - To stage one desired row: \`const result = await E(workspace).status(); const row = result.entries.find(({ path }) => path === "src/main.js"); if (!row) throw new Error("row not found"); await E(workspace).add([row.path])\`.
   Then \`E(workspace).commit(message)\` records them.
 Build what the user asks for in the workspace, committing as you reach working

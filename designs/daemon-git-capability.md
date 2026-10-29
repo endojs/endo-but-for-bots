@@ -805,7 +805,7 @@ It is not part of the normative design.
 ### In progress
 
 - **Phase 7, structured `diff` slice** — `Git.diff(options?)` returns `GitDiff` and the porcelain moves to `Git.diffText(options?)`; in-tree consumers migrated (the agent `diff` tool and code-mode declarations report the structured shape; the conflict-rebase eval keeps byte-identity patch comparison through `diffText`).
-  § Structured Result Shapes now records the shipped `GitFileDiff`: mount-relative `oldPath` / `newPath` strings instead of `EndoMountEntry` values (matching `status()`), and an `'unmerged'` status with no hunks. `GitDiffHunk` and its `{ kind, text }` lines ship as sketched.
+  § Structured Result Shapes now records the shipped `GitFileDiff`: mount-relative `oldPath` / `newPath` strings instead of `EndoMountEntry` values (matching `status()`), and an `'unmerged'` status with no hunks.
   `binary` is reported as an empty record (`{}`); byte sizes are not yet populated.
   Remaining Phase 7 work: `GitShow` / `showText`, `GitMergeResult` / `mergeText`, `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
 
