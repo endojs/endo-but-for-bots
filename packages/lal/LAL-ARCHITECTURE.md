@@ -413,7 +413,7 @@ common structure.
 | `LAL_HOST` | API base URL | `http://localhost:11434` |
 | `LAL_MODEL` | Model name | `qwen3` or `claude-opus-4-5-20251101` |
 | `LAL_AUTH_TOKEN` | API key | (optional for local) |
-| `LAL_MAX_TOKENS` | Max completion tokens (llama.cpp only) | `4096` |
+| `LAL_MAX_TOKENS` | Max completion tokens (llama.cpp and the brokered Anthropic path, `LAL_INFERENCE`) | `4096` |
 | `LAL_MAX_MESSAGES` | Truncate to last N messages (llama.cpp only) | (none) |
 
 ---

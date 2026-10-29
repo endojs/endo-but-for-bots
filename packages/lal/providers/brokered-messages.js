@@ -10,6 +10,10 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 import { toAnthropicMessages, toAnthropicTools } from './anthropic.js';
 
+// This is a sibling of subscription-responses.js rather than a mode of it:
+// both consume an InferenceEndpoint, but that adapter speaks the OpenAI
+// Responses request and event grammar, and Anthropic Messages has its own.
+
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MODEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 
