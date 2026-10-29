@@ -3,6 +3,7 @@
 
 /** @import { GitRemoteCredential, GitStatusEntry, HistoryRewriteEndoGit, PathEntry } from '@endo/exo-git' */
 /** @import { EndoMountFile } from '../src/types.js' */
+/** @import { AddressInfo } from 'node:net' */
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
@@ -12,9 +13,10 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify as nodePromisify } from 'node:util';
 
+import { encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { internalHelpers, makeNativeGitBackend } from '@endo/git';
@@ -23,6 +25,7 @@ import {
   makeGitKit,
   makeNotYetImplementedBackend,
 } from '@endo/exo-git';
+import { splitGitCapabilityUrl } from '@endo/exo-git/src/git-remote-policy.js';
 
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
@@ -2210,26 +2213,233 @@ test('NativeGitBackend credential transport satisfies git HTTP auth challenge', 
   t.true(authorizations.includes(expected));
 });
 
-// Serial: this test mutates the global process.env.PATH to inject a fake git.
-test.serial(
-  'NativeGitBackend askpass keeps credential out of argv, env, and temp files',
-  async t => {
-    const repoRoot = await provisionGitWorktree(t);
-    const fakeDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), 'native-git-fake-'),
-    );
-    t.teardown(() => fs.promises.rm(fakeDir, { recursive: true, force: true }));
-    const reportPath = path.join(fakeDir, 'report.json');
-    const secret = `token-${Date.now()}-${Math.random()}`;
-    const beforeAskpassTempEntries = new Set(
-      (await fs.promises.readdir(os.tmpdir())).filter(name =>
-        name.startsWith('endo-git-askpass-'),
-      ),
-    );
-    const fakeGitPath = path.join(fakeDir, 'git');
-    await fs.promises.writeFile(
-      fakeGitPath,
-      `#!/usr/bin/env node
+/**
+ * Serve the bare repositories under `projectRoot` over smart HTTP through
+ * `git http-backend`, refusing any request whose Authorization header is not
+ * `authorization.current`.
+ * Records every request's path and Authorization header.
+ *
+ * @param {string} projectRoot
+ * @param {{ current: string }} authorization
+ */
+const startAuthenticatedGitHttpServer = async (projectRoot, authorization) => {
+  /** @type {Array<{ path: string, query: string, authorization: string | undefined }>} */
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || '/', 'http://127.0.0.1');
+    requests.push({
+      path: requestUrl.pathname,
+      query: requestUrl.search,
+      authorization: request.headers.authorization,
+    });
+    if (request.headers.authorization !== authorization.current) {
+      response.writeHead(401, {
+        'WWW-Authenticate': 'Basic realm="Endo Git Capability Test"',
+      });
+      response.end('auth required');
+      return;
+    }
+    const child = spawn('git', ['http-backend'], {
+      env: {
+        PATH: process.env.PATH || '',
+        HOME: projectRoot,
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_PROJECT_ROOT: projectRoot,
+        GIT_HTTP_EXPORT_ALL: '1',
+        REQUEST_METHOD: request.method || 'GET',
+        PATH_INFO: requestUrl.pathname,
+        QUERY_STRING: requestUrl.search.slice(1),
+        CONTENT_TYPE: request.headers['content-type'] || '',
+        HTTP_CONTENT_ENCODING: request.headers['content-encoding'] || '',
+        GIT_PROTOCOL: String(request.headers['git-protocol'] || ''),
+        REMOTE_USER: 'x-access-token',
+      },
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    request.pipe(child.stdin);
+    /** @type {Buffer[]} */
+    const chunks = [];
+    child.stdout.on('data', chunk => chunks.push(chunk));
+    child.on('close', () => {
+      const output = Buffer.concat(chunks);
+      const split = output.indexOf('\r\n\r\n');
+      const headerText = output.subarray(0, split).toString('latin1');
+      let status = 200;
+      /** @type {Record<string, string>} */
+      const headers = {};
+      for (const line of headerText.split('\r\n')) {
+        const colon = line.indexOf(':');
+        const name = line.slice(0, colon).trim();
+        const value = line.slice(colon + 1).trim();
+        if (name.toLowerCase() === 'status') {
+          status = Number.parseInt(value, 10);
+        } else if (name !== '') {
+          headers[name] = value;
+        }
+      }
+      response.writeHead(status, headers);
+      response.end(output.subarray(split + 4));
+    });
+  });
+  await new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => resolve(undefined));
+  });
+  const { port } = /** @type {AddressInfo} */ (server.address());
+  const close = () =>
+    new Promise(resolve => {
+      server.close(() => resolve(undefined));
+    });
+  return { port, requests, close };
+};
+
+test('NativeGitBackend fetches a capability-URL partition with the split basic credential', async t => {
+  // An external client pushes an artifact into a bare "partition" repository.
+  const { repoRoot: producerRoot } = await provisionGitWorktreeWithFile(
+    t,
+    'artifact.txt',
+    'pushed through a capability URL\n',
+  );
+  const projectRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'git-capability-partitions-'),
+  );
+  t.teardown(() => removeRepoTree(projectRoot));
+  const partitionRoot = path.join(projectRoot, 'partition.git');
+  await execFileAsync('git', ['init', '-q', '--bare', partitionRoot]);
+  await quiesceGitMaintenance(partitionRoot);
+  await execFileAsync('git', ['push', '-q', partitionRoot, 'main:main'], {
+    cwd: producerRoot,
+  });
+
+  const token = `cap-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const basic = /** @param {string} secret */ secret =>
+    `Basic ${encodeBase64(Buffer.from(`x-access-token:${secret}`))}`;
+  const authorization = { current: basic(token) };
+  const { port, requests, close } = await startAuthenticatedGitHttpServer(
+    projectRoot,
+    authorization,
+  );
+  t.teardown(close);
+
+  // The host splits the capability URL; only the split fields travel on.
+  const split = splitGitCapabilityUrl(
+    `https://x-access-token:${token}@127.0.0.1:${port}/partition.git`,
+  );
+  t.false(split.url.includes(token));
+  // The daemon's sanitized git environment admits no test CA, so the fixture
+  // serves plain HTTP on the same origin the split endpoint names.
+  const fetchUrl = split.url.replace(/^https:/u, 'http:');
+  /** @type {GitRemoteCredential} */
+  const credential = harden({
+    kind: 'basic',
+    material: harden({ username: split.username, password: split.password }),
+  });
+
+  const consumerRoot = await provisionGitWorktree(t);
+  const backend = makeNativeGitBackend({ repoRoot: consumerRoot });
+  await backend.remoteFetch({
+    url: fetchUrl,
+    refspecs: ['+refs/heads/main:refs/remotes/origin/main'],
+    credential,
+  });
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({
+    rootPath: consumerRoot,
+    readOnly: false,
+    filePowers,
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const gitFs = /** @type {any} */ (
+    await E(git).filesystemAt('refs/remotes/origin/main')
+  );
+  const root = /** @type {any} */ (await E(gitFs).root());
+  const file = /** @type {any} */ (await E(root).lookup('artifact.txt'));
+  const opener = /** @type {any} */ (await E(file).open({ read: true }));
+  const bytes = await collectReader(await E(opener).read(0n, 1024n));
+  await E(opener).close();
+  t.deepEqual(
+    Buffer.from(bytes),
+    Buffer.from('pushed through a capability URL\n'),
+  );
+
+  t.true(
+    requests.some(request => request.authorization === basic(token)),
+    'git answered the challenge with the split basic credential',
+  );
+  t.false(
+    requests.some(
+      request =>
+        request.path.endsWith('/git-receive-pack') ||
+        request.query.includes('git-receive-pack'),
+    ),
+    'a fetch never reaches receive-pack',
+  );
+
+  // Server-side revocation: the fixture stops accepting the token.
+  authorization.current = basic(`${token}-rotated`);
+  const error = await t.throwsAsync(
+    backend.remoteFetch({
+      url: fetchUrl,
+      refspecs: ['+refs/heads/main:refs/remotes/origin/main'],
+      credential,
+    }),
+    { message: /git fetch failed/ },
+  );
+  t.false(String(error?.message).includes(token));
+  t.false(String(error?.stack).includes(token));
+});
+
+/** @type {ReadonlyArray<[string, (secret: string) => GitRemoteCredential]>} */
+const askpassCredentialCases = harden([
+  [
+    'a bearer token',
+    /** @param {string} secret */
+    secret =>
+      harden({
+        kind: 'bearer',
+        material: harden({ token: secret }),
+      }),
+  ],
+  [
+    // A credential split from a git capability URL is a basic credential
+    // with the fixed `x-access-token` username.
+    'a basic credential split from a capability URL',
+    /** @param {string} secret */
+    secret => {
+      const { username, password } = splitGitCapabilityUrl(
+        `https://x-access-token:${encodeURIComponent(secret)}@git.minion.town/p/0123`,
+      );
+      return harden({
+        kind: 'basic',
+        material: harden({ username, password }),
+      });
+    },
+  ],
+]);
+
+for (const [credentialLabel, makeCredential] of askpassCredentialCases) {
+  // Serial: this test mutates the global process.env.PATH to inject a fake git.
+  test.serial(
+    `NativeGitBackend askpass keeps ${credentialLabel} out of argv, env, and temp files`,
+    async t => {
+      const repoRoot = await provisionGitWorktree(t);
+      const fakeDirectory = await fs.promises.mkdtemp(
+        path.join(os.tmpdir(), 'native-git-fake-'),
+      );
+      t.teardown(() =>
+        fs.promises.rm(fakeDirectory, { recursive: true, force: true }),
+      );
+      const reportPath = path.join(fakeDirectory, 'report.json');
+      const secret = `token-${Date.now()}-${Math.random()}`;
+      const beforeAskpassTemporaryEntries = new Set(
+        (await fs.promises.readdir(os.tmpdir())).filter(name =>
+          name.startsWith('endo-git-askpass-'),
+        ),
+      );
+      const fakeGitPath = path.join(fakeDirectory, 'git');
+      await fs.promises.writeFile(
+        fakeGitPath,
+        `#!/usr/bin/env node
 const fs = require('node:fs');
 const childProcess = require('node:child_process');
 const path = require('node:path');
@@ -2300,57 +2510,55 @@ if (includes('fetch')) {
 console.error('unexpected fake git invocation', args.join(' '));
 process.exit(1);
 `,
-      { mode: 0o755 },
-    );
-    await fs.promises.chmod(fakeGitPath, 0o755);
+        { mode: 0o755 },
+      );
+      await fs.promises.chmod(fakeGitPath, 0o755);
 
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${fakeDir}${path.delimiter}${originalPath || ''}`;
-    try {
-      const backend = makeNativeGitBackend({ repoRoot });
-      await t.throwsAsync(
-        backend.remoteFetch({
-          url: 'https://example.com/repo.git',
-          refspecs: [],
-          credential: harden({
-            kind: 'bearer',
-            material: harden({ token: secret }),
+      const originalPath = process.env.PATH;
+      process.env.PATH = `${fakeDirectory}${path.delimiter}${originalPath || ''}`;
+      try {
+        const backend = makeNativeGitBackend({ repoRoot });
+        await t.throwsAsync(
+          backend.remoteFetch({
+            url: 'https://example.com/repo.git',
+            refspecs: [],
+            credential: makeCredential(secret),
           }),
-        }),
-        { message: /git fetch failed/ },
-      );
-    } finally {
-      process.env.PATH = originalPath;
-    }
+          { message: /git fetch failed/ },
+        );
+      } finally {
+        process.env.PATH = originalPath;
+      }
 
-    let reportText;
-    try {
-      reportText = await fs.promises.readFile(reportPath, 'utf8');
-    } catch (error) {
-      t.fail(
-        `fake git did not write credential probe report: ${/** @type {Error} */ (error).message}`,
+      let reportText;
+      try {
+        reportText = await fs.promises.readFile(reportPath, 'utf8');
+      } catch (error) {
+        t.fail(
+          `fake git did not write credential probe report: ${/** @type {Error} */ (error).message}`,
+        );
+        return;
+      }
+      const report = JSON.parse(reportText);
+      t.is(report.phase, 'askpass-complete');
+      t.false(report.argvIncludesSecret);
+      t.false(report.envIncludesSecret);
+      t.false(report.hasSocketEnv);
+      t.is(report.helperBasename, 'git-askpass-helper.cjs');
+      t.is(report.fd, '3');
+      t.true(report.usernameMatched);
+      t.true(report.passwordMatched);
+      const newAskpassTemporaryEntries = (
+        await fs.promises.readdir(os.tmpdir())
+      ).filter(
+        name =>
+          name.startsWith('endo-git-askpass-') &&
+          !beforeAskpassTemporaryEntries.has(name),
       );
-      return;
-    }
-    const report = JSON.parse(reportText);
-    t.is(report.phase, 'askpass-complete');
-    t.false(report.argvIncludesSecret);
-    t.false(report.envIncludesSecret);
-    t.false(report.hasSocketEnv);
-    t.is(report.helperBasename, 'git-askpass-helper.cjs');
-    t.is(report.fd, '3');
-    t.true(report.usernameMatched);
-    t.true(report.passwordMatched);
-    const newAskpassTempEntries = (
-      await fs.promises.readdir(os.tmpdir())
-    ).filter(
-      name =>
-        name.startsWith('endo-git-askpass-') &&
-        !beforeAskpassTempEntries.has(name),
-    );
-    t.deepEqual(newAskpassTempEntries, []);
-  },
-);
+      t.deepEqual(newAskpassTemporaryEntries, []);
+    },
+  );
+}
 
 // Serial: this test mutates the global process.env.PATH to inject a fake git.
 test.serial(

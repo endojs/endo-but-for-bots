@@ -550,6 +550,46 @@ The archive bytes are streamed to the worker and parsed via
 `@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's
 workers read the same archive content directly from the CAS.
 
+## provideBasicCredential(petName, options) -> Promise<BasicCredential>
+
+Mint an audience-bound username/password credential for Git remotes and
+name it.
+The material is held in daemon memory only, never in the formula.
+
+- petName: Pet name or path for the credential
+- options: { audience, username, password }; audience is a URL origin
+
+To adopt a git capability URL
+(`https://x-access-token:<token>@git.minion.town/<partition>`), split it
+on the host side with `splitGitCapabilityUrl` from
+`@endo/exo-git/src/git-remote-policy.js` and pass
+its `{ audience, username, password }` here; pass its credential-free `url`
+to provideGitRemote or provideGitClone.
+Never pass the capability URL itself to the daemon.
+
+After a daemon restart the credential reports `revoked: true` through
+`credentialHealth()` until the host supplies the material again with
+`rotate({ username, password })` on its GitCredentialController.
+A capability URL is shown once, so the host must keep it to recover.
+
+## provideGitClone(options) -> Promise<{ git, remote }>
+
+Clone an endpoint into a writable mount and return the Git and its
+`origin` GitRemote.
+The remote is returned, not named.
+
+- options.destMount: A writable daemon-minted mount
+- options.endpoint: { url, credential?, allowLocalFileTransport? }
+- options.identity: Optional commit identity for the clone's Git
+
+The origin permits both fetch and push.
+For a fetch-only grant (for example, ingesting a capability URL's
+partition), narrow it before naming or granting it:
+`E(E(host).getGitRemoteController(remote)).setAllowedDirections(["fetch"])`.
+The narrowed policy is formula-owned and survives a restart.
+A host that skips the narrowing step grants push even on a read-only
+capability token, and the server's 403 is then the only backstop.
+
 ## cancel(petNameOrPath, reason?) -> Promise<void>
 
 Cancel a value, triggering cleanup and releasing resources.

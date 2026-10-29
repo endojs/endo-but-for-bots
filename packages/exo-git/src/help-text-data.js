@@ -141,7 +141,7 @@ export const helpTextEntries = harden([
       revoke:
         'revoke() -> Promise<void>\nPermanently revoke the remote.\nOperations in flight are cancelled and every later operation is refused.',
       setAllowedDirections:
-        'setAllowedDirections(directions) -> Promise<void>\nSet which directions the remote may run, as a subset of "fetch" and\n"push".',
+        'setAllowedDirections(directions) -> Promise<void>\nSet which directions the remote may run, as a subset of "fetch" and\n"push".\nThe change persists with the remote\'s formula, so a restart revives the\nnarrowed policy.\nUse `setAllowedDirections(["fetch"])` to make the fetch+push origin minted\nby provideGitClone fetch-only before granting it.',
       setFetchRefspecs:
         'setFetchRefspecs(refspecs) -> Promise<void>\nReplace the refspecs fetch() and pull() are allowed to fetch.',
       setPushRefspecs:
@@ -181,7 +181,7 @@ export const helpTextEntries = harden([
   [
     'BasicCredential',
     {
-      '': 'BasicCredential - An audience-bound username and password.\n\nThe username and password are held privately and are never exposed\nthrough this capability; only the audience they are bound to can be read.\nRotation and revocation belong to the host-private\nGitCredentialController minted alongside it.',
+      '': "BasicCredential - An audience-bound username and password.\n\nThe username and password are held privately and are never exposed\nthrough this capability; only the audience they are bound to can be read.\nRotation and revocation belong to the host-private\nGitCredentialController minted alongside it.\nA git capability URL is adopted as a BasicCredential: the host splits it\nwith `splitGitCapabilityUrl` (`@endo/exo-git/src/git-remote-policy.js`)\nand passes the resulting audience, username,\nand password to provideBasicCredential.\nThe material lives in daemon memory only; after a restart, rotate it back\nin from the host's copy of the capability URL.",
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("audience") returns documentation for the audience method',
       audience:
         'audience() -> string\nGet the URL origin this credential may be used for.',

@@ -267,6 +267,22 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
       }),
     { message: /embedded credentials/ },
   );
+  const leaked = t.throws(
+    () =>
+      makeGitRemote({
+        git,
+        operations,
+        name: 'origin',
+        credential: exampleCredential(),
+        policy: {
+          ...basePolicy,
+          url: 'https://x-access-token:s3cret-token@github.com/example/repo.git',
+        },
+      }),
+    { message: /embedded credentials: "https:\/\/\*\*\*:\*\*\*@github\.com/ },
+  );
+  t.false(String(leaked?.message).includes('s3cret-token'));
+  t.false(String(leaked?.stack).includes('s3cret-token'));
   t.throws(
     () =>
       makeGitRemote({

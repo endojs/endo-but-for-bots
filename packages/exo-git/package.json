@@ -41,6 +41,10 @@
       "types": "./src/git-cloner.d.ts",
       "default": "./src/git-cloner.js"
     },
+    "./src/git-remote-policy.js": {
+      "types": "./src/git-remote-policy.d.ts",
+      "default": "./src/git-remote-policy.js"
+    },
     "./src/git-credential.js": {
       "types": "./src/git-credential.d.ts",
       "default": "./src/git-credential.js"
