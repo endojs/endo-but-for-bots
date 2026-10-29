@@ -99,6 +99,8 @@ const withDecodedSecret = async (bytesBase64, operation) => {
  * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
+ * @property {(secretId: string) => SecretAuditEvent[]} listSecretAuditEventsFor
+ *   Every audit event for one secret, oldest first.
  */
 
 /**
@@ -667,17 +669,13 @@ export const makeSecretManager = ({
           }
         });
       },
-      provideBase64: async (
-        name,
-        description,
-        bytesBase64,
-        { secretId, grantId, operationId },
-      ) => {
+      provideBase64: async (name, description, bytesBase64, stableIds) => {
         await null;
         assertPetName(name);
         assertDescription(description);
-        [secretId, grantId, operationId].every(value =>
-          STABLE_ID_PATTERN.test(value),
+        const { secretId, grantId, operationId } = stableIds;
+        [secretId, grantId, operationId].every(
+          value => typeof value === 'string' && STABLE_ID_PATTERN.test(value),
         ) ||
           (() => {
             throw fixedError('INVALID_STABLE_ID');
@@ -691,26 +689,46 @@ export const makeSecretManager = ({
           if (existing !== undefined && existing.grantId !== grantId) {
             throw fixedError('NAME_CONFLICT');
           }
+          // A retry may finish binding its own name, never add a second one.
+          knownPaths.every(
+            entry => entry.grantId !== grantId || entry === existing,
+          ) ||
+            (() => {
+              throw fixedError('IDEMPOTENCY_CONFLICT');
+            })();
+          const recordedSecretId = persistence.getSecretIdForGrant(grantId);
+          recordedSecretId === undefined ||
+            recordedSecretId === secretId ||
+            (() => {
+              throw fixedError('IDEMPOTENCY_CONFLICT');
+            })();
           let record = persistence.getSecretRecord(secretId);
           if (record !== undefined) {
-            record.description === description ||
+            // Only the operation that created the record may resume it, and
+            // only through the grant that operation recorded. The caller
+            // chooses `secretId`, so knowing it must not be enough to mint
+            // another grant onto someone else's secret.
+            const creator = persistence
+              .listSecretAuditEventsFor(secretId)
+              .filter(
+                event =>
+                  event.operation === 'create' && event.outcome === 'attempted',
+              )
+              .at(-1);
+            (record.description === description &&
+              creator?.operationId === operationId &&
+              recordedSecretId === secretId) ||
               (() => {
                 throw fixedError('IDEMPOTENCY_CONFLICT');
               })();
-            const recordedSecretId = persistence.getSecretIdForGrant(grantId);
-            recordedSecretId === undefined ||
-              recordedSecretId === secretId ||
-              (() => {
-                throw fixedError('IDEMPOTENCY_CONFLICT');
-              })();
-            if (recordedSecretId === undefined) {
-              persistence.writeSecretGrant(grantId, secretId);
-            }
             record.state !== 'revoked' ||
               (() => {
                 throw fixedError('REVOKED');
               })();
           } else {
+            // The attempt is audited before the record exists, so the record
+            // never outlives the event that names its creating operation.
+            await audit(secretId, 'create', 'attempted', 1n, operationId);
             const createdAt = now();
             record = harden(
               /** @type {SecretRecord} */ ({
@@ -725,47 +743,52 @@ export const makeSecretManager = ({
             );
             persistence.writeSecretRecord(record);
             persistence.writeSecretGrant(grantId, secretId);
-            await audit(secretId, 'create', 'attempted', 1n, operationId);
           }
 
           if (record.state === 'provisioning') {
-            try {
-              const backendRef =
-                bytesBase64 === undefined
-                  ? await backend.recover?.(operationId, secretId)
-                  : await withDecodedSecret(bytesBase64, bytes =>
-                      backend.create(operationId, secretId, bytes),
-                    );
-              backendRef !== undefined ||
-                (() => {
-                  throw fixedError('KEY_NEEDED');
-                })();
-              record = harden({
-                ...record,
-                backendRef,
-                state: /** @type {'active'} */ ('active'),
-                updatedAt: now(),
-              });
-              persistence.writeSecretRecord(record);
-            } catch (error) {
-              if (/KEY_NEEDED/.test(/** @type {Error} */ (error).message)) {
-                throw error;
+            /** @param {() => Promise<string | undefined>} install */
+            const installBackend = async install => {
+              await null;
+              try {
+                return await install();
+              } catch {
+                await audit(secretId, 'create', 'failed', 1n, operationId, {
+                  reasonCode: 'CREATE_FAILED',
+                });
+                throw fixedError('CREATE_FAILED');
               }
-              await audit(secretId, 'create', 'failed', 1n, operationId, {
-                reasonCode: 'CREATE_FAILED',
-              });
-              throw fixedError('CREATE_FAILED');
+            };
+            const backendRef =
+              bytesBase64 === undefined
+                ? await installBackend(async () =>
+                    backend.recover?.(operationId, secretId),
+                  )
+                : await withDecodedSecret(bytesBase64, bytes =>
+                    installBackend(() =>
+                      backend.create(operationId, secretId, bytes),
+                    ),
+                  );
+            if (backendRef === undefined) {
+              // Nothing was written and no bytes were supplied. The
+              // `provisioning` summary tells the caller to resupply the key.
+              return summaryFor(record);
             }
+            record = harden({
+              ...record,
+              backendRef,
+              state: /** @type {'active'} */ ('active'),
+              updatedAt: now(),
+            });
+            persistence.writeSecretRecord(record);
           }
 
           if (existing === undefined) {
             await bindGrant(grantId, name);
           }
           const succeeded = persistence
-            .listSecretAuditEvents(1000)
+            .listSecretAuditEventsFor(secretId)
             .some(
               event =>
-                event.secretId === secretId &&
                 event.operationId === operationId &&
                 event.operation === 'create' &&
                 event.outcome === 'succeeded',

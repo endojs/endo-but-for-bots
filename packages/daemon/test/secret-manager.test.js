@@ -38,6 +38,8 @@ const makeHarness = () => {
     // `slice(-0)` would yield every event; SQL `LIMIT 0` yields none.
     listSecretAuditEvents: limit =>
       limit === 0 ? [] : events.slice(-limit).reverse(),
+    listSecretAuditEventsFor: secretId =>
+      events.filter(event => event.secretId === secretId),
   });
   const backend = harden({
     create: async (_operationId, secretId, bytes) => {
@@ -311,6 +313,8 @@ test('a revoke racing a backend read fails the read closed', async t => {
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
         limit === 0 ? [] : harness.events.slice(-limit),
+      listSecretAuditEventsFor: secretId =>
+        harness.events.filter(event => event.secretId === secretId),
     }),
     backend: racingBackend,
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
@@ -405,6 +409,8 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
         limit === 0 ? [] : harness.events.slice(-limit),
+      listSecretAuditEventsFor: secretId =>
+        harness.events.filter(event => event.secretId === secretId),
     }),
     backend,
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
@@ -453,6 +459,8 @@ const makeRacingManager = (
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
         limit === 0 ? [] : harness.events.slice(-limit),
+      listSecretAuditEventsFor: secretId =>
+        harness.events.filter(event => event.secretId === secretId),
     }),
     backend,
     randomHex256: async () => {
@@ -1144,20 +1152,17 @@ test('stable import refuses invalid ids, idempotency conflicts, missing keys, an
       ),
     { message: /INVALID_STABLE_ID/ },
   );
-  await t.throwsAsync(
-    () =>
-      E(importer).provideBase64(
-        'stable-missing',
-        'Stable missing key',
-        undefined,
-        harden({
-          secretId: 'secret-stable-0006',
-          grantId: 'grant-stable-00006',
-          operationId: 'operation-stable-6',
-        }),
-      ),
-    { message: /KEY_NEEDED/ },
+  const missing = await E(importer).provideBase64(
+    'stable-missing',
+    'Stable missing key',
+    undefined,
+    harden({
+      secretId: 'secret-stable-0006',
+      grantId: 'grant-stable-00006',
+      operationId: 'operation-stable-6',
+    }),
   );
+  t.is(missing.state, 'provisioning');
 
   await E(importer).provideBase64(
     'stable-refuse',
@@ -1190,6 +1195,54 @@ test('stable import refuses invalid ids, idempotency conflicts, missing keys, an
     { message: /IDEMPOTENCY_CONFLICT/ },
   );
 
+  // Knowing a secret's id and description is not enough to resume it: the
+  // creating operation and its grant must both match.
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-intruder',
+        'Stable refusal',
+        bytes,
+        harden({
+          secretId: stableIds.secretId,
+          grantId: 'grant-intruder-01',
+          operationId: 'operation-intruder',
+        }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-intruder',
+        'Stable refusal',
+        bytes,
+        harden({ ...stableIds, grantId: 'grant-intruder-02' }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-intruder',
+        'Stable refusal',
+        bytes,
+        harden({ ...stableIds, operationId: 'operation-intruder' }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  // A retry may not bind the same grant under a second name.
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-second-name',
+        'Stable refusal',
+        bytes,
+        stableIds,
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+
   const entry = (await E(await E(directory).lookup('catalog')).list()).find(
     candidate => candidate.secretId === stableIds.secretId,
   );
@@ -1204,4 +1257,15 @@ test('stable import refuses invalid ids, idempotency conflicts, missing keys, an
       ),
     { message: /REVOKED/ },
   );
+  // A refused retry against a revoked secret leaves no new grant behind.
+  t.is(harness.grants.get('grant-intruder-03'), undefined);
+  await t.throwsAsync(() =>
+    E(importer).provideBase64(
+      'stable-refuse',
+      'Stable refusal',
+      bytes,
+      harden({ ...stableIds, grantId: 'grant-intruder-03' }),
+    ),
+  );
+  t.is(harness.grants.get('grant-intruder-03'), undefined);
 });
