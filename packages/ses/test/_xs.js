@@ -1,4 +1,6 @@
 // @ts-nocheck
+// prefer-endo-primitives-exempt: this fixture verifies the host TextEncoder and
+// TextDecoder that SES hardens on XS, so it must construct them directly.
 // This is a test fixture for minimal spot checks of the XS-specific variant of
 // SES.
 // The script ../scripts/generate-test-xs.js generates the _meaning.pre-mjs.json
