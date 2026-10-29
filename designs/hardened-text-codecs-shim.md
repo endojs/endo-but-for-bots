@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-09-29 |
+| **Updated** | 2026-10-27 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Implemented** (Phases 1-2) |
 
@@ -28,7 +28,13 @@ A follow-up PR, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
 Node's non-standard `Symbol(nodejs.util.inspect.custom)` method on both
 prototypes.
 
-Remaining items:
+Completed follow-up:
+
+- **Phase 3 (downstream audit, optional):** performed on `llm` commit
+  `844ce3df7b`; no call site needs migration. § Phase 3 audit result
+  below lists the call sites and the loader evidence.
+
+Open items:
 
 - **§ Test plan item 6 (XS smoke test):** open as draft
   [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349).
@@ -37,13 +43,6 @@ Remaining items:
   path exercises pass-through-and-harden rather than the missing-codecs
   case this design assumed. § Sampling and degradation and Design
   Decision 3 below note this.
-- **Phase 3 (downstream audit, optional):** not performed on `llm`. As of
-  `llm` commit `7ff30afbce`, `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
-  in 10 files. All are Node-host powers, drivers, and backends
-  (`9p-server`, `cli`, `daemon`, `git`, `platform`, `sandbox`, and the
-  `*-sandbox` packages), not
-  code that runs inside a compartment. An audit, if wanted, is a separate
-  cleanup job.
 - **Node `TextDecoder` fast-path flags:** hardening a `TextDecoder`
   *instance* on recent Node releases makes the next `decode()` throw.
   Tracked upstream as
@@ -220,11 +219,147 @@ Tests live under `packages/ses/test/`.
 Optional cleanup; it does not gate the **Implemented** status.
 
 - Grep the monorepo for `Buffer.from(` and `.toString('utf` in code
-  that runs under SES.
+  that runs inside a compartment created after lockdown.
   These call sites become candidates for migration to
   `TextEncoder`/`TextDecoder` per the project's
   "prefer Uint8Array + TextEncoder/TextDecoder over Buffer"
   convention.
+
+#### Phase 3 audit result
+
+Audited on `llm` commit `844ce3df7b`.
+
+**Scope.**
+The audit covers shipped package code, `packages/*/src`.
+It also checks the other non-test package surfaces (`bench/`,
+`demo/`, `scripts/`, and Markdown) for code that runs inside a
+compartment created after lockdown.
+It excludes `packages/*/test/` (83 matches), because tests are not
+shipped and run on the Node host.
+
+**Criterion.**
+Each match is classified on two separate axes.
+
+- *Execution boundary:* does the code run in the start compartment
+  on the Node host, or inside a compartment created after lockdown?
+  A module's Node-builtin imports or host-global reads show what
+  authority it needs, not where it runs: a loader's policy or
+  endowments can grant both to a compartment.
+  The audit therefore classifies each site by its loaders, below.
+  The start compartment still runs under SES, but `Buffer` is a host
+  global there.
+- *Conversion:* is the operation a portable UTF-8 conversion, which
+  `TextEncoder` and `TextDecoder` can replace, or does it depend on
+  `Buffer`-specific behavior?
+  `Buffer`-specific behavior includes hex and base64 decoding,
+  zero-copy `Buffer` views handed to Node streams, and
+  `Buffer#copy` into a frame buffer.
+
+A site is a migration candidate under this phase only if it runs
+inside a compartment created after lockdown and performs a portable
+UTF-8 conversion.
+
+**Loaders.**
+These are the loaders in `packages/*/src` that run code inside a
+compartment created after lockdown, and what each supplies:
+
+- The daemon worker (`packages/daemon/src/worker.js`) loads confined
+  caplets from a bundle, archive, or tree through `parseArchive`.
+  It passes a fixed `globals` record (`assert`, `console`, `E`, `Far`,
+  `makeExo`, `M`, `TextEncoder`, `TextDecoder`, `URL`) and no exit
+  modules, so a confined caplet gets neither `Buffer` nor any Node
+  builtin. Its `evaluate` facet uses the same record plus
+  caller-supplied pet-named values.
+- `@endo/import-bundle`, the agent-tools code-mode compartment, the
+  Fae code tool, the Preact container, the Thixotrope worker, and the
+  `exo-npm` snapshot mapper take caller-supplied endowments or pass
+  `modules: {}`. No caller in `packages/*/src` endows `Buffer` or
+  grants a Node builtin.
+
+The daemon worker loads *unconfined* caplets with a native `import()`,
+so they run in the start compartment.
+The command-line tools and the daemon's Node powers also load through
+Node's own module loader.
+
+**Shipped code.**
+`packages/*/src` has 22 `Buffer.from(` and `.toString('utf...')`
+call sites in 13 files, not counting comments.
+Each site gets its `Buffer` from the host global, from an import of
+`node:buffer`, or as a chunk from a `node:net` socket.
+No compartment loader above supplies any of these, so in a
+compartment created by one of them a site would fail with a
+`ReferenceError` or fail to link.
+All 22 sites therefore run only under Node's own loader, in the start
+compartment.
+This holds for the loaders in this repository; a consumer outside it
+could build a compartment whose policy grants `Buffer` or
+`node:buffer`.
+That compartment would also have `TextEncoder` and `TextDecoder`,
+because they are universal intrinsics, so the consumer could migrate
+at that point.
+The per-file notes below record each file's `Buffer` source and its
+known loader.
+
+- `packages/9p-server/src/server.js`, 1 site. `Buffer` view for a socket
+  write. Host-global `Buffer`. Loaded only by the unconfined `mount-caplet.js` through
+  `fs-bridge.js`, which imports `node:net`. The daemon worker loads
+  unconfined caplets with a native `import()`.
+- `packages/9p-server/src/wire.js`, 3 sites. 2 UTF-8, 1 `Buffer#copy`
+  into a frame. Same as `server.js`.
+- `packages/claude/src/launch.js`, 2 sites. UTF-8 decode. Host-global
+  `Buffer`; spawns a `node:child_process` child.
+- `packages/cli/src/commands/log.js`, 1 site. UTF-8 decode. Command-line
+  tool; host-global `Buffer`; imports `fs` and `child_process`.
+- `packages/daemon/src/manager-node-powers.js`, 1 site. Hex decode of a
+  DER prefix. The daemon's Node powers; host-global `Buffer`; imports `node:crypto` and
+  `node:fs/promises`.
+- `packages/git/src/native-git-backend.js`, 4 sites. UTF-8 encode and
+  decode. Imports `node:buffer`, `node:child_process`, and `node:fs`.
+- `packages/hosted-agent/src/mcp-socket.js`, 1 site. UTF-8 decode.
+  Decodes `Buffer` chunks from a socket it creates with `node:net`.
+- `packages/npm-registry-server/src/http.js`, 3 sites. UTF-8 encode and
+  decode. Imports `node:http` and `node:buffer`.
+- `packages/npm-registry-server/src/registry.js`, 1 site. Base64 decode.
+  Imports `Buffer` from `node:buffer`.
+- `packages/opencode-sandbox/src/opencode-bridge.mjs`, 1 site. Base64
+  encode. Imports `node:buffer`, `node:child_process`, and
+  `node:process`.
+- `packages/platform/src/http-node/backend.js`, 1 site. `Buffer` view
+  for an HTTP write. Host-global `Buffer`; imports `node:http`.
+- `packages/sandbox/src/drivers/child-process.js`, 2 sites. UTF-8
+  decode. Host-global `Buffer`. Calls `spawn` on a passed-in Node `child_process` module and
+  collects its output chunks.
+- `packages/sandbox/src/drivers/podman.js`, 1 site. UTF-8 round trip.
+  Host-global `Buffer`. Drives `podman` through `child-process.js` and
+  reads the `process` host global.
+
+The other matches in `packages/*/src`, in
+`packages/pass-style/src/byteArray.js` and
+`packages/immutable-arraybuffer/src/lib.js`, are comments.
+
+**Other package surfaces.**
+One match runs inside a compartment created after lockdown.
+`packages/compartment-mapper/demo/policy/index.mjs` calls `lockdown()`
+and then loads `app.js` with `importLocation`.
+`packages/compartment-mapper/demo/policy/app.js` calls `Buffer.from`
+at line 13, through a `Buffer` subset that the demo's policy endows.
+That call decodes a hex string, so it is `Buffer`-specific, and
+`TextEncoder` and `TextDecoder` cannot replace it.
+The demo also exists to show a policy-attenuated `Buffer` endowment,
+so it stays as written.
+The remaining matches are host scripts or prose:
+`packages/9p-server/bench/bench.js`,
+`packages/fae/scripts/debug-llm-logs.js`, and
+`packages/fae/scripts/smoke.test.js` run on the Node host, and
+`packages/immutable-arraybuffer/README.md` and
+`packages/immutable-arraybuffer/designs/immutable-arraybuffer.md` are
+Markdown.
+
+**Conclusion.**
+No site meets the migration criterion.
+The portable UTF-8 sites in the table could still move to
+`TextEncoder` and `TextDecoder` as a style cleanup, following the
+portability convention, but this design does not require it.
 
 ## Design Decisions
 
