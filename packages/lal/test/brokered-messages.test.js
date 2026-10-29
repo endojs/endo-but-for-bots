@@ -695,3 +695,35 @@ test('brokered Lal drives a turn through the broker with no API key', async t =>
   t.is(body.max_tokens, 77);
   t.false(/api[-_]?key|authorization/i.test(JSON.stringify(request)));
 });
+
+const brokeredTurn = async env => {
+  const subject = rawFixture({
+    chunks: textChunks(sse([textStart, stop])),
+  });
+  const { powers } = makeMockPowers({
+    initialMessage: {
+      number: 1,
+      from: '@host',
+      to: 'lal-self-id',
+      strings: ['Say hello.'],
+      names: [],
+      ids: [],
+    },
+  });
+  await spawnWorkerLoop(powers, null, {
+    LAL_INFERENCE: subject.inference,
+    ...env,
+  });
+  return subject;
+};
+
+test('brokered Lal defaults max_tokens to 4096', async t => {
+  const subject = await brokeredTurn({ LAL_MODEL: 'claude-test' });
+  t.is(JSON.parse(subject.requests[0].body).max_tokens, 4096);
+});
+
+test('brokered Lal rejects a missing model', async t => {
+  await t.throwsAsync(brokeredTurn({ LAL_MAX_TOKENS: '77' }), {
+    message: /Invalid brokered Messages recipe/,
+  });
+});

@@ -762,7 +762,9 @@ export const makeInferenceProviderRegistry = async ({
         },
       ];
       const reservedTokens = conservativeTokenReservation(request);
-      const price = modelPrices[grant.models[0]];
+      const price = Object.hasOwn(modelPrices, grant.models[0])
+        ? modelPrices[grant.models[0]]
+        : undefined;
       const reservedCostMicros = priceUsageMicros(
         request.inputBytes * 2,
         request.maxOutputTokens,
@@ -819,6 +821,7 @@ export const makeInferenceProviderRegistry = async ({
       for (const turn of allTurns) {
         if (
           turn.day !== day &&
+          Number(turn.admittedAtMs) < admittedAtMs - 60_000 &&
           (turn.state !== 'reserved' ||
             Number(turn.expiresAtMs ?? Infinity) <= admittedAtMs)
         ) {
@@ -876,7 +879,9 @@ export const makeInferenceProviderRegistry = async ({
         counts.outputTokens,
         counts.cacheReadTokens,
         counts.cacheWriteTokens,
-        modelPrices[prior.model],
+        Object.hasOwn(modelPrices, prior.model)
+          ? modelPrices[prior.model]
+          : undefined,
       );
       const chargedCostMicros =
         disposition === 'released'
@@ -1186,7 +1191,14 @@ export const makeInferenceProviderRegistry = async ({
           const checked = checkLimits(limits, grant.caps);
           for (const [name, value] of Object.entries(checked)) {
             const providerValue = lifecycle.limits[name];
-            providerValue === undefined ||
+            (providerValue === undefined &&
+            (name === 'dailyTokens' || name === 'dailyDollars')
+              ? (() => {
+                  // admit() would drop a cap of the provider's other budget
+                  // kind, so refuse it rather than persist an unenforced cap.
+                  throw fixedError('invalid-agent-limits');
+                })()
+              : providerValue === undefined) ||
               Number(value) <= Number(providerValue) ||
               (() => {
                 throw fixedError('invalid-agent-limits');
@@ -1255,7 +1267,14 @@ export const makeInferenceProviderRegistry = async ({
           const caps = checkLimits(request.caps || {}, agentDefaults);
           for (const [name, value] of Object.entries(caps)) {
             const providerValue = lifecycle.limits[name];
-            providerValue === undefined ||
+            (providerValue === undefined &&
+            (name === 'dailyTokens' || name === 'dailyDollars')
+              ? (() => {
+                  // admit() would drop a cap of the provider's other budget
+                  // kind, so refuse it rather than persist an unenforced cap.
+                  throw fixedError('invalid-agent-limits');
+                })()
+              : providerValue === undefined) ||
               Number(value) <= Number(providerValue) ||
               (() => {
                 throw fixedError('invalid-agent-limits');

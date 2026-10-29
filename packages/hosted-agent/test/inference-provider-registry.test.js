@@ -704,6 +704,15 @@ test('phase 2 defaults and limit raises require explicit confirmation', async t 
     { message: /limit-raise-unconfirmed/ },
   );
   t.is(registry.inspect().grants['grant-defaults-1'].caps.dailyDollars, 1);
+  await t.throwsAsync(
+    () =>
+      E(use).setGrantLimits(
+        'grant-defaults-1',
+        harden({ dailyTokens: 100 }),
+        'wrong-kind-1',
+      ),
+    { message: /invalid-agent-limits/ },
+  );
   t.is(
     (
       await E(use).setGrantLimits(
