@@ -42,7 +42,7 @@ import {
   makeHelp,
 } from '@endo/exo-git';
 
-import { parseGitDiff } from './parse-diff.js';
+import { parseDiffOutput } from './parse-diff.js';
 
 // `TextDecoder` is portable across XS, browsers, and SES realms;
 // prefer it over `Buffer.from(...).toString('utf8')` per the project
@@ -2752,7 +2752,8 @@ export const makeNativeGitBackend = ({
     worktreeRemove,
 
     /**
-     * Render a textual diff in `git diff` form.
+     * Render a textual diff in `git diff` form, capped at
+     * `TOOL_OUTPUT_LIMIT` (50,000 characters) with a truncation marker.
      *
      * @param {GitBackendDiffOptions} [options]
      * @returns {Promise<string>}
@@ -2760,30 +2761,33 @@ export const makeNativeGitBackend = ({
     diffText: async (options = {}) => runGit(diffArguments(options)),
 
     /**
-     * Report a diff as structured per-file records, parsed from a
-     * `--raw -z` rendering and a patch rendering of the same comparison.
-     * Both invocations pin `--find-renames`, and the patch pins uncolored
-     * output and the short submodule rendering (a `diff.submodule=log`
-     * summary has no `diff --git` section), so repository diff
-     * configuration cannot desynchronize them.  Unlike
-     * `diffText`, an output larger than the subprocess buffer fails rather
-     * than truncating, because a truncated patch cannot be parsed honestly.
+     * Report a diff as structured per-file records, parsed from one git run
+     * that writes a `--raw -z` rendering followed by the patch, so both
+     * renderings describe the same snapshot of a changing worktree.
+     * The run pins `--find-renames`, uncolored output, and the short
+     * submodule rendering (a `diff.submodule=log` summary has no
+     * `diff --git` section), so repository diff configuration cannot
+     * desynchronize the two renderings.
+     * An output larger than the 1 MiB subprocess buffer fails, because a
+     * truncated patch cannot be parsed honestly; `diffText` instead caps
+     * its result at `TOOL_OUTPUT_LIMIT` (50,000 characters) with a
+     * truncation marker.
      *
      * @param {GitBackendDiffOptions} [options]
      * @returns {Promise<GitDiff>}
      */
     diff: async (options = {}) => {
-      const [rawText, patchText] = await Promise.all([
-        runGitRaw(diffArguments(options, ['--raw', '-z', '--no-abbrev'])),
-        runGitRaw(
-          diffArguments(options, [
-            '--patch',
-            '--no-color',
-            '--submodule=short',
-          ]),
-        ),
-      ]);
-      return parseGitDiff(rawText, patchText);
+      const output = await runGitRaw(
+        diffArguments(options, [
+          '--raw',
+          '-z',
+          '--no-abbrev',
+          '--patch',
+          '--no-color',
+          '--submodule=short',
+        ]),
+      );
+      return parseDiffOutput(output);
     },
 
     /**

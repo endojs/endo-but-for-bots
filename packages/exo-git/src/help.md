@@ -63,9 +63,12 @@ List the repository's branches as refs.
 
 Report changes as structured data: `{ files }`, one record per changed
 file with `status`, `oldPath` / `newPath`, `oldMode` / `newMode`, and
-`hunks` of `{ kind: 'context' | 'add' | 'remove', text }` lines.
+`hunks`.
+Each hunk carries `oldStart`, `oldLines`, `newStart`, `newLines`, and
+`lines` of `{ kind: 'context' | 'add' | 'remove', text }`.
 A binary file carries `binary` and no hunks; an unmerged path has
 status `unmerged` and no hunks.
+An output larger than 1 MiB fails; use `diffText` or narrow by path.
 Options are `cached`, `base`, `head`, and either `entries` (PathEntry
 capabilities minted for this worktree) or `paths`.
 - diff({ cached: true }) compares the index with HEAD
@@ -74,6 +77,7 @@ capabilities minted for this worktree) or `paths`.
 ## diffText(options?) -> Promise<string>
 
 Render the same comparison as `diff` as `git diff` text, for display.
+The text is capped at 50,000 characters with a truncation marker.
 Takes the same options as `diff`.
 
 ## log(options?) -> Promise<GitCommit[]>

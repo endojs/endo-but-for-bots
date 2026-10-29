@@ -452,7 +452,10 @@ export type ReadOnlyEndoGit = {
   trackingStatus: () => Promise<GitTrackingStatus>;
   worktreeList: () => Promise<GitWorktreeEntry[]>;
   diff: (options?: GitDiffOptions) => Promise<GitDiff>;
-  /** The porcelain `git diff` rendering of the same comparison as `diff`. */
+  /**
+   * The porcelain `git diff` rendering of the same comparison as `diff`,
+   * capped at 50,000 characters with a truncation marker.
+   */
   diffText: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;

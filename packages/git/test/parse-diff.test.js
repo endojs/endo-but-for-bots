@@ -4,9 +4,11 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import {
+  parseDiffOutput,
   parseGitDiff,
   parsePatchSections,
   parseRawDiff,
+  splitDiffOutput,
 } from '../src/parse-diff.js';
 
 const ZERO_OID = '0'.repeat(40);
@@ -282,4 +284,43 @@ test('parseGitDiff refuses an unsupported raw status letter', t => {
   t.throws(() => parseGitDiff(raw, 'diff --git a/f b/f\n'), {
     message: /Unsupported git diff status/,
   });
+});
+
+test('splitDiffOutput separates one run into raw records and patch', t => {
+  const modify = `:100644 100644 ${'1'.repeat(40)} ${'2'.repeat(40)} M`;
+  const rename = `:100644 100644 ${'3'.repeat(40)} ${'3'.repeat(40)} R100`;
+  const rawPart = `${modify}\0a.txt\0${rename}\0old name\0new name\0`;
+  const patchPart = [
+    'diff --git a/a.txt b/a.txt',
+    '@@ -1 +1 @@',
+    '-one',
+    '+two',
+    'diff --git a/old name b/new name',
+    'similarity index 100%',
+    'rename from old name',
+    'rename to new name',
+    '',
+  ].join('\n');
+  t.deepEqual(splitDiffOutput(`${rawPart}\0${patchPart}`), {
+    rawText: rawPart,
+    patchText: patchPart,
+  });
+  t.deepEqual(splitDiffOutput(''), { rawText: '', patchText: '' });
+  t.deepEqual(splitDiffOutput(rawPart), { rawText: rawPart, patchText: '' });
+  t.deepEqual(
+    parseDiffOutput(`${rawPart}\0${patchPart}`).files.map(
+      ({ status, newPath }) => [status, newPath],
+    ),
+    [
+      ['modified', 'a.txt'],
+      ['renamed', 'new name'],
+    ],
+  );
+  const unmerged = `::100644 100644 100644 ${'4'.repeat(40)} ${'5'.repeat(40)} ${'0'.repeat(40)} MM`;
+  t.deepEqual(
+    parseDiffOutput(`${unmerged}\0f.txt\0\0diff --cc f.txt\nindex 4,5..0\n`)
+      .files,
+    [{ status: 'unmerged', oldPath: 'f.txt', newPath: 'f.txt', hunks: [] }],
+  );
+  t.throws(() => splitDiffOutput(`${modify}`), { message: /ends early/ });
 });

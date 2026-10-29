@@ -79,7 +79,13 @@ export const parseRawDiff = rawText => {
       if (!header.startsWith(':')) {
         throw Error(`Unexpected git diff --raw field ${q(header)}`);
       }
-      const [oldMode, newMode, , , status] = header.slice(1).split(' ');
+      // Alongside `--patch`, git renders an unmerged path as one combined
+      // record (`::` plus a mode and object per side) instead of a `U`
+      // record followed by a stage-to-worktree record.
+      const combined = header.startsWith('::');
+      const [oldMode, newMode, , , status] = combined
+        ? [ABSENT_MODE, ABSENT_MODE, '', '', 'U']
+        : header.slice(1).split(' ');
       const letter = status.slice(0, 1);
       const path = fields[index + 1];
       if (path === undefined || path === '') {
@@ -218,6 +224,9 @@ const modeNumber = mode =>
  * The raw records carry exact paths, modes, and statuses; the patch carries
  * hunks.  Both list files in the same order, which this function verifies
  * by requiring every patch section to be consumed exactly once.
+ * The renderings must come from one invocation (see `parseDiffOutput`):
+ * two separate runs over a changing worktree can list the same number of
+ * different files, which this count check cannot detect.
  *
  * @param {string} rawText `git diff --raw -z --no-abbrev` output.
  * @param {string} patchText `git diff --patch` output for the same arguments.
@@ -286,3 +295,54 @@ export const parseGitDiff = (rawText, patchText) => {
   return harden({ files: harden(files) });
 };
 harden(parseGitDiff);
+
+/**
+ * Split the output of one `git diff --raw -z --no-abbrev --patch` run into
+ * its raw records and its patch.  Git writes every NUL-terminated raw record
+ * first, then an empty field, then the patch; a raw record never has an
+ * empty header, so the first empty field where a header belongs ends the raw
+ * part.
+ *
+ * @param {string} output
+ * @returns {{ rawText: string, patchText: string }}
+ */
+export const splitDiffOutput = output => {
+  let offset = 0;
+  while (offset < output.length) {
+    if (output[offset] === '\0') {
+      return harden({
+        rawText: output.slice(0, offset),
+        patchText: output.slice(offset + 1),
+      });
+    }
+    const headerEnd = output.indexOf('\0', offset);
+    if (headerEnd === -1) {
+      throw Error(
+        `git diff --raw record ${q(output.slice(offset))} ends early`,
+      );
+    }
+    const status = output.slice(offset, headerEnd).split(' ').at(-1) ?? '';
+    const pathCount = status.startsWith('R') || status.startsWith('C') ? 2 : 1;
+    offset = headerEnd + 1;
+    for (let pathIndex = 0; pathIndex < pathCount; pathIndex += 1) {
+      const pathEnd = output.indexOf('\0', offset);
+      offset = pathEnd === -1 ? output.length : pathEnd + 1;
+    }
+  }
+  return harden({ rawText: output, patchText: '' });
+};
+harden(splitDiffOutput);
+
+/**
+ * Parse one `git diff --raw -z --no-abbrev --patch` run into a `GitDiff`.
+ * Taking both renderings from a single run means they describe the same
+ * snapshot of the worktree.
+ *
+ * @param {string} output
+ * @returns {GitDiff}
+ */
+export const parseDiffOutput = output => {
+  const { rawText, patchText } = splitDiffOutput(output);
+  return parseGitDiff(rawText, patchText);
+};
+harden(parseDiffOutput);
