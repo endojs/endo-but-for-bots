@@ -1,5 +1,4 @@
 // @ts-check
-// prefer-endo-primitives-exempt: this provider is the SSE/TextDecoder bridge.
 
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
@@ -9,62 +8,25 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 import { toAnthropicMessages, toAnthropicTools } from './anthropic.js';
+import { sseData } from './sse-data.js';
 
 // This is a sibling of subscription-responses.js rather than a mode of it:
 // both consume an InferenceEndpoint, but that adapter speaks the OpenAI
 // Responses request and event grammar, and Anthropic Messages has its own.
 
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MODEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 
 /** @param {AsyncIterableIterator<Uint8Array>} bytes */
 const anthropicEvents = async function* anthropicEventIterator(bytes) {
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let pending = '';
-  let data = [];
-  let size = 0;
-  const takeEvent = () => {
-    const text = data.join('\n');
-    data = [];
+  for await (const text of sseData(bytes, 'Anthropic Messages')) {
+    let event;
     try {
-      return JSON.parse(text);
+      event = JSON.parse(text);
     } catch {
       throw Error('Invalid Anthropic Messages stream event');
     }
-  };
-  /**
-   * Split complete lines off `pending`. Until the stream ends, a trailing CR
-   * may be the first half of a CRLF, so it waits for the next chunk.
-   *
-   * @param {boolean} ended
-   */
-  const takeLines = function* takeLineIterator(ended) {
-    const terminator = ended
-      ? /^(.*?)(\r\n|\n|\r)/s
-      : /^(.*?)(\r\n|\n|\r(?!$))/s;
-    for (;;) {
-      const match = terminator.exec(pending);
-      if (!match) break;
-      pending = pending.slice(match[0].length);
-      const line = match[1];
-      if (line === '') {
-        if (data.length > 0) yield takeEvent();
-      } else if (line.startsWith('data:')) {
-        data.push(line.slice(5).replace(/^ /, ''));
-      }
-    }
-  };
-  for await (const chunk of bytes) {
-    size += Number(chunk.byteLength);
-    size <= MAX_RESPONSE_BYTES ||
-      Fail`Anthropic stream exceeds transport bound`;
-    pending += decoder.decode(chunk, { stream: true });
-    yield* takeLines(false);
+    yield event;
   }
-  pending += decoder.decode();
-  yield* takeLines(true);
-  (!pending.trim() && data.length === 0) ||
-    Fail`Truncated Anthropic Messages stream event`;
 };
 
 /** @param {any} recipe */
@@ -340,8 +302,14 @@ const currentTools = context => {
 
 /**
  * Pi stream function over the brokered provider. It deliberately emits one
- * completed event after the broker stream is validated; the provider adapter
- * remains the only Anthropic wire-format owner.
+ * completed event after the broker stream is validated.
+ *
+ * pi-ai's native `anthropic-messages` stream is not reused through a `fetch`
+ * shim: it posts to `/v1/messages?beta=true` with `anthropic-beta` headers,
+ * adds `thinking`, `output_config`, `fallbacks`, and `cache_control` fields,
+ * and retries on its own. The registry's request policy refuses each of
+ * those, and a retry would be a second admission, so a shim would have to
+ * rewrite pi-ai's request and own the wire format anyway.
  *
  * @param {object} options
  * @param {any} options.inference

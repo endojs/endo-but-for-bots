@@ -12,9 +12,9 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { M, mustMatch } from '@endo/patterns';
 
 import { abortableDelay } from './delay.js';
+import { sseData } from './sse-data.js';
 
 // A transport bound matching the Codex broker, not a model context limit.
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const OVERLOAD_RETRY_DELAYS_MS = harden([5000, 10_000, 20_000, 40_000, 60_000]);
 // These events stay inside the adapter. In particular, seeing a function-call
 // item does not dispatch a tool: only a completed response leaves the adapter.
@@ -306,59 +306,21 @@ const requestContext = (messages, model) => {
   return { instructions: instructions.join('\n\n'), input };
 };
 
-/**
- * SSE framing is independent of chunk boundaries and retains multiline data.
- * The broker's usage tap is deliberately not an SSE parser: it skips oversized
- * lines and malformed JSON, whereas an inference consumer must reject them.
- * @param {AsyncIterableIterator<Uint8Array>} bytes
- */
+/** @param {AsyncIterableIterator<Uint8Array>} bytes */
 const responseEvents = async function* responseEventIterator(bytes) {
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let pending = '';
-  let data = [];
-  let size = 0;
-  const takeEvent = () => {
-    const text = data.join('\n');
-    data = [];
-    if (text === '[DONE]') return { type: 'stream.done' };
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw Error('Invalid Responses stream event');
-    }
-  };
-  for await (const chunk of bytes) {
-    size += chunk.byteLength;
-    size <= MAX_RESPONSE_BYTES ||
-      Fail`Responses stream exceeds transport bound`;
-    pending += decoder.decode(chunk, { stream: true });
-    for (;;) {
-      const match = /^(.*?)(\r\n|\n|\r(?!$))/s.exec(pending);
-      if (!match) break;
-      pending = pending.slice(match[0].length);
-      const line = match[1];
-      if (line === '') {
-        if (data.length > 0) {
-          const event = takeEvent();
-          if (event !== undefined) yield event;
-        }
-      } else if (line.startsWith('data:')) {
-        data.push(line.slice(5).replace(/^ /, ''));
+  for await (const text of sseData(bytes, 'Responses')) {
+    if (text === '[DONE]') {
+      yield { type: 'stream.done' };
+    } else {
+      let event;
+      try {
+        event = JSON.parse(text);
+      } catch {
+        throw Error('Invalid Responses stream event');
       }
+      yield event;
     }
   }
-  pending += decoder.decode();
-  // A trailing CR is held across chunks to distinguish CRLF. At EOF it is
-  // itself the final line ending, including a CR-only blank dispatch line.
-  if (pending === '\r') {
-    pending = '';
-    if (data.length > 0) {
-      const event = takeEvent();
-      if (event !== undefined) yield event;
-    }
-  }
-  (!pending.trim() && data.length === 0) ||
-    Fail`Truncated Responses stream event`;
 };
 
 /**
