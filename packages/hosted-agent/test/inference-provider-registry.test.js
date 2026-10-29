@@ -8,6 +8,10 @@ import { M } from '@endo/patterns';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { makeInferenceProviderRegistry } from '../src/inference-provider-registry.js';
+import {
+  validateAnthropicInferenceRequest,
+  validateInferenceLimits,
+} from '../src/inference-provider-policy.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 import { InferenceEndpointInterface } from '../src/subscription-share.js';
 
@@ -818,6 +822,32 @@ test('raw requests are refused before opening the secret-backed issuer', async t
   t.is(usage.turns.length, 0);
   t.is(usage.refusals.length, invalid.length);
   await registry.close();
+});
+
+test('the validated body is what gets forwarded', t => {
+  const checked = validateAnthropicInferenceRequest(
+    harden({
+      method: 'POST',
+      path: '/v1/messages',
+      body: '{"model":"claude-other","max_tokens":4000,"messages":[],"model":"claude-test","max_tokens":1}',
+    }),
+    { model: 'claude-test', maxOutputTokens: 10, maxRequestBytes: 1024 },
+  );
+  t.deepEqual(JSON.parse(checked.message.body), {
+    model: 'claude-test',
+    max_tokens: 1,
+    messages: [],
+  });
+  t.is(checked.inputBytes, encodeUtf8(checked.message.body).length);
+  t.is(checked.maxOutputTokens, 1);
+});
+
+test('limit fields without an enforcement site are refused', t => {
+  for (const name of ['maxTurns', 'maxResponseBytes']) {
+    t.throws(() => validateInferenceLimits(harden({ [name]: 1 })), {
+      message: /Invalid inference limit field/,
+    });
+  }
 });
 
 test('owner-wide admission spans providers and cancellation releases its slot', async t => {

@@ -10,8 +10,6 @@ const LIMIT_FIELDS = harden([
   'dailyTokens',
   'maxOutputTokens',
   'maxRequestBytes',
-  'maxResponseBytes',
-  'maxTurns',
   'maxWallClockMs',
 ]);
 
@@ -21,8 +19,6 @@ export const DEFAULT_PROVIDER_LIMITS = harden({
   dailyDollars: 5,
   maxOutputTokens: 4096,
   maxRequestBytes: 8 * 1024 * 1024,
-  maxResponseBytes: 16 * 1024 * 1024,
-  maxTurns: 32,
   maxWallClockMs: 5 * 60_000,
 });
 harden(DEFAULT_PROVIDER_LIMITS);
@@ -190,9 +186,15 @@ export const validateAnthropicInferenceRequest = (message, policy) => {
       Number(body.max_tokens) <= policy.maxOutputTokens) ||
       Fail`inference-request-refused`;
   }
+  // Forward the bytes that were validated, not the caller's string. A
+  // repeated key parses last-wins here but may parse differently upstream.
+  const forwardBody = JSON.stringify(body);
+  const inputBytes = encodeUtf8(forwardBody).length;
+  inputBytes <= policy.maxRequestBytes || Fail`inference-request-refused`;
   return harden({
     body,
-    inputBytes: encodeUtf8(message.body).length,
+    message: harden({ ...message, body: forwardBody }),
+    inputBytes,
     maxOutputTokens:
       message.path === '/v1/messages' ? Number(body.max_tokens) : 0,
   });

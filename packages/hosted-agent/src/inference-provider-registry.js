@@ -1049,7 +1049,7 @@ export const makeInferenceProviderRegistry = async ({
         }
         let response;
         try {
-          response = await E(endpoint).request(message);
+          response = await E(endpoint).request(checked.message);
         } catch (error) {
           // Once dispatched, an unknown/cancelled turn is conservatively
           // charged its reservation even though its concurrency slot releases.
@@ -1097,7 +1097,7 @@ export const makeInferenceProviderRegistry = async ({
         }
         let response;
         try {
-          response = await E(endpoint).requestByteStream(message);
+          response = await E(endpoint).requestByteStream(checked.message);
         } catch (error) {
           await settle(turnId, undefined, 'estimated');
           throw error;
