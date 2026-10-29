@@ -76,6 +76,7 @@
     "src",
     "primer",
     "prompts",
+    "providers",
     "tools"
   ],
   "publishConfig": {
