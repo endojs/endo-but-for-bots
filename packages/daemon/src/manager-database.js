@@ -49,6 +49,7 @@ import { q } from '@endo/errors';
  * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
+ * @property {(secretId: string) => SecretAuditEvent[]} listSecretAuditEventsFor
  */
 
 // Node's ObjectWrap cleanup hook can be removed during GC without a current
@@ -364,6 +365,10 @@ export const makeDaemonDatabase = (config, options) => {
     // millisecond timestamp. `seq` is not projected: it is an internal
     // ordering key, not part of the `SecretAuditEvent` contract.
     'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event ORDER BY seq DESC LIMIT ?',
+  );
+  const stmtListSecretAuditEventsFor = prepare(
+    // Oldest first, so the first `create` event names the creating operation.
+    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event WHERE secret_id = ? ORDER BY seq ASC',
   );
 
   // -- Formula operations --
@@ -750,12 +755,10 @@ export const makeDaemonDatabase = (config, options) => {
     );
   };
 
-  /** @param {number} limit */
-  const listSecretAuditEvents = limit =>
+  /** @param {Record<string, unknown>[]} rows */
+  const decodeSecretAuditEvents = rows =>
     /** @type {SecretAuditEvent[]} */ (
-      /** @type {Record<string, unknown>[]} */ (
-        stmtListSecretAuditEvents.all(limit)
-      ).map(row => {
+      rows.map(row => {
         /** @type {Record<string, unknown>} */
         const event = {
           ...row,
@@ -764,6 +767,22 @@ export const makeDaemonDatabase = (config, options) => {
         if (event.reasonCode === null) delete event.reasonCode;
         return event;
       })
+    );
+
+  /** @param {number} limit */
+  const listSecretAuditEvents = limit =>
+    decodeSecretAuditEvents(
+      /** @type {Record<string, unknown>[]} */ (
+        stmtListSecretAuditEvents.all(limit)
+      ),
+    );
+
+  /** @param {string} secretId */
+  const listSecretAuditEventsFor = secretId =>
+    decodeSecretAuditEvents(
+      /** @type {Record<string, unknown>[]} */ (
+        stmtListSecretAuditEventsFor.all(secretId)
+      ),
     );
 
   const close = () => {
@@ -813,6 +832,7 @@ export const makeDaemonDatabase = (config, options) => {
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
+    listSecretAuditEventsFor,
   });
 };
 harden(makeDaemonDatabase);

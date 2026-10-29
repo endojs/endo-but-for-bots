@@ -7,7 +7,10 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
-import { makeInferenceProviderRegistry } from '../src/inference-provider-registry.js';
+import {
+  makeEndoSecretParticipant,
+  makeInferenceProviderRegistry,
+} from '../src/inference-provider-registry.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 import { InferenceEndpointInterface } from '../src/subscription-share.js';
 
@@ -139,7 +142,8 @@ const makeRegistry = (backing, options = {}) => {
     journal: backing.journal,
     secrets: backing.secretParticipant,
     makeIssuer: makeIssuerFactory(events),
-    validateLimits: value => harden({ ...value }),
+    validateLimits: value =>
+      harden({ .../** @type {Record<string, unknown>} */ (value) }),
     randomId: options.randomId || makeIds(),
     now: options.now || (() => '2026-10-27T00:00:00.000Z'),
     ...(options.afterCommit === undefined
@@ -479,7 +483,8 @@ test('AgentInference uses the existing issuer in-process without a listener', as
         accountRef: descriptor.providerId,
         admits: model => model === descriptor.defaultModel,
       }),
-    validateLimits: value => harden({ ...value }),
+    validateLimits: value =>
+      harden({ .../** @type {Record<string, unknown>} */ (value) }),
     randomId: makeIds(),
     now: () => '2026-10-27T00:00:00.000Z',
   });
@@ -539,7 +544,7 @@ test('expired intent aborts and reconciliation revokes orphan registry secrets',
   t.is(
     Object.values(revived.inspect().operations).find(
       operation => operation.kind === 'create',
-    ).state,
+    )?.state,
     'aborted',
   );
   t.is(backing.secrets.get('inference-provider-orphan').state, 'revoked');
@@ -613,4 +618,150 @@ test('grants validate owner, agent, and model, and streams flow through', async 
     events.some(([kind, , path]) => kind === 'stream' && path === '/stream'),
   );
   await registry.close();
+});
+
+test('validators refuse non-string values rather than their stringification', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+
+  await Promise.all(
+    /** @type {Array<[Record<string, unknown>, string]>} */ ([
+      [{ idempotencyKey: undefined }, 'invalid-idempotency-key'],
+      [{ idempotencyKey: null }, 'invalid-idempotency-key'],
+      [{ idempotencyKey: ['create-0000000009'] }, 'invalid-idempotency-key'],
+      [{ displayName: undefined }, 'invalid-display-name'],
+      [{ displayName: null }, 'invalid-display-name'],
+      [{ defaultModel: undefined }, 'invalid-model'],
+      [{ defaultModel: ['claude-test'] }, 'invalid-model'],
+    ]).map(([overrides, code], index) =>
+      t.throwsAsync(
+        () =>
+          E(directory).create(
+            providerRequest({
+              idempotencyKey: `coerce-000000000${index}`,
+              ...overrides,
+            }),
+          ),
+        { message: new RegExp(code) },
+      ),
+    ),
+  );
+  t.deepEqual(Object.keys(registry.inspect().operations), []);
+
+  const provider = await E(directory).create(providerRequest());
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const request = harden({
+    ownerId: 'owner-alice',
+    agentId: 'agent-alice',
+    model: 'claude-test',
+  });
+  await t.throwsAsync(
+    () => E(use).grant(harden({ ...request, agentId: null })),
+    { message: /invalid-agent/ },
+  );
+  await t.throwsAsync(
+    () => E(use).grant(harden({ ...request, model: ['claude-test'] })),
+    { message: /invalid-model/ },
+  );
+  await t.throwsAsync(() => E(use).grant(harden({ ...request, grantId: '' })), {
+    message: /invalid-generated-id/,
+  });
+  await t.throwsAsync(
+    () => E(use).grant(harden({ ...request, caps: { budget: NaN } })),
+    { message: /invalid-caps/ },
+  );
+  await registry.close();
+});
+
+test('idempotency compares canonical data, not key order', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  t.like(
+    await E(directory).create(
+      providerRequest({
+        limits: harden({ dailyTokens: 1000, concurrentTurns: 1 }),
+      }),
+    ),
+    { providerId: provider.providerId },
+  );
+  await t.throwsAsync(
+    () =>
+      E(directory).create(
+        providerRequest({
+          limits: harden({ concurrentTurns: -0, dailyTokens: 1000 }),
+        }),
+      ),
+    { message: /idempotency-conflict/ },
+  );
+
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const request = harden({
+    grantId: 'grant-000000001',
+    ownerId: 'owner-alice',
+    agentId: 'agent-alice',
+    model: 'claude-test',
+    caps: { a: 1, b: 2 },
+  });
+  const inference = await E(use).grant(request);
+  t.is(
+    await E(use).grant(harden({ ...request, caps: { b: 2, a: 1 } })),
+    inference,
+  );
+  await registry.close();
+});
+
+test('retiring a retired provider under a fresh key is a no-op', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const admin = await E(directory).adminFor(provider.providerId);
+  t.is((await E(admin).retire('retire-000000001')).state, 'retired');
+  const before = registry.inspect();
+  t.is((await E(admin).retire('retire-000000002')).state, 'retired');
+  t.is(registry.inspect(), before);
+  await registry.close();
+});
+
+test('the Endo participant reports absence only for an absent secret', async t => {
+  const stableIds = harden({
+    secretId: 'secret-000000001',
+    grantId: 'grant-000000001',
+    operationId: 'operation-00001',
+  });
+  /** @type {string} */
+  let summaryState = 'provisioning';
+  let fault = false;
+  const importer = harden({
+    provideBase64: async () => harden({ state: summaryState }),
+  });
+  const participant = makeEndoSecretParticipant(
+    harden({
+      has: async (...path) => {
+        if (fault) throw Error('connection lost');
+        return path.length === 1;
+      },
+      lookup: async () => importer,
+    }),
+  );
+  t.false(await participant.has('inference-provider-x'));
+  t.false(
+    await /** @type {NonNullable<typeof participant.recover>} */ (
+      participant.recover
+    )('inference-provider-x', 'Inference provider x', stableIds),
+  );
+  summaryState = 'active';
+  t.true(
+    await /** @type {NonNullable<typeof participant.recover>} */ (
+      participant.recover
+    )('inference-provider-x', 'Inference provider x', stableIds),
+  );
+  // A transient fault must not read as "the user must re-enter the key".
+  fault = true;
+  await t.throwsAsync(() => participant.has('inference-provider-x'), {
+    message: /connection lost/,
+  });
 });

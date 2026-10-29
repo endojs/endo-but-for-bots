@@ -1882,9 +1882,17 @@ export interface SecretImporter {
     bytesBase64: string,
   ): Promise<SecretSummary>;
   /**
-   * Import once under caller-preallocated identifiers. Retrying the same
-   * operation completes an interrupted backend write or pet-name binding and
-   * never substitutes later bytes for a secret already written.
+   * Import once under caller-preallocated identifiers. Use this instead of
+   * `createBase64`, which is not idempotent, when the caller must survive a
+   * lost response: retrying the same operation completes an interrupted
+   * backend write or pet-name binding and never substitutes later bytes for a
+   * secret already written.
+   *
+   * A retry must repeat the creating `operationId` and `grantId`; any other
+   * pairing with an existing `secretId` is refused with
+   * `IDEMPOTENCY_CONFLICT`. Passing `undefined` bytes resumes a completed
+   * write; when there is none, the returned summary stays `provisioning` and
+   * the caller must resupply the key.
    */
   provideBase64(
     name: string,
@@ -2784,6 +2792,8 @@ export type DaemonicPersistencePowers = {
   deleteSecret: (secretId: string) => void;
   writeSecretAuditEvent: (event: SecretAuditEvent) => void;
   listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
+  /** Every audit event for one secret, oldest first. */
+  listSecretAuditEventsFor: (secretId: string) => SecretAuditEvent[];
 };
 
 export interface DaemonWorkerFacet {}

@@ -65,7 +65,7 @@ export const make = async (powers, context, { env } = {}) => {
     validateLimits: limits => {
       (limits && typeof limits === 'object' && !Array.isArray(limits)) ||
         Fail`Invalid provider limits`;
-      return harden({ ...limits });
+      return harden({ .../** @type {Record<string, unknown>} */ (limits) });
     },
     randomId: randomUUID,
   });

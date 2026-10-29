@@ -69,6 +69,7 @@ export const makeDaemonicPersistencePowers = (
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
+    listSecretAuditEventsFor,
   } = daemonDb;
 
   const initializePersistence = async () => {
@@ -188,6 +189,7 @@ export const makeDaemonicPersistencePowers = (
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
+    listSecretAuditEventsFor,
   });
 };
 harden(makeDaemonicPersistencePowers);
