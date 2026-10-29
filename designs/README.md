@@ -6,6 +6,10 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[endo-child-agent-factory](endo-child-agent-factory.md) (added 2026-10-26;
+Proposed M3 replacement for closed PR #1102: a provider-neutral, durable
+child-agent factory over held maker capabilities; replaces work already
+counted in M3, so it adds no milestone duration),
 [ironhorse-guest-compartment](ironhorse-guest-compartment.md) (added
 2026-09-18; the implementation specification for a guest-callable
 `Compartment` in `ironhorse-vm` — the remainder
@@ -580,6 +584,7 @@ LLM-agent stack).*
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | In Progress |
 | [endo-claude-inference-backends](endo-claude-inference-backends.md) | 2026-09-28 | 2026-09-30 | Draft |
+| [endo-child-agent-factory](endo-child-agent-factory.md) | 2026-10-26 | 2026-10-26 | Proposed |
 | [endo-guest-stdio-mcp](endo-guest-stdio-mcp.md) | 2026-09-08 | 2026-09-24 | In Progress |
 | [agent-confined-application-makers](agent-confined-application-makers.md) | 2026-09-24 | 2026-10-01 | Proposed |
 | [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
@@ -651,6 +656,8 @@ The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**
 The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), bringing Proposed to 31 and the indexed records to 250 after the totals above.
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
+
+The endo-child-agent-factory design adds [endo-child-agent-factory](endo-child-agent-factory.md) (Proposed) to the summary table, bringing Proposed to 33 and the indexed records to 252.
 
 
 
@@ -729,6 +736,7 @@ flowchart TD
         estdio[endo-guest-stdio-mcp<br/><i>IN PROGRESS</i>]
         dgbi[daemon-guest-bot-incarnation<br/><i>IMPLEMENTED</i>]
         eclib[endo-claude-inference-backends<br/><i>DRAFT</i>]
+        ecaf[endo-child-agent-factory<br/><i>PROPOSED</i>]
         dform --> lalfp
         dval --> lalfp
         laltx --> lalfp
@@ -752,6 +760,8 @@ flowchart TD
         estdio --> eclaude
         dgbi --> eclaude
         eclaude --> eclib
+        dgbi --> ecaf
+        eclib --> ecaf
     end
 
     subgraph Ironhorse Snapshot Schema
@@ -1176,12 +1186,17 @@ halves and their directly-dependent companions as its first-to-land work:
   [endo-claude](endo-claude.md) (**moved here from M6** by this groom; see
   the M6 pointer) — a confined `claude -p` that *is* an Endo guest's
   inference engine, reaching only that one guest's facet as its whole tool
-  surface. Confinement core in flight as PR
-  [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open
-  draft); the child-guest provisioning half is `endo-claude-agents-capability`,
-  PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open
-  draft), which composes with #1015 and provisions Claude-backed child
-  guests without granting guests credentials.
+  surface. The confinement core landed in PR
+  [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015), followed by
+  the provider-neutral `@endo/inference` seam and Claude backends in PRs
+  [#1403](https://github.com/endojs/endo-but-for-bots/pull/1403) and
+  [#1412](https://github.com/endojs/endo-but-for-bots/pull/1412). The
+  child-guest provisioning half is now
+  [endo-child-agent-factory](endo-child-agent-factory.md): a generic durable
+  child/driver composition over held maker capabilities. It replaces the
+  closed, pre-inference design in PR
+  [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) and is ready
+  to build from dependencies already on `llm`.
 
 These two halves solve the two directions of the same bottleneck and lead
 this milestone; the remaining M3 rows below (gateway substrate, mount,
@@ -1216,11 +1231,11 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | In Progress | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
 | **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
-| **endo-claude** | In Progress | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
-| **endo-claude-inference-backends** | Draft | **Client-side bridge (back-fill of `endo-claude` from the minion.town Claude CLI and Agent SDK experiments, kriscendobot/minion.town#105 and #106).** Settles a provider-neutral `@endo/inference` seam (interfaces, provider plugins over a `CredentialSource` that owns admission and delivery, mechanism libraries, and enrichers; never-reject tagged `InferResult`, facet as authority and formula id as label only) that four minion.town prototypes shared, with the Claude CLI and Agent SDK backends as plugins in `@endo/claude`; finds the two Claude paths are one engine with two front ends. Credentials live in the daemon secret manager, one backend instance per credential, delivered through a broker lease; the deployed root user runs on the maintainer-approved subscription. The OS slice is required for multi-principal inference (guests bringing their own subscription or API key) and, per `endo-claude` Decision 6, for any guest-influenced prompt whoever pays; Claude Code's credential store does not require it. Stays a draft until a speculative build and deployment supplies production evidence. |
+| **endo-claude** | In Progress | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface. It is the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. The confinement core landed in PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015); its provider-neutral inference seam and Claude backends followed in #1403 and #1412. Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite. Its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
+| **endo-claude-inference-backends** | In Progress | **Client-side bridge (back-fill of `endo-claude` from the minion.town Claude CLI and Agent SDK experiments, kriscendobot/minion.town#105 and #106).** The provider-neutral `@endo/inference` seam landed in [#1403](https://github.com/endojs/endo-but-for-bots/pull/1403), and the Claude CLI and Agent SDK backends landed in [#1412](https://github.com/endojs/endo-but-for-bots/pull/1412). The seam keeps credential admission/delivery in `CredentialSource`, treats held facets as authority and formula ids as labels, and lets child provisioning select an implementation by capability rather than provider identity. Later broker, multi-principal OS-slice, and production-evidence phases remain design. |
 | **endo-guest-stdio-mcp** | In Progress | **Client-side bridge (arc [kriscendobot/garden#89](https://github.com/kriscendobot/garden/issues/89) item 5).** The stdio MCP server the confined `endo-claude` process reaches. Revised 2026-09-17 per the PR #1226 review to a **single claude-spawned process** (no per-guest socket, named pipe, or broker): it reads the guest's 64-hex formula id from its environment (threaded from the MCP config, never the MCP wire), uses the ordinary Endo daemon client to reach the bootstrap root host, resolves that one guest's facet, pins the pruned `tools/list` snapshot, and rejects any `tools/call` outside it. Owns the server side of `endo-claude`'s pinned-catalog contract and the server-hosting seam it names as a prerequisite; the neighboring MCP designs (`endo-gateway-mcp`, `daemon-agent-tools`, and the minion.town trio) are all HTTP-plus-OAuth. Composes with the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone). Isolation is per-process, per-call; cross-guest isolation is now runtime (formula-id secrecy) rather than structural, with the ocapn offset-0 gateway / broker retained as the multi-tenant hardening path. Fail-closed: empty/underivable catalog is a construction throw. Names honor the reconciled flat namespace from `kriscendobot/minion.town` PR #79. |
 | ~~daemon-guest-bot-incarnation~~ | **Implemented** | Landed generically in [#1306](https://github.com/endojs/endo-but-for-bots/pull/1306): `provideGuest(..., { pins })` installs a caller-elected guest `@pins` directory, and every mailbox delivery best-effort reincarnates its values before publishing the message notification. A deployment pins an ordinary responder formulated with the guest as its powers; the earlier `GuestFormula.bot`, `EndoBot`, supervisor, startup scan, and daemon-level breaker proposal is retired. Design reconciliation remains in PR [#1227](https://github.com/endojs/endo-but-for-bots/pull/1227). |
-| **endo-claude-agents-capability** | Proposed | **Client-side bridge, top priority (carved 2026-09-03).** The provisioning half of the confined in-guest agent: a portable Endo capability for provisioning Claude-backed child guests without granting guests credentials, arbitrary host access, or authority over unrelated guest namespaces (namespace-scoped recursive factory facets, per-account-family credential sources, single-use per-child leases, durable revocation, fail-closed restart). Composes with `endo-claude` (#1015). Design in flight as PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft), requested in the minion.town #64 maintainer review; separates Endo's generic daemon/factory work from Minion Town's account UX/credential custody. |
+| **endo-child-agent-factory** | Proposed | **Client-side bridge, top priority (carved 2026-09-03; redesigned 2026-10-26).** A provider- and harness-neutral `@endo/exo-agent-factory` that composes a held `AgentDriverMaker` with a private namespace, explicit ordinary child endowments, a separate driver guest, a pinned coordinator that revives every committed runner, and an append-only lifecycle journal. Holding the bound factory is the authorization check; no owner, provider, account, credential, or formula identifier authorizes a call. Recursion is explicit delegation, credentials remain behind `@endo/inference`, and recovery converges creation/removal after every crash boundary. [Current design](endo-child-agent-factory.md) replaces closed PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102); required substrates #1306 and #1403 are merged, as is optional concrete Claude adapter #1412. Open daemon PRs #1343 and #1368 are compatible hardening, not blockers; provider registry PR #1543 is a downstream consumer. |
 | filesystem-watchers | **Complete** | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | In Progress | Clean locator API; unblocked |
 | daemon-rename-to-manager | In Progress | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
@@ -1245,8 +1260,9 @@ MCP-daemon boundary without an external LLM hand-marshaling bytes — a
 capability-addressed `git push` lands it into an Endo directory
 ([git-remote-capability](https://github.com/kriscendobot/minion.town/pull/41)
 + the git trio and `daemon-agent-tools` push tier), and a confined
-in-guest agent ([endo-claude](endo-claude.md) #1015 + its child-guest
-provisioning #1102) acts with normal tools directly on the daemon side
+in-guest agent ([endo-claude](endo-claude.md) #1015 + the
+[capability-scoped child-agent factory](endo-child-agent-factory.md)) acts with
+normal tools directly on the daemon side
 rather than marshaling everything across by value.**
 
 **Estimated duration (1 dev):** 4-5 weeks (the two carved client-side
@@ -1448,10 +1464,11 @@ capability-addressed git remote), because its true prerequisite (the
 because a 2026-09-02/03 liaison session was fresh, concrete evidence that the
 MCP-daemon-boundary bottleneck it addresses is the first thing to close. See
 M3's "Client-side bridge" block for the full statement, the confinement-flag
-combination, PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015)
-(confinement core) and PR
-[#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (child-guest
-provisioning). Its own concrete minion.town-box deployment remains a named
+combination, merged PR
+[#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (confinement
+core), and [endo-child-agent-factory](endo-child-agent-factory.md)
+(dependency-ready child-guest provisioning, replacing closed PR #1102). Its
+own concrete minion.town-box deployment remains a named
 follow-on design belonging in `kriscendobot/minion.town`. M6 continues to own
 the *external*-client MCP-termination direction (the P1 slice); only the inverse
 `@endo/claude` direction moved.
@@ -1982,6 +1999,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endo-agent-tools | M-L | 1.5-2 weeks | 3 | `@endo/agent-tools`: the canonical `ToolRecord` (`makeTool`, lifted from genie) plus hand-authored wire schemas pinned to the live guard by a divergence gate (the `Pattern -> JSON Schema` deriver is tabled); `Filesystem`-targeted file tools over `@endo/platform/fs/extended` reading live worktree plus history uniformly. First tools landed (#523 FS read tool, git tools; #524 code-mode declaration renderer). Remaining bulk: the command-tool `Spawner` seam, the push tier, and across-turn cap persistence |
 | endo-claude | M | 1-1.5 weeks | 6 | `@endo/claude`: a hermetic `claude -p` (`--bare` + `--mcp-config` + `--strict-mcp-config` + `--setting-sources ""` + `--settings` apiKeyHelper + `--tools ""` fail-closed built-in baseline + `--disable-slash-commands` + a facet-derived, membership-validated `mcp__<server>__<tool>` allow-list, never `--resume`/`--continue`), run inside a **required** `@endo/claude-sandbox` OS slice (a hard dependency on `endo-posix-sandbox`), whose only capability surface is one guest facet's MCP projection. Composes with the `@endo/agent-tools` MCP adapter (prerequisite) for the server side; **extends** `@endo/claude-sandbox`'s `ClaudeCredentials` caplet with a new subscription credential kind (its live kinds `apiKey`/`oauthToken` are both inadmissible under `--bare`, so this is work, not drop-in reuse) for pooling. Bulk is the allow-list generator, the mcp-config renderer, and the credential-pool allocator (allocator-owned occupancy); the projection is not reinvented. Load-bearing residuals: whether a subscription can be presented via apiKeyHelper under `--bare`, and a live negative-**and-positive** confinement test |
 | endo-claude-inference-backends | M | 2 weeks | 3 | Port the #105/#106 seam into a provider-neutral `@endo/inference` and a sandbox-free `@endo/claude`, add CLI and SDK backends, move credentials onto the secret manager, and route them through the `@endo/hosted-agent` broker. The broker's subscription mode, the slice composition for guests' own credentials, and the CLI-versus-SDK comparison run are the uncertain tail, gated on the evidence probe. |
+| endo-child-agent-factory | L | 1-1.5 weeks | 3 | Add a provider-neutral `@endo/exo-agent-factory`, extracting Fae's child/driver topology behind capability-scoped makers and adding append-only lifecycle recovery, a pinned coordinator with durable facets, keyed turn publication, explicit recursion, daemon integration, and fake-inference conformance tests. Required substrates #1306 and #1403 are merged, as is optional Claude adapter #1412; #1343/#1368 are optional hardening and #1543 is downstream. Replaces the child-provisioning work already counted in M3, so it adds no new milestone duration. |
 | endo-guest-stdio-mcp | S | 2-4 days | 3 | The stdio MCP server side of `endo-claude`: a single claude-spawned process (MCP framing loop, env-threaded formula id, ordinary daemon-client resolution of the one guest facet, pinned pruned catalog, server-side dispatch check). In progress (endojs/endo-but-for-bots#1336); the projection it hosts is the `@endo/agent-tools` MCP adapter (`endo-agent-tools`, prerequisite), so the net-new build bulk is the config threading and the fail-closed construction guards, not the projection. Revised 2026-09-17 to drop the two-process broker / per-guest socket, which shrinks the build slice. Estimate is the design's own build slice; the adapter-implementation prerequisite is counted under `endo-agent-tools` / `endo-claude` |
 | ~~daemon-guest-bot-incarnation~~ | M | — | 3 | ✅ Implemented by the generic caller-elected guest pin and per-delivery pin-reincarnation substrate in #1306; no `EndoBot` protocol or guest-specific supervisor is needed. |
 | agentry-agent-builder | M | 4-5 days | 3 | `@endo/agentry` `defineAgent` builder: new module in #308's existing package. Composes selection/attenuation/wire-schemas/presets declaratively and binds the confined pi loop. Bulk is the config surface plus preset bundles plus the `prepareArguments` call site; the heavy lifting (tools, schemas) lives in `endo-agent-tools`. Depends on `endo-agent-tools` landing first |
