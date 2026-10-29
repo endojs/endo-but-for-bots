@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-09-29 |
+| **Updated** | 2026-10-29 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Implemented** (Phases 1-2) |
 
@@ -27,6 +27,17 @@ A follow-up PR, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
 (merged 2026-08-11 as `dc504ca993`, also on `llm`), explicitly denies
 Node's non-standard `Symbol(nodejs.util.inspect.custom)` method on both
 prototypes.
+
+A regression on older Chromium followed: `lockdown()` threw because the
+host codec constructors carry undeletable `caller` and `arguments`
+properties
+([endojs/endo#3369](https://github.com/endojs/endo/issues/3369)).
+The remedy merged upstream in
+[endojs/endo#3376](https://github.com/endojs/endo/pull/3376) on
+2026-10-29 (merge commit `679d9afaa4`) and reaches `llm` with the next
+upstream merge.
+§ Revision: restricted `caller` and `arguments` on older Chromium
+records the failure and the remedy.
 
 Remaining items:
 
@@ -178,8 +189,9 @@ Tests live under `packages/ses/test/`.
    The existing XS test runner exercises (1) on XS.
    This design assumed XS never provides the codecs, so the XS run
    would also cover (5).
-   Current Moddable `xst` defines both codecs
-   ([endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)),
+   Current Moddable `xst` defines both codecs (found by
+   [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349),
+   closed unmerged on 2026-10-29, so no XS run of (1) has landed),
    so on today's toolchain the XS run exercises pass-through-and-harden,
    and (5) is covered only by the deletion test on Node.
 
@@ -194,11 +206,115 @@ Tests live under `packages/ses/test/`.
   Note this in the SES changeset for the release that ships the
   shim.
 
+## Revision: restricted `caller` and `arguments` on older Chromium (2026-10-29)
+
+### The failure
+
+`lockdown()` collects the intrinsics, then deletes every property
+the permits do not name, and throws if a deletion fails.
+On older V8, every Web IDL function, including the `TextEncoder` and
+`TextDecoder` constructors, carries own `caller` and `arguments`
+properties, each `{ value: null, writable: false, enumerable: false,
+configurable: false }`.
+The `FunctionInstance` permits do not name them, they cannot be
+deleted, and so `lockdown()` threw as soon as
+[endojs/endo#3322](https://github.com/endojs/endo/pull/3322) made the
+codecs permitted intrinsics (ses 2.3.0;
+[endojs/endo#3369](https://github.com/endojs/endo/issues/3369)).
+
+Measured on Chrome for Testing headless shells (Linux x64,
+2026-10-07): 120, 126, 127, 133, 136 and 137 carry the properties on
+both codec constructors; 138, 139 and 140 do not.
+The versions in between were not measured.
+endojs/endo#3376 also reports the shape on the Android System WebView
+through at least 133.
+The shape belongs to Web IDL functions in general, so `URLSearchParams`
+and the host `URL` (`%InitialURL%`) carry it too.
+
+### The remedy: tolerate a frozen `null`
+
+`cauterizeProperty` in `packages/ses/src/cauterize-property.js` now
+tolerates exactly one undeletable shape on a function's `arguments` or
+`caller`: an own data property whose value is `null`, non-writable
+and non-configurable.
+It reports `Tolerating undeletable <path> === null` through the
+reporter's `warn` and leaves the property in place.
+Any other value, or a writable or configurable property, still fails
+`lockdown()`.
+This parallels the existing tolerance of an undeletable `prototype`
+that can be set to `undefined`.
+
+Consequences for this design:
+
+- The host codec constructors stay the permitted intrinsics.
+  § Design above is unchanged: sampling, the permits table, identity
+  across compartments (test plan item 2) and hardening all hold on
+  every engine.
+- The tolerance is not specific to the codecs.
+  It also lets `URLSearchParams` and `%InitialURL%` through on the
+  same engines, so [hardened-url-shim](hardened-url-shim.md) needs no
+  revision for this failure.
+- Each affected function adds one warning per property to the
+  `lockdown()` report on affected engines.
+
+### Security considerations
+
+The upstream argument is that a frozen `null` is inert: it cannot
+change and it leaks nothing.
+That holds for Web IDL functions.
+The descriptor alone does not distinguish them from a V8 sloppy-mode
+`function`, whose own `arguments` reads as the same frozen `null`
+outside a call and as the live arguments object during one (checked
+on Node 22.23).
+The tolerance is therefore safe as long as the permitted intrinsics
+contain no sloppy-mode functions, which holds for engine built-ins
+and for SES's own strict-mode code.
+The open question below asks whether to pin that assumption in a
+test.
+
+### Test plan additions
+
+7. **Frozen `null` tolerated, other shapes refused.**
+   Landed with endojs/endo#3376 under `packages/ses/test/error/`:
+   it plants pills on a replacement `Array.isArray` and checks that a
+   frozen `null` pill passes `lockdown()` with a warning, while a
+   frozen non-`null` pill and a writable `null` pill fail.
+
+8. **Browser smoke (manual).**
+   `lockdown()` completes on Chrome for Testing 137 with the codecs
+   permitted, and `new TextDecoder().decode(new TextEncoder().encode('ok'))`
+   round-trips in a post-lockdown compartment.
+   No CI job covers this: Browser Tests do not run on frozen-base PRs
+   (endojs/endo-but-for-bots#1582 tracks the workflow change).
+
+### Considered and rejected
+
+- **Encapsulate affected host constructors.**
+  Replace each codec constructor that has an own `arguments` property
+  with an SES-owned constructor that delegates to the host and shares
+  its prototype
+  ([endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349),
+  mirrored as [endojs/endo#3377](https://github.com/endojs/endo/pull/3377)).
+  Reason: closed as superseded by endojs/endo#3376, which fixes every
+  Web IDL function at once, keeps constructor identity on every
+  engine, and adds no new code path.
+- **Permit `caller` and `arguments` on the codecs**
+  ([endojs/endo#3371](https://github.com/endojs/endo/pull/3371)).
+  Reason: closed; a per-constructor permit would have to be repeated
+  for every Web IDL intrinsic.
+
+### Open questions
+
+1. Should the SES test suite assert that no permitted intrinsic is a
+   sloppy-mode function, so the frozen-`null` tolerance can never
+   cover a live `arguments` or `caller` slot?
+
 ## Dependencies
 
 | Design | Relationship |
 |---|---|
 | [hardened-url-shim](hardened-url-shim.md) | Sibling design split from the same source issue.  Both add a vetted host-provided constructor to SES permits.  The two sets of permits are independent and may land in either order. |
+| [endojs/endo#3376](https://github.com/endojs/endo/pull/3376) | Upstream fix for the older-Chromium `lockdown()` failure; merged 2026-10-29, not yet on `llm`.  See § Revision. |
 | [base64-native-fallthrough](base64-native-fallthrough.md) | Same family of work: tame and dispatch to native intrinsics inside SES rather than re-implementing in JavaScript.  Independent. |
 
 ## Phases
