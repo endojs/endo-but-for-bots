@@ -182,3 +182,10 @@ The inference provider registry (`inference-provider-registry.js`) does: it appl
 the default daily dollar budgets, concurrency, and rate caps in
 `inference-provider-policy.js` (`DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`)
 to every provider, owner, and agent unless they are configured otherwise.
+
+Two subpaths support API-key providers:
+
+| | |
+|---|---|
+| `@endo/hosted-agent/anthropic-api-key-issuer.js` | `makeAnthropicApiKeyIssuerFactory` builds the registry's issuer factory for Anthropic API-key grants; `make` is its Endo module entry point |
+| `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`; `validateInferenceLimits` and `raisedInferenceLimits` for limit records; `validateAnthropicInferenceRequest` for the Messages request policy; `conservativeTokenReservation` and `priceUsageMicros` for reservation and settlement |
