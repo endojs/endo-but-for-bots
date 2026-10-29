@@ -3,14 +3,14 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-09-29 |
+| **Updated** | 2026-10-29 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | **Implemented** (Phases 1-2) |
+| **Status** | **Implemented**; XS smoke coverage remains |
 
 ## Status
 
-**Implemented (Phases 1-2).** The permits, the global sampling, the
-tests, and the changeset merged upstream in
+**Implemented, with one verification delta.** The permits, the global
+sampling, the Node tests, and the changeset merged upstream in
 [endojs/endo#3322](https://github.com/endojs/endo/pull/3322) on 2026-07-22
 (merge commit `8021d268e7`). They reached `llm`, this repository's
 integration branch that carries upstream `endojs/endo` plus fork-only work,
@@ -28,15 +28,36 @@ A follow-up PR, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
 Node's non-standard `Symbol(nodejs.util.inspect.custom)` method on both
 prototypes.
 
+Chromium 120, 126, 127, 133, 136, and 137 exposed own, frozen-null
+`caller` and `arguments` properties on the codec constructors. The permits
+therefore made `lockdown()` fail when it could not delete those properties.
+[endojs/endo#3376](https://github.com/endojs/endo/pull/3376) fixed the
+general case upstream on 2026-10-29 (commit `679d9afaa4`):
+`cauterizeProperty` now tolerates exactly a non-writable,
+non-configurable data property whose value is `null`, while retaining the
+host constructor and rejecting every other undeletable shape.
+
+That general fix supersedes the codec-specific constructor encapsulation in
+closed [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)
+and its closed upstream mirror
+[endojs/endo#3377](https://github.com/endojs/endo/pull/3377). The proposed
+encapsulation, its browser tests, documentation, and changeset are no longer
+needed. The closed PR is not wholly superseded, though: it also carried the
+still-unmerged XS smoke coverage below and an independent XS
+lockdown-Compartment repair owned by
+[endojs/endo-but-for-bots#1425](https://github.com/endojs/endo-but-for-bots/pull/1425).
+The latter is not a remaining delta for this design.
+
 Remaining items:
 
-- **§ Test plan item 6 (XS smoke test):** open as draft
-  [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349).
-  It extends `packages/ses/test/_xs.js`. It also found that the current
-  Moddable `xst` *does* define both codecs, so on today's toolchain the XS
-  path exercises pass-through-and-harden rather than the missing-codecs
-  case this design assumed. § Sampling and degradation and Design
-  Decision 3 below note this.
+- **§ Test plan item 6 (XS smoke test):** not merged. Closed PRs
+  [#1349](https://github.com/endojs/endo-but-for-bots/pull/1349) and
+  [endojs/endo#3377](https://github.com/endojs/endo/pull/3377) carried the
+  coverage, but [endojs/endo#3376](https://github.com/endojs/endo/pull/3376)
+  touched no XS files and did not replace it. A follow-up should retain only
+  the XS assertions: the current Moddable `xst` present-codecs path and a
+  second pre-import deletion script for the absent-codecs path. It should not
+  revive the superseded constructor encapsulation.
 - **Phase 3 (downstream audit, optional):** not performed on `llm`. As of
   `llm` commit `7ff30afbce`, `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
   in 10 files. All are Node-host powers, drivers, and backends
@@ -175,13 +196,15 @@ Tests live under `packages/ses/test/`.
    No throw, and the post-lockdown compartments lack the bindings.
 
 6. **XS smoke test.**
-   The existing XS test runner exercises (1) on XS.
-   This design assumed XS never provides the codecs, so the XS run
-   would also cover (5).
-   Current Moddable `xst` defines both codecs
-   ([endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)),
-   so on today's toolchain the XS run exercises pass-through-and-harden,
-   and (5) is covered only by the deletion test on Node.
+   Extend the existing XS test runner to exercise (1)-(4) on XS.
+   This design originally assumed XS never provides the codecs, so the XS
+   run would also cover (5). Current Moddable `xst` defines both codecs, so
+   the ordinary run exercises pass-through-and-harden. A second generated XS
+   script must delete both globals before importing SES to exercise (5),
+   because lockdown happens once per realm. Closed PRs
+   [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)
+   and [endojs/endo#3377](https://github.com/endojs/endo/pull/3377) contained
+   this coverage, but it remains unmerged.
 
 ### Compatibility considerations
 
