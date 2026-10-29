@@ -1061,3 +1061,118 @@ test('settlement records unknown usage, late reports, overruns, and model 404', 
   );
   await registry.close();
 });
+
+const tokenGrant = async (registry, agentId, providerLimits = limits) => {
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(
+    providerRequest({ limits: { ...providerLimits, dailyTokens: 20_000 } }),
+  );
+  const inference = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(harden({ ownerId: 'owner-alice', agentId, model: 'claude-test' }));
+  return { directory, inference };
+};
+
+test('a rejected usage report settles the turn and releases its slot', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing, {
+    modelPrices: harden({}),
+    behavior: {
+      usage: request => {
+        if (!request.body.includes('reject')) return undefined;
+        const rejected = Promise.reject(Error('usage lost'));
+        rejected.catch(() => {});
+        return rejected;
+      },
+    },
+  });
+  // The owner keeps its default dollar budget; the unpriced model is governed
+  // by the token-budgeted provider rather than refused at the owner scope.
+  const { directory, inference } = await tokenGrant(registry, 'agent-reject');
+  await t.throwsAsync(() => E(inference).request(message('reject')), {
+    message: /usage lost/,
+  });
+  await E(inference).request(message('after'));
+  const usage = await E(directory).getUsage();
+  t.false(usage.turns.some(turn => turn.state === 'reserved'));
+  t.true(
+    usage.turns.some(
+      turn =>
+        turn.disposition === 'estimated' &&
+        turn.chargedTokens === turn.reservedTokens,
+    ),
+  );
+  await registry.close();
+});
+
+test('restart settles orphaned reservations as estimated', async t => {
+  const backing = makeBacking();
+  const pending = new Promise(() => {});
+  const behavior = {
+    streamResponse: () => ({
+      status: 200,
+      headers: {},
+      body: makeExo('reader', TestReaderInterface, {}),
+      usage: pending,
+    }),
+  };
+  const first = await makeRegistry(backing, {
+    modelPrices: harden({}),
+    behavior,
+  });
+  const { inference } = await tokenGrant(first, 'agent-restart');
+  await E(inference).requestByteStream(message('orphan'));
+  t.true(
+    Object.values(first.inspect().turns).some(
+      turn => turn.state === 'reserved',
+    ),
+  );
+  await first.close();
+
+  const second = await makeRegistry(backing, { modelPrices: harden({}) });
+  const turns = Object.values(second.inspect().turns);
+  t.is(turns.length, 1);
+  t.like(turns[0], { state: 'settled', disposition: 'estimated' });
+  t.is(turns[0].chargedTokens, turns[0].reservedTokens);
+  await second.close();
+});
+
+test('reservations hold across UTC midnight, expire, and old days are pruned', async t => {
+  const backing = makeBacking();
+  let clock = Date.parse('2026-10-27T23:59:59.000Z');
+  const registry = await makeRegistry(backing, {
+    modelPrices: harden({}),
+    nowMillis: () => clock,
+    behavior: {
+      streamResponse: () => ({
+        status: 200,
+        headers: {},
+        body: makeExo('reader', TestReaderInterface, {}),
+        usage: new Promise(() => {}),
+      }),
+    },
+  });
+  const { directory, inference } = await tokenGrant(registry, 'agent-midnight');
+  await E(inference).request(message('settled-yesterday'));
+  await E(inference).requestByteStream(message('held'));
+
+  clock = Date.parse('2026-10-28T00:00:01.000Z');
+  await t.throwsAsync(() => E(inference).request(message('midnight')), {
+    message: /inference-request-refused/,
+  });
+  const refused = await E(directory).getUsage();
+  t.true(
+    refused.refusals.some(refusal =>
+      refusal.reason.endsWith('-concurrency-exhausted'),
+    ),
+  );
+
+  clock = Date.parse('2026-10-28T00:10:00.000Z');
+  await E(inference).request(message('after-expiry'));
+  const turns = Object.values(registry.inspect().turns);
+  t.deepEqual(
+    turns.map(turn => turn.day),
+    ['2026-10-28'],
+  );
+  await registry.close();
+});

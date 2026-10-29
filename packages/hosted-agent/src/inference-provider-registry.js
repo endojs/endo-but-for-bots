@@ -61,6 +61,11 @@ harden(ProviderAdminInterface);
 // eslint-disable-next-line @endo/no-harden-pattern-maker
 harden(ProviderUseInterface);
 
+/** Refusal records kept for audit; older ones are dropped. */
+const MAX_REFUSALS = 1024;
+/** Reservation lifetime when no wall-clock cap applies. */
+const DEFAULT_RESERVATION_MS = 5 * 60_000;
+
 /** @returns {any} */
 const emptyState = () =>
   harden({
@@ -162,6 +167,35 @@ export const makeInferenceProviderRegistry = async ({
     (() => {
       throw fixedError('unsupported-version');
     })();
+  // A turn still reserved at restart lost its in-flight request with the
+  // prior incarnation. Charge its reservation and release its slot.
+  const orphaned = Object.values(state.turns || {}).filter(
+    turn => turn.state === 'reserved',
+  );
+  if (orphaned.length > 0) {
+    const turns = { ...state.turns };
+    for (const turn of orphaned) {
+      turns[turn.turnId] = harden({
+        ...turn,
+        state: 'settled',
+        disposition: 'estimated',
+        usage: harden({
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        }),
+        chargedTokens: turn.reservedTokens,
+        ...(turn.reservedCostMicros === undefined
+          ? {}
+          : { chargedCostMicros: turn.reservedCostMicros }),
+        overrun: false,
+        settledAt: now(),
+      });
+    }
+    state = harden({ ...state, turns: harden(turns) });
+    await journal.write(state);
+  }
 
   /** @type {Promise<void>} */
   let mutationTail = Promise.resolve();
@@ -614,6 +648,7 @@ export const makeInferenceProviderRegistry = async ({
   /** @param {any} grant @param {string} reason */
   const appendRefusal = async (grant, reason) => {
     const next = copyState(state);
+    next.refusals = next.refusals.slice(-(MAX_REFUSALS - 1));
     next.refusals.push(
       harden({
         ownerId: grant.ownerId,
@@ -647,7 +682,9 @@ export const makeInferenceProviderRegistry = async ({
       cacheReadTokens: count(
         observed?.cacheReadTokens ?? observed?.cachedInputTokens,
       ),
-      cacheWriteTokens: count(observed?.cacheWriteTokens),
+      cacheWriteTokens: count(
+        observed?.cacheWriteTokens ?? observed?.cacheWriteInputTokens,
+      ),
     });
   };
 
@@ -694,11 +731,18 @@ export const makeInferenceProviderRegistry = async ({
           throw fixedError('invalid-clock');
         })();
       const day = new Date(admittedAtMs).toISOString().slice(0, 10);
-      const recent = Object.values(state.turns || {}).filter(
+      const allTurns = Object.values(state.turns || {});
+      const recent = allTurns.filter(
         turn => Number(turn.admittedAtMs) >= admittedAtMs - 60_000,
       );
-      const today = Object.values(state.turns || {}).filter(
-        turn => turn.day === day,
+      const today = allTurns.filter(turn => turn.day === day);
+      // A reservation holds its slot across UTC midnight, and expires once
+      // its wall-clock allowance passes, so an abandoned stream cannot hold
+      // a slot indefinitely.
+      const holding = allTurns.filter(
+        turn =>
+          turn.state === 'reserved' &&
+          Number(turn.expiresAtMs ?? Infinity) > admittedAtMs,
       );
       const scopes = [
         {
@@ -727,9 +771,7 @@ export const makeInferenceProviderRegistry = async ({
         price,
       );
       for (const scope of scopes) {
-        const concurrent = today.filter(
-          turn => scope.matches(turn) && turn.state === 'reserved',
-        ).length;
+        const concurrent = holding.filter(turn => scope.matches(turn)).length;
         if (concurrent >= Number(scope.limits.concurrentTurns)) {
           // The scope checks are intentionally serialized with the durable
           // refusal record so the audit trail precedes the caller's refusal.
@@ -745,7 +787,16 @@ export const makeInferenceProviderRegistry = async ({
           await appendRefusal(grant, `${scope.name}-rate-limited`);
           throw fixedError('inference-request-refused');
         }
+        // An unpriced model on a token-budgeted provider cannot be charged
+        // against the owner's dollar budget; the provider's token budget
+        // governs it instead of refusing every turn at the owner scope.
+        const ownerUnpriced =
+          scope.name === 'owner' &&
+          Object.hasOwn(scope.limits, 'dailyDollars') &&
+          reservedCostMicros === undefined &&
+          Object.hasOwn(providerLimits, 'dailyTokens');
         if (
+          !ownerUnpriced &&
           Object.hasOwn(scope.limits, 'dailyDollars') &&
           reservedCostMicros === undefined
         ) {
@@ -762,7 +813,10 @@ export const makeInferenceProviderRegistry = async ({
         const budget = Object.hasOwn(scope.limits, 'dailyDollars')
           ? scope.limits.dailyDollars * 1_000_000
           : scope.limits.dailyTokens;
-        if (Number(used) + Number(requested) > Number(budget)) {
+        if (
+          !ownerUnpriced &&
+          Number(used) + Number(requested) > Number(budget)
+        ) {
           // eslint-disable-next-line no-await-in-loop
           await appendRefusal(grant, `${scope.name}-budget-exhausted`);
           throw fixedError('inference-request-refused');
@@ -770,6 +824,22 @@ export const makeInferenceProviderRegistry = async ({
       }
       const turnId = randomId();
       const next = copyState(state);
+      // Settled turns from earlier days no longer affect admission; keep the
+      // durable ledger bounded to the current day plus live reservations.
+      for (const turn of allTurns) {
+        if (
+          turn.day !== day &&
+          (turn.state !== 'reserved' ||
+            Number(turn.expiresAtMs ?? Infinity) <= admittedAtMs)
+        ) {
+          delete next.turns[turn.turnId];
+        }
+      }
+      const reservationMs = Number(
+        agentLimits.maxWallClockMs ??
+          providerLimits.maxWallClockMs ??
+          DEFAULT_RESERVATION_MS,
+      );
       next.turns[turnId] = harden({
         version: 1,
         turnId,
@@ -781,6 +851,7 @@ export const makeInferenceProviderRegistry = async ({
         day,
         admittedAt: now(),
         admittedAtMs,
+        expiresAtMs: admittedAtMs + reservationMs,
         state: 'reserved',
         reservedTokens,
         ...(reservedCostMicros === undefined ? {} : { reservedCostMicros }),
@@ -985,7 +1056,14 @@ export const makeInferenceProviderRegistry = async ({
           await settle(turnId, undefined, 'estimated');
           throw error;
         }
-        await settle(turnId, await response.usage, 'estimated');
+        let observed;
+        try {
+          observed = await response.usage;
+        } catch (error) {
+          await settle(turnId, undefined, 'estimated');
+          throw error;
+        }
+        await settle(turnId, observed, 'estimated');
         if (response.status === 404) {
           await refuse(grantId, 'model-not-available');
           throw fixedError('model-not-available');
