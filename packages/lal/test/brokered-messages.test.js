@@ -11,6 +11,7 @@ import {
   makeBrokeredMessagesStream,
 } from '../providers/brokered-messages.js';
 import { spawnWorkerLoop } from '../agent.js';
+import { makeMockPowers } from '../tools/mock-powers.js';
 
 const events = [
   {
@@ -414,4 +415,284 @@ test('disposal cancels a pending broker request and refuses later turns', async 
   await t.throwsAsync(provider.chat([{ role: 'user', content: 'again' }], []), {
     message: 'Brokered Messages provider disposed',
   });
+});
+
+/**
+ * A broker whose response bytes are supplied verbatim, so each test can shape
+ * the Server-Sent Events framing, status, and content type independently.
+ *
+ * @param {object} options
+ * @param {() => Iterable<Uint8Array>} [options.chunks]
+ * @param {number} [options.status]
+ * @param {string} [options.contentType]
+ */
+const rawFixture = ({
+  chunks = () => [],
+  status = 200,
+  contentType = 'text/event-stream',
+}) => {
+  const requests = [];
+  const inference = Far('RawAgentInference', {
+    requestByteStream: message => {
+      requests.push(message);
+      return harden({
+        status,
+        contentType,
+        reader: bytesReaderFromIterator(chunks()[Symbol.iterator]()),
+      });
+    },
+  });
+  return { inference, requests };
+};
+
+/** @param {string} text */
+const textChunks = text => () => [new TextEncoder().encode(text)];
+
+/**
+ * @param {any[]} list
+ * @param {string} [newline]
+ */
+const sse = (list, newline = '\n') =>
+  list
+    .map(event => `data: ${JSON.stringify(event)}${newline}${newline}`)
+    .join('');
+
+const textStart = {
+  type: 'content_block_start',
+  index: 0,
+  content_block: { type: 'text', text: '' },
+};
+const toolStart = {
+  type: 'content_block_start',
+  index: 0,
+  content_block: { type: 'tool_use', id: 'call-1', name: 'lookup' },
+};
+const stop = { type: 'message_stop' };
+
+/** @param {any} broker */
+const chatWith = async broker => {
+  await null;
+  const provider = makeBrokeredMessagesProvider({
+    inference: broker.inference,
+    model: 'claude-test',
+  });
+  try {
+    return await provider.chat([{ role: 'user', content: 'hello' }], []);
+  } finally {
+    await provider.dispose();
+  }
+};
+
+test('brokered Messages accepts carriage-return framed events', async t => {
+  const result = await chatWith(
+    rawFixture({
+      chunks: textChunks(
+        sse(
+          [
+            textStart,
+            {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'cr' },
+            },
+            stop,
+          ],
+          '\r',
+        ),
+      ),
+    }),
+  );
+  t.is(result.message.content, 'cr');
+});
+
+for (const [
+  title,
+  options,
+  message,
+] of /** @type {Array<[string, any, RegExp]>} */ ([
+  [
+    'a response past the transport bound',
+    {
+      // Each chunk is one complete ignored line, so parsing stays linear.
+      chunks: function* oversized() {
+        const chunk = new TextEncoder().encode(`:${'x'.repeat(65_534)}\n`);
+        for (let count = 0; count <= 256; count += 1) yield chunk;
+      },
+    },
+    /exceeds transport bound/,
+  ],
+  [
+    'a truncated event',
+    { chunks: textChunks(`${sse([textStart])}data: {"type":"mess`) },
+    /Truncated Anthropic Messages stream event/,
+  ],
+  [
+    'a stream that ends without message_stop',
+    { chunks: textChunks(sse([textStart])) },
+    /ended without message_stop/,
+  ],
+  [
+    'an in-stream error event',
+    {
+      chunks: textChunks(
+        sse([
+          textStart,
+          { type: 'error', error: { type: 'overloaded_error', message: 'x' } },
+        ]),
+      ),
+    },
+    /^Anthropic Messages inference failed$/,
+  ],
+  [
+    'an event that is not JSON',
+    { chunks: textChunks('data: {not json\n\n') },
+    /Invalid Anthropic Messages stream event/,
+  ],
+  [
+    'an unsupported content block type',
+    {
+      chunks: textChunks(
+        sse([
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'thinking' },
+          },
+        ]),
+      ),
+    },
+    /Unsupported Anthropic content block/,
+  ],
+  [
+    'an invalid content block index',
+    {
+      chunks: textChunks(sse([{ ...textStart, index: -1 }])),
+    },
+    /Invalid Anthropic content block/,
+  ],
+  [
+    'a repeated content block index',
+    { chunks: textChunks(sse([textStart, textStart])) },
+    /Invalid Anthropic content block/,
+  ],
+  [
+    'a delta for an absent content block',
+    {
+      chunks: textChunks(
+        sse([
+          {
+            type: 'content_block_delta',
+            index: 3,
+            delta: { type: 'text_delta', text: 'x' },
+          },
+        ]),
+      ),
+    },
+    /delta has no content block/,
+  ],
+  [
+    'a delta that does not match its block',
+    {
+      chunks: textChunks(
+        sse([
+          textStart,
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: '{}' },
+          },
+        ]),
+      ),
+    },
+    /Invalid Anthropic content delta/,
+  ],
+  [
+    'malformed tool input JSON',
+    {
+      chunks: textChunks(
+        sse([
+          toolStart,
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'input_json_delta', partial_json: '{"name":' },
+          },
+          stop,
+        ]),
+      ),
+    },
+    /Invalid Anthropic tool input/,
+  ],
+  [
+    'an upstream 500',
+    { status: 500, chunks: textChunks('{"error":"secret detail"}') },
+    /^Anthropic Messages inference failed$/,
+  ],
+  [
+    'a non-event-stream content type',
+    { contentType: 'application/json', chunks: textChunks(sse([stop])) },
+    /^Anthropic Messages inference failed$/,
+  ],
+])) {
+  test(`brokered Messages rejects ${title}`, async t => {
+    await t.throwsAsync(chatWith(rawFixture(options)), { message });
+  });
+}
+
+test('brokered Messages recipes reject an unsafe maxTokens', t => {
+  const { inference } = fixture();
+  for (const maxTokens of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '64']) {
+    t.throws(
+      () =>
+        assertBrokeredMessagesRecipe(
+          harden({
+            kind: 'brokered-messages',
+            inference,
+            model: 'claude-test',
+            maxTokens,
+          }),
+        ),
+      { message: /Invalid brokered Messages recipe/ },
+      `maxTokens ${String(maxTokens)}`,
+    );
+  }
+});
+
+test('brokered Lal drives a turn through the broker with no API key', async t => {
+  const subject = rawFixture({
+    chunks: textChunks(
+      sse([
+        textStart,
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'hello' },
+        },
+        stop,
+      ]),
+    ),
+  });
+  // The mock inbox delivers one message and then ends, which ends the loop.
+  const { powers } = makeMockPowers({
+    initialMessage: {
+      number: 1,
+      from: '@host',
+      to: 'lal-self-id',
+      strings: ['Say hello.'],
+      names: [],
+      ids: [],
+    },
+  });
+  await spawnWorkerLoop(powers, null, {
+    LAL_INFERENCE: subject.inference,
+    LAL_MODEL: 'claude-test',
+    LAL_MAX_TOKENS: '77',
+  });
+  t.is(subject.requests.length, 1);
+  const [request] = subject.requests;
+  t.deepEqual(Object.keys(request).sort(), ['body', 'method', 'path']);
+  const body = JSON.parse(request.body);
+  t.is(body.model, 'claude-test');
+  t.is(body.max_tokens, 77);
+  t.false(/api[-_]?key|authorization/i.test(JSON.stringify(request)));
 });
