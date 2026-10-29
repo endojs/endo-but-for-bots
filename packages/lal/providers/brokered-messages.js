@@ -28,13 +28,18 @@ const anthropicEvents = async function* anthropicEventIterator(bytes) {
       throw Error('Invalid Anthropic Messages stream event');
     }
   };
-  for await (const chunk of bytes) {
-    size += Number(chunk.byteLength);
-    size <= MAX_RESPONSE_BYTES ||
-      Fail`Anthropic stream exceeds transport bound`;
-    pending += decoder.decode(chunk, { stream: true });
+  /**
+   * Split complete lines off `pending`. Until the stream ends, a trailing CR
+   * may be the first half of a CRLF, so it waits for the next chunk.
+   *
+   * @param {boolean} ended
+   */
+  const takeLines = function* takeLineIterator(ended) {
+    const terminator = ended
+      ? /^(.*?)(\r\n|\n|\r)/s
+      : /^(.*?)(\r\n|\n|\r(?!$))/s;
     for (;;) {
-      const match = /^(.*?)(\r\n|\n|\r(?!$))/s.exec(pending);
+      const match = terminator.exec(pending);
       if (!match) break;
       pending = pending.slice(match[0].length);
       const line = match[1];
@@ -44,8 +49,16 @@ const anthropicEvents = async function* anthropicEventIterator(bytes) {
         data.push(line.slice(5).replace(/^ /, ''));
       }
     }
+  };
+  for await (const chunk of bytes) {
+    size += Number(chunk.byteLength);
+    size <= MAX_RESPONSE_BYTES ||
+      Fail`Anthropic stream exceeds transport bound`;
+    pending += decoder.decode(chunk, { stream: true });
+    yield* takeLines(false);
   }
   pending += decoder.decode();
+  yield* takeLines(true);
   (!pending.trim() && data.length === 0) ||
     Fail`Truncated Anthropic Messages stream event`;
 };
