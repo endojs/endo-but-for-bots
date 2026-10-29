@@ -802,9 +802,7 @@ const requireRevision = (value, fieldName) => {
  * otherwise bind to a path and have git exec while rendering the diff.
  * `core.attributesFile=/dev/null` (in `GIT_BASE_ARGS`) only disables the
  * *external* attributes file, not the in-tree `.gitattributes`, so the
- * per-command flag is load-bearing here.  Combined with the rest of the
- * hardening envelope (hooks off, filters off), guests cannot make
- * `git diff` execute arbitrary code.
+ * per-command flag is load-bearing here.
  *
  * @param {GitBackendDiffOptions} options
  * @param {string[]} [formatArguments] Output-format flags; the structured
@@ -817,10 +815,8 @@ const diffArguments = (options, formatArguments = []) => {
     commandArguments.push('--find-renames', ...formatArguments);
   }
   if (options.cached) commandArguments.push('--cached');
-  // `--end-of-options` separates option-shaped flags from the revisions
-  // that follow.  `requireRevision` already rejects refs that begin with
-  // `-`; this is the defense-in-depth boundary git itself enforces when
-  // both sides cooperate.
+  // `requireRevision` already rejects leading `-`; `--end-of-options` is
+  // defense in depth.
   const positionals = [];
   if (options.base !== undefined) {
     positionals.push(requireRevision(options.base, 'diff.base'));
@@ -2765,9 +2761,8 @@ export const makeNativeGitBackend = ({
     diffText: async (options = {}) => runGit(diffArguments(options)),
 
     /**
-     * Report a diff as structured per-file records.  Git renders the same
-     * comparison twice: `--raw -z` carries exact paths, modes, and statuses
-     * (NUL-delimited, so no path quoting), and the patch carries the hunks.
+     * Report a diff as structured per-file records, parsed from a
+     * `--raw -z` rendering and a patch rendering of the same comparison.
      * Both invocations pin `--find-renames`, and the patch pins uncolored
      * output and the short submodule rendering (a `diff.submodule=log`
      * summary has no `diff --git` section), so repository diff

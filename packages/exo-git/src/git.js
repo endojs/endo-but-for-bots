@@ -683,7 +683,7 @@ async function trackingStatus() {
  *   name the backend forwards to git unchanged.
  * - `entries` (PathEntry[]) get resolved to repo-relative paths with
  *   the same lineage check `add` uses. `paths` (string[]) passes
- *   through (callers can use either).
+ *   through.
  *
  * @param {GitState} state
  * @param {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} options

@@ -191,6 +191,7 @@ export const GitRebaseStartInputShape = M.splitRecord(
   { autosquash: M.boolean() },
   harden({}),
 );
+harden(GitRebaseStartInputShape);
 
 const GitRebaseControlInputShape = M.splitRecord(
   { mode: M.or('continue', 'abort', 'skip') },
