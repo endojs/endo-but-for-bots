@@ -7,14 +7,14 @@ import { readFaeWorkloadConfig } from './src/workload-config.js';
 import { spawnWorkerLoop } from './agent.js';
 import { resolveAuthToken } from './src/credentials.js';
 
+/** @import { ERef } from '@endo/eventual-send' */
+
 /**
- * Choose how the provider owner authenticates. A subscription session
- * carries its identity, a brokered recipe carries none because the registry
- * grant holds the credential, and any other provider reads its token from the
- * delegated secret on every turn.
+ * Choose how the provider owner authenticates. A brokered recipe carries no
+ * credential because the registry grant holds it.
  *
  * @param {object} options
- * @param {import('@endo/eventual-send').ERef<object>} options.powers
+ * @param {ERef<object>} options.powers
  * @param {{ kind?: string }} options.storedConfig
  * @param {string} [options.sessionId]
  * @returns {{ sessionId?: string, provideAuthToken?: () => Promise<string> }}

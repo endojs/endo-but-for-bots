@@ -1,14 +1,21 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
-import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import { providerCredentialOptions } from '../driver.js';
 
 const noSecretPowers = () =>
-  Far('NoSecretPowers', {
-    has: async () => false,
-  });
+  makeExo(
+    'NoSecretPowers',
+    M.interface('NoSecretPowers', {
+      has: M.call().rest(M.any()).returns(M.promise()),
+    }),
+    {
+      has: async () => false,
+    },
+  );
 
 test('a brokered recipe receives no credential resolver or session', t => {
   const options = providerCredentialOptions({
