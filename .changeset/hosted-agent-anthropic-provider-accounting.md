@@ -2,9 +2,6 @@
 '@endo/hosted-agent': minor
 ---
 
-Add Anthropic provider accounting to the inference provider registry.
-The new `@endo/hosted-agent/anthropic-api-key-issuer.js` export issues Anthropic API-key grants, and `@endo/hosted-agent/inference-provider-policy.js` validates inference requests and limits.
-The registry now refuses requests that fail the Anthropic Messages request policy, and reserves and settles per-turn token and dollar usage against agent, provider, and owner limits.
-Providers, owners, and agents receive default daily dollar budgets, concurrency, and rate caps unless configured otherwise.
-Reservations left by a restart are settled as estimated, and settled turns from earlier days are pruned from the durable ledger.
-`@endo/base64` and `@endo/utf8` are now runtime dependencies.
+Add Anthropic provider accounting to the inference provider registry, with new `@endo/hosted-agent/anthropic-api-key-issuer.js` (Anthropic API-key grants) and `@endo/hosted-agent/inference-provider-policy.js` (request and limit validation) exports.
+The registry now refuses requests that fail the Anthropic Messages request policy and enforces per-agent, per-provider, and per-owner token and dollar limits.
+Upgrade note: limits now apply by default, so calls past them are refused. Each provider and owner gets 2 concurrent turns, 20 requests per minute, and $5 per day; each agent gets 1 concurrent turn, 10 requests per minute, and $2 per day (`DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`). Raise them with `limits` at provider creation, `setLimits` on the provider admin, `setOwnerLimits` on the directory, or `setGrantLimits` on the provider use facet.
