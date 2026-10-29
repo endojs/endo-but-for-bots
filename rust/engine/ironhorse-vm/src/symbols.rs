@@ -21,11 +21,45 @@ pub use ironhorse_text::SymbolName;
 
 #[derive(Clone, Default)]
 pub(crate) struct SymbolIds(std::collections::HashMap<SymbolName, u16>);
-impl SymbolIds {
-    pub fn get(&self, name: impl Into<SymbolName>) -> Option<&u16> {
-        self.0.get(&name.into())
+
+/// A name [`SymbolIds`] can look up. Text whose encoding is its UTF-8 is
+/// looked up by those bytes, without building a [`SymbolName`].
+pub(crate) trait SymbolKey {
+    fn find_in<'a>(&self, ids: &'a std::collections::HashMap<SymbolName, u16>) -> Option<&'a u16>;
+}
+impl SymbolKey for str {
+    fn find_in<'a>(&self, ids: &'a std::collections::HashMap<SymbolName, u16>) -> Option<&'a u16> {
+        match SymbolName::encoding_of(self) {
+            Some(encoding) => ids.get(encoding),
+            None => ids.get(&SymbolName::from(self)),
+        }
     }
-    pub fn contains_key(&self, name: impl Into<SymbolName>) -> bool {
+}
+impl SymbolKey for String {
+    fn find_in<'a>(&self, ids: &'a std::collections::HashMap<SymbolName, u16>) -> Option<&'a u16> {
+        self.as_str().find_in(ids)
+    }
+}
+impl SymbolKey for SymbolName {
+    fn find_in<'a>(&self, ids: &'a std::collections::HashMap<SymbolName, u16>) -> Option<&'a u16> {
+        ids.get(self)
+    }
+}
+impl<T: SymbolKey + ?Sized> SymbolKey for &T {
+    fn find_in<'a>(&self, ids: &'a std::collections::HashMap<SymbolName, u16>) -> Option<&'a u16> {
+        (**self).find_in(ids)
+    }
+}
+
+impl SymbolIds {
+    // Out of line, as it was when it built the name: inlined, the hash
+    // state joins the frame of every caller, recursive property paths
+    // included (`benches/stack_height.py`).
+    #[inline(never)]
+    pub fn get(&self, name: impl SymbolKey) -> Option<&u16> {
+        name.find_in(&self.0)
+    }
+    pub fn contains_key(&self, name: impl SymbolKey) -> bool {
         self.get(name).is_some()
     }
     pub fn insert(&mut self, name: impl Into<SymbolName>, id: u16) -> Option<u16> {
@@ -114,6 +148,24 @@ mod tests {
             names,
             vec![SymbolName::from("foo"), SymbolName::from("Object")]
         );
+    }
+
+    #[test]
+    fn text_finds_the_name_it_spells() {
+        let spellings = ["length", "é", "", "\0", "😀", "a\0😀z"];
+        let mut ids = SymbolIds::default();
+        for (id, text) in (1..).zip(spellings) {
+            ids.insert(text, id);
+        }
+        for (id, text) in (1..).zip(spellings) {
+            assert_eq!(ids.get(text), Some(&id), "{text:?}");
+            assert_eq!(ids.get(text.to_string()), Some(&id), "{text:?}");
+            let name = SymbolName::from(text);
+            assert_eq!(ids.get(&name), Some(&id), "{text:?}");
+            assert_eq!(ids.get(name), Some(&id), "{text:?}");
+        }
+        assert_eq!(ids.get("lengt"), None);
+        assert!(!ids.contains_key("\0\0"));
     }
 
     #[test]
