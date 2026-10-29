@@ -225,6 +225,28 @@ const drain = async stream => {
   return { seen, message: await stream.result() };
 };
 
+test('the pi stream sends the pi-ai context system prompt and tools', async t => {
+  const subject = fixture();
+  const streamFn = makeBrokeredMessagesStream({
+    inference: subject.inference,
+    model: 'claude-test',
+  });
+  await drain(
+    streamFn(undefined, {
+      systemPrompt: 'Be terse',
+      messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
+      tools: [{ name: 'lookup', description: 'look up', parameters: {} }],
+    }),
+  );
+  const body = JSON.parse(subject.requests[0].body);
+  t.is(body.system, 'Be terse');
+  t.deepEqual(
+    body.tools.map(tool => tool.name),
+    ['lookup'],
+  );
+  t.deepEqual(body.messages, [{ role: 'user', content: 'hello' }]);
+});
+
 test('the pi stream translates harness history and reports a tool-use turn', async t => {
   const subject = fixture();
   const streamFn = makeBrokeredMessagesStream({

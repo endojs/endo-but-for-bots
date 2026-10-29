@@ -296,9 +296,13 @@ const commonMessages = messages =>
     throw Error('Unsupported brokered Messages history');
   });
 
-/** @param {any[]} messages */
-const currentTools = messages => {
+/** @param {{ messages: any[], tools?: any[] }} context */
+const currentTools = context => {
+  const messages = context.messages;
   const tools = new Map();
+  // pi-ai carries the turn's tools in `context.tools`; the system-message
+  // `toolsAdded`/`toolsRemoved` deltas are a legacy history shape.
+  for (const tool of context.tools || []) tools.set(tool.name, tool);
   for (const message of messages) {
     if (message.role === 'system') {
       for (const tool of message.toolsAdded || []) tools.set(tool.name, tool);
@@ -334,8 +338,13 @@ export const makeBrokeredMessagesStream = options => {
     void (async () => {
       try {
         const result = await provider.chat(
-          commonMessages(context.messages),
-          currentTools(context.messages),
+          commonMessages([
+            ...(context.systemPrompt
+              ? [{ role: 'system', content: context.systemPrompt }]
+              : []),
+            ...context.messages,
+          ]),
+          currentTools(context),
           streamOptions.signal,
         );
         const content = [];
