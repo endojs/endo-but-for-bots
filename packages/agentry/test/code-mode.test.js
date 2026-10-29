@@ -735,7 +735,11 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
     listed: [...listed].sort(),
     beforeSize: String(beforeStat.size),
     status: { path: row.path, index: row.index, worktree: row.worktree },
-    stagedDiffHasEdit: stagedDiff.includes('+after'),
+    stagedDiffHasEdit: stagedDiff.files.some(file =>
+      file.hunks.some(hunk =>
+        hunk.lines.some(line => line.kind === 'add' && line.text === 'after'),
+      ),
+    ),
     commitSummary: commit.summary,
     previousText,
     currentText,

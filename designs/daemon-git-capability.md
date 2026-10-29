@@ -266,6 +266,7 @@ interface Git {
 
   // Repository inspection.
   status(): Promise<GitStatusEntry[]>;
+  // Phase 1 shape; Phase 7 returns GitDiff and adds diffText() for the string.
   diff(options?: {
     cached?: boolean;
     base?: GitRef | string;
@@ -408,13 +409,13 @@ type GitDiffHunk = {
 };
 
 type GitFileDiff = {
-  oldEntry?: EndoMountEntry;
-  newEntry?: EndoMountEntry;
+  oldPath?: string; // mount-relative, matching the status() copy-data shape
+  newPath?: string;
   oldMode?: number;
   newMode?: number;
-  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied';
-  hunks: GitDiffHunk[];
-  binary?: { oldSizeBytes?: number; newSizeBytes?: number };
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged';
+  hunks: GitDiffHunk[]; // empty for 'unmerged'; conflict state is GitConflict's job
+  binary?: {}; // present for a binary file; byte sizes are not yet reported
 };
 
 type GitDiff = { files: GitFileDiff[] };
@@ -563,7 +564,8 @@ The contract below is best-effort backend-pluggable, not contractually backend-r
 interface GitBackend {
   assertRepositoryRoot(): Promise<void>;
   status(): Promise<BackendStatusEntry[]>;
-  diff(...): Promise<string>;
+  diff(...): Promise<GitDiff>;
+  diffText(...): Promise<string>;
   add(...): Promise<void>;
   // ...
   tree(ref: string): Promise<ReadableTree>;
@@ -601,7 +603,7 @@ The chosen parsing surfaces are stable across that floor:
 
 - `git status --porcelain=v2 --branch` for `status()` (NUL-terminated with `-z`);
 - `git log --pretty=format:%H%x1f%s%x1f%aN%x1f%aI%x1e` for `log()`;
-- `git diff --raw -z` plus `git diff` (text) for the first `diff()` phase; `git diff --no-color --no-ext-diff` invariants for the structured-shape hunk parser ([§ Structured Result Shapes (Phase 7)](#structured-result-shapes-phase-7));
+- `git diff --raw -z` plus `git diff` (text) for the first `diff()` phase; one `git diff --raw -z --no-abbrev --patch` run with `--no-color --no-ext-diff --no-textconv --find-renames --submodule=short` pinned for the structured-shape hunk parser ([§ Structured Result Shapes (Phase 7)](#structured-result-shapes-phase-7));
 - `git for-each-ref --format=...` for `branches()`;
 - `git rev-parse --verify --end-of-options` for `revParse()`;
 - `git ls-tree -z --long` and `git cat-file --batch` for lazy tree reads;
@@ -801,6 +803,14 @@ It is not part of the normative design.
 - **#371** (`fix(daemon): correctness and authority-boundary fixes for the git capability`) — correctness and authority-boundary hardening on the shipped `Git` surface.
 - **`Git.filesystemAt(ref)`** ([endo-fs-from-git](endo-fs-from-git.md) Phases 1-3 plus a Phase-4 slice) — the historical-read `Filesystem` view over the git object database (§ Historical Read); the exo surface now lives in `packages/exo-git` (`makeGit`, `makeGitFsBackend`) with the native driver in `packages/git`.
 - **#644** (`feat(git): add commit amend and reword`) — `commit({ amend })` and `reword(ref, message)` behind the gated `allowHistoryRewrite` attenuation axis (Design Decision 11), plus the elevated `makeGitHistoryTool` in `@endo/agent-tools` and code-mode regeneration.
+
+### In progress
+
+- **Phase 7, structured `diff` slice** — `Git.diff(options?)` returns `GitDiff` and the porcelain moves to `Git.diffText(options?)`; in-tree consumers migrated (the agent `diff` tool and code-mode declarations report the structured shape; the conflict-rebase eval keeps byte-identity patch comparison through `diffText`).
+  § Structured Result Shapes now records the shipped `GitFileDiff`: mount-relative `oldPath` / `newPath` strings instead of `EndoMountEntry` values (matching `status()`), and an `'unmerged'` status with no hunks.
+  `binary` is reported as an empty record (`{}`); byte sizes are not yet populated.
+  `diffText` is capped at 50,000 characters (a pre-existing limit of the text methods), so the eval's byte-identity comparison holds only below that size.
+  Remaining Phase 7 work: `GitShow` / `showText`, `GitMergeResult` / `mergeText`, `GitRebaseResult` / `rebaseText`, structured `stashList` / `stashShow` with their `*Text` siblings, and narrowing mutation methods out of the `readOnly()` type.
 
 ### Forward-design notes
 

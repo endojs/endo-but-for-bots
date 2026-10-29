@@ -24,7 +24,9 @@ export const helpTextEntries = harden([
         'currentBranch() -> Promise<GitRef | undefined>\nGet the branch HEAD currently points at.\nReturns undefined when HEAD is detached.',
       branches:
         "branches() -> Promise<GitRef[]>\nList the repository's branches as refs.",
-      diff: 'diff(options?) -> Promise<string>\nRender a textual diff.\nOptions are `cached`, `base`, `head`, and either `entries` (PathEntry\ncapabilities minted for this worktree) or `paths`.',
+      diff: "diff(options?) -> Promise<GitDiff>\nReport changes as structured data: `{ files }`, one record per changed\nfile with `status`, `oldPath` / `newPath`, `oldMode` / `newMode`, and\n`hunks`.\nEach hunk carries `oldStart`, `oldLines`, `newStart`, `newLines`, and\n`lines` of `{ kind: 'context' | 'add' | 'remove', text }`.\nA binary file carries `binary` and no hunks; an unmerged path has\nstatus `unmerged` and no hunks.\nAn output larger than 1 MiB fails; use `diffText` or narrow by path.\nOptions are `cached`, `base`, `head`, and either `entries` (PathEntry\ncapabilities minted for this worktree) or `paths`.\n- diff({ cached: true }) compares the index with HEAD\n- diff({ base: \"HEAD~1\", head: \"HEAD\" }) compares two revisions",
+      diffText:
+        'diffText(options?) -> Promise<string>\nRender the same comparison as `diff` as `git diff` text, for display.\nThe text is capped at 50,000 characters with a truncation marker.\nTakes the same options as `diff`.',
       log: 'log(options?) -> Promise<GitCommit[]>\nList commits, most recent first.\nOptions are `ref`, `maxCount`, `since`, and `until`.',
       show: 'show(ref) -> Promise<string>\nRender one revision as text, the way `git show` does.',
       revParse:

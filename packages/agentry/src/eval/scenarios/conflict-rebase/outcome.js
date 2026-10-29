@@ -121,7 +121,7 @@ export const assertGitConflictRebaseOutcome = async ({
   if (replayed.length === expected.expectedPatches.length) {
     const replayedPatches = await Promise.all(
       replayed.map(entry =>
-        E(gitRef).diff({ base: `${entry.oid}^`, head: entry.oid }),
+        E(gitRef).diffText({ base: `${entry.oid}^`, head: entry.oid }),
       ),
     );
     patchesMatch = replayedPatches.every(

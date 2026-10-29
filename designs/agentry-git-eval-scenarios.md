@@ -101,7 +101,7 @@ The repository already has pieces of the right convention:
 | `OpenFile.read(offset, length)` | Byte-ranged low-level open-file read | Line-blind, with no end-of-file or truncation signal; separate from the public `ReadableBlob` methods below. |
 | `Cursor.read(limit)` | Returns `{ entries, atEnd }`. | Right result shape, directory listings only. |
 | `git.log(options)` | Bounds by `maxCount`. | Bounds row count, not output size. |
-| `git.diff()`, `git.show()`, `stashShow()` | Unbounded strings. | No bounding option at all. |
+| `git.diffText()`, `git.show()`, `stashShow()` | Strings capped at 50,000 characters with a truncation marker. | No caller-chosen bound or continuation. |
 
 The concrete filesystem/blob realization of this sed-like affordance is the
 range-read surface described in
@@ -165,8 +165,8 @@ when it needs a line window:
   the blob methods.
 
 The remaining Git text surfaces are intentionally separate follow-ups.
-The rendered outputs of `git.diff()`, `git.show()`, `git.log()`, and `stashShow()`
-remain unbounded here; a future tool or Git API design must decide how its
+The rendered outputs of `git.diffText()`, `git.show()`, `git.log()`, and `stashShow()`
+have no caller-chosen bound here (the text methods only truncate at 50,000 characters); a future tool or Git API design must decide how its
 line-window vocabulary and continuation result apply to those strings.
 The platform design also leaves propagation of `rangeRead` and `rangeReadText` to
 the remote daemon, Git, and mount blob exos as a follow-up.

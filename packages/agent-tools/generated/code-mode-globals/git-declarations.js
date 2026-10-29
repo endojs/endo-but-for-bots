@@ -44,6 +44,9 @@ type GitDiffOptions = {
     entries?: GitPathEntry[];
     paths?: string[];
 };
+type GitDiff = {
+    files: GitFileDiff[];
+};
 type GitFilesystem = GitExtendedFilesystem;
 type GitFollowRootOptions = {
     cancelled?: Promise<never>;
@@ -72,7 +75,8 @@ type GitReadOnlyEndoGit = {
     status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
     trackingStatus: () => Promise<GitTrackingStatus>;
     worktreeList: () => Promise<GitWorktreeEntry[]>;
-    diff: (options?: GitDiffOptions) => Promise<string>;
+    diff: (options?: GitDiffOptions) => Promise<GitDiff>;
+    diffText: (options?: GitDiffOptions) => Promise<string>;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     show: (ref: GitRef | string) => Promise<string>;
     revParse: (ref: GitRef | string) => Promise<GitRef>;
@@ -318,6 +322,25 @@ type GitTreeRef = {
     hash: string;
 };
 type GitRemotableFilesystem = GitFilesystem & unknown;
+type GitFileDiff = {
+    status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged';
+    oldPath?: string;
+    newPath?: string;
+    oldMode?: number;
+    newMode?: number;
+    hunks: GitDiffHunk[];
+    binary?: {};
+};
+type GitDiffHunk = {
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    lines: {
+        kind: 'context' | 'add' | 'remove';
+        text: string;
+    }[];
+};
 type GitRootTransition = {
     type: 'transition';
     fromRevision: bigint;
@@ -393,7 +416,8 @@ type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
         force?: boolean;
     }) => Promise<void>;
     detach: (ref: GitRef | string) => Promise<void>;
-    diff: (options?: GitDiffOptions) => Promise<string>;
+    diff: (options?: GitDiffOptions) => Promise<GitDiff>;
+    diffText: (options?: GitDiffOptions) => Promise<string>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
     followLatestRoot: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootSnapshot, undefined>>;
     followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;
@@ -471,6 +495,9 @@ type GitDiffOptions = {
     head?: GitRef | string;
     entries?: GitPathEntry[];
     paths?: string[];
+};
+type GitDiff = {
+    files: GitFileDiff[];
 };
 type GitFilesystem = GitExtendedFilesystem;
 type GitLogOptions = {
@@ -676,7 +703,26 @@ type GitExtendedFilesystem = {
     brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
     help: (method?: string) => string;
 };
+type GitFileDiff = {
+    status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged';
+    oldPath?: string;
+    newPath?: string;
+    oldMode?: number;
+    newMode?: number;
+    hunks: GitDiffHunk[];
+    binary?: {};
+};
 type GitPathEntry = GitLitePathEntry;
+type GitDiffHunk = {
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    lines: {
+        kind: 'context' | 'add' | 'remove';
+        text: string;
+    }[];
+};
 type GitStatusEntry = {
     path: string;
     index: 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
@@ -730,7 +776,8 @@ type GitStreamYieldNode<Y = unknown, R = undefined> = {
     body: `{
     branches: () => Promise<GitRef[]>;
     currentBranch: () => Promise<GitRef | undefined>;
-    diff: (options?: GitDiffOptions) => Promise<string>;
+    diff: (options?: GitDiffOptions) => Promise<GitDiff>;
+    diffText: (options?: GitDiffOptions) => Promise<string>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     readOnly: () => typeof gitReadOnly;

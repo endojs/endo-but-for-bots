@@ -1,7 +1,7 @@
 // @ts-check
 
 // Establish a SES perimeter (provides the `harden` global).
-// eslint-disable-next-line import/order
+
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -228,11 +228,16 @@ test('the version-controlled-filesystem loop closes end to end through provision
     'both paths are staged after add',
   );
 
-  const diff = /** @type {string} */ (
-    await vcs('diff').invoke({ options: { cached: true } })
+  const diff =
+    /** @type {{ files: { status: string, newPath?: string }[] }} */ (
+      await vcs('diff').invoke({ options: { cached: true } })
+    );
+  t.true(
+    diff.files.some(
+      file => file.newPath === 'AGENT.md' && file.status === 'added',
+    ),
+    'the staged diff reports the new file',
   );
-  t.is(typeof diff, 'string');
-  t.true(diff.includes('AGENT.md'), 'the staged diff names the new file');
 
   const commit = /** @type {{ oid: string }} */ (
     await vcs('commit').invoke({
