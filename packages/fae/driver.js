@@ -8,6 +8,32 @@ import { spawnWorkerLoop } from './agent.js';
 import { resolveAuthToken } from './src/credentials.js';
 
 /**
+ * Choose how the provider owner authenticates. A subscription session
+ * carries its identity, a brokered recipe carries none because the registry
+ * grant holds the credential, and any other provider reads its token from the
+ * delegated secret on every turn.
+ *
+ * @param {object} options
+ * @param {import('@endo/eventual-send').ERef<object>} options.powers
+ * @param {{ kind?: string }} options.storedConfig
+ * @param {string} [options.sessionId]
+ * @returns {{ sessionId?: string, provideAuthToken?: () => Promise<string> }}
+ */
+export const providerCredentialOptions = ({
+  powers,
+  storedConfig,
+  sessionId,
+}) => {
+  if (sessionId !== undefined) return harden({ sessionId });
+  if (storedConfig.kind === 'brokered-messages') return harden({});
+  return harden({
+    provideAuthToken: () =>
+      resolveAuthToken({ powers, config: /** @type {any} */ (storedConfig) }),
+  });
+};
+harden(providerCredentialOptions);
+
+/**
  * Fae agent driver caplet.
  *
  * A lightweight caplet whose sole job is to run the inbox/LLM loop for
@@ -81,14 +107,7 @@ export const make = async (powers, context, { env } = {}) => {
         requestTimeoutMs,
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
-        ...(sessionId === undefined && storedConfig.kind !== 'brokered-messages'
-          ? {
-              provideAuthToken: () =>
-                resolveAuthToken({ powers, config: storedConfig }),
-            }
-          : sessionId === undefined
-            ? {}
-            : { sessionId }),
+        ...providerCredentialOptions({ powers, storedConfig, sessionId }),
       }),
     );
   };
