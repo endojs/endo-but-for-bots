@@ -8,7 +8,7 @@
 // This generates ../tmp/test-xs.js, which can be run with xst directly for
 // validation of the XS environment under SES-for-XS.
 
-/* global print */
+/* global globalThis, print */
 
 // Eslint does not know about package reflexive imports (importing your own
 // package), which in this case is necessary to go through the conditional
@@ -20,10 +20,66 @@ import 'ses';
 // eslint-disable-next-line import/no-unresolved
 import precompiledModuleSource from '../tmp/_meaning.pre-mjs.json';
 
+// xst provides both text codecs; _xs-missing-text-codecs.js covers their
+// absence.
+assert.equal(
+  typeof globalThis.TextEncoder,
+  'function',
+  'xst provides TextEncoder',
+);
+assert.equal(
+  typeof globalThis.TextDecoder,
+  'function',
+  'xst provides TextDecoder',
+);
+const HostTextEncoder = globalThis.TextEncoder;
+const HostTextDecoder = globalThis.TextDecoder;
+
 lockdown();
 
 // spot checks
 assert(Object.isFrozen(Object));
+
+print('# compartments share the hardened host text codecs');
+{
+  const compartment = new Compartment();
+  const otherCompartment = new Compartment();
+  for (const [name, HostCodec] of [
+    ['TextEncoder', HostTextEncoder],
+    ['TextDecoder', HostTextDecoder],
+  ]) {
+    assert(globalThis[name] === HostCodec, `${name} is the host constructor`);
+    assert(
+      compartment.evaluate(name) === HostCodec,
+      `compartment shares the host ${name}`,
+    );
+    assert(
+      otherCompartment.evaluate(name) === HostCodec,
+      `every compartment shares the host ${name}`,
+    );
+    assert(Object.isFrozen(HostCodec), `${name} is frozen`);
+    assert(Object.isFrozen(HostCodec.prototype), `${name}.prototype is frozen`);
+  }
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  assert.equal(
+    decoder.decode(encoder.encode('hello')),
+    'hello',
+    'hardened codecs round-trip text',
+  );
+  assert.equal(
+    decoder.decode(encoder.encode('')),
+    '',
+    'hardened codecs round-trip the empty string',
+  );
+  assert.equal(
+    compartment.evaluate(
+      "new TextDecoder().decode(new TextEncoder().encode('hello'))",
+    ),
+    'hello',
+    'codecs round-trip text inside a compartment',
+  );
+}
 
 print('# shim compartment can import a shim precompiled module source');
 {
