@@ -787,16 +787,9 @@ export const makeInferenceProviderRegistry = async ({
           await appendRefusal(grant, `${scope.name}-rate-limited`);
           throw fixedError('inference-request-refused');
         }
-        // An unpriced model on a token-budgeted provider cannot be charged
-        // against the owner's dollar budget; the provider's token budget
-        // governs it instead of refusing every turn at the owner scope.
-        const ownerUnpriced =
-          scope.name === 'owner' &&
-          Object.hasOwn(scope.limits, 'dailyDollars') &&
-          reservedCostMicros === undefined &&
-          Object.hasOwn(providerLimits, 'dailyTokens');
+        // A dollar budget cannot meter an unpriced model, so every scope that
+        // budgets in dollars refuses it; the owner aggregate is never skipped.
         if (
-          !ownerUnpriced &&
           Object.hasOwn(scope.limits, 'dailyDollars') &&
           reservedCostMicros === undefined
         ) {
@@ -813,10 +806,7 @@ export const makeInferenceProviderRegistry = async ({
         const budget = Object.hasOwn(scope.limits, 'dailyDollars')
           ? scope.limits.dailyDollars * 1_000_000
           : scope.limits.dailyTokens;
-        if (
-          !ownerUnpriced &&
-          Number(used) + Number(requested) > Number(budget)
-        ) {
+        if (Number(used) + Number(requested) > Number(budget)) {
           // eslint-disable-next-line no-await-in-loop
           await appendRefusal(grant, `${scope.name}-budget-exhausted`);
           throw fixedError('inference-request-refused');

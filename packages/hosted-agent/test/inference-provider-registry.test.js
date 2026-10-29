@@ -1019,6 +1019,37 @@ test('admission refuses worst-case reservations and unpriced dollar models befor
     dollarUsage.refusals.some(refusal => refusal.reason === 'unpriced-model'),
   );
   await dollarRegistry.close();
+
+  // A token-budgeted provider does not exempt an unpriced model from the
+  // owner's dollar budget, which aggregates every provider the owner holds.
+  const ownerBacking = makeBacking();
+  const ownerEvents = [];
+  const ownerRegistry = await makeRegistry(ownerBacking, {
+    events: ownerEvents,
+    modelPrices: harden({}),
+  });
+  const ownerDirectory = ownerRegistry.directoryFor('owner-alice');
+  const ownerProvider = await E(ownerDirectory).create(
+    providerRequest({ limits: { ...limits, dailyTokens: 20_000 } }),
+  );
+  const ownerInference = await E(
+    ownerRegistry.useFor('owner-alice', ownerProvider.providerId),
+  ).grant(
+    harden({
+      ownerId: 'owner-alice',
+      agentId: 'agent-owner-dollars',
+      model: 'claude-test',
+    }),
+  );
+  await t.throwsAsync(() => E(ownerInference).request(message('owner')), {
+    message: /inference-request-refused/,
+  });
+  t.deepEqual(ownerEvents, []);
+  const ownerUsage = await E(ownerDirectory).getUsage();
+  t.true(
+    ownerUsage.refusals.some(refusal => refusal.reason === 'unpriced-model'),
+  );
+  await ownerRegistry.close();
 });
 
 test('settlement records unknown usage, late reports, overruns, and model 404', async t => {
@@ -1094,6 +1125,12 @@ test('settlement records unknown usage, late reports, overruns, and model 404', 
 
 const tokenGrant = async (registry, agentId, providerLimits = limits) => {
   const directory = registry.directoryFor('owner-alice');
+  // An unpriced model needs a token budget at every scope, owner included.
+  await E(directory).setOwnerLimits(
+    harden({ dailyTokens: 100_000 }),
+    `owner-tokens-${agentId}`,
+    true,
+  );
   const provider = await E(directory).create(
     providerRequest({ limits: { ...providerLimits, dailyTokens: 20_000 } }),
   );
@@ -1116,8 +1153,6 @@ test('a rejected usage report settles the turn and releases its slot', async t =
       },
     },
   });
-  // The owner keeps its default dollar budget; the unpriced model is governed
-  // by the token-budgeted provider rather than refused at the owner scope.
   const { directory, inference } = await tokenGrant(registry, 'agent-reject');
   await t.throwsAsync(() => E(inference).request(message('reject')), {
     message: /usage lost/,
