@@ -814,7 +814,7 @@ test('a retire retry under a fresh key drives the in-flight retirement', async t
   const { operations, audit } = registry.inspect();
   t.deepEqual(
     Object.keys(operations).filter(key => key.startsWith('retire:')),
-    ['retire:owner-alice:retire-000000001'],
+    [`retire:${provider.providerId}`],
   );
   t.deepEqual(
     audit.map(event => event.change),
