@@ -815,6 +815,51 @@ test('revoking a provisioning import cleans up a lost backend response', async t
   t.is(harness.records.get(stableIds.secretId).state, 'revoked');
 });
 
+test('deleting a provisioning import whose revoke cleanup failed recovers the orphaned bytes', async t => {
+  const harness = makeHarness();
+  let recoverAttempts = 0;
+  const backend = harden({
+    ...harness.backend,
+    create: async (_operationId, secretId, bytes) => {
+      harness.values.set(secretId, new Uint8Array(bytes));
+      throw Error('lost backend response');
+    },
+    recover: async (operationId, secretId) => {
+      recoverAttempts += 1;
+      if (recoverAttempts === 1) throw Error('backend unavailable');
+      return harness.backend.recover(operationId, secretId);
+    },
+  });
+  const stableIds = harden({
+    secretId: 'secret-stable-0005',
+    grantId: 'grant-stable-00005',
+    operationId: 'operation-stable-5',
+  });
+  const directory = harness.makeDirectory(harness.makeManager(backend));
+  const importer = await E(directory).lookup('create');
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-orphan',
+        'Stable orphan',
+        encodeBase64(encodeUtf8('original')),
+        stableIds,
+      ),
+    { message: /CREATE_FAILED/ },
+  );
+
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  await t.throwsAsync(() => E(entry.admin).revoke(), {
+    message: /BACKEND_CLEANUP_FAILED/,
+  });
+  t.is(harness.records.get(stableIds.secretId).backendRef, '');
+  t.true(harness.values.has(stableIds.secretId));
+
+  await E(entry.admin).delete();
+  t.false(harness.records.has(stableIds.secretId));
+  t.false(harness.values.has(stableIds.secretId));
+});
+
 test('stable import resumes a lost binding response exactly once', async t => {
   const harness = makeHarness();
   let loseResponse = true;
