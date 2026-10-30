@@ -1882,8 +1882,22 @@ export interface SecretImporter {
     bytesBase64: string,
   ): Promise<SecretSummary>;
   /**
-   * Import once under caller-preallocated identifiers.
-   * Retry contract: see the `@endo/daemon` changeset.
+   * Import once under caller-preallocated identifiers, so a caller can retry
+   * after a lost response without minting a second secret.
+   *
+   * A retry with the same `name`, `description`, and `stableIds` resumes the
+   * import and returns the same secret's summary. A retry that reuses
+   * `secretId` with a different `grantId` or `description`, or that would bind
+   * the grant under a second name, throws `IDEMPOTENCY_CONFLICT`; a `name`
+   * already bound to another grant throws `NAME_CONFLICT`.
+   *
+   * `bytesBase64` may be `undefined` only for a resume-only retry: it
+   * finishes an import whose bytes the backend already holds, and otherwise
+   * returns a summary with state `'provisioning'`, meaning not yet imported.
+   * Replayed bytes never overwrite the first-written bytes.
+   *
+   * `grantId` is redeemable read authority, so choose identifiers that are
+   * unguessable or derived from a secret.
    */
   provideBase64(
     name: string,
