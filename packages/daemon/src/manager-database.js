@@ -355,6 +355,9 @@ export const makeDaemonDatabase = (config, options) => {
   const stmtDeleteSecretRecord = prepare(
     'DELETE FROM secret_record WHERE secret_id = ?',
   );
+  const stmtBeginTransaction = prepare('BEGIN');
+  const stmtCommitTransaction = prepare('COMMIT');
+  const stmtRollbackTransaction = prepare('ROLLBACK');
   // Audit rows deliberately carry no grant identifier: a grant identifier is
   // redeemable read authority, and the audit facet is readable by anyone
   // holding `@secrets/audit`.
@@ -741,11 +744,17 @@ export const makeDaemonDatabase = (config, options) => {
    * @param {SecretRecord} record
    * @param {string} grantId
    */
-  const writeSecretRecordWithGrant = (record, grantId) =>
-    db.transaction(() => {
+  const writeSecretRecordWithGrant = (record, grantId) => {
+    stmtBeginTransaction.run();
+    try {
       writeSecretRecord(record);
       writeSecretGrant(grantId, record.secretId);
-    })();
+      stmtCommitTransaction.run();
+    } catch (error) {
+      stmtRollbackTransaction.run();
+      throw error;
+    }
+  };
 
   /** @param {string} secretId */
   const deleteSecret = secretId => {
