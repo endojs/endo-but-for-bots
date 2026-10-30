@@ -10,7 +10,6 @@ const LIMIT_FIELDS = harden([
   'dailyTokens',
   'maxOutputTokens',
   'maxRequestBytes',
-  'maxWallClockMs',
 ]);
 
 export const DEFAULT_PROVIDER_LIMITS = harden({
@@ -19,7 +18,6 @@ export const DEFAULT_PROVIDER_LIMITS = harden({
   dailyDollars: 5,
   maxOutputTokens: 4096,
   maxRequestBytes: 8 * 1024 * 1024,
-  maxWallClockMs: 5 * 60_000,
 });
 harden(DEFAULT_PROVIDER_LIMITS);
 
@@ -57,6 +55,10 @@ export const validateInferenceLimits = (
     Fail`Invalid inference limits`;
   Reflect.ownKeys(proposed).every(key => LIMIT_FIELDS.includes(String(key))) ||
     Fail`Invalid inference limit field`;
+  !(
+    Object.hasOwn(proposed, 'dailyDollars') &&
+    Object.hasOwn(proposed, 'dailyTokens')
+  ) || Fail`Inference limits require exactly one daily budget`;
   const limits = { ...defaults, ...proposed };
   if (Object.hasOwn(proposed, 'dailyTokens')) delete limits.dailyDollars;
   if (Object.hasOwn(proposed, 'dailyDollars')) delete limits.dailyTokens;
@@ -77,6 +79,16 @@ export const validateInferenceLimits = (
   Object.hasOwn(checked, 'dailyDollars') !==
     Object.hasOwn(checked, 'dailyTokens') ||
     Fail`Inference limits require exactly one daily budget`;
+  // A ceiling on one budget kind must not be escaped by choosing the other.
+  for (const kind of ['dailyDollars', 'dailyTokens']) {
+    Object.hasOwn(checked, kind) ||
+      ceilings[kind] === undefined ||
+      Object.hasOwn(
+        ceilings,
+        kind === 'dailyDollars' ? 'dailyTokens' : 'dailyDollars',
+      ) ||
+      Fail`Inference limit exceeds deployment ceiling`;
+  }
   return harden(checked);
 };
 harden(validateInferenceLimits);

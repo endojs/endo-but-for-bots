@@ -63,8 +63,6 @@ harden(ProviderUseInterface);
 
 /** Refusal records kept for audit; older ones are dropped. */
 const MAX_REFUSALS = 1024;
-/** Reservation lifetime when no wall-clock cap applies. */
-const DEFAULT_RESERVATION_MS = 5 * 60_000;
 
 /** @returns {any} */
 const emptyState = () =>
@@ -736,14 +734,10 @@ export const makeInferenceProviderRegistry = async ({
         turn => Number(turn.admittedAtMs) >= admittedAtMs - 60_000,
       );
       const today = allTurns.filter(turn => turn.day === day);
-      // A reservation holds its slot across UTC midnight, and expires once
-      // its wall-clock allowance passes, so an abandoned stream cannot hold
-      // a slot indefinitely.
-      const holding = allTurns.filter(
-        turn =>
-          turn.state === 'reserved' &&
-          Number(turn.expiresAtMs ?? Infinity) > admittedAtMs,
-      );
+      // A reservation holds its slot, across UTC midnight, until it settles.
+      // The endpoint's request deadline bounds an abandoned stream, and
+      // restart settles any reservation the prior incarnation left behind.
+      const holding = allTurns.filter(turn => turn.state === 'reserved');
       const scopes = [
         {
           name: 'agent',
@@ -822,17 +816,11 @@ export const makeInferenceProviderRegistry = async ({
         if (
           turn.day !== day &&
           Number(turn.admittedAtMs) < admittedAtMs - 60_000 &&
-          (turn.state !== 'reserved' ||
-            Number(turn.expiresAtMs ?? Infinity) <= admittedAtMs)
+          turn.state !== 'reserved'
         ) {
           delete next.turns[turn.turnId];
         }
       }
-      const reservationMs = Number(
-        agentLimits.maxWallClockMs ??
-          providerLimits.maxWallClockMs ??
-          DEFAULT_RESERVATION_MS,
-      );
       next.turns[turnId] = harden({
         version: 1,
         turnId,
@@ -844,7 +832,6 @@ export const makeInferenceProviderRegistry = async ({
         day,
         admittedAt: now(),
         admittedAtMs,
-        expiresAtMs: admittedAtMs + reservationMs,
         state: 'reserved',
         reservedTokens,
         ...(reservedCostMicros === undefined ? {} : { reservedCostMicros }),
@@ -897,6 +884,9 @@ export const makeInferenceProviderRegistry = async ({
         usage: counts,
         chargedTokens,
         ...(chargedCostMicros === undefined ? {} : { chargedCostMicros }),
+        // Reported usage is charged in full even above the reservation, so a
+        // day's spend can pass its budget by the overrun of turns already in
+        // flight; later admissions that day are then refused.
         overrun:
           Number(chargedTokens) > Number(prior.reservedTokens) ||
           Number(chargedCostMicros ?? 0) >

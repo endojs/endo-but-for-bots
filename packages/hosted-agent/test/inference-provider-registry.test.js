@@ -1211,9 +1211,14 @@ test('restart settles orphaned reservations as estimated', async t => {
   await second.close();
 });
 
-test('reservations hold across UTC midnight, expire, and old days are pruned', async t => {
+test('reservations hold until settlement across UTC midnight, and old days are pruned', async t => {
   const backing = makeBacking();
   let clock = Date.parse('2026-10-27T23:59:59.000Z');
+  /** @type {(usage: any) => void} */
+  let settleHeld = () => {};
+  const held = new Promise(resolve => {
+    settleHeld = resolve;
+  });
   const registry = await makeRegistry(backing, {
     modelPrices: harden({}),
     nowMillis: () => clock,
@@ -1222,27 +1227,34 @@ test('reservations hold across UTC midnight, expire, and old days are pruned', a
         status: 200,
         headers: {},
         body: makeExo('reader', TestReaderInterface, {}),
-        usage: new Promise(() => {}),
+        usage: held,
       }),
     },
   });
   const { directory, inference } = await tokenGrant(registry, 'agent-midnight');
   await E(inference).request(message('settled-yesterday'));
-  await E(inference).requestByteStream(message('held'));
+  const stream = await E(inference).requestByteStream(message('held'));
 
   clock = Date.parse('2026-10-28T00:00:01.000Z');
   await t.throwsAsync(() => E(inference).request(message('midnight')), {
     message: /inference-request-refused/,
   });
+  // A stream still running long after admission keeps its slot.
+  clock = Date.parse('2026-10-28T06:00:00.000Z');
+  await t.throwsAsync(() => E(inference).request(message('still-held')), {
+    message: /inference-request-refused/,
+  });
   const refused = await E(directory).getUsage();
-  t.true(
-    refused.refusals.some(refusal =>
+  t.is(
+    refused.refusals.filter(refusal =>
       refusal.reason.endsWith('-concurrency-exhausted'),
-    ),
+    ).length,
+    2,
   );
 
-  clock = Date.parse('2026-10-28T00:10:00.000Z');
-  await E(inference).request(message('after-expiry'));
+  settleHeld(undefined);
+  await stream.usage;
+  await E(inference).request(message('after-settlement'));
   const turns = Object.values(registry.inspect().turns);
   t.deepEqual(
     turns.map(turn => turn.day),
