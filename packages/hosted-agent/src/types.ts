@@ -1,6 +1,9 @@
 // Types for the durable inference provider registry
-// (`inference-provider-registry.js`). Every record here is non-secret: key
-// bytes stay in `@secrets` and reach only the issuer factory.
+// (`inference-provider-registry.js`). Key bytes never enter these records or
+// the registry journal; they stay in `@secrets` and reach only the issuer
+// factory. The records do hold secret-adjacent identifiers: `StableIds.grantId`
+// is redeemable read authority over the key, so treat registry state (including
+// `inspect()` output) as confidential.
 
 /** Caller-preallocated identifiers for one idempotent `@secrets` import. */
 export type StableIds = {
@@ -9,10 +12,8 @@ export type StableIds = {
   operationId: string;
 };
 
-/** Limits as returned by the injected `validateLimits`. */
 export type ProviderLimits = Record<string, unknown>;
 
-/** An unvalidated request from across the capability boundary. */
 export type UntrustedRequest = Record<string, unknown> | undefined;
 
 /** The validated, key-free part of a create request, kept for idempotency. */
