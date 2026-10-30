@@ -159,7 +159,11 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
    */
   const runOneRound = prompt => runRound(piAgent, prompt);
 
-  await runInboxLoop({ powers, getCancelled, runOneRound });
+  try {
+    await runInboxLoop({ powers, getCancelled, runOneRound });
+  } finally {
+    await streamFn?.dispose();
+  }
 };
 harden(spawnWorkerLoop);
 

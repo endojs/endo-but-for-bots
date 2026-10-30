@@ -104,8 +104,9 @@ export const makeBrokeredMessagesProvider = ({
     const abort = () =>
       cancel(signal?.reason ?? Error('Brokered Messages inference cancelled'));
     signal?.addEventListener('abort', abort, { once: true });
+    const requested = E(inference).requestByteStream(request);
     try {
-      const response = await wait(E(inference).requestByteStream(request));
+      const response = await wait(requested);
       if (response.status === 401)
         throw Error('Anthropic authentication failed');
       if (response.status === 429) throw Error('Anthropic rate limit reached');
@@ -120,6 +121,7 @@ export const makeBrokeredMessagesProvider = ({
       let cacheReadTokens = 0;
       let cacheWriteTokens = 0;
       let stopped = false;
+      let stopReason;
       for (;;) {
         // eslint-disable-next-line no-await-in-loop
         const next = await wait(events.next());
@@ -168,6 +170,7 @@ export const makeBrokeredMessagesProvider = ({
           }
         } else if (event.type === 'message_delta') {
           outputTokens = Number(event.usage?.output_tokens) || outputTokens;
+          stopReason = event.delta?.stop_reason ?? stopReason;
         } else if (event.type === 'message_stop') {
           stopped = true;
         }
@@ -207,11 +210,18 @@ export const makeBrokeredMessagesProvider = ({
         },
       });
       onUsage?.(usage);
-      return harden({ message: harden(message), usage });
+      return harden({ message: harden(message), usage, stopReason });
     } finally {
       signal?.removeEventListener('abort', abort);
       cancellations.delete(cancel);
-      void iterator?.return?.().catch(() => undefined);
+      if (iterator === undefined) {
+        // Cancelled before the response arrived: close its reader when it does.
+        void requested
+          .then(response => iterateBytesReader(response.reader).return?.())
+          .catch(() => undefined);
+      } else {
+        void iterator.return?.().catch(() => undefined);
+      }
     }
   };
 
@@ -301,15 +311,10 @@ const currentTools = context => {
 };
 
 /**
- * Pi stream function over the brokered provider. It deliberately emits one
- * completed event after the broker stream is validated.
- *
- * pi-ai's native `anthropic-messages` stream is not reused through a `fetch`
- * shim: it posts to `/v1/messages?beta=true` with `anthropic-beta` headers,
- * adds `thinking`, `output_config`, `fallbacks`, and `cache_control` fields,
- * and retries on its own. The registry's request policy refuses each of
- * those, and a retry would be a second admission, so a shim would have to
- * rewrite pi-ai's request and own the wire format anyway.
+ * Pi stream function over the brokered provider. It emits one completed event
+ * after the broker stream is validated, and carries `dispose`.
+ * pi-ai's native Anthropic stream adds fields the request policy refuses and
+ * retries on its own, which would be a second admission.
  *
  * @param {object} options
  * @param {any} options.inference
@@ -318,7 +323,8 @@ const currentTools = context => {
  */
 export const makeBrokeredMessagesStream = options => {
   const provider = makeBrokeredMessagesProvider(options);
-  return (_model, context, streamOptions = {}) => {
+  /** @type {(model: any, context: any, streamOptions?: any) => any} */
+  const streamMessages = (_model, context, streamOptions = {}) => {
     const stream = createAssistantMessageEventStream();
     void (async () => {
       try {
@@ -357,9 +363,13 @@ export const makeBrokeredMessagesStream = options => {
             (usage.cacheWriteInputTokens || 0),
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
-        const stopReason = result.message.tool_calls?.length
-          ? 'toolUse'
-          : 'stop';
+        // A `max_tokens` stop is a truncation, not a clean end of turn.
+        const stopReason =
+          result.stopReason === 'max_tokens'
+            ? 'length'
+            : result.message.tool_calls?.length
+              ? 'toolUse'
+              : 'stop';
         /** @type {any} */
         const message = harden({
           role: 'assistant',
@@ -411,5 +421,6 @@ export const makeBrokeredMessagesStream = options => {
     })();
     return stream;
   };
+  return harden(Object.assign(streamMessages, { dispose: provider.dispose }));
 };
 harden(makeBrokeredMessagesStream);

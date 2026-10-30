@@ -219,6 +219,60 @@ test('a harness abort cancels a pending broker request', async t => {
   await t.throwsAsync(pending, { message: 'stop now' });
 });
 
+test('a cancel before the broker responds closes the late reader', async t => {
+  /** @type {((response: any) => void) | undefined} */
+  let respond;
+  let closed = false;
+  const inference = Far('LateAgentInference', {
+    requestByteStream: () =>
+      new Promise(resolve => {
+        respond = resolve;
+      }),
+  });
+  const provider = makeBrokeredMessagesProvider({
+    inference,
+    model: 'claude-test',
+  });
+  t.teardown(() => provider.dispose());
+  const controller = new AbortController();
+  const pending = provider.chat(
+    [{ role: 'user', content: 'hello' }],
+    [],
+    controller.signal,
+  );
+  for (let turn = 0; turn < 10 && respond === undefined; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  controller.abort(Error('stop now'));
+  await t.throwsAsync(pending, { message: 'stop now' });
+  /** @type {(response: any) => void} */ (respond)(
+    harden({
+      status: 200,
+      contentType: 'text/event-stream',
+      reader: bytesReaderFromIterator(
+        harden({
+          next: async () => {
+            await new Promise(() => {});
+          },
+          return: async () => {
+            closed = true;
+            return harden({ done: true, value: undefined });
+          },
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+        }),
+      ),
+    }),
+  );
+  for (let turn = 0; turn < 50 && !closed; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  t.true(closed);
+});
+
 /** @param {any} stream */
 const drain = async stream => {
   const seen = [];
@@ -726,4 +780,44 @@ test('brokered Lal rejects a missing model', async t => {
   await t.throwsAsync(brokeredTurn({ LAL_MAX_TOKENS: '77' }), {
     message: /Invalid brokered Messages recipe/,
   });
+});
+
+test('the pi stream reports a max_tokens stop as a truncation', async t => {
+  const encoded = new TextEncoder().encode(
+    [
+      { type: 'message_start', message: { usage: { input_tokens: 1 } } },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: 'cut' },
+      },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens' },
+        usage: { output_tokens: 1 },
+      },
+      { type: 'message_stop' },
+    ]
+      .map(event => `data: ${JSON.stringify(event)}\n\n`)
+      .join(''),
+  );
+  const inference = Far('AgentInference', {
+    requestByteStream: () =>
+      harden({
+        status: 200,
+        contentType: 'text/event-stream',
+        reader: bytesReaderFromIterator([encoded][Symbol.iterator]()),
+      }),
+  });
+  const streamFn = makeBrokeredMessagesStream({
+    inference,
+    model: 'claude-test',
+  });
+  t.teardown(() => streamFn.dispose());
+  const { message } = await drain(
+    streamFn(undefined, {
+      messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
+    }),
+  );
+  t.is(message.stopReason, 'length');
 });
