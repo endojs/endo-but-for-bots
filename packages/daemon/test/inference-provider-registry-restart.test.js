@@ -3,6 +3,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { encodeBase64 } from '@endo/base64';
@@ -18,9 +19,8 @@ testNode(
   'provider registry and AgentInference grants revive across daemon restart',
   async t => {
     t.timeout(120_000);
-    // Keep the daemon socket below the Unix-domain path limit in deep
-    // worktrees; the random suffix still isolates parallel runs.
-    const base = await mkdtemp('/tmp/provider-registry-');
+    // A short prefix keeps the daemon socket below the Unix-domain path limit.
+    const base = await mkdtemp(join(tmpdir(), 'epr-'));
     const config = {
       statePath: join(base, 'state'),
       ephemeralStatePath: join(base, 'run'),
