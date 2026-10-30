@@ -343,7 +343,8 @@ gap-closing designs prefixed `endopi-*`),
 [hardened-text-codecs-shim](hardened-text-codecs-shim.md)
 (added 2026-05-06, Phases 1-2 implemented upstream 2026-07-22 via
 [endojs/endo#3322](https://github.com/endojs/endo/pull/3322); permits
-`TextEncoder`/`TextDecoder` in SES intrinsics),
+`TextEncoder`/`TextDecoder` in SES intrinsics; the XS smoke test is
+unmerged; see its § Status),
 [hardened-url-shim](hardened-url-shim.md) (added 2026-05-06; vetted-shim
 treatment for the `URL` constructor and `URLSearchParams`).*
 
@@ -539,7 +540,7 @@ LLM-agent stack).*
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | 2026-02-14 | 2026-05-06 | In Progress |
 | [formula-inspector](formula-inspector.md) | 2026-02-14 | 2026-06-13 | In Progress |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Implemented** |
-| [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-09-29 | **Implemented** (Phases 1-2, [endojs/endo#3322](https://github.com/endojs/endo/pull/3322); XS smoke #1349 open) |
+| [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-10-30 | **Implemented** (Phases 1-2); XS smoke test unmerged |
 | [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
 | [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-03-13 | In Progress |
 | [inventory-drag-and-drop](inventory-drag-and-drop.md) | 2026-02-14 | 2026-02-24 | **Complete** |
