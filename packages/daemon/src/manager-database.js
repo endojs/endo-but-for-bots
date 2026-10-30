@@ -50,7 +50,6 @@ import { q } from '@endo/errors';
  * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
- * @property {(secretId: string) => SecretAuditEvent[]} listSecretAuditEventsFor
  */
 
 // Node's ObjectWrap cleanup hook can be removed during GC without a current
@@ -355,6 +354,11 @@ export const makeDaemonDatabase = (config, options) => {
   const stmtDeleteSecretRecord = prepare(
     'DELETE FROM secret_record WHERE secret_id = ?',
   );
+  // Insert-only, so a stable import can never repoint a grant already
+  // recorded for another secret.
+  const stmtInsertSecretGrant = prepare(
+    'INSERT INTO secret_grant (grant_id, secret_id) VALUES (?, ?)',
+  );
   const stmtBeginTransaction = prepare('BEGIN');
   const stmtCommitTransaction = prepare('COMMIT');
   const stmtRollbackTransaction = prepare('ROLLBACK');
@@ -369,10 +373,6 @@ export const makeDaemonDatabase = (config, options) => {
     // millisecond timestamp. `seq` is not projected: it is an internal
     // ordering key, not part of the `SecretAuditEvent` contract.
     'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event ORDER BY seq DESC LIMIT ?',
-  );
-  const stmtListSecretAuditEventsFor = prepare(
-    // Oldest first, so the last `create` attempt names the creating operation.
-    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event WHERE secret_id = ? ORDER BY seq ASC',
   );
 
   // -- Formula operations --
@@ -748,7 +748,7 @@ export const makeDaemonDatabase = (config, options) => {
     stmtBeginTransaction.run();
     try {
       writeSecretRecord(record);
-      writeSecretGrant(grantId, record.secretId);
+      stmtInsertSecretGrant.run(grantId, record.secretId);
       stmtCommitTransaction.run();
     } catch (error) {
       stmtRollbackTransaction.run();
@@ -778,10 +778,12 @@ export const makeDaemonDatabase = (config, options) => {
     );
   };
 
-  /** @param {Record<string, unknown>[]} rows */
-  const decodeSecretAuditEvents = rows =>
+  /** @param {number} limit */
+  const listSecretAuditEvents = limit =>
     /** @type {SecretAuditEvent[]} */ (
-      rows.map(row => {
+      /** @type {Record<string, unknown>[]} */ (
+        stmtListSecretAuditEvents.all(limit)
+      ).map(row => {
         /** @type {Record<string, unknown>} */
         const event = {
           ...row,
@@ -790,22 +792,6 @@ export const makeDaemonDatabase = (config, options) => {
         if (event.reasonCode === null) delete event.reasonCode;
         return event;
       })
-    );
-
-  /** @param {number} limit */
-  const listSecretAuditEvents = limit =>
-    decodeSecretAuditEvents(
-      /** @type {Record<string, unknown>[]} */ (
-        stmtListSecretAuditEvents.all(limit)
-      ),
-    );
-
-  /** @param {string} secretId */
-  const listSecretAuditEventsFor = secretId =>
-    decodeSecretAuditEvents(
-      /** @type {Record<string, unknown>[]} */ (
-        stmtListSecretAuditEventsFor.all(secretId)
-      ),
     );
 
   const close = () => {
@@ -856,7 +842,6 @@ export const makeDaemonDatabase = (config, options) => {
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
-    listSecretAuditEventsFor,
   });
 };
 harden(makeDaemonDatabase);

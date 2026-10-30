@@ -42,8 +42,6 @@ const makeHarness = () => {
     // `slice(-0)` would yield every event; SQL `LIMIT 0` yields none.
     listSecretAuditEvents: limit =>
       limit === 0 ? [] : events.slice(-limit).reverse(),
-    listSecretAuditEventsFor: secretId =>
-      events.filter(event => event.secretId === secretId),
   });
   const backend = harden({
     create: async (_operationId, secretId, bytes) => {
@@ -325,8 +323,6 @@ test('a revoke racing a backend read fails the read closed', async t => {
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
         limit === 0 ? [] : harness.events.slice(-limit),
-      listSecretAuditEventsFor: secretId =>
-        harness.events.filter(event => event.secretId === secretId),
     }),
     backend: racingBackend,
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
@@ -425,8 +421,6 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
         limit === 0 ? [] : harness.events.slice(-limit),
-      listSecretAuditEventsFor: secretId =>
-        harness.events.filter(event => event.secretId === secretId),
     }),
     backend,
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
@@ -479,8 +473,6 @@ const makeRacingManager = (
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
         limit === 0 ? [] : harness.events.slice(-limit),
-      listSecretAuditEventsFor: secretId =>
-        harness.events.filter(event => event.secretId === secretId),
     }),
     backend,
     randomHex256: async () => {
@@ -1003,6 +995,54 @@ test('an attempt that crashed before writing cannot take over the secret a later
   );
   t.is(summary.state, 'active');
   t.is(harness.grants.get(crashed.grantId), undefined);
+});
+
+test('concurrent stable imports cannot share a name or a grant', async t => {
+  const harness = makeHarness();
+  const importer = await E(harness.makeDirectory(harness.makeManager())).lookup(
+    'create',
+  );
+  const bytes = encodeBase64(encodeUtf8('original'));
+  const ids = n =>
+    harden({
+      secretId: `secret-race-${n}`,
+      grantId: `grant-race-${n}`,
+      operationId: `operation-race-${n}`,
+    });
+
+  const sameName = await Promise.allSettled([
+    E(importer).provideBase64('race-name', 'Race', bytes, ids(1)),
+    E(importer).provideBase64('race-name', 'Race', bytes, ids(2)),
+  ]);
+  t.deepEqual(
+    sameName.map(({ status }) => status),
+    ['fulfilled', 'rejected'],
+  );
+  t.regex(
+    /** @type {PromiseRejectedResult} */ (sameName[1]).reason.message,
+    /NAME_CONFLICT/,
+  );
+  t.is(harness.records.has('secret-race-2'), false);
+
+  const sameGrant = await Promise.allSettled([
+    E(importer).provideBase64('race-grant-a', 'Race', bytes, ids(3)),
+    E(importer).provideBase64(
+      'race-grant-b',
+      'Race',
+      bytes,
+      harden({ ...ids(4), grantId: ids(3).grantId }),
+    ),
+  ]);
+  t.deepEqual(
+    sameGrant.map(({ status }) => status),
+    ['fulfilled', 'rejected'],
+  );
+  t.regex(
+    /** @type {PromiseRejectedResult} */ (sameGrant[1]).reason.message,
+    /IDEMPOTENCY_CONFLICT/,
+  );
+  t.is(harness.grants.get(ids(3).grantId), ids(3).secretId);
+  t.is(harness.records.has('secret-race-4'), false);
 });
 
 test('stable ids differing only in punctuation name distinct secrets', async t => {
