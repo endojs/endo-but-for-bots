@@ -3,14 +3,14 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-10-29 |
+| **Updated** | 2026-10-30 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | **Implemented**; XS smoke coverage remains |
+| **Status** | **Implemented** (Phases 1-2); XS smoke test unmerged |
 
 ## Status
 
-**Implemented, with one verification delta.** The permits, the global
-sampling, the Node tests, and the changeset merged upstream in
+**Phases 1-2 implemented, with one verification delta.** The permits,
+the global sampling, the Node tests, and the changeset merged upstream in
 [endojs/endo#3322](https://github.com/endojs/endo/pull/3322) on 2026-07-22
 (merge commit `8021d268e7`). They reached `llm`, this repository's
 integration branch that carries upstream `endojs/endo` plus fork-only work,
@@ -28,43 +28,64 @@ A follow-up PR, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
 Node's non-standard `Symbol(nodejs.util.inspect.custom)` method on both
 prototypes.
 
-Chromium 120, 126, 127, 133, 136, and 137 exposed own, frozen-null
-`caller` and `arguments` properties on the codec constructors. The permits
-therefore made `lockdown()` fail when it could not delete those properties.
-[endojs/endo#3376](https://github.com/endojs/endo/pull/3376) fixed the
-general case upstream on 2026-10-29 (commit `679d9afaa4`):
-`cauterizeProperty` now tolerates exactly a non-writable,
-non-configurable data property whose value is `null`, while retaining the
-host constructor and rejecting every other undeletable shape.
+Some Chromium versions give the codec constructors, like other Web IDL
+functions, own `caller` and `arguments` properties that are frozen and hold
+`null`. `lockdown()` removes every property the permits do not allow, by
+deleting it, and throws if it cannot. Because the permits pull the codec
+constructors into the hardened graph, `lockdown()` failed on those
+versions. Closed
+[endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)
+measured the shape on Chromium 120, 126, 127, 133, 136, and 137, and not on
+138, 139, or 140; versions before 120 were not tested. The upstream fix's
+commit message reports it on "V8 through at least 133, as shipped in the
+Android System WebView".
 
-That general fix supersedes the codec-specific constructor encapsulation in
-closed [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)
-and its closed upstream mirror
-[endojs/endo#3377](https://github.com/endojs/endo/pull/3377). The proposed
-encapsulation, its browser tests, documentation, and changeset are no longer
-needed. The closed PR is not wholly superseded, though: it also carried the
-still-unmerged XS smoke coverage below and an independent XS
-lockdown-Compartment repair owned by
-[endojs/endo-but-for-bots#1425](https://github.com/endojs/endo-but-for-bots/pull/1425).
-The latter is not a remaining delta for this design.
+[endojs/endo#3376](https://github.com/endojs/endo/pull/3376) fixed this for
+every function, not only the codecs. It merged on `endojs/endo` `master` on
+2026-10-29 (commit `679d9afaa4`): `cauterizeProperty`, the SES helper that
+deletes an unpermitted property, now leaves exactly a non-writable,
+non-configurable data property whose value is `null` in place with a
+warning, and still rejects every other undeletable shape.
+**That fix has not yet reached `llm`.** As of `llm` commit `9a14ddf660`,
+`679d9afaa4` is not an ancestor, and `packages/ses/src/cauterize-property.js`
+has no `null` tolerance, so on `llm` the codec permits still make
+`lockdown()` throw on the affected Chromium versions. The fix arrives with
+the next regular upstream merge into `llm`; nothing in this design needs to
+be built for it.
+
+The pull requests involved, and what each carried:
+
+- **Superseded:** the codec-specific constructor encapsulation in closed
+  endojs/endo-but-for-bots#1349 and its closed upstream mirror
+  [endojs/endo#3377](https://github.com/endojs/endo/pull/3377). The generic
+  fix in endojs/endo#3376 makes the encapsulation, its browser tests,
+  documentation, and changeset unnecessary. Do not revive them.
+- **Still wanted, unowned:** the XS smoke coverage those closed PRs also
+  carried (§ Test plan item 6). No open pull request carries it yet.
+- **Owned elsewhere:** the XS lockdown-Compartment repair those closed PRs
+  also carried. Open draft
+  [endojs/endo-but-for-bots#1425](https://github.com/endojs/endo-but-for-bots/pull/1425)
+  owns it, so it is not a delta of this design. The XS smoke test depends on
+  it, because XS compartments see the hardened codecs only with that repair
+  (endojs/endo-but-for-bots#1349 carried it for that reason).
 
 Remaining items:
 
-- **§ Test plan item 6 (XS smoke test):** not merged. Closed PRs
-  [#1349](https://github.com/endojs/endo-but-for-bots/pull/1349) and
-  [endojs/endo#3377](https://github.com/endojs/endo/pull/3377) carried the
-  coverage, but [endojs/endo#3376](https://github.com/endojs/endo/pull/3376)
-  touched no XS files and did not replace it. A follow-up should retain only
-  the XS assertions: the current Moddable `xst` present-codecs path and a
-  second pre-import deletion script for the absent-codecs path. It should not
-  revive the superseded constructor encapsulation.
-- **Phase 3 (downstream audit, optional):** not performed on `llm`. As of
-  `llm` commit `7ff30afbce`, `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
-  in 10 files. All are Node-host powers, drivers, and backends
-  (`9p-server`, `cli`, `daemon`, `git`, `platform`, `sandbox`, and the
-  `*-sandbox` packages), not
-  code that runs inside a compartment. An audit, if wanted, is a separate
-  cleanup job.
+- **§ Test plan item 6 (XS smoke test):** not merged, and no open pull
+  request carries it. endojs/endo#3376 touched no XS files and did not
+  replace it. A follow-up should take only the XS assertions from
+  endojs/endo-but-for-bots#1349, land after or together with
+  endojs/endo-but-for-bots#1425, and not revive the superseded constructor
+  encapsulation.
+- **Sync endojs/endo#3376 into `llm`:** pending the next regular upstream
+  merge (see above).
+- **Phase 3 (downstream audit, optional):** not performed on `llm`.
+  Re-checked at `llm` commit `9a14ddf660`: 22 lines in `packages/*/src`
+  match `Buffer.from(` or `.toString('utf`, in 13 files. All are Node-host
+  powers, drivers, servers, and backends (`9p-server`, `claude`, `cli`,
+  `daemon`, `git`, `hosted-agent`, `npm-registry-server`,
+  `opencode-sandbox`, `platform`, and `sandbox`), not code that runs inside
+  a compartment. An audit, if wanted, is a separate cleanup job.
 - **Node `TextDecoder` fast-path flags:** hardening a `TextDecoder`
   *instance* on recent Node releases makes the next `decode()` throw.
   Tracked upstream as
@@ -199,12 +220,10 @@ Tests live under `packages/ses/test/`.
    Extend the existing XS test runner to exercise (1)-(4) on XS.
    This design originally assumed XS never provides the codecs, so the XS
    run would also cover (5). Current Moddable `xst` defines both codecs, so
-   the ordinary run exercises pass-through-and-harden. A second generated XS
-   script must delete both globals before importing SES to exercise (5),
-   because lockdown happens once per realm. Closed PRs
-   [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)
-   and [endojs/endo#3377](https://github.com/endojs/endo/pull/3377) contained
-   this coverage, but it remains unmerged.
+   the ordinary run exercises pass-through-and-harden. Lockdown happens
+   once per realm, so the absent-codecs case cannot share a realm with the
+   present-codecs case: a second generated XS script must delete both
+   globals before importing SES to exercise (5).
 
 ### Compatibility considerations
 
