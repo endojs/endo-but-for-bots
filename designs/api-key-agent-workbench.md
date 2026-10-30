@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Created** | 2026-10-27 |
-| **Updated** | 2026-10-27 |
+| **Updated** | 2026-10-30 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed. Leaving Proposed requires an answer to open question 3 (what backs the workbench mount on minion.town) |
 | **Parent** | [API-key inference providers and pinned guest agents](api-key-inference-providers-and-pinned-agents.md) (PR [#1543](https://github.com/endojs/endo-but-for-bots/pull/1543)) |
 | **Companion** | minion.town `designs/agent-chat-clip.md` (the chat Clip), under review in [kriscendobot/minion.town#228](https://github.com/kriscendobot/minion.town/pull/228) |
-| **Grounded against** | `endojs/endo-but-for-bots` `llm` at `844ce3df7b`, and the #1543 head `81e5e47ae3`, which is this PR's frozen base. The in-repo claims below were rechecked at that base by reading the code and design text; none was verified by execution. W2's first tests check the code claims that drive design choices (see W2). None of the chat-Clip behavior is verified; W6 is its only real-execution evidence |
+| **Grounded against** | `endojs/endo-but-for-bots` `llm` at `844ce3df7b`, and the #1543 head `069b429c16` (which folds in the maintainer's answers to #1543's open questions), this PR's frozen base. The in-repo claims below were rechecked at that base by reading the code and design text; none was verified by execution. W2's first tests check the code claims that drive design choices (see W2). None of the chat-Clip behavior is verified; W6 is its only real-execution evidence |
 
 ## What is the Problem Being Solved?
 
@@ -27,12 +27,13 @@ The maintainer's scenario (kriskowal, 2026-10-27, arc tracker [minion.town#227](
 The parent's phases 1-5 are taken as given.
 The parent is itself an open design (PR #1543, not merged), so none of its phases is built, and this design assumes all of them are unbuilt.
 It changes the parent in exactly one place: it names the broker's admission serialization, which the parent leaves unnamed (§ Budget, *Serialization and the broker lease*).
+It also fills one slot the parent leaves to it: the parent endows every agent's subagent-creation capability only when the creation request names it, and leaves that capability to this design (parent [§ Explicit endowment](api-key-inference-providers-and-pinned-agents.md#explicit-endowment)); the spawner is that capability.
 That edit is proposed for the parent's phase 2 before phase 2 is built.
 This PR proposes that edit; the author of the parent's phase 2 lands it in the parent design.
-If the parent's phase 2 lands first with a broker that is not a single-vat queue per provider, or the parent merges without the edit, W3 is a rewrite of the broker's admission path, not an attenuation, and this design must be revised before W3 starts.
+If the parent's phase 2 lands first with a broker that is not a single-vat admission queue per owner, or the parent merges without the edit, W3 is a rewrite of the broker's admission path, not an attenuation, and this design must be revised before W3 starts.
 
 **Terms, and the picture in five sentences.**
-An **owner** is a signed-in minion.town user who has imported an API key; the key is held by a **broker** (one per provider), which makes every upstream call and records each call's cost as a row in one **usage ledger**.
+An **owner** is a signed-in minion.town user who has imported an API key; the key is held by a **broker** (one per provider, all of one owner's brokers in one vat), which makes every upstream call and records each call's cost as a row in one **usage ledger**.
 An **agent** is a Lal or Fae harness running as its own daemon **guest** (a confined identity with its own pet store), and it is **pinned**: a responder answers its mail.
 A **grant** is an agent's right to spend through the broker, up to limits (models, rates, a budget per period); the agent reaches it through an `AgentInference` capability that names no key.
 An **endowment** is a capability the owner hands the agent at creation, under a fixed name in the agent's pet store; the agent's tools are derived from what it holds.
@@ -93,8 +94,9 @@ The workbench depends only on the shipped signature and the `grep(glob)` equalit
 
 ## Endowments at creation
 
-The parent design gives an agent no endowments (parent § User experience): the harness's powers profile fixes its authority.
-This design adds an **endowment set**, which is a list of capabilities the owner introduces into the agent guest under fixed names.
+The parent design fixes an agent's guest powers by the harness's powers profile, and allows exactly one endowment beyond it: the subagent-creation capability, which the creation request names (the pre-checked **Can create subagents** box) and which the factory adds only when named (parent [§ Explicit endowment](api-key-inference-providers-and-pinned-agents.md#explicit-endowment)).
+The parent leaves both that capability and endowing anything else from the owner's inventory to this design.
+This design adds an **endowment set**, which is a list of capabilities the owner introduces into the agent guest under fixed names, and makes the spawner the parent's subagent-creation capability.
 The harness's tool catalog is derived from what the guest holds, as the parent's confinement table already requires.
 
 - **Operation: `endow` copies values the owner holds.**
@@ -117,6 +119,8 @@ The harness's tool catalog is derived from what the guest holds, as the parent's
   A second `grant-workbench` with different options replaces the first (the old formula is dropped and its tools vanish at the next turn); a second `grant-spawner` with different options is refused with `spawner-exists`, because the spawner's children are bound to it, and the owner changes the limits behind a spawner with the parent design's `set-limits` on the agent's own grant instead.
   Withdrawal is not a third verb: copied and minted endowments are both withdrawn by `endow` with `remove`, because withdrawal only deletes a name, whatever put it there.
   Because a spawner is created only by `grant-spawner` or by `spawn` with `allowSpawn`, "a spawner bound to this agent's grant" holds by construction, not by inspecting what the owner passes.
+  A creation request that names the parent's subagent-creation endowment runs `grant-spawner` under the creation's idempotency key, after `create` and before any `endow`; a request that omits it (the box unchecked) mints no spawner, and the server adds none by default, as the parent requires.
+  The owner can add one later from the agent detail view with `grant-spawner`.
 - **No type-based endowment filter.**
   The factory does not inspect endowment values by type.
   Why, and what a holder gives away by passing a grant or a control, is explained after the budget mechanism, in [§ Forwarded authority](#forwarded-authority-no-type-based-endowment-filter).
@@ -191,7 +195,7 @@ The rules below are what make each step hold.
 - **Oversubscription is allowed.**
   The sum of the children's caps may exceed the parent's cap.
   The chain check still stops the subtree at the parent's cap.
-  Children compete for the parent's remaining budget first come, first served, in the order the per-provider queue admits them.
+  Children compete for the parent's remaining budget first come, first served, in the order the owner's admission queue admits them.
 - **The parent reserve.**
   The parent's own turns draw from the same remaining budget as its subtree, and the parent's coordination turn is the one that would `pause` or `revoke` a runaway child.
   So every grant that has a spawner carries a `parentReserve`, an amount of its budget its descendants cannot spend.
@@ -215,34 +219,37 @@ The rules below are what make each step hold.
 
 **Mechanism.**
 The parent states that admission is atomic at the broker (parent [§ Cost and abuse controls](api-key-inference-providers-and-pinned-agents.md#cost-and-abuse-controls)) but does not name the mechanism, so this design names it, and the parent's phase 2 adopts it.
-The broker keeps one in-vat promise queue per provider record, and every admission, settlement, cancellation, and grant `state` write for that provider runs as one entry on it.
+The broker keeps one in-vat promise queue per owner, and every admission, settlement, cancellation, and grant `state` write for any of that owner's providers runs as one entry on it.
+The queue is per owner, not per provider, because the parent's admission reserves against the agent, its provider, and the owner-wide cap atomically, and the owner-wide cap spans all of one owner's providers (parent [§ Cost and abuse controls](api-key-inference-providers-and-pinned-agents.md#cost-and-abuse-controls), *Aggregation scope*); two per-provider queues could each admit a turn that together overruns it.
 An entry reads and writes only the broker's own durable store, in the broker's vat; it makes no `E()` call and awaits nothing remote, so a slow CapTP peer cannot hold the queue.
 Each entry commits all of its writes as **one durable store transaction**, so a crash leaves either all of an entry's writes or none of them.
 Upstream calls happen after the admission entry has committed its reservation row and returned.
 The same holds for cancellation: an entry that cancels turns (`revoke`, or `pause({ cancelInFlight: true })`) commits the charge and marks each row `estimated`, and the broker aborts the upstream requests only after the entry commits.
 If an abort fails or the upstream ignores it, the charge stays at the reservation, and any usage the upstream later reports is recorded as an overrun, as for any turn.
 The broker retries a failed abort until the turn's wall clock on the row expires, after which it drops the connection.
-Every grant in a tree shares one provider, because a child inherits its parent's provider and cannot name another, so the chain check runs as part of the admission entry: it reads the ancestor sums, checks them, and writes the reservation row in one step.
+Every grant in a tree shares one provider, because a child inherits its parent's provider and cannot name another, and every provider in a tree belongs to one owner, so the chain check runs as part of the admission entry: it reads the ancestor sums and the owner-wide sum, checks them, and writes the reservation row in one step.
 Two concurrent sibling admissions are two entries, and a settlement is a separate entry, so none of them interleaves with another's read-check-write.
-This rests on one assumption, stated here so the implementation cannot drop it: **the broker for a provider runs in a single vat**, and the queue is that vat's.
-A deployment that split one provider's broker across vats would need a different serialization mechanism and is out of scope.
+This rests on one assumption, stated here so the implementation cannot drop it: **the brokers for all of one owner's providers run in a single vat**, and the queue is that vat's.
+A deployment that split one owner's brokers across vats would need a different serialization mechanism and is out of scope.
 
 **The broker lease.**
 The single-vat assumption is checked, not just stated.
-On start, a broker writes a lease into the provider record naming its incarnation: the daemon's process incarnation (a fresh id each time the daemon starts) and the broker vat's incarnation within it.
-Every queue entry re-reads the lease inside its own durable transaction and commits only if the lease still names this incarnation; that is one keyed read of one record per entry, inside a transaction the entry opens anyway.
-A broker that finds a lease naming the **current** daemon incarnation and a different vat refuses to serve the provider with `broker-not-exclusive`, because a live peer holds it.
+On start, the broker vat writes a lease into the owner's `OwnerInferenceLimits` record in the provider registry (the parent's per-owner place for the owner-wide cap) naming its incarnation: the daemon's process incarnation (a fresh id each time the daemon starts) and the broker vat's incarnation within it.
+Every queue entry re-reads that lease inside its own durable transaction and commits only if the lease still names this incarnation; that is one keyed read of one record per entry, inside a transaction the entry opens anyway.
+A broker that finds a lease naming the **current** daemon incarnation and a different vat refuses to serve that owner's providers with `broker-not-exclusive`, because a live peer holds it.
 A lease naming an **earlier** daemon incarnation is stale by construction, because the daemon holds an exclusive lock on its state directory and so no earlier process can still be running; the new broker takes it over at once, with no timeout.
 A broker vat that crashes and is restarted inside the same daemon gets a new vat incarnation, and the daemon's vat supervisor, which saw the old vat terminate, clears the old lease before starting the new one.
-So a crash never leaves a provider unservable, and a live broker's lease is never taken.
+So a crash never leaves an owner's providers unservable, and a live broker's lease is never taken.
 
 **Computing the aggregate.**
 The ledger rows are the only store the chain check reads; there is no cached per-grant total.
 The admission entry walks `parentGrantId` from `g` to the root, which is at most four grants because depth is capped at 3 (§ Abuse controls), and for each one sums the current period's rows whose `grantPath` starts with that grant's.
-The store keys rows by `(provider, period, grantPath)`, so each sum is one ordered prefix scan, and a tree holds at most 32 agents (§ Abuse controls).
+The same entry also sums the owner-wide total, every current-period row of the owner's providers, which the parent defines as the sum of the owner's rows in the usage ledger.
+The store keys rows by `(ownerId, period, provider, grantPath)`, so the owner-wide sum, the provider sum, and each ancestor sum is one ordered prefix scan, and a tree holds at most 32 agents (§ Abuse controls).
 Because nothing derived is stored, there is nothing to drift, detect, or rebuild.
-Expected load is one owner's tree: at most 32 agents, each with a small `maxConcurrentTurns`, so at most a few hundred entries a minute per provider, each scanning at most four prefixes of one period's rows.
-The queue serializes only one provider's grants; different providers and different owners do not share a queue.
+Expected load is one owner's tree: at most 32 agents, each with a small `maxConcurrentTurns`, so at most a few hundred entries a minute per owner, each scanning at most six prefixes of one period's rows: four ancestor grant paths, the provider, and the owner.
+The queue serializes one owner's grants across that owner's providers; different owners do not share a queue.
+The parent's owner-wide caps also bound a whole tree: by default every agent of one owner, at every depth, shares 2 concurrent turns, 20 requests per minute, and $5.00 a day, so a child's own limits are an upper bound, not a promise of capacity.
 A running total per grant is a later optimization that needs a benchmark showing the prefix scan is too slow (the trigger: an admission entry's p99 above 10 ms with a full 32-agent tree on the W3 fake upstream); if it is added, it must be written in the same transaction as its source rows and rebuilt before the first admission after any restart.
 
 ### Forwarded authority: no type-based endowment filter
@@ -567,7 +574,7 @@ The recommendation is a per-owner workspace directory under the owner's storage 
 | Owner -> factory (`endow`) | Agent operation record | The owner endows only what the owner holds; minted bundles come only from `grant-workbench` and `grant-spawner` | `AgentRecord` endowment list (authoritative); `endowments/<as>` in the agent guest is a projection | The factory commits the record; the reconciler rebuilds the projection | Capabilities inward; summaries outward |
 | Agent -> spawner -> factory (`spawn`) | `AgentSpawner` formula bound to the parent agent and grant | Depth, fan-out, tree, and rate ceilings; limits at most the parent's | `AgentRecord.parentAgentId` and operation records | The factory coordinates; the guest, grant, and responder are participants (the parent's steps) | Capabilities the parent holds inward; `{ name, locator, control }` outward |
 | Factory -> broker (child grant) | `InferenceProviderUse.createChildGrant` | Child limits at most the parent's | `InferenceGrantRecord.parentGrantId` (canonical) and `grantPath` (index) | The provider registry commits the record | Grant id inward; a durable `AgentInference` outward |
-| Harness -> broker (turn) | `AgentInference` request | Chain check over `grantPath`, as one entry on the per-provider admission queue | Usage ledger rows tagged with `grantPath` (the only store the check reads) | The broker admits, settles, and cancels | Request bytes inward; response bytes and usage outward |
+| Harness -> broker (turn) | `AgentInference` request | Chain check over `grantPath`, as one entry on the owner's admission queue | Usage ledger rows tagged with `grantPath` (the only store the check reads) | The broker admits, settles, and cancels | Request bytes inward; response bytes and usage outward |
 | Parent -> control -> registry | `DelegationControl` formula | The holder of the control decides | The child's grant `state` and limits | The provider registry commits pause, resume, resize, and the `revoked` fence; the factory's `deleting` mark and the reconciler's cascade derive from it | Commands inward; `DelegationSummary` outward |
 | Harness -> workbench | `EndoMount` subview and exo-git facet | Tier and subtree chosen by the owner or parent | The mount's files and the git objects | The mount commits writes; git commits are the agent's | Paths and edits inward; text and results outward |
 
@@ -579,20 +586,21 @@ W6 needs the parent's phase 6 canary provider, and it is gated on the answer to 
 
 1. **W1: Endowments (Endo).**
    The `endow` operation with its `set` and `remove` lists, the `grant-workbench` and `grant-spawner` operations, the non-durable refusal, the reconciler that rebuilds the pet-store projection from the record, and tool catalogs derived from held endowments in Lal and Fae.
-   Tests: the owner can endow only held names; a refusal names the entry; a spawner exists only through `grant-spawner` or `spawn`; a crash at each boundary leaves the pet store matching the record's endowment set; a restart revives the endowments; removing an endowment drops its tools at the next turn.
+   Tests: the owner can endow only held names; a refusal names the entry; a spawner exists only through `grant-spawner` or `spawn`; a creation request naming the subagent-creation endowment yields an agent holding a spawner and one omitting it yields none; a crash at each boundary leaves the pet store matching the record's endowment set; a restart revives the endowments; removing an endowment drops its tools at the next turn.
 2. **W2: Workbench bundle (Endo).**
    The workbench formula, `readLines`, `EndoMount.edit` and `readHashlines` over `hashline.js`, a stale-hash compare-and-swap refusal, tool registration in both harnesses, read and write tiers, and search caps.
    W2 builds against any `EndoMount`, and its tests use a temporary-directory mount, so it does not wait on open question 3.
    Its first tests gate the design's reading of the code and run before the rest of the phase: the `readOnly()` view lacks `glob`, `grep`, `glorp`, `stat`, and `readText`; `glorp` equals `grep(glob)`; no guard yet exposes `EndoMount.edit`.
    Tests: a read tier exposes no write or git-write tool; `..`, a symlink escape, and a denied segment are refused; `glorp` equals `grep(glob)` within the subtree; a `maxResults` overrun is truncated and flagged; hashline edits with a stale anchor are refused; a commit lands in the bound mount only.
 3. **W3: Child grants and chain admission (Endo).**
-   `parentGrantId`, `grantPath`, the `paused` state, `createChildGrant`, the per-provider admission queue, the chain check by prefix scan inside it, one durable transaction per queue entry, the parent reserve, and `limits-exceed-parent`.
+   `parentGrantId`, `grantPath`, the `paused` state, `createChildGrant`, the per-owner admission queue, the chain check and the owner-wide sum by prefix scan inside it, one durable transaction per queue entry, the parent reserve, and `limits-exceed-parent`.
    Tests against the parent's fake upstream:
    - A child reservation that fits its own cap but not an ancestor's is refused.
    - 16 sibling admissions issued concurrently against a parent whose remaining budget fits exactly 5 reservations admit exactly 5, with the other 11 refused for budget.
    - A settlement racing an admission leaves every ancestor's remaining budget equal to its cap minus a prefix scan of the rows.
    - A crash injected between two queue entries, and inside one entry before its commit, leaves no partial entry and no over-admission after restart.
-   - A second broker started against the same provider refuses with `broker-not-exclusive`, and an entry from a broker whose lease was taken does not commit.
+   - Concurrent admissions on two providers of one owner, each with room under its agent and provider caps, never together exceed the owner-wide concurrency or budget.
+   - A second broker vat started for the same owner refuses with `broker-not-exclusive`, and an entry from a broker whose lease was taken does not commit.
    - A failed upstream abort after a cancelling entry leaves the row charged at its reservation and records any later usage as an overrun.
    - A descendant admission that would dip into an ancestor's parent reserve is refused while the ancestor's own turn is admitted into it.
    - A turn admitted before a period reset and settled after it charges the closed period only and leaves the new period's budget whole.
@@ -600,7 +608,7 @@ W6 needs the parent's phase 6 canary provider, and it is gated on the answer to 
    - Revoking the middle of a three-level chain fences the leaf's next call.
    - Usage rows sum correctly per agent and per subtree.
    - A restart preserves every state above.
-   - A broker restarted after a daemon crash takes over the earlier incarnation's lease at once and serves the provider.
+   - A broker restarted after a daemon crash takes over the earlier incarnation's lease at once and serves the owner's providers.
    - An explicit `parentReserve` at or above the grant's budget is refused with `reserve-exceeds-budget`, and a default reserve above half the budget is clamped to half.
 4. **W4: Spawner and control facet (Endo).**
    `AgentSpawner`, `DelegationControl`, the parentage fields on `AgentRecord`, the depth-first cascade reconciler and its invariant, the abuse ceilings, Fae compatibility, Lal subagent tools, and the refusal of Fae's own spawner for brokered agents.
@@ -678,8 +686,8 @@ W6 needs the parent's phase 6 canary provider, and it is gated on the answer to 
 4. **May an agent push?**
    Should a workbench ever include a `GitRemote` push tier, for example scoped to one branch of the owner's partition, or does push stay with the owner?
 5. **Should endowments be added to the API-key agent dialog?**
-   The parent design deliberately has no endowments step.
-   Is adding one as an optional third step acceptable, or should endowments stay an agent-detail action after creation?
+   The parent design's step 2 offers exactly one endowment, the **Can create subagents** box, and leaves endowing other capabilities to this design.
+   Is adding an endowment picker as an optional third step acceptable, or should other endowments stay an agent-detail action after creation?
 6. **May one agent spend another's grant by forwarding it?**
    With no endowment filter, a parent that holds a sibling's `AgentInference` can forward it to a child, which then spends the sibling's budget (§ Forwarded authority).
    Is that acceptable, given that the factory never hands out another agent's grant, or should the broker bind each `AgentInference` to the guest it was issued to and refuse a request that arrives through a different guest's powers?
