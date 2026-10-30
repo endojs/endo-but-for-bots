@@ -825,7 +825,8 @@ test('a retire retry under a fresh key drives the in-flight retirement', async t
 
 test('revoking a grant whose endpoint fails while opening still succeeds', async t => {
   const backing = makeBacking();
-  let releaseOpen;
+  /** @type {(value?: unknown) => void} */
+  let releaseOpen = () => {};
   const opening = new Promise(resolve => {
     releaseOpen = resolve;
   });
@@ -866,7 +867,7 @@ test('revoking a grant whose endpoint fails while opening still succeeds', async
   );
   const pending = E(inference).request(message('/v1/messages'));
   const revoked = registry.revokeGrant('grant-000000001');
-  releaseOpen();
+  releaseOpen(undefined);
   await t.notThrowsAsync(revoked);
   await t.throwsAsync(pending, { message: /agent-deleted/ });
   t.is(registry.inspect().grants['grant-000000001'].state, 'revoked');
@@ -912,6 +913,10 @@ test('grant ids that name Object.prototype members are refused or absent', async
   t.true(Object.hasOwn(grants, 'constructor'));
   t.is(Object.getPrototypeOf(grants), Object.prototype);
   await registry.revokeGrant('constructor');
-  t.is(registry.inspect().grants.constructor.state, 'revoked');
+  t.is(
+    Object.getOwnPropertyDescriptor(registry.inspect().grants, 'constructor')
+      ?.value.state,
+    'revoked',
+  );
   await registry.close();
 });
