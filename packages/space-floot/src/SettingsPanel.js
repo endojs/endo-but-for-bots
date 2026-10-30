@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
+import { PresetSettings } from './PresetSettings.js';
 import { NetworkPolicyPanel } from './NetworkPolicyPanel.js';
 import { accountCapacity, accountSections } from './account-label.js';
 import { usageRows } from './usage-label.js';
@@ -291,7 +292,30 @@ export const SettingsPanel = ({ state, controller }) => {
     h(
       'div',
       { class: 'floot-settings' },
-      h('div', { class: 'floot-modal-title' }, 'Transcription & settings'),
+      h('div', { class: 'floot-modal-title' }, 'Assistant & voice settings'),
+      h(PresetSettings, { state, controller }),
+      controller.forgetUnconfirmedSend
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.forgetUnconfirmedSend?.(),
+            },
+            'Clear unconfirmed submission…',
+          )
+        : null,
+      controller.exportObjects
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.exportObjects?.(),
+            },
+            'Export Floot objects…',
+          )
+        : null,
       state.execution?.supported
         ? h(
             'section',

@@ -68,9 +68,9 @@ export const helpTextEntries = harden([
       handle:
         "handle() -> Handle\nGet this agent's mailbox handle.\nThe handle is used internally for receiving messages.",
       listMessages:
-        'listMessages() -> Promise<Message[]>\nList all messages in the inbox.\nEach message has: number, date, from, to, type, and content.',
+        "listMessages() -> Promise<Message[]>\nRead the current mailbox entries without waiting for their lifecycle to finish.\nMetadata includes number, date, from, to, type, messageId, and optional replyTo.\nPayload fields depend on type: packages have strings/names/ids; requests have description.\nA message's done boolean means its content is complete, not that its task was answered.\n\nLifecycle fields are not payload or status snapshots:\n- dismissed is a Promise<void> that resolves only after dismiss(number) removes this entry.\n- dismisser is a capability whose dismiss() removes the entry; it is not metadata.\n- A request's settled promise resolves when that request is resolved or rejected.\n\nNever blindly await every field, Promise.all(Object.values(message)), or a\nmessage's dismissed/settled promise while processing that same message.\nDoing so can wait for the completion action your own handler must perform.\nInspect explicit data fields instead; for example, this returns while dismissed is pending:\n\n```js\nconst messages = await E(powers).listMessages();\nreturn messages.map(({ number, type, from, to, messageId, replyTo, done, strings, names }) =>\n  ({ number, type, from, to, messageId, replyTo, done, strings, names }));\n```\n\nReply or resolve/reject first, then dismiss if you own message handling.\nFloot's automatic mail handler replies and dismisses after the agent finishes;\ndo not wait for or dismiss its active task message yourself.\nDismissal removes the entry needed by reply(number); do not use it to unblock inspection.",
       followMessages:
-        'followMessages() -> AsyncIterator<Message>\nSubscribe to incoming messages.\nFirst yields existing messages, then yields new ones as they arrive.\nUse with for-await-of:\n  for await (const message of E(guest).followMessages()) { ... }',
+        'followMessages() -> AsyncIterator<Message>\nSubscribe to incoming messages.\nFirst yields existing messages, then yields new ones as they arrive.\nThis is a long-lived subscription, not a finite list to collect until completion.\nUse listMessages() for a snapshot. Yielded entries carry the same dismissed and\nrequest settled lifecycle promises documented by help("listMessages").\nDo not await those promises in the handler responsible for replying or settling\nthat message; Floot dismisses its task only after the agent finishes.\nUse with for-await-of:\n  for await (const message of E(guest).followMessages()) { ... }',
       resolve:
         'resolve(messageNumber, petNameOrPath) -> Promise<void>\nRespond to a request message by providing a named value.\n- resolve(0, "my-counter") responds to message 0 with the value named "my-counter"\nThe requester receives the resolved value.',
       reject:
@@ -78,7 +78,11 @@ export const helpTextEntries = harden([
       adopt:
         'adopt(messageNumber, edgeName, petName) -> Promise<void>\nAdopt a value from an incoming package message, giving it a pet name.\n- adopt(0, "gift", "my-new-thing") takes "gift" from message 0, names it "my-new-thing"\nEdge names are the labels the sender attached to values in the package.',
       dismiss:
-        "dismiss(messageNumber) -> Promise<void>\nRemove a message from the inbox.\nUse after you've processed a message.",
+        "dismiss(messageNumber) -> Promise<void>\nRemove a message from the inbox and resolve its dismissed lifecycle promise.\nReply or resolve/reject before dismissing: reply(number) needs the mailbox entry.\nNever dismiss an active task merely to release an inspection waiting on dismissed.\nFloot's automatic mail handler replies and dismisses its task after the agent finishes.",
+      reply:
+        "reply(messageNumber, strings, edgeNames, petNames) -> Promise<void>\nReply to a retained mailbox entry, preserving its messageId as the replyTo correlation.\nCall before dismiss(number); replying to an already-dismissed entry fails.\nDo not await the entry's dismissed promise before replying.\nFloot's automatic mail handler sends your final answer and then dismisses the task.",
+      messageHistory:
+        'messageHistory(messageNumber) -> Promise<Revision[]>\nRead recorded content revisions for a retained mailbox entry.\nEach revision contains envelope, done, date, and timestamp.\nUse this for content history, not to wait for dismissal or request settlement.',
       dismissAll:
         'dismissAll() -> Promise<void>\nRemove all messages from the inbox.',
       request:
@@ -126,6 +130,8 @@ export const helpTextEntries = harden([
     'EndoHost',
     {
       '': 'EndoHost - A privileged agent with full Endo capabilities.\n\nA host has all guest capabilities plus:\n- Create workers for running code\n- Evaluate JavaScript code\n- Create confined guests\n- Store blobs and values\n- Make unconfined or bundled caplets\n- Manage network peers\n- Manage secret blobs through `@secrets` without revealing them in inventory\n\n`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are management\nfacets on the daemon\'s root host only; a host made with provideHost does not\ncarry `@secrets`.\nCreated read capabilities are bound beneath the ordinary `secrets` directory.\nPrefer endowing a formula with a secret capability instead of calling its\n`readBase64()` method in an agent session.\n\nUse help("methodName") for details on specific methods.',
+      createDirectory:
+        'createDirectory(petNamePath) -> Promise<void>\nHost only. Create a directory at the given name or array of path segments.\nLike makeDirectory, this replaces an existing binding: check absence first.\nReturns no directory capability. Use path-based list, lookup, storeValue, and\nremove operations when a worker must survive collection of its owned storage.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the host capabilities\n- help("evaluate") returns documentation for code evaluation',
       storeBlob:
         'storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',

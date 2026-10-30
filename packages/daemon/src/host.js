@@ -46,7 +46,7 @@ import {
   HostInterface,
   TracesInterface,
 } from './interfaces.js';
-import { hostHelp, makeHelp } from './help-text.js';
+import { hostHelp, mailHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
 
 /**
@@ -304,6 +304,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
  * @param {DaemonCore['formulateArchive']} args.formulateArchive
  * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
+ * @param {DaemonCore['formulateFromPackage']} args.formulateFromPackage
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
  * @param {HostToolPowers['gitClone']} [args.gitClone]
@@ -363,6 +364,7 @@ export const makeHostMaker = ({
   formulateUnconfined,
   formulateArchive,
   formulateFromTree,
+  formulateFromPackage,
   getScratchMountPath,
   formulateReadableBlob,
   checkinTree,
@@ -2290,6 +2292,62 @@ export const makeHostMaker = ({
       return value;
     };
 
+    /** @type {EndoHost['makeFromPackage']} */
+    const makeFromPackage = async (workerName, sourceName, options = {}) => {
+      const {
+        entry,
+        registryName = '@registry',
+        offline = false,
+        ...capletOptions
+      } = options;
+      const sourceId = await E(directory).identify(...namePathFrom(sourceName));
+      if (sourceId === undefined) {
+        throw new TypeError(`Unknown pet name for source: ${q(sourceName)}`);
+      }
+      const registryNamePath = namePathFrom(registryName);
+      const packageRegistryId =
+        registryNamePath.length === 1
+          ? petStore.identifyLocal(/** @type {Name} */ (registryNamePath[0]))
+          : await E(directory).identify(...registryNamePath);
+      if (packageRegistryId === undefined) {
+        throw new TypeError(
+          `Unknown pet name for registry: ${q(registryName)}`,
+        );
+      }
+
+      const {
+        tasks,
+        workerId,
+        workerLabel: explicitLabel,
+        powersId,
+        env,
+        workerTrustedShims,
+      } = await prepareMakeCaplet(
+        /** @type {NameOrPath | undefined} */ (workerName),
+        capletOptions,
+      );
+      const workerLabel =
+        explicitLabel ??
+        (options.resultName !== undefined
+          ? `${options.resultName}`
+          : `package:${Array.isArray(sourceName) ? sourceName.join('/') : sourceName}`);
+
+      const { value } = await formulateFromPackage(
+        hostId,
+        handleId,
+        /** @type {FormulaIdentifier} */ (sourceId),
+        /** @type {FormulaIdentifier} */ (packageRegistryId),
+        harden({ entry, offline }),
+        tasks,
+        workerId,
+        powersId,
+        env,
+        workerTrustedShims,
+        workerLabel,
+      );
+      return value;
+    };
+
     /**
      * Attempts to introduce the given names to the specified agent. The agent in question
      * must be formulated before this function is called.
@@ -2817,7 +2875,8 @@ export const makeHostMaker = ({
       if (
         formula.type !== 'make-unconfined' &&
         formula.type !== 'make-archive' &&
-        formula.type !== 'make-from-tree'
+        formula.type !== 'make-from-tree' &&
+        formula.type !== 'make-from-package'
       ) {
         throw makeError(
           X`Formula ${q(identifier)} has no construction environment`,
@@ -2902,6 +2961,12 @@ export const makeHostMaker = ({
     const makeDirectory = async petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);
       return makeDirectoryLocal(namePath);
+    };
+    /** @type {EndoHost['createDirectory']} */
+    const createDirectory = async petNameOrPath => {
+      // A supervisor must be able to own storage without receiving its formula
+      // presence: collecting that presence would terminate its entire worker.
+      await makeDirectoryLocal(namePathFrom(petNameOrPath));
     };
     const {
       listMessages,
@@ -3147,6 +3212,7 @@ export const makeHostMaker = ({
       move,
       copy,
       makeDirectory,
+      createDirectory,
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
@@ -3192,6 +3258,7 @@ export const makeHostMaker = ({
       makeUnconfined,
       makeArchive,
       makeFromTree,
+      makeFromPackage,
       stageTree,
       makeUnconfinedFromTree,
       cancel,
@@ -3223,7 +3290,7 @@ export const makeHostMaker = ({
       'EndoHost',
       HostInterface,
       /** @type {any} */ ({
-        help: makeHelp(hostHelp),
+        help: makeHelp(hostHelp, [mailHelp]),
         ...host,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {

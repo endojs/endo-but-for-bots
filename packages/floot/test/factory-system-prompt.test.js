@@ -10,6 +10,7 @@ import {
 import { makePromiseKit } from './_promise-kit.js';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 
 const sandboxed = harden({
   toolNamePrefix: 'mcp__endo__',
@@ -29,9 +30,16 @@ const authSecret = token =>
  * spec of every session it is asked to create: `spec.systemPrompt` is the
  * prompt a hosted model actually runs under.
  *
- * @param {{ promptEnvironment?: object, fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown }} [options]
+ * @param {{ promptEnvironment?: object, fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown, env?: Record<string, string>, beforeGuest?: () => Promise<void>, afterStore?: (value: any, name: string) => void }} [options]
  */
-const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
+const makeWorld = ({
+  promptEnvironment,
+  fetch,
+  lookupProvider,
+  env,
+  beforeGuest,
+  afterStore,
+} = {}) => {
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const inboxes = [];
   /** @type {Array<Record<string, any>>} */
@@ -127,22 +135,16 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
     ]),
   );
   const host = Far('PromptHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name =>
-      name === 'llm-provider' && lookupProvider
+    ...directoryHost(hostStore, { afterStore }),
+    lookup: (...names) =>
+      names[0] === 'llm-provider' && lookupProvider
         ? lookupProvider()
-        : hostStore.get(name),
+        : hostStore.get(names.flat().join('/')),
     locate: name => `locator:${name}`,
     copy: () => undefined,
-    provideGuest: (_name, { agentName }) => {
+    provideGuest: async (_name, { agentName }) => {
+      await beforeGuest?.();
       if (!hostStore.has(agentName)) hostStore.set(agentName, makeGuest());
-    },
-    storeValue: (value, name) => {
-      hostStore.set(name, value);
-    },
-    remove: name => {
-      hostStore.delete(name);
     },
   });
   let disposalHook;
@@ -152,7 +154,7 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
         disposalHook = hook;
       },
     });
-  let factory = make(host, context(), { fetch });
+  let factory = make(host, context(), { fetch, env });
   /**
    * The prompt the backend was given for a session, once a turn has run.
    * @param session
@@ -189,7 +191,7 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
       await factory;
       await E(disposalHook)();
       disposalHook = undefined;
-      factory = make(host, context(), { fetch });
+      factory = make(host, context(), { fetch, env });
       return factory;
     },
     duringNextTurn: act => {
@@ -1217,4 +1219,327 @@ test('workflow sessions are explicitly created outside the user list', async t =
       message: /userInitiated must be a boolean/,
     },
   );
+});
+
+test('delegation stays enabled but recursive verification stops at the depth bound', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  let session = await E(world.factory).createSession(hosted);
+  // Each child must exist before its tool set can create the next generation.
+  /* eslint-disable no-await-in-loop */
+  for (const name of ['researcher', 'checker']) {
+    const parentId = (await E(session).getInfo()).id;
+    world.duringNextTurn(async tools => {
+      await E(tools).execute('spawnSubagent', harden({ name }));
+    });
+    await world.promptOf(session);
+    const child = (await E(world.factory).listSessions()).find(
+      s => s.parentSessionId === parentId,
+    );
+    t.truthy(child, 'both root delegation and bounded subdelegation work');
+    session = await E(world.factory).getSession(child.id);
+  }
+  /* eslint-enable no-await-in-loop */
+  world.duringNextTurn(async tools => {
+    await t.throwsAsync(
+      E(tools).execute('spawnSubagent', harden({ name: 'checkeragain' })),
+      { message: /[Uu]nknown tool/ },
+    );
+  });
+  const prompt = await world.promptOf(session);
+  t.true(prompt.includes('Do the assigned work yourself by default'));
+  t.true(prompt.includes('recursively fact-check'));
+  t.is((await E(world.factory).listSessions()).length, 3);
+});
+
+test('concurrent spawns share the whole tree budget, survive revival, and recover after stop', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({
+    env: { FLOOT_MAX_SUBAGENTS: '3', FLOOT_MAX_SUBAGENT_DEPTH: '4' },
+  });
+  t.teardown(world.close);
+  let parent = await E(world.factory).createSession(hosted);
+  const rootId = (await E(parent).getInfo()).id;
+  world.duringNextTurn(async tools => {
+    await E(tools).execute('spawnSubagent', harden({ name: 'researcher' }));
+  });
+  await world.promptOf(parent);
+  const child = (await E(world.factory).listSessions()).find(
+    s => s.parentSessionId === rootId,
+  );
+  const worker = await E(world.factory).getSession(child.id);
+  world.duringNextTurn(async tools => {
+    const results = await Promise.allSettled(
+      ['a', 'b', 'c', 'd'].map(name =>
+        E(tools).execute('spawnSubagent', harden({ name })),
+      ),
+    );
+    t.is(results.filter(r => r.status === 'fulfilled').length, 2);
+    const rejected = results.filter(r => r.status === 'rejected');
+    t.is(rejected.length, 2);
+    for (const result of rejected)
+      t.regex(result.reason.message, /tree limit of 3/);
+  });
+  await world.promptOf(worker);
+  t.is((await E(world.factory).listSessions()).length, 4);
+  const revived = await world.revive();
+  parent = await E(revived).getSession(rootId);
+  world.duringNextTurn(async tools => {
+    await t.throwsAsync(
+      E(tools).execute('spawnSubagent', harden({ name: 'overflow' })),
+      { message: /tree limit of 3/ },
+    );
+    await E(tools).execute('stopSubagent', harden({ name: 'researcher' }));
+    await E(tools)
+      .execute('spawnSubagent', harden({ name: 'recovered' }))
+      .catch(e => t.fail(e.message));
+  });
+  await world.promptOf(parent);
+  const sessions = await E(revived).listSessions();
+  t.is(sessions.length, 2, 'stop releases every descendant and its budget');
+  t.true(sessions.some(s => s.subagentName === 'recovered'));
+});
+
+test('duplicate concurrent names and failed introductions do not leak reservations', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ env: { FLOOT_MAX_SUBAGENTS: '1' } });
+  t.teardown(world.close);
+  const parent = await E(world.factory).createSession(hosted);
+  const { id } = await E(parent).getInfo();
+  await E(world.hostStore.get(`session-agent-${id}`)).storeValue(
+    'value',
+    'source',
+  );
+  world.duringNextTurn(async tools => {
+    await t.throwsAsync(
+      E(tools).execute(
+        'spawnSubagent',
+        harden({
+          name: 'helper',
+          attachments: [{ name: 'user', petName: 'source' }],
+        }),
+      ),
+      { message: /already exists/ },
+    );
+    const results = await Promise.allSettled(
+      [1, 2].map(() =>
+        E(tools).execute('spawnSubagent', harden({ name: 'helper' })),
+      ),
+    );
+    t.is(results.filter(r => r.status === 'fulfilled').length, 1);
+    const rejected = results.find(r => r.status === 'rejected');
+    if (!rejected) throw Error('Expected a rejected duplicate spawn');
+    t.regex(rejected.reason.message, /already exists/);
+  });
+  await world.promptOf(parent);
+  t.is((await E(world.factory).listSessions()).length, 2);
+});
+
+test('deleting a parent drains an in-flight spawn without stranding its child', async t => {
+  t.timeout(10_000);
+  const entered = makePromiseKit();
+  const resume = makePromiseKit();
+  const fenced = makePromiseKit();
+  let block = false;
+  const world = makeWorld({
+    afterStore: value => {
+      if (value?.sessions?.some(entry => entry.lifecycle === 'deleting'))
+        fenced.resolve();
+    },
+    beforeGuest: async () => {
+      if (block) {
+        entered.resolve(undefined);
+        await resume.promise;
+      }
+    },
+  });
+  t.teardown(async () => {
+    resume.resolve(undefined);
+    await world.close();
+  });
+  const parent = await E(world.factory).createSession(hosted);
+  const { id } = await E(parent).getInfo();
+  block = true;
+  world.duringNextTurn(async tools => {
+    await t.throwsAsync(
+      E(tools).execute('spawnSubagent', harden({ name: 'helper' })),
+      { message: /no longer accepts delegation/ },
+    );
+  });
+  const turn = await E(parent).startTurn('delegate');
+  await entered.promise;
+  const deletion = E(world.factory).deleteSession(id);
+  await fenced.promise;
+  resume.resolve(undefined);
+  await deletion;
+  await E(turn).whenFinished();
+  t.deepEqual(await E(world.factory).listSessions(), []);
+  t.false(
+    [...world.hostStore.keys()].some(name => name.startsWith('session-agent-')),
+  );
+});
+
+test('restart finishes a fenced subtree before reviving its descendants', async t => {
+  t.timeout(10_000);
+  const recovered = makePromiseKit();
+  let recovering = false;
+  const world = makeWorld({
+    afterStore: value => {
+      if (recovering && value?.sessions?.length === 0) recovered.resolve();
+    },
+  });
+  t.teardown(world.close);
+  const parent = await E(world.factory).createSession(hosted);
+  const { id } = await E(parent).getInfo();
+  world.duringNextTurn(async tools => {
+    await E(tools).execute('spawnSubagent', harden({ name: 'worker' }));
+  });
+  await world.promptOf(parent);
+  const entries = [...world.hostStore.entries()]
+    .filter(([name]) => name.startsWith('floot-sessions-v1-'))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const latest = entries.at(-1);
+  if (!latest) throw Error('Missing session registry');
+  const [registryName, record] = latest;
+  // Crash point: deletion intent is durable, but no child has been removed.
+  world.hostStore.set(
+    registryName,
+    harden({
+      ...record,
+      sessions: record.sessions.map(entry =>
+        entry.id === id ? { ...entry, lifecycle: 'deleting' } : entry,
+      ),
+    }),
+  );
+  recovering = true;
+  const revived = await world.revive();
+  await recovered.promise;
+  t.deepEqual(await E(revived).listSessions(), []);
+  t.false(
+    [...world.hostStore.keys()].some(
+      name =>
+        name.startsWith('session-agent-') ||
+        name.startsWith('floot-private-sessions/'),
+    ),
+  );
+});
+
+test('editable presets snapshot prompt and endowments across restart, later edits, deletion and delegation', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  let config = await E(world.factory).getPresetConfiguration();
+  const general = config.presets.find(preset => preset.id === 'general');
+  const firstGrant = Far('FirstGrant', { read: () => 'first' });
+  const secondGrant = Far('SecondGrant', { read: () => 'second' });
+  const custom = harden({
+    ...general,
+    id: 'custom-helper',
+    title: 'My helper',
+    instructions: 'Standing instruction alpha.',
+    backendId: 'test',
+    modelId: 'm',
+    endowments: [
+      { petName: 'notebook', sourcePath: ['notes'], value: firstGrant },
+    ],
+  });
+  config = await E(world.factory).savePreset(custom, config.revision);
+  config = await E(world.factory).setVoicePreset(custom.id, config.revision);
+  const parent = await E(world.factory).createAssistantSession();
+  const info = await E(parent).getInfo();
+  t.like(info, { presetId: custom.id, backendId: 'test', modelId: 'm' });
+  const guest = world.hostStore.get(`session-agent-${info.id}`);
+  t.is(await E(guest).lookup('notebook'), firstGrant);
+  const firstPrompt = await world.promptOf(parent);
+  t.true(firstPrompt.includes('Standing instruction alpha.'));
+  t.true(firstPrompt.includes('Your replies are spoken aloud'));
+  config = await E(world.factory).savePreset(
+    harden({
+      ...custom,
+      instructions: 'Standing instruction beta.',
+      endowments: [
+        {
+          petName: 'new-notebook',
+          sourcePath: ['new-notes'],
+          value: secondGrant,
+        },
+      ],
+    }),
+    config.revision,
+  );
+  const later = await E(world.factory).createSession(
+    harden({ presetId: custom.id }),
+  );
+  t.true((await world.promptOf(later)).includes('Standing instruction beta.'));
+  const laterGuest = world.hostStore.get(
+    `session-agent-${(await E(later).getInfo()).id}`,
+  );
+  t.is(await E(laterGuest).lookup('new-notebook'), secondGrant);
+  t.false(await E(laterGuest).has('notebook'));
+  config = await E(world.factory).setVoicePreset('voice', config.revision);
+  await E(world.factory).deletePreset(custom.id, config.revision);
+  const revived = await world.revive();
+  const old = await E(revived).getSession(info.id);
+  world.duringNextTurn(async tools => {
+    await E(tools).execute('spawnSubagent', harden({ name: 'helper' }));
+  });
+  t.is(await world.promptOf(old), firstPrompt);
+  const child = (await E(revived).listSessions()).find(
+    session => session.parentSessionId === info.id,
+  );
+  t.truthy(child);
+  const childGuest = world.hostStore.get(`session-agent-${child.id}`);
+  t.is(await E(childGuest).lookup('notebook'), firstGrant);
+  t.false(await E(childGuest).has('new-notebook'));
+  t.false(await E(guest).has('new-notebook'));
+});
+
+test('preset model defaults are overridden only by explicit session identity', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  const config = await E(world.factory).getPresetConfiguration();
+  const general = config.presets.find(preset => preset.id === 'general');
+  await E(world.factory).savePreset(
+    harden({ ...general, backendId: 'missing', modelId: 'missing' }),
+    config.revision,
+  );
+  await t.throwsAsync(
+    E(world.factory).createSession(harden({ presetId: 'general' })),
+    { message: /Unknown hosted backend/ },
+  );
+  t.like(
+    await E(await E(world.factory).createSession(hosted)).getInfo(),
+    hosted,
+  );
+  await t.throwsAsync(
+    E(world.factory).createSession(harden({ presetId: 'deleted', ...hosted })),
+    { message: /Unknown preset/ },
+  );
+});
+
+test('undefined session identity fields preserve saved preset defaults', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  t.teardown(world.close);
+  const config = await E(world.factory).getPresetConfiguration();
+  const general = config.presets.find(p => p.id === 'general');
+  await E(world.factory).savePreset(
+    harden({ ...general, ...hosted }),
+    config.revision,
+  );
+  const omitted = await E(world.factory).createSession(
+    harden({ presetId: 'general' }),
+  );
+  const undefinedKeys = await E(world.factory).createSession(
+    harden({
+      presetId: 'general',
+      backendId: undefined,
+      modelId: undefined,
+      reasoningEffort: undefined,
+    }),
+  );
+  t.like(await E(omitted).getInfo(), hosted);
+  t.like(await E(undefinedKeys).getInfo(), hosted);
 });

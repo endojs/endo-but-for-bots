@@ -21,6 +21,7 @@
         "packages/demo",
         "packages/fae",
         "packages/familiar",
+        "packages/floot-android/android/app/src/main/assets/chat",
         "packages/eventual-send-test",
         "packages/harden-test",
         "packages/hex-test",

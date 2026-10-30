@@ -9,6 +9,27 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { FlootApp } from '@endo/space-floot';
 import { makeReplyFold } from '@endo/floot/src/reply-fold.js';
 import { applyTranscript } from '@endo/floot/src/transcript-delta.js';
+import {
+  resolveMentions,
+  validateChatMessage,
+} from '@endo/floot/src/session-mentions.js';
+import {
+  makeFlootComposer,
+  decodeChatDraft,
+  chatDraftText,
+  encodeChatDraft,
+} from './floot-mentions.js';
+import { makePresetSettings } from './preset-settings.js';
+import {
+  makeSessionDrafts,
+  makeSubmissionClient,
+} from './floot-submission-client.js';
+import {
+  pendingAssistantInvocation,
+  acknowledgeAssistantInvocation,
+  claimAssistantInvocation,
+} from './assistant-launch.js';
+import { exportFlootObjects } from './floot-transfer.js';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
@@ -502,6 +523,11 @@ export const flootComponent = (
   audioPath,
   ttsPath,
 ) => {
+  const submissionClient = makeSubmissionClient(
+    localStorage,
+    () => `${Date.now()}-${crypto.randomUUID()}`,
+  );
+  const sessionDrafts = makeSessionDrafts(submissionClient.draft, localStorage);
   // Resolve the floot factory by walking the profile path.
   /** @type {any} */
   let factory = rootPowers;
@@ -569,7 +595,7 @@ export const flootComponent = (
   /**
    * @typedef {{ role: 'user' | 'assistant' | 'tool' | 'thinking', text?: string,
    *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
-   *   meta?: { mail?: { from?: string } },
+   *   meta?: { mail?: { from?: string }, message?: {strings: string[], names: string[]} },
    *   name?: string, args?: string, result?: string | null, failed?: boolean }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
    *   model: string, backendId?: string, modelId?: string,
@@ -578,11 +604,11 @@ export const flootComponent = (
    *   lifecycle?: string,
    *   activity?: 'passive' | 'working' | 'error', pendingCount?: number,
    *   transcript: { version: number, messages: readonly any[] } | null,
-   *   current: { input: string | null, turn: any, pendingId?: string } | null,
+   *   current: { input: string | null, message?: {strings: string[], names: string[]}, turn: any, pendingId?: string } | null,
    *   running: { input: string, from?: string } | null,
    *   pending: import('./floot-session-state.js').PendingState,
    *   displayTurn: FlootTurn | null,
-   *   tail?: { input: string | null, turn: FlootTurn } | null,
+   *   tail?: { input: string | null, message?: {strings: string[], names: string[]}, turn: FlootTurn } | null,
    *   transcriptStale?: boolean }}
    *   FlootSession
    *
@@ -617,10 +643,17 @@ export const flootComponent = (
   let sessions = [];
   /** @type {string | null} */
   let activeSessionId = null;
+  let activeAssistantId = '';
+  let assistantRequested = false;
+  /** @type {Promise<void> | undefined} */
+  let assistantReady;
+  let assistantPreparing = false;
   /** @type {Map<string, 'idle' | 'streaming' | 'error'>} */
   const sessionStatus = new Map();
 
   let status = 'Loading sessions…';
+  const textDraft = text =>
+    encodeChatDraft({ strings: [text], petNames: [], edgeNames: [] });
   let inputText = '';
   let settingsOpen = false;
   // Whether the transcript should follow new content to the bottom. Tracked
@@ -651,7 +684,9 @@ export const flootComponent = (
   // "Screen wake lock"). A no-op until then, because `notify` runs during setup
   // and reaching a `let` before its declaration would throw.
   let updateWakeLock = () => {};
+  let syncComposer = () => {};
   const notify = () => {
+    syncComposer();
     try {
       updateWakeLock();
     } catch {
@@ -725,6 +760,8 @@ export const flootComponent = (
       Boolean(recovery.getState().resolving || hasOutstandingWork()),
   });
   const execution = makeFlootExecution({ notify });
+  /** @type {ReturnType<typeof makeFlootComposer> | undefined} */
+  let composer;
 
   /**
    * @param {any[]} history
@@ -762,6 +799,7 @@ export const flootComponent = (
    * @param {string} [subscription] one of the backend's subscriptions; absent
    *   or `auto` leaves the choice to the backend
    * @param {string} [networkPolicy]
+   * @param {string} [assistantId]
    */
   const createSession = async (
     title,
@@ -770,6 +808,7 @@ export const flootComponent = (
     reasoningEffort,
     subscription,
     networkPolicy,
+    assistantId = '',
   ) => {
     const selected = models.find(candidate => candidate.id === model);
     if (
@@ -788,21 +827,23 @@ export const flootComponent = (
     // driven from here, where replies are read aloud. The factory composes
     // the voice rules into the system prompt of a session that says so, and
     // of no other.
-    const facet = await E(factory).createSession({
-      title: title || DEFAULT_TITLE,
-      spoken: true,
-      userInitiated: true,
-      ...(presetId ? { presetId } : {}),
-      ...(selected?.backendId
-        ? {
-            backendId: selected.backendId,
-            modelId: selected.modelId,
-          }
-        : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(subscription && subscription !== 'auto' ? { subscription } : {}),
-      ...(networkPolicy ? { networkPolicy } : {}),
-    });
+    const facet = await (assistantId
+      ? E(factory).createAssistantSession()
+      : E(factory).createSession({
+          title: title || DEFAULT_TITLE,
+          spoken: true,
+          userInitiated: true,
+          ...(presetId ? { presetId } : {}),
+          ...(selected?.backendId
+            ? {
+                backendId: selected.backendId,
+                modelId: selected.modelId,
+              }
+            : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(subscription && subscription !== 'auto' ? { subscription } : {}),
+          ...(networkPolicy ? { networkPolicy } : {}),
+        }));
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
     const session = {
@@ -825,6 +866,10 @@ export const flootComponent = (
       pending: normalizePending(null),
       displayTurn: null,
     };
+    // A later invocation or unmount owns the UI now; still let the session
+    // watcher expose any successfully created session for inspection.
+    if (assistantId && (cancelled || activeAssistantId !== assistantId))
+      return session;
     // The session list's own subscription reports the new session too, and
     // usually first (`getInfo` above is a second round trip). There must be
     // one record per session: adopt what this call learned into that one.
@@ -913,14 +958,24 @@ export const flootComponent = (
     const sent = session ? [...session.messages] : [];
     if (current) {
       if (typeof current.input === 'string') {
-        sent.push({ role: 'user', text: current.input });
+        sent.push({
+          role: 'user',
+          text: current.input,
+          ...(current.message ? { meta: { message: current.message } } : {}),
+        });
       }
       if (shown) sent.push(...shown.messages);
     } else if (session?.tail) {
       // The turn is over but the transcript that contains it could not be
       // read yet: what was on screen stays there until it can.
       if (typeof session.tail.input === 'string') {
-        sent.push({ role: 'user', text: session.tail.input });
+        sent.push({
+          role: 'user',
+          text: session.tail.input,
+          ...(session.tail.message
+            ? { meta: { message: session.tail.message } }
+            : {}),
+        });
       }
       sent.push(...session.tail.turn.messages);
     } else if (session?.running) {
@@ -947,6 +1002,7 @@ export const flootComponent = (
       ...queuedEntries.map(entry => ({
         role: /** @type {const} */ ('user'),
         text: entry.text,
+        ...(entry.message ? { meta: { message: entry.message } } : {}),
         pending: true,
         pendingId: entry.id,
         pendingState:
@@ -963,6 +1019,7 @@ export const flootComponent = (
             .map(send => ({
               role: /** @type {const} */ ('user'),
               text: send.text,
+              ...(send.message ? { meta: { message: send.message } } : {}),
               pending: true,
               pendingId: `local-${send.id}`,
               pendingState: /** @type {const} */ ('sending'),
@@ -1003,11 +1060,8 @@ export const flootComponent = (
         lifecycle: s.lifecycle,
       })),
       activeSessionId,
-      presets: presets.map(p => ({
-        id: p.id,
-        title: p.title,
-        description: p.description,
-      })),
+      presets: presets.map(p => ({ ...p })),
+      presetSettings: presetSettings.getState(),
       models: models.map(m => ({
         id: m.id,
         title: m.title,
@@ -1047,7 +1101,7 @@ export const flootComponent = (
       // No session is nothing to load: the pane says hello, not "loading".
       loaded: session ? session.loaded : true,
       status,
-      input: inputText,
+      input: chatDraftText(inputText),
       settingsOpen,
       recovery: recovery.getState(),
       network: network.getState(),
@@ -1109,7 +1163,7 @@ export const flootComponent = (
    * not it.
    *
    * @typedef {{ id: number, sessionId: string, text: string,
-   *   pendingId?: string, acked: boolean, seen: boolean,
+   *   message?: {strings: string[], names: string[]}, pendingId?: string, acked: boolean, seen: boolean,
    *   before: Set<string> }} InFlightSend
    */
   /** @type {InFlightSend[]} */
@@ -1127,6 +1181,7 @@ export const flootComponent = (
     ...session.pending.entries.map(entry => ({
       id: entry.id,
       text: entry.text,
+      ...(entry.message ? { meta: { message: entry.message } } : {}),
     })),
     ...(session.current?.pendingId
       ? [{ id: session.current.pendingId, text: session.current.input }]
@@ -1324,6 +1379,7 @@ export const flootComponent = (
         ? {
             input: typeof reported.input === 'string' ? reported.input : null,
             turn: reported.turn,
+            ...(reported.message ? { message: reported.message } : {}),
             ...(typeof reported.pendingId === 'string'
               ? { pendingId: reported.pendingId }
               : {}),
@@ -1338,7 +1394,11 @@ export const flootComponent = (
       // until it can, rather than the prompt and reply blinking out.
       session.tail =
         previous && session.displayTurn && session.transcriptStale
-          ? { input: previous.input, turn: session.displayTurn }
+          ? {
+              input: previous.input,
+              turn: session.displayTurn,
+              ...(previous.message ? { message: previous.message } : {}),
+            }
           : null;
       session.displayTurn = null;
       if (previous && activeSessionId === session.id && !activeTurn) {
@@ -1483,6 +1543,7 @@ export const flootComponent = (
   // keeps running on the daemon, and its queue with it.
   /** @param {boolean} [reselect] false when reopening the same session */
   const openActiveSession = (reselect = true) => {
+    composer?.close();
     if (sessionView) sessionView.close();
     sessionView = null;
     if (detachActiveTurnView) detachActiveTurnView();
@@ -1507,6 +1568,17 @@ export const flootComponent = (
           : '',
       );
       usage = null;
+    }
+    try {
+      inputText = sessionDrafts.select(
+        session ? `floot-send:${profilePath.join('/')}:${session.id}` : null,
+        inputText,
+      );
+    } catch {
+      inputText = '';
+      setStatus(
+        'Saved submission could not be read. Inspect browser storage before retrying.',
+      );
     }
     if (!session) {
       notify();
@@ -1591,6 +1663,10 @@ export const flootComponent = (
   // Hand a message to the daemon. It starts at once if the session is idle and
   // otherwise waits its turn there — whether or not this page stays open.
   const submit = (/** @type {string} */ raw) => {
+    if (assistantPreparing) {
+      setStatus('Starting your assistant session…');
+      return;
+    }
     if (execution.getState().blocked) {
       setStatus(
         'Session stopped or stopping. Inspect Settings before resuming.',
@@ -1622,13 +1698,40 @@ export const flootComponent = (
       resumeTimer = 0;
     }
     pendingUtterance = '';
-    const text = (raw || '').trim();
+    const draft = raw || '';
+    let structured;
+    let text;
+    try {
+      structured = decodeChatDraft(draft);
+      text = chatDraftText(draft);
+      if (structured.petNames.length)
+        validateChatMessage({
+          strings: structured.strings,
+          names: structured.edgeNames,
+        });
+    } catch (error) {
+      setStatus(/** @type {Error} */ (error).message);
+      return;
+    }
     if (!text) return;
+    composer?.close();
     // Create/resume the audio context now, still inside the user's Send
     // gesture: a browser refuses autoplay when the first resume happens only
     // after the remote round trips that start the turn and its speech.
     if (ttsEnabled && ttsServer) prepareTts();
     inputText = '';
+    /** @type {{key: string, value: string} | null} */
+    let savedDraft = null;
+    try {
+      savedDraft = sessionDrafts.save(draft);
+    } catch {
+      inputText = draft;
+      setStatus(
+        'This draft could not be saved on this device. Nothing was sent.',
+      );
+      notify();
+      return;
+    }
     // Sending a message is an explicit "follow along" intent — re-stick.
     stick = true;
 
@@ -1637,6 +1740,9 @@ export const flootComponent = (
       id: nextInFlightId,
       sessionId: selected ? selected.id : '',
       text,
+      message: structured.petNames.length
+        ? { strings: structured.strings, names: structured.edgeNames }
+        : undefined,
       acked: false,
       seen: false,
       before: new Set(
@@ -1654,6 +1760,7 @@ export const flootComponent = (
         session = await createSession();
         send.sessionId = session.id;
         openActiveSession();
+        savedDraft = sessionDrafts.save(draft);
       }
       if (session.title === DEFAULT_TITLE) {
         session.title = autoTitle(text);
@@ -1662,7 +1769,15 @@ export const flootComponent = (
           .catch(() => {});
         notify();
       }
-      const accepted = await E(facetFor(session)).enqueue(text);
+      const accepted = await submissionClient.submit(
+        facetFor(session),
+        `floot-send:${profilePath.join('/')}:${session.id}`,
+        draft,
+        () => sessionDrafts.acknowledge(savedDraft),
+        structured.petNames.length
+          ? () => resolveMentions(rootPowers, structured.petNames)
+          : undefined,
+      );
       send.acked = true;
       if (accepted && typeof accepted.id === 'string') {
         send.pendingId = accepted.id;
@@ -1677,10 +1792,29 @@ export const flootComponent = (
       .catch((/** @type {Error} */ error) => {
         if (cancelled) return;
         inFlightSends = inFlightSends.filter(other => other !== send);
-        // Nothing was accepted: the text goes back where it can be sent
-        // again. Unless the daemon has reported it after all (a failure after
-        // it was queued), in which case restoring it would make two of it.
-        if (!send.seen && !inputText) inputText = text;
+        // This failure belongs to the session that submitted it. Selection may
+        // have changed while waiting, and the outcome may still be uncertain.
+        if (error.name === 'SubmissionChangedError') {
+          try {
+            // A delayed discovery must not reoffer a request another view has
+            // already resolved or explicitly discarded with a fresh retry ID.
+            sessionDrafts.acknowledge(savedDraft);
+          } catch {
+            // Still report why this view did not dispatch.
+          }
+        } else if (!send.seen && !send.acked) {
+          try {
+            if (send.sessionId) {
+              inputText = sessionDrafts.restore(
+                `floot-send:${profilePath.join('/')}:${send.sessionId}`,
+                draft,
+                inputText,
+              );
+            } else if (!getActiveSession() && !inputText) inputText = draft;
+          } catch {
+            // The durable retry remains authoritative when draft storage fails.
+          }
+        }
         setStatus(`error: ${error.message}`);
       })
       .finally(() => {
@@ -1828,6 +1962,7 @@ export const flootComponent = (
   // ── Mic input (optional) ─────────────────────────────────────────────────────
   let micActive = false; // mic open and listening
   let speaking = false; // currently inside a detected utterance
+  let voiceCommitId = 0;
   let calibrating = false;
   // Actionable guidance shown when the browser/OS denies mic access (distinct
   // from the transient status line, since it needs to persist until retried).
@@ -1846,6 +1981,14 @@ export const flootComponent = (
   let calibSamples = [];
   /** @type {Uint8Array[]} */
   let preroll = [];
+  // A permission request can outlive pause, stop, a new request, or unmount.
+  let micRequestId = 0;
+  let audioSuspended = false;
+  const audioAllowed = () =>
+    !cancelled &&
+    $parent.isConnected &&
+    !audioSuspended &&
+    $parent.ownerDocument.visibilityState !== 'hidden';
   let micInRate = 16_000;
   /** @type {MediaStream | null} */
   let mediaStream = null;
@@ -1878,16 +2021,19 @@ export const flootComponent = (
   const drainTranscript = async (
     /** @type {any} */ textReader,
     /** @type {any} */ ownChannel,
+    /** @type {number} */ requestId,
   ) => {
     let last = '';
     try {
       for await (const raw of iterateReader(textReader, { buffer: 4 })) {
         const value = /** @type {any} */ (raw);
-        if (cancelled) break;
+        if (!audioAllowed() || requestId !== micRequestId) break;
         if (value.type === 'partial' || value.type === 'final') {
           last = value.text;
           // Show buffered continuation text ahead of the live partial.
-          inputText = pendingUtterance ? `${pendingUtterance} ${last}` : last;
+          inputText = textDraft(
+            pendingUtterance ? `${pendingUtterance} ${last}` : last,
+          );
           voiceTranscript = last;
           notify();
         } else if (value.type === 'end') {
@@ -1898,10 +2044,19 @@ export const flootComponent = (
         }
       }
     } catch (err) {
-      setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
+      if (audioAllowed() && requestId === micRequestId)
+        setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
     } finally {
-      if (ownChannel === channel) channel = null;
+      if (ownChannel === channel) {
+        // A recognizer may finish before VAD silence (for example its own
+        // endpoint detector fired). Close that utterance before arming a send.
+        channel?.end();
+        channel = null;
+        speaking = false;
+        silenceStart = 0;
+      }
     }
+    if (!audioAllowed() || requestId !== micRequestId) return;
     const text = filterTranscript(last);
     inputText = '';
     voiceTranscript = '';
@@ -1930,19 +2085,37 @@ export const flootComponent = (
     // Keep the buffered utterance visible in the compose box for the whole
     // grace window. Blanking it made recognized speech vanish for about a
     // second before it sent, which reads as a swallowed message.
-    inputText = pendingUtterance;
+    inputText = textDraft(pendingUtterance);
     notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
+    voiceCommitId += 1;
+    const commitId = voiceCommitId;
     resumeTimer = window.setTimeout(() => {
       resumeTimer = 0;
-      pendingUtterance = '';
       // The buffer has been sitting in the compose box as ordinary editable
       // text for the whole grace window, so the box IS the buffer: a correction
       // typed there is what sends, and clearing it cancels the send. Sending
       // what was recognized instead would silently discard the edit.
-      const full = inputText.trim();
-      if (full) submit(full);
+      const requestId = micRequestId;
+      // Transcription starts while provisioning runs, but a finalized utterance
+      // may only go to the new session, never the previously selected one.
+      void Promise.resolve(assistantReady)
+        .then(() => {
+          const full = inputText.trim();
+          if (
+            full &&
+            micActive &&
+            audioAllowed() &&
+            requestId === micRequestId &&
+            commitId === voiceCommitId &&
+            !speaking
+          ) {
+            pendingUtterance = '';
+            submit(full);
+          }
+        })
+        .catch(() => {});
     }, VAD.RESUME_GRACE_MS);
   };
 
@@ -1978,7 +2151,7 @@ export const flootComponent = (
   // Open a fresh transcribe() stream for the utterance just detected and flush
   // the pre-roll so the word's onset isn't clipped.
   const beginUtterance = () => {
-    if (speaking || !audioServer) return;
+    if (speaking || !audioServer || !micActive || !audioAllowed()) return;
     // If we're within the post-utterance grace, this is a continuation of the
     // same thought: cancel the pending send and keep the buffered text.
     if (resumeTimer) {
@@ -1986,18 +2159,19 @@ export const flootComponent = (
       resumeTimer = 0;
     }
     speaking = true;
+    voiceCommitId += 1;
     // Never let a reply talk over a live recording: silence any TTS still
     // playing or scheduled ahead.
     stopTts();
     speechStart = Date.now();
     silenceStart = 0;
     // Preserve any buffered continuation text; a fresh utterance clears it.
-    inputText = pendingUtterance;
+    inputText = textDraft(pendingUtterance);
     notify();
     channel = makeAudioChannel();
     const ownChannel = channel;
     const textReader = E(audioServer).transcribe(channel.reader);
-    drainTranscript(textReader, ownChannel);
+    drainTranscript(textReader, ownChannel, micRequestId);
     for (const frame of preroll) ownChannel.writeBytes(frame);
     preroll = [];
   };
@@ -2015,7 +2189,7 @@ export const flootComponent = (
           .return()
           .catch(() => {});
       channel = null;
-      inputText = pendingUtterance;
+      inputText = textDraft(pendingUtterance);
       notify();
       return;
     }
@@ -2038,6 +2212,10 @@ export const flootComponent = (
   // noise-floor drift, onset/barge-in, and end-of-speech silence detection.
   const vadLoop = () => {
     if (!micActive) return;
+    if (!audioAllowed()) {
+      stopAudio();
+      return;
+    }
     const now = Date.now();
     const vol = computeRms();
 
@@ -2095,8 +2273,8 @@ export const flootComponent = (
     rafId = requestAnimationFrame(vadLoop);
   };
 
-  const startMic = async () => {
-    if (micActive || !audioServer) return;
+  const startMic = async (immediate = false) => {
+    if (micActive || !audioServer || !audioAllowed()) return;
     // Preflight the two environment failures that deny the mic *without* a
     // browser prompt, so the user gets an explanation instead of silence:
     //   1. a non-secure context (mic is HTTPS/localhost only), and
@@ -2120,8 +2298,10 @@ export const flootComponent = (
     // Still inside the tap: prime the audio context now, since a hands-free
     // reply starts from the utterance timer, not a gesture.
     if (ttsEnabled && ttsServer) prepareTts();
+    micRequestId += 1;
+    const requestId = micRequestId;
     micActive = true;
-    calibrating = true;
+    calibrating = !immediate;
     calibStart = Date.now();
     calibSamples = [];
     noiseFloor = 0;
@@ -2132,13 +2312,18 @@ export const flootComponent = (
     try {
       // Called synchronously off the tap (no await precedes it) so the user
       // gesture that mobile browsers require is still in effect.
-      mediaStream = await media.getUserMedia({
+      const acquired = await media.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
+      if (!audioAllowed() || requestId !== micRequestId || !micActive) {
+        acquired.getTracks().forEach(track => track.stop());
+        return;
+      }
+      mediaStream = acquired;
       audioCtx = new AudioContext();
       source = audioCtx.createMediaStreamSource(mediaStream);
       analyser = audioCtx.createAnalyser();
@@ -2147,6 +2332,7 @@ export const flootComponent = (
       processor = audioCtx.createScriptProcessor(4096, 1, 1);
       micInRate = audioCtx.sampleRate;
       processor.onaudioprocess = e => {
+        if (!audioAllowed() || requestId !== micRequestId || !micActive) return;
         const data = e.inputBuffer.getChannelData(0);
         const pcm = toPcm16le(data, micInRate, 16_000);
         if (!pcm.length) return;
@@ -2161,12 +2347,22 @@ export const flootComponent = (
       source.connect(analyser);
       source.connect(processor);
       processor.connect(audioCtx.destination);
+      if (immediate) {
+        // Do not discard the first second of an assistant invocation as noise
+        // calibration. Open transcription before the first PCM callback.
+        beginUtterance();
+        setStatus(
+          assistantPreparing ? 'Listening · starting assistant…' : 'listening…',
+        );
+      }
       rafId = requestAnimationFrame(vadLoop);
     } catch (err) {
-      micActive = false;
-      calibrating = false;
+      if (!audioAllowed() || requestId !== micRequestId) return;
+      stopMic();
+      const failedRequestId = micRequestId;
       const name = /** @type {Error} */ (err).name;
       const message = /** @type {Error} */ (err).message;
+      console.error(`[floot microphone] ${name}: ${message}`);
       if (name === 'NotAllowedError' || name === 'SecurityError') {
         // Say where the block is, as far as this browser will tell. A site
         // permission of 'denied' means the browser's site settings. Chrome
@@ -2186,6 +2382,7 @@ export const flootComponent = (
           // Permissions API unsupported, or 'microphone' isn't a known name on
           // this browser — leave permState empty and give generic guidance.
         }
+        if (!audioAllowed() || failedRequestId !== micRequestId) return;
         const android =
           typeof navigator !== 'undefined' &&
           /android/i.test(navigator.userAgent || '');
@@ -2240,7 +2437,10 @@ export const flootComponent = (
         micError = 'No microphone was found on this device.';
       } else if (name === 'NotReadableError') {
         micError =
-          'The microphone is in use by another app. Close it and tap 🎤 again.';
+          `The microphone could not start. This can be an app or system audio ` +
+          `configuration problem, or another app using the microphone. ` +
+          `Check microphone access in system settings and try again. ` +
+          `Details: ${name}: ${message}`;
       } else {
         micError = `Could not start the microphone: ${message}`;
       }
@@ -2250,6 +2450,7 @@ export const flootComponent = (
   };
 
   const stopMic = () => {
+    micRequestId += 1;
     if (!micActive) return;
     micActive = false;
     calibrating = false;
@@ -2326,14 +2527,102 @@ export const flootComponent = (
 
   updateWakeLock = () => {
     screenWakeLock.set(
-      !cancelled && Boolean(micActive || ttsSpeaking || isBusy()),
+      audioAllowed() && Boolean(micActive || ttsSpeaking || isBusy()),
     );
   };
 
   // The browser drops the lock when the page is hidden and does not restore it.
   // Registered with the other listeners at mount, below, so a throw during setup
   // cannot strand it on the document with no disposer to remove it.
-  const onVisibilityChange = () => screenWakeLock.refresh();
+  const stopAudio = () => {
+    stopMic();
+    stopTts();
+    void ttsCtx?.suspend().catch(() => {});
+  };
+  const launchAssistant = async () => {
+    const request = pendingAssistantInvocation();
+    if (!request || !audioAllowed() || !hasMic) return;
+    if (activeAssistantId === request.id) return;
+    activeAssistantId = request.id;
+    try {
+      /** @type {Promise<void> | undefined} */
+      let ready;
+      const claimed = await claimAssistantInvocation(
+        localStorage,
+        navigator.locks,
+        request.id,
+        {
+          isCurrent: () => audioAllowed() && activeAssistantId === request.id,
+          start: () => {
+            assistantRequested = true;
+            stopAudio();
+            assistantPreparing = true;
+            // Use the explicit identity without waiting for model discovery.
+            // Start creation and capture in the same admitted lock turn.
+            ready = createSession(
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              request.id,
+            ).then(() => {
+              if (cancelled || activeAssistantId !== request.id) return;
+              assistantPreparing = false;
+              const transcript = inputText;
+              openActiveSession();
+              inputText = transcript;
+              setStatus(micActive ? 'listening…' : 'Ready.');
+            });
+            assistantReady = ready;
+            void startMic(true);
+          },
+        },
+      );
+      if (!claimed && (!audioAllowed() || activeAssistantId !== request.id)) {
+        if (activeAssistantId === request.id) activeAssistantId = '';
+        return;
+      }
+      acknowledgeAssistantInvocation(request.id);
+      await ready;
+    } catch (error) {
+      console.error('[floot assistant setup]', error);
+      acknowledgeAssistantInvocation(
+        request.id,
+        `Assistant setup failed: ${/** @type {Error} */ (error).message}`,
+      );
+      if (cancelled || activeAssistantId !== request.id) return;
+      assistantPreparing = false;
+      assistantReady = undefined;
+      const transcript = inputText;
+      stopAudio();
+      inputText = transcript;
+      setStatus(
+        `Assistant setup failed: ${/** @type {Error} */ (error).message}`,
+      );
+    }
+  };
+  const onAssistantInvocation = () => {
+    void launchAssistant();
+  };
+  window.addEventListener('endo-assistant', onAssistantInvocation);
+
+  const suspendAudio = () => {
+    audioSuspended = true;
+    stopAudio();
+    updateWakeLock();
+  };
+  const resumeAudio = () => {
+    audioSuspended = false;
+    updateWakeLock();
+  };
+  const onVisibilityChange = () => {
+    if (wakeLockDoc.visibilityState === 'hidden') stopAudio();
+    screenWakeLock.refresh();
+  };
+  window.addEventListener('endo-suspend', suspendAudio);
+  window.addEventListener('endo-resume', resumeAudio);
 
   // Each request for playback. stopTts() bumps it too, so a request that
   // resumes after the audio context resumed (mute, Stop, barge-in, or unmount
@@ -2344,6 +2633,7 @@ export const flootComponent = (
   // Create/resume the audio context. Also called synchronously from the Send
   // gesture (see submit) so autoplay is allowed by the time audio arrives.
   const prepareTts = () => {
+    if (!audioAllowed()) return Promise.resolve();
     try {
       if (!ttsCtx) ttsCtx = new AudioContext();
     } catch {
@@ -2392,7 +2682,7 @@ export const flootComponent = (
     /** @type {Uint8Array} */ bytes,
     /** @type {number} */ sampleRate,
   ) => {
-    if (!ttsCtx) return;
+    if (!ttsCtx || !audioAllowed()) return;
     const frames = Math.floor(bytes.length / 2);
     if (!frames) return;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
@@ -2430,12 +2720,17 @@ export const flootComponent = (
     /** @type {any} */ audioReader,
     /** @type {FlootTurn | null} */ speechTurn = null,
   ) => {
-    if (!ttsServer) return;
+    if (!ttsServer || !audioAllowed()) {
+      void iterateReader(audioReader)
+        .return()
+        .catch(() => {});
+      return;
+    }
     ttsRequestSeq += 1;
     const mySeq = ttsRequestSeq;
     await prepareTts();
     if (
-      cancelled ||
+      !audioAllowed() ||
       !ttsCtx ||
       mySeq !== ttsRequestSeq ||
       (speechTurn && !ttsEnabled)
@@ -2458,7 +2753,7 @@ export const flootComponent = (
     try {
       for await (const raw of audio) {
         const value = /** @type {any} */ (raw);
-        if (cancelled || myId !== ttsPlaybackId) break;
+        if (!audioAllowed() || myId !== ttsPlaybackId) break;
         if (value.type === 'bytes') {
           enqueuePcm(base64ToBytes(value.b64), value.sampleRate || 22_050);
         } else if (value.type === 'end' || value.type === 'abort') {
@@ -2484,7 +2779,7 @@ export const flootComponent = (
   // Play a finished message through TTS by feeding its whole text as one delta.
   // Independent of the live turn: starting a replay supersedes any other audio.
   const replayMessage = (/** @type {string} */ text) => {
-    if (!ttsServer || !text.trim()) return;
+    if (!ttsServer || !text.trim() || !audioAllowed()) return;
     const feed = makeTextFeed();
     feed.delta(text);
     feed.end();
@@ -2520,7 +2815,7 @@ export const flootComponent = (
   // that rejects (no such voice, TTS unreachable) just ends the iteration in
   // playAudioStream; the text reply is unaffected.
   const speakTurn = (/** @type {FlootTurn} */ turn) => {
-    if (!ttsServer) return;
+    if (!ttsServer || !audioAllowed()) return;
     playAudioStream(E(turn.ref).speak(ttsServer, currentTtsOptions()), turn);
   };
 
@@ -2575,8 +2870,81 @@ export const flootComponent = (
   };
 
   // ── Controller (the view's only handle on the host engine) ───────────────────
+  const presetSettings = makePresetSettings({
+    factory,
+    rootPowers,
+    changed: () => {
+      if (!cancelled) notify();
+    },
+    catalogChanged: async () => {
+      presets = await E(factory).listPresets();
+      if (!cancelled) notify();
+    },
+  });
+
   const controller = harden({
     getState,
+    async forgetUnconfirmedSend() {
+      const session = getActiveSession();
+      if (
+        !session ||
+        !window.confirm(
+          'The earlier message may already have run. Check the conversation first. Forget its saved retry ID?',
+        )
+      )
+        return;
+      try {
+        await submissionClient.forget(
+          `floot-send:${profilePath.join('/')}:${session.id}`,
+        );
+        setStatus('Saved submission cleared.');
+      } catch (error) {
+        setStatus(/** @type {Error} */ (error).message);
+      }
+    },
+    async exportObjects() {
+      try {
+        const text = await exportFlootObjects(rootPowers, {
+          profilePath,
+          audioPath,
+          ttsPath,
+        });
+        if (cancelled) return;
+        const dialog = document.createElement('dialog');
+        const label = document.createElement('p');
+        label.textContent =
+          'Import this into Floot on another Endo. Anyone with these references can use this controller and the included speech services. Share only with a trusted device.';
+        const content = document.createElement('textarea');
+        content.value = text;
+        content.readOnly = true;
+        content.rows = 12;
+        content.cols = 55;
+        content.style.maxWidth = '100%';
+        content.setAttribute('aria-label', 'Floot object export');
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy export';
+        copy.onclick = () => {
+          void navigator.clipboard.writeText(text).then(
+            () => {
+              copy.textContent = 'Copied';
+            },
+            () => {
+              content.focus();
+              content.select();
+            },
+          );
+        };
+        const close = document.createElement('button');
+        close.textContent = 'Close';
+        close.onclick = () => dialog.close();
+        dialog.onclose = () => dialog.remove();
+        dialog.append(label, content, copy, close);
+        document.body.append(dialog);
+        dialog.showModal();
+      } catch (err) {
+        setStatus(`Export failed: ${/** @type {Error} */ (err).message}`);
+      }
+    },
     refreshDiscovery() {
       void readDiscovery();
     },
@@ -2617,8 +2985,12 @@ export const flootComponent = (
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    send(/** @type {string | undefined} */ text) {
-      submit(typeof text === 'string' ? text : inputText);
+    send(/** @type {string | undefined} */ text = undefined) {
+      submit(
+        typeof text === 'string'
+          ? textDraft(text)
+          : (composer?.read() ?? inputText),
+      );
     },
     stop() {
       cancelTurn();
@@ -2731,6 +3103,21 @@ export const flootComponent = (
     replayMessage(/** @type {string} */ text) {
       replayMessage(text);
     },
+    loadPresetSettings() {
+      void presetSettings.load();
+    },
+    savePreset(preset) {
+      void presetSettings.save(preset);
+    },
+    deletePreset(id) {
+      void presetSettings.remove(id);
+    },
+    resetPreset(id) {
+      void presetSettings.reset(id);
+    },
+    setVoicePreset(id) {
+      void presetSettings.selectVoice(id);
+    },
     toggleSettings() {
       settingsOpen = !settingsOpen;
       if (settingsOpen) void network.refresh();
@@ -2746,6 +3133,11 @@ export const flootComponent = (
     },
     setInput(/** @type {string} */ text) {
       inputText = text;
+      try {
+        sessionDrafts.save(text);
+      } catch {
+        setStatus('This draft could not be saved on this device.');
+      }
       notify();
     },
   });
@@ -2765,6 +3157,30 @@ export const flootComponent = (
     allowedAttrs: ['target'],
   });
 
+  composer = makeFlootComposer({
+    document: $parent.ownerDocument,
+    powers: rootPowers,
+    onInput: draft => controller.setInput(draft),
+    onSend: () => controller.send(),
+  });
+  const mountComposer = () => {
+    const anchor = $mount.querySelector('[data-floot-composer]');
+    if (composer && anchor && composer.node.parentNode !== anchor)
+      anchor.appendChild(composer.node);
+  };
+  syncComposer = () => {
+    const state = controller.getState();
+    composer?.sync(
+      inputText,
+      state.unavailable ||
+        state.network?.changing ||
+        state.network?.blocked ||
+        state.recovery?.resolving,
+    );
+  };
+  syncComposer();
+  mountComposer();
+
   // Sticky-bottom transcript scrolling lives HOST-side: the confined view cannot
   // touch DOM nodes (the renderer strips refs), so the host owns `$mount` and
   // nudges `.floot-messages` to the bottom after each render while the reader is
@@ -2781,6 +3197,7 @@ export const flootComponent = (
   $mount.addEventListener('scroll', onScrollCapture, true);
   wakeLockDoc.addEventListener('visibilitychange', onVisibilityChange);
   const scrollObserver = new MutationObserver(() => {
+    mountComposer();
     if (!stick) return;
     const el = /** @type {HTMLElement | null} */ (
       $mount.querySelector('.floot-messages')
@@ -3158,21 +3575,23 @@ export const flootComponent = (
       ).length;
       // No session is made just so there is one: the first is the person's
       // to start, with the backend and model they choose.
-      activeSessionId = sessions.length
-        ? (
-            sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
-            sessions[0]
-          ).id
-        : null;
-      // Say so rather than reporting a clean "Ready." over sessions the
-      // factory could not revive; they are still listed by the factory and an
-      // operator has to deal with them.
-      setStatus(
-        strandedCount > 0
-          ? `Ready. ${strandedCount} session(s) could not be recovered.`
-          : readyStatus(),
-      );
-      openActiveSession();
+      if (!assistantRequested) {
+        activeSessionId = sessions.length
+          ? (
+              sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
+              sessions[0]
+            ).id
+          : null;
+        // Say so rather than reporting a clean "Ready." over sessions the
+        // factory could not revive; they are still listed by the factory and an
+        // operator has to deal with them.
+        setStatus(
+          strandedCount > 0
+            ? `Ready. ${strandedCount} session(s) could not be recovered.`
+            : readyStatus(),
+        );
+        openActiveSession();
+      }
       void followSessionList(list);
     } catch (err) {
       if (!cancelled) setStatus(`error: ${/** @type {Error} */ (err).message}`);
@@ -3180,6 +3599,8 @@ export const flootComponent = (
   };
   void loadInitialSessions();
   void followAccounts();
+  // A cold launch may arrive before this space and its listeners are mounted.
+  void launchAssistant();
 
   return () => {
     cancelled = true;
@@ -3190,6 +3611,9 @@ export const flootComponent = (
     void network.select(null);
     void execution.select(null);
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('endo-suspend', suspendAudio);
+    window.removeEventListener('endo-resume', resumeAudio);
+    window.removeEventListener('endo-assistant', onAssistantInvocation);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();
     // Closing a subscription detaches this page and nothing else.
@@ -3214,6 +3638,7 @@ export const flootComponent = (
       ttsCtx = null;
     }
     scrollObserver.disconnect();
+    composer?.dispose();
     $mount.removeEventListener('scroll', onScrollCapture, true);
     unmount($mount);
     $mount.remove();

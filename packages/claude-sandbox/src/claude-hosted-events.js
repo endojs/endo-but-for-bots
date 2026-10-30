@@ -1,4 +1,5 @@
 // @ts-check
+import { imageResultFromBlocks } from '@endo/hosted-agent/image-result.js';
 // Translate the raw `claude -p --output-format stream-json` events a
 // ClaudeClient reply reader yields into the provider-neutral hosted turn events
 // Floot's hosted-turn consumer understands:
@@ -45,6 +46,8 @@ import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js
  * @returns {string}
  */
 const renderToolResultText = content => {
+  const image = imageResultFromBlocks(content);
+  if (image !== undefined) return image;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content

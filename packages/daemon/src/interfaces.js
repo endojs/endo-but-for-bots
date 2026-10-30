@@ -59,6 +59,19 @@ const MakeCapletOptionsShape = M.splitRecord(
   },
 );
 
+const MakeFromPackageOptionsShape = M.splitRecord(
+  {},
+  {
+    powersName: NameOrPathShape,
+    resultName: NameOrPathShape,
+    env: EnvShape,
+    workerTrustedShims: M.arrayOf(M.string()),
+    entry: M.string(),
+    registryName: NameOrPathShape,
+    offline: M.boolean(),
+  },
+);
+
 // Shared method guard for evaluate (used by both Host and Guest)
 // Both execute directly in a worker, differing only in namespace
 const EvaluateMethodGuard = M.call(
@@ -346,7 +359,7 @@ export const GuestInterface = M.interface('EndoGuest', {
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
   // Internal: deliver a message
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
   // Mint a guest-owned invitation (network mediation stays internal)
@@ -356,6 +369,7 @@ export const GuestInterface = M.interface('EndoGuest', {
 });
 
 export const HostInterface = M.interface('EndoHost', {
+  createDirectory: M.call(NameOrPathShape).returns(M.promise()),
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
@@ -393,7 +407,7 @@ export const HostInterface = M.interface('EndoHost', {
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
     NameOrPathShape, // recipientName
@@ -542,6 +556,11 @@ export const HostInterface = M.interface('EndoHost', {
   // modules at their referenced paths).
   makeFromTree: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
     .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  // Make a caplet from a ReadableTree or Mount whose root holds a
+  // package.json, resolving its dependencies through a registry.
+  makeFromPackage: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
+    .optional(MakeFromPackageOptionsShape)
     .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
   stageTree: M.call(NameOrPathShape, NameOrPathShape).returns(M.promise()),

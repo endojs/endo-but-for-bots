@@ -91,13 +91,10 @@ Withholding the spawner is what withholds the tools.
 An agent at the delegation bound is given none, so `makeSubagentTools` is never
 called for it and `claim` has nothing to match.
 
-A Floot session on a *hosted backend* has no subagent tools.
-Its tool set is projected once, in `getAgent`, before the session agent — and
-therefore the delegation registry — exists, so the backend's own tool loop sees
-only the Endo tools.
-Delegation is available to provider-backed sessions and to Fae agents.
-Closing the gap means building the session's tool set once, where the
-delegation registry lives, and handing the same set to both paths.
+Floot provider and hosted backends both receive the built-in Endo delegation
+tools from the same tool registry.
+Harness-native subagent tools are disabled so helpers remain ordinary Endo
+sessions with capability grants and recovery records.
 
 ### Prompts
 
@@ -109,14 +106,42 @@ child is *appended* beneath it by `composeSubagentSystemPrompt`.
 A delegation is therefore extra context under the deployment's instructions,
 never a way out of them.
 
+Floot workers are explicitly told to do their assigned work themselves by default,
+including when the parent omits a role prompt.
+Delegate only distinct, bounded tasks with a narrower scope and a stopping
+condition; do not recursively delegate the same question to fact checkers.
+Helpers do not supply missing research tools, source access, or independent
+evidence merely by being separate agents.
+State uncertainty, reuse helpers, and synthesize their answers.
+The spawn tool's schema and `help()` repeat this guidance.
+
 ### Bounds
 
 | Bound | Default | Where |
 |---|---|---|
-| Delegation depth | 1 | `DEFAULT_MAX_SUBAGENT_DEPTH`; Floot reads `FLOOT_MAX_SUBAGENT_DEPTH` |
-| Live subagents per parent | 8 | `DEFAULT_MAX_SUBAGENTS` |
-| Ask timeout | 300 s, capped at 3600 s | `askSubagent`'s `timeoutSeconds` |
+| Delegation depth | 2 | `FLOOT_MAX_SUBAGENT_DEPTH` / `FAE_MAX_SUBAGENT_DEPTH` |
+| Live Floot descendants per root session | 8 | `FLOOT_MAX_SUBAGENTS` |
+| Live standalone Fae children per parent | 8 | `FAE_MAX_SUBAGENTS` |
+| Ask timeout | 86400 s, capped at 604800 s | `askSubagent`'s `timeoutSeconds` |
 | Outstanding asks per subagent | 1 | `makeSubagentDelegations` |
+
+Root sessions have depth zero: two levels permit children and grandchildren.
+Agents at the depth limit receive no spawner, and Floot also checks depth at
+admission against the registry ancestry.
+Setting the depth to zero disables delegation; that is not the default.
+
+Floot counts all descendants together, including provisioning reservations and
+failed cleanup records, so branching and concurrent calls cannot multiply the
+budget or reuse an occupied name.
+The registry restores the live count after restart.
+Failed provisioning releases its reservation; stopping a helper releases its
+entire subtree after cleanup succeeds.
+Deleting a parent first fences new spawns, drains and rolls back in-flight
+creations, and then deletes descendants.
+Restart recovery finishes fenced subtrees before reviving inboxes.
+Unrelated root sessions have separate budgets.
+Limits are a backstop: reaching one means finish with available results, not
+stop and respawn a chain of equivalent helpers.
 
 A timed-out ask releases its timer and forgets the delegation, so a reply that
 arrives afterwards settles nothing.
@@ -126,8 +151,8 @@ subagent would answer that, and two models would bill an unbounded exchange
 nobody asked for.
 An answered ask is closed the same way, so a subagent that replies twice — a
 progress note and then its answer — does not start that exchange either.
-The registry remembers the last 32 closed asks for that purpose, and the last
-32 subagents it has asked, whose unsolicited mail it consumes as well; past
+The registry remembers the last 65536 closed asks for that purpose, and the last
+65536 subagents it has asked, whose unsolicited mail it consumes as well; past
 either bound a very late message does land in the inbox.
 Teardown is depth-first, so raising the depth bound does not strand a subtree.
 
@@ -188,7 +213,7 @@ a subagent's name is derived by infixing its parent's: agent `p`'s subagent `x`
 is the host agent `p.sub.x`, whose driver caplet is `p.sub.x-driver`.
 
 The infix delimiter is a dot because an agent name may not contain one
-(`agentNamePattern` is `^[a-z][a-z0-9-]{0,31}$`, and the rule applies to root
+(`agentNamePattern` is `^[a-z][a-z0-9-]{0,62}$`, and the rule applies to root
 agents as well as subagents).
 That is what makes the parse unambiguous rather than merely unlikely: with a
 hyphenated infix, root agents `p` and `p-sub` both derive the host name

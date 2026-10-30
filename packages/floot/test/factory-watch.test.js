@@ -6,6 +6,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 import { applyTranscript } from '../src/transcript-delta.js';
 
 /**
@@ -60,8 +61,8 @@ const makeWorld = existingStore => {
   const hostStore = existingStore || new Map();
   if (!existingStore)
     hostStore.set(
-      'floot-private-turn-3-one-schema',
-      harden({ version: 1, sessionId: 'one' }),
+      'floot-private-sessions/one/schema',
+      harden({ version: 2, sessionId: 'one' }),
     );
   if (!existingStore)
     hostStore.set(
@@ -85,14 +86,9 @@ const makeWorld = existingStore => {
     );
   hostStore.set('codex-backend', backend);
   const host = Far('TestHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
+    ...directoryHost(hostStore),
     provideGuest: (_name, { agentName }) => {
       hostStore.set(agentName, guest);
-    },
-    storeValue: (value, name) => {
-      hostStore.set(name, value);
     },
     remove: name => {
       hostStore.delete(name);

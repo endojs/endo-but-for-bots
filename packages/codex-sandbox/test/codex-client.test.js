@@ -1,10 +1,18 @@
 // @ts-check
 import '@endo/init';
+import {
+  encodeImageResult,
+  imageDataUrl,
+} from '@endo/hosted-agent/image-result.js';
 
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
+import {
+  responsesApiItems,
+  readResponsesApiItems,
+} from '@endo/hosted-agent/transcript-records.js';
 // Internal test harness, deliberately not a runtime package export.
 // eslint-disable-next-line import/no-relative-packages
 import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
@@ -498,7 +506,7 @@ const makeQueue = () => {
 
 /**
  * @param {{
- *   injectFails?: boolean,
+ *   injectFails?: boolean | number,
  *   threadId?: string,
  *   saveThreadState?: Parameters<typeof makeCodexClient>[0]['saveThreadState'],
  *   clientOptions?: Record<string, any>,
@@ -619,7 +627,12 @@ const makeFixture = ({
       case 'thread/inject_items':
         // An app-server too old to know the method refuses it; this one
         // knows it. `injectFails` exercises the other case.
-        if (injectFails) {
+        if (
+          injectFails === true ||
+          (typeof injectFails === 'number' &&
+            sent.filter(entry => entry.method === 'thread/inject_items')
+              .length === injectFails)
+        ) {
           push({
             id: message.id,
             error: { code: -32_601, message: 'method not found' },
@@ -936,6 +949,127 @@ test('native snapshot binding mismatch refuses before any transport work', async
     );
   }
   t.deepEqual(fixture.sent, []);
+});
+
+test('recovery restores a native checkpoint and injects late settled evidence once before continuing', async t => {
+  t.timeout(5000);
+  const calls = [];
+  const fixture = makeFixture({
+    threadId: 'old-native',
+    existingTurnIds: ['failed-turn'],
+    restoredTurnIds: ['restored-checkpoint'],
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, turnId: 'failed-turn' },
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      callTool: async (...args) => {
+        calls.push(args);
+        return 'must not run';
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const suffix = [
+    { kind: 'message', role: 'user', content: 'Diagnose the failure' },
+    {
+      kind: 'tool-call',
+      id: 'grep',
+      name: 'endo_exec',
+      args: '{"code":"read diagnostic"}',
+    },
+    { kind: 'tool-result', id: 'grep', content: 'late result' },
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: '[Floot turn outcome-unknown: correlation failed]',
+    },
+  ];
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot(), ...suffix],
+  });
+  const methods = fixture.sent.map(message => message.method);
+  t.true(
+    methods.indexOf('thread/revert') < methods.indexOf('thread/inject_items'),
+  );
+  t.true(
+    methods.indexOf('thread/inject_items') < methods.indexOf('turn/start'),
+  );
+  const injected = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  t.is(injected.params.threadId, 'fresh-native');
+  t.deepEqual(
+    injected.params.items.filter(item => item.type === 'function_call_output'),
+    [{ type: 'function_call_output', call_id: 'grep', output: 'late result' }],
+  );
+  t.deepEqual(calls, []);
+  const started = fixture.sent.find(message => message.method === 'turn/start');
+  const turnId = 'turn-2';
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: started.params.threadId,
+      turn: { id: turnId, status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  const checkpoint = events.find(
+    event => event.type === 'native-context',
+  ).checkpoint;
+  await fixture.client.acknowledge(turnId);
+  const next = await fixture.client.send('next', { transcript: [checkpoint] });
+  t.is(
+    fixture.sent.filter(message => message.method === 'thread/inject_items')
+      .length,
+    1,
+  );
+  t.deepEqual(calls, []);
+  await fixture.client.interrupt();
+  await drain(next);
+});
+
+test('native suffix recovery refuses dangling calls before transport and failed injection before a prompt', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const fixture = makeFixture({
+    injectFails: true,
+    clientOptions: {
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      saveThreadState: async state => {
+        writes.push(state);
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const call = { kind: 'tool-call', id: 'effect', name: 'exec', args: '{}' };
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot(), call],
+      }),
+    { message: /unsettled suffix/ },
+  );
+  t.deepEqual(fixture.sent, []);
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [
+          nativeTestSnapshot(),
+          call,
+          { kind: 'tool-result', id: 'effect', content: 'done' },
+        ],
+      }),
+    { message: /method not found/ },
+  );
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.deepEqual(writes, []);
 });
 
 test('malformed native capture refuses before restoration or protocol effects', async t => {
@@ -2659,6 +2793,82 @@ test('teardown synchronously rejects a new turn before its close audit', async t
   await closing;
 });
 
+test('a native child cannot borrow parent tools and a late parent result survives quarantine', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve('late parent result');
+  });
+  const calls = [];
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 0,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'Test tool.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: (name, args) => {
+        calls.push({ name, args });
+        return held;
+      },
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const reader = await fixture.client.send('diagnose');
+  const parent = {
+    threadId: 'thread-new',
+    turnId: 'turn-1',
+    callId: 'parent-call',
+    namespace: null,
+    tool: 'wait',
+    arguments: { source: 'parent' },
+  };
+  fixture.push({ id: 990, method: 'item/tool/call', params: parent });
+  await flush();
+  t.is(calls.length, 1);
+  fixture.push({
+    id: 991,
+    method: 'item/tool/call',
+    params: {
+      ...parent,
+      threadId: 'native-child',
+      turnId: 'child-turn',
+      callId: 'child-call',
+      arguments: { source: 'child' },
+    },
+  });
+  const events = await drain(reader);
+  t.is(events.at(-1).type, 'abort');
+  t.true(fixture.isClosed());
+  t.deepEqual(calls, [{ name: 'wait', args: { source: 'parent' } }]);
+  t.false(
+    audit.some(
+      entry =>
+        entry.kind === 'tool-intent' && entry.payload.callId === 'child-call',
+    ),
+  );
+  release();
+  await fixture.client.terminate();
+  const results = audit.filter(entry => entry.kind === 'tool-result');
+  t.is(results.length, 1);
+  t.like(results[0].payload, {
+    threadId: 'thread-new',
+    turnId: 'turn-1',
+    callId: 'parent-call',
+    success: true,
+    result: 'late parent result',
+  });
+});
+
 test('a timed-out Endo tool poisons the session until late settlement', async t => {
   t.timeout(5000);
   /** @type {(value?: any) => void} */
@@ -4099,7 +4309,11 @@ test('broker config admission precedes thread startup and rejects inherited bear
       config: {
         model_provider: 'endo_broker',
         sandbox_mode: 'danger-full-access',
-        features: { network_proxy: { enabled: false } },
+        features: {
+          network_proxy: { enabled: false },
+          multi_agent: false,
+          multi_agent_v2: false,
+        },
         approval_policy: 'never',
         model_providers: {
           endo_broker: {
@@ -4128,7 +4342,11 @@ test('broker config admission permits a credential-free provider', async t => {
       config: {
         model_provider: 'endo_broker',
         sandbox_mode: 'danger-full-access',
-        features: { network_proxy: { enabled: false } },
+        features: {
+          network_proxy: { enabled: false },
+          multi_agent: false,
+          multi_agent_v2: false,
+        },
         approval_policy: 'never',
         model_providers: {
           endo_broker: {
@@ -4164,7 +4382,11 @@ test('admitted public networking is passed to the external turn policy', async t
       config: {
         model_provider: 'endo_broker',
         sandbox_mode: 'danger-full-access',
-        features: { network_proxy: { enabled: false } },
+        features: {
+          network_proxy: { enabled: false },
+          multi_agent: false,
+          multi_agent_v2: false,
+        },
         approval_policy: 'never',
         model_providers: {
           endo_broker: {
@@ -4270,4 +4492,216 @@ test('an app-server without inject_items refuses the turn rather than degrading 
   t.is(abort.type, 'abort');
   t.regex(abort.reason, /refused .* restored items/);
   t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
+test('dynamic image tools deliver pixels beyond the text cap and retain replay evidence', async t => {
+  t.timeout(5000);
+  const image = harden({
+    mimeType: /** @type {const} */ ('image/png'),
+    data: 'AAAA'.repeat(600_000),
+  });
+  const encoded = encodeImageResult(image);
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolSetId: 'images-v1',
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'viewImage',
+          description: 'See an image',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: async () => encoded,
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('inspect');
+  t.teardown(() => fixture.client.terminate());
+  fixture.push({
+    id: 993,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'image-call',
+      namespace: null,
+      tool: 'viewImage',
+      arguments: {},
+    },
+  });
+  for (let tries = 0; tries < 30; tries += 1) {
+    if (fixture.sent.some(message => message.id === 993)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.deepEqual(fixture.sent.find(message => message.id === 993)?.result, {
+    success: true,
+    contentItems: [{ type: 'inputImage', imageUrl: imageDataUrl(image) }],
+  });
+  t.is(
+    audit.find(entry => entry.kind === 'tool-result')?.payload.result,
+    encoded,
+  );
+  fixture.push({
+    method: 'item/completed',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      item: {
+        type: 'dynamicToolCall',
+        id: 'image-call',
+        tool: 'viewImage',
+        arguments: {},
+        contentItems: [{ type: 'inputImage', imageUrl: imageDataUrl(image) }],
+        success: true,
+      },
+    },
+  });
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  const imageEvent = events.find(event => event.type === 'tool-result');
+  t.is(imageEvent?.result, encoded);
+  const records = harden([
+    {
+      kind: /** @type {const} */ ('tool-call'),
+      id: 'image-call',
+      name: 'viewImage',
+      args: '{}',
+    },
+    {
+      kind: /** @type {const} */ ('tool-result'),
+      id: 'image-call',
+      content: imageEvent.result,
+    },
+  ]);
+  t.deepEqual(readResponsesApiItems(responsesApiItems(records)), records);
+});
+
+for (const mode of ['fresh', 'catalog rotation', 'native suffix']) {
+  test(`${mode} restores multiple large images in ordered bounded requests`, async t => {
+    t.timeout(5000);
+    const native = mode === 'native suffix';
+    const records = [0, 1].flatMap(index => [
+      {
+        kind: /** @type {const} */ ('tool-call'),
+        id: `shot-${index}`,
+        name: 'viewImage',
+        args: '{}',
+      },
+      {
+        kind: /** @type {const} */ ('tool-result'),
+        id: `shot-${index}`,
+        content: encodeImageResult({
+          mimeType: 'image/png',
+          data: (index ? 'BBBB' : 'AAAA').repeat(600_000),
+        }),
+      },
+    ]);
+    const fixture = makeFixture({
+      ...(mode === 'catalog rotation'
+        ? { threadId: 'thread-saved', existingTurnIds: ['turn-1'] }
+        : {}),
+      clientOptions: {
+        ...(mode === 'catalog rotation'
+          ? {
+              savedToolSetId: 'old-tools',
+              toolSetId: 'new-tools',
+              savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+            }
+          : {}),
+        ...(native
+          ? {
+              nativeContext: nativeTestTransport(),
+              makeNativeIdentity: () => ({
+                sessionId: 'fresh-native',
+                timestamp: '2026-10-25T18:40:00.000Z',
+              }),
+            }
+          : {}),
+        callTool: async () => {
+          throw Error('Replay must never execute tools');
+        },
+      },
+    });
+    t.teardown(() => fixture.client.terminate());
+    const reader = await fixture.client.send('continue', {
+      transcript: [...(native ? [nativeTestSnapshot()] : []), ...records],
+    });
+    const requests = fixture.sent.filter(
+      message => message.method === 'thread/inject_items',
+    );
+    t.is(requests.length, 2);
+    t.deepEqual(
+      requests.flatMap(message => message.params.items),
+      responsesApiItems(records),
+    );
+    t.true(
+      requests.every(
+        message =>
+          new TextEncoder().encode(`${JSON.stringify(message)}\n`).length <=
+          4 * 1024 * 1024,
+      ),
+    );
+    const startIndex = fixture.sent.findIndex(
+      message => message.method === 'turn/start',
+    );
+    t.true(startIndex > fixture.sent.indexOf(requests.at(-1)));
+    await fixture.client.interrupt();
+    await drain(reader);
+  });
+}
+
+test('a failed later native image batch leaves the checkpoint unpublished and never starts inference', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const records = [0, 1].flatMap(index => [
+    {
+      kind: /** @type {const} */ ('tool-call'),
+      id: `shot-${index}`,
+      name: 'viewImage',
+      args: '{}',
+    },
+    {
+      kind: /** @type {const} */ ('tool-result'),
+      id: `shot-${index}`,
+      content: encodeImageResult({
+        mimeType: 'image/png',
+        data: 'AAAA'.repeat(600_000),
+      }),
+    },
+  ]);
+  const fixture = makeFixture({
+    injectFails: 2,
+    clientOptions: {
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      saveThreadState: async state => writes.push(state),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot(), ...records],
+      }),
+    { message: /method not found/ },
+  );
+  t.is(
+    fixture.sent.filter(message => message.method === 'thread/inject_items')
+      .length,
+    2,
+  );
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.deepEqual(writes, []);
 });

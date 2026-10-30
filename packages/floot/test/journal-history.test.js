@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { encodeImageResult } from '@endo/hosted-agent/image-result.js';
 
 import { projectJournalTurnHistory } from '../src/journal-history.js';
 import { encodeJournalPresentation } from '../src/journal-presentation.js';
@@ -13,6 +14,62 @@ const transcript = records =>
     ordinal: `${index}`,
     payload: encodeJournalTranscript(record),
   }));
+
+for (const source of ['tools', 'activity']) {
+  for (const hasCall of [false, true]) {
+    test(`interrupted image ${source} renders a receipt from its preview with ${hasCall ? 'a' : 'no'} recorded call`, async t => {
+      const image = encodeImageResult({
+        mimeType: 'image/png',
+        data: 'AAAA'.repeat(20_000),
+      });
+      // The host result can be durable before the provider's transcript result
+      // arrives. Recovery must not decode this intentionally incomplete preview
+      // or hydrate the large image merely to show a history receipt.
+      const turn = {
+        turnId: 'image-turn',
+        state: 'interrupted',
+        input: 'inspect',
+        transcript: transcript(
+          hasCall
+            ? [
+                {
+                  kind: 'tool-call',
+                  id: 'image-call',
+                  name: 'viewImage',
+                  args: '{}',
+                },
+              ]
+            : [],
+        ),
+        [source]: [
+          {
+            callId: 'image-call',
+            name: 'viewImage',
+            args: '{}',
+            settled: true,
+            result: image.slice(0, 1024),
+            resultRef: { name: 'image-content', chars: image.length },
+          },
+        ],
+      };
+      const history = await projectJournalTurnHistory(turn, noContent);
+      const results = history.filter(row => row.role === 'tool');
+      t.is(results.length, 1);
+      t.regex(
+        results[0].result,
+        /Image result; bytes retained for model input/,
+      );
+      t.false(JSON.stringify(history).includes('AAAA'));
+      t.deepEqual(
+        await projectJournalTurnHistory(
+          JSON.parse(JSON.stringify(turn)),
+          noContent,
+        ),
+        history,
+      );
+    });
+  }
+}
 
 test('sealed multi-round output is not duplicated; unsealed mismatched output remains visible', async t => {
   const turn = {

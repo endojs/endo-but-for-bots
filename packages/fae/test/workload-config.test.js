@@ -10,8 +10,8 @@ import { provisionFaeAgent } from '../src/subagent-host.js';
 test('Fae workload configuration shares defaults and validates overrides', t => {
   const defaults = readFaeWorkloadConfig({});
   t.is(defaults.maxToolRounds, 1024);
-  t.is(defaults.maxDepth, 32);
-  t.is(defaults.maxSubagents, 1024);
+  t.is(defaults.maxDepth, 2);
+  t.is(defaults.maxSubagents, 8);
   const configured = readFaeWorkloadConfig({
     FAE_MAX_TOOL_ROUNDS: '2000',
     FAE_PROVIDER_REQUEST_TIMEOUT_MS: '9000',

@@ -98,6 +98,7 @@ const NAMED_TOOLS = harden([
   'handoffDesign',
   'reviewStatus',
   'publishWorkspace',
+  'viewImage',
   'attachContainerMount',
   'detachContainerMount',
   'listContainerMounts',
@@ -153,6 +154,15 @@ not throw; it reads as undefined, and the error you then get is
 \`Cannot deliver "someMethod" to target; typeof target is "undefined"\`. exec has
 no \`import\` or \`require\` and no Node built-ins: whatever is outside comes
 through a capability.
+
+For visual pages, scenes, and interfaces, verify the rendered result before claiming
+it works. Discover an available browser capability or use Playwright/Chromium through
+your granted shell. Render at desktop and mobile sizes, collect console/page errors,
+save screenshots to a readable Endo workspace or mount, and use viewImage to inspect
+them. Fix visible defects and render again. A syntax check does not verify rendering.
+If browser access, shell execution, or image input is unavailable, say what could not
+be verified; do not claim you saw the result. Do not publish merely to obtain a
+screenshot unless publishing is part of the user's request.
 
 When a tool result is itself a capability it shows as
 \`[remote capability] callable methods: [...]\` listing the methods you can call
@@ -244,6 +254,13 @@ objects attached:
   number and the object's edge name, plus a petname to file it under.
 - send — send a message (and optionally objects) to another party.
 - reply — respond to a message by its number.
+Raw mailbox entries include lifecycle promises: dismissed resolves only after
+removal; a request's settled resolves after resolve/reject. These are not payload
+fields. Never blindly await all fields or await dismissed/settled while handling
+that message. Read explicit metadata/content fields instead. The done boolean
+means content complete, not task answered. Floot replies to your incoming task
+and dismisses it after you finish: do not wait for or dismiss that task yourself.
+Early dismissal removes the entry needed by reply(number).
 
 Delegation — when spawnSubagent, askSubagent, and stopSubagent are listed among
 your tools, you may hand a self-contained piece of work to a helper agent:
@@ -251,8 +268,18 @@ your tools, you may hand a self-contained piece of work to a helper agent:
 - askSubagent — mail it a task and wait for its reply. It cannot see this
   conversation, so put everything it needs in the task.
 - stopSubagent — release it once its work is done.
-Use this for work whose details you don't need to keep — a long search, a
-self-contained draft — not for things you can simply do yourself.
+These Endo tools are the delegation mechanism. Do not use a harness-native
+spawn_agent, agent, or task tool to create helpers; those helpers do not have
+Endo-managed sessions, capability grants, or recovery records.
+Use this only for distinct, bounded tasks that materially advance the answer.
+Do work you can simply do yourself. A helper has no additional tools, web access,
+source code, or evidence unless explicitly supplied. Do not delegate to compensate
+for missing capabilities, or spawn chains of fact checkers repeating the same
+question. State what you cannot verify instead. Give each helper a narrower scope
+and a concrete stopping condition; reuse it for follow-ups. All descendants share
+a finite tree budget. If a limit is reached, finish with available results rather
+than cycling through replacement agents. Synthesize the replies and release your
+helpers when finished.
 
 Caplet tools dropped into your \`tools/\` directory are discovered automatically,
 so your abilities can grow over time. When asked what you can do, you can list
@@ -358,7 +385,7 @@ Operating the daemon — reach the host in exec with
   \`E(endo).provideWorker(name)\` mints a worker.
 - \`E(endo).cancel(name)\` tears a capability down — destructive, so confirm first.
 
-Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
+If your inventory includes "endo-src", it is a READ-ONLY mount of the Endo
 codebase you run inside. Use it to understand the capabilities you operate
 before acting through "endo". In exec, look it up and read from it:
 - \`const src = await E(powers).lookup('endo-src')\`
@@ -441,7 +468,8 @@ output aloud.
 /** @param {PromptContext} context */
 const machineAdminSection = ({ containerMounts, spoken }) => `
 You ALSO administer this machine's operating system. It runs NixOS. Your
-petstore contains THREE related capabilities:
+petstore contains "nixos". Deployment workflow capabilities may also be present;
+check your inventory before looking them up:
 - "nixos" reads the git-backed host configuration and remains available for
   orientation and emergency recovery. Reach it with
   \`const nixos = await E(powers).lookup('nixos')\`. Use \`getSystemInfo()\`,
@@ -789,13 +817,34 @@ harden(normalizePromptContext);
  * @param {object} options
  * @param {string} options.presetId
  * @param {Partial<PromptContext>} [options.context]
+ * @param {Array<{kind: string, petName: string}>} [options.objects]
  * @returns {string}
  */
-export const composePresetPrompt = ({ presetId, context }) => {
+export const composePresetPrompt = ({ presetId, context, objects }) => {
   if (!Object.hasOwn(PRESET_SECTIONS, presetId)) {
     throw Error(`No system prompt for preset "${presetId}"`);
   }
-  const sections = PRESET_SECTIONS[presetId];
+  let sections = PRESET_SECTIONS[presetId];
+  if (objects) {
+    const has = kind => objects.some(object => object.kind === kind);
+    sections = [
+      ...(has('git-workspace') ? [workspaceSection] : []),
+      ...(has('development-environment')
+        ? [PRESET_SECTIONS.development[1]]
+        : []),
+      ...(has('host-powers') ? [controlSection, closingSection] : []),
+      selectedContext =>
+        mountsSection(
+          selectedContext,
+          has('host-powers') && has('code-mount')
+            ? { petName: 'endo-src', readOnly: true }
+            : undefined,
+          has('git-workspace') &&
+            selectedContext.environment.workspacePath !== '',
+        ),
+      ...(has('nixos-admin') ? [machineAdminSection] : []),
+    ];
+  }
   const normalized = normalizePromptContext(context);
   return [
     identitySection(normalized),

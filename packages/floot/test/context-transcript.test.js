@@ -34,7 +34,7 @@ const turn = (turnId, records, extra = {}) => ({
   transcriptComplete: true,
   input: `input ${turnId}`,
   activity: [],
-  tools: [],
+  tools: /** @type {any[]} */ ([]),
   transcript: records.map((record, index) => ({
     ordinal: `${index}`,
     sequence: `${turnId + index + 1}`,
@@ -552,6 +552,99 @@ test('native context refuses unresolved later turns without hiding their evidenc
       message: /cannot conceal unresolved or recovered tool evidence/,
     });
   }
+});
+
+test('Codex recovery keeps native bytes and appends a resolved late tool result without replay', async t => {
+  const native = {
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    payload: 'opaque native rollout',
+    context: [],
+  };
+  const first = turn(1, [native], { nativeContextFormat: native.format });
+  const interrupted = turn(20, [call('grep', 'endo_exec')], {
+    state: 'outcome-unknown',
+    transcriptComplete: false,
+    nativeContextFormat: native.format,
+    error: 'Dynamic tool call was not correlated to the active turn',
+    tools: [
+      {
+        callId: 'host-grep',
+        name: 'endo_exec',
+        args: '{}',
+        sequence: '22',
+        settled: false,
+      },
+    ],
+  });
+  const options = { reconciledNativeSuffix: true };
+  await t.throwsAsync(
+    projectContextTranscript([first, interrupted], noRead, undefined, options),
+    {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    },
+  );
+  interrupted.tools[0] = {
+    ...interrupted.tools[0],
+    settled: true,
+    result: 'grep finished after session failure',
+    resultSequence: '23',
+  };
+  // Settlement alone does not resolve an unknown native outcome.
+  await t.throwsAsync(
+    projectContextTranscript([first, interrupted], noRead, undefined, options),
+    {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    },
+  );
+  const resolved = {
+    ...interrupted,
+    resolution:
+      'Verified the diagnostic call completed; no outstanding effects.',
+  };
+  const records = await projectContextTranscript(
+    [first, resolved],
+    noRead,
+    undefined,
+    options,
+  );
+  t.deepEqual(records[0], native);
+  const pairs = pairToolCalls(records.slice(1), { perTurn: true });
+  t.is(pairs.unanswered.length, 0);
+  t.is(pairs.pairs.length, 1);
+  t.is(resultContent(pairs.pairs[0]), 'grep finished after session failure');
+  t.true(
+    records.some(
+      row => row.kind === 'message' && row.content.includes('outcome-unknown'),
+    ),
+  );
+  t.is(interrupted.transcript.length, 1);
+  // Still refuse evidence that the checkpoint itself could be hiding.
+  await t.throwsAsync(
+    projectContextTranscript(
+      [
+        {
+          ...first,
+          tools: [
+            {
+              callId: 'hidden',
+              name: 'write',
+              args: '{}',
+              sequence: '2',
+              settled: true,
+              result: 'changed',
+              resultSequence: '3',
+            },
+          ],
+        },
+        resolved,
+      ],
+      noRead,
+      undefined,
+      options,
+    ),
+    { message: /cannot conceal/ },
+  );
 });
 
 test('native context refuses unresolved prior and same-turn evidence rather than rewriting signed IDs', async t => {

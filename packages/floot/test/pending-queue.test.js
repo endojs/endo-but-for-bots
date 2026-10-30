@@ -291,3 +291,134 @@ test('a record that cannot be read does not make its session undeletable', async
   await queue.destroy();
   t.false(store.has(NAME));
 });
+
+test('a lost enqueue acknowledgement and reconnect retain one durable submission', async t => {
+  t.timeout(5000);
+  const host = makeHost();
+  const now = () => 1_800_000_000_000;
+  const requestId = '1800000000000-11111111-1111-4111-8111-111111111111';
+  const first = makePendingQueue({ host: host.host, id: 'abc', now });
+  host.loseNextAck();
+  await t.throwsAsync(() => first.enqueue('one', { requestId, claim: true }), {
+    message: /acknowledgement lost/,
+  });
+  const restored = makePendingQueue({ host: host.host, id: 'abc', now });
+  const repeated = await restored.enqueue('one', { requestId });
+  t.true('duplicate' in repeated && repeated.duplicate);
+  t.is(restored.list().length, 1);
+  t.is(restored.list()[0].state, 'interrupted');
+  t.is(repeated.id, restored.list()[0].id);
+  await restored.complete(repeated.id);
+  const third = makePendingQueue({ host: host.host, id: 'abc', now });
+  t.is((await third.enqueue('one', { requestId })).id, repeated.id);
+  t.deepEqual(
+    third.list(),
+    [],
+    'a completed submission cannot be queued twice',
+  );
+  await t.throwsAsync(() => third.enqueue('different', { requestId }), {
+    message: /different text/,
+  });
+  await third.destroy();
+  t.is(host.store.size, 0, 'session deletion removes receipts too');
+});
+
+test('concurrent duplicate sends share an ID and expired IDs are rejected after receipt expiry', async t => {
+  t.timeout(5000);
+  const { host } = makeHost();
+  let clock = 1_800_000_000_000;
+  const requestId = '1800000000000-11111111-1111-4111-8111-111111111111';
+  const queue = makePendingQueue({ host, id: 'abc', now: () => clock });
+  const [a, b] = await Promise.all([
+    queue.enqueue('one', { requestId }),
+    queue.enqueue('one', { requestId }),
+  ]);
+  t.is(a.id, b.id);
+  t.is(queue.list().length, 1);
+  await queue.complete(a.id);
+  clock += 24 * 60 * 60 * 1000;
+  await t.throwsAsync(() => queue.enqueue('one', { requestId }), {
+    message: /expired/,
+  });
+  t.is(queue.list().length, 0);
+});
+
+test('inventory references survive restart privately and duplicate retry cannot replace them', async t => {
+  t.timeout(5000);
+  const { host, store, loseNextAck } = makeHost();
+  const now = 1_760_000_000_000;
+  const requestId = `${now}-00000000-0000-4000-8000-000000000000`;
+  const value = Far('Document', { read: () => 'original' });
+  const mentions = harden([{ path: ['docs'], identity: 'object-id', value }]);
+  const message = harden({ strings: ['Read ', ''], names: ['docs'] });
+  const first = makePendingQueue({ host, id: 'abc', now: () => now });
+  loseNextAck();
+  await t.throwsAsync(
+    () => first.enqueue('Read @docs', { requestId, mentions, message }),
+    { message: /lost/ },
+  );
+  const restored = makePendingQueue({ host, id: 'abc', now: () => now });
+  await restored.ready();
+  t.false(
+    'mentions' in restored.list()[0],
+    'watchers never receive capabilities',
+  );
+  const receipt = await restored.enqueue('Read @docs', {
+    requestId,
+    mentions,
+    message,
+  });
+  t.true('duplicate' in receipt && receipt.duplicate);
+  await t.throwsAsync(
+    () =>
+      restored.enqueue('Read @docs', {
+        requestId,
+        message,
+        mentions: harden([
+          {
+            ...mentions[0],
+            identity: 'replacement',
+            value: Far('Replacement', {}),
+          },
+        ]),
+      }),
+    { message: /different inventory objects/ },
+  );
+  const claimed = await restored.claim();
+  t.is(claimed?.mentions?.[0].value, value);
+  await restored.complete(receipt.id);
+  t.is(restored.list().length, 0);
+  await restored.enqueue('Read @docs', { requestId, mentions, message });
+  t.is(restored.list().length, 0, 'completed turn never requeued');
+  t.is(store.size, 1, 'references and receipts use one record');
+  t.deepEqual(
+    await restored.receipt(
+      'Read @docs',
+      requestId,
+      harden([{ identity: 'object-id', path: ['docs'] }]),
+      message,
+    ),
+    { id: receipt.id },
+    'receipt comparison is independent of record key order after CapTP marshalling',
+  );
+  await restored.destroy();
+  t.is(store.size, 0, 'session cleanup removes references and receipts');
+});
+
+test('queued attachments must be explicitly cancelled and recomposed to edit', async t => {
+  const { host } = makeHost();
+  const queue = makePendingQueue({ host, id: 'abc' });
+  const entry = await queue.enqueue('Read @docs', {
+    message: harden({ strings: ['Read ', ''], names: ['docs'] }),
+    mentions: harden([
+      { path: ['docs'], identity: 'id', value: Far('Doc', {}) },
+    ]),
+  });
+  await t.throwsAsync(() => queue.edit(entry.id, 'Hello'), {
+    message: /recompose/,
+  });
+  await queue.cancel(entry.id);
+  t.deepEqual(queue.list(), []);
+  const text = await queue.enqueue('Read @docs or @{docs}');
+  t.false('mentions' in text);
+});

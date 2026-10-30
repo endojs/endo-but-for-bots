@@ -27,7 +27,7 @@ export {};
  *   pending?: boolean,
  *   pendingId?: number | string,
  *   pendingState?: 'queued' | 'sending' | 'interrupted',
- *   meta?: { mail?: { from?: string }, turnStatus?: boolean, turnState?: string },
+ *   meta?: { message?: {strings: string[], names: string[]}, mail?: { from?: string }, turnStatus?: boolean, turnState?: string },
  * }} FlootMessage
  */
 
@@ -57,7 +57,7 @@ export {};
  */
 
 /**
- * @typedef {{ id: string, title: string, description?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
+ * @typedef {{ id: string, title: string, description?: string, templateId?: string, backendId?: string, modelId?: string, reasoningEffort?: string, networkPolicy?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
  */
 
 /**
@@ -107,6 +107,7 @@ export {};
  *   target: { value: string },
  *   key?: string,
  *   shiftKey?: boolean,
+ *   isComposing?: boolean,
  *   preventDefault: () => void,
  *   stopPropagation: () => void,
  * }} FlootSafeEvent
@@ -159,6 +160,7 @@ export {};
  *   status: string,
  *   input: string,
  *   settingsOpen: boolean,
+ *   presetSettings?: {busy: boolean, error: string, message: string, configuration: any},
  *   recovery?: FlootRecovery,
  *   network?: FlootNetwork,
  *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
@@ -176,6 +178,8 @@ export {};
  * @property {() => FlootState} getState
  * @property {(listener: () => void) => () => void} subscribe
  * @property {(text?: string) => void} send
+ * @property {() => void} [forgetUnconfirmedSend]
+ * @property {() => Promise<void>} [exportObjects]
  * @property {() => void} stop
  * @property {(pendingId: number | string) => void} [sendPendingNow]
  * @property {(pendingId: number | string, text: string) => void} [editPending]
@@ -192,6 +196,11 @@ export {};
  * @property {(name: 'voice' | 'speed' | 'noiseScale' | 'noiseW' |
  *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
+ * @property {() => void} [loadPresetSettings]
+ * @property {(preset: any) => void} [savePreset]
+ * @property {(id: string) => void} [deletePreset]
+ * @property {(id: string) => void} [resetPreset]
+ * @property {(id: string) => void} [setVoicePreset]
  * @property {() => void} toggleSettings
  * @property {() => void} [emergencyStop]
  * @property {() => void} [resumeSession]

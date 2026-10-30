@@ -17,6 +17,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 
 /**
  * A world with one floot session on a fake hosted backend. The backend
@@ -181,8 +182,8 @@ const makeWorld = ({ terminateGate } = {}) => {
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
   hostStore.set(
-    'floot-private-turn-3-one-schema',
-    harden({ version: 1, sessionId: 'one' }),
+    'floot-private-sessions/one/schema',
+    harden({ version: 2, sessionId: 'one' }),
   );
   hostStore.set(
     'floot-sessions-v1-00000000000000000000',
@@ -207,17 +208,12 @@ const makeWorld = ({ terminateGate } = {}) => {
   hostStore.set('container-mount-bridge', bridgeProvider);
   hostStore.set('session-agent-one', guest);
   const host = Far('TestHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
+    ...directoryHost(hostStore, {
+      beforeStore: (_value, name) => {
+        if (hostStore.has(name)) throw Error(`cannot overwrite ${name}`);
+      },
+    }),
     provideGuest: () => undefined,
-    storeValue: (value, name) => {
-      if (hostStore.has(name)) throw Error(`cannot overwrite ${name}`);
-      hostStore.set(name, value);
-    },
-    remove: name => {
-      hostStore.delete(name);
-    },
   });
   return {
     host,

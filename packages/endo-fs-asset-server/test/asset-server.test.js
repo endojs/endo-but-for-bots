@@ -28,9 +28,9 @@ const getRandomValues = bytes => globalThis.crypto.getRandomValues(bytes);
 // those sockets with a `ClientDestroyedError`, which SES surfaces as a
 // fatal unhandled rejection on Node 24. A no-keep-alive client closes
 // each socket as soon as the body is read, so `server.close()` is clean.
-const httpGet = url =>
+const httpGet = (url, method = 'GET') =>
   new Promise((resolve, reject) => {
-    const req = http.get(url, { agent: false }, res => {
+    const req = http.request(url, { agent: false, method }, res => {
       let body = '';
       res.setEncoding('utf-8');
       res.on('data', chunk => {
@@ -45,6 +45,7 @@ const httpGet = url =>
       );
     });
     req.on('error', reject);
+    req.end();
   });
 
 const writeBytes = async (writerRef, bytes) => {
@@ -143,6 +144,54 @@ test.serial('serves the index file for directory paths', async t => {
   t.is(dirRes.text, '<h1>app</h1>');
 });
 
+test.serial(
+  'canonical directory redirects preserve queries and relative asset resolution',
+  async t => {
+    const fs = await makeSiteFs();
+    const server = await startServer(t);
+    const { url, path, revoke } = await E(server).serve(fs);
+    const { origin } = new URL(url);
+    const query = '?next=https%3A%2F%2Fevil.example%2F&x=%0D%0A&x=two';
+    for (const method of ['GET', 'HEAD']) {
+      const response = await httpGet(`${url.slice(0, -1)}${query}`, method);
+      t.is(response.status, 308);
+      t.is(response.headers.location, `${path}${query}`);
+      t.is(response.text, '');
+      t.is(response.headers['referrer-policy'], 'no-referrer');
+      const canonical = new URL(response.headers.location, origin);
+      t.is(canonical.origin, origin);
+      const page = await httpGet(canonical, method);
+      t.is(page.status, 200);
+      t.is(page.text, method === 'HEAD' ? '' : '<h1>home</h1>');
+      const asset = await httpGet(new URL('style.css', canonical));
+      t.is(asset.status, 200);
+      const nested = await httpGet(`${url}app${query}`, method);
+      t.is(nested.status, 308);
+      t.is(nested.headers.location, `${path}app/${query}`);
+      t.is(
+        (
+          await httpGet(
+            new URL('main.js', new URL(nested.headers.location, origin)),
+          )
+        ).status,
+        200,
+      );
+      const file = await httpGet(`${url}app/main.js${query}`, method);
+      t.is(file.status, 200);
+      t.is(file.headers.location, undefined);
+    }
+    // Decoded leading slashes must never become an authority-relative Location.
+    const encoded = await httpGet(`${origin}/%2F${path.slice(1, -1)}`);
+    t.is(encoded.status, 308);
+    t.is(encoded.headers.location, path);
+    t.false(encoded.headers.location.startsWith('//'));
+    t.is((await httpGet(`${url}missing`)).status, 404);
+    t.is((await httpGet(`${origin}/unknown-token`)).status, 404);
+    await E(revoke).revoke();
+    t.is((await httpGet(url.slice(0, -1))).status, 404);
+  },
+);
+
 test.serial('responses carry hardening headers', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);
@@ -177,12 +226,17 @@ test.serial('a directory with no real index file 404s', async t => {
   const { url } = await E(server).serve(fs);
 
   t.is((await httpGet(`${url}empty/`)).status, 404);
+  t.is((await httpGet(`${url}empty`)).status, 404);
 });
 
 test.serial('subPath rebases the served root', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);
   const { url } = await E(server).serve(fs, { subPath: 'app' });
+
+  const redirect = await httpGet(`${url.slice(0, -1)}?view=mobile`);
+  t.is(redirect.status, 308);
+  t.is(redirect.headers.location, `${new URL(url).pathname}?view=mobile`);
 
   const res = await httpGet(`${url}main.js`);
   t.is(res.status, 200);

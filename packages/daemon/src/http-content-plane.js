@@ -18,10 +18,6 @@ const httpProtocols = harden(['http:', 'https:']);
 export const makeHttpContentDataPlane = (
   fetchImplementation = globalThis.fetch,
 ) => {
-  if (typeof fetchImplementation !== 'function') {
-    throw makeError('HTTP content plane requires fetch');
-  }
-
   return harden({
     name: 'http',
     sourcePlanes: harden(['ws']),
@@ -42,6 +38,11 @@ export const makeHttpContentDataPlane = (
      * @param {ContentKind} _kind
      */
     async fetch(hint, _hash, _kind) {
+      // XS can run local CapTP and other transports without an HTTP fetch
+      // endowment. Fail this optional operation, not the entire daemon startup.
+      if (typeof fetchImplementation !== 'function') {
+        throw makeError('HTTP content plane requires fetch');
+      }
       if (hint.plane !== 'ws') {
         throw makeError(`HTTP plane cannot fetch ${q(hint.plane)}`);
       }

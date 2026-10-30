@@ -22,6 +22,44 @@ const drain = async reader => {
   return events;
 };
 
+test('native images outside portable limits do not stop subsequent events', t => {
+  const translator = makeClaudeHostedTranslator();
+  const events = translator.handle({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'gif',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/gif',
+                data: 'R0lGODlh',
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  t.regex(
+    events.find(event => event.type === 'tool-result')?.result ?? '',
+    /Image pixels are unavailable in this replay/,
+  );
+  const next = translator.handle({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'Next event' }] },
+  });
+  t.true(
+    next.some(
+      event => event.type === 'text-delta' && event.text === 'Next event',
+    ),
+  );
+});
+
 test('native tool error flags are mapped without classifying literal error text', t => {
   for (const isError of [true, false, undefined]) {
     const translator = makeClaudeHostedTranslator();

@@ -142,6 +142,17 @@ Every agent has these tools available immediately:
 - `send`, `reply`, `listMessages`, `dismiss` — mail operations
 - `adoptTool` — adopt a tool capability from an incoming message
 
+### Inspecting mailbox messages
+
+`listMessages()` returns immediately with mailbox entries, including lifecycle promises.
+`dismissed` resolves only after removal, and a request's `settled` resolves after resolve/reject.
+Do not await these while handling that same message or blindly await every field.
+Read explicit metadata and payload fields; `done` means content complete, not task answered.
+Use `help("listMessages")` for a safe inspection example.
+Reply before dismissal, since `reply(number)` requires the retained mailbox entry.
+Floot automatically replies and dismisses its task after the agent finishes;
+do not dismiss the active task or wait for its dismissal yourself.
+
 ### Creating tool caplets
 
 Create example tools (greet, math, timestamp) in the host's inventory:
@@ -328,3 +339,28 @@ A `SecretBlob` hands its holder the bytes by design, so the way to stop those
 agents using the old token is to **revoke the secret**, which is what the secret
 manager is for; removing the pet name from the provider config is not a
 revocation.
+
+## Image inputs
+
+`viewImage({ petName, path? })` reads a PNG, JPEG, or WebP from an already-held
+Endo readable blob, tree, mount, or git workspace and supplies image input to a
+vision-capable model.
+For example, `{"petName":"workspace","path":["screenshots","mobile.png"]}`
+reads the workspace's worktree; omit `path` for an adopted blob.
+The byte limit is 2 MiB and paths must be relative segments.
+The tool does not fetch URLs or grant filesystem access.
+
+For visual development, use a granted browser or shell to render desktop and
+mobile screenshots, inspect browser errors, call `viewImage`, and iterate.
+Report any unavailable verification instead of claiming that a syntax check
+verified the scene.
+See [Floot's image-input guide](../floot/README.md#reading-images-and-checking-visual-work)
+for transport and recovery details.
+
+When inference fails after a new image read, Fae checkpoints a receipt for that
+turn's image inputs so subsequent requests can recover without replaying the
+rejected bytes.
+Earlier successful images and the original immutable tool records remain intact.
+This recovery checkpoint survives restart; the agent may explicitly read a corrected
+image again.
+Compaction and diagnostic logs use image receipts rather than base64 text.

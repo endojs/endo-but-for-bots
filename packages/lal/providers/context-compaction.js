@@ -1,6 +1,7 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { imageResultText } from '@endo/hosted-agent/image-result.js';
 
 /**
  * Serialized byte size for retaining history and bounding summary requests.
@@ -138,7 +139,9 @@ const summaryInstruction =
  * @returns {string}
  */
 const toolText = content =>
-  typeof content === 'string' ? content : JSON.stringify(content ?? null);
+  typeof content === 'string'
+    ? imageResultText(content)
+    : JSON.stringify(content ?? null);
 
 /**
  * @param {any} content

@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { makePromiseKit } from './_promise-kit.js';
 import { makeSessionNetworkPolicy } from '../src/network-policy.js';
 
 const fixture = () => {
@@ -179,4 +180,42 @@ test('completion acknowledgement loss revives only the durably committed policy'
   t.is(f.stops(), 1);
   await t.throwsAsync(controller.forTurn(), { message: /uncertain/ });
   t.is(await f.create().forTurn(), 'public-internet');
+});
+
+test('closing drains an admitted audit write and rejects further policy work', async t => {
+  t.timeout(5000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  t.teardown(() => release.resolve(undefined));
+  const values = new Map();
+  const controller = makeSessionNetworkPolicy({
+    id: 'test',
+    supported: async () => ['off', 'public-internet'],
+    prepare: async () => {},
+    change: async () => {},
+    host: Far('HeldAudit', {
+      list: () => harden([]),
+      storeValue: async (value, name) => {
+        entered.resolve(undefined);
+        await release.promise;
+        values.set(name, value);
+      },
+    }),
+  });
+  const writing = controller.request(
+    'public-internet',
+    'Download dependencies',
+  );
+  await entered.promise;
+  let closed = false;
+  const closing = controller.close().then(() => {
+    closed = true;
+  });
+  t.throws(() => controller.get(), { message: /closed/ });
+  t.throws(() => controller.set('off'), { message: /closed/ });
+  t.false(closed);
+  release.resolve(undefined);
+  await writing;
+  await closing;
+  t.is(values.size, 1);
 });

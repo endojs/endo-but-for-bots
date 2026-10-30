@@ -1,4 +1,5 @@
 // @ts-check
+import { imageResultFromBlocks } from '@endo/hosted-agent/image-result.js';
 import { Fail, b } from '@endo/errors';
 import {
   NATIVE_CONTEXT_LIMIT as LIMIT,
@@ -204,7 +205,9 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
                   (Array.isArray(item.content) &&
                     item.content.every(
                       part =>
-                        part.type === 'text' && typeof part.text === 'string',
+                        (part.type === 'text' &&
+                          typeof part.text === 'string') ||
+                        imageResultFromBlocks([part]) !== undefined,
                     ))),
           )),
     );

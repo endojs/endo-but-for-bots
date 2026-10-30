@@ -1,4 +1,9 @@
 // @ts-check
+import {
+  decodeImageResult,
+  imageDataUrl,
+  imageResultText,
+} from '@endo/hosted-agent/image-result.js';
 
 /**
  * @typedef {object} ChatToolCall
@@ -45,39 +50,61 @@ const stringifyToolArguments = args => {
  * @param {ChatMessage[]} messages
  * @returns {ChatCompletionMessageParam[]}
  */
-export const toOpenAICompatibleMessages = messages =>
-  messages.map((message, messageIndex) => {
-    if (message.role === 'assistant') {
-      const toolCalls = message.tool_calls?.map((toolCall, toolIndex) => ({
-        id: toolCall.id || `tool_${messageIndex}_${toolIndex}`,
-        type: /** @type {const} */ ('function'),
-        function: {
-          name: toolCall.function.name,
-          arguments: stringifyToolArguments(toolCall.function.arguments),
-        },
-      }));
+export const toOpenAICompatibleMessages = messages => {
+  /** @type {ChatCompletionMessageParam[]} */
+  const pendingImages = [];
+  const mapped = messages.flatMap((message, messageIndex) => {
+    /** @type {ChatCompletionMessageParam[]} */
+    const before = message.role === 'tool' ? [] : pendingImages.splice(0);
+    /** @returns {ChatCompletionMessageParam} */
+    const convert = () => {
+      if (message.role === 'assistant') {
+        const toolCalls = message.tool_calls?.map((toolCall, toolIndex) => ({
+          id: toolCall.id || `tool_${messageIndex}_${toolIndex}`,
+          type: /** @type {const} */ ('function'),
+          function: {
+            name: toolCall.function.name,
+            arguments: stringifyToolArguments(toolCall.function.arguments),
+          },
+        }));
 
-      if (toolCalls && toolCalls.length > 0) {
+        if (toolCalls && toolCalls.length > 0) {
+          return {
+            role: 'assistant',
+            content: message.content || null,
+            tool_calls: toolCalls,
+            ...(message.reasoning_details
+              ? { reasoning_details: message.reasoning_details }
+              : {}),
+          };
+        }
+        return { role: 'assistant', content: message.content || '' };
+      }
+
+      if (message.role === 'tool') {
+        const image = decodeImageResult(message.content);
+        if (image)
+          pendingImages.push({
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `Image returned by tool call ${message.tool_call_id || ''}:`,
+              },
+              { type: 'image_url', image_url: { url: imageDataUrl(image) } },
+            ],
+          });
         return {
-          role: 'assistant',
-          content: message.content || null,
-          tool_calls: toolCalls,
-          ...(message.reasoning_details
-            ? { reasoning_details: message.reasoning_details }
-            : {}),
+          role: 'tool',
+          content: imageResultText(message.content || ''),
+          tool_call_id: message.tool_call_id || '',
         };
       }
-      return { role: 'assistant', content: message.content || '' };
-    }
 
-    if (message.role === 'tool') {
-      return {
-        role: 'tool',
-        content: message.content || '',
-        tool_call_id: message.tool_call_id || '',
-      };
-    }
-
-    return { role: message.role, content: message.content || '' };
+      return { role: message.role, content: message.content || '' };
+    };
+    return [...before, convert()];
   });
+  return [...mapped, ...pendingImages];
+};
 harden(toOpenAICompatibleMessages);

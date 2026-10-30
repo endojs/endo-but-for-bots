@@ -863,11 +863,12 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // /bin/sh's `ulimit -u` reports RLIMIT_NPROC, the same value
+  // Bash's `ulimit -u` reports RLIMIT_NPROC, the same value
   // prlimit set.  We assert the cap is in effect rather than
   // running an actual fork bomb (which would also stress the host
-  // the test process is running on).
-  const result = await runInSlice(t, handle, ['/bin/sh', '-c', 'ulimit -u']);
+  // the test process is running on). Use Bash explicitly because
+  // /bin/sh implementations such as dash do not support this option.
+  const result = await runInSlice(t, handle, ['/bin/bash', '-c', 'ulimit -u']);
   if (result === null) return;
   t.is(
     result.exit.code,
@@ -1146,7 +1147,9 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
   });
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
-  await waitForProcessGroupGone(/** @type {number} */ (pid));
+  await t.notThrowsAsync(() =>
+    waitForProcessGroupGone(/** @type {number} */ (pid)),
+  );
 });
 
 // --- PATH synthesis tests --------------------------------------------------

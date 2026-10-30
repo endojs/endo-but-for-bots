@@ -13,8 +13,8 @@ test('Floot defaults no longer impose small development budgets', t => {
   t.is(settings.shellTimeoutMs, 86_400_000);
   t.is(settings.shellOutputBytes, 16 * 1024 ** 2);
   t.is(settings.requestTimeoutMs, 3_600_000);
-  t.is(settings.maxSubagents, 1024);
-  t.is(settings.maxSubagentDepth, 32);
+  t.is(settings.maxSubagents, 8);
+  t.is(settings.maxSubagentDepth, 2);
   t.is(settings.subagentLimits.replyTimeoutSeconds, 86_400);
   t.is(settings.subagentLimits.maxTimeoutSeconds, 604_800);
 });

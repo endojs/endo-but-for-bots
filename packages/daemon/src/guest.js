@@ -17,7 +17,7 @@ import { idFromLocator } from './locator.js';
 
 /** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
-import { guestHelp, makeHelp } from './help-text.js';
+import { guestHelp, mailHelp, makeHelp } from './help-text.js';
 
 /**
  * @param {object} args
@@ -516,7 +516,7 @@ export const makeGuestMaker = ({
       'EndoGuest',
       GuestInterface,
       /** @type {any} */ ({
-        help: makeHelp(guestHelp),
+        help: makeHelp(guestHelp, [mailHelp]),
         ...guest,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {

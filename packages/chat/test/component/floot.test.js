@@ -26,6 +26,9 @@ import {
 } from '../helpers/dom-setup.js';
 
 const dom = createDOM();
+// Each fake daemon uses the same session IDs; persistent browser state belongs
+// to the test, while remounts within a test deliberately retain it.
+test.beforeEach(() => dom.window.localStorage.clear());
 // Happy DOM implements the browser APIs exercised here; its declaration types
 // carry implementation-specific symbols, so adapt only at the harness boundary.
 const testWindow = /** @type {Window & typeof globalThis} */ (
@@ -844,10 +847,52 @@ const must = (element, what) => {
  * @param {string} selector
  * @returns {HTMLTextAreaElement}
  */
-const textareaIn = (parent, selector) =>
-  /** @type {HTMLTextAreaElement} */ (
-    must(parent.querySelector(selector), selector)
+const textareaIn = (parent, selector) => {
+  const el = /** @type {HTMLElement} */ (
+    must(
+      parent.querySelector(
+        selector.replace('textarea.floot-input', '.floot-input'),
+      ),
+      selector,
+    )
   );
+  if (!el.classList.contains('floot-input'))
+    return /** @type {HTMLTextAreaElement} */ (el);
+  // Compatibility facade for the existing tests' text edits; all events still
+  // hit the real contenteditable and the production Chat token controller.
+  const move = (start, end = start) => {
+    el.focus();
+    const range = testDocument.createRange();
+    if (!el.firstChild) el.appendChild(testDocument.createTextNode(''));
+    const child = el.firstChild;
+    if (!child) throw Error('Missing text node');
+    range.setStart(child, start);
+    range.setEnd(child, end);
+    testWindow.getSelection()?.removeAllRanges();
+    testWindow.getSelection()?.addRange(range);
+  };
+  return /** @type {HTMLTextAreaElement} */ (
+    /** @type {unknown} */ (
+      new Proxy(el, {
+        get(target, key) {
+          if (key === 'value') return target.textContent || '';
+          if (key === 'disabled') return target.contentEditable !== 'true';
+          if (key === 'setSelectionRange') return move;
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+        set(target, key, value) {
+          if (key === 'value') {
+            target.textContent = value;
+            move(value.length);
+            return true;
+          }
+          return Reflect.set(target, key, value, target);
+        },
+      })
+    )
+  );
+};
 
 /**
  * A mounted Floot space over a fake daemon (test/helpers/fake-floot.js).
@@ -971,6 +1016,109 @@ const setup = async (t, count = 2, recover = false, prepare = () => {}) => {
     setHistoryReader: daemon.setHistoryReader,
   };
 };
+
+test.serial(
+  'recovered drafts stay in their session and ordinary drafts survive remount',
+  async t => {
+    dom.window.localStorage.setItem(
+      'floot-send::s0',
+      JSON.stringify({
+        id: 'uncertain-request',
+        text: 'uncertain A',
+        legacy: false,
+      }),
+    );
+    const { parent, remount } = await setup(t);
+    t.is(textareaIn(parent, '.floot-input').value, 'uncertain A');
+    const select = async index => {
+      parent
+        .querySelectorAll('.floot-session-item')
+        [index].dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await tick();
+    };
+    await select(1);
+    const input = textareaIn(parent, '.floot-input');
+    t.is(input.value, '');
+    input.value = 'unsent B';
+    input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await tick();
+    await select(0);
+    t.is(textareaIn(parent, '.floot-input').value, 'uncertain A');
+    await select(1);
+    t.is(textareaIn(parent, '.floot-input').value, 'unsent B');
+    remount();
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 2,
+    );
+    await tick(50);
+    await select(1);
+    t.is(textareaIn(parent, '.floot-input').value, 'unsent B');
+  },
+);
+
+test.serial('a late failed send restores only its source session', async t => {
+  const gate = makePromiseKit();
+  let entered = false;
+  const { parent, send } = await setup(t, 2, false, daemon => {
+    daemon.setEnqueueGate(() => {
+      entered = true;
+      return gate.promise;
+    });
+  });
+  await send('uncertain in A');
+  await waitFor(() => entered);
+  parent
+    .querySelectorAll('.floot-session-item')[1]
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await tick();
+  t.is(textareaIn(parent, '.floot-input').value, '');
+  gate.reject(Error('late acknowledgement lost'));
+  await waitFor(() => parent.textContent.includes('late acknowledgement lost'));
+  t.is(textareaIn(parent, '.floot-input').value, '');
+  parent
+    .querySelectorAll('.floot-session-item')[0]
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await tick();
+  t.is(textareaIn(parent, '.floot-input').value, 'uncertain in A');
+});
+
+test.serial(
+  'activity recreation before acquiring the send lock retains the unsent draft',
+  async t => {
+    const gate = makePromiseKit();
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const originalLocks = globalThis.navigator.locks;
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          request: (key, work) =>
+            gate.promise.then(() => originalLocks.request(key, work)),
+        },
+      },
+    });
+    t.teardown(() => {
+      gate.resolve(undefined);
+      if (previous) Object.defineProperty(globalThis, 'navigator', previous);
+      else delete (/** @type {any} */ (globalThis).navigator);
+    });
+    const { parent, send, remount } = await setup(t);
+    await send('saved before claiming');
+    t.is(
+      JSON.parse(
+        dom.window.localStorage.getItem('floot-draft:floot-send::s0') || '{}',
+      ).text,
+      'saved before claiming',
+    );
+    remount();
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 2,
+    );
+    await tick(50);
+    t.is(textareaIn(parent, '.floot-input').value, 'saved before claiming');
+    gate.resolve(undefined);
+  },
+);
 
 test.serial(
   'deleting the active session releases submissions before the old turn ends',
@@ -2260,7 +2408,7 @@ const stubWakeLock = (t, latencyMs = 0) => {
   };
   const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   Object.defineProperty(globalThis, 'navigator', {
-    value: { wakeLock },
+    value: { wakeLock, locks: globalThis.navigator?.locks },
     configurable: true,
   });
   t.teardown(() => {
@@ -3303,5 +3451,174 @@ test.serial(
     await waitFor(() => titles().length === 0);
     t.deepEqual(titles(), []);
     t.true(opened.every(id => id === 'user'));
+  },
+);
+
+test.serial(
+  'saved-model presets honor explicit internet off without backend network controls',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.append(parent);
+    const created = [];
+    const facet = farSession('PresetPickerSession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = farFactory('PresetPickerFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'One' }]),
+      listPresets: () =>
+        harden([
+          {
+            id: 'voice',
+            title: 'Voice',
+            backendId: 'fae-codex',
+            modelId: 'sol',
+            networkPolicy: 'public-internet',
+            supportedNetworkPolicies: ['off', 'public-internet'],
+          },
+        ]),
+      listBackends: () => harden([{ id: 'fae-codex', title: 'Fae Codex' }]),
+      listModels: () =>
+        harden([
+          {
+            id: 'fae-codex:sol',
+            backendId: 'fae-codex',
+            modelId: 'sol',
+            title: 'Sol',
+          },
+        ]),
+      getSession: () => facet,
+      createSession: options => {
+        created.push(options);
+        return facet;
+      },
+    });
+    const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    await waitFor(() => parent.querySelector('.floot-session-item'));
+    await tick(50);
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() =>
+      parent.querySelector('[aria-label="Internet access override"]'),
+    );
+    const select = /** @type {HTMLSelectElement} */ (
+      parent.querySelector('[aria-label="Internet access override"]')
+    );
+    t.is(select.value, '');
+    select.value = 'off';
+    select.dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    await tick();
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 1);
+    t.like(created[0], { presetId: 'voice', networkPolicy: 'off' });
+    t.false('backendId' in created[0]);
+    t.false('modelId' in created[0]);
+  },
+);
+
+test.serial(
+  'inventory picker sends a nested object reference through the confined composer',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.append(parent);
+    const object = Far('Notes', { read: () => 'notes' });
+    const sent = [];
+    const facet = farSession('MentionSession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      enqueueOnce: () => {
+        throw Error('text-only endpoint must not be used');
+      },
+      enqueueMessageOnce: (text, id, mentions) => {
+        sent.push({ text, id, mentions });
+        return harden({ id: 'accepted' });
+      },
+      getSubmissionReceipt: () => null,
+    });
+    const factory = farFactory('MentionFactory', {
+      listSessions: () =>
+        harden([{ id: 'one', title: 'One', userInitiated: true }]),
+      getSession: () => facet,
+      listPresets: () => harden([]),
+      listBackends: () => harden([]),
+      listModels: () => harden([]),
+    });
+    const folder = Far('Folder', { list: () => harden(['notes']) });
+    const root = Far('Inventory', {
+      list: () => harden(['folder']),
+      lookup: path => {
+        if (path === 'floot') return factory;
+        if (JSON.stringify(path) === '["folder"]') return folder;
+        t.deepEqual(path, ['folder', 'notes']);
+        return object;
+      },
+      identify: (...path) => {
+        t.deepEqual(path, ['folder', 'notes']);
+        return 'notes-id';
+      },
+    });
+    const cleanup = flootComponent(parent, root, ['floot'], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 1,
+    );
+    await tick(50);
+    const input = textareaIn(parent, '.floot-input');
+    input.value = 'Read @';
+    input.setSelectionRange(6, 6);
+    input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await waitFor(() =>
+      parent.querySelector('.token-menu-item')?.textContent?.includes('folder'),
+    );
+    input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key: '/',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() =>
+      parent.querySelector('.token-menu-item')?.textContent?.includes('notes'),
+    );
+    input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() => parent.querySelector('.floot-input .chat-token'));
+    t.is(sent.length, 0, 'picker Enter selects without sending');
+    input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() => sent.length === 1);
+    t.deepEqual(sent[0].text, { strings: ['Read ', ''], names: ['notes'] });
+    t.deepEqual(sent[0].mentions[0].path, ['folder', 'notes']);
+    t.is(sent[0].mentions[0].value, object);
+    t.is(sent[0].mentions[0].identity, 'notes-id');
+    t.truthy(
+      parent.querySelector('.floot-msg .chat-token'),
+      'submitted reference remains visible as a chip',
+    );
   },
 );

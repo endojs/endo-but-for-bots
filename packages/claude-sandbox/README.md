@@ -37,6 +37,10 @@ This package has no form-driven replacement API; select the Claude backend throu
 
 A new session's model is admitted by the catalog of an account the session may be served from, with an effort that model takes; a reopen keeps its recorded pin without asking the provider, and an effort changed on its own keeps the recorded model. A session that names no model runs the runtime's own default, unpinned; nobody picks one from the list for it.
 The system prompt is pinned for the session and forwarded on every CLI spawn.
+Every fresh, resumed, and recovered CLI process denies the native `Agent` and
+`Task` tools with `--disallowedTools`.
+Delegation uses the supplied Endo MCP tools, so helpers stay within Floot's
+session ownership, recovery records, and tree budget.
 Network defaults to `off`; `public-internet` is offered only if the broker's recorded
 configuration supports it.
 This means the managed public proxy and resolver, not unrestricted host networking.

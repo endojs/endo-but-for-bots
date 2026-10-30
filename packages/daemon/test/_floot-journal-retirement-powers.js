@@ -59,8 +59,11 @@ export const make = host => {
   });
   return Far('JournalRetirementPowers', {
     list: (...args) => E(host).list(...args),
-    has: name => name === 'codex-backend' || E(host).has(name),
-    lookup: name => (name === 'codex-backend' ? backend : E(host).lookup(name)),
+    createDirectory: (...args) => E(host).createDirectory(...args),
+    has: (name, ...rest) =>
+      name === 'codex-backend' || E(host).has(name, ...rest),
+    lookup: (name, ...rest) =>
+      name === 'codex-backend' ? backend : E(host).lookup(name, ...rest),
     locate: (...args) => E(host).locate(...args),
     copy: (...args) => E(host).copy(...args),
     provideGuest: (...args) => E(host).provideGuest(...args),
@@ -68,17 +71,12 @@ export const make = host => {
     armRemoval: (prefix, kind, after) => {
       fault = { prefix, kind, after };
     },
-    remove: async name => {
-      const hit =
-        fault &&
-        name.startsWith(fault.prefix) &&
-        (fault.kind === 'schema'
-          ? name.endsWith('-schema')
-          : name.includes('-floot-turn-'));
+    remove: async (...names) => {
+      const hit = fault && names.join('/') === fault.prefix;
       const after = fault?.after;
       if (hit) fault = undefined;
       if (hit && !after) throw Error('Injected journal removal failure');
-      await E(host).remove(name);
+      await E(host).remove(...names);
       if (hit) throw Error('Injected journal removal acknowledgement lost');
     },
   });

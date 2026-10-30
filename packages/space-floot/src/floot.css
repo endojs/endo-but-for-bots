@@ -4,18 +4,18 @@
  * imported as a JS side-effect so the package stays loadable under Node.
  */
 .floot-app {
-  --fl-bg: #0f0f10;
-  --fl-surface: #17171a;
-  --fl-surface2: #1f1f23;
-  --fl-surface3: #26262b;
-  --fl-border: #2a2a2e;
-  --fl-border-strong: #3a3a40;
-  --fl-text: #e4e4e7;
-  --fl-text-muted: #8a8a92;
-  --fl-text-faint: #5e5e66;
+  --fl-bg: var(--bg-primary, #0f0f10);
+  --fl-surface: var(--bg-secondary, #17171a);
+  --fl-surface2: var(--bg-sidebar, #1f1f23);
+  --fl-surface3: var(--bg-hover, #26262b);
+  --fl-border: var(--border-color, #2a2a2e);
+  --fl-border-strong: var(--text-muted, #3a3a40);
+  --fl-text: var(--text-primary, #e4e4e7);
+  --fl-text-muted: var(--text-secondary, #8a8a92);
+  --fl-text-faint: var(--text-muted, #5e5e66);
   --fl-user: #2563eb;
   --fl-user-text: #fff;
-  --fl-assistant: #27272a;
+  --fl-assistant: var(--bg-active, #27272a);
   --fl-accent: #3b82f6;
   --fl-red: #ef4444;
   --fl-green: #22c55e;
@@ -642,6 +642,8 @@
   font-size: 1.15rem;
 }
 .floot-mic:hover {
+  /* Override the host page's button:hover, including sticky touch hover. */
+  background: var(--fl-surface2);
   border-color: var(--fl-text-muted);
 }
 .floot-mic.listening {
@@ -1451,4 +1453,118 @@
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 0.8rem;
+}
+
+.floot-presets fieldset {
+  border: 0;
+  padding: 0;
+  margin-top: 1rem;
+  min-width: 0;
+}
+.floot-preset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+}
+.floot-preset-field input,
+.floot-preset-field select,
+.floot-preset-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem;
+  border-radius: 0.4rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  font: inherit;
+}
+.floot-preset-object {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.floot-preset-endowment {
+  border-inline-start: 2px solid currentColor;
+  padding-inline-start: 0.75rem;
+  margin: 1rem 0;
+}
+.floot-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.floot-compose {
+  position: relative;
+}
+
+/* Shared Chat token UI, scoped to Floot's system-theme palette. */
+.floot-composer-anchor {
+  flex: 1;
+  min-width: 0;
+}
+.floot-composer-editor {
+  position: relative;
+}
+.floot-input {
+  white-space: pre-wrap;
+  overflow-y: auto;
+  min-height: 1.4em;
+}
+.floot-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--fl-text-muted);
+  pointer-events: none;
+}
+.floot-input[aria-disabled='true'] {
+  opacity: 0.6;
+}
+#floot-root .chat-token {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--fl-accent);
+  border-radius: 5px;
+  color: var(--fl-accent);
+  background: var(--fl-surface2);
+  white-space: nowrap;
+}
+#floot-root .chat-token::before {
+  content: '@';
+}
+#floot-root .token-edge::before {
+  content: ':';
+}
+#floot-root .token-menu {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--fl-surface);
+  color: var(--fl-text);
+  border: 1px solid var(--fl-border);
+  border-radius: 10px;
+  z-index: 200;
+}
+#floot-root .token-menu.visible {
+  display: block;
+}
+#floot-root .token-menu-item {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+#floot-root .token-menu-item.selected {
+  background: var(--fl-accent);
+  color: var(--fl-surface);
+}
+#floot-root .token-menu-hint,
+#floot-root .token-menu-empty {
+  padding: 8px 12px;
+  color: var(--fl-text-muted);
+  font-size: 12px;
 }

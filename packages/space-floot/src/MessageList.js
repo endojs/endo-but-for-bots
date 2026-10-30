@@ -588,6 +588,24 @@ harden(TurnStatus);
  * @param {{ msg: FlootMessage, canReplay: boolean, onReplay: (text: string) => void, replaying: boolean }} props
  * @returns {VNode}
  */
+/** @param {FlootMessage} msg */
+const messageBody = msg => {
+  const message = msg.role === 'user' && msg.meta?.message;
+  if (!message) return linkify(msg.text || '');
+  return message.strings.flatMap((part, index) => [
+    part,
+    ...(index < message.names.length
+      ? [
+          h(
+            'span',
+            { class: 'chat-token', title: 'Attached object' },
+            h('span', { class: 'token-name' }, message.names[index]),
+          ),
+        ]
+      : []),
+  ]);
+};
+
 const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
   const text = msg.text || '';
   const mailFrom = msg.meta && msg.meta.mail && msg.meta.mail.from;
@@ -600,7 +618,7 @@ const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
         h('span', { class: 'token message-token' }, `@${mailFrom}`),
       )
     : null;
-  const bubble = h('div', { class: 'floot-msg' }, ...linkify(text));
+  const bubble = h('div', { class: 'floot-msg' }, ...messageBody(msg));
   // A finished assistant message offers a replay button when TTS is wired.
   if (msg.role === 'assistant' && canReplay && text.trim()) {
     return h(
@@ -731,7 +749,7 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
     return h(
       'div',
       { class: 'floot-msg-row user pending floot-pending-sending' },
-      h('div', { class: 'floot-msg' }, text),
+      h('div', { class: 'floot-msg' }, ...messageBody(msg)),
       h('div', { class: 'floot-pending-note' }, 'Sending…'),
     );
   }
@@ -743,7 +761,7 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
         interrupted ? ' floot-pending-interrupted' : ''
       }`,
     },
-    h('div', { class: 'floot-msg' }, text),
+    h('div', { class: 'floot-msg' }, ...messageBody(msg)),
     interrupted
       ? h(
           'div',
@@ -765,7 +783,7 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
             interrupted ? 'Send again' : 'Send now',
           )
         : null,
-      onEdit
+      onEdit && !msg.meta?.message?.names.length
         ? h(
             'button',
             {
