@@ -75,7 +75,15 @@ test('a record and its grant can be written together', async t => {
   t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
 
   const other = harden({ ...record, secretId: 'other-secret-id' });
-  t.throws(() => database.writeSecretRecordWithGrant(other, 'grant-id'));
+  // `SqliteError` is not an `Error` that ava's `t.throws` recognizes.
+  /** @type {{ code?: string } | undefined} */
+  let refusal;
+  try {
+    database.writeSecretRecordWithGrant(other, 'grant-id');
+  } catch (error) {
+    refusal = /** @type {{ code?: string }} */ (error);
+  }
+  t.is(refusal?.code, 'SQLITE_CONSTRAINT_PRIMARYKEY');
   t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
   t.is(database.getSecretRecord(other.secretId), undefined);
 });
