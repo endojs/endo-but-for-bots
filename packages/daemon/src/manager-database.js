@@ -751,7 +751,11 @@ export const makeDaemonDatabase = (config, options) => {
       stmtInsertSecretGrant.run(grantId, record.secretId);
       stmtCommitTransaction.run();
     } catch (error) {
-      stmtRollbackTransaction.run();
+      try {
+        stmtRollbackTransaction.run();
+      } catch {
+        // SQLite may already have rolled back; report the original failure.
+      }
       throw error;
     }
   };

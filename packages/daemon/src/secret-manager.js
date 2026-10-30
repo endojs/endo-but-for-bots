@@ -527,9 +527,14 @@ export const makeSecretManager = ({
           try {
             // Revocation backends are required to be idempotent. Retrying here
             // prevents deletion from discarding the only cleanup reference
-            // after an earlier backend-revocation failure.
-            if (before.backendRef !== '') {
-              await backend.revoke(operationId, before.backendRef);
+            // after an earlier backend-revocation failure. A record revoked
+            // while still provisioning may have no reference yet, so recover
+            // one before forgetting the record.
+            const backendRef =
+              before.backendRef ||
+              (await backend.recover?.(operationId, secretId));
+            if (backendRef !== undefined) {
+              await backend.revoke(operationId, backendRef);
             }
             const paths = (await listKnownGrantPaths()).filter(
               ({ grantId }) =>
