@@ -765,3 +765,153 @@ test('the Endo participant reports absence only for an absent secret', async t =
     message: /connection lost/,
   });
 });
+
+test('replaying setLimits under one operation id records it once', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const admin = await E(directory).adminFor(provider.providerId);
+  const raised = harden({ concurrentTurns: 2, dailyTokens: 2000 });
+  await E(admin).setLimits(raised, 'limits-000000001');
+  const before = registry.inspect();
+  t.deepEqual(
+    (await E(admin).setLimits(raised, 'limits-000000001')).limits,
+    raised,
+  );
+  t.is(registry.inspect(), before);
+  await t.throwsAsync(() => E(admin).setLimits(limits, 'limits-000000001'), {
+    message: /idempotency-conflict/,
+  });
+  t.is(
+    registry.inspect().audit.filter(event => event.change === 'limits').length,
+    1,
+  );
+  await registry.close();
+});
+
+test('a retire retry under a fresh key drives the in-flight retirement', async t => {
+  const backing = makeBacking();
+  const { revoke } = backing.secretParticipant;
+  let fail = true;
+  backing.secretParticipant.revoke = async name => {
+    if (fail) {
+      fail = false;
+      throw Error('revoke unavailable');
+    }
+    return revoke(name);
+  };
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const admin = await E(directory).adminFor(provider.providerId);
+  await t.throwsAsync(() => E(admin).retire('retire-000000001'), {
+    message: 'revoke unavailable',
+  });
+  t.is((await E(admin).getSummary()).state, 'retiring');
+
+  t.is((await E(admin).retire('retire-000000002')).state, 'retired');
+  const { operations, audit } = registry.inspect();
+  t.deepEqual(
+    Object.keys(operations).filter(key => key.startsWith('retire:')),
+    ['retire:owner-alice:retire-000000001'],
+  );
+  t.deepEqual(
+    audit.map(event => event.change),
+    ['created', 'retiring', 'retired'],
+  );
+  await registry.close();
+});
+
+test('revoking a grant whose endpoint fails while opening still succeeds', async t => {
+  const backing = makeBacking();
+  let releaseOpen;
+  const opening = new Promise(resolve => {
+    releaseOpen = resolve;
+  });
+  const registry = await makeInferenceProviderRegistry({
+    journal: backing.journal,
+    secrets: backing.secretParticipant,
+    makeIssuer: async () =>
+      harden({
+        openEndpoint: async () => {
+          await opening;
+          return makeExo('InferenceEndpoint', InferenceEndpointInterface, {
+            request: async () => harden({ status: 200, headers: {}, body: '' }),
+            requestByteStream: async () => {
+              throw Error('unused');
+            },
+            attestation: async () => harden({}),
+            revoke: async () => {},
+          });
+        },
+        dispose: async () => {},
+      }),
+    validateLimits: value =>
+      harden({ .../** @type {Record<string, unknown>} */ (value) }),
+    randomId: makeIds(),
+    now: () => '2026-10-27T00:00:00.000Z',
+  });
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const inference = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(
+    harden({
+      grantId: 'grant-000000001',
+      ownerId: 'owner-alice',
+      agentId: 'agent-alice',
+      model: 'claude-test',
+    }),
+  );
+  const pending = E(inference).request(message('/v1/messages'));
+  const revoked = registry.revokeGrant('grant-000000001');
+  releaseOpen();
+  await t.notThrowsAsync(revoked);
+  await t.throwsAsync(pending, { message: /agent-deleted/ });
+  t.is(registry.inspect().grants['grant-000000001'].state, 'revoked');
+  await registry.close();
+});
+
+test('grant ids that name Object.prototype members are refused or absent', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const provider = await E(directory).create(providerRequest());
+  const before = registry.inspect();
+
+  await t.throwsAsync(() => registry.revokeGrant('__proto__'), {
+    message: /invalid-grant/,
+  });
+  t.throws(() => registry.inferenceFor('__proto__'), {
+    message: /invalid-grant/,
+  });
+  await registry.revokeGrant('constructor');
+  await registry.revokeGrant('toString');
+  t.is(registry.inspect(), before);
+  await t.throwsAsync(
+    () => E(registry.inferenceFor('constructor')).request(message('/x')),
+    { message: /agent-deleted/ },
+  );
+  await t.throwsAsync(() => E(directory).lookup('constructor'), {
+    message: /provider-not-found/,
+  });
+
+  const inference = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(
+    harden({
+      grantId: 'constructor',
+      ownerId: 'owner-alice',
+      agentId: 'agent-alice',
+      model: 'claude-test',
+    }),
+  );
+  t.is((await E(inference).request(message('/v1/messages'))).status, 200);
+  const { grants } = registry.inspect();
+  t.true(Object.hasOwn(grants, 'constructor'));
+  t.is(Object.getPrototypeOf(grants), Object.prototype);
+  await registry.revokeGrant('constructor');
+  t.is(registry.inspect().grants.constructor.state, 'revoked');
+  await registry.close();
+});

@@ -57,6 +57,36 @@ harden(ProviderAdminInterface);
 // eslint-disable-next-line @endo/no-harden-pattern-maker
 harden(ProviderUseInterface);
 
+/**
+ * Look up a caller-keyed record without reaching `Object.prototype`, so an id
+ * such as `constructor` reads as absent.
+ *
+ * @template T
+ * @param {Record<string, T>} record
+ * @param {string} key
+ * @returns {T | undefined}
+ */
+const ownEntry = (record, key) =>
+  Object.hasOwn(record, key) ? record[key] : undefined;
+
+/**
+ * Define rather than assign, so a key such as `__proto__` or `constructor`
+ * becomes an own entry instead of reaching `Object.prototype`.
+ *
+ * @template T
+ * @param {Record<string, T>} record
+ * @param {string} key
+ * @param {T} value
+ */
+const setEntry = (record, key, value) => {
+  Object.defineProperty(record, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+};
+
 /** @returns {RegistryState} */
 const emptyState = () =>
   harden({
@@ -207,8 +237,8 @@ export const makeInferenceProviderRegistry = async ({
 
   /** @param {string} providerId */
   const requireProvider = providerId => {
-    const descriptor = state.descriptors[providerId];
-    const lifecycle = state.lifecycles[providerId];
+    const descriptor = ownEntry(state.descriptors, providerId);
+    const lifecycle = ownEntry(state.lifecycles, providerId);
     if (descriptor === undefined || lifecycle === undefined) {
       throw fixedError('provider-not-found');
     }
@@ -281,7 +311,7 @@ export const makeInferenceProviderRegistry = async ({
         /** @type {Record<string, unknown>} */ (request);
       const operationKey = `create:${ownerId}:${idempotencyKey}`;
       let operation = /** @type {CreateOperation | undefined} */ (
-        state.operations[operationKey]
+        ownEntry(state.operations, operationKey)
       );
       if (operation !== undefined) {
         if (!sameData(operation.request, safeRequest)) {
@@ -315,7 +345,7 @@ export const makeInferenceProviderRegistry = async ({
           (() => {
             throw fixedError('invalid-generated-id');
           })();
-        if (state.descriptors[providerId] !== undefined) {
+        if (ownEntry(state.descriptors, providerId) !== undefined) {
           throw fixedError('invalid-generated-id');
         }
         const createdAt = now();
@@ -334,7 +364,7 @@ export const makeInferenceProviderRegistry = async ({
           updatedAt: createdAt,
         });
         const next = copyState(state);
-        next.operations[operationKey] = operation;
+        setEntry(next.operations, operationKey, operation);
         await commit(next);
         await afterCommit('create-intent', harden({ operationId, providerId }));
       }
@@ -360,7 +390,7 @@ export const makeInferenceProviderRegistry = async ({
           state: /** @type {const} */ ('secret-created'),
           updatedAt: now(),
         });
-        next.operations[operationKey] = operation;
+        setEntry(next.operations, operationKey, operation);
         await commit(next);
         await afterCommit(
           'create-secret-recorded',
@@ -394,14 +424,14 @@ export const makeInferenceProviderRegistry = async ({
           updatedAt: now(),
         });
         const next = copyState(state);
-        next.descriptors[operation.providerId] = descriptor;
-        next.lifecycles[operation.providerId] = lifecycle;
+        setEntry(next.descriptors, operation.providerId, descriptor);
+        setEntry(next.lifecycles, operation.providerId, lifecycle);
         operation = harden({
           ...operation,
           state: /** @type {const} */ ('committed'),
           updatedAt: now(),
         });
-        next.operations[operationKey] = operation;
+        setEntry(next.operations, operationKey, operation);
         next.audit.push(
           harden({
             providerId: operation.providerId,
@@ -433,7 +463,7 @@ export const makeInferenceProviderRegistry = async ({
     const issuer = issuers.get(providerId);
     issuers.delete(providerId);
     for (const [grantId, endpoint] of endpoints.entries()) {
-      if (state.grants[grantId]?.providerId === providerId) {
+      if (ownEntry(state.grants, grantId)?.providerId === providerId) {
         endpoints.delete(grantId);
         void endpoint.then(value => E(value).revoke()).catch(() => {});
       }
@@ -459,10 +489,24 @@ export const makeInferenceProviderRegistry = async ({
         ownerId,
         providerId,
       );
-      const operationKey = `retire:${ownerId}:${idempotencyKey}`;
+      let operationKey = `retire:${ownerId}:${idempotencyKey}`;
       let operation = /** @type {RetireOperation | undefined} */ (
-        state.operations[operationKey]
+        ownEntry(state.operations, operationKey)
       );
+      if (operation === undefined && lifecycle.state === 'retiring') {
+        // A retry under a fresh key drives the in-flight retirement rather
+        // than starting a second one.
+        const inFlight = Object.entries(state.operations).find(
+          ([, candidate]) =>
+            candidate.kind === 'retire' &&
+            candidate.providerId === providerId &&
+            candidate.state !== 'committed',
+        );
+        if (inFlight !== undefined) {
+          operationKey = inFlight[0];
+          operation = /** @type {RetireOperation} */ (inFlight[1]);
+        }
+      }
       if (
         operation !== undefined &&
         (operation.kind !== 'retire' || operation.providerId !== providerId)
@@ -470,7 +514,7 @@ export const makeInferenceProviderRegistry = async ({
         throw fixedError('idempotency-conflict');
       }
       if (operation?.state === 'committed') {
-        return summarize(descriptor, state.lifecycles[providerId]);
+        return summarize(descriptor, requireProvider(providerId).lifecycle);
       }
       if (operation === undefined && lifecycle.state === 'retired') {
         // A retired provider stays retired; a fresh key must not reopen it.
@@ -498,8 +542,8 @@ export const makeInferenceProviderRegistry = async ({
           updatedAt: changedAt,
         });
         const next = copyState(state);
-        next.operations[operationKey] = operation;
-        next.lifecycles[providerId] = retiring;
+        setEntry(next.operations, operationKey, operation);
+        setEntry(next.lifecycles, providerId, retiring);
         next.audit.push(
           harden({
             providerId,
@@ -526,7 +570,7 @@ export const makeInferenceProviderRegistry = async ({
           state: /** @type {const} */ ('secret-revoked'),
           updatedAt: now(),
         });
-        next.operations[operationKey] = operation;
+        setEntry(next.operations, operationKey, operation);
         await commit(next);
         await afterCommit(
           'retire-secret-recorded',
@@ -534,20 +578,20 @@ export const makeInferenceProviderRegistry = async ({
         );
       }
       if (operation.state === 'secret-revoked') {
-        const before = state.lifecycles[providerId];
+        const before = requireProvider(providerId).lifecycle;
         const retired = harden({
           ...before,
           state: /** @type {const} */ ('retired'),
           updatedAt: now(),
         });
         const next = copyState(state);
-        next.lifecycles[providerId] = retired;
+        setEntry(next.lifecycles, providerId, retired);
         operation = harden({
           ...operation,
           state: /** @type {const} */ ('committed'),
           updatedAt: now(),
         });
-        next.operations[operationKey] = operation;
+        setEntry(next.operations, operationKey, operation);
         next.audit.push(
           harden({
             providerId,
@@ -564,7 +608,7 @@ export const makeInferenceProviderRegistry = async ({
           harden({ operationId: operation.operationId }),
         );
       }
-      return summarize(descriptor, state.lifecycles[providerId]);
+      return summarize(descriptor, requireProvider(providerId).lifecycle);
     });
 
   /** @param {string} providerId */
@@ -577,6 +621,8 @@ export const makeInferenceProviderRegistry = async ({
           (() => {
             throw fixedError('provider-retired');
           })();
+        // The non-stable `provide` path returns the blob even for a revoked
+        // secret, so the `active` check above must stay ahead of it.
         const secret = await secrets.provide(
           descriptor.secretGrantFormulaId,
           `Inference provider ${providerId}`,
@@ -593,7 +639,7 @@ export const makeInferenceProviderRegistry = async ({
 
   /** @param {string} grantId */
   const requireActiveGrant = grantId => {
-    const grant = state.grants[grantId];
+    const grant = ownEntry(state.grants, grantId);
     if (grant === undefined || grant.state !== 'active') {
       throw fixedError('agent-deleted');
     }
@@ -630,8 +676,17 @@ export const makeInferenceProviderRegistry = async ({
     return endpoint;
   };
 
+  /** @param {unknown} grantId */
+  const assertGrantId = grantId => {
+    matches(IDENTIFIER_PATTERN, grantId) ||
+      (() => {
+        throw fixedError('invalid-grant');
+      })();
+  };
+
   /** @param {string} grantId */
   const provideInference = grantId => {
+    assertGrantId(grantId);
     let inference = inferences.get(grantId);
     if (inference !== undefined) return inference;
     inference = makeExo('AgentInference', InferenceEndpointInterface, {
@@ -667,19 +722,28 @@ export const makeInferenceProviderRegistry = async ({
   /** @param {string} grantId */
   const revokeGrant = grantId =>
     inOrder(async () => {
-      const grant = state.grants[grantId];
+      assertGrantId(grantId);
+      const grant = ownEntry(state.grants, grantId);
       if (grant === undefined || grant.state === 'revoked') return;
       const next = copyState(state);
-      next.grants[grantId] = harden({
-        ...grant,
-        state: 'revoked',
-        generation: grant.generation + 1,
-        updatedAt: now(),
-      });
+      setEntry(
+        next.grants,
+        grantId,
+        harden({
+          ...grant,
+          state: 'revoked',
+          generation: grant.generation + 1,
+          updatedAt: now(),
+        }),
+      );
       await commit(next);
       const endpoint = endpoints.get(grantId);
       endpoints.delete(grantId);
-      if (endpoint !== undefined) await E(await endpoint).revoke();
+      // The grant is already revoked; an endpoint that failed to open or to
+      // tear down must not report that revoke as failed.
+      if (endpoint !== undefined) {
+        await endpoint.then(value => E(value).revoke()).catch(() => {});
+      }
     });
 
   /**
@@ -722,7 +786,7 @@ export const makeInferenceProviderRegistry = async ({
             })();
           const caps = request.caps === undefined ? {} : request.caps;
           assertCanonical(caps, 'invalid-caps');
-          const existing = state.grants[grantId];
+          const existing = ownEntry(state.grants, grantId);
           const desired = harden({
             version: /** @type {const} */ (1),
             grantId,
@@ -756,13 +820,17 @@ export const makeInferenceProviderRegistry = async ({
           }
           const changedAt = now();
           const next = copyState(state);
-          next.grants[grantId] = harden({
-            ...desired,
-            state: /** @type {const} */ ('active'),
-            generation: 1,
-            createdAt: changedAt,
-            updatedAt: changedAt,
-          });
+          setEntry(
+            next.grants,
+            grantId,
+            harden({
+              ...desired,
+              state: /** @type {const} */ ('active'),
+              generation: 1,
+              createdAt: changedAt,
+              updatedAt: changedAt,
+            }),
+          );
           await commit(next);
           return provideInference(grantId);
         }),
@@ -792,17 +860,31 @@ export const makeInferenceProviderRegistry = async ({
               throw fixedError('invalid-operation-id');
             })();
           const found = requireOwnedProvider(ownerId, providerId);
+          const checkedLimits = validateLimits(limits);
+          const prior = state.audit.find(
+            event =>
+              event.change === 'limits' &&
+              event.providerId === providerId &&
+              event.operationId === operationId,
+          );
+          if (prior !== undefined) {
+            sameData(prior.newValue.limits, checkedLimits) ||
+              (() => {
+                throw fixedError('idempotency-conflict');
+              })();
+            return summarize(found.descriptor, found.lifecycle);
+          }
           found.lifecycle.state === 'active' ||
             (() => {
               throw fixedError('provider-retired');
             })();
           const changed = harden({
             ...found.lifecycle,
-            limits: validateLimits(limits),
+            limits: checkedLimits,
             updatedAt: now(),
           });
           const next = copyState(state);
-          next.lifecycles[providerId] = changed;
+          setEntry(next.lifecycles, providerId, changed);
           next.audit.push(
             harden({
               providerId,
@@ -845,7 +927,10 @@ export const makeInferenceProviderRegistry = async ({
             Object.values(state.descriptors)
               .filter(descriptor => descriptor.ownerId === ownerId)
               .map(descriptor =>
-                summarize(descriptor, state.lifecycles[descriptor.providerId]),
+                summarize(
+                  descriptor,
+                  requireProvider(descriptor.providerId).lifecycle,
+                ),
               )
               .sort((left, right) =>
                 left.providerId.localeCompare(right.providerId),
@@ -891,7 +976,7 @@ export const makeInferenceProviderRegistry = async ({
                 state: /** @type {const} */ ('secret-created'),
                 updatedAt: now(),
               });
-              next.operations[operationKey] = operation;
+              setEntry(next.operations, operationKey, operation);
               // eslint-disable-next-line no-await-in-loop
               await commit(next);
             } else if (
@@ -899,11 +984,15 @@ export const makeInferenceProviderRegistry = async ({
               intentExpiryMs
             ) {
               const next = copyState(state);
-              next.operations[operationKey] = harden({
-                ...operation,
-                state: /** @type {const} */ ('aborted'),
-                updatedAt: now(),
-              });
+              setEntry(
+                next.operations,
+                operationKey,
+                harden({
+                  ...operation,
+                  state: /** @type {const} */ ('aborted'),
+                  updatedAt: now(),
+                }),
+              );
               if (secrets.revokeStable !== undefined) {
                 // eslint-disable-next-line no-await-in-loop
                 await secrets.revokeStable(operation.secretIds);
@@ -945,13 +1034,17 @@ export const makeInferenceProviderRegistry = async ({
               updatedAt: now(),
             });
             const next = copyState(state);
-            next.descriptors[operation.providerId] = descriptor;
-            next.lifecycles[operation.providerId] = lifecycle;
-            next.operations[operationKey] = harden({
-              ...operation,
-              state: /** @type {const} */ ('committed'),
-              updatedAt: now(),
-            });
+            setEntry(next.descriptors, operation.providerId, descriptor);
+            setEntry(next.lifecycles, operation.providerId, lifecycle);
+            setEntry(
+              next.operations,
+              operationKey,
+              harden({
+                ...operation,
+                state: /** @type {const} */ ('committed'),
+                updatedAt: now(),
+              }),
+            );
             next.audit.push(
               harden({
                 providerId: operation.providerId,
@@ -979,24 +1072,28 @@ export const makeInferenceProviderRegistry = async ({
               state: /** @type {const} */ ('secret-revoked'),
               updatedAt: now(),
             });
-            next.operations[operationKey] = operation;
+            setEntry(next.operations, operationKey, operation);
             // eslint-disable-next-line no-await-in-loop
             await commit(next);
           }
           if (operation.state === 'secret-revoked') {
-            const before = state.lifecycles[operation.providerId];
+            const before = requireProvider(operation.providerId).lifecycle;
             const retired = harden({
               ...before,
               state: /** @type {const} */ ('retired'),
               updatedAt: now(),
             });
             const next = copyState(state);
-            next.lifecycles[operation.providerId] = retired;
-            next.operations[operationKey] = harden({
-              ...operation,
-              state: /** @type {const} */ ('committed'),
-              updatedAt: now(),
-            });
+            setEntry(next.lifecycles, operation.providerId, retired);
+            setEntry(
+              next.operations,
+              operationKey,
+              harden({
+                ...operation,
+                state: /** @type {const} */ ('committed'),
+                updatedAt: now(),
+              }),
+            );
             next.audit.push(
               harden({
                 providerId: operation.providerId,
@@ -1013,6 +1110,8 @@ export const makeInferenceProviderRegistry = async ({
         }
       }
 
+      // Sweeping unreferenced names is sound only because every mutation runs
+      // through `inOrder`: no create can be between naming and recording here.
       if (secrets.listNames !== undefined) {
         const referenced = new Set(
           Object.values(state.operations).map(
@@ -1083,7 +1182,6 @@ export const makeEndoSecretParticipant = powers => {
       bytesBase64,
       stableIds,
     );
-    // `provisioning` is the structured "no bytes yet" answer.
     return summary.state !== 'provisioning';
   };
   return harden({
