@@ -5,7 +5,7 @@
 /** @import { ERef } from '@endo/eventual-send' */
 
 import { E } from '@endo/eventual-send';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { Far } from '@endo/far';
 import { M } from '@endo/patterns';
@@ -25,6 +25,48 @@ const RegistryRootInterface = M.interface('InferenceProviderRegistry', {
 });
 // eslint-disable-next-line @endo/no-harden-pattern-maker
 harden(RegistryRootInterface);
+
+const PRICE_FIELDS = harden([
+  'inputPerMillion',
+  'outputPerMillion',
+  'cacheReadPerMillion',
+  'cacheWritePerMillion',
+]);
+
+/**
+ * Parse `INFERENCE_PROVIDER_MODEL_PRICES`: a JSON object from model id to a
+ * record of non-negative per-million-token prices.
+ *
+ * @param {string | undefined} text
+ */
+export const parseModelPrices = text => {
+  if (text === undefined) return harden({});
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw Fail`INFERENCE_PROVIDER_MODEL_PRICES is not JSON: ${q(error.message)}`;
+  }
+  (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ||
+    Fail`INFERENCE_PROVIDER_MODEL_PRICES must be an object of model prices`;
+  for (const [model, price] of Object.entries(parsed)) {
+    (price &&
+      typeof price === 'object' &&
+      !Array.isArray(price) &&
+      Object.hasOwn(price, 'inputPerMillion') &&
+      Object.hasOwn(price, 'outputPerMillion') &&
+      Object.entries(price).every(
+        ([name, value]) =>
+          PRICE_FIELDS.includes(name) &&
+          typeof value === 'number' &&
+          Number.isFinite(value) &&
+          value >= 0,
+      )) ||
+      Fail`INFERENCE_PROVIDER_MODEL_PRICES has an invalid price for ${q(model)}`;
+  }
+  return harden(parsed);
+};
+harden(parseModelPrices);
 
 /**
  * Root-private provider registry caplet. Its powers are the root host, which
@@ -72,10 +114,7 @@ export const make = async (powers, context, { env } = {}) => {
         secret,
       );
     },
-    modelPrices:
-      env?.INFERENCE_PROVIDER_MODEL_PRICES === undefined
-        ? harden({})
-        : harden(JSON.parse(env.INFERENCE_PROVIDER_MODEL_PRICES)),
+    modelPrices: parseModelPrices(env?.INFERENCE_PROVIDER_MODEL_PRICES),
     validateLimits: limits => {
       (limits && typeof limits === 'object' && !Array.isArray(limits)) ||
         Fail`Invalid provider limits`;
