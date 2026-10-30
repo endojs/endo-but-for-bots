@@ -741,10 +741,11 @@ export const makeDaemonDatabase = (config, options) => {
    * @param {SecretRecord} record
    * @param {string} grantId
    */
-  const writeSecretRecordWithGrant = db.transaction((record, grantId) => {
-    writeSecretRecord(record);
-    writeSecretGrant(grantId, record.secretId);
-  });
+  const writeSecretRecordWithGrant = (record, grantId) =>
+    db.transaction(() => {
+      writeSecretRecord(record);
+      writeSecretGrant(grantId, record.secretId);
+    })();
 
   /** @param {string} secretId */
   const deleteSecret = secretId => {
