@@ -14,6 +14,7 @@ test('agentry subpaths resolve through package exports', async t => {
     endoCodeModePiExtensionModule,
     evalModule,
     editTextModule,
+    rpcModule,
   ] = await Promise.all([
     import('@endo/agentry'),
     import('@endo/agentry/harness'),
@@ -26,6 +27,7 @@ test('agentry subpaths resolve through package exports', async t => {
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/eval'),
     import('@endo/agentry/edit-text'),
+    import('@endo/agentry/rpc'),
   ]);
 
   // Pin the public runtime surface of the package's primary entry points.
@@ -132,5 +134,19 @@ test('agentry subpaths resolve through package exports', async t => {
     Object.keys(editTextModule).sort(),
     ['applyEdits', 'computeUnifiedDiff', 'normalizeEdits'],
     '@endo/agentry/edit-text export surface',
+  );
+
+  t.is(typeof rpcModule.serveRpc, 'function');
+  t.deepEqual(
+    Object.keys(rpcModule).sort(),
+    [
+      'encodeRecord',
+      'makeJsonlDecoder',
+      'makeRpcBridge',
+      'makeRpcSession',
+      'serveRpc',
+      'translateAgentEvent',
+    ],
+    '@endo/agentry/rpc export surface',
   );
 });
