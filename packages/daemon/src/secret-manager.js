@@ -96,6 +96,8 @@ const withDecodedSecret = async (bytesBase64, operation) => {
  * @property {() => SecretRecord[]} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
+ * @property {(record: SecretRecord, grantId: string) => void} writeSecretRecordWithGrant
+ *   Writes both in one transaction.
  * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
@@ -707,7 +709,10 @@ export const makeSecretManager = ({
             // Only the operation that created the record may resume it, and
             // only through the grant that operation recorded. The caller
             // chooses `secretId`, so knowing it must not be enough to mint
-            // another grant onto someone else's secret.
+            // another grant onto someone else's secret. Attempts are audited
+            // only while no record exists, so the latest attempt is the one
+            // that wrote it; an earlier attempt that crashed before writing
+            // must not take the record over.
             const creator = persistence
               .listSecretAuditEventsFor(secretId)
               .filter(
@@ -741,8 +746,7 @@ export const makeSecretManager = ({
                 updatedAt: createdAt,
               }),
             );
-            persistence.writeSecretRecord(record);
-            persistence.writeSecretGrant(grantId, secretId);
+            persistence.writeSecretRecordWithGrant(record, grantId);
           }
 
           if (record.state === 'provisioning') {
@@ -769,8 +773,6 @@ export const makeSecretManager = ({
                     ),
                   );
             if (backendRef === undefined) {
-              // Nothing was written and no bytes were supplied. The
-              // `provisioning` summary tells the caller to resupply the key.
               return summaryFor(record);
             }
             record = harden({

@@ -46,6 +46,7 @@ import { q } from '@endo/errors';
  * @property {() => SecretRecord[]} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
+ * @property {(record: SecretRecord, grantId: string) => void} writeSecretRecordWithGrant
  * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
@@ -367,7 +368,7 @@ export const makeDaemonDatabase = (config, options) => {
     'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event ORDER BY seq DESC LIMIT ?',
   );
   const stmtListSecretAuditEventsFor = prepare(
-    // Oldest first, so the first `create` event names the creating operation.
+    // Oldest first, so the last `create` attempt names the creating operation.
     'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event WHERE secret_id = ? ORDER BY seq ASC',
   );
 
@@ -733,6 +734,18 @@ export const makeDaemonDatabase = (config, options) => {
     stmtWriteSecretGrant.run(grantId, secretId);
   };
 
+  /**
+   * One transaction, so a crash cannot leave a new record without the grant
+   * that lets its creator resume it.
+   *
+   * @param {SecretRecord} record
+   * @param {string} grantId
+   */
+  const writeSecretRecordWithGrant = db.transaction((record, grantId) => {
+    writeSecretRecord(record);
+    writeSecretGrant(grantId, record.secretId);
+  });
+
   /** @param {string} secretId */
   const deleteSecret = secretId => {
     // Delete grants first so a crash cannot leave a grant pointing at a
@@ -829,6 +842,7 @@ export const makeDaemonDatabase = (config, options) => {
     listSecretRecords,
     getSecretIdForGrant,
     writeSecretGrant,
+    writeSecretRecordWithGrant,
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
