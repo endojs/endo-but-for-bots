@@ -186,3 +186,7 @@ Two subpaths support API-key providers:
 |---|---|
 | `@endo/hosted-agent/anthropic-api-key-issuer.js` | `makeAnthropicApiKeyIssuerFactory` builds the registry's issuer factory for Anthropic API-key grants; `make` is its Endo module entry point |
 | `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`, the limits a consumer configures against |
+
+`INFERENCE_PROVIDER_MODEL_PRICES` supplies integer micro-dollar prices per
+million tokens. A free price is zero; a non-zero price below 1,000 micro-dollars
+is refused as a likely unit error.

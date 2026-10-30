@@ -159,7 +159,10 @@ const makeRegistry = (backing, options = {}) => {
     modelPrices:
       options.modelPrices ||
       harden({
-        'claude-test': { inputPerMillion: 1, outputPerMillion: 1 },
+        'claude-test': {
+          inputPerMillion: 1_000_000,
+          outputPerMillion: 1_000_000,
+        },
       }),
     ...(options.nowMillis === undefined
       ? {}
@@ -516,7 +519,10 @@ test('AgentInference uses the existing issuer in-process without a listener', as
     randomId: makeIds(),
     now: () => '2026-10-27T00:00:00.000Z',
     modelPrices: harden({
-      'claude-test': { inputPerMillion: 1, outputPerMillion: 1 },
+      'claude-test': {
+        inputPerMillion: 1_000_000,
+        outputPerMillion: 1_000_000,
+      },
     }),
   });
   const directory = registry.directoryFor('owner-alice');
