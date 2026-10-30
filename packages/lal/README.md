@@ -30,9 +30,8 @@ Two `providers/` subpaths are exported for downstream consumers (jaine, fae):
 | `@endo/lal/providers/index.js` | `createProvider` and the per-backend provider factories it re-exports |
 | `@endo/lal/providers/brokered-messages.js` | `makeBrokeredMessagesProvider`, `makeBrokeredMessagesStream`, and `assertBrokeredMessagesRecipe` for the credential-free Anthropic Messages path over an inference grant |
 
-Nothing else in `providers/` is a subpath; the Anthropic message conversion
-helpers in `providers/anthropic.js` (`toAnthropicMessages`, `toAnthropicTools`)
-are internal.
+`brokered-messages.js` is its own subpath, not a `createProvider` backend,
+because it takes an inference grant rather than a host and key.
 Lal's own agent loop goes through pi-ai's multi-provider registry, except for
 the brokered Anthropic path, which uses `providers/brokered-messages.js`.
 

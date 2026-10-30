@@ -158,7 +158,7 @@ Key behaviors:
 
 - **Tool call extraction.** Some models embed tool calls as
   `<tool_call>JSON</tool_call>` in content. `extractToolCallsFromContent()`
-  parses these and strips `<think>…</think>` blocks.
+  parses these and strips `<think>...</think>` blocks.
 - **Direct evaluation.** The `evaluate` tool executes code directly and
   returns the result synchronously within the tool-call round-trip.
 - **No max-iteration guard.** The loop relies on the LLM to stop calling tools

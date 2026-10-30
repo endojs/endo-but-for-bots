@@ -177,15 +177,12 @@ model list, and an account without discovery admits nothing.
 Request and response size bounds and simultaneous request slots protect host resources;
 completed requests do not exhaust a lifetime budget.
 An open stream holds its slot until upstream EOF, cancellation, or failure.
-The grant layer itself imposes no token or dollar spending limits.
-The inference provider registry (`inference-provider-registry.js`) does: it applies
-the default daily dollar budgets, concurrency, and rate caps in
-`inference-provider-policy.js` (`DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`)
-to every provider, owner, and agent unless they are configured otherwise.
+The grant layer itself imposes no token or dollar spending limits; the inference
+provider registry does, with defaults from `inference-provider-policy.js`.
 
 Two subpaths support API-key providers:
 
 | Subpath | Exports |
 |---|---|
 | `@endo/hosted-agent/anthropic-api-key-issuer.js` | `makeAnthropicApiKeyIssuerFactory` builds the registry's issuer factory for Anthropic API-key grants; `make` is its Endo module entry point |
-| `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`; `validateInferenceLimits` and `raisedInferenceLimits` for limit records; `validateAnthropicInferenceRequest` for the Messages request policy; `conservativeTokenReservation` and `priceUsageMicros` for reservation and settlement |
+| `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`, the limits a consumer configures against |
