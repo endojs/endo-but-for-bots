@@ -8,11 +8,13 @@ import path from 'node:path';
 
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
+/** @import { Config } from '../src/types.js' */
+
 test('secret metadata survives updates without invalidating grants', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-db-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,
@@ -50,7 +52,7 @@ test('a record and its grant can be written together', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-pair-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,
@@ -77,7 +79,7 @@ test('audit events never carry a redeemable grant identifier', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-audit-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,
@@ -134,7 +136,7 @@ test('audit events are ordered by insertion, not by timestamp', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-seq-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,
