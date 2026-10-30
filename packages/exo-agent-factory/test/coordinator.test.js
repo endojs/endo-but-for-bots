@@ -1,15 +1,20 @@
 // @ts-check
 
+/**
+ * @import { ExecutionContext } from 'ava'
+ */
+
 /* eslint-disable no-await-in-loop */
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
 
 import { prepareChildAgentCoordinator } from '../index.js';
 import { LIFECYCLE_NAME } from '../src/coordinator.js';
-import { makeFakeDaemon } from './_fake-host.js';
+import { AgentDriverMakerInterface } from '../src/interfaces.js';
+import { makeFakeDaemon, makeToken } from './_fake-host.js';
 
 // A crash loses its class crossing an exo boundary, so match its message.
 const crashPattern = /^(crash at|dead incarnation)/;
@@ -38,7 +43,7 @@ const setup = async () => {
 
 test('create commits a child with exactly its endowments', async t => {
   const { daemon, bound, calls } = await setup();
-  const notes = Far('Notes', {});
+  const notes = makeToken('Notes');
   const { summary, handle } = await E(bound).create('helper', {
     instructions: 'Summarize.',
     endowments: { notes },
@@ -79,7 +84,7 @@ test('policy refusal has no side effects', async t => {
     message: /64-byte bound/,
   });
   await t.throwsAsync(
-    E(bound).create('a', { endowments: { secrets: Far('S', {}) } }),
+    E(bound).create('a', { endowments: { secrets: makeToken('S') } }),
     { message: /does not admit/ },
   );
   await t.throwsAsync(E(bound).create('@self'), { message: /ordinary/ });
@@ -94,7 +99,7 @@ test('bind and attenuate can only reduce policy and quota is nested', async t =>
     endowmentNames: ['notes', 'unlisted'],
   });
   await t.throwsAsync(
-    E(narrow).create('a', { endowments: { workspace: Far('W', {}) } }),
+    E(narrow).create('a', { endowments: { workspace: makeToken('W') } }),
     { message: /does not admit/ },
   );
   const derived = await E(narrow).attenuate('sub', { maxChildren: 99 });
@@ -144,7 +149,7 @@ test('operation semantics: duplicate, unknown, and removed names', async t => {
 test('maker failure during create rolls the child back', async t => {
   const daemon = makeFakeDaemon();
   const coordinator = await boot(daemon);
-  const maker = Far('AgentDriverMaker', {
+  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
     async installDriver() {
       throw Error('provider refused');
     },
@@ -208,7 +213,7 @@ test('a child that clears its own @pins still resumes', async t => {
   const guestName = /** @type {string} */ (
     [...daemon.names.keys()].find(name => name.endsWith('.guest'))
   );
-  daemon.guestWrite(guestName, 'pins-replacement', Far('Junk', {}));
+  daemon.guestWrite(guestName, 'pins-replacement', makeToken('Junk'));
   daemon.forgetIncarnations();
   await boot(daemon);
   t.is(daemon.running().length, 1);
@@ -238,7 +243,7 @@ test('a wrong formula type at a derived name fails closed', async t => {
   const bound = await E(coordinator.rootFacet).bind(maker);
   // Plant a non-guest at the first operation's guest name, as only a
   // coordinator defect could.
-  await E(daemon.host).storeValue(Far('Squatter', {}), 'c1.0.guest');
+  await E(daemon.host).storeValue(makeToken('Squatter'), 'c1.0.guest');
   await t.throwsAsync(E(bound).create('helper'), {
     message: /expected "guest"/,
   });
@@ -254,7 +259,7 @@ test('a wrong formula type at a derived name fails closed', async t => {
  * Crash at every effect of `scenario` in turn, then restart and check that
  * the state converged.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {(ctx: { bound: any, coordinator: any, daemon: any }) => Promise<void>} prepare
  * @param {(ctx: { bound: any, coordinator: any, daemon: any }) => Promise<void>} scenario
  * @param {(ctx: { daemon: any, revived: any, crashed: boolean }) => Promise<void>} check
@@ -287,7 +292,7 @@ const crashMatrix = async (t, prepare, scenario, check) => {
 };
 
 test('recovery matrix: create converges to exactly one child or none', async t => {
-  const notes = Far('Notes', {});
+  const notes = makeToken('Notes');
   await crashMatrix(
     t,
     async () => {},
@@ -327,7 +332,9 @@ test('recovery matrix: removal converges with nothing left', async t => {
   await crashMatrix(
     t,
     async ({ bound }) => {
-      await E(bound).create('helper', { endowments: { notes: Far('N', {}) } });
+      await E(bound).create('helper', {
+        endowments: { notes: makeToken('N') },
+      });
     },
     async ({ bound }) => {
       await E(bound).remove('helper');
@@ -417,7 +424,9 @@ test('a pre-bound endowment with a different identifier fails closed', async t =
     probe.makeMaker().maker,
   );
   const start = probe.effects;
-  await E(probeBound).create('helper', { endowments: { notes: Far('N', {}) } });
+  await E(probeBound).create('helper', {
+    endowments: { notes: makeToken('N') },
+  });
   const cut =
     probe.trace.findIndex(
       (label, i) => i >= start && label.startsWith('name guest'),
@@ -428,11 +437,11 @@ test('a pre-bound endowment with a different identifier fails closed', async t =
   // `notes` to something else, which only a defect could do.
   daemon.crashAfter(cut);
   await t.throwsAsync(
-    E(bound).create('helper', { endowments: { notes: Far('N', {}) } }),
+    E(bound).create('helper', { endowments: { notes: makeToken('N') } }),
     { message: crashPattern },
   );
   daemon.restart();
-  daemon.guestWrite('c1.0.guest', 'notes', Far('Other', {}));
+  daemon.guestWrite('c1.0.guest', 'notes', makeToken('Other'));
   const revived = await boot(daemon);
   t.regex(Object.values(revived.faults())[0], /another value/);
   const [summary] = await E(revived.boundFacet(1)).list();
@@ -449,7 +458,9 @@ test('a stray name in the child directory fails closed', async t => {
     probe.makeMaker().maker,
   );
   const start = probe.effects;
-  await E(probeBound).create('helper', { endowments: { notes: Far('N', {}) } });
+  await E(probeBound).create('helper', {
+    endowments: { notes: makeToken('N') },
+  });
   const cut =
     probe.trace.findIndex(
       (label, i) => i >= start && label.startsWith('name guest'),
@@ -458,11 +469,11 @@ test('a stray name in the child directory fails closed', async t => {
     2;
   daemon.crashAfter(cut);
   await t.throwsAsync(
-    E(bound).create('helper', { endowments: { notes: Far('N', {}) } }),
+    E(bound).create('helper', { endowments: { notes: makeToken('N') } }),
     { message: crashPattern },
   );
   daemon.restart();
-  daemon.guestWrite('c1.0.guest', 'stray', Far('Stray', {}));
+  daemon.guestWrite('c1.0.guest', 'stray', makeToken('Stray'));
   const revived = await boot(daemon);
   t.regex(Object.values(revived.faults())[0], /expected exactly/);
   const [summary] = await E(revived.boundFacet(1)).list();
@@ -475,7 +486,7 @@ test('a responder formulated with other powers fails closed', async t => {
   const { maker: honest } = daemon.makeMaker();
   // A defective maker that formulates the responder over the agent guest
   // rather than the driver guest.
-  const maker = Far('AgentDriverMaker', {
+  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
     installDriver: (/** @type {any} */ context) =>
       E(honest).installDriver({ ...context, driverGuest: context.agent }),
   });
@@ -501,8 +512,8 @@ test('a responder formulated with other powers fails closed', async t => {
 
 test('a stale retained endowment is replaced before the operation starts', async t => {
   const { daemon, bound } = await setup();
-  const notes = Far('Notes', {});
-  await E(daemon.host).storeValue(Far('Stale', {}), 'c1.0.e0');
+  const notes = makeToken('Notes');
+  await E(daemon.host).storeValue(makeToken('Stale'), 'c1.0.e0');
   const { summary } = await E(bound).create('helper', {
     endowments: { notes },
   });

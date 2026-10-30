@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { Fail, q } from '@endo/errors';
+import { encodeUtf8 } from '@endo/utf8';
 
 /**
  * @typedef {object} ChildAgentPolicy
@@ -135,8 +136,6 @@ export const intersectPolicy = (issuer, requested = {}) => {
 };
 harden(intersectPolicy);
 
-const textEncoder = new TextEncoder();
-
 /**
  * Refuse a `create` request the namespace's policy does not admit. Quota is
  * checked separately because it spans ancestor namespaces.
@@ -147,7 +146,7 @@ const textEncoder = new TextEncoder();
  */
 export const assertCreateAdmitted = (policy, instructions, endowmentNames) => {
   typeof instructions === 'string' || Fail`Instructions must be a string`;
-  textEncoder.encode(instructions).length <= policy.maxInstructionBytes ||
+  encodeUtf8(instructions).length <= policy.maxInstructionBytes ||
     Fail`Instructions exceed this factory's ${q(policy.maxInstructionBytes)}-byte bound`;
   for (const name of endowmentNames) {
     assertOrdinaryName(name, 'endowment name');
