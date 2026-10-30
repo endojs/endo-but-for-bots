@@ -5,6 +5,7 @@ import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import {
   makeSecretManager,
@@ -27,6 +28,10 @@ const makeHarness = () => {
     listSecretRecords: () => [...records.values()],
     getSecretIdForGrant: id => grants.get(id),
     writeSecretGrant: (grantId, secretId) => grants.set(grantId, secretId),
+    writeSecretRecordWithGrant: (record, grantId) => {
+      records.set(record.secretId, record);
+      grants.set(grantId, record.secretId);
+    },
     deleteSecret: secretId => {
       for (const [grantId, grantSecretId] of grants) {
         if (grantSecretId === secretId) grants.delete(grantId);
@@ -43,6 +48,8 @@ const makeHarness = () => {
       values.set(secretId, new Uint8Array(bytes));
       return secretId;
     },
+    recover: async (_operationId, secretId) =>
+      values.has(secretId) ? secretId : undefined,
     read: async ref => new Uint8Array(values.get(ref)),
     replace: async (_operationId, ref, bytes) => {
       values.set(ref, new Uint8Array(bytes));
@@ -52,9 +59,12 @@ const makeHarness = () => {
     },
   });
   const bindings = [];
-  const makeManager = (backendPower = backend) =>
+  const makeManager = (
+    backendPower = backend,
+    persistencePower = persistence,
+  ) =>
     makeSecretManager({
-      persistence,
+      persistence: persistencePower,
       backend: backendPower,
       randomHex256,
     });
@@ -81,6 +91,7 @@ const makeHarness = () => {
     events,
     values,
     bindings,
+    persistence,
     backend,
     makeManager,
     makeDirectory,
@@ -304,6 +315,10 @@ test('a revoke racing a backend read fails the read closed', async t => {
       listSecretRecords: () => [...harness.records.values()],
       getSecretIdForGrant: id => harness.grants.get(id),
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
+      writeSecretRecordWithGrant: (next, id) => {
+        harness.records.set(next.secretId, next);
+        harness.grants.set(id, next.secretId);
+      },
       deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
@@ -398,6 +413,10 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
       listSecretRecords: () => [...harness.records.values()],
       getSecretIdForGrant: id => harness.grants.get(id),
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
+      writeSecretRecordWithGrant: (next, id) => {
+        harness.records.set(next.secretId, next);
+        harness.grants.set(id, next.secretId);
+      },
       deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
@@ -446,6 +465,10 @@ const makeRacingManager = (
       listSecretRecords: () => [...harness.records.values()],
       getSecretIdForGrant: id => harness.grants.get(id),
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
+      writeSecretRecordWithGrant: (next, id) => {
+        harness.records.set(next.secretId, next);
+        harness.grants.set(id, next.secretId);
+      },
       deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit =>
@@ -705,6 +728,409 @@ test('re-creating a secret under a taken pet name is the binder decision', async
   );
 });
 
+test('stable import resumes a lost backend response without replacing bytes', async t => {
+  const harness = makeHarness();
+  let first = true;
+  const backend = harden({
+    ...harness.backend,
+    create: async (_operationId, secretId, bytes) => {
+      if (!harness.values.has(secretId)) {
+        harness.values.set(secretId, new Uint8Array(bytes));
+      }
+      if (first) {
+        first = false;
+        throw Error('lost backend response');
+      }
+      return secretId;
+    },
+  });
+  const stableIds = harden({
+    secretId: 'secret-stable-0001',
+    grantId: 'grant-stable-00001',
+    operationId: 'operation-stable-1',
+  });
+  const original = encodeBase64(encodeUtf8('original'));
+  const firstImporter = await E(
+    harness.makeDirectory(harness.makeManager(backend)),
+  ).lookup('create');
+  await t.throwsAsync(
+    () =>
+      E(firstImporter).provideBase64(
+        'stable',
+        'Stable import',
+        original,
+        stableIds,
+      ),
+    { message: /CREATE_FAILED/ },
+  );
+  t.is(harness.records.get(stableIds.secretId).state, 'provisioning');
+
+  const revivedDirectory = harness.makeDirectory(harness.makeManager(backend));
+  const revivedImporter = await E(revivedDirectory).lookup('create');
+  const summary = await E(revivedImporter).provideBase64(
+    'stable',
+    'Stable import',
+    undefined,
+    stableIds,
+  );
+  t.is(summary.state, 'active');
+  t.is(harness.records.size, 1);
+  t.is(harness.grants.size, 1);
+  t.is(harness.bindings.length, 1);
+  const blob = await E(revivedDirectory).lookup(['use', stableIds.grantId]);
+  t.is(await E(blob).readBase64(), original);
+});
+
+test('revoking a provisioning import cleans up a lost backend response', async t => {
+  const harness = makeHarness();
+  const backend = harden({
+    ...harness.backend,
+    create: async (_operationId, secretId, bytes) => {
+      harness.values.set(secretId, new Uint8Array(bytes));
+      throw Error('lost backend response');
+    },
+  });
+  const stableIds = harden({
+    secretId: 'secret-stable-0004',
+    grantId: 'grant-stable-00004',
+    operationId: 'operation-stable-4',
+  });
+  const directory = harness.makeDirectory(harness.makeManager(backend));
+  const importer = await E(directory).lookup('create');
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-cleanup',
+        'Stable cleanup',
+        encodeBase64(encodeUtf8('original')),
+        stableIds,
+      ),
+    { message: /CREATE_FAILED/ },
+  );
+  t.true(harness.values.has(stableIds.secretId));
+
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  await E(entry.admin).revoke();
+  t.false(harness.values.has(stableIds.secretId));
+  t.is(harness.records.get(stableIds.secretId).state, 'revoked');
+});
+
+test('deleting a provisioning import whose revoke cleanup failed recovers the orphaned bytes', async t => {
+  const harness = makeHarness();
+  let recoverAttempts = 0;
+  const backend = harden({
+    ...harness.backend,
+    create: async (_operationId, secretId, bytes) => {
+      harness.values.set(secretId, new Uint8Array(bytes));
+      throw Error('lost backend response');
+    },
+    recover: async (operationId, secretId) => {
+      recoverAttempts += 1;
+      if (recoverAttempts === 1) throw Error('backend unavailable');
+      return harness.backend.recover(operationId, secretId);
+    },
+  });
+  const stableIds = harden({
+    secretId: 'secret-stable-0005',
+    grantId: 'grant-stable-00005',
+    operationId: 'operation-stable-5',
+  });
+  const directory = harness.makeDirectory(harness.makeManager(backend));
+  const importer = await E(directory).lookup('create');
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-orphan',
+        'Stable orphan',
+        encodeBase64(encodeUtf8('original')),
+        stableIds,
+      ),
+    { message: /CREATE_FAILED/ },
+  );
+
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  await t.throwsAsync(() => E(entry.admin).revoke(), {
+    message: /BACKEND_CLEANUP_FAILED/,
+  });
+  t.is(harness.records.get(stableIds.secretId).backendRef, '');
+  t.true(harness.values.has(stableIds.secretId));
+
+  await E(entry.admin).delete();
+  t.false(harness.records.has(stableIds.secretId));
+  t.false(harness.values.has(stableIds.secretId));
+});
+
+test('stable import resumes a lost binding response exactly once', async t => {
+  const harness = makeHarness();
+  let loseResponse = true;
+  const makeDirectory = manager =>
+    manager.makeHostDirectory({
+      bindGrant: async (grantId, name) => {
+        harness.bindings.push({ grantId, name });
+        if (loseResponse) {
+          loseResponse = false;
+          throw Error('lost binding response');
+        }
+      },
+      listKnownGrantPaths: async () =>
+        harness.bindings.map(({ grantId, name }) => ({
+          grantId,
+          path: ['secrets', name],
+        })),
+      removeKnownGrantPaths: async () => {},
+    });
+  const stableIds = harden({
+    secretId: 'secret-stable-0002',
+    grantId: 'grant-stable-00002',
+    operationId: 'operation-stable-2',
+  });
+  const bytes = encodeBase64(encodeUtf8('original'));
+  const firstImporter = await E(makeDirectory(harness.makeManager())).lookup(
+    'create',
+  );
+  await t.throwsAsync(
+    () =>
+      E(firstImporter).provideBase64(
+        'stable-bind',
+        'Stable binding',
+        bytes,
+        stableIds,
+      ),
+    { message: 'lost binding response' },
+  );
+  const revivedImporter = await E(makeDirectory(harness.makeManager())).lookup(
+    'create',
+  );
+  const summary = await E(revivedImporter).provideBase64(
+    'stable-bind',
+    'Stable binding',
+    bytes,
+    stableIds,
+  );
+  t.is(summary.state, 'active');
+  t.is(harness.bindings.length, 1);
+  t.is(harness.records.size, 1);
+});
+
+test('stable import rejects a taken pet name before creating an orphan', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const bytes = encodeBase64(encodeUtf8('original'));
+  await E(importer).createBase64('taken', 'Existing secret', bytes);
+  const beforeRecords = harness.records.size;
+  const beforeGrants = harness.grants.size;
+
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'taken',
+        'Stable import',
+        bytes,
+        harden({
+          secretId: 'secret-stable-0003',
+          grantId: 'grant-stable-00003',
+          operationId: 'operation-stable-3',
+        }),
+      ),
+    { message: /NAME_CONFLICT/ },
+  );
+  t.is(harness.records.size, beforeRecords);
+  t.is(harness.grants.size, beforeGrants);
+});
+
+/**
+ * A persistence whose first record-and-grant write rolls back.
+ *
+ * @param {ReturnType<typeof makeHarness>} harness
+ */
+const makeCrashingPersistence = harness => {
+  let crash = true;
+  return harden({
+    ...harness.persistence,
+    writeSecretRecordWithGrant: (record, grantId) => {
+      if (crash) {
+        crash = false;
+        throw Error('crash before commit');
+      }
+      harness.persistence.writeSecretRecordWithGrant(record, grantId);
+    },
+  });
+};
+
+test('a crash while recording a stable import does not wedge its retry', async t => {
+  const harness = makeHarness();
+  const persistence = makeCrashingPersistence(harness);
+  const stableIds = harden({
+    secretId: 'secret-stable-0007',
+    grantId: 'grant-stable-00007',
+    operationId: 'operation-stable-7',
+  });
+  const bytes = encodeBase64(encodeUtf8('original'));
+  const firstImporter = await E(
+    harness.makeDirectory(harness.makeManager(harness.backend, persistence)),
+  ).lookup('create');
+  await t.throwsAsync(
+    () =>
+      E(firstImporter).provideBase64(
+        'stable-crash',
+        'Stable crash',
+        bytes,
+        stableIds,
+      ),
+    { message: 'crash before commit' },
+  );
+  t.is(harness.records.size, 0);
+  t.is(harness.grants.size, 0);
+
+  const revivedDirectory = harness.makeDirectory(
+    harness.makeManager(harness.backend, persistence),
+  );
+  const summary = await E(
+    await E(revivedDirectory).lookup('create'),
+  ).provideBase64('stable-crash', 'Stable crash', bytes, stableIds);
+  t.is(summary.state, 'active');
+  t.is(harness.grants.get(stableIds.grantId), stableIds.secretId);
+  t.is(harness.bindings.length, 1);
+  const blob = await E(revivedDirectory).lookup(['use', stableIds.grantId]);
+  t.is(await E(blob).readBase64(), bytes);
+});
+
+test('an attempt that crashed before writing cannot take over the secret a later operation created', async t => {
+  const harness = makeHarness();
+  const persistence = makeCrashingPersistence(harness);
+  const importer = await E(
+    harness.makeDirectory(harness.makeManager(harness.backend, persistence)),
+  ).lookup('create');
+  const bytes = encodeBase64(encodeUtf8('original'));
+  const crashed = harden({
+    secretId: 'secret-stable-0008',
+    grantId: 'grant-stable-00008',
+    operationId: 'operation-stable-8',
+  });
+  const creator = harden({
+    ...crashed,
+    grantId: 'grant-stable-00009',
+    operationId: 'operation-stable-9',
+  });
+  await t.throwsAsync(
+    () => E(importer).provideBase64('stable-a', 'Stable race', bytes, crashed),
+    { message: 'crash before commit' },
+  );
+  await E(importer).provideBase64('stable-b', 'Stable race', bytes, creator);
+  t.deepEqual(
+    harness.events
+      .filter(
+        event =>
+          event.secretId === crashed.secretId && event.outcome === 'attempted',
+      )
+      .map(event => event.operationId),
+    [crashed.operationId, creator.operationId],
+  );
+
+  await t.throwsAsync(
+    () => E(importer).provideBase64('stable-a', 'Stable race', bytes, crashed),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  const summary = await E(importer).provideBase64(
+    'stable-b',
+    'Stable race',
+    bytes,
+    creator,
+  );
+  t.is(summary.state, 'active');
+  t.is(harness.grants.get(crashed.grantId), undefined);
+});
+
+test('concurrent stable imports cannot share a name or a grant', async t => {
+  const harness = makeHarness();
+  const importer = await E(harness.makeDirectory(harness.makeManager())).lookup(
+    'create',
+  );
+  const bytes = encodeBase64(encodeUtf8('original'));
+  const ids = n =>
+    harden({
+      secretId: `secret-race-${n}`,
+      grantId: `grant-race-${n}`,
+      operationId: `operation-race-${n}`,
+    });
+
+  const sameName = await Promise.allSettled([
+    E(importer).provideBase64('race-name', 'Race', bytes, ids(1)),
+    E(importer).provideBase64('race-name', 'Race', bytes, ids(2)),
+  ]);
+  t.deepEqual(
+    sameName.map(({ status }) => status),
+    ['fulfilled', 'rejected'],
+  );
+  t.regex(
+    /** @type {PromiseRejectedResult} */ (sameName[1]).reason.message,
+    /NAME_CONFLICT/,
+  );
+  t.is(harness.records.has('secret-race-2'), false);
+
+  const sameGrant = await Promise.allSettled([
+    E(importer).provideBase64('race-grant-a', 'Race', bytes, ids(3)),
+    E(importer).provideBase64(
+      'race-grant-b',
+      'Race',
+      bytes,
+      harden({ ...ids(4), grantId: ids(3).grantId }),
+    ),
+  ]);
+  t.deepEqual(
+    sameGrant.map(({ status }) => status),
+    ['fulfilled', 'rejected'],
+  );
+  t.regex(
+    /** @type {PromiseRejectedResult} */ (sameGrant[1]).reason.message,
+    /IDEMPOTENCY_CONFLICT/,
+  );
+  t.is(harness.grants.get(ids(3).grantId), ids(3).secretId);
+  t.is(harness.records.has('secret-race-4'), false);
+});
+
+test('stable ids differing only in punctuation name distinct secrets', async t => {
+  const harness = makeHarness();
+  const importer = await E(harness.makeDirectory(harness.makeManager())).lookup(
+    'create',
+  );
+  const colon = harden({
+    secretId: 'secret:stable:10',
+    grantId: 'grant:stable:10',
+    operationId: 'operation:stable:10',
+  });
+  const dot = harden({
+    secretId: 'secret.stable.10',
+    grantId: 'grant.stable.10',
+    operationId: 'operation.stable.10',
+  });
+  const bytes = encodeBase64(encodeUtf8('original'));
+  await E(importer).provideBase64('stable-colon', 'Stable', bytes, colon);
+  await E(importer).provideBase64('stable-dot', 'Stable', bytes, dot);
+  t.is(harness.records.size, 2);
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-dot',
+        'Stable',
+        bytes,
+        harden({ ...dot, grantId: colon.grantId }),
+      ),
+    { message: /NAME_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-mixed',
+        'Stable',
+        bytes,
+        harden({ ...dot, grantId: colon.grantId }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+});
+
 test('a read reports the generation its bytes came from', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
@@ -952,4 +1378,139 @@ test('a malformed generation precondition is refused rather than ignored', async
   const after = await E(blob).readBase64WithGeneration();
   t.is(new TextDecoder().decode(decodeBase64(after.base64)), canary);
   t.is(after.generation, 1n);
+});
+
+test('stable import refuses invalid ids, idempotency conflicts, missing keys, and revoked records', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const bytes = encodeBase64(encodeUtf8('original'));
+  const stableIds = harden({
+    secretId: 'secret-stable-0005',
+    grantId: 'grant-stable-00005',
+    operationId: 'operation-stable-5',
+  });
+
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-refuse',
+        'Stable refusal',
+        bytes,
+        harden({ ...stableIds, secretId: 'not a stable id' }),
+      ),
+    { message: /INVALID_STABLE_ID/ },
+  );
+  const missing = await E(importer).provideBase64(
+    'stable-missing',
+    'Stable missing key',
+    undefined,
+    harden({
+      secretId: 'secret-stable-0006',
+      grantId: 'grant-stable-00006',
+      operationId: 'operation-stable-6',
+    }),
+  );
+  t.is(missing.state, 'provisioning');
+
+  await E(importer).provideBase64(
+    'stable-refuse',
+    'Stable refusal',
+    bytes,
+    stableIds,
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-refuse',
+        'Different description',
+        bytes,
+        stableIds,
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-other',
+        'Stable missing key',
+        bytes,
+        harden({
+          secretId: 'secret-stable-0006',
+          grantId: 'grant-stable-00005',
+          operationId: 'operation-stable-6',
+        }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-intruder',
+        'Stable refusal',
+        bytes,
+        harden({
+          secretId: stableIds.secretId,
+          grantId: 'grant-intruder-01',
+          operationId: 'operation-intruder',
+        }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-intruder',
+        'Stable refusal',
+        bytes,
+        harden({ ...stableIds, grantId: 'grant-intruder-02' }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-intruder',
+        'Stable refusal',
+        bytes,
+        harden({ ...stableIds, operationId: 'operation-intruder' }),
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-second-name',
+        'Stable refusal',
+        bytes,
+        stableIds,
+      ),
+    { message: /IDEMPOTENCY_CONFLICT/ },
+  );
+
+  const entry = (await E(await E(directory).lookup('catalog')).list()).find(
+    candidate => candidate.secretId === stableIds.secretId,
+  );
+  await E(entry.admin).revoke();
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-refuse',
+        'Stable refusal',
+        bytes,
+        stableIds,
+      ),
+    { message: /REVOKED/ },
+  );
+  t.is(harness.grants.get('grant-intruder-03'), undefined);
+  await t.throwsAsync(() =>
+    E(importer).provideBase64(
+      'stable-refuse',
+      'Stable refusal',
+      bytes,
+      harden({ ...stableIds, grantId: 'grant-intruder-03' }),
+    ),
+  );
+  t.is(harness.grants.get('grant-intruder-03'), undefined);
 });

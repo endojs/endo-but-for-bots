@@ -46,6 +46,7 @@ import { q } from '@endo/errors';
  * @property {() => SecretRecord[]} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
+ * @property {(record: SecretRecord, grantId: string) => void} writeSecretRecordWithGrant
  * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
@@ -353,6 +354,14 @@ export const makeDaemonDatabase = (config, options) => {
   const stmtDeleteSecretRecord = prepare(
     'DELETE FROM secret_record WHERE secret_id = ?',
   );
+  // Insert-only, so a stable import can never repoint a grant already
+  // recorded for another secret.
+  const stmtInsertSecretGrant = prepare(
+    'INSERT INTO secret_grant (grant_id, secret_id) VALUES (?, ?)',
+  );
+  const stmtBeginTransaction = prepare('BEGIN');
+  const stmtCommitTransaction = prepare('COMMIT');
+  const stmtRollbackTransaction = prepare('ROLLBACK');
   // Audit rows deliberately carry no grant identifier: a grant identifier is
   // redeemable read authority, and the audit facet is readable by anyone
   // holding `@secrets/audit`.
@@ -728,6 +737,29 @@ export const makeDaemonDatabase = (config, options) => {
     stmtWriteSecretGrant.run(grantId, secretId);
   };
 
+  /**
+   * One transaction, so a crash cannot leave a new record without the grant
+   * that lets its creator resume it.
+   *
+   * @param {SecretRecord} record
+   * @param {string} grantId
+   */
+  const writeSecretRecordWithGrant = (record, grantId) => {
+    stmtBeginTransaction.run();
+    try {
+      writeSecretRecord(record);
+      stmtInsertSecretGrant.run(grantId, record.secretId);
+      stmtCommitTransaction.run();
+    } catch (error) {
+      try {
+        stmtRollbackTransaction.run();
+      } catch {
+        // SQLite may already have rolled back; report the original failure.
+      }
+      throw error;
+    }
+  };
+
   /** @param {string} secretId */
   const deleteSecret = secretId => {
     // Delete grants first so a crash cannot leave a grant pointing at a
@@ -810,6 +842,7 @@ export const makeDaemonDatabase = (config, options) => {
     listSecretRecords,
     getSecretIdForGrant,
     writeSecretGrant,
+    writeSecretRecordWithGrant,
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
