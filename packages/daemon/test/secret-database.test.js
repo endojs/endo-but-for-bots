@@ -46,6 +46,33 @@ test('secret metadata survives updates without invalidating grants', async t => 
   t.is(database.getSecretIdForGrant('grant-id'), undefined);
 });
 
+test('a record and its grant can be written together', async t => {
+  const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-pair-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  const database = makeDaemonDatabase(
+    /** @type {import('../src/types.js').Config} */ ({
+      statePath,
+      ephemeralStatePath: statePath,
+      cachePath: statePath,
+      sockPath: path.join(statePath, 'endo.sock'),
+      registryUrl: 'https://invalid.example',
+    }),
+  );
+  t.teardown(() => database.close());
+  const record = harden({
+    secretId: 'secret-id',
+    backendRef: '',
+    description: 'Provider key',
+    state: /** @type {'provisioning'} */ ('provisioning'),
+    generation: 1n,
+    createdAt: '2026-10-30T00:00:00.000Z',
+    updatedAt: '2026-10-30T00:00:00.000Z',
+  });
+  database.writeSecretRecordWithGrant(record, 'grant-id');
+  t.is(database.getSecretRecord(record.secretId)?.state, 'provisioning');
+  t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
+});
+
 test('audit events never carry a redeemable grant identifier', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-audit-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));

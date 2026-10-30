@@ -1886,13 +1886,8 @@ export interface SecretImporter {
    * `createBase64`, which is not idempotent, when the caller must survive a
    * lost response: retrying the same operation completes an interrupted
    * backend write or pet-name binding and never substitutes later bytes for a
-   * secret already written.
-   *
-   * A retry must repeat the creating `operationId` and `grantId`; any other
-   * pairing with an existing `secretId` is refused with
-   * `IDEMPOTENCY_CONFLICT`. Passing `undefined` bytes resumes a completed
-   * write; when there is none, the returned summary stays `provisioning` and
-   * the caller must resupply the key.
+   * secret already written. The retry contract is in the `@endo/daemon`
+   * changeset.
    */
   provideBase64(
     name: string,
@@ -2789,10 +2784,10 @@ export type DaemonicPersistencePowers = {
   listSecretRecords: () => SecretRecord[];
   getSecretIdForGrant: (grantId: string) => string | undefined;
   writeSecretGrant: (grantId: string, secretId: string) => void;
+  writeSecretRecordWithGrant: (record: SecretRecord, grantId: string) => void;
   deleteSecret: (secretId: string) => void;
   writeSecretAuditEvent: (event: SecretAuditEvent) => void;
   listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
-  /** Every audit event for one secret, oldest first. */
   listSecretAuditEventsFor: (secretId: string) => SecretAuditEvent[];
 };
 
