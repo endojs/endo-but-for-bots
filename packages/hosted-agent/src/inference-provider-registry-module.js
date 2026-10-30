@@ -45,7 +45,7 @@ export const parseModelPrices = text => {
   try {
     parsed = JSON.parse(text);
   } catch (error) {
-    throw Fail`INFERENCE_PROVIDER_MODEL_PRICES is not JSON: ${q(error.message)}`;
+    throw Fail`INFERENCE_PROVIDER_MODEL_PRICES is not JSON: ${error}`;
   }
   (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ||
     Fail`INFERENCE_PROVIDER_MODEL_PRICES must be an object of model prices`;
