@@ -73,6 +73,11 @@ test('a record and its grant can be written together', async t => {
   database.writeSecretRecordWithGrant(record, 'grant-id');
   t.is(database.getSecretRecord(record.secretId)?.state, 'provisioning');
   t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
+
+  const other = harden({ ...record, secretId: 'other-secret-id' });
+  t.throws(() => database.writeSecretRecordWithGrant(other, 'grant-id'));
+  t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
+  t.is(database.getSecretRecord(other.secretId), undefined);
 });
 
 test('audit events never carry a redeemable grant identifier', async t => {

@@ -1882,12 +1882,8 @@ export interface SecretImporter {
     bytesBase64: string,
   ): Promise<SecretSummary>;
   /**
-   * Import once under caller-preallocated identifiers. Use this instead of
-   * `createBase64`, which is not idempotent, when the caller must survive a
-   * lost response: retrying the same operation completes an interrupted
-   * backend write or pet-name binding and never substitutes later bytes for a
-   * secret already written. The retry contract is in the `@endo/daemon`
-   * changeset.
+   * Import once under caller-preallocated identifiers.
+   * Retry contract: see the `@endo/daemon` changeset.
    */
   provideBase64(
     name: string,
@@ -2788,7 +2784,6 @@ export type DaemonicPersistencePowers = {
   deleteSecret: (secretId: string) => void;
   writeSecretAuditEvent: (event: SecretAuditEvent) => void;
   listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
-  listSecretAuditEventsFor: (secretId: string) => SecretAuditEvent[];
 };
 
 export interface DaemonWorkerFacet {}
