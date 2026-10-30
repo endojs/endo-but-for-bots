@@ -8,7 +8,7 @@
 | **Status** | Proposed. Leaving Proposed requires answers to open question 3 (what backs the workbench mount on minion.town) and open question 6 (whether one agent may spend another's grant by forwarding it) |
 | **Provider design** | [API-key inference providers and pinned guest agents](api-key-inference-providers-and-pinned-agents.md) (PR [#1543](https://github.com/endojs/endo-but-for-bots/pull/1543)) |
 | **Companion** | minion.town `designs/agent-chat-clip.md` (the chat Clip), under review in [kriscendobot/minion.town#228](https://github.com/kriscendobot/minion.town/pull/228) |
-| **Grounded against** | `endojs/endo-but-for-bots` `llm` at `844ce3df7b`, and the #1543 head `069b429c16` (which folds in the maintainer's answers to #1543's open questions), this PR's frozen base. The in-repo claims below were rechecked at that base by reading the code and design text; none was verified by execution. Four code claims drive design choices and are unverified until the gating tests run, before any phase starts (§ Phased implementation, *Gating checks*): the `glorp` signature and its `grep(glob)` equality; that no guard exposes `EndoMount.edit`; that `provideSubMount(mount, path, name, { readOnly: true })` yields a searchable read-only `EndoMount`; and that the daemon holds an exclusive lock on its state directory (the broker lease relies on it). None of the chat-Clip behavior is verified; W6 is its only real-execution evidence |
+| **Grounded against** | `endojs/endo-but-for-bots` `llm` at `844ce3df7b`, and the #1543 head `069b429c16`, which is this PR's frozen base. That head folds in the maintainer's answers to #1543's open questions. The in-repo claims below were rechecked at that base by reading the code and design text; none was verified by execution. Five code claims drive design choices and stay unverified until the gating tests run, before any phase starts (§ Phased implementation, *Gating checks*): the `glorp` signature and its `grep(glob)` equality; that no guard exposes `EndoMount.edit`; that agentry's provisioning path can materialize an `EndoProvisionSpec` beneath a supplied mount; that the grep matcher is linear for an escaped literal pattern; and that the daemon holds an exclusive lock on its state directory, on which the broker lease relies. None of the chat-Clip behavior is verified; W6 is its only real-execution evidence. |
 
 ## What is the Problem Being Solved?
 
@@ -17,12 +17,13 @@ The maintainer's scenario (kriskowal, 2026-10-27, arc tracker [minion.town#227](
 
 1. When the owner creates an agent, they give it **endowments** chosen from their inventory.
 2. One endowment can be a **token-budgeted subagent spawner**.
-   With it, an agent creates subagents, splits its token budget and endowments among them, converses with them, and holds a **control facet** for each delegation (pause, resize the budget, revoke).
+   With it, an agent creates subagents, gives each a capped share of its endowments and of its token budget, converses with them, and holds a **control facet** for each delegation (pause, resize the budget, revoke).
+   A child's budget is a **limit checked against the parent's**, not an allocation reserved for it: every grant in a tree spends from the root's one budget, first come, first served, and each child's cap only bounds how much of it that child may take (§ Budget, *Oversubscription is allowed*).
 3. Agents work in a **git virtual file system** through tools that mostly exist already: grep, glob, glorp, exact-string edit, and the git reader and writer.
    Hashline reads and edits, which anchor each line by a short hash of its content (`packages/daemon/src/hashline.js`), are new wiring over existing code.
    Bounded line reads are a small new method.
 4. All of this runs behind a chat conversation surface integrated as a **Clip**, a sandboxed web page that minion.town hosts.
-   The chat Clip is the minion.town companion design's, not this design's.
+   The chat Clip belongs to the companion design in minion.town, not to this design.
 
 This design builds on the **provider design**, [api-key-inference-providers-and-pinned-agents](api-key-inference-providers-and-pinned-agents.md) (PR #1543, not merged), and assumes all of its phases are unbuilt.
 It proposes one edit to the provider design, naming the broker's admission serialization, and W3 is gated on that edit landing (§ Budget, *Serialization and the broker lease*).
@@ -33,7 +34,8 @@ An **owner** is a signed-in minion.town user who has imported an API key; the ke
 An **agent** is a Lal or Fae harness running as its own daemon **guest** (a confined identity with its own pet store), and it is **pinned**: a responder answers its mail.
 A **grant** is an agent's right to spend through the broker, up to limits (models, rates, a budget per period); the agent reaches it through an `AgentInference` capability that names no key.
 An **endowment** is a capability the owner hands the agent at creation, under a fixed name in the agent's pet store; the agent's tools are derived from what it holds.
-A **spawner** is the capability with which an agent creates child agents whose grants are carved from its own, and a **workbench** is a bundle of file and git tools.
+A **spawner** is the capability with which an agent creates child agents whose grants are capped attenuations of its own: a child's spend is checked against its own cap and against every ancestor's remaining budget, and nothing is set aside for it at spawn.
+A **workbench** is a bundle of file and git tools, granted as an inert `EndoProvisionSpec` (the `@endo/agentry` provisioning policy), not as a live object.
 
 ## Capability graph
 
@@ -47,7 +49,7 @@ flowchart TD
     Factory -->|"InferenceProviderUse"| Broker["Provider broker + usage ledger"]
     Broker -->|"AgentInference grant gA"| HA["Harness A"]
     A -->|"powers facet"| HA
-    Owner -->|"chosen endowments"| End["workbench/mount, workbench/git, spawner"]
+    Owner -->|"chosen endowments"| End["workbench spec, spawner"]
     End --> A
     HA -->|"E(spawner).spawn"| Sp["AgentSpawner(A, gA)"]
     Sp -->|"factory create, parent A"| C["Agent guest C"]
@@ -72,12 +74,13 @@ The Roadmap column is the milestone on [`README.md`](README.md) § Roadmap; M3 i
 | Endowment picker | [chat-inventory-create-menu](chat-inventory-create-menu.md) § Pane 3: Endowment selection | M9 | Proposed for reuse as an optional third step of **New API-key agent** (companion design; this design's open question 5) |
 | Reply-chain transcript per conversation | [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) (Complete) | M1 | None |
 | Streaming a reply | [daemon-message-streaming](daemon-message-streaming.md) (Complete: `editMessage`, `done`) | n/a | The responder streams harness text deltas through `editMessage` |
-| Mount, search, writes | `EndoMount` (`packages/daemon/src/interfaces.js`): `glob`, `grep`, `glorp`, `readText`, `writeText`, `list`, `stat`, `subView`; the host's `provideSubMount`; [mount-stream-glob-grep](mount-stream-glob-grep.md) | M3 | None. A read tier binds a read-only sub-mount derived with the host's existing `provideSubMount(mount, path, name, { readOnly: true })`, which is a full searchable `EndoMount`; the `readOnly()` view is not used, because it narrows to `has`, `list`, `listTree`, and `lookup` ([§ The workbench](#the-workbench-vfs-tool-bundle)) |
+| Workbench authority policy | `EndoProvisionSpec` and `normalizeEndoProvisionSpec` (`packages/agentry/README.md`, `packages/agentry/src/code-mode-provision-policy.js`): named `mounts` (`{ path, mode, deniedSegments? }`) and `gits` (`{ mount?, path, mode }`), `readOnly`/`readWrite` attenuation, writable Git only over a writable mount | M3 | Accept a spec only of `mounts` and `gits`, rooted beneath the owner's chosen mount; a subset check for a child's spec ([§ The workbench](#the-workbench-vfs-tool-bundle)) |
+| Mount, search, writes | `EndoMount` (`packages/daemon/src/interfaces.js`): `glob`, `grep`, `glorp`, `readText`, `writeText`, `list`, `stat`; [mount-stream-glob-grep](mount-stream-glob-grep.md) | M3 | The workbench's `grep` and `glorp` tools take a literal string, escaped before it reaches the matcher (§ The workbench, *Search cost*) |
 | Exact-string edit | [endopi-edit-tool](endopi-edit-tool.md) (lal `editText`, fae `edit`) | M3 | None |
 | Hashline edit | `packages/daemon/src/hashline.js` (parser, validator, renderer, splice); [cli-edit-verb](cli-edit-verb.md) | M3 | Wire `EndoMount.edit`, which the `hashline.js` header promises and no guard exposes yet, and add `readHashlines` (new) |
 | Git | `@endo/exo-git` reader, then writer, then rewriter facets (each wider than the last); [daemon-git-capability](daemon-git-capability.md), [daemon-git-next-steps](daemon-git-next-steps.md), [agentry-git-verb-gaps](agentry-git-verb-gaps.md) | M3 | None. The bundle picks a tier |
 | Bounded reads | Asked for by [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) | M3 | `readLines(path, { offset, limit })` |
-| Tool catalog from held facets | [endo-agent-tools](endo-agent-tools.md), [daemon-agent-tools](daemon-agent-tools.md) | M3 | Register the bundle's tools in Lal (`packages/lal/tools/fs.js`) and Fae (`packages/fae/setup-fs-tools.js`) |
+| Tool catalog from held facets | [endo-agent-tools](endo-agent-tools.md), [daemon-agent-tools](daemon-agent-tools.md) | M3 | Extend the shared mount tool adapters, which Lal (`packages/lal/tools/fs.js`) and Fae (`packages/fae/setup-fs-tools.js`) already register, with the bounded and hashline operations only |
 
 **"Glorp".**
 `glorp` is the fused glob-plus-grep method on `EndoMount`.
@@ -97,21 +100,22 @@ The harness's tool catalog is derived from what the guest holds, as the provider
   Its request is one list of endowments to set and one list of names to remove:
   `{ set: [{ as, from }], remove: [as] }`.
   A name that appears in both lists is refused with `endowment-conflict`, so the order of the two lists never matters.
-  `remove` is also how a minted bundle is withdrawn: `remove: ['workbench']` deletes `endowments/workbench`.
+  `remove` is also how a granted bundle is withdrawn: `remove: ['workbench']` clears the workbench spec, and `remove: ['spawner']` deletes `endowments/spawner`.
   Each entry resolves the owner pet name `from` **through the owner guest's own powers** (`E(ownerGuest).lookup`), so the owner can endow only what the owner holds, and writes the value into the agent guest under `endowments/<as>`.
   A refusal names the offending entry's `as` and its owner pet name `from`.
   The operation is idempotent under the provider design's rules.
   Creation with endowments is a `create` followed by an `endow`, both under one client idempotency key.
   This is the `introducedNames` mechanism ([lal-fae-form-provisioning](lal-fae-form-provisioning.md)), driven by the factory instead of by a manager guest that holds the host (that is, one with the host's full authority).
-- **Operations: `grant-workbench` and `grant-spawner` mint new authority.**
-  Minting is a different act from copying, so it gets its own operations rather than a variant of `endow`.
-  `grant-workbench` mints a workbench (§ The workbench) from the owner's chosen mount, git tier, and subtree root, which are themselves resolved through the owner's powers.
+- **Operations: `grant-workbench` and `grant-spawner` grant new authority.**
+  Granting is a different act from copying, so it gets its own operations rather than a variant of `endow`.
+  `grant-workbench` records a workbench (§ The workbench): an `EndoProvisionSpec` naming the owner's chosen mount, subtree root, mode, and git tier, with the mount resolved through the owner's powers.
+  It mints no new formula; the spec is data on the `AgentRecord`, so it is durable by construction.
   `grant-spawner` mints a spawner bound to this agent and its grant (§ The budgeted spawner), as `spawn` already binds a child.
-  Each writes its value under a fixed name, `endowments/workbench` or `endowments/spawner`, and is idempotent under the provider design's rules.
+  `grant-workbench` writes the spec under the fixed key `workbench` in the record, and `grant-spawner` writes its formula under `endowments/spawner`; each is idempotent under the provider design's rules.
   So an agent holds at most one workbench and one spawner.
-  A second `grant-workbench` with different options replaces the first (the old formula is dropped and its tools vanish at the next turn); a second `grant-spawner` with different options is refused with `spawner-exists`, because the spawner's children are bound to it, and the owner changes the limits behind a spawner with the provider design's `set-limits` on the agent's own grant instead.
-  Withdrawal is not a third verb: copied and minted endowments are both withdrawn by `endow` with `remove`, because withdrawal only deletes a name, whatever put it there.
-  The add side has two verbs and the remove side one, so the agent detail view hides the asymmetry: every endowment, copied or minted, is listed with one **Remove** action, and the view issues `endow { remove }` for each.
+  A second `grant-workbench` with different options replaces the first (the old spec is dropped and its tools vanish at the next turn); a second `grant-spawner` with different options is refused with `spawner-exists`, because the spawner's children are bound to it, and the owner changes the limits behind a spawner with the provider design's `set-limits` on the agent's own grant instead.
+  Withdrawal is not a third verb: copied and granted endowments are both withdrawn by `endow` with `remove`, because withdrawal only deletes a name, whatever put it there.
+  The add side has two verbs and the remove side one, so the agent detail view hides the asymmetry: every endowment, copied or granted, is listed with one **Remove** action, and the view issues `endow { remove }` for each.
   Because a spawner is created only by `grant-spawner` or by `spawn` with `allowSpawn`, "a spawner bound to this agent's grant" holds by construction, not by inspecting what the owner passes.
   A creation request that names the provider design's subagent-creation endowment runs `grant-spawner` under the creation's idempotency key, after `create` and before any `endow`; a request that omits it (the box unchecked) mints no spawner, and the server adds none by default, as the provider design requires.
   The owner can add one later from the agent detail view with `grant-spawner`.
@@ -119,16 +123,17 @@ The harness's tool catalog is derived from what the guest holds, as the provider
   See [§ Forwarded authority](#forwarded-authority-no-type-based-endowment-filter).
 - **Durability.**
   An endowment must be a formula the daemon can name.
-  Ephemeral remotables are refused with `endowment-not-durable`.
+  Ephemeral remotables are refused with `endowment-not-durable`; so is a transient view such as `E(mount).subView(path)`, because a restarted agent could not hold it again.
   Fae's spawner applies the same rule.
 - **Source of truth.**
   The factory's `AgentRecord` endowment list is the intent and is authoritative.
   The `endowments/<as>` names in the agent guest's pet store are a projection of it.
   After a crash between the two writes, the factory's reconciler rewrites the projection to match the record.
 - **Bundles.**
-  The two minted bundles are the **workbench** ([§ The workbench](#the-workbench-vfs-tool-bundle)) and the **spawner** ([§ The budgeted spawner](#the-budgeted-spawner-and-the-subagent-control-facet)).
+  The two granted bundles are the **workbench** ([§ The workbench](#the-workbench-vfs-tool-bundle)) and the **spawner** ([§ The budgeted spawner](#the-budgeted-spawner-and-the-subagent-control-facet)).
   The owner chooses them as options in the endowments step, which issues the matching `grant-*` operation.
-  Each is a factory formula whose only state is the ids it binds, the same pattern as `AgentInference` (provider design [§ Durable grant identity](api-key-inference-providers-and-pinned-agents.md#durable-grant-identity)).
+  The workbench is an inert spec on the record.
+  The spawner is a factory formula whose only state is the ids it binds, the same pattern as `AgentInference` (provider design [§ Durable grant identity](api-key-inference-providers-and-pinned-agents.md#durable-grant-identity)).
 
 ## Budget: A child grant is an attenuation of its parent's grant
 
@@ -219,8 +224,16 @@ The rules below are what make each step hold.
 The provider design states that admission is atomic at the broker (provider design [§ Cost and abuse controls](api-key-inference-providers-and-pinned-agents.md#cost-and-abuse-controls)) but does not name the mechanism, so this design names it, and the provider design's phase 2 adopts it.
 The broker keeps one in-vat promise queue per owner, and every admission, settlement, cancellation, and grant `state` write for any of that owner's providers runs as one entry on it.
 The queue is per owner, not per provider, because the provider design's admission reserves against the agent, its provider, and the owner-wide cap atomically, and the owner-wide cap spans all of one owner's providers (provider design [§ Cost and abuse controls](api-key-inference-providers-and-pinned-agents.md#cost-and-abuse-controls), *Aggregation scope*); two per-provider queues could each admit a turn that together overruns it.
-An entry reads and writes only the broker's own durable store, in the broker's vat; it makes no `E()` call and awaits nothing remote, so a slow CapTP peer cannot hold the queue.
+An entry reads and writes only one durable store in the broker's vat; it makes no `E()` call and awaits nothing remote, so a slow CapTP peer cannot hold the queue.
 Each entry commits all of its writes as **one durable store transaction**, so a crash leaves either all of an entry's writes or none of them.
+
+**One transaction owner.**
+The provider design gives each datum one owner: the provider registry owns grant records (limits, `state`, `generation`) and `OwnerInferenceLimits`, and the usage ledger, written only by the broker, owns rows.
+This design keeps those owners and adds one transaction owner over them: **the owner's admission queue**.
+For one owner, the registry's grant records, its `OwnerInferenceLimits` record, and the ledger's rows live in that one per-owner store in the broker vat, and every write to any of them runs as a queue entry.
+Ownership still decides who may write which field: only a registry operation (`set-limits`, a control call, the `revoked` fence) writes grant fields, and only the broker writes rows; the queue entry is where they commit together.
+So an entry that writes grant `state` and settles or cancels rows, such as `revoke`, `pause({ cancelInFlight: true })`, or a reserve pause at settlement, is one transaction with one owner, not a coordination between two stores.
+Writes that touch neither the grant records nor the ledger, such as the factory's `AgentRecord`, stay in the factory's registry and converge from what the queue committed (§ One commit owner).
 Upstream calls happen after the admission entry has committed its reservation row and returned.
 The same holds for cancellation: an entry that cancels turns (`revoke`, or `pause({ cancelInFlight: true })`) commits the charge and marks each row `estimated`, and the broker aborts the upstream requests only after the entry commits.
 If an abort fails or the upstream ignores it, the charge stays at the reservation, and any usage the upstream later reports is recorded as an overrun, as for any turn.
@@ -232,7 +245,7 @@ A deployment that split one owner's brokers across vats would need a different s
 
 **The W3 gate.**
 The provider design is unmerged, and its phase 2 could land with a different broker.
-So W3 does not start until the provider design's text on `llm` names this per-owner single-vat admission queue.
+So W3 does not start until the provider design's text on `llm` names this per-owner single-vat admission queue and places one owner's grant records, `OwnerInferenceLimits`, and ledger rows in the store that queue's entries commit to.
 The W3 builder checks that before writing code and records the commit it read in the W3 pull request; if the text says otherwise, the builder stops and this design is revised first.
 
 **The broker lease.**
@@ -289,8 +302,13 @@ Lal gets the same three tools in `packages/lal/tools/`, through the same adapter
 interface AgentSpawner {
   // Fae-compatible. Each `capabilities` value must be one the caller holds.
   spawn(name: string, options: {
-    systemPrompt: string;
+    // Optional, as in Fae: omitted, the child runs on the standing prompt it
+    // inherits from the tree's root, with nothing appended
+    // (`composeSubagentSystemPrompt`, packages/fae/SUBAGENTS.md § Prompts).
+    systemPrompt?: string;
     capabilities?: Array<{ name: string; value: unknown }>;
+    // A subset of the parent's workbench spec; omitted, the child has none.
+    workbench?: EndoProvisionSpec;
     harness?: 'lal' | 'fae';          // default: the parent's harness
     model?: string;                    // must be in the parent's allowlist
     // Tool description: "omitted fields inherit the parent's".
@@ -394,9 +412,9 @@ The parent can still pass one in `capabilities` (§ Forwarded authority).
 **Confinement.**
 
 - **Endowments.**
-  A child holds only what `spawn` passes in `capabilities`, plus a `spawner` the factory mints when `allowSpawn` is given.
-  The passed values come from the parent's own hand.
-  The parent may attenuate them first, for example with `E(mount).subView(path)` or `E(workbench).narrow(...)` (§ The workbench), or it may pass them unattenuated.
+  A child holds only what `spawn` passes in `capabilities` and `workbench`, plus a `spawner` the factory mints when `allowSpawn` is given.
+  The passed values come from the parent's own hand, and each must be durable (§ Endowments at creation, *Durability*), so a restarted child holds them again.
+  A parent narrows file authority by passing a narrower `workbench` spec, which the factory checks against the parent's own (§ The workbench, *Children*); it does not pass a `subView`, which is transient and is refused.
   So, apart from the minted spawner, a child can hold at most what its parent holds: equal authority is allowed, wider is not (§ Forwarded authority).
   The minted spawner is itself bounded by the parent's remaining depth, fan-out, and budget (below).
 - **Budget.**
@@ -410,7 +428,7 @@ The parent can still pass one in `capabilities` (§ Forwarded authority).
 
 **Control semantics.**
 Authority comes from holding the control facet.
-The owner's agent-management capability reaches every descendant through the factory, so the owner can always pause or revoke a subagent the agent forgot about; the owner finds it in the agent view's subagent tree (companion design).
+The owner's agent-management capability reaches every descendant through the factory, so the owner can always pause or revoke a subagent that its parent forgot about; the owner finds it in the agent view's subagent tree (companion design).
 
 | Method | Effect | Cascade | In-flight turn |
 |---|---|---|---|
@@ -437,6 +455,13 @@ The number of turns in `R` is at most the subtree's agent count (32 per tree) ti
 In time: the last of them ends within the largest per-turn wall clock on the subtree's rows, which is at most the paused grant's `wallClockSeconds` at admission, because a child's limits are at most its parent's and the wall clock is fixed on the row at admission.
 The turns run concurrently, so the time bound is one wall clock, not one per turn.
 A parent that cannot accept that bound uses `pause({ cancelInFlight: true })`, which ends spending at once at the cost of the cancellation charge (§ Charging a revoked subtree).
+
+**The worked example, continued.**
+Return to step 4 of § Budget, one period, no reset.
+A's 55,000 from step 3 is 50,000 settled plus one turn in flight, reserved at 5,000; that turn's admission is `a_p`, the last admission in A's subtree.
+At `a_p` the chain check saw `S_p` = 50,000 under A's effective cap `C_p` = 60,000, so the bound is 10,000, and the actual exposure, the one 5,000 reservation, fits under it.
+P calls `pause()`: no further turn is admitted, and the in-flight turn settles at what it uses, at most 5,000 plus any upstream overrun, within one wall clock.
+Had P called `pause({ cancelInFlight: true })` instead, that turn would be cancelled in the pause's queue entry and charged its 5,000 reservation, marked `estimated`, at once: the same worst case, reached immediately, with no further time for the turn to act.
 
 **Pause and wake.**
 `pause` writes only the grant `state`, so a crash cannot leave pause and wake disagreeing: while wake is on, the responder reads the message, the broker defers the turn, and the message enters the child agent's durable deferred queue (provider design [§ Confinement and wake-on-message](api-key-inference-providers-and-pinned-agents.md#confinement-and-wake-on-message)).
@@ -474,7 +499,7 @@ The factory gives the control facet only to the parent, so cancellation authorit
 The grant `state` (`active`, `paused`, `revoked`) has one owner, the provider registry, and it is the only durable fact `pause`, `resume`, and the fencing step of `revoke` write; the cancellations of `revoke` and of `pause({ cancelInFlight: true })` settle rows in the same broker queue entry.
 The factory's `AgentRecord` `deleting` mark is derived from it: the factory writes `deleting` after the grant is `revoked`, and if a crash falls between the two, the reconciler sees a `revoked` grant under a live `AgentRecord` and writes `deleting`.
 `resize` is the registry's `set-limits` on the grant.
-So every control method has exactly one committer, the registry, and the factory and reconciler only converge from what it committed.
+So every control method has exactly one committer, the registry, which commits through one entry on the owner's admission queue (§ Serialization and the broker lease, *One transaction owner*), and the factory and reconciler only converge from what it committed.
 
 Because the fence and the cancellations share one queue entry (the `revoke()` queue entry), neither a crash mid-cascade nor the delay before the next reconciler sweep lets a descendant spend.
 The reconciler restores one invariant on every sweep: **no `AgentRecord` that is not `deleted` has an ancestor that is `deleting` or `deleted`**.
@@ -517,15 +542,23 @@ Each child conversation is a reply chain ([lal-reply-chain-transcripts](lal-repl
 
 ## The workbench: VFS tool bundle
 
-The workbench is a factory-minted endowment that binds one mount and one git facet over it.
-The owner picks the mount, the git tier, and a subtree root.
-It has one method of its own besides its tools: `narrow(subpath, { readOnly? })` returns a new workbench over a narrower sub-mount (§ Confinement, *Children*).
+The workbench is not a new capability type.
+It is an inert `EndoProvisionSpec`, the authority policy `@endo/agentry` already normalizes and provisions (`packages/agentry/README.md`), restricted to two of its fields:
+
+- `mounts`: one or more named filesystem roots, each `{ path, mode, deniedSegments? }`, where `path` is resolved beneath the owner's chosen mount and `mode` is `readOnly` or `readWrite`; and
+- `gits`: Git grants, each `{ mount?, path, mode }`, with `mode` `readOnly` or `readWrite`.
+
+The factory refuses a spec with any other field (`piTools`, `fs`, `git`, `grants`, `gitRemotes`) with `workbench-field-refused`, and refuses `historyRewrite` the same way.
+It normalizes the spec with agentry's `normalizeEndoProvisionSpec` at `grant-workbench` and stores the normalized spec on the `AgentRecord`.
+At each turn the harness materializes it through agentry's provisioning path into live mount and Git capabilities, so the agentry rules apply unchanged: omission grants nothing, `deniedSegments` adds to the defaults, and writable Git requires a writable mount, because `provideGit` writes the same working tree.
+The workbench therefore adds no formula, no `narrow` protocol, and no second representation of file authority: the policy is data, and the capabilities are derived from it.
 
 | Tool | Method | Tier | Exists? |
 |---|---|---|---|
 | `list`, `stat`, `readText` | `EndoMount.list` / `stat` / `readText` | read | yes |
 | `readLines` | `readLines(path, { offset, limit })`, at most 2000 lines and a byte bound | read | **new** (small) |
-| `glob`, `grep`, `glorp` | `EndoMount.glob` / `grep` / `glorp`, `maxResults` required and capped at 1000 | read | yes |
+| `glob` | `EndoMount.glob`, `maxResults` required and capped at 1000 | read | yes |
+| `grep`, `glorp` | `EndoMount.grep` / `glorp` over a **literal** search string, escaped before it reaches the matcher, `maxResults` required and capped at 1000 | read | yes (escaping is new, in the adapter) |
 | `readHashlines` | renders lines with `hashline.js` anchors | read | **new** (wiring) |
 | `writeText`, `makeDirectory`, `move`, `remove` | `EndoMount` | write | yes |
 | `editText` | exact-string edit ([endopi-edit-tool](endopi-edit-tool.md)) | write | yes |
@@ -533,15 +566,15 @@ It has one method of its own besides its tools: `narrow(subpath, { readOnly? })`
 | `gitStatus`, `gitDiff`, `gitLog`, `gitShow`, `gitBranches` | exo-git reader | read | yes |
 | `gitAdd`, `gitCommit`, `gitCreateBranch`, `gitSwitch` | exo-git writer | write | yes |
 
+The new rows are additions to the shared mount tool adapters that Lal and Fae already register, not workbench-specific tools.
+
 **Confinement.**
 
 - **Subtree.**
-  The bound mount is a durable sub-mount the factory derives with the host's `provideSubMount(ownerMount, root, name, { readOnly })`, not a `subView`, because only a daemon-minted mount can be narrowed again (`provideSubMount` refuses a view).
-  Paths outside it cannot be expressed, and the shared walker's `isConfinedPath` and its `assertSegmentAllowed` check over `defaultDeniedSegments` (`.ssh`, `.env`, and the rest; `packages/daemon/src/mount.js`) apply to every search.
+  Each mount in the spec is rooted beneath the owner's chosen mount, and paths outside it cannot be expressed.
+  The shared walker's `isConfinedPath` and its `assertSegmentAllowed` check over `defaultDeniedSegments` (`.ssh`, `.env`, and the rest; `packages/daemon/src/mount.js`) apply to every search.
 - **Read-only.**
-  A searchable read-only mount already exists as a primitive: the host's `provideSubMount(mount, path, name, { readOnly: true })` (`packages/daemon/src/interfaces.js`, `packages/daemon/src/host.js`) derives a durable sub-mount formula from a daemon-minted mount, clamped beneath the parent's root and never lifting a read-only parent, and the result is a full `EndoMount` with `glob`, `grep`, `glorp`, `stat`, and `readText`, refusing writes.
-  The `readOnly()` view is not used: it builds the same read-only mount and then narrows it to a `ReadableTree` (`has`, `list`, `listTree`, `lookup`; `packages/daemon/src/mount.js`, `readOnlyView`).
-  So a read tier passes `readOnly: true` to that derivation, and the git facet is then `E(git).readOnly()`.
+  A `readOnly` mount grant is provisioned as a read-only mount that still searches, and its Git grant is then `readOnly` too.
   A read-only workbench never advertises a write tool, as [daemon-agent-tools](daemon-agent-tools.md) already requires.
 - **Excluded.**
   The rewriter tier (`rebase`, `cherryPick`, `reword`), every `GitRemote` (`push`, `fetch`), shell, and network are excluded.
@@ -549,12 +582,19 @@ It has one method of its own besides its tools: `narrow(subpath, { readOnly? })`
   Granting push is open question 4.
 - **Search cost.**
   `glob` and the glob half of `glorp` take glob patterns supplied by the model; the shared walker matches them with a linear scan written to avoid regular-expression denial of service (ReDoS) (`packages/platform/src/fs/search.js`, the matcher's header comment).
-  `grep` and the grep half of `glorp` take regular expressions supplied by the model and compile them with `new RegExp` (same file), so ReDoS is a live risk there.
-  The bundle enforces `maxResults` and a wall clock per call on all three.
+  `grep` and the grep half of `glorp` compile their pattern with a synchronous `new RegExp` on the daemon's event loop (same file), and an elapsed-time check cannot preempt a catastrophic backtrack inside one match.
+  So the workbench does not accept a model-supplied regular expression.
+  Its `grep` and `glorp` tools take a literal string, and the adapter escapes every regular-expression metacharacter before passing it on.
+  An escaped literal has no quantifier, alternation, or backreference, so matching it is linear in the line's length; the gating checks confirm that against the shipped matcher.
+  The model-facing description says "literal text search".
+  Arbitrary regular-expression search returns only with a matcher that is linear by construction or runs outside the daemon's event loop; that is not in this design's phases.
+  `maxResults` and a per-call wall clock still apply, and the wall clock is checked between files, where the walker yields, which bounds a large tree, not a single match.
 - **Children.**
-  A parent hands a child a narrower workbench with `E(workbench).narrow(subpath, { readOnly })`, or passes its own workbench unattenuated.
-  The factory serves `narrow` with the same `provideSubMount` derivation over the workbench's bound mount, so a write workbench yields a read-only child workbench directly, and a read-only workbench can only yield read-only ones.
-  The derived workbench is a new durable formula, so it can be passed in `spawn`'s `capabilities`.
+  A parent hands a child file authority with `spawn`'s `workbench` option, a spec of its own.
+  The factory accepts it only if it is a subset of the parent's normalized spec: each child mount's `path` lies beneath a parent mount's path, its `mode` is no wider than that mount's, and its `deniedSegments` include that mount's; each child Git grant names a child mount and is no wider than the parent's grant over the same tree.
+  Otherwise `spawn` throws `workbench-exceeds-parent`.
+  The child's spec is stored on its `AgentRecord`, like any workbench, so it is durable by construction: after a restart the child's harness materializes it again, with no derived formula to re-mint.
+  A write workbench thus yields a read-only child workbench directly, and a read-only workbench can only yield read-only ones.
 
 **What backs the mount on minion.town** is open question 3.
 Owners hold no `EndoMount` today.
@@ -564,30 +604,30 @@ The recommendation is a per-owner workspace directory under the owner's storage 
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| Owner -> factory (`endow`) | Agent operation record | The owner endows only what the owner holds; minted bundles come only from `grant-workbench` and `grant-spawner` | `AgentRecord` endowment list (authoritative); `endowments/<as>` in the agent guest is a projection | The factory commits the record; the reconciler rebuilds the projection | Capabilities inward; summaries outward |
+| Owner -> factory (`endow`) | Agent operation record | The owner endows only what the owner holds; granted bundles come only from `grant-workbench` and `grant-spawner` | `AgentRecord` endowment list (authoritative); `endowments/<as>` in the agent guest is a projection | The factory commits the record; the reconciler rebuilds the projection | Capabilities inward; summaries outward |
 | Agent -> spawner -> factory (`spawn`) | `AgentSpawner` formula bound to the parent agent and grant | Depth, fan-out, tree, and rate ceilings; limits at most the parent's | `AgentRecord.parentAgentId` and operation records | The factory coordinates; the guest, grant, and responder are participants (the provider design's steps) | Capabilities the parent holds inward; `{ name, locator, control }` outward |
 | Factory -> broker (child grant) | `InferenceProviderUse.createChildGrant` | Child limits at most the parent's | `InferenceGrantRecord.parentGrantId` (canonical) and `grantPath` (index) | The provider registry commits the record | Grant id inward; a durable `AgentInference` outward |
-| Harness -> broker (turn) | `AgentInference` request | Chain check over `grantPath`, as one entry on the owner's admission queue | Usage ledger rows tagged with `grantPath` (the only store the check reads) | The broker admits, settles, and cancels | Request bytes inward; response bytes and usage outward |
-| Parent -> control -> registry | `SubagentControl` formula | The holder of the control decides | The child's grant `state` and limits | The provider registry commits pause, resume, resize, and the `revoked` fence; the factory's `deleting` mark and the reconciler's cascade derive from it | Commands inward; `SubagentSummary` outward |
-| Harness -> workbench | `EndoMount` subview and exo-git facet | Tier and subtree chosen by the owner or parent | The mount's files and the git objects | The mount commits writes; git commits are the agent's | Paths and edits inward; text and results outward |
+| Harness -> broker (turn) | `AgentInference` request | Chain check over `grantPath`, as one entry on the owner's admission queue | Usage ledger rows tagged with `grantPath` (the only store the check reads), in the owner's one per-owner store | The broker admits, settles, and cancels, each as one queue-entry transaction | Request bytes inward; response bytes and usage outward |
+| Parent -> control -> registry | `SubagentControl` formula | The holder of the control decides | The child's grant `state` and limits, in the owner's one per-owner store | The provider registry commits pause, resume, resize, and the `revoked` fence, each through one queue entry that also settles or cancels any affected rows; the factory's `deleting` mark and the reconciler's cascade derive from it | Commands inward; `SubagentSummary` outward |
+| Owner or parent -> workbench | `EndoProvisionSpec` (`mounts`, `gits`) on the `AgentRecord`, materialized by agentry's provisioning path at each turn | Tier and subtree chosen by the owner; a child's spec is a subset of its parent's | The normalized spec on the record; the mount's files and the git objects | The factory commits the spec; the mount commits writes; git commits are the agent's | Paths and edits inward; text and results outward |
 
 ## Phased implementation
 
 These phases start after the provider design's phase 5 lands, and W3 also waits on the W3 gate (§ Serialization and the broker lease).
 
 **Gating checks.**
-Before any phase starts, one short test file checks the code claims the design relies on, at the then-current `llm`: `glorp(g, r)` has the stated signature and equals `grep(r, glob(g))`; no guard exposes `EndoMount.edit`; `provideSubMount(mount, path, name, { readOnly: true })` returns a mount whose `glob`, `grep`, `glorp`, `stat`, and `readText` work and whose writes are refused; and a second daemon on the same state directory is refused by a lock.
-A failure stops the phases that rely on the claim (W2 for the first three, W3 for the lock) until this design is revised.
+Before any phase starts, one short test file checks, at the then-current `llm`, the claims about code on which the design relies: `glorp(g, r)` has the stated signature and equals `grep(r, glob(g))`; no guard exposes `EndoMount.edit`; agentry's provisioning path materializes a normalized `EndoProvisionSpec` of `mounts` and `gits` beneath a supplied mount, with a `readOnly` mount whose `glob`, `grep`, `glorp`, `stat`, and `readText` work and whose writes are refused; `grep` over an escaped literal of an adversarial pattern, such as `(a+)+$` against a long run of `a`, returns promptly; and a second daemon on the same state directory is refused by a lock.
+A failure stops the phases that rely on the claim (W2 for the first four, W3 for the lock) until this design is revised.
 W1-W5 are Endo-side and can run in parallel with the provider design's phases 6 and 7; W5 depends only on the provider design's phase 5 responder.
 W6 needs the provider design's phase 6 canary provider, and it is gated on the answer to open question 3, because no minion.town owner holds a mount until that is settled.
 
 1. **W1: Endowments (Endo).**
-   The `endow` operation with its `set` and `remove` lists, the `grant-workbench` and `grant-spawner` operations, the non-durable refusal, the reconciler that rebuilds the pet-store projection from the record, and tool catalogs derived from held endowments in Lal and Fae.
+   The `endow` operation with its `set` and `remove` lists, the `grant-workbench` and `grant-spawner` operations, the non-durable refusal (including a `subView`), the reconciler that rebuilds the pet-store projection from the record, and tool catalogs derived from held endowments in Lal and Fae.
    Tests: the owner can endow only held names; a refusal names the entry; a spawner exists only through `grant-spawner` or `spawn`; a creation request naming the subagent-creation endowment yields an agent holding a spawner and one omitting it yields none; a crash at each boundary leaves the pet store matching the record's endowment set; a restart revives the endowments; removing an endowment, including `remove: ['workbench']`, drops its tools at the next turn; a `grant-workbench` replacement issued while a turn is running with the old tools lets that turn finish with the old tools and gives the next turn only the new ones.
 2. **W2: Workbench bundle (Endo).**
-   The workbench formula and its `narrow`, `readLines`, `EndoMount.edit` and `readHashlines` over `hashline.js`, a stale-hash compare-and-swap refusal, tool registration in both harnesses, read and write tiers, and search caps.
+   The workbench spec check (`mounts` and `gits` only, beneath the owner's mount) and its materialization through agentry's provisioning path, the child-subset check, `readLines`, `EndoMount.edit` and `readHashlines` over `hashline.js` in the shared mount tool adapters, a stale-hash compare-and-swap refusal, literal-only `grep` and `glorp`, read and write tiers, and search caps.
    W2 builds against any `EndoMount`, and its tests use a temporary-directory mount, so it does not wait on open question 3.
-   Tests: a read tier exposes no write or git-write tool, and its search tools work; `narrow(subpath, { readOnly: true })` on a write workbench yields a read-only workbench confined to the subpath, and `narrow` on a read-only workbench cannot yield a write one; `..`, a symlink escape, and a denied segment are refused; `glorp` equals `grep(glob)` within the subtree; a `maxResults` overrun is truncated and flagged; hashline edits with a stale anchor are refused; a commit lands in the bound mount only.
+   Tests: a read tier exposes no write or git-write tool, and its search tools work; a spec with any other field, or with `historyRewrite`, is refused with `workbench-field-refused`; a read-only child spec beneath a write workbench is accepted and confined to its subpath, and a write child spec beneath a read-only one, a path outside the parent's, or a dropped denied segment throws `workbench-exceeds-parent`; a child's workbench is materialized again after a daemon restart; a regular-expression metacharacter in a `grep` or `glorp` search string matches literally, and an adversarial pattern such as `(a+)+$` returns within the per-call bound; `..`, a symlink escape, and a denied segment are refused; `glorp` equals `grep(glob)` within the subtree; a `maxResults` overrun is truncated and flagged; hashline edits with a stale anchor are refused; a commit lands in the bound mount only.
 3. **W3: Child grants and chain admission (Endo).**
    `parentGrantId`, `grantPath`, the `paused` state, `createChildGrant`, the per-owner admission queue, the chain check and the owner-wide sum by prefix scan inside it, one durable transaction per queue entry, the parent reserve, and `limits-exceed-parent`.
    Tests against the provider design's fake upstream:
@@ -627,6 +667,8 @@ W6 needs the provider design's phase 6 canary provider, and it is gated on the a
    - `resize` merges and keeps omitted fields.
    - `getStatus()` reports the changed `effectiveLimits`, and unchanged `limits`, after an ancestor `resize`.
    - Revoking a parent cancels its descendants' in-flight turns before the next reconciler sweep.
+   - A `spawn` without `systemPrompt` succeeds, and the child runs on the inherited standing prompt alone; the Fae adapter's `spawnSubagent({ name })` reaches it.
+   - A `capabilities` value that is a `subView` is refused with `endowment-not-durable`.
    - A crash at each spawn and cascade boundary leaves no orphan guest, grant, or responder, and no live descendant of a deleted agent.
    - The owner can revoke a grandchild directly.
    - A late child reply after revoke is consumed, not delivered.
@@ -646,7 +688,7 @@ W6 needs the provider design's phase 6 canary provider, and it is gated on the a
    The scenario, recorded with usage receipts:
    1. A fresh guest account signs in and imports the canary key as a provider.
    2. It creates a Lal agent with a write workbench over a scratch repository and a spawner (`maxDepth: 2`, `maxChildren: 2`).
-   3. In the chat Clip, it asks the agent to spawn a child with a read-only sub-workbench and have the child `glorp` for a marker string.
+   3. In the chat Clip, it asks the agent to spawn a child with a read-only workbench spec beneath its own and have the child `glorp` for a marker string.
       The parent agent then applies a hashline edit itself and commits.
    4. It verifies the commit in the repository, the child in the delegation tree, and per-agent and subtree usage on the Providers page.
    5. It resizes the child below its usage, and records two observations, not API return values alone: the agent view in the browser shows the child blocked for budget, and the usage receipts show no admission for the child after the resize.
@@ -668,6 +710,12 @@ W6 needs the provider design's phase 6 canary provider, and it is gated on the a
 3. **`paused` is a grant state, not "resize to zero" or an annotation.**
    Resize to zero would lose the child's limits, which `resume` restores, and would defer with an ordinary budget code instead of one that says why.
    A `pausedReason` annotation on an `active` grant would make the chain check and the reconciler test two fields to decide whether a grant may spend.
+4. **The workbench is a provisioning spec, not a formula.**
+   Considered and rejected: a durable workbench formula with its own `narrow()` method.
+   `@endo/agentry`'s `EndoProvisionSpec` already expresses retained mount and Git grants, subtree selection, denied segments, and `readOnly`/`readWrite` attenuation as data, so a formula would be a second representation of the same authority, and a capability method for narrowing would replace a subset check over data with behavior that has to be trusted.
+5. **No model-supplied regular expressions in the daemon.**
+   Considered and rejected: accepting them under a per-call wall clock.
+   A synchronous `RegExp` match cannot be preempted by a clock, so one catastrophic pattern would block every agent and owner served by that daemon.
 
 ## Open questions
 
