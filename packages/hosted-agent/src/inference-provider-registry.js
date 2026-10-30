@@ -489,36 +489,14 @@ export const makeInferenceProviderRegistry = async ({
         ownerId,
         providerId,
       );
-      let operationKey = `retire:${ownerId}:${idempotencyKey}`;
+      // One retirement per provider: the idempotency key is recorded, not
+      // part of the key, so a retry under any key drives the same record.
+      const operationKey = `retire:${providerId}`;
       let operation = /** @type {RetireOperation | undefined} */ (
         ownEntry(state.operations, operationKey)
       );
-      if (operation === undefined && lifecycle.state === 'retiring') {
-        // A retry under a fresh key drives the in-flight retirement rather
-        // than starting a second one.
-        const inFlight = Object.entries(state.operations).find(
-          ([, candidate]) =>
-            candidate.kind === 'retire' &&
-            candidate.providerId === providerId &&
-            candidate.state !== 'committed',
-        );
-        if (inFlight !== undefined) {
-          operationKey = inFlight[0];
-          operation = /** @type {RetireOperation} */ (inFlight[1]);
-        }
-      }
-      if (
-        operation !== undefined &&
-        (operation.kind !== 'retire' || operation.providerId !== providerId)
-      ) {
-        throw fixedError('idempotency-conflict');
-      }
       if (operation?.state === 'committed') {
         return summarize(descriptor, requireProvider(providerId).lifecycle);
-      }
-      if (operation === undefined && lifecycle.state === 'retired') {
-        // A retired provider stays retired; a fresh key must not reopen it.
-        return summarize(descriptor, lifecycle);
       }
       if (operation === undefined) {
         const operationId = randomId();
