@@ -251,7 +251,7 @@ test('a cancel before the broker responds closes the late reader', async t => {
       status: 200,
       contentType: 'text/event-stream',
       reader: bytesReaderFromIterator(
-        harden({
+        /** @type {any} */ ({
           next: async () => {
             await new Promise(() => {});
           },
