@@ -1211,7 +1211,7 @@ test('restart settles orphaned reservations as estimated', async t => {
   await second.close();
 });
 
-test('reservations hold until settlement across UTC midnight, and old days are pruned', async t => {
+test('reservations hold across midnight and complete facts compact', async t => {
   const backing = makeBacking();
   let clock = Date.parse('2026-10-27T23:59:59.000Z');
   /** @type {(usage: any) => void} */
@@ -1239,7 +1239,6 @@ test('reservations hold until settlement across UTC midnight, and old days are p
   await t.throwsAsync(() => E(inference).request(message('midnight')), {
     message: /inference-request-refused/,
   });
-  // A stream still running long after admission keeps its slot.
   clock = Date.parse('2026-10-28T06:00:00.000Z');
   await t.throwsAsync(() => E(inference).request(message('still-held')), {
     message: /inference-request-refused/,
@@ -1255,10 +1254,19 @@ test('reservations hold until settlement across UTC midnight, and old days are p
   settleHeld(undefined);
   await stream.usage;
   await E(inference).request(message('after-settlement'));
-  const turns = Object.values(registry.inspect().turns);
+  const inspected = registry.inspect();
+  const turns = Object.values(inspected.turns);
   t.deepEqual(
     turns.map(turn => turn.day),
     ['2026-10-28'],
+  );
+  t.is(
+    inspected.turnEvents.filter(event => event.type === 'reserved').length,
+    1,
+  );
+  t.is(
+    inspected.turnEvents.filter(event => event.type === 'settled').length,
+    1,
   );
   await registry.close();
 });

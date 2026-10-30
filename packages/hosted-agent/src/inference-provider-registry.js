@@ -7,6 +7,13 @@ import { M } from '@endo/patterns';
 
 import { InferenceEndpointInterface } from './subscription-share.js';
 import {
+  compactInferenceTurnEvents,
+  effectiveInferenceLimits,
+  foldInferenceTurnEvents,
+  inferenceAdmissionRefusal,
+  inferenceUsageAt,
+} from './inference-provider-admission.js';
+import {
   conservativeTokenReservation,
   DEFAULT_AGENT_LIMITS,
   DEFAULT_OWNER_INFERENCE_LIMITS,
@@ -74,7 +81,7 @@ const emptyState = () =>
     grants: {},
     ownerLimits: {},
     modelStates: {},
-    turns: {},
+    turnEvents: [],
     refusals: [],
     audit: [],
   });
@@ -95,7 +102,7 @@ const copyState = state => ({
   grants: { ...state.grants },
   ownerLimits: { ...(state.ownerLimits || {}) },
   modelStates: { ...(state.modelStates || {}) },
-  turns: { ...(state.turns || {}) },
+  turnEvents: [...(state.turnEvents || [])],
   refusals: [...(state.refusals || [])],
   audit: [...state.audit],
 });
@@ -121,6 +128,54 @@ const summarize = (descriptor, lifecycle) =>
     limits: lifecycle.limits,
     updatedAt: lifecycle.updatedAt,
   });
+
+/**
+ * Convert the prior mutable-turn snapshot shape to immutable facts.
+ *
+ * @param {Record<string, any>} turns
+ */
+const eventsFromLegacyTurns = turns => {
+  const events = [];
+  for (const turn of Object.values(turns || {})) {
+    events.push(
+      harden({
+        type: 'reserved',
+        version: turn.version,
+        turnId: turn.turnId,
+        ownerId: turn.ownerId,
+        providerId: turn.providerId,
+        grantId: turn.grantId,
+        agentId: turn.agentId,
+        model: turn.model,
+        day: turn.day,
+        admittedAt: turn.admittedAt,
+        admittedAtMs: turn.admittedAtMs,
+        reservedTokens: turn.reservedTokens,
+        ...(turn.reservedCostMicros === undefined
+          ? {}
+          : { reservedCostMicros: turn.reservedCostMicros }),
+      }),
+    );
+    if (turn.state === 'settled') {
+      events.push(
+        harden({
+          type: 'settled',
+          turnId: turn.turnId,
+          disposition: turn.disposition,
+          usage: turn.usage,
+          chargedTokens: turn.chargedTokens,
+          ...(turn.chargedCostMicros === undefined
+            ? {}
+            : { chargedCostMicros: turn.chargedCostMicros }),
+          overrun: turn.overrun,
+          settledAt: turn.settledAt,
+          settledAtMs: Date.parse(turn.settledAt),
+        }),
+      );
+    }
+  }
+  return harden(events);
+};
 
 /**
  * The durable, non-secret provider registry. The caller supplies one Endo
@@ -157,41 +212,58 @@ export const makeInferenceProviderRegistry = async ({
   afterCommit = () => {},
 }) => {
   await null;
-  /** @type {ReturnType<typeof emptyState>} */
   const restored = await journal.read();
   /** @type {ReturnType<typeof emptyState>} */
-  let state = harden({ ...emptyState(), ...(restored || {}) });
+  let state;
+  if (restored?.turns !== undefined && restored?.turnEvents === undefined) {
+    const { turns, ...withoutTurns } = restored;
+    state = harden({
+      ...emptyState(),
+      ...withoutTurns,
+      turnEvents: eventsFromLegacyTurns(turns),
+    });
+    await journal.write(state);
+  } else {
+    state = harden({ ...emptyState(), ...(restored || {}) });
+  }
   state.version === 1 ||
     (() => {
       throw fixedError('unsupported-version');
     })();
   // A turn still reserved at restart lost its in-flight request with the
   // prior incarnation. Charge its reservation and release its slot.
-  const orphaned = Object.values(state.turns || {}).filter(
-    turn => turn.state === 'reserved',
-  );
+  const orphaned = Object.values(
+    foldInferenceTurnEvents(state.turnEvents || []),
+  ).filter(turn => turn.state === 'reserved');
   if (orphaned.length > 0) {
-    const turns = { ...state.turns };
+    const recoveredAtMs = nowMillis();
+    const turnEvents = [...state.turnEvents];
     for (const turn of orphaned) {
-      turns[turn.turnId] = harden({
-        ...turn,
-        state: 'settled',
-        disposition: 'estimated',
-        usage: harden({
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
+      turnEvents.push(
+        harden({
+          type: 'settled',
+          turnId: turn.turnId,
+          disposition: 'estimated',
+          usage: harden({
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          }),
+          chargedTokens: turn.reservedTokens,
+          ...(turn.reservedCostMicros === undefined
+            ? {}
+            : { chargedCostMicros: turn.reservedCostMicros }),
+          overrun: false,
+          settledAt: now(),
+          settledAtMs: recoveredAtMs,
         }),
-        chargedTokens: turn.reservedTokens,
-        ...(turn.reservedCostMicros === undefined
-          ? {}
-          : { chargedCostMicros: turn.reservedCostMicros }),
-        overrun: false,
-        settledAt: now(),
-      });
+      );
     }
-    state = harden({ ...state, turns: harden(turns) });
+    state = harden({
+      ...state,
+      turnEvents: compactInferenceTurnEvents(turnEvents, recoveredAtMs),
+    });
     await journal.write(state);
   }
 
@@ -686,12 +758,6 @@ export const makeInferenceProviderRegistry = async ({
     });
   };
 
-  /** @param {any} turn @param {Record<string, number>} limits */
-  const budgetUsed = (turn, limits) =>
-    Object.hasOwn(limits, 'dailyDollars')
-      ? (turn.chargedCostMicros ?? turn.reservedCostMicros ?? 0)
-      : (turn.chargedTokens ?? turn.reservedTokens ?? 0);
-
   /**
    * Atomically reserve against the agent, provider, and owner scopes.
    * @param {string} grantId
@@ -699,60 +765,37 @@ export const makeInferenceProviderRegistry = async ({
    */
   const admit = (grantId, request) =>
     inOrder(async () => {
+      await null;
       const grant = requireActiveGrant(grantId);
       const { lifecycle } = requireProvider(grant.providerId);
       const ownerLimits =
         state.ownerLimits?.[grant.ownerId] || DEFAULT_OWNER_INFERENCE_LIMITS;
       const providerLimits = lifecycle.limits;
-      const agentLimits = { ...grant.caps };
-      for (const [name, value] of Object.entries(providerLimits)) {
-        if (agentLimits[name] !== undefined) {
-          agentLimits[name] = Math.min(agentLimits[name], value);
-        }
-      }
-      if (Object.hasOwn(providerLimits, 'dailyTokens')) {
-        delete agentLimits.dailyDollars;
-        agentLimits.dailyTokens = Math.min(
-          agentLimits.dailyTokens ?? providerLimits.dailyTokens,
-          providerLimits.dailyTokens,
-        );
-      } else {
-        delete agentLimits.dailyTokens;
-        agentLimits.dailyDollars = Math.min(
-          agentLimits.dailyDollars ?? providerLimits.dailyDollars,
-          providerLimits.dailyDollars,
-        );
-      }
+      const agentLimits = effectiveInferenceLimits(grant.caps, providerLimits);
       const admittedAtMs = nowMillis();
       Number.isFinite(admittedAtMs) ||
         (() => {
           throw fixedError('invalid-clock');
         })();
       const day = new Date(admittedAtMs).toISOString().slice(0, 10);
-      const allTurns = Object.values(state.turns || {});
-      const recent = allTurns.filter(
-        turn => Number(turn.admittedAtMs) >= admittedAtMs - 60_000,
-      );
-      const today = allTurns.filter(turn => turn.day === day);
-      // A reservation holds its slot, across UTC midnight, until it settles.
-      // The endpoint's request deadline bounds an abandoned stream, and
-      // restart settles any reservation the prior incarnation left behind.
-      const holding = allTurns.filter(turn => turn.state === 'reserved');
       const scopes = [
         {
           name: 'agent',
           limits: agentLimits,
-          matches: turn => turn.grantId === grantId,
+          field: 'grantId',
+          value: grantId,
         },
         {
           name: 'provider',
           limits: providerLimits,
-          matches: turn => turn.providerId === grant.providerId,
+          field: 'providerId',
+          value: grant.providerId,
         },
         {
           name: 'owner',
           limits: ownerLimits,
-          matches: turn => turn.ownerId === grant.ownerId,
+          field: 'ownerId',
+          value: grant.ownerId,
         },
       ];
       const reservedTokens = conservativeTokenReservation(request);
@@ -766,76 +809,39 @@ export const makeInferenceProviderRegistry = async ({
         0,
         price,
       );
-      for (const scope of scopes) {
-        const concurrent = holding.filter(turn => scope.matches(turn)).length;
-        if (concurrent >= Number(scope.limits.concurrentTurns)) {
-          // The scope checks are intentionally serialized with the durable
-          // refusal record so the audit trail precedes the caller's refusal.
-          // eslint-disable-next-line no-await-in-loop
-          await appendRefusal(grant, `${scope.name}-concurrency-exhausted`);
-          throw fixedError('inference-request-refused');
-        }
-        if (
-          recent.filter(turn => scope.matches(turn)).length >=
-          Number(scope.limits.requestsPerMinute)
-        ) {
-          // eslint-disable-next-line no-await-in-loop
-          await appendRefusal(grant, `${scope.name}-rate-limited`);
-          throw fixedError('inference-request-refused');
-        }
-        // A dollar budget cannot meter an unpriced model, so every scope that
-        // budgets in dollars refuses it; the owner aggregate is never skipped.
-        if (
-          Object.hasOwn(scope.limits, 'dailyDollars') &&
-          reservedCostMicros === undefined
-        ) {
-          // eslint-disable-next-line no-await-in-loop
-          await appendRefusal(grant, 'unpriced-model');
-          throw fixedError('inference-request-refused');
-        }
-        const used = today
-          .filter(turn => scope.matches(turn))
-          .reduce((total, turn) => total + budgetUsed(turn, scope.limits), 0);
-        const requested = Object.hasOwn(scope.limits, 'dailyDollars')
-          ? /** @type {number} */ (reservedCostMicros)
-          : reservedTokens;
-        const budget = Object.hasOwn(scope.limits, 'dailyDollars')
-          ? scope.limits.dailyDollars * 1_000_000
-          : scope.limits.dailyTokens;
-        if (Number(used) + Number(requested) > Number(budget)) {
-          // eslint-disable-next-line no-await-in-loop
-          await appendRefusal(grant, `${scope.name}-budget-exhausted`);
-          throw fixedError('inference-request-refused');
-        }
+      // Per-turn enforcers and post-result usage sinks cannot protect this
+      // boundary: admission spans grants and owners and must happen before the
+      // endpoint reads the API key. Policy therefore decides from a pure value
+      // snapshot; this layer only records the resulting fact.
+      const refusal = inferenceAdmissionRefusal({
+        usage: inferenceUsageAt(state.turnEvents, admittedAtMs),
+        scopes,
+        reservedTokens,
+        reservedCostMicros,
+      });
+      if (refusal !== undefined) {
+        await appendRefusal(grant, refusal);
+        throw fixedError('inference-request-refused');
       }
       const turnId = randomId();
       const next = copyState(state);
-      // Settled turns from earlier days no longer affect admission; keep the
-      // durable ledger bounded to the current day plus live reservations.
-      for (const turn of allTurns) {
-        if (
-          turn.day !== day &&
-          Number(turn.admittedAtMs) < admittedAtMs - 60_000 &&
-          turn.state !== 'reserved'
-        ) {
-          delete next.turns[turn.turnId];
-        }
-      }
-      next.turns[turnId] = harden({
-        version: 1,
-        turnId,
-        ownerId: grant.ownerId,
-        providerId: grant.providerId,
-        grantId,
-        agentId: grant.agentId,
-        model: grant.models[0],
-        day,
-        admittedAt: now(),
-        admittedAtMs,
-        state: 'reserved',
-        reservedTokens,
-        ...(reservedCostMicros === undefined ? {} : { reservedCostMicros }),
-      });
+      next.turnEvents.push(
+        harden({
+          type: 'reserved',
+          version: 1,
+          turnId,
+          ownerId: grant.ownerId,
+          providerId: grant.providerId,
+          grantId,
+          agentId: grant.agentId,
+          model: grant.models[0],
+          day,
+          admittedAt: now(),
+          admittedAtMs,
+          reservedTokens,
+          ...(reservedCostMicros === undefined ? {} : { reservedCostMicros }),
+        }),
+      );
       await commit(next);
       return turnId;
     });
@@ -847,8 +853,8 @@ export const makeInferenceProviderRegistry = async ({
    */
   const settle = (turnId, settlement, disposition) =>
     inOrder(async () => {
-      const prior = state.turns?.[turnId];
-      if (prior === undefined) return;
+      const prior = foldInferenceTurnEvents(state.turnEvents)[turnId];
+      if (prior === undefined || prior.state !== 'reserved') return;
       const counts = usageCounts(settlement);
       const observedTokens = Object.values(counts).reduce(
         (total, count) => total + count,
@@ -876,10 +882,11 @@ export const makeInferenceProviderRegistry = async ({
           : known && observedCost !== undefined
             ? observedCost
             : prior.reservedCostMicros;
+      const settledAtMs = nowMillis();
       const next = copyState(state);
-      next.turns[turnId] = harden({
-        ...prior,
-        state: 'settled',
+      const settlementEvent = harden({
+        type: 'settled',
+        turnId,
         disposition: known ? 'reported' : disposition,
         usage: counts,
         chargedTokens,
@@ -892,7 +899,12 @@ export const makeInferenceProviderRegistry = async ({
           Number(chargedCostMicros ?? 0) >
             Number(prior.reservedCostMicros ?? Infinity),
         settledAt: now(),
+        settledAtMs,
       });
+      next.turnEvents = compactInferenceTurnEvents(
+        [...next.turnEvents, settlementEvent],
+        settledAtMs,
+      );
       await commit(next);
     });
 
@@ -1179,21 +1191,13 @@ export const makeInferenceProviderRegistry = async ({
             })();
           const { lifecycle } = requireOwnedProvider(ownerId, providerId);
           const checked = checkLimits(limits, grant.caps);
-          for (const [name, value] of Object.entries(checked)) {
-            const providerValue = lifecycle.limits[name];
-            (providerValue === undefined &&
-            (name === 'dailyTokens' || name === 'dailyDollars')
-              ? (() => {
-                  // admit() would drop a cap of the provider's other budget
-                  // kind, so refuse it rather than persist an unenforced cap.
-                  throw fixedError('invalid-agent-limits');
-                })()
-              : providerValue === undefined) ||
-              Number(value) <= Number(providerValue) ||
-              (() => {
-                throw fixedError('invalid-agent-limits');
-              })();
-          }
+          sameData(
+            checked,
+            effectiveInferenceLimits(checked, lifecycle.limits),
+          ) ||
+            (() => {
+              throw fixedError('invalid-agent-limits');
+            })();
           confirmed ||
             raisedInferenceLimits(grant.caps, checked).length === 0 ||
             (() => {
@@ -1238,38 +1242,15 @@ export const makeInferenceProviderRegistry = async ({
             (() => {
               throw fixedError('invalid-model');
             })();
-          /** @type {Record<string, number>} */
-          const agentDefaults = { ...DEFAULT_AGENT_LIMITS };
-          for (const [name, value] of Object.entries(lifecycle.limits)) {
-            if (name === 'dailyTokens') {
-              delete agentDefaults.dailyDollars;
-              agentDefaults.dailyTokens = value;
-            } else if (
-              name !== 'dailyDollars' ||
-              !Object.hasOwn(lifecycle.limits, 'dailyTokens')
-            ) {
-              agentDefaults[name] = Math.min(
-                agentDefaults[name] ?? value,
-                value,
-              );
-            }
-          }
+          const agentDefaults = effectiveInferenceLimits(
+            DEFAULT_AGENT_LIMITS,
+            lifecycle.limits,
+          );
           const caps = checkLimits(request.caps || {}, agentDefaults);
-          for (const [name, value] of Object.entries(caps)) {
-            const providerValue = lifecycle.limits[name];
-            (providerValue === undefined &&
-            (name === 'dailyTokens' || name === 'dailyDollars')
-              ? (() => {
-                  // admit() would drop a cap of the provider's other budget
-                  // kind, so refuse it rather than persist an unenforced cap.
-                  throw fixedError('invalid-agent-limits');
-                })()
-              : providerValue === undefined) ||
-              Number(value) <= Number(providerValue) ||
-              (() => {
-                throw fixedError('invalid-agent-limits');
-              })();
-          }
+          sameData(caps, effectiveInferenceLimits(caps, lifecycle.limits)) ||
+            (() => {
+              throw fixedError('invalid-agent-limits');
+            })();
           const grantId = request.grantId || randomId();
           IDENTIFIER_PATTERN.test(grantId) ||
             (() => {
@@ -1464,9 +1445,9 @@ export const makeInferenceProviderRegistry = async ({
             return checked;
           }),
         getUsage: async () => {
-          const turns = Object.values(state.turns || {}).filter(
-            turn => turn.ownerId === ownerId,
-          );
+          const turns = Object.values(
+            foldInferenceTurnEvents(state.turnEvents),
+          ).filter(turn => turn.ownerId === ownerId);
           const refusals = (state.refusals || []).filter(
             refusal => refusal.ownerId === ownerId,
           );
@@ -1660,7 +1641,11 @@ export const makeInferenceProviderRegistry = async ({
     inferenceFor: provideInference,
     revokeGrant,
     reconcile,
-    inspect: () => state,
+    inspect: () =>
+      harden({
+        ...state,
+        turns: foldInferenceTurnEvents(state.turnEvents),
+      }),
     close: async () => {
       await Promise.allSettled(
         [...issuers.values()].map(async issuer => (await issuer).dispose()),
