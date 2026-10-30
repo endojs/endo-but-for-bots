@@ -977,7 +977,6 @@ export const makeInferenceProviderRegistry = async ({
               }
               // eslint-disable-next-line no-await-in-loop
               await commit(next);
-              // This expired intent has no participant effect to drive.
               // eslint-disable-next-line no-continue
               continue;
             } else {

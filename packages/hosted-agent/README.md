@@ -166,6 +166,22 @@ is still available; see the Claude package's
 much of the rate limit is left, and what a token count costs — without holding
 the credential. See [ACCOUNT-ORACLE.md](./ACCOUNT-ORACLE.md).
 
+## Inference provider registry
+
+`inference-provider-registry.js` (`makeInferenceProviderRegistry`) is a durable,
+owner-scoped registry of inference providers; `inference-provider-registry-module.js`
+is its root-private caplet. Provider keys live only in the root host's `@secrets`,
+imported through `SecretImporter.provideBase64` under registry-assigned stable
+identifiers (`makeEndoSecretParticipant`), so a lost response or a crash never
+imports a key twice. Registry records and the snapshot journal hold those
+identifiers, never key bytes; a grant identifier is still redeemable read
+authority, so registry state is confidential.
+Mutations are journaled before their `@secrets` effects, and on restart the
+registry reconciles unfinished creations and retirements against `@secrets`.
+Only the issuer factory, resolved by name after each restart, receives the
+`SecretBlob`; owners receive attenuated directory, use, and inference facets.
+Phase 1 admits only the `anthropic` provider and no custom base URLs.
+
 ## Session inference grants
 
 `makeProviderBrokerGrant` and `makeProviderBrokerGrantIssuer` grant inference until
