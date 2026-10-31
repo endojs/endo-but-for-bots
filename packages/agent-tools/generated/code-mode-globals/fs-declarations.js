@@ -262,16 +262,6 @@ type MountEndoMountFile = {
 type MountReadableBlobSource = {
     streamBase64: (...streamArguments: any[]) => PromiseLike<unknown>;
 };
-type MountFile = {
-    streamBase64: (synPromise: unknown) => Promise<unknown>;
-    text: () => Promise<string>;
-    json: () => Promise<any>;
-    writeText: (content: string) => Promise<void>;
-    writeBytes: (readable: unknown) => Promise<void>;
-    append: (content: string) => Promise<void>;
-    readOnly: () => MountReadableBlob;
-    snapshot: () => Promise<MountSnapshotBlob>;
-};
 type MountReadableTreeView = {
     has: (...pathSegments: string[]) => Promise<boolean>;
     list: (...pathSegments: string[]) => Promise<readonly string[]>;
@@ -329,16 +319,6 @@ type MountReadableBlobView = {
     textRange: (startLine: number, endLine: number) => Promise<MountReadableBlobView>;
     help: (method?: string) => string;
 };
-type MountReadableBlob = {
-    streamBase64: (synPromise: unknown) => Promise<unknown>;
-    text: () => Promise<string>;
-    json: () => Promise<any>;
-    help: (method?: string) => string;
-};
-type MountSnapshotBlob = MountReadableBlob & {
-    sha256: () => string;
-    size: () => Promise<bigint>;
-};
 type MountTreeEntry = {
     path: string[];
     type: 'file' | 'directory';
@@ -371,7 +351,7 @@ type MountStreamYieldNode<Y = unknown, R = undefined> = {
     list: (...pathSegments: string[]) => Promise<string[]>;
     lookup: (path: string | readonly string[] | MountEndoMountEntry) => Promise<typeof workspace | MountEndoMountFile>;
     makeDirectory: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace>;
-    makeFile: (path: string | string[] | MountEndoMountEntry, content?: MountReadableBlobSource | string) => Promise<MountFile>;
+    makeFile: (path: string | string[] | MountEndoMountEntry, content?: MountReadableBlobSource | string) => Promise<MountEndoMountFile>;
     maybeLookup: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace | MountEndoMountFile | undefined>;
     maybeReadText: (path: string | string[] | MountEndoMountEntry) => Promise<string | undefined>;
     move: (from: string | string[] | MountEndoMountEntry, to: string | string[] | MountEndoMountEntry) => Promise<void>;

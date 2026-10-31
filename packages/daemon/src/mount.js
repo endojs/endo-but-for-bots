@@ -1100,6 +1100,14 @@ const makeMountExo = ctx => {
     const targetSegments = segmentsFromPathArgument(pathArgument);
     const target = resolveFromRoot(targetSegments);
     await assertConfinedOrAncestor(target, confinementRoot, filePowers);
+    if (content !== undefined && typeof content !== 'string') {
+      // The guard admits any remotable, but `write` would also materialize a
+      // ReadableTree as a directory. Reject anything that is not a
+      // ReadableBlob before touching the filesystem.
+      // eslint-disable-next-line no-underscore-dangle
+      const methodNames = await E(content).__getMethodNames__();
+      assertReadableBlobSource(content, methodNames);
+    }
     const parent = filePowers.joinPath(target, '..');
     await filePowers.makePath(parent);
     if (await filePowers.isDirectory(target)) {
@@ -1115,8 +1123,7 @@ const makeMountExo = ctx => {
       await filePowers.writeFileText(target, content);
       return openExisting(target, targetSegments);
     }
-    // The guard admits only a remotable here. `write` performs the semantic
-    // ReadableBlob check and streams the bytes through a scratch file before
+    // `write` streams the validated blob through a scratch file before
     // atomically replacing the target.
     await write(pathArgument, content);
     return openExisting(target, targetSegments);

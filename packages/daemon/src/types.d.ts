@@ -14,7 +14,6 @@ import type {
 import type { HttpClient, HttpClientControl } from '@endo/exo-http-client';
 import type {
   DirectoryWriteSource,
-  File as PlatformFile,
   PathEntry,
   PathEntryIssuer,
   ReadableBlobSource,
@@ -1653,7 +1652,7 @@ export interface EndoMount extends PathEntryIssuer {
   makeFile(
     path: string | string[] | EndoMountEntry,
     content?: ReadableBlobSource | string,
-  ): Promise<PlatformFile>;
+  ): Promise<EndoMountFile>;
   remove(path: string | string[] | EndoMountEntry): Promise<void>;
   move(
     from: string | string[] | EndoMountEntry,

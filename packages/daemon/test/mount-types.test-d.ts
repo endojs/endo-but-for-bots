@@ -54,9 +54,9 @@ expectTypeOf(mount.stat(entry)).resolves.toEqualTypeOf<
   EndoMountStat | undefined
 >();
 expectTypeOf(mount.write(entry, source)).resolves.toEqualTypeOf<void>();
-expectTypeOf(mount.makeFile(entry, 'contents')).resolves.toEqualTypeOf<
-  import('@endo/platform/fs/lite/types').File
->();
+expectTypeOf(
+  mount.makeFile(entry, 'contents'),
+).resolves.toEqualTypeOf<EndoMountFile>();
 
 // The public `write`/`makeFile` payload types stay exactly what the daemon
 // promises callers: a `DirectoryWriteSource` for `write`, and an optional

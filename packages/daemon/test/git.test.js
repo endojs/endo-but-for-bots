@@ -26,10 +26,22 @@ import {
 
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
-import { lineageOf, makeMount } from '../src/mount.js';
+import { lineageOf, makeMount as makeEndoMount } from '../src/mount.js';
 import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
 
-/** @import { GitRebaseInput } from '@endo/exo-git' */
+/** @import { GitRebaseInput, WritableGitWorktree } from '@endo/exo-git' */
+
+/**
+ * `EndoMount` is the git worktree authority at runtime, but its `makeFile`
+ * resolves to an `EndoMountFile`, whose `snapshot()` yields a daemon readable
+ * with an asynchronous `sha256()`. That is not the platform `File` shape, so
+ * `EndoMount` is not statically a `WritableGitWorktree`. Git never creates
+ * files through the worktree, so these tests view the mount through both types.
+ *
+ * @param {Parameters<typeof makeEndoMount>[0]} options
+ * @returns {WritableGitWorktree & ReturnType<typeof makeEndoMount>}
+ */
+const makeMount = options => /** @type {any} */ (makeEndoMount(options));
 
 const execFileAsync = nodePromisify(execFile);
 

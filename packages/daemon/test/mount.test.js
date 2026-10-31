@@ -523,12 +523,39 @@ test('makeFile streams a ReadableBlob and returns its file capability', async t 
   t.is(await E(file).text(), 'blob content');
 });
 
+test('makeFile rejects a ReadableTree source without creating anything', async t => {
+  // The guard admits any remotable, and `write` would materialize a tree as
+  // a directory; `makeFile` must refuse it before touching the filesystem.
+  const sourceRoot = makeTemporaryRoot(t);
+  fs.mkdirSync(path.join(sourceRoot, 'dir'));
+  fs.writeFileSync(path.join(sourceRoot, 'dir', 'leaf.txt'), 'leaf');
+  const sourceMount = makeMount({
+    rootPath: sourceRoot,
+    readOnly: true,
+    filePowers,
+  });
+  const tree = await E(sourceMount).readOnly();
+
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(
+    () => E(mount).makeFile(['nested', 'new'], /** @type {any} */ (tree)),
+    { message: /Expected a ReadableBlob source/ },
+  );
+  t.false(fs.existsSync(path.join(rootPath, 'nested')));
+});
+
+test('help(makeFile) documents the returned file and blob content', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const text = await E(mount).help('makeFile');
+  t.regex(text, /-> Promise<EndoMountFile>/);
+  t.regex(text, /ReadableBlob/);
+});
+
 test('makeFile rejects mutable Uint8Array at the exo guard', async t => {
-  // The makeFile interface guard accepts only string content; a raw
-  // Uint8Array is mutable and is therefore rejected at the exo boundary.
-  // Binary content reaches the mount through `write(path, readableBlob)`
-  // instead; `makeFile` accepts only `string` content (or `undefined` for a
-  // touch-style empty file).
+  // A raw Uint8Array is mutable and is therefore rejected at the exo
+  // boundary. Binary content reaches the mount as a ReadableBlob.
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   const bytes = new Uint8Array([0x00, 0xff]);
