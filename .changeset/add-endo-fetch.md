@@ -1,27 +1,26 @@
 ---
 '@endo/fetch': minor
+'@endo/confined-fetch': minor
 '@endo/exo-http-client': minor
 ---
 
-Add `@endo/fetch`, an unconfined Endo plugin that provisions confined outbound
-HTTP per `designs/endo-fetch.md`. A fetch service hands a guest a bounded
-`HttpClient` (origin allowlist, request-rate and response-byte caps, manual
-redirect resolution, trust-on-first-bind pins) and retains the
-`HttpClientControl` for the integration — the provisioning, persistence, and
-restart-revival half of the M3 "confined outbound HTTP" capability, repackaged as
-an unconfined caplet (`make(powers, context, { env })`, provisioned via the
-generic `make-unconfined` pathway) rather than a daemon formula. It composes the
-merged `makeHttpClientAndControl` of `@endo/exo-http-client` and re-implements
-neither the client nor the `@endo/http-confine` core.
+Split confined outbound HTTP into two plugins per `designs/endo-fetch.md`.
 
-Durable policy (`config.json`) and trust-on-first-bind pins (`bindings.json`)
-live on the platform virtual file system (`@endo/platform/fs/extended`),
-backing-agnostic (host directory, in-memory, daemon mount, or database) with
-write-then-`move` atomic replacement — no `node:fs`, no daemon `filePowers`. The
-store, not the `env` initials, is authoritative across restarts. Wake-on-restart
-is integration-owned retention of a live reference via the `@pins` recipe
-documented in the package README; a service reconstitutes with identical policy
-and pins, and a revoked service revives revoked.
+`@endo/fetch` is now the unconfined base plugin: its `make()` adapts the
+worker's ambient `fetch` into a passable, unfettered `Fetch` capability with no
+allowlist, caps, policy, or persistence. A response is a record whose body is a
+`CloseablePassableBytesReader`, and a request may carry a `cancellation`
+promise that aborts it, so the capability crosses vat boundaries.
+
+`@endo/confined-fetch` is the stateful confined plugin, endowed with that base
+`Fetch` and a private virtual-file-system state directory. It builds the
+`@endo/exo-http-client` `HttpClient` / `HttpClientControl` pair over the
+endowed base only, never ambient `fetch`, and returns a `ConfinedFetchService`
+whose `client()` is the only facet a guest receives. Durable policy
+(`config.json`) and trust-on-first-bind pins (`bindings.json`) persist through
+write-then-`move` replacement; the store, not the `env` initials, is
+authoritative across restarts, and a revoked service revives revoked when the
+integration re-endows the same base and directory under `@pins`.
 
 `@endo/exo-http-client`'s `makeHttpClientAndControl` and
 `makeTrustOnFirstBindPolicyAdapter` gain two backward-compatible persistence
@@ -31,5 +30,4 @@ callback invoked synchronously after any durable policy or binding mutation. On
 `makeHttpClientAndControl` the callback is `onPolicyChange(snapshot)`, receiving
 the persistable snapshot; the underlying `makeTrustOnFirstBindPolicyAdapter`
 exposes the lower-level `onChange()` (no argument), which `makeHttpClientAndControl`
-adapts into the snapshot-bearing form. The package stays platform-pure — the
-callback is an ordinary function and the virtual file system never enters it.
+adapts into the snapshot-bearing form.

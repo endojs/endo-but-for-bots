@@ -1,35 +1,44 @@
 // @ts-check
 
 /**
- * The `@endo/fetch` service core. It composes the merged
- * `makeHttpClientAndControl` (`@endo/exo-http-client`, PR #566) over a durable
- * virtual-file-system store into a `FetchService` exo that hands out the two
- * facets, mirroring `ReminderService`:
+ * The `@endo/confined-fetch` service core. It composes
+ * `makeHttpClientAndControl` (`@endo/exo-http-client`) over a durable
+ * virtual-file-system store into a `ConfinedFetchService` exo that hands out
+ * the two facets, mirroring `ReminderService`:
  *
  * - `client()` - the guest-facing `HttpClient` facet, the only thing a confined
  *   agent ever holds. It can reach only allowlisted or pinned origins, under
- *   rate and byte caps, and never sees the plugin, the store, or ambient
- *   `fetch`.
+ *   rate and byte caps, and never sees the service, the store, or the base.
  * - `control()` - the integration-facing `HttpClientControl` facet, retained by
  *   whoever provisioned the service.
  *
- * The core takes injectable `store`, `fetch`, and `now` seams, so tests run
- * against an in-memory filesystem, a fake transport, and a deterministic clock;
- * the plugin (`./index.js`) supplies the worker's ambient `fetch` and real
- * `now`. The durable store - not the `env` initials - is authoritative across
- * restarts: persisted policy and pins are adopted when present, and every
- * durable mutation (a control operation or a request-time trust-on-first-bind
- * pin) is written back through the `onPolicyChange` seam.
+ * The `fetch` transport is required: `makeHttpClientAndControl` would otherwise
+ * default to the ambient `globalThis.fetch`. The plugin (`./index.js`) builds
+ * it from the endowed base; tests inject a fake. The durable store - not the
+ * `env` initials - is authoritative across restarts: persisted policy and pins
+ * are adopted when present, and every durable mutation (a control operation or
+ * a request-time trust-on-first-bind pin) is written back through the
+ * `onPolicyChange` seam.
  */
 
-import { Far } from '@endo/pass-style';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { makeHttpClientAndControl } from '@endo/exo-http-client';
 
-/** @import { FetchServicePowers, FetchService } from './types.js' */
+/** @import { ConfinedFetchServicePowers, ConfinedFetchService } from './types.js' */
 /** @import { PolicyMode, PolicySnapshot } from '@endo/exo-http-client' */
 
-const fetchServiceHelp = [
-  'FetchService - a confined outbound-HTTP provider.',
+export const ConfinedFetchServiceInterface = M.interface(
+  'ConfinedFetchService',
+  {
+    client: M.call().returns(M.remotable('HttpClient')),
+    control: M.call().returns(M.remotable('HttpClientControl')),
+    help: M.call().returns(M.string()),
+  },
+);
+
+const confinedFetchServiceHelp = [
+  'ConfinedFetchService - a confined outbound-HTTP provider.',
   '',
   '  client()  -> HttpClient          (guest-facing)',
   '  control() -> HttpClientControl   (integration-facing)',
@@ -41,10 +50,10 @@ const fetchServiceHelp = [
  * hands out the two facets), `client` is the guest-facing `HttpClient`, and
  * `control` is the integration-facing `HttpClientControl`.
  *
- * @param {FetchServicePowers} powers
- * @returns {Promise<FetchService>}
+ * @param {ConfinedFetchServicePowers} powers
+ * @returns {Promise<ConfinedFetchService>}
  */
-export const makeFetchService = async powers => {
+export const makeConfinedFetchService = async powers => {
   const {
     store,
     fetch,
@@ -55,6 +64,11 @@ export const makeFetchService = async powers => {
     policyMode: envPolicyMode,
     policyAuthority,
   } = powers;
+  if (typeof fetch !== 'function') {
+    throw TypeError(
+      '@endo/confined-fetch: a fetch transport built from the endowed base is required',
+    );
+  }
 
   // The durable store is authoritative across restarts; the env-supplied values
   // are only the initial policy at first provisioning. Read both documents up
@@ -99,12 +113,12 @@ export const makeFetchService = async powers => {
         await store.writeBindings(snapshot.bindings);
       })
       .catch(error => {
-        console.error('[fetch] failed to persist policy:', error);
+        console.error('[confined-fetch] failed to persist policy:', error);
       });
   };
 
   const { client, control } = makeHttpClientAndControl({
-    ...(fetch !== undefined ? { fetch } : {}),
+    fetch,
     ...(now !== undefined ? { now } : {}),
     allowedOrigins,
     ...(maxRequestsPerMinute !== undefined ? { maxRequestsPerMinute } : {}),
@@ -152,12 +166,16 @@ export const makeFetchService = async powers => {
   // capability, so cancelling the caplet collapses the worker and with it the
   // guest's reference - no explicit cancellation revoke is needed (and one that
   // persisted `revoked` would wrongly revive the service revoked next boot).
-  const service = Far('FetchService', {
-    client: () => client,
-    control: () => control,
-    help: () => fetchServiceHelp,
-  });
+  const service = makeExo(
+    'ConfinedFetchService',
+    ConfinedFetchServiceInterface,
+    {
+      client: () => client,
+      control: () => control,
+      help: () => confinedFetchServiceHelp,
+    },
+  );
 
   return harden({ service, client, control });
 };
-harden(makeFetchService);
+harden(makeConfinedFetchService);
