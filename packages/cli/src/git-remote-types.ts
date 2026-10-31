@@ -1,25 +1,47 @@
+import type { GitRemoteProvisionOptions } from '@endo/daemon';
+
 export type GitRemoteProfile = 'fetch-only' | 'agent';
 
-export type GitDirection = 'fetch' | 'push';
+export type GitDirection = NonNullable<
+  GitRemoteProvisionOptions['allowedDirections']
+>[number];
 
-export type GitRemoteProfileOptions = {
-  name: string;
-  url: string;
-  allowedDirections: GitDirection[];
-  fetchRefspecs: string[];
-  pushRefspecs?: string[];
-  allowedBranches?: string[];
-  allowForcePush: boolean;
-  allowTags: boolean;
-  allowDelete: boolean;
+/**
+ * Turns each array-valued field into a readonly array, matching the hardened
+ * values `makeGitRemoteProfile` returns.
+ */
+type ReadonlyArrayValue<V> = V extends readonly (infer U)[] ? readonly U[] : V;
+type ReadonlyFields<T> = {
+  readonly [K in keyof T]: ReadonlyArrayValue<T[K]>;
 };
+
+/**
+ * The CLI's view of the daemon's `provideGitRemote` options: the policy a
+ * bounded profile supplies, without the credential (bound at provisioning)
+ * or the options no profile sets.
+ */
+export type GitRemoteProfileOptions = ReadonlyFields<
+  Required<
+    Pick<
+      GitRemoteProvisionOptions,
+      | 'name'
+      | 'url'
+      | 'allowedDirections'
+      | 'fetchRefspecs'
+      | 'allowForcePush'
+      | 'allowTags'
+      | 'allowDelete'
+    >
+  > &
+    Pick<GitRemoteProvisionOptions, 'pushRefspecs' | 'allowedBranches'>
+>;
 
 export type GitRemotePolicyView = Omit<
   GitRemoteProfileOptions,
   'pushRefspecs'
 > & {
-  pushRefspecs: string[];
-  revoked: boolean;
+  readonly pushRefspecs: readonly string[];
+  readonly revoked: boolean;
 };
 
 export type GitCredentialHealth =
@@ -32,9 +54,14 @@ export type GitCredentialHealth =
       revoked: boolean;
     };
 
+/**
+ * `credential` is absent for a revoked remote: revocation closes every
+ * guest-facing method, including `credentialHealth()`, so only the
+ * controller's policy view remains.
+ */
 export type GitRemoteInspection = {
   policy: GitRemotePolicyView;
-  credential: GitCredentialHealth;
+  credential?: GitCredentialHealth;
 };
 
 export type GitRemoteHost = {

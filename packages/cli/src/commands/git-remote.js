@@ -1,12 +1,14 @@
 // @ts-check
 
 import os from 'os';
+import { stderr } from 'process';
 
+import { Fail, b, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 
 import { withEndoHost } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
-import { prompt, promptText } from '../prompt.js';
+import { makePrompter } from '../prompt.js';
 
 /**
  * @import { ERef } from '@endo/eventual-send'
@@ -46,30 +48,68 @@ const assertGitRemoteName = remoteName => {
     remoteName.includes('..') ||
     remoteName.endsWith('.lock')
   ) {
-    throw new Error(
-      `Git remote name ${JSON.stringify(remoteName)} must be a single segment of letters, digits, ".", "_", or "-"`,
-    );
+    Fail`Git remote name ${q(remoteName)} must be a single segment of letters, digits, ".", "_", or "-"`;
   }
+};
+
+/**
+ * C0 and C1 controls, DEL, and the Unicode bidirectional overrides can
+ * rewrite or hide what a terminal shows, so no value rendered in the
+ * approval preview may carry them.
+ */
+const TERMINAL_CONTROL_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+
+/**
+ * @param {string} value
+ * @param {string} label
+ */
+const assertNoTerminalControls = (value, label) => {
+  !TERMINAL_CONTROL_PATTERN.test(value) ||
+    Fail`${b(label)} ${q(value)} must not contain control or bidirectional-override characters`;
 };
 
 /**
  * @param {string} url
  */
 const assertHttpsEndpoint = url => {
+  assertNoTerminalControls(url, 'Git remote URL');
   let parsed;
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`Git remote URL ${JSON.stringify(url)} is not a valid URL`);
+    throw Fail`Git remote URL ${q(url)} is not a valid URL`;
   }
-  if (parsed.protocol !== 'https:') {
-    throw new Error(`Git remote URL ${JSON.stringify(url)} must use https:`);
+  parsed.protocol === 'https:' ||
+    Fail`Git remote URL ${q(url)} must use https:`;
+  (parsed.username === '' && parsed.password === '') ||
+    Fail`Git remote URL must not embed credentials; name a credential capability with --credential`;
+};
+
+/**
+ * Applies the component rules of `git check-ref-format` to a ref under
+ * `refs/heads/`. A trailing `*` component is the selector's wildcard and was
+ * validated by the caller.
+ *
+ * @param {string} ref
+ */
+const isValidBranchRef = ref => {
+  const components = ref.split('/');
+  if (components[components.length - 1] === '*') {
+    components.pop();
   }
-  if (parsed.username !== '' || parsed.password !== '') {
-    throw new Error(
-      'Git remote URL must not embed credentials; name a credential capability with --credential',
-    );
-  }
+  return (
+    !ref.endsWith('.') &&
+    components.every(
+      component =>
+        component !== '' &&
+        !component.startsWith('.') &&
+        !component.endsWith('.lock') &&
+        // eslint-disable-next-line no-control-regex
+        !/[\u0000-\u0020\u007f~^:?*[\\]/.test(component),
+    )
+  );
 };
 
 /**
@@ -81,7 +121,7 @@ const assertHttpsEndpoint = url => {
  * @returns {string}
  */
 const normalizeAgentBranch = branch => {
-  const label = JSON.stringify(branch);
+  const label = q(branch);
   if (
     branch === '' ||
     /[\s~^:?[\\]/.test(branch) ||
@@ -92,25 +132,23 @@ const normalizeAgentBranch = branch => {
     branch.includes('//') ||
     branch.includes('@{')
   ) {
-    throw new Error(`--branch ${label} is not a valid branch selector`);
+    Fail`--branch ${label} is not a valid branch selector`;
   }
   if (branch.startsWith('refs/') && !branch.startsWith('refs/heads/')) {
-    throw new Error(`--branch ${label} must name a ref under refs/heads/`);
+    Fail`--branch ${label} must name a ref under refs/heads/`;
   }
   const ref = branch.startsWith('refs/heads/')
     ? branch
     : `refs/heads/${branch}`;
-  const wildcards = [...ref].filter(ch => ch === '*').length;
+  const wildcards = [...ref].filter(character => character === '*').length;
   if (wildcards > 1 || (wildcards === 1 && !ref.endsWith('/*'))) {
-    throw new Error(
-      `--branch ${label} may only end in a single /* under a fixed parent`,
-    );
+    Fail`--branch ${label} may only end in a single /* under a fixed parent`;
   }
   if (ref === 'refs/heads/*') {
-    throw new Error(
-      `--branch ${label} would grant every branch; name a narrower namespace`,
-    );
+    Fail`--branch ${label} would grant every branch; name a narrower namespace`;
   }
+  isValidBranchRef(ref) ||
+    Fail`--branch ${label} is not a valid branch selector`;
   return ref;
 };
 
@@ -119,7 +157,7 @@ const normalizeAgentBranch = branch => {
  *   `refs/remotes/<remoteName>/*`.
  * @param {string} url - Fixed HTTPS endpoint without embedded credentials.
  * @param {string} profile - One of {@link GIT_REMOTE_PROFILES}.
- * @param {string[]} [branches] - Agent-profile branch selectors.
+ * @param {readonly string[]} [branches] - Agent-profile branch selectors.
  * @returns {GitRemoteProfileOptions}
  */
 export const makeGitRemoteProfile = (
@@ -128,16 +166,10 @@ export const makeGitRemoteProfile = (
   profile,
   branches = [],
 ) => {
-  if (!isGitRemoteProfile(profile)) {
-    throw new Error(
-      `Unknown Git remote profile ${JSON.stringify(profile)}; expected ${GIT_REMOTE_PROFILES.join(
-        ' or ',
-      )}`,
-    );
-  }
-  if (profile === FETCH_ONLY_PROFILE && branches.length > 0) {
-    throw new Error('--branch requires the agent profile');
-  }
+  isGitRemoteProfile(profile) ||
+    Fail`Unknown Git remote profile ${q(profile)}; expected fetch-only or agent`;
+  !(profile === FETCH_ONLY_PROFILE && branches.length > 0) ||
+    Fail`--branch requires the agent profile`;
   assertGitRemoteName(remoteName);
   assertHttpsEndpoint(url);
 
@@ -204,7 +236,9 @@ const formatGitRemotePolicyLines = policy => [
  */
 export const formatGitRemoteInspection = ({ policy, credential }) => {
   const lines = formatGitRemotePolicyLines(policy);
-  if (credential.required) {
+  if (credential === undefined) {
+    lines.push('  credential: not checked (remote revoked)');
+  } else if (credential.required) {
     lines.push(
       `  credential: ${credential.kind} for ${credential.audience} (${credential.available && !credential.revoked ? 'available' : 'unavailable'})`,
     );
@@ -243,6 +277,11 @@ export const formatGitRemotePreview = (profileOptions, credentialName) => {
 harden(formatGitRemotePreview);
 
 /**
+ * Reads the policy through the host-held controller rather than the remote's
+ * own `inspect()`: the CLI already acts with the host's authority, and only
+ * the controller can still report a remote after revocation, when every
+ * guest-facing method, `credentialHealth()` included, rejects.
+ *
  * @param {ERef<GitRemoteHost>} host
  * @param {ERef<GitRemoteCap>} remote
  * @returns {Promise<GitRemoteInspection>}
@@ -251,10 +290,11 @@ const inspectRemote = async (host, remote) => {
   const controller = /** @type {Promise<GitRemoteController>} */ (
     E(host).getGitRemoteController(remote)
   );
-  const [policy, credential] = await Promise.all([
-    E(controller).inspect(),
-    E(remote).credentialHealth(),
-  ]);
+  const policy = await E(controller).inspect();
+  if (policy.revoked) {
+    return harden({ policy });
+  }
+  const credential = await E(remote).credentialHealth();
   return harden({ policy, credential });
 };
 
@@ -264,7 +304,7 @@ const inspectRemote = async (host, remote) => {
  * @param {string} options.remoteName
  * @param {string | undefined} options.url
  * @param {string} options.profile
- * @param {string[]} options.branches
+ * @param {readonly string[]} options.branches
  * @param {string} options.credentialName
  * @param {boolean} options.approve
  * @param {boolean} options.asJson
@@ -280,26 +320,42 @@ export const provisionGitRemote = async ({
   asJson,
 }) => {
   await null;
-  if (approve && !url) {
-    throw new Error(
-      '--yes requires --url; the endpoint prompt needs a terminal',
-    );
-  }
+  !(approve && !url) ||
+    Fail`--yes requires --url; the endpoint prompt needs a terminal`;
+  assertNoTerminalControls(credentialName, '--credential');
   const remotePath = parsePetNamePath(remoteName);
-  const endpointUrl = url || (await promptText('Remote HTTPS URL:'));
-  const profileOptions = makeGitRemoteProfile(
-    remotePath[remotePath.length - 1],
-    endpointUrl,
-    profile,
-    branches,
-  );
-
-  if (!approve) {
-    console.log(formatGitRemotePreview(profileOptions, credentialName));
-    const answer = await prompt('Provision this remote? (yes/no)');
-    if (answer !== 'yes' && answer !== 'y') {
-      console.log('Remote was not provisioned.');
-      return;
+  const remoteSegment = remotePath[remotePath.length - 1];
+  /** @type {GitRemoteProfileOptions} */
+  let profileOptions;
+  if (approve) {
+    profileOptions = makeGitRemoteProfile(
+      remoteSegment,
+      /** @type {string} */ (url),
+      profile,
+      branches,
+    );
+  } else {
+    // The preview and prompts go to stderr so stdout carries only the
+    // resulting inspection, which `--json` makes one parseable document.
+    const prompter = makePrompter(stderr);
+    try {
+      const endpointUrl = url || (await prompter.ask('Remote HTTPS URL:'));
+      profileOptions = makeGitRemoteProfile(
+        remoteSegment,
+        endpointUrl,
+        profile,
+        branches,
+      );
+      console.error(formatGitRemotePreview(profileOptions, credentialName));
+      const answer = (
+        await prompter.ask('Provision this remote? (yes/no)')
+      ).toLowerCase();
+      if (answer !== 'yes' && answer !== 'y') {
+        console.error('Remote was not provisioned.');
+        return;
+      }
+    } finally {
+      prompter.close();
     }
   }
 
@@ -324,6 +380,7 @@ export const provisionGitRemote = async ({
     );
   });
 };
+harden(provisionGitRemote);
 
 /**
  * @param {object} options
@@ -340,3 +397,4 @@ export const inspectGitRemote = async ({ remoteName, asJson }) =>
         : formatGitRemoteInspection(inspection),
     );
   });
+harden(inspectGitRemote);

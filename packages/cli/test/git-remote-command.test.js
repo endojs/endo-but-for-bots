@@ -192,6 +192,15 @@ test('agent profile rejects branch selectors that widen the grant', t => {
     ['agent/*/x', /single \/\* under a fixed parent/],
     ['agent*', /single \/\* under a fixed parent/],
     ['agent/*/*', /single \/\* under a fixed parent/],
+    ['agent/foo.lock', /not a valid branch selector/],
+    ['agent/.hidden', /not a valid branch selector/],
+    ['.hidden', /not a valid branch selector/],
+    ['agent/foo.', /not a valid branch selector/],
+    ['agent/.hidden/*', /not a valid branch selector/],
+    ['agent.lock/*', /not a valid branch selector/],
+    ['agent/a\u0001b', /not a valid branch selector/],
+    ['agent/a\u007fb', /not a valid branch selector/],
+    ['agent/a\tb', /not a valid branch selector/],
   ];
   for (const [branch, message] of cases) {
     t.throws(
@@ -200,6 +209,23 @@ test('agent profile rejects branch selectors that widen the grant', t => {
       `branch ${JSON.stringify(branch)}`,
     );
   }
+});
+
+test('agent profile accepts branch names git check-ref-format accepts', t => {
+  t.deepEqual(
+    makeGitRemoteProfile('origin', endpoint, 'agent', [
+      'agent/v1.2',
+      'agent/x.locked',
+      'agent/@',
+      'Review/Mixed-Case/*',
+    ]).allowedBranches,
+    [
+      'refs/heads/agent/v1.2',
+      'refs/heads/agent/x.locked',
+      'refs/heads/agent/@',
+      'refs/heads/Review/Mixed-Case/*',
+    ],
+  );
 });
 
 test('agent profile accepts rooted wildcard namespaces and drops duplicates', t => {
@@ -271,6 +297,33 @@ test('endpoint must be HTTPS without embedded credentials', t => {
   }
 });
 
+test('endpoint rejects terminal control and bidirectional-override characters', t => {
+  for (const candidate of [
+    'https://github.com/endojs/endo.git\n  push targets: (none)',
+    'https://github.com/endojs/\u001b[2Kendo.git',
+    'https://github.com/endojs/endo.git\r',
+    'https://github.com/endojs/\u009bendo.git',
+    'https://github.com/endojs/\u202eendo.git',
+  ]) {
+    t.throws(
+      () => makeGitRemoteProfile('origin', candidate, 'fetch-only'),
+      { message: /must not contain control or bidirectional-override/ },
+      `url ${JSON.stringify(candidate)}`,
+    );
+  }
+});
+
+test('endpoint preserves a mixed-case path', t => {
+  t.is(
+    makeGitRemoteProfile(
+      'origin',
+      'https://github.com/EndoJS/Endo.git',
+      'fetch-only',
+    ).url,
+    'https://github.com/EndoJS/Endo.git',
+  );
+});
+
 test('preview derives push targets per branch and does not vouch for the credential', t => {
   const output = formatGitRemotePreview(
     makeGitRemoteProfile('origin', endpoint, 'agent', [
@@ -320,6 +373,44 @@ test('inspection reports a revoked-but-available credential as unavailable and e
   });
   t.regex(output, /directions: \(none\)/);
   t.regex(output, /\(unavailable\)/);
+});
+
+test('inspection of a revoked remote notes the unchecked credential', t => {
+  const output = formatGitRemoteInspection({
+    policy: {
+      name: 'origin',
+      url: endpoint,
+      revoked: true,
+      allowedDirections: ['fetch'],
+      fetchRefspecs: [],
+      pushRefspecs: [],
+      allowForcePush: false,
+      allowTags: false,
+      allowDelete: false,
+    },
+  });
+  t.regex(output, /state: revoked/);
+  t.regex(output, /credential: not checked \(remote revoked\)/);
+});
+
+test('provision rejects a credential name carrying terminal controls', async t => {
+  const result = await execa(
+    process.execPath,
+    [
+      endoBin,
+      'git-remote',
+      'provision',
+      'repo-git',
+      'origin',
+      '--url',
+      endpoint,
+      '--credential',
+      'github-token\u001b[2K',
+    ],
+    { reject: false, input: '' },
+  );
+  t.not(result.exitCode, 0);
+  t.regex(result.stderr, /must not contain control/);
 });
 
 test('provision --yes without --url fails instead of prompting', async t => {
