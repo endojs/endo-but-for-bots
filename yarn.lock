@@ -2078,6 +2078,26 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/exo-agent-factory@workspace:packages/exo-agent-factory":
+  version: 0.0.0-use.local
+  resolution: "@endo/exo-agent-factory@workspace:packages/exo-agent-factory"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/exo-git@workspace:^, @endo/exo-git@workspace:packages/exo-git":
   version: 0.0.0-use.local
   resolution: "@endo/exo-git@workspace:packages/exo-git"
