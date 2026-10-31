@@ -957,6 +957,252 @@ test('NativeGitBackend.merge reports a detached head and rethrows non-conflict f
   t.is(unchanged.head.name, 'HEAD');
 });
 
+/**
+ * A repository whose `feature` branch carries two commits (`feature one`
+ * edits `conflict.txt`, `feature two` adds `two.txt`) on a base that `main`
+ * has since moved past by editing `conflict.txt` differently.  HEAD is
+ * `feature`.
+ *
+ * @param {ExecutionContext} t
+ */
+const provisionDivergedRebase = async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  /** @param {string} message */
+  const commit = message =>
+    git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qm',
+      message,
+    ]);
+  /**
+   * @param {string} file
+   * @param {string} content
+   */
+  const write = async (file, content) => {
+    await fs.promises.writeFile(path.join(repoRoot, file), content);
+    await git(['add', file]);
+  };
+  await write('conflict.txt', 'base\n');
+  await commit('base');
+  await git(['switch', '-qc', 'feature']);
+  await write('conflict.txt', 'feature\n');
+  await commit('feature one');
+  await write('two.txt', 'two\n');
+  await commit('feature two');
+  await git(['switch', '-q', 'main']);
+  await write('conflict.txt', 'main\n');
+  await commit('main');
+  await git(['switch', '-q', 'feature']);
+  return { backend, repoRoot, git, write };
+};
+
+test('NativeGitBackend.rebase reports conflicts, then the replayed commits', async t => {
+  const { backend, repoRoot, git, write } = await provisionDivergedRebase(t);
+  const featureOne = (await git(['rev-parse', 'feature~1'])).stdout.trim();
+
+  const stopped = await backend.rebase({ mode: 'start', upstream: 'main' });
+  if (stopped.status !== 'conflicts') {
+    throw t.fail(`expected a structured conflict, got ${stopped.status}`);
+  }
+  t.is(stopped.current.oid, featureOne);
+  t.is(stopped.current.summary, 'feature one');
+  t.is(stopped.conflicts.length, 1);
+  const [conflict] = stopped.conflicts;
+  t.is(conflict.path, 'conflict.txt');
+  t.is(conflict.markerStyle, 'merge');
+  t.truthy(conflict.base?.oid);
+  t.truthy(conflict.ours?.oid);
+  t.truthy(conflict.theirs?.oid);
+
+  // Continuing before the conflict is staged leaves it in place.
+  const unresolved = await backend.rebase({ mode: 'continue' });
+  t.is(unresolved.status, 'conflicts');
+
+  await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'done\n');
+  await write('conflict.txt', 'done\n');
+  const completed = await backend.rebase({ mode: 'continue' });
+  if (completed.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${completed.status}`);
+  }
+  t.deepEqual(
+    completed.replayed.map(commit => commit.summary),
+    ['feature one', 'feature two'],
+  );
+  t.is(completed.head.name, 'feature');
+  t.is(completed.head.kind, 'branch');
+  t.is(completed.head.oid, completed.replayed[1].oid);
+  t.not(completed.replayed[0].oid, featureOne);
+
+  // A branch Git leaves in place replays nothing.
+  const unchanged = await backend.rebase({ mode: 'start', upstream: 'main' });
+  t.deepEqual(unchanged, {
+    status: 'completed',
+    head: completed.head,
+    replayed: [],
+  });
+  t.regex(
+    await backend.rebaseText({ mode: 'start', upstream: 'main' }),
+    /up to date/,
+  );
+});
+
+test('NativeGitBackend.rebase reports skip and abort outcomes', async t => {
+  const { backend, git } = await provisionDivergedRebase(t);
+  const featureTip = (await git(['rev-parse', 'feature'])).stdout.trim();
+
+  t.is(
+    (await backend.rebase({ mode: 'start', upstream: 'main' })).status,
+    'conflicts',
+  );
+  // Starting again while stopped surfaces Git's refusal rather than
+  // describing the rebase already in progress.
+  await t.throwsAsync(backend.rebase({ mode: 'start', upstream: 'main' }));
+  const aborted = await backend.rebase({ mode: 'abort' });
+  t.deepEqual(aborted, {
+    status: 'aborted',
+    head: { name: 'feature', kind: 'branch', oid: featureTip },
+  });
+  await t.throwsAsync(backend.rebase({ mode: 'continue' }));
+
+  t.is(
+    (await backend.rebase({ mode: 'start', upstream: 'main' })).status,
+    'conflicts',
+  );
+  const skipped = await backend.rebase({ mode: 'skip' });
+  if (skipped.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${skipped.status}`);
+  }
+  t.deepEqual(
+    skipped.replayed.map(commit => commit.summary),
+    ['feature two'],
+  );
+});
+
+test('NativeGitBackend.rebase reports a conflict-free stop as in-progress', async t => {
+  const { backend, repoRoot, git } = await provisionDivergedRebase(t);
+  const featureTip = (await git(['rev-parse', 'feature'])).stdout.trim();
+  // An operator outside the capability marks both feature commits `edit`, so
+  // Git stops after each one without a conflict.
+  const editorScript = path.join(repoRoot, '.git', 'edit-every-pick.cjs');
+  await fs.promises.writeFile(
+    editorScript,
+    `const fs = require('fs');
+const todo = process.argv[2];
+fs.writeFileSync(todo, fs.readFileSync(todo, 'utf8').replace(/^pick /gmu, 'edit '));
+`,
+  );
+  await git([
+    '-c',
+    `sequence.editor="${process.execPath}" "${editorScript}"`,
+    'rebase',
+    '-i',
+    'feature~2',
+  ]);
+
+  const stopped = await backend.rebase({ mode: 'continue' });
+  if (stopped.status !== 'in-progress') {
+    throw t.fail(`expected an in-progress rebase, got ${stopped.status}`);
+  }
+  t.is(stopped.current.oid, featureTip);
+  t.is(stopped.current.summary, 'feature two');
+
+  // Git refusing to continue over an unstaged edit is a stop, not a failure.
+  await fs.promises.writeFile(path.join(repoRoot, 'two.txt'), 'dirty\n');
+  const refused = await backend.rebase({ mode: 'continue' });
+  t.deepEqual(refused, { status: 'in-progress', current: stopped.current });
+  await git(['checkout', '--', 'two.txt']);
+
+  // Git reused both commits unchanged, so nothing counts as replayed.
+  const completed = await backend.rebase({ mode: 'continue' });
+  t.deepEqual(completed, {
+    status: 'completed',
+    head: { name: 'feature', kind: 'branch', oid: featureTip },
+    replayed: [],
+  });
+});
+
+test('NativeGitBackend.rebase folds fixups only when autosquash is requested', async t => {
+  const { backend, git, write } = await provisionDivergedRebase(t);
+  // Give `feature two` a fixup so autosquash has something to fold.
+  await write('two.txt', 'two, fixed\n');
+  await git([
+    '-c',
+    'user.email=t@t',
+    '-c',
+    'user.name=T',
+    'commit',
+    '-qm',
+    'fixup! feature two',
+  ]);
+  const fixupTip = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+
+  await t.throwsAsync(
+    // @ts-expect-error autosquash must be a boolean
+    backend.rebase({ mode: 'start', upstream: 'main', autosquash: 'yes' }),
+    { message: /autosquash must be a boolean/ },
+  );
+  await t.throwsAsync(
+    // @ts-expect-error autosquash belongs to mode start
+    backend.rebase({ mode: 'continue', autosquash: true }),
+    { message: /autosquash is only valid for mode start/ },
+  );
+  await t.throwsAsync(
+    // @ts-expect-error upstream belongs to mode start
+    backend.rebase({ mode: 'skip', upstream: 'main' }),
+    { message: /upstream is only valid for mode start/ },
+  );
+  await t.throwsAsync(
+    // @ts-expect-error not a rebase mode
+    backend.rebase({ mode: 'edit-todo' }),
+    { message: /rebase mode must be start, continue, abort, or skip/ },
+  );
+
+  const kept = await backend.rebase({
+    mode: 'start',
+    upstream: 'main',
+    autosquash: false,
+  });
+  t.is(kept.status, 'conflicts');
+  await write('conflict.txt', 'done\n');
+  const unsquashed = await backend.rebase({ mode: 'continue' });
+  if (unsquashed.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${unsquashed.status}`);
+  }
+  t.deepEqual(
+    unsquashed.replayed.map(commit => commit.summary),
+    ['feature one', 'feature two', 'fixup! feature two'],
+  );
+  await git(['reset', '-q', '--hard', fixupTip]);
+
+  t.is(
+    (
+      await backend.rebase({
+        mode: 'start',
+        upstream: 'main',
+        autosquash: true,
+      })
+    ).status,
+    'conflicts',
+  );
+  await write('conflict.txt', 'done\n');
+  const completed = await backend.rebase({ mode: 'continue' });
+  if (completed.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${completed.status}`);
+  }
+  t.deepEqual(
+    completed.replayed.map(commit => commit.summary),
+    ['feature one', 'feature two'],
+  );
+  t.is((await git(['show', 'HEAD:two.txt'])).stdout, 'two, fixed\n');
+});
+
 test('NativeGitBackend.diff narrows by revision range and path', async t => {
   const { backend, repoRoot } = await provisionRepo(t);
   /** @param {string[]} commandArguments */

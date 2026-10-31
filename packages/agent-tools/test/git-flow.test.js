@@ -293,12 +293,12 @@ test('makeGitTool derives the rewriter-facet catalog against a real Git cap', as
   );
   t.truthy(picked);
 
-  const rebased = /** @type {string} */ (
+  const rebased = /** @type {{ status: string }} */ (
     await byName('rebase').invoke({
       input: harden({ mode: 'start', upstream: 'main' }),
     })
   );
-  t.truthy(rebased);
+  t.is(rebased.status, 'completed');
 });
 
 test('the runtime guard rejects a bad arg before reaching the live cap', async t => {

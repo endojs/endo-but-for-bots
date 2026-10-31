@@ -120,7 +120,12 @@ const makeFakeBackend = (worktreeRemove = async () => undefined) =>
       head: { name: 'main', kind: 'branch', oid: '0'.repeat(40) },
     }),
     mergeText: async () => 'Already up to date.',
-    rebase: async () => 'rebased',
+    rebase: async () => ({
+      status: 'completed',
+      head: { name: 'main', kind: 'branch', oid: '0'.repeat(40) },
+      replayed: [],
+    }),
+    rebaseText: async () => 'Successfully rebased and updated refs/heads/main.',
     stashPush: async () => 'stash@{0}',
     stashList: async () => [],
     stashShow: async () => '',

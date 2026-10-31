@@ -140,7 +140,7 @@ test('Git exo advertises the writer facet, cumulative up to the rewriter facet',
 
   // History-rewrite methods are absent from the writer facet entirely —
   // posture is facet membership, not a runtime-rejected method call.
-  for (const name of ['reword', 'cherryPick', 'rebase']) {
+  for (const name of ['reword', 'cherryPick', 'rebase', 'rebaseText']) {
     t.false(methods.includes(name), `Git writer should not advertise ${name}`);
   }
 
@@ -202,7 +202,7 @@ test('Git exo advertises the writer facet, cumulative up to the rewriter facet',
       `Git rewriter should advertise every writer method, missing ${name}`,
     );
   }
-  for (const name of ['reword', 'cherryPick', 'rebase']) {
+  for (const name of ['reword', 'cherryPick', 'rebase', 'rebaseText']) {
     t.true(
       rewriterMethods.includes(name),
       `Git rewriter should advertise ${name}`,
@@ -1434,6 +1434,75 @@ test('NativeGitBackend.cherryPick stops cleanly on conflict', async t => {
   t.truthy(conflicted);
   t.is(conflicted && conflicted.index, 'conflicted');
   t.is(conflicted && conflicted.worktree, 'conflicted');
+});
+
+test('Git.rebase mounts conflict entries through the worktree on the rewriter facet', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  /** @param {string} message */
+  const commit = message =>
+    git([
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-qam',
+      message,
+    ]);
+  const conflictPath = path.join(repoRoot, 'nested', 'conflict.txt');
+  await fs.promises.mkdir(path.dirname(conflictPath));
+  await fs.promises.writeFile(conflictPath, 'base\n');
+  await git(['add', 'nested/conflict.txt']);
+  await commit('base file');
+  await git(['switch', '-qc', 'side']);
+  await fs.promises.writeFile(conflictPath, 'side\n');
+  await commit('side edit');
+  await git(['switch', '-q', 'main']);
+  await fs.promises.writeFile(conflictPath, 'main\n');
+  await commit('main edit');
+  await git(['switch', '-q', 'side']);
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const rewriter = makeGit(
+    { mount, backend, lineageOf },
+    { allowHistoryRewrite: true },
+  );
+
+  const stopped = await E(rewriter).rebase({ mode: 'start', upstream: 'main' });
+  if (stopped.status !== 'conflicts') {
+    throw t.fail(
+      `expected a structured rebase conflict, got ${stopped.status}`,
+    );
+  }
+  t.is(stopped.current.summary, 'side edit');
+  t.is(stopped.conflicts.length, 1);
+  const [conflict] = stopped.conflicts;
+  t.deepEqual(await E(conflict.entry).segments(), ['nested', 'conflict.txt']);
+  t.truthy(conflict.base?.oid);
+  t.truthy(conflict.ours?.oid);
+  t.truthy(conflict.theirs?.oid);
+  t.is(conflict.markerStyle, 'merge');
+
+  await E(rewriter).checkoutConflict([conflict.entry], 'theirs');
+  const completed = await E(rewriter).rebase({ mode: 'continue' });
+  if (completed.status !== 'completed') {
+    throw t.fail(`expected a completed rebase, got ${completed.status}`);
+  }
+  t.deepEqual(
+    completed.replayed.map(replayedCommit => replayedCommit.summary),
+    ['side edit'],
+  );
+  t.is(completed.head.name, 'side');
+  t.is(await fs.promises.readFile(conflictPath, 'utf8'), 'side\n');
+  t.regex(
+    await E(rewriter).rebaseText({ mode: 'start', upstream: 'main' }),
+    /up to date/,
+  );
 });
 
 test('Git.checkoutConflict selects and stages ours in a merge conflict', async t => {
@@ -3030,13 +3099,9 @@ test('NativeGitBackend.rebase continues a conflicted rebase without an interacti
 
   const backend = makeNativeGitBackend({ repoRoot });
 
-  // Starting the rebase stops on the conflict and surfaces a non-zero exit.
-  await t.throwsAsync(
-    () => backend.rebase({ mode: 'start', upstream: 'main' }),
-    {
-      message: /rebase failed/,
-    },
-  );
+  // Starting the rebase stops on the conflict and reports it.
+  const stopped = await backend.rebase({ mode: 'start', upstream: 'main' });
+  t.is(stopped.status, 'conflicts');
 
   // Resolve the conflict and stage the resolution.
   await fs.promises.writeFile(
@@ -3047,7 +3112,8 @@ test('NativeGitBackend.rebase continues a conflicted rebase without an interacti
 
   // The continue must complete non-interactively and preserve the original
   // commit message (the editor override accepts the prepared message as-is).
-  await backend.rebase({ mode: 'continue' });
+  const continued = await backend.rebase({ mode: 'continue' });
+  t.is(continued.status, 'completed');
 
   const commits = await backend.log({ maxCount: 2 });
   t.deepEqual(
