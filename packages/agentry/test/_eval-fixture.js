@@ -119,6 +119,16 @@ export const initRepo = async (
   await run(['config', '--local', 'tag.gpgsign', 'false']);
   await run(['config', '--local', 'user.email', 'eval@example.invalid']);
   await run(['config', '--local', 'user.name', 'Eval']);
+  // Hermeticity: a conflict scenario provisions its repository by performing
+  // the conflicting rebase once with the intended resolution, so a host whose
+  // user config enables rerere records that resolution in this repository's
+  // `rr-cache` and silently replays it ("Staged 'app.txt' using previous
+  // resolution") the next time the same conflict arises. A scenario that
+  // depends on the conflict actually stopping the rebase then behaves
+  // differently on such a host than on a stock CI runner. Pin the reuse of
+  // recorded resolutions off locally, which outranks the inherited setting.
+  await run(['config', '--local', 'rerere.enabled', 'false']);
+  await run(['config', '--local', 'rerere.autoupdate', 'false']);
   return harden({ repoRoot, run });
 };
 harden(initRepo);
