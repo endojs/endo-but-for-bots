@@ -1,4 +1,6 @@
 // @ts-check
+// spell-out-exempt: XDG_RUNTIME_DIR and ENDO_ADDR are external environment
+// variable names, not identifiers this test coins.
 
 import fs from 'fs/promises';
 import os from 'os';
