@@ -183,7 +183,10 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
     return stopping;
   };
   const shell = makeExo('EnvironmentShell', ShellInterface, {
-    inspect: async () => recipe.policy,
+    // The runner provisions a confined native environment, so the portable
+    // Shell reports the sandbox engine without consulting it; inspection stays
+    // passive.
+    inspect: async () => harden({ ...recipe.policy, engine: 'sandbox' }),
     exec: (command, args, options = {}) => {
       let failedController;
       const pending = inOrder(async () => {

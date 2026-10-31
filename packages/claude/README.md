@@ -152,6 +152,15 @@ externally authored bytes, since that result re-enters the model's context. The
 child is spawned with a constructed env allowlist (not inherited-minus-one), so
 an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 
+## Provisioning a code-mode guest
+
+`provisionClaudeSession(guest, { workspace, git, remote, shell })` installs the
+fixed code-mode grant under `workspace`, `git`, `origin`, and `shell` in the
+guest's petstore. Before installing any capability it asks the held `Shell` for
+its own posture and refuses the whole grant unless `inspect()` reports
+`engine: 'sandbox'`. The returned `codeNames` and `petNamePaths` arrays can be
+passed directly to the MCP `evaluate` tool.
+
 ## Inference backends over `@endo/inference`
 
 [`designs/endo-claude-inference-backends.md`](../../designs/endo-claude-inference-backends.md)
@@ -240,7 +249,7 @@ usage with its usage recorder.
   CLI bump.
 - **The credential path under `--bare`** (the DD5 residual), answered by a
   live turn on Claude Code 2.1.280: a subscription OAuth access token
-  (`sk-ant-oat…`) is **not** accepted through an `apiKeyHelper` (`claude`
+  (`sk-ant-oat...`) is **not** accepted through an `apiKeyHelper` (`claude`
   presents it as an API key and gets `401`). The spawn files therefore present
   such a token as `ANTHROPIC_AUTH_TOKEN` in the `--settings` file's `env` key,
   never in the spawn environment. `claude` still holds it in memory, the same
