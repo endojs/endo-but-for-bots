@@ -117,7 +117,7 @@ import {
 
 // Sorted:
 import {
-  DaemonFacetForWorkerInterface,
+  ManagerFacetForWorkerInterface,
   GuestInterface,
   InspectorHubInterface,
   InspectorInterface,
@@ -139,7 +139,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, ManagerCore, ManagerCoreExternal, ManagerPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerManagerFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -153,7 +153,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  */
 
 /**
- * The daemon's filesystem content store always surfaces the optional `size` /
+ * The manager's filesystem content store always surfaces the optional `size` /
  * `readRange` members of the host-side `ContentStoreBlob`, so its `fetch`
  * result can be narrowed to require them.
  * This backing value is consumed here to implement the public `EndoBlob` Exo;
@@ -162,7 +162,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  * @typedef {import('@endo/platform/fs/lite/types').ContentStoreBlob & {
  *   size: () => Promise<bigint>,
  *   readRange: (offset: number, length: number) => Promise<Uint8Array>,
- * }} DaemonContentStoreBlob
+ * }} ManagerContentStoreBlob
  */
 
 /**
@@ -227,12 +227,12 @@ const extractInboundErrorId = err => {
 };
 
 /**
- * Construct a `marshalSaveError` hook that the daemon installs on its
- * outbound CapTP connections. On every outbound error the daemon
+ * Construct a `marshalSaveError` hook that the manager installs on its
+ * outbound CapTP connections. On every outbound error the manager
  * forwards, the hook checks the WeakMap of worker-decoded errors and,
  * if the error came from a worker, registers an alias from the
  * outbound errorId to the worker-side `(workerId, errorId)` record.
- * If the error came from the daemon itself, records a stub trace.
+ * If the error came from the manager itself, records a stub trace.
  *
  * @param {ReturnType<typeof makeTraceAggregator>} aggregator
  * @param {WeakMap<Error, { workerId: string, errorId: string }>} inboundOrigin
@@ -259,9 +259,9 @@ const makeOutboundMarshalSaveError =
       aggregator.aliasByErrorId(inboundErrorId, outboundErrorId);
       return;
     }
-    // Daemon-internal error with no preceding worker push. Record a
+    // Manager-internal error with no preceding worker push. Record a
     // stub so `lookup(outboundErrorId)` at least returns something
-    // with the daemon-side context. The daemon itself runs in the
+    // with the manager-side context. The manager itself runs in the
     // start compartment, so `getUnredactedStackString` taps SES's
     // privileged unredaction hook (the same one `@endo/ses-ava` uses)
     // and returns the full unredacted rendering rather than the
@@ -451,36 +451,36 @@ const RESOLVED_VALUE_NAME = /** @type {PetName} */ ('value');
  */
 
 /**
- * Creates the core daemon infrastructure with formula graph management.
+ * Creates the core manager infrastructure with formula graph management.
  *
- * This function sets up the fundamental components of an Endo daemon, including:
+ * This function sets up the fundamental components of an Endo manager, including:
  * - Formula graph serialization and persistence
  * - Worker termination management
  * - Built-in formula references (ENDO, NONE, MAIN)
  * - Special formula support for user-defined entities
  * - Inspectors for accessing formula graph contents
  *
- * The daemon maintains a persistent formula graph that is loaded from storage on startup.
+ * The manager maintains a persistent formula graph that is loaded from storage on startup.
  * All formula mutations (formulation, removal, provision, cancellation) are
  * serialized to prevent concurrent modifications.
  *
- * @param {DaemonicPowers} powers - The daemon powers including crypto,
+ * @param {ManagerPowers} powers - The manager powers including crypto,
  * petStore, persistence, and control capabilities.
  * @param {FormulaNumber} rootEntropy - A root entropy value used for deriving
- * formula IDs for this daemon instance.
+ * formula IDs for this manager instance.
  * @param {object} args
- * @param {(error: Error) => void} args.cancel - Function to call when daemon needs to cancel.
+ * @param {(error: Error) => void} args.cancel - Function to call when the manager needs to cancel.
  * @param {number} args.gracePeriodMs - Grace period in milliseconds for worker shutdown.
  * @param {Specials} args.specials - Map of special names to formula generators.
  * @param {Promise<never>} args.gracePeriodElapsed - A promise that resolves/cancels when the grace period expires.
- * @param {NodeNumber} args.localNodeNumber - The local node number for this daemon.
- * @param {(bytes: Uint8Array) => Uint8Array} args.signBytes - Sign bytes with the daemon's root Ed25519 key.
+ * @param {NodeNumber} args.localNodeNumber - The local node number for this manager.
+ * @param {(bytes: Uint8Array) => Uint8Array} args.signBytes - Sign bytes with the manager's root Ed25519 key.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection of worker daemons.
  * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers (defaults to 'node').
  *
  * @example
  * ```js
- * const core = await makeDaemonCore(powers, 'entropy-abc123', {
+ * const core = await makeManagerCore(powers, 'entropy-abc123', {
  *   cancel: onError,
  *   gracePeriodMs: 5000,
  *   gracePeriodElapsed: onCancelled,
@@ -489,7 +489,7 @@ const RESOLVED_VALUE_NAME = /** @type {PetName} */ ('value');
  * });
  * ```
  */
-const makeDaemonCore = async (
+const makeManagerCore = async (
   powers,
   rootEntropy,
   {
@@ -514,7 +514,7 @@ const makeDaemonCore = async (
   } = powers;
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;
   // `git` and `shell` formulas spawn host processes.  The supervisor
-  // injects the implementations rather than the daemon core importing
+  // injects the implementations rather than the manager core importing
   // them, so the core stays free of `node:` builtins; a supervisor that
   // cannot spawn gets stand-ins that refuse.
   const { gitClone, makeNativeGitBackend, makeHostSpawner } =
@@ -535,16 +535,16 @@ const makeDaemonCore = async (
     backend: secretBackend,
     randomHex256,
   });
-  /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
-  const workerDaemonFacets = new WeakMap();
+  /** @type {WeakMap<object, ERef<WorkerManagerFacet>>} */
+  const workerManagerFacets = new WeakMap();
   /** @type {Map<string, (reason?: Error) => Promise<void>>} */
   const workerTerminationByNumber = new Map();
   /**
-   * Side WeakMap that the daemon's per-worker CapTP populates via its
+   * Side WeakMap that the manager's per-worker CapTP populates via its
    * `marshalLoadError` hook: each decoded error from a worker is
-   * stamped with `{ workerId, errorId }` so the daemon's outbound
+   * stamped with `{ workerId, errorId }` so the manager's outbound
    * CLI-facing `marshalSaveError` can register an alias entry from
-   * the new daemon-minted errorId to the worker's already-aggregated
+   * the new manager-minted errorId to the worker's already-aggregated
    * record.
    *
    * @type {WeakMap<Error, { workerId: string, errorId: string }>}
@@ -553,7 +553,7 @@ const makeDaemonCore = async (
 
   /**
    * In-process aggregator for error traces pushed by workers and
-   * minted by the daemon's outbound CapTP. Configurable via
+   * minted by the manager's outbound CapTP. Configurable via
    * ENDO_TRACE_RECORDS, ENDO_TRACE_BYTES, ENDO_TRACE_WORKERS.
    */
   const traceAggregator = makeTraceAggregator({
@@ -710,7 +710,7 @@ const makeDaemonCore = async (
     ),
   );
 
-  // The following are the root state tables for the daemon.
+  // The following are the root state tables for the manager.
 
   /**
    * The two functions "formulate" and "provide" share a responsibility for
@@ -1587,7 +1587,7 @@ const makeDaemonCore = async (
    * remote formula's content is not resolvable locally, so it is not
    * content-locatable here.
    *
-   * @type {DaemonCore['getContentIdentityForId']}
+   * @type {ManagerCore['getContentIdentityForId']}
    */
   const getContentIdentityForId = async inputId => {
     if (!isLocalId(inputId)) {
@@ -1619,7 +1619,7 @@ const makeDaemonCore = async (
     controllerForId,
   });
 
-  /** @type {DaemonCore['getIdForRef']} */
+  /** @type {ManagerCore['getIdForRef']} */
   const getIdForRef = ref => idForRef.get(/** @type {any} */ (ref));
 
   /** @param {unknown} value */
@@ -1927,7 +1927,7 @@ const makeDaemonCore = async (
           if (type === 'tree') {
             yield* archiveTree(childHash, `${path}/`);
           } else if (type === 'blob') {
-            const blob = /** @type {DaemonContentStoreBlob} */ (
+            const blob = /** @type {ManagerContentStoreBlob} */ (
               contentStore.fetch(childHash)
             );
             const size = Number(await blob.size());
@@ -1954,7 +1954,7 @@ const makeDaemonCore = async (
     },
     /**
      * Return the formula numbers from `peerNodeNumber` that this
-     * daemon currently holds, followed by incremental updates.
+     * manager currently holds, followed by incremental updates.
      * Each yielded value has shape `{ add: string[], remove: string[] }`.
      * The first delta is the snapshot (all adds, no removes).
      * Subsequent deltas are batched over microtasks.
@@ -2089,23 +2089,23 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId512
    */
-  const makeDaemonFacetForWorker = workerId512 => {
+  const makeManagerFacetForWorker = workerId512 => {
     // The trace record's `workerId` must be a full formula identifier
     // (`number:node`) so a UI can pass it straight to `lookupById` /
     // `getFormula` (Show Value); `workerId512` alone is only the
     // formula number and fails `parseId` with "Invalid formula
     // identifier". Workers are always local, so the node is this
-    // daemon's node.
+    // manager's node.
     const workerFormulaId = formatId({
       number: /** @type {FormulaNumber} */ (workerId512),
       node: localNodeNumber,
     });
     return makeExo(
       `Endo facet for worker ${workerId512}`,
-      DaemonFacetForWorkerInterface,
+      ManagerFacetForWorkerInterface,
       {
         /**
-         * Push a trace record from the worker. The daemon stamps the
+         * Push a trace record from the worker. The manager stamps the
          * authoritative workerId from the connection identity so a
          * worker cannot forge entries under another worker's id.
          *
@@ -2150,7 +2150,7 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     label = undefined,
   ) => {
-    const daemonWorkerFacet = makeDaemonFacetForWorker(workerId512);
+    const managerWorkerFacet = makeManagerFacetForWorker(workerId512);
 
     const { promise: forceCancelled, reject: forceCancel } =
       /** @type {PromiseKit<never>} */ (makePromiseKit());
@@ -2168,7 +2168,7 @@ const makeDaemonCore = async (
 
     /**
      * Stamp every error we decode from this worker with its origin so
-     * the daemon's outbound CapTP hook can alias forwarded errorIds.
+     * the manager's outbound CapTP hook can alias forwarded errorIds.
      *
      * @param {Error} err
      * @param {string} [errorId]
@@ -2180,12 +2180,12 @@ const makeDaemonCore = async (
     const recordInboundOrigin = (err, errorId) => {
       if (errorId === undefined) return;
       // Key by the full formula identifier so it matches the `workerId`
-      // that `reportTrace` records under (see `makeDaemonFacetForWorker`).
+      // that `reportTrace` records under (see `makeManagerFacetForWorker`).
       inboundErrorOrigin.set(err, { workerId: workerFormulaId, errorId });
     };
 
     const acquisition =
-      /** @type {PromiseKit<Awaited<ReturnType<DaemonicPowers['control']['makeWorker']>>>} */ (
+      /** @type {PromiseKit<Awaited<ReturnType<ManagerPowers['control']['makeWorker']>>>} */ (
         makePromiseKit()
       );
     const terminated = acquisition.promise.then(
@@ -2199,7 +2199,7 @@ const makeDaemonCore = async (
     const gracefulCancel = async () => {
       cancelWorker(new Error('Worker cancelled'));
       void acquisition.promise.then(
-        ({ workerDaemonFacet }) => E.sendOnly(workerDaemonFacet).terminate(),
+        ({ workerManagerFacet }) => E.sendOnly(workerManagerFacet).terminate(),
         () => {},
       );
       const cancelWorkerGracePeriod = () => {
@@ -2226,7 +2226,7 @@ const makeDaemonCore = async (
       acquisition.resolve(
         controlPowers.makeWorker(
           workerId512,
-          daemonWorkerFacet,
+          managerWorkerFacet,
           workerCancelled,
           workerForceCancelled,
           capTpConnectionRegistrar,
@@ -2239,11 +2239,11 @@ const makeDaemonCore = async (
     } catch (error) {
       acquisition.reject(error);
     }
-    const { workerTerminated, workerDaemonFacet } = await acquisition.promise;
+    const { workerTerminated, workerManagerFacet } = await acquisition.promise;
 
     /** @param {Error} [_reason] */
     const terminateWorker = async _reason => {
-      E.sendOnly(workerDaemonFacet).terminate();
+      E.sendOnly(workerManagerFacet).terminate();
       await Promise.race([
         workerTerminated,
         delay(gracePeriodMs, gracePeriodElapsed).catch(() => {}),
@@ -2260,7 +2260,7 @@ const makeDaemonCore = async (
 
     const worker = makeExo('EndoWorker', WorkerInterface, {});
 
-    workerDaemonFacets.set(worker, workerDaemonFacet);
+    workerManagerFacets.set(worker, workerManagerFacet);
 
     return worker;
   };
@@ -2290,7 +2290,7 @@ const makeDaemonCore = async (
     // attenuated view reads its selected bytes.
     const isFull = start === 0 && end === undefined;
     const { makeFileReader, text, json, size, readRange } =
-      /** @type {DaemonContentStoreBlob} */ (contentStore.fetch(sha256));
+      /** @type {ManagerContentStoreBlob} */ (contentStore.fetch(sha256));
 
     /** @returns {Promise<Uint8Array>} the cap's currently selected bytes */
     const readSelected = async () => {
@@ -2480,12 +2480,12 @@ const makeDaemonCore = async (
     }
 
     const worker = await provide(workerId, 'worker');
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, `Cannot evaluate using non-worker`);
+    const workerManagerFacet = workerManagerFacets.get(worker);
+    assert(workerManagerFacet, `Cannot evaluate using non-worker`);
 
     const endowmentValues = await Promise.all(ids.map(id => provide(id)));
 
-    return E(workerDaemonFacet).evaluate(
+    return E(workerManagerFacet).evaluate(
       source,
       codeNames,
       endowmentValues,
@@ -2538,11 +2538,11 @@ const makeDaemonCore = async (
     }
 
     const worker = await provide(workerId, 'worker');
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, 'Cannot make unconfined plugin with non-worker');
+    const workerManagerFacet = workerManagerFacets.get(worker);
+    assert(workerManagerFacet, 'Cannot make unconfined plugin with non-worker');
     context.assertActive();
     const powersP = provide(powersId);
-    return E(/** @type {any} */ (workerDaemonFacet)).makeUnconfined(
+    return E(/** @type {any} */ (workerManagerFacet)).makeUnconfined(
       specifier,
       // TODO fix type
       /** @type {any} */ (powersP),
@@ -2577,14 +2577,14 @@ const makeDaemonCore = async (
       /** @type {FormulaIdentifier} */ (workerId),
       'worker',
     );
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const workerManagerFacet = workerManagerFacets.get(worker);
+    assert(workerManagerFacet, 'Cannot make caplet with non-worker');
     const readableArchiveP = provide(
       /** @type {FormulaIdentifier} */ (archiveId),
       'readable-blob',
     );
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
-    return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+    return E(/** @type {any} */ (workerManagerFacet)).makeArchive(
       readableArchiveP,
       // TODO fix type
       /** @type {any} */ (powersP),
@@ -2625,8 +2625,8 @@ const makeDaemonCore = async (
       /** @type {FormulaIdentifier} */ (workerId),
       'worker',
     );
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const workerManagerFacet = workerManagerFacets.get(worker);
+    assert(workerManagerFacet, 'Cannot make caplet with non-worker');
     const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
 
@@ -2651,7 +2651,7 @@ const makeDaemonCore = async (
       const archiveBytes = await packTreeIntoArchiveBytes(treeP);
       // eslint-disable-next-line no-use-before-define
       const transientBlob = makeBytesBlob(archiveBytes);
-      return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+      return E(/** @type {any} */ (workerManagerFacet)).makeArchive(
         /** @type {any} */ (transientBlob),
         /** @type {any} */ (powersP),
         /** @type {any} */ (makeFarContext(context)),
@@ -2659,7 +2659,7 @@ const makeDaemonCore = async (
       );
     }
 
-    return E(/** @type {any} */ (workerDaemonFacet)).makeFromTree(
+    return E(/** @type {any} */ (workerManagerFacet)).makeFromTree(
       /** @type {any} */ (treeP),
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
@@ -5022,7 +5022,7 @@ const makeDaemonCore = async (
     return evaluateFormula(id, formulaNumber, formula, context);
   };
 
-  /** @type {DaemonCore['formulate']} */
+  /** @type {ManagerCore['formulate']} */
   /**
    * Persist a formula to disk and register it in the graph, but do NOT
    * evaluate it eagerly.  Callers can later call `provide(id)` to
@@ -5055,7 +5055,7 @@ const makeDaemonCore = async (
     return id;
   };
 
-  /** @type {DaemonCore['formulate']} */
+  /** @type {ManagerCore['formulate']} */
   const formulate = async (
     formulaNumber,
     formula,
@@ -5124,7 +5124,7 @@ const makeDaemonCore = async (
   /** @type {Map<FormulaIdentifier, { state: 'pending' | 'failed' }>} */
   const disposals = new Map();
 
-  /** @type {DaemonCore['provideController']} */
+  /** @type {ManagerCore['provideController']} */
   const provideController = inputId => {
     const id = inputId;
     const disposal = disposals.get(id) || collections.get(id);
@@ -5206,7 +5206,7 @@ const makeDaemonCore = async (
     return /** @type {FormulaIdentifier} */ (peerId);
   };
 
-  /** @type {DaemonCore['cancelValue']} */
+  /** @type {ManagerCore['cancelValue']} */
   const cancelValue = async (id, reason) => {
     // Wait for any in-flight graph operation (formulation, collection)
     // to finish before cancelling.
@@ -5216,7 +5216,7 @@ const makeDaemonCore = async (
     return controller.context.cancel(reason);
   };
 
-  /** @type {DaemonCore['formulateReadableBlob']} */
+  /** @type {ManagerCore['formulateReadableBlob']} */
   const formulateReadableBlob = async (readerRef, deferredTasks) => {
     return /** @type {FormulateResult<FarRef<EndoReadable>>} */ (
       withFormulaGraphLock(async () => {
@@ -5252,7 +5252,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateMount']} */
+  /** @type {ManagerCore['formulateMount']} */
   const formulateMount = async (
     mountPath,
     readOnly,
@@ -5291,7 +5291,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateScratchMount']} */
+  /** @type {ManagerCore['formulateScratchMount']} */
   const formulateScratchMount = async (
     readOnly,
     deferredTasks,
@@ -5323,7 +5323,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateSubMount']} */
+  /** @type {ManagerCore['formulateSubMount']} */
   const formulateSubMount = async (
     parentMountId,
     subpath,
@@ -5424,7 +5424,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateGit']} */
+  /** @type {ManagerCore['formulateGit']} */
   const formulateGit = async (
     mountId,
     allowHistoryRewrite,
@@ -5479,7 +5479,7 @@ const makeDaemonCore = async (
     return formulate(formulaNumber, formula, nodeNumber);
   };
 
-  /** @type {DaemonCore['formulateShell']} */
+  /** @type {ManagerCore['formulateShell']} */
   const formulateShell = async (mountId, policy, deferredTasks) => {
     return /** @type {FormulateResult<import('./types.js').EndoShell>} */ (
       withFormulaGraphLock(async () => {
@@ -5507,7 +5507,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateEnvironment']} */
+  /** @type {ManagerCore['formulateEnvironment']} */
   const formulateEnvironment = (runner, workspace, recipe, deferredTasks) =>
     withFormulaGraphLock(async () => {
       const state = await formulateDirectory();
@@ -5583,7 +5583,7 @@ const makeDaemonCore = async (
       }
     });
 
-  /** @type {DaemonCore['formulateHttpClient']} */
+  /** @type {ManagerCore['formulateHttpClient']} */
   const formulateHttpClient = async (policy, deferredTasks) => {
     return /** @type {FormulateResult<import('@endo/exo-http-client').HttpClient>} */ (
       withFormulaGraphLock(async () => {
@@ -5610,7 +5610,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateGitCredential']} */
+  /** @type {ManagerCore['formulateGitCredential']} */
   const formulateGitCredential = async (
     kind,
     audience,
@@ -5662,7 +5662,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateGitRemote']} */
+  /** @type {ManagerCore['formulateGitRemote']} */
   const formulateGitRemote = async (
     gitId,
     credentialId,
@@ -5698,7 +5698,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['checkinTree']} */
+  /** @type {ManagerCore['checkinTree']} */
   const checkinTree = async (remoteTree, deferredTasks) => {
     return /** @type {FormulateResult<unknown>} */ (
       withFormulaGraphLock(async () => {
@@ -5992,7 +5992,7 @@ const makeDaemonCore = async (
    * formula graph lock. The caller must release it after publishing a durable
    * reference, or if publication fails.
    *
-   * @type {DaemonCore['formulateDirectory']}
+   * @type {ManagerCore['formulateDirectory']}
    */
   const formulateDirectory = async (nodeNumber = localNodeNumber) => {
     return /** @type {FormulateResult<EndoDirectory>} */ (
@@ -6040,7 +6040,7 @@ const makeDaemonCore = async (
    * @param {string} [options.label] - Human-readable label for status reporting.
    * @param {'locked' | 'node'} [options.kind] - Worker kind (locked for XS, node for Node.js).
    * @param {NodeNumber} [options.nodeNumber] - Node number (defaults to localNodeNumber).
-   * @returns {ReturnType<DaemonCore['formulateWorker']>}
+   * @returns {ReturnType<ManagerCore['formulateWorker']>}
    */
   const formulateNumberedWorker = (
     formulaNumber,
@@ -6067,7 +6067,7 @@ const makeDaemonCore = async (
   };
 
   /**
-   * @type {DaemonCore['formulateWorker']}
+   * @type {ManagerCore['formulateWorker']}
    */
   const formulateWorker = async (
     deferredTasks,
@@ -6095,7 +6095,7 @@ const makeDaemonCore = async (
    */
 
   /**
-   * @type {DaemonCore['formulateHostDependencies']}
+   * @type {ManagerCore['formulateHostDependencies']}
    */
   const formulateHostDependencies = async specifiedIdentifiers => {
     const { specifiedWorkerId, workerLabel, ...remainingSpecifiedIdentifiers } =
@@ -6234,7 +6234,7 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateNumberedHost']} */
+  /** @type {ManagerCore['formulateNumberedHost']} */
   const formulateNumberedHost = identifiers => {
     /** @type {HostFormula} */
     const formula = {
@@ -6263,7 +6263,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateHost']} */
+  /** @type {ManagerCore['formulateHost']} */
   const formulateHost = async (
     endoId,
     networksDirectoryId,
@@ -6296,7 +6296,7 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateGuestDependencies']} */
+  /** @type {ManagerCore['formulateGuestDependencies']} */
   const formulateGuestDependencies = async (
     hostAgentId,
     hostHandleId,
@@ -6430,7 +6430,7 @@ const makeDaemonCore = async (
     }
   };
 
-  /** @type {DaemonCore['formulateNumberedGuest']} */
+  /** @type {ManagerCore['formulateNumberedGuest']} */
   const formulateNumberedGuest = identifiers => {
     /** @type {GuestFormula} */
     const formula = {
@@ -6457,7 +6457,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateGuest']} */
+  /** @type {ManagerCore['formulateGuest']} */
   const formulateGuest = async (
     hostAgentId,
     hostHandleId,
@@ -6550,7 +6550,7 @@ const makeDaemonCore = async (
     return workerFormulation.id;
   };
 
-  /** @type {DaemonCore['formulateMarshalValue']} */
+  /** @type {ManagerCore['formulateMarshalValue']} */
   async function formulateMarshalValue(value, deferredTasks, pin) {
     return /** @type {FormulateResult<void>} */ (
       withFormulaGraphLock(async () => {
@@ -6593,7 +6593,7 @@ const makeDaemonCore = async (
     );
   }
 
-  /** @type {DaemonCore['formulatePromise']} */
+  /** @type {ManagerCore['formulatePromise']} */
   const formulatePromise = async pin => {
     return withFormulaGraphLock(async () => {
       const storeFormulaNumber = /** @type {FormulaNumber} */ (
@@ -6640,7 +6640,7 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateMessage']} */
+  /** @type {ManagerCore['formulateMessage']} */
   const formulateMessage = async (messageFormula, pin) => {
     return withFormulaGraphLock(async () => {
       const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
@@ -6659,7 +6659,7 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateEval']} */
+  /** @type {ManagerCore['formulateEval']} */
   const formulateEval = async (
     nameHubId,
     source,
@@ -6884,7 +6884,7 @@ const makeDaemonCore = async (
     }
   };
 
-  /** @type {DaemonCore['formulateUnconfined']} */
+  /** @type {ManagerCore['formulateUnconfined']} */
   const formulateUnconfined = async (
     hostAgentId,
     hostHandleId,
@@ -6924,7 +6924,7 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateArchive']} */
+  /** @type {ManagerCore['formulateArchive']} */
   const formulateArchive = async (
     hostAgentId,
     hostHandleId,
@@ -6968,7 +6968,7 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateFromTree']} */
+  /** @type {ManagerCore['formulateFromTree']} */
   const formulateFromTree = async (
     hostAgentId,
     hostHandleId,
@@ -7030,7 +7030,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulatePeer']} */
+  /** @type {ManagerCore['formulatePeer']} */
   const formulatePeer = async (networksDirectoryId, nodeNumber, addresses) => {
     const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
     // TODO: validate addresses
@@ -7059,7 +7059,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateLoopbackNetwork']} */
+  /** @type {ManagerCore['formulateLoopbackNetwork']} */
   const formulateLoopbackNetwork = async () => {
     const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
     /** @type {LoopbackNetworkFormula} */
@@ -7071,7 +7071,7 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateNetworksDirectory']} */
+  /** @type {ManagerCore['formulateNetworksDirectory']} */
   const formulateNetworksDirectory = async () => {
     const { id, value, context } = await formulateDirectory();
     // Make default networks.
@@ -7089,7 +7089,7 @@ const makeDaemonCore = async (
     return { id, value, context };
   };
 
-  /** @type {DaemonCore['formulateEndo']} */
+  /** @type {ManagerCore['formulateEndo']} */
   const formulateEndo = async specifiedFormulaNumber => {
     return /** @type {FormulateResult<FarRef<EndoBootstrap>>} */ (
       withFormulaGraphLock(async () => {
@@ -7157,7 +7157,7 @@ const makeDaemonCore = async (
     return readyNetworks;
   };
 
-  /** @type {DaemonCore['getAllNetworkAddresses']} */
+  /** @type {ManagerCore['getAllNetworkAddresses']} */
   const getAllNetworkAddresses = async networksDirectoryId => {
     const networksDirectory = await provide(networksDirectoryId, 'directory');
     const networkIds = await networksDirectory.listIdentifiers();
@@ -7180,7 +7180,7 @@ const makeDaemonCore = async (
   const contentDataPlaneRegistry = makeContentDataPlaneRegistry();
   contentDataPlaneRegistry.register(makeHttpContentDataPlane());
 
-  /** @type {DaemonCore['getAllContentSources']} */
+  /** @type {ManagerCore['getAllContentSources']} */
   const getAllContentSources = async (planesDirectoryId, identity) => {
     const planesDirectory = await provide(planesDirectoryId, 'directory');
     const names = await E(planesDirectory).list();
@@ -7582,7 +7582,7 @@ const makeDaemonCore = async (
    * than widen the guest, the daemon mediates the only two network operations
    * minting and redeeming an invitation require — reading this daemon's own
    * advertised peer info, and registering the accepting peer — through this
-   * narrow broker. It is resolved here, inside daemon-core code, from the root
+   * narrow broker. It is resolved here, inside manager-core code, from the root
    * `endo` bootstrap's network-owning host; both are root formulas, so the
    * result is identical for every inviting agent (all agents on one daemon share
    * one node identity, one networks directory, and one known-peers store). The
@@ -7618,7 +7618,7 @@ const makeDaemonCore = async (
    * inviter-side pet-store rebind inside `Invitation.accept`; the acceptor-side
    * bind here is a plain, idempotent, single-writer local write.
    *
-   * Network mediation stays behind the internal broker and daemon-core
+   * Network mediation stays behind the internal broker and manager-core
    * persistence powers, reachable here only lexically. A guest acceptor gains
    * no `getPeerInfo`/`addPeerInfo`, host facet, peer enumeration, or
    * outbound-dialing *surface* of its own — exactly as a guest inviter does not
@@ -8093,20 +8093,20 @@ const makeDaemonCore = async (
         .replace(/^\//, '')
         .split('@')
         .map(decodeURIComponent);
-      const guestDaemonNode = url.hostname;
+      const guestManagerNode = url.hostname;
       // The handle's node may differ from the daemon node when agent keys
       // are used as formula nodes.
       const guestHandleNode =
-        url.searchParams.get('handleNode') || guestDaemonNode;
+        url.searchParams.get('handleNode') || guestManagerNode;
 
       if (!guestHandleNumber) {
         throw makeError('Handle locator must include a formula number');
       }
-      assertNodeNumber(guestDaemonNode);
+      assertNodeNumber(guestManagerNode);
       assertFormulaNumber(guestHandleNumber);
       // `guestHandleNode` is caller-supplied via the `handleNode` query param and
       // flows into a durable routing write below; validate it at the input edge
-      // exactly as its siblings `guestDaemonNode`/`guestHandleNumber` are, so a
+      // exactly as its siblings `guestManagerNode`/`guestHandleNumber` are, so a
       // malformed handle node cannot reach `writeRemoteAgentKey`.
       assertNodeNumber(guestHandleNode);
 
@@ -8167,10 +8167,10 @@ const makeDaemonCore = async (
         // remote daemon to register and no remote agent key to route. Writing
         // a `remote_agent_key` row for a local key would be spurious — a
         // guest's handle node is always its own agent key, so a same-daemon
-        // accept otherwise satisfies `guestHandleNode !== guestDaemonNode` and
+        // accept otherwise satisfies `guestHandleNode !== guestManagerNode` and
         // would write one (section 4 of the guest-native-invitations design).
         // Skip both writes for the local node.
-        if (guestDaemonNode !== localNodeNumber) {
+        if (guestManagerNode !== localNodeNumber) {
           // These additive-only routing writes mutate daemon-wide tables
           // (`remote_agent_key` and the known-peers store) that are ALSO written
           // by the acceptor-side `acceptInvitation` and by every sibling
@@ -8180,7 +8180,7 @@ const makeDaemonCore = async (
           // the same inviting daemon. Two attacker-supplied `guestHandleLocator`
           // values (in two distinct invitations redeemed concurrently on this
           // daemon) naming the same not-yet-known `guestHandleNode`/
-          // `guestDaemonNode` could therefore both observe the `=== undefined`
+          // `guestManagerNode` could therefore both observe the `=== undefined`
           // guard before either writes, and whichever write lands last silently
           // REDIRECTS the route the other just added — the exact "may ADD, never
           // REDIRECT" violation the acceptor side closes with its daemon-wide
@@ -8195,7 +8195,7 @@ const makeDaemonCore = async (
           // No deadlock from nesting inside `invitationJobs`: the acceptor-side
           // critical section holds `acceptInvitationJobs` across its
           // `E(invitation).accept()` round-trip, but that only re-enters THIS
-          // handler in the same-daemon case — where `guestDaemonNode ===
+          // handler in the same-daemon case — where `guestManagerNode ===
           // localNodeNumber` skips this whole block, so the handler never
           // re-acquires the queue the acceptor already holds. Across daemons the
           // two `acceptInvitationJobs` are distinct in-memory queues.
@@ -8214,12 +8214,12 @@ const makeDaemonCore = async (
             // future send addressed to that key. The accept path may ADD an
             // agent-key route, never redirect an existing one.
             if (
-              guestHandleNode !== guestDaemonNode &&
+              guestHandleNode !== guestManagerNode &&
               persistencePowers.getRemoteAgentKey(guestHandleNode) === undefined
             ) {
               persistencePowers.writeRemoteAgentKey(
                 guestHandleNode,
-                guestDaemonNode,
+                guestManagerNode,
               );
             }
 
@@ -8232,7 +8232,7 @@ const makeDaemonCore = async (
             // is undialable across daemons anyway, so skipping the write loses
             // nothing.
             //
-            // `guestDaemonNode` and `addresses` are parsed from the bearer
+            // `guestManagerNode` and `addresses` are parsed from the bearer
             // `guestHandleLocator` this accept() consumes, so — exactly as on the
             // acceptor-side `acceptInvitation` twin — register a route only for a
             // node we do not already know, never re-addressing an existing peer.
@@ -8246,10 +8246,10 @@ const makeDaemonCore = async (
                   await provideStoreController(knownPeersId)
                 )
               );
-              if (knownPeers.identifyLocal(guestDaemonNode) === undefined) {
+              if (knownPeers.identifyLocal(guestManagerNode) === undefined) {
                 /** @type {PeerInfo} */
                 const peerInfo = {
-                  node: guestDaemonNode,
+                  node: guestManagerNode,
                   addresses,
                 };
                 await networkBroker.addPeerInfo(peerInfo);
@@ -8970,7 +8970,7 @@ const makeDaemonCore = async (
     return info;
   };
 
-  /** @type {DaemonCoreExternal} */
+  /** @type {ManagerCoreExternal} */
   await seedFormulaGraphFromPersistence();
 
   // eslint-disable-next-line no-undef
@@ -9003,15 +9003,15 @@ const makeDaemonCore = async (
  *
  * This function provides the main entry point for creating an Endo daemon. It:
  * 1. Loads the root nonce and keypair from persistence (or generates new ones)
- * 2. Creates or recreates the daemon core with appropriate formulas
+ * 2. Creates or recreates the manager core with appropriate formulas
  * 3. If the daemon was newly created, formulates the Endo bootstrap formula
  * 4. Returns the endo bootstrap interface and CapTP connection registrar
  *
  * For existing daemons, the formula graph is loaded from persistence and the
  * Endo bootstrap is provided.
- * For new daemons, the bootstrap formula is formulated and returned.
+ * For new managers, the bootstrap formula is formulated and returned.
  *
- * @param {DaemonicPowers} powers - The daemon powers for crypto and persistence.
+ * @param {ManagerPowers} powers - The manager powers for crypto and persistence.
  * @param {object} args
  * @param {(error: Error) => void} args.cancel - Callback for cancellation.
  * @param {number} args.gracePeriodMs - Grace period in milliseconds for shutdown.
@@ -9058,7 +9058,7 @@ const provideEndoBootstrap = async (
   const localNodeNumber = /** @type {NodeNumber} */ (
     toHex(rootKeypair.publicKey)
   );
-  const daemonCore = await makeDaemonCore(powers, endoFormulaNumber, {
+  const managerCore = await makeManagerCore(powers, endoFormulaNumber, {
     cancel,
     gracePeriodMs,
     gracePeriodElapsed,
@@ -9069,7 +9069,7 @@ const provideEndoBootstrap = async (
     defaultWorkerKind,
   });
   const { capTpConnectionRegistrar, traceAggregator, inboundErrorOrigin } =
-    daemonCore;
+    managerCore;
   const marshalSaveError = makeOutboundMarshalSaveError(
     traceAggregator,
     inboundErrorOrigin,
@@ -9078,10 +9078,10 @@ const provideEndoBootstrap = async (
   if (isInitialized) {
     const endoId = formatId({
       number: endoFormulaNumber,
-      node: daemonCore.nodeNumber,
+      node: managerCore.nodeNumber,
     });
     const endoBootstrap = /** @type {FarRef<EndoBootstrap>} */ (
-      await daemonCore.provide(endoId)
+      await managerCore.provide(endoId)
     );
     return {
       endoBootstrap,
@@ -9091,7 +9091,7 @@ const provideEndoBootstrap = async (
     };
   } else {
     const { value: endoBootstrap } =
-      await daemonCore.formulateEndo(endoFormulaNumber);
+      await managerCore.formulateEndo(endoFormulaNumber);
     return {
       endoBootstrap,
       capTpConnectionRegistrar,
@@ -9111,12 +9111,12 @@ const provideEndoBootstrap = async (
  * 4. Returns a daemon object with the endo bootstrap, cancellation callback,
  *    and CapTP connection registrar
  *
- * The daemon runs in the background and serves as the central point of
+ * The manager serves as the central point of
  * coordination for formulas, workers, and persistent state.
  *
- * @param {DaemonicPowers} powers - The daemon powers including crypto, persistence, and control.
- * @param {string} daemonLabel - A label for the daemon instance (used for logging).
- * @param {(error: Error) => void} cancel - Callback to call when daemon needs to cancel.
+ * @param {ManagerPowers} powers - The manager powers including crypto, persistence, and control.
+ * @param {string} managerLabel - A label for the manager instance (used for logging).
+ * @param {(error: Error) => void} cancel - Callback to call when the manager needs to cancel.
  * @param {Promise<never>} cancelled - A promise that rejects when cancelled.
  * @param {Specials} [specials] - Special formula generators
  * @param {object} [options]
@@ -9126,7 +9126,7 @@ const provideEndoBootstrap = async (
  * @example
  * ```js
  * const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } =
- *   await makeDaemon(powers, 'my-daemon', handleError, cancelledPromise, {
+ *   await makeManager(powers, 'my-daemon', handleError, cancelledPromise, {
  *     // your special formulas here
  *   });
  *
@@ -9134,9 +9134,9 @@ const provideEndoBootstrap = async (
  * await cancelGracePeriod(new Error('Daemon shutdown'));
  * ```
  */
-export const makeDaemon = async (
+export const makeManager = async (
   powers,
-  daemonLabel,
+  managerLabel,
   cancel,
   cancelled,
   specials = {},
@@ -9153,7 +9153,7 @@ export const makeDaemon = async (
   const gracePeriodElapsed = cancelled.catch(async error => {
     await delay(gracePeriodMs, gracePeriodCancelled);
     console.log(
-      `Endo daemon grace period ${gracePeriodMs}ms elapsed for ${daemonLabel}`,
+      `Endo daemon grace period ${gracePeriodMs}ms elapsed for ${managerLabel}`,
     );
     throw error;
   });

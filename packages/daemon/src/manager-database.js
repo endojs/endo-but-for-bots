@@ -6,7 +6,7 @@ import { q } from '@endo/errors';
 /** @import { Config, Formula, FormulaNumber, SecretAuditEvent, SecretRecord, SecretState } from './types.js' */
 
 /**
- * @typedef {object} DaemonDatabase
+ * @typedef {object} ManagerDatabase
  * @property {import('better-sqlite3').Database} db - The underlying SQLite database handle.
  * @property {() => void} close
  * @property {(formulaNumber: string, nodeNumber: string, formula: Formula) => void} writeFormula
@@ -163,13 +163,13 @@ const SCHEMA_SQL = `
  * @param {Config} config
  * @param {object} options
  * @param {new (path: string) => any} options.Database
- * @returns {DaemonDatabase}
+ * @returns {ManagerDatabase}
  */
-export const makeDaemonDatabase = (config, options) => {
+export const makeManagerDatabase = (config, options) => {
   const { Database } = options;
   if (typeof Database !== 'function') {
     throw new TypeError(
-      'makeDaemonDatabase requires options.Database (a better-sqlite3-compatible constructor)',
+      'makeManagerDatabase requires options.Database (a better-sqlite3-compatible constructor)',
     );
   }
   const dbPath = `${config.statePath}/endo.sqlite`;
@@ -432,7 +432,7 @@ export const makeDaemonDatabase = (config, options) => {
     return rows.map(r => r.number);
   };
 
-  // -- Daemon state --
+  // -- Manager state --
 
   /** @param {string} key */
   const getState = key => {
@@ -687,12 +687,12 @@ export const makeDaemonDatabase = (config, options) => {
     );
     return row === undefined
       ? undefined
-      : /** @type {ReturnType<DaemonDatabase['getSecretRecord']>} */ (
+      : /** @type {ReturnType<ManagerDatabase['getSecretRecord']>} */ (
           decodeSecretRecord(row)
         );
   };
 
-  /** @param {Parameters<DaemonDatabase['writeSecretRecord']>[0]} record */
+  /** @param {Parameters<ManagerDatabase['writeSecretRecord']>[0]} record */
   const writeSecretRecord = record => {
     stmtWriteSecretRecord.run(
       record.secretId,
@@ -706,7 +706,7 @@ export const makeDaemonDatabase = (config, options) => {
   };
 
   const listSecretRecords = () =>
-    /** @type {ReturnType<DaemonDatabase['listSecretRecords']>} */ (
+    /** @type {ReturnType<ManagerDatabase['listSecretRecords']>} */ (
       /** @type {Record<string, unknown>[]} */ (
         stmtListSecretRecords.all()
       ).map(decodeSecretRecord)
@@ -815,4 +815,4 @@ export const makeDaemonDatabase = (config, options) => {
     listSecretAuditEvents,
   });
 };
-harden(makeDaemonDatabase);
+harden(makeManagerDatabase);

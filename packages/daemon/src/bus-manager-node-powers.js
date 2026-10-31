@@ -1,7 +1,7 @@
 // @ts-nocheck
 // The bus Node daemon powers still delegate to pre-SQLite pet-store
 // and persistence factories; aligning with the llm-side constructor
-// signatures (single daemonDb argument) is follow-up work.
+// signatures (single managerDatabase argument) is follow-up work.
 
 /* global process */
 /* eslint-disable no-void */
@@ -13,7 +13,7 @@
    frame serially by design. */
 
 /**
- * Daemonic powers for the bus platform (external supervisor).
+ * Manager powers for the bus platform (external supervisor).
  *
  * Instead of spawning workers via child_process.fork(), this module
  * requests worker spawns from the supervisor via the envelope protocol.
@@ -36,16 +36,16 @@ import { decodeEnvelope, readFrameFromStream } from './envelope.js';
 import {
   makeFilePowers,
   makeCryptoPowers,
-  makeDaemonicPersistencePowers,
+  makeManagerPersistencePowers,
 } from './manager-node-powers.js';
 import { makeRegistryNodePowers } from './registry-node-powers.js';
 import { makeNodeHostToolPowers } from './host-tool-powers-node.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPowers, FilePowers, WorkerDaemonFacet } from './types.js' */
+/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, ManagerWorkerFacet, ManagerPowers, FilePowers, WorkerManagerFacet } from './types.js' */
 
 // Re-export shared powers from daemon-node-powers.
-export { makeFilePowers, makeCryptoPowers, makeDaemonicPersistencePowers };
+export { makeFilePowers, makeCryptoPowers, makeManagerPersistencePowers };
 
 /**
  * @typedef {object} EnvelopeChannel
@@ -70,7 +70,7 @@ export { makeFilePowers, makeCryptoPowers, makeDaemonicPersistencePowers };
  * @param {FilePowers} filePowers
  * @param {EnvelopeChannel} envelopeChannel
  */
-export const makeDaemonicBusControlPowers = (
+export const makeManagerBusControlPowers = (
   config,
   fileURLToPath,
   filePowers,
@@ -187,7 +187,7 @@ export const makeDaemonicBusControlPowers = (
    * Spawn a worker through the bus supervisor.
    *
    * @param {string} workerId
-   * @param {DaemonWorkerFacet} daemonWorkerFacet
+   * @param {ManagerWorkerFacet} managerWorkerFacet
    * @param {Promise<never>} cancelled
    * @param {Promise<never>} _forceCancelled
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
@@ -197,7 +197,7 @@ export const makeDaemonicBusControlPowers = (
    */
   const makeWorker = async (
     workerId,
-    daemonWorkerFacet,
+    managerWorkerFacet,
     cancelled,
     _forceCancelled,
     capTpConnectionRegistrar = undefined,
@@ -313,7 +313,7 @@ export const makeDaemonicBusControlPowers = (
       messageWriter,
       messageReader,
       cancelled,
-      daemonWorkerFacet,
+      managerWorkerFacet,
       undefined,
       capTpConnectionRegistrar,
     );
@@ -327,10 +327,10 @@ export const makeDaemonicBusControlPowers = (
 
     const workerTerminated = Promise.race([workerClosed, capTpClosed]);
 
-    /** @type {ERef<WorkerDaemonFacet>} */
-    const workerDaemonFacet = getBootstrap();
+    /** @type {ERef<WorkerManagerFacet>} */
+    const workerManagerFacet = getBootstrap();
 
-    return { workerTerminated, workerDaemonFacet };
+    return { workerTerminated, workerManagerFacet };
   };
 
   return harden({
@@ -348,9 +348,9 @@ export const makeDaemonicBusControlPowers = (
  * @param {Parameters<typeof makeRegistryNodePowers>[0]} opts.registryPowers
  * @param {(handle: number, verb: string, payload?: Uint8Array, nonce?: number) => Promise<void>} opts.sendEnvelope
  * @param {import('stream').Readable} opts.envelopeReadStream
- * @returns {DaemonicPowers}
+ * @returns {ManagerPowers}
  */
-export const makeDaemonicBusPowers = ({
+export const makeManagerBusPowers = ({
   config,
   url,
   filePowers,
@@ -362,12 +362,12 @@ export const makeDaemonicBusPowers = ({
   const { fileURLToPath } = url;
 
   const petStorePowers = makePetStoreMaker(filePowers, config);
-  const daemonicPersistencePowers = makeDaemonicPersistencePowers(
+  const managerPersistencePowers = makeManagerPersistencePowers(
     filePowers,
     cryptoPowers,
     config,
   );
-  const daemonicControlPowers = makeDaemonicBusControlPowers(
+  const managerControlPowers = makeManagerBusControlPowers(
     config,
     fileURLToPath,
     filePowers,
@@ -377,8 +377,8 @@ export const makeDaemonicBusPowers = ({
   return harden({
     crypto: cryptoPowers,
     petStore: petStorePowers,
-    persistence: daemonicPersistencePowers,
-    control: daemonicControlPowers,
+    persistence: managerPersistencePowers,
+    control: managerControlPowers,
     filePowers,
     registry: makeRegistryNodePowers({
       ...registryPowers,

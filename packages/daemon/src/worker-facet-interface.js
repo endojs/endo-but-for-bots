@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * The `EndoWorkerFacetForDaemon` interface guard, in a module of its
+ * The `EndoWorkerFacetForManager` interface guard, in a module of its
  * own.
  *
  * Both worker implementations must guard their facet with the *same*
@@ -35,8 +35,8 @@ const EnvShape = M.recordOf(
   M.string({ stringLengthLimit: 0x7fff_ffff }),
 );
 
-export const WorkerFacetForDaemonInterface = M.interface(
-  'EndoWorkerFacetForDaemon',
+export const WorkerFacetForManagerInterface = M.interface(
+  'EndoWorkerFacetForManager',
   {
     terminate: M.call().returns(M.promise()),
     evaluate: M.call(

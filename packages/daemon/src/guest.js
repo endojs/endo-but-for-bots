@@ -15,28 +15,28 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, ManagerCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, mailHelp, makeHelp } from './help-text.js';
 
 /**
  * @param {object} args
  * @param {Provide} args.provide
- * @param {DaemonCore['provideStoreController']} args.provideStoreController
- * @param {DaemonCore['formulateEval']} args.formulateEval
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
- * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
- * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
+ * @param {ManagerCore['provideStoreController']} args.provideStoreController
+ * @param {ManagerCore['formulateEval']} args.formulateEval
+ * @param {ManagerCore['formulateReadableBlob']} args.formulateReadableBlob
+ * @param {ManagerCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {ManagerCore['formulateInvitation']} args.formulateInvitation
+ * @param {ManagerCore['acceptInvitation']} args.acceptInvitation
+ * @param {ManagerCore['getFormulaForId']} args.getFormulaForId
+ * @param {ManagerCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
+ * @param {ManagerCore['getAllContentSources']} args.getAllContentSources
  * @param {ContentLoadable['loadContent']} args.loadContent
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {(node: string) => boolean} args.isLocalKey
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
+ * @param {ManagerCore['pinTransient']} [args.pinTransient]
+ * @param {ManagerCore['unpinTransient']} [args.unpinTransient]
  */
 export const makeGuestMaker = ({
   provide,
@@ -411,7 +411,7 @@ export const makeGuestMaker = ({
      * exist). The inviter independently chooses its own pet name for this
      * guest, so the two names may differ.
      *
-     * This shares one implementation with `EndoHost.accept` via the daemon-core
+     * This shares one implementation with `EndoHost.accept` via the manager-core
      * `acceptInvitation` helper. Peer registration and remote-agent-key routing
      * stay behind that helper (and the invitation formula's own daemon-mediated
      * accept), so a guest acceptor gains no `getPeerInfo`/`addPeerInfo`, host
