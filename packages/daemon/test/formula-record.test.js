@@ -1,5 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { fc } from '@fast-check/ava';
+import { normalizeGitRemotePolicy } from '@endo/exo-git';
 
 import { makeFormulaRecord } from '../src/formula-record.js';
 
@@ -417,4 +419,54 @@ test('makeFormulaRecord reports an allowed local-file transport', t => {
     kind: 'literal',
     value: true,
   });
+});
+
+const branchSegmentArb = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9_-]{0,8}$/);
+// The normalizer accepts a wildcard selector only when fully qualified.
+const allowedBranchArb = fc
+  .tuple(
+    fc.array(branchSegmentArb, { minLength: 1, maxLength: 4 }),
+    fc.boolean(),
+    fc.boolean(),
+  )
+  .map(
+    ([segments, wildcard, qualified]) =>
+      `${qualified || wildcard ? 'refs/heads/' : ''}${segments.join('/')}${wildcard ? '/*' : ''}`,
+  );
+
+test('makeFormulaRecord pushRefspecs match the policy normalizer (property)', t => {
+  fc.assert(
+    fc.property(
+      fc.uniqueArray(allowedBranchArb, { minLength: 1, maxLength: 8 }),
+      fc.boolean(),
+      (allowedBranches, revoked) => {
+        const policy = {
+          url: 'https://github.com/endojs/endo.git',
+          allowedDirections: /** @type {Array<'fetch' | 'push'>} */ ([
+            'fetch',
+            'push',
+          ]),
+          fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+          pushRefspecs: [],
+          allowedBranches,
+        };
+        const formula = /** @type {Formula} */ (
+          /** @type {unknown} */ ({
+            type: 'git-remote',
+            gitId: 'git-id',
+            name: 'origin',
+            revoked,
+            policy,
+          })
+        );
+        const { properties } = makeFormulaRecord(formula, aNumber);
+        t.deepEqual(properties.pushRefspecs, {
+          kind: 'literal',
+          value: normalizeGitRemotePolicy({ name: 'origin', policy })
+            .pushRefspecs,
+        });
+      },
+    ),
+    { numRuns: 300 },
+  );
 });
