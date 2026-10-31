@@ -105,6 +105,9 @@ binary64 neighbor:
 
 Each pair contains the two faithful roundings that bracket the exact result.
 The cases assert membership in that pair, and any other value still fails.
+Their `Source:` line, the program that `corpora_programs()` dual-runs in the
+multi-crank and compile-diff gates, is the same membership expression.
+The original corpus line is kept as `Original corpus line:`.
 A platform-only pin would make the oracle gate depend on the runner's glibc
 version. Exact values were computed with Python Decimal at 60 digits, using the
 same formulas as the C3 references above.
