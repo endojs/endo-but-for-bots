@@ -11,6 +11,15 @@ import type {
 import type { EndoShell } from '@endo/exo-shell';
 import type { HttpClient, HttpResponse } from '@endo/exo-http-client';
 import type { Pattern } from '@endo/patterns';
+import type {
+  PackageManagerToolCapability,
+  PackageManagerToolsOptions,
+} from './json-tools/package-manager.js';
+
+export type {
+  PackageManagerToolCapability,
+  PackageManagerToolsOptions,
+} from './json-tools/package-manager.js';
 
 /**
  * The three cumulative Git facets `makeGitTool` derives a catalog from,
@@ -358,12 +367,16 @@ export interface WorkspaceGrants {
   remote?: ERef<GitRemoteToolCapability>;
   /** Command layer: the granted `Shell`. */
   shell?: ERef<ShellToolCapability>;
+  /** Confined JavaScript package-manager capability. */
+  packageManager?: ERef<PackageManagerToolCapability>;
   /** Drop the file-tool write slice; forwarded to `makeMountFsTools`. */
   readOnly?: boolean;
   /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */
   maxChars?: number;
   /** Advisory shell-tool veto policy; forwarded to `makeShellTool`. */
   shellOptions?: ShellToolOptions;
+  /** Options forwarded to `makePackageManagerTools`. */
+  packageManagerOptions?: PackageManagerToolsOptions;
 }
 
 export declare function makeWorkspaceTools(
