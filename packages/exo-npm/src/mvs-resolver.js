@@ -455,9 +455,9 @@ export const makeMvsResolveHook = options => {
     let document;
     try {
       document = await fetcher.getPackument(name);
-    } catch (err) {
+    } catch (error) {
       throw RegistryNetworkError(
-        `failed to fetch packument for ${name}: ${/** @type {Error} */ (err).message}`,
+        `failed to fetch packument for ${name}: ${/** @type {Error} */ (error).message}`,
       );
     }
     if (
@@ -573,10 +573,10 @@ export const makeMvsResolveHook = options => {
       let entry;
       try {
         entry = decodePackageJson(packageJson);
-      } catch (err) {
+      } catch (error) {
         throw makeError(
           X`entry package.json is not valid JSON: ${
-            /** @type {Error} */ (err).message
+            /** @type {Error} */ (error).message
           }`,
         );
       }
@@ -731,13 +731,13 @@ export const makeMvsResolveHook = options => {
         let document;
         try {
           document = await loadPackument(packumentCache, name);
-        } catch (err) {
+        } catch (error) {
           if (source === 'optionalDependencies') {
             unmetOptionals.push({
               importer,
               name,
               range,
-              reason: /** @type {Error} */ (err).message,
+              reason: /** @type {Error} */ (error).message,
               from,
             });
             return;
@@ -750,7 +750,7 @@ export const makeMvsResolveHook = options => {
             peerRequirements.push({ importer, name, range, from });
             return;
           }
-          throw err;
+          throw error;
         }
 
         if (selectLeastSatisfying(document, [range]) === undefined) {
@@ -1031,8 +1031,8 @@ export const makeMvsResolveHook = options => {
               try {
                 // eslint-disable-next-line no-await-in-loop
                 tarballBytes = await fetcher.getTarball(name, version);
-              } catch (err) {
-                const message = /** @type {Error} */ (err).message;
+              } catch (error) {
+                const message = /** @type {Error} */ (error).message;
                 if (
                   !incoming.every(
                     edge => edge.source === 'optionalDependencies',

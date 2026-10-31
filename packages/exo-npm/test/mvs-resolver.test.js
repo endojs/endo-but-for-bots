@@ -567,18 +567,18 @@ test('resolve drops diagnostics from a superseded selection', async t => {
 });
 
 test('resolve groups overlapping ranges independent of traversal order', async t => {
-  // A and B share 2.0.0, B and C share 3.0.0, A and C share nothing.
-  // Whichever consumer the walk meets first, B joins the group of the
-  // range with the least satisfying version.
+  // alpha and beta share 2.0.0, beta and gamma share 3.0.0, alpha and
+  // gamma share nothing. Whichever consumer the walk meets first, beta
+  // joins the group of the range with the least satisfying version.
   const packuments = {
     pkg: plainPackument(['1.0.0', '2.0.0', '3.0.0']),
-    a: consumerOf('<=2.0.0'),
-    b: consumerOf('>=2.0.0 <=3.0.0'),
-    c: consumerOf('>=3.0.0'),
+    alpha: consumerOf('<=2.0.0'),
+    beta: consumerOf('>=2.0.0 <=3.0.0'),
+    gamma: consumerOf('>=3.0.0'),
   };
   const orders = [
-    { a: '^1.0.0', c: '^1.0.0', b: '^1.0.0' },
-    { c: '^1.0.0', a: '^1.0.0', b: '^1.0.0' },
+    { alpha: '^1.0.0', gamma: '^1.0.0', beta: '^1.0.0' },
+    { gamma: '^1.0.0', alpha: '^1.0.0', beta: '^1.0.0' },
   ];
   const resolutions = await Promise.all(
     orders.map(dependencies => resolveFixture(packuments, { dependencies })),
