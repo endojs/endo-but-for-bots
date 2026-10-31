@@ -30,7 +30,6 @@ test('a writable Git yields file and writer git tools that edit and commit its w
     t.false(tools.has(name), `${name} withheld`);
   }
 
-  // Every tool presents the shape the inbox loop dispatches through.
   for (const [name, tool] of tools) {
     t.is(tool.schema().function.name, name);
     t.is(typeof tool.help(), 'string');

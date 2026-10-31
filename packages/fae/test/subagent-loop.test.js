@@ -2018,8 +2018,6 @@ test('an agent without a workspace grant has no file or git tools', async t => {
 });
 
 /**
- * An exo stand-in whose methods take and return whatever the test needs.
- *
  * @param {string} name
  * @param {Record<string, (...args: any[]) => any>} methods
  */
@@ -2089,7 +2087,6 @@ test('createAgent with a workspace hands the named Git to the driver, whose loop
     harden({ maxSubagentDepth: 0, workspace: { git: 'project-git' } }),
   );
 
-  // Only the driver's guest holds the workspace.
   const holders = [...storedByGuest].filter(([, stored]) =>
     stored.has('workspace-git'),
   );

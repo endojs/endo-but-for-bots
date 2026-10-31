@@ -121,9 +121,9 @@ const profileNameFor = handleName => `profile-for-${handleName}`;
  * @param {boolean} [options.pin]
  * @param {import('./subagent.js').SubagentCapability[]} [options.capabilities]
  * @param {string} [options.workspaceGitLocator] - A `Git` the agent works in.
- *   Only the factory passes this; a subagent gets no workspace of its parent's.
+ *   Only the factory passes this.
  * @param {string} [options.workspaceRemoteLocator] - A `GitRemote` for that
- *   workspace. Meaningless without `workspaceGitLocator`.
+ *   workspace.
  * @returns {Promise<{ name: string, profileName: string, locator: string }>}
  */
 export const provisionFaeAgent = async ({

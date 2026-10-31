@@ -51,16 +51,10 @@ harden(faeToolFromRecord);
  * Build the workspace tools for a Fae agent from a granted `Git` and, when
  * present, a granted `GitRemote`.
  *
- * The catalog follows the grant, so the model is never offered a verb the
- * capability would refuse. A read-only `Git` gets the reader tools, and a
- * remote is refused alongside it: `pull` would mutate the worktree the remote
- * is bound to, and `fetch` / `push` mutate repository and remote state. A
- * writable `Git` is narrowed to its writer scope before any tool closes over
- * it, so history rewrite stays a separate, elevated grant.
- *
- * The remote is a separate grant whose authority is its own. Nothing on a
- * `GitRemote` names the `Git` it is bound to, so pairing the two is the
- * operator's choice when they create the agent.
+ * A remote is refused beside a read-only `Git` because `pull` would mutate the
+ * worktree the remote is bound to, and `fetch` / `push` mutate repository and
+ * remote state. A writable `Git` is narrowed to its writer scope before any
+ * tool closes over it, so history rewrite stays a separate, elevated grant.
  *
  * @param {FaeWorkspaceGrant} grant
  * @param {{ maxChars?: number }} [options]

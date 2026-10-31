@@ -230,9 +230,8 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @param {number} [options.maxToolRounds]
  * @param {number} [options.requestTimeoutMs]
  * @param {FaeWorkspaceGrant} [options.workspace]
- *   A granted `Git` (and optionally a `GitRemote`) the agent works in. Present
- *   only when the operator gave the agent a workspace; its absence withholds
- *   the file and git tools, as `spawner` withholds the subagent tools.
+ *   A granted `Git` (and optionally a `GitRemote`) the agent works in.
+ *   Absent, the agent has no file or git tools.
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -408,8 +407,8 @@ export const spawnWorkerLoop = async (
   localTools.set('viewImage', makeViewImageTool(powers));
   localTools.set('readChannel', makeReadChannelTool(powers));
 
-  // Workspace tools exist only over a granted `Git`. A name that would
-  // displace a built-in fails the agent at start, not at its first turn.
+  // A name that would displace a built-in fails the agent at start, not at
+  // its first turn.
   if (workspace) {
     const workspaceTools = await provisionFaeWorkspaceTools(workspace);
     const builtInNames = new Set(
