@@ -15,6 +15,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import { withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
+import { checkMountFlags, makeCapletFromMount } from '../mount-caplet.js';
 
 const endowments = harden({
   // See https://github.com/Agoric/agoric-sdk/issues/9515
@@ -54,19 +55,65 @@ const runArchiveBytes = async (archiveBytes, powersP, args) => {
 
 export const run = async ({
   filePath,
-  args,
+  programArguments,
   archiveName,
+  mountName,
+  registryName,
+  offline,
   importPath,
   powersName,
   agentNames,
   env = {},
 }) => {
+  await null;
+  const mountFlagError = checkMountFlags({
+    mountName,
+    registryName,
+    offline,
+    archiveName,
+    importPath,
+  });
+  if (mountFlagError !== undefined) {
+    console.error(mountFlagError);
+    process.exitCode = 1;
+    return;
+  }
+  if (mountName !== undefined) {
+    if (programArguments.length !== 0) {
+      console.error(
+        'A caplet run with --mount takes no arguments beyond its entry',
+      );
+      process.exitCode = 1;
+      return;
+    }
+    // The caplet runs in a daemon worker rather than in this process, so
+    // its env goes to the caplet instead of this process.
+    await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
+      await null;
+      const result = await makeCapletFromMount(agent, {
+        mountName,
+        entry: filePath,
+        registryName,
+        offline,
+        workerName: undefined,
+        powersName,
+        resultName: undefined,
+        env,
+      });
+      if (result !== undefined) {
+        console.log(result);
+      }
+    });
+    return;
+  }
   if (
     filePath === undefined &&
     importPath === undefined &&
     archiveName === undefined
   ) {
-    console.error('Specify at least one of --file, --archive, or --UNCONFINED');
+    console.error(
+      'Specify at least one of --file, --archive, --mount, or --UNCONFINED',
+    );
     process.exitCode = 1;
     return;
   }
@@ -109,18 +156,18 @@ export const run = async ({
           return;
         }
         if (filePath !== undefined) {
-          args.unshift(filePath);
+          programArguments.unshift(filePath);
         }
 
         const importUrl = url.pathToFileURL(importPath).href;
         const namespace = await import(importUrl);
-        const result = await namespace.main(powersP, ...args);
+        const result = await namespace.main(powersP, ...programArguments);
         if (result !== undefined) {
           console.log(result);
         }
       } else if (archiveName !== undefined) {
         if (filePath !== undefined) {
-          args.unshift(filePath);
+          programArguments.unshift(filePath);
         }
         // Stream the archive bytes from the daemon.
         const archiveNamePath = parsePetNamePath(archiveName);
@@ -138,7 +185,7 @@ export const run = async ({
           archiveBytes.set(chunk, offset);
           offset += chunk.byteLength;
         }
-        await runArchiveBytes(archiveBytes, powersP, args);
+        await runArchiveBytes(archiveBytes, powersP, programArguments);
       } else {
         // Build a source-only archive on the fly from the file path.
         const readPowers = makeReadPowers({ fs, url, crypto, path });
@@ -150,7 +197,7 @@ export const run = async ({
           moduleLocation,
           { parserForLanguage: sourceParserForLanguage },
         );
-        await runArchiveBytes(archiveBytes, powersP, args);
+        await runArchiveBytes(archiveBytes, powersP, programArguments);
       }
     },
   );
