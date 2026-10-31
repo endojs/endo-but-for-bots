@@ -1,8 +1,6 @@
 // @ts-check
 
-import { E } from '@endo/eventual-send';
-import { Fail } from '@endo/errors';
-import { provisionWorkspaceTools } from '@endo/agent-tools';
+import { provisionGitWorkspaceTools } from '@endo/agent-tools';
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { ToolRecord } from '@endo/agent-tools' */
@@ -17,13 +15,6 @@ import { provisionWorkspaceTools } from '@endo/agent-tools';
  *   or its read-only facet.
  * @property {ERef<object>} [remote] - A `GitRemote` from `provideGitRemote`.
  */
-
-/**
- * Methods whose presence on a granted `Git` marks it writable. The read-only
- * facet (`Git.readOnly()`, or `provideGit` over a read-only mount) carries
- * none of them.
- */
-const gitWriterMethods = harden(['add', 'commit']);
 
 /**
  * @param {ToolRecord} record
@@ -64,23 +55,9 @@ export const provisionFaeWorkspaceTools = async (
   { git, remote },
   { maxChars } = {},
 ) => {
-  const methodNames = /** @type {string[]} */ (
-    // eslint-disable-next-line no-underscore-dangle
-    await E(git).__getMethodNames__()
-  );
-  const writable = gitWriterMethods.every(method =>
-    methodNames.includes(method),
-  );
-  writable ||
-    remote === undefined ||
-    Fail`A read-only workspace Git cannot be granted with a GitRemote`;
-  const workspaceGit = writable ? await E(git).scope('writer') : git;
-
-  const records = await provisionWorkspaceTools({
-    git: /** @type {any} */ (workspaceGit),
+  const records = await provisionGitWorkspaceTools({
+    git,
     remote: /** @type {any} */ (remote),
-    readOnly: !writable,
-    gitFacet: writable ? 'writer' : 'reader',
     maxChars,
   });
 

@@ -391,6 +391,21 @@ export declare function provisionWorkspaceTools(
 ): Promise<ToolRecord[]>;
 
 /**
+ * A workspace grant whose Git posture is discovered at the capability
+ * boundary. A writable Git is attenuated to its writer facet before any tool
+ * closes over it; a read-only Git cannot be combined with a remote.
+ */
+export interface GitWorkspaceGrant {
+  git: ERef<object>;
+  remote?: ERef<GitRemoteToolCapability>;
+  maxChars?: number;
+}
+
+export declare function provisionGitWorkspaceTools(
+  grant: GitWorkspaceGrant,
+): Promise<ToolRecord[]>;
+
+/**
  * Grant for {@link provisionHistoryTools}: a `Git` (used only for its
  * `filesystemAt` historical-read projection) and the ref to view.
  */

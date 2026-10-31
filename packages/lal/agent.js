@@ -20,9 +20,13 @@ import {
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
+import {
+  provisionLalWorkspaceTools,
+  resolveLalWorkspace,
+} from './workspace-tools.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { GuestPowers, LalContext } from './agent.types.js' */
+/** @import { GuestPowers, LalContext, LalWorkspaceGrant } from './agent.types.js' */
 
 // pi-ai's built-in API providers (anthropic, openai, google, openrouter,
 // mistral, deepseek, groq, xai, github-copilot, and ~20 others) are registered
@@ -56,9 +60,15 @@ const LalInterface = M.interface('Lal', {
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
+ * @param {LalWorkspaceGrant} [workspace]
  * @returns {Promise<void>}
  */
-export const spawnWorkerLoop = async (powers, context, workerEnv) => {
+export const spawnWorkerLoop = async (
+  powers,
+  context,
+  workerEnv,
+  workspace,
+) => {
   const getCancelled = async () => {
     if (!context) return null;
     const resolvedContext = await context;
@@ -94,6 +104,19 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   const agentTools = tools.map(({ name, summary }) =>
     toAgentTool(name, summary, executeTool),
   );
+  if (workspace !== undefined) {
+    const workspaceTools = await provisionLalWorkspaceTools(workspace);
+    const names = new Set(agentTools.map(tool => tool.name));
+    for (const tool of workspaceTools) {
+      if (names.has(tool.name)) {
+        throw new Error(
+          `Workspace tool ${tool.name} would shadow a built-in Lal tool`,
+        );
+      }
+      names.add(tool.name);
+      agentTools.push(tool);
+    }
+  }
 
   const resolvedModel = await resolveModel(model);
   const isOllama = resolvedModel.name?.startsWith('ollama/');
@@ -173,6 +196,16 @@ export const make = (guestPowers, _context) => {
           example: 'sk-ant-... for Anthropic',
           secret: true,
         },
+        {
+          name: 'git',
+          label: 'Git workspace pet name (optional)',
+          default: '',
+        },
+        {
+          name: 'remote',
+          label: 'Git remote pet name (optional; requires Git)',
+          default: '',
+        },
       ]),
     );
 
@@ -236,7 +269,7 @@ export const make = (guestPowers, _context) => {
         try {
           // Resolve the submitted values from the value message.
           const config =
-            /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
+            /** @type {import('./agent.types.js').WorkerConfig} */ (
               await E(powers).lookupById(msg.valueId)
             );
 
@@ -251,6 +284,8 @@ export const make = (guestPowers, _context) => {
               [],
             );
           } else {
+            const workspace = await resolveLalWorkspace(powers, config);
+
             // Create the guest profile via the host agent.
             // provideGuest returns the full EndoGuest (not the handle).
             // Guard with has() so restart re-uses the existing guest;
@@ -269,11 +304,16 @@ export const make = (guestPowers, _context) => {
             await provisionPrimer(guest);
 
             // Spawn a worker loop for this guest.
-            const workerP = spawnWorkerLoop(guest, null, {
-              LAL_HOST: config.host,
-              LAL_MODEL: config.model,
-              LAL_AUTH_TOKEN: config.authToken,
-            });
+            const workerP = spawnWorkerLoop(
+              guest,
+              null,
+              {
+                LAL_HOST: config.host,
+                LAL_MODEL: config.model,
+                LAL_AUTH_TOKEN: config.authToken,
+              },
+              workspace,
+            );
             activeWorkers.set(name, workerP);
             workerP.catch(error => {
               console.error(`[lal] Worker "${name}" error:`, error);

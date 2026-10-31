@@ -13,6 +13,7 @@ export { makeShellTool } from './src/json-tools/shell.js';
 export { makeHttpTool } from './src/json-tools/http.js';
 export {
   makeWorkspaceTools,
+  provisionGitWorkspaceTools,
   provisionWorkspaceTools,
   provisionHistoryTools,
 } from './src/workspace.js';

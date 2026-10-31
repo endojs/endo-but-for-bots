@@ -7,3 +7,4 @@ The agent gets file and git tools over that `Git`'s worktree, plus `fetch`, `pul
 Commits carry the identity the `Git` formula fixed, not one the model chooses.
 A read-only `Git` gets only the read tools and cannot be combined with a remote.
 Agents created without a workspace are unchanged, and subagents do not inherit their parent's workspace.
+The former `setup-fs-tools` command and its unconfined `FAE_CWD` path-root tool caplets have been removed.

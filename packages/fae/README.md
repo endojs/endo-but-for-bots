@@ -161,9 +161,8 @@ The remote is a separate grant with its own authority: its `pull` updates the
 `GitRemote` names that `Git`, so give the agent a remote created for the same
 `Git` you grant.
 
-This replaces `setup-fs-tools` (below) for git work: those caplets run
-unconfined at a host directory, while a workspace reaches only what the
-granted `Git` reaches.
+Workspace tools reach only what the granted `Git` reaches. The former
+`FAE_CWD` path-root tool caplets have been removed.
 
 ## Tools
 
@@ -192,15 +191,6 @@ Create example tools (greet, math, timestamp) in the host's inventory:
 
 ```bash
 yarn setup-tools
-```
-
-Create filesystem tools (read-file, write-file, edit, list-dir, glob,
-grep, run-command). The root directory defaults to `process.cwd()`:
-
-```bash
-yarn setup-fs-tools
-# Or with a specific root:
-FAE_CWD=/path/to/project yarn setup-fs-tools
 ```
 
 Send a tool to an agent via the chat UI:
@@ -257,7 +247,6 @@ packages/fae/
 ├── provider-setup.sh         # Step 2: source .env and submit provider
 ├── fae-factory-setup.js      # Step 3: create fae-factory + default agent
 ├── setup-tools.js            # Create example tools in host inventory
-├── setup-fs-tools.js         # Create filesystem tools (FAE_CWD)
 ├── setup-with-tools.js       # All-in-one: provider + factory + tools
 ├── src/
 │   ├── extract-tool-calls.js # XML tool call parser
@@ -269,14 +258,7 @@ packages/fae/
 └── tools/
     ├── greet.js              # Example: greeting generator
     ├── math.js               # Example: arithmetic
-    ├── timestamp.js          # Example: current time
-    ├── read-file.js          # FaeTool: read files under root
-    ├── write-file.js         # FaeTool: write files under root
-    ├── edit.js               # FaeTool: edit files by exact-text replacement
-    ├── list-dir.js           # FaeTool: list directory under root
-    ├── glob.js               # FaeTool: find paths by glob pattern under root
-    ├── grep.js               # FaeTool: search file contents by regexp under root
-    └── run-command.js        # FaeTool: run shell commands in root
+    └── timestamp.js          # Example: current time
 ```
 
 ## Subagents

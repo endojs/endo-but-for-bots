@@ -336,7 +336,7 @@ than carrying the hosted-management package into this chart-only port.
 - **Per-run workspaces.** Nothing today mints a git worktree per run,
   wraps it as a tool, and mails it to the developer agent.
   `EndoGuest` has no `provideMount` / `provideGitClone`, and Fae's fs
-  tools are rooted at a frozen `FAE_CWD`.
+  tools require a `Git` workspace grant chosen before the worker starts.
 - **Reviewer independence.** A Fae agent's transcript is a conversation
   tree chained across every inbox message for its whole life
   (`agent.js:172`), so a reused reviewer carries prior runs into its next
