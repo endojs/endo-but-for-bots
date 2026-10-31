@@ -5,7 +5,8 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
-import { Far } from '@endo/pass-style';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import {
   makeWorkspaceTools,
@@ -15,15 +16,19 @@ import {
 /**
  * The provisioning adapter composes its catalog purely from the tool makers'
  * static schemas and interface guards — a maker never calls the granted cap at
- * construction time — so an inert `Far` remotable is a sufficient stand-in for
+ * construction time — so an inert exo is a sufficient stand-in for
  * every grant these composition-semantics tests exercise. The live-capability
  * behavior is proved end to end in `git-worked-loop.test.js`.
  *
  * @param {string} label
  * @returns {any} an inert stand-in for any workspace grant; typed `any` so a
- *   single `Far` remotable satisfies every distinct capability parameter.
+ *   single inert exo satisfies every distinct capability parameter.
  */
-const grant = label => Far(label, {});
+const grant = label => makeExo(label, M.interface(label, {}), {});
+
+const GitFixtureInterface = M.interface('GitFixture', {
+  worktree: M.callWhen().returns(M.remotable('Mount')),
+});
 
 /** @param {{ name: string }[]} records */
 const nameSet = records => new Set(records.map(record => record.name));
@@ -88,6 +93,11 @@ test('a shell grant composes the command tools', t => {
   t.true(names.has('inspect'));
 });
 
+test('an HTTP grant composes the confined network tools', t => {
+  const names = nameSet(makeWorkspaceTools({ http: grant('HttpClient') }));
+  t.deepEqual(names, new Set(['fetch', 'allowedOrigins']));
+});
+
 test('grants compose into one flat catalog with distinct names', t => {
   // filesystem + git + remote all coexist: every tool name across the three
   // groups is unique, so the catalog is a flat, unambiguous set.
@@ -114,6 +124,19 @@ test('a shell + remote catalog fails closed on the shared "inspect" name', t => 
   t.regex(error.message, /gitRemote/);
 });
 
+test('an HTTP + remote catalog fails closed on the shared "fetch" name', t => {
+  const error = t.throws(() =>
+    makeWorkspaceTools({
+      http: grant('HttpClient'),
+      remote: grant('GitRemote'),
+    }),
+  );
+  t.regex(error.message, /name collision/);
+  t.regex(error.message, /fetch/);
+  t.regex(error.message, /http/);
+  t.regex(error.message, /gitRemote/);
+});
+
 test('provisionWorkspaceTools passes an explicit filesystem straight through', async t => {
   // With an explicit `filesystem` and no `git`, the async provisioner performs
   // no derivation and returns the same catalog as the synchronous maker.
@@ -125,6 +148,43 @@ test('provisionWorkspaceTools passes an explicit filesystem straight through', a
     nameSet(catalog),
     new Set(['mountReadText', 'mountList', 'mountStat', 'mountWriteText']),
   );
+});
+
+test('provisionWorkspaceTools passes an HTTP grant into the catalog', async t => {
+  await null;
+  const catalog = await provisionWorkspaceTools({ http: grant('HttpClient') });
+  t.deepEqual(nameSet(catalog), new Set(['fetch', 'allowedOrigins']));
+});
+
+test('filesystem + git + shell + http compose without collision', t => {
+  const catalog = makeWorkspaceTools({
+    filesystem: grant('Filesystem'),
+    git: grant('Git'),
+    shell: grant('Shell'),
+    http: grant('HttpClient'),
+  });
+  t.is(catalog.length, nameSet(catalog).size, 'no name is repeated');
+  const names = nameSet(catalog);
+  for (const name of ['mountReadText', 'commit', 'exec', 'fetch']) {
+    t.true(names.has(name), `"${name}" present`);
+  }
+});
+
+test('provisionWorkspaceTools combines http with a git-derived filesystem', async t => {
+  await null;
+  /** @type {any} a `Git` stand-in whose `worktree` derives the filesystem. */
+  const git = makeExo('GitFixture', GitFixtureInterface, {
+    worktree: () => grant('Mount'),
+  });
+  const catalog = await provisionWorkspaceTools({
+    git,
+    http: grant('HttpClient'),
+    filesystem: grant('Filesystem'),
+  });
+  const names = nameSet(catalog);
+  t.true(names.has('fetch'));
+  t.true(names.has('mountReadText'));
+  t.true(names.has('commit'));
 });
 
 test('provisionWorkspaceTools with no grants derives nothing', async t => {
