@@ -22,11 +22,11 @@ import { makePromiseKit } from '@endo/promise-kit';
 // eslint-disable-next-line import/named
 import { main } from './manager.js';
 // eslint-disable-next-line import/no-unresolved
-import { makePowers } from './daemon-webextension-powers.js';
+import { makePowers } from './manager-webextension-powers.js';
 
 if (process.argv.length < 5) {
   throw new Error(
-    `daemon.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `manager-webextension.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );

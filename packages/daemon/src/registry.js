@@ -520,7 +520,7 @@ export const makeRegistryTable = ({ maxEntries = 0 } = {}) => {
 
 /**
  * The side-effecting operations the resolver depends on.  The JS backend
- * (`makeDaemonRegistryBackend`) wires these to registry HTTP + tarball → CAS
+ * (`makeRegistryBackend`) wires these to registry HTTP + tarball -> CAS
  * check-in; test doubles wire them to an in-memory registry.
  *
  * @typedef {object} RegistryBackend

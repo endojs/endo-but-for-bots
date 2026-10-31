@@ -15,11 +15,11 @@ import url from 'url';
 
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
-import { makeDaemon } from './manager.js';
+import { makeManager } from './manager.js';
 import {
   makeFilePowers,
   makeNetworkPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeCryptoPowers,
   gunzip,
 } from './manager-node-powers.js';
@@ -33,7 +33,7 @@ const fsp = { access: fs.promises.access };
 const args = process.argv.slice(2);
 if (args.length < 4) {
   throw new Error(
-    `daemon.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `manager-node.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );
@@ -125,19 +125,19 @@ const killStaleWorkers = async () => {
 };
 
 const main = async () => {
-  const daemonLabel = `daemon on PID ${pid}`;
+  const managerLabel = `daemon on PID ${pid}`;
   console.log(`Endo daemon starting on PID ${pid}`);
   cancelled.catch(err => {
     console.log(`Endo daemon stopping on PID ${pid} (caught: ${err})`);
   });
 
-  // Initializing daemonic powers must happen inside main() rather than at
+  // Initializing manager powers must happen inside main() rather than at
   // module scope so that bundlers targeting CJS (which does not support
   // top-level await) can include this module in their dependency graph.
   // The Familiar Electron shell bundles this file with esbuild's `cjs`
   // format, which requires the only `await` in this file to live inside
   // an async function.
-  const powers = await makeDaemonicPowers({
+  const powers = await makeManagerPowers({
     config,
     cancelled,
     fs,
@@ -147,9 +147,9 @@ const main = async () => {
     cryptoPowers,
     registryPowers,
   });
-  const { persistence: daemonicPersistencePowers } = powers;
+  const { persistence: managerPersistencePowers } = powers;
 
-  await daemonicPersistencePowers.initializePersistence();
+  await managerPersistencePowers.initializePersistence();
   await killStaleWorkers();
 
   const {
@@ -157,9 +157,9 @@ const main = async () => {
     cancelGracePeriod,
     capTpConnectionRegistrar,
     marshalSaveError,
-  } = await makeDaemon(
+  } = await makeManager(
     powers,
-    daemonLabel,
+    managerLabel,
     cancel,
     cancelled,
     {},

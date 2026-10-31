@@ -457,7 +457,7 @@ LLM-agent stack).*
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-10-15 | Proposed (Parcel carriage and opening across Slot Machine) |
 | [parcel](parcel.md) | 2026-10-14 | 2026-10-14 | Proposed |
 | [sturdyref-shim-contract](sturdyref-shim-contract.md) | 2026-09-30 | 2026-10-14 | Proposed (layer 1 Parcel contract and nine-layer pivot map) |
-| [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | In Progress |
+| [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-10-31 | Implemented |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | In Progress |
 | [daemon-capability-bus](daemon-capability-bus.md) | 2026-02-25 | 2026-04-11 | In Progress |
@@ -1223,7 +1223,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | **endo-claude-agents-capability** | Proposed | **Client-side bridge, top priority (carved 2026-09-03).** The provisioning half of the confined in-guest agent: a portable Endo capability for provisioning Claude-backed child guests without granting guests credentials, arbitrary host access, or authority over unrelated guest namespaces (namespace-scoped recursive factory facets, per-account-family credential sources, single-use per-child leases, durable revocation, fail-closed restart). Composes with `endo-claude` (#1015). Design in flight as PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft), requested in the minion.town #64 maintainer review; separates Endo's generic daemon/factory work from Minion Town's account UX/credential custody. |
 | filesystem-watchers | **Complete** | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | In Progress | Clean locator API; unblocked |
-| daemon-rename-to-manager | In Progress | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
+| daemon-rename-to-manager | Implemented | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
 | daemon-xs-worker-snapshot | In Progress | XS heap snapshot/restore; Phases 1-2 implemented — streaming CAS write/read, suspend/resume supervisor integration, CBOR control verbs; 12 passing tests; Phase 2 integration test and ephemeral GC roots remaining |
 | endo-reminder (supersedes endoclaw-timer) | Not Started | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
 | endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
@@ -1999,7 +1999,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | snapshot-mapper | M | 4-5 days | 3 | Layer 3 of 4. `packages/daemon/src/map-snapshot.js` + `packages/daemon/src/worker-import.js` (`makeMountReadPowers`) + small extension point in `packages/compartment-mapper` for the archive-precedent peer-directory layout. The one cross-package change in the four-layer stack |
 | ~~filesystem-watchers~~ (design) | S | — | 3 | ✅ Design merged (PR #115); implementation TBD |
 | daemon-locator-terminology | S | 1 day | 3 | locator.js + host.js changes |
-| daemon-rename-to-manager | S | 1 day | 3 | Mechanical rename; design merged (PR #85); implementation TBD |
+| daemon-rename-to-manager | S | 1 day | 3 | Mechanical rename; design merged (PR #85); implemented in PR #1594 |
 | endo-reminder (supersedes endoclaw-timer) | S-M | 3 days | 3 | `@endo/reminder` message-scheduler plugin: reminder delivery, VFS durable store, host-controlled limits, integration-owned revival; core logic ports from PR #609's head |
 | ~~daemon-guest-eval-simplification~~ | — | — | 3 | ✅ Implemented (PR #92, ~2 hours actual; well under 1-day estimate) |
 | endo-fetch (supersedes endoclaw-network-fetch) | S-M | ~1-2 days | 3 | `@endo/fetch` unconfined base provides direct HTTP; `@endo/confined-fetch` receives that base plus a VFS state directory, adds policy + TOFU persistence through `@endo/exo-http-client`, and revives through `@pins`; `makeHttpTool` binds only the confined client ([`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6) |

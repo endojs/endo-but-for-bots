@@ -56,7 +56,7 @@ export { installShouldTerminate, markShouldTerminate, silentReject };
 // and the eval question never receives a `CTP_RETURN`. The result is a
 // hang any time a cross-CapTP-session call rejects.
 //
-// `bus-daemon-rust-xs.js` already installs its own polyfill; this one
+// `bus-manager-rust-xs.js` already installs its own polyfill; this one
 // covers the worker bootstrap (and any other future consumer of
 // `bus-xs-core`).
 if (typeof globalThis.console === 'undefined') {

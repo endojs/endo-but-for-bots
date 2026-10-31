@@ -9,7 +9,7 @@ import {
 import { assertPetName } from '../src/pet-name.js';
 import { makePetStoreMaker } from '../src/pet-store.js';
 
-/** @import { DaemonDatabase } from '../src/types.js' */
+/** @import { ManagerDatabase } from '../src/types.js' */
 
 for (const replacing of [false, true]) {
   test(`failed ${replacing ? 'replacement' : 'initial'} write keeps memory and notifications consistent with persistence`, async t => {
@@ -28,7 +28,7 @@ for (const replacing of [false, true]) {
     let fail = true;
     let writes = 0;
     // Only these synchronous database operations are used by the real pet store.
-    const database = /** @type {DaemonDatabase} */ (
+    const database = /** @type {ManagerDatabase} */ (
       /** @type {unknown} */ ({
         listPetStoreEntries: () =>
           [...persisted].map(([key, formulaId]) => ({ name: key, formulaId })),

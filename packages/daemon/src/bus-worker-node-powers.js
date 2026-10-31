@@ -24,14 +24,14 @@ import {
   writeFrameToStream,
 } from './envelope.js';
 
-/** @import { MignonicPowers } from './types.js' */
+/** @import { WorkerPowers } from './types.js' */
 /** @import { Reader, Writer } from '@endo/stream' */
 
 /**
  * @param {object} modules
  * @param {typeof import('fs')} modules.fs
  * @param {typeof import('url')} modules.url
- * @returns {MignonicPowers}
+ * @returns {WorkerPowers}
  */
 export const makePowers = ({ fs, url }) => {
   // Open the envelope protocol pipes.

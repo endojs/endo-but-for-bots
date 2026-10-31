@@ -50,7 +50,7 @@ import { fromHex, toHex } from '../hex.js';
  * `EndoGateway.followRetentionSet` — rides on top of the OCapN session
  * unchanged, exactly as it rode on CapTP before. This module conforms
  * to the existing `EndoNetwork` interface (`addresses`, `supports`,
- * `connect`) and needs no daemon-core changes to be discovered through
+ * `connect`) and needs no manager-core changes to be discovered through
  * `@nets`.
  */
 

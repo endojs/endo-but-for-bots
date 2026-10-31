@@ -168,7 +168,7 @@ as ${errorId}\`)` and before the encoded message is handed to
 matching trace record is already in flight to the daemon.
 
 The push uses a new method `reportTrace(record)` on
-`EndoDaemonFacetForWorker` (currently empty).
+`EndoManagerFacetForWorker` (currently empty).
 The CapTP connection both transports the error and carries the
 trace push, but they are independent messages: the trace push does
 not block the error message and the error message does not block
@@ -248,8 +248,8 @@ than a Node `Buffer`-specific calculation.
 
 ### Daemon aggregator
 
-The aggregate lives in `daemonCore` (in
-[`packages/daemon/src/daemon.js`](../packages/daemon/src/daemon.js))
+The aggregate lives in `managerCore` (in
+[`packages/daemon/src/manager.js`](../packages/daemon/src/manager.js))
 and is constructed once per daemon process.
 Its shape is:
 
@@ -391,7 +391,7 @@ without requiring an exit-error context.
 - The daemon does not expose the aggregate over the gateway to
   remote peers.
   The `traces` facet is reachable through the host formula only,
-  and the existing gateway check (`src/daemon.js`'s "Gateway can
+  and the existing gateway check (`src/manager.js`'s "Gateway can
   only provide local values" guard) is sufficient.
 - Error messages in the buffer are the same strings SES's causal
   console would already print to the worker log.
@@ -439,17 +439,17 @@ without requiring an exit-error context.
 - `packages/daemon/src/worker-node.js` — install the
   `process.on('unhandledRejection')` handler that calls
   `pushTrace`.
-- `packages/daemon/src/daemon-go-powers.js` and
-  `packages/daemon/src/daemon-node-powers.js` — pass the daemon's
+- `packages/daemon/src/manager-go-powers.js` and
+  `packages/daemon/src/manager-node-powers.js` — pass the daemon's
   per-worker `marshalSaveError` through `makeNetstringCapTP` so
   the daemon side records the daemon-side `errorId` and registers
   aliases.
-- `packages/daemon/src/daemon.js` — own the aggregate buffer and
+- `packages/daemon/src/manager.js` — own the aggregate buffer and
   its indices; expose `recordTrace`, `aliasTrace`, `lookupTrace`,
-  and `recentTraces` through `daemonCore`; thread them into
-  `makeDaemonFacetForWorker` and into `makeHostMaker`.
+  and `recentTraces` through `managerCore`; thread them into
+  `makeManagerFacetForWorker` and into `makeHostMaker`.
 - `packages/daemon/src/interfaces.js` — add `reportTrace` to
-  `DaemonFacetForWorkerInterface`; add `TracesInterface`; extend
+  `ManagerFacetForWorkerInterface`; add `TracesInterface`; extend
   `HostInterface` with a `traces()` method.
 - `packages/daemon/src/host.js` — expose the `traces` facet on
   the Exo the host maker returns.

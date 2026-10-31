@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * The XS worker's `EndoWorkerFacetForDaemon` — the object the daemon
+ * The XS worker's `EndoWorkerFacetForManager`: the object the manager
  * drives over CapTP.
  *
  * Split out of `./bus-worker-xs.js` so it can be exercised directly.
@@ -22,7 +22,7 @@ import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { WorkerFacetForDaemonInterface } from './worker-facet-interface.js';
+import { WorkerFacetForManagerInterface } from './worker-facet-interface.js';
 
 /**
  * Standard endowments provided to evaluated code in Compartments.
@@ -101,7 +101,7 @@ harden(endowCompartment);
  *   loop to exit after the current command.
  */
 export const makeXsWorkerFacet = ({ markShouldTerminate }) =>
-  makeExo('EndoWorkerFacetForDaemon', WorkerFacetForDaemonInterface, {
+  makeExo('EndoWorkerFacetForManager', WorkerFacetForManagerInterface, {
     // Unlike `./worker.js`, which cancels a whole Node process's
     // vat, this only raises the flag the Rust main loop polls; any
     // in-flight `evaluate` runs to completion first.

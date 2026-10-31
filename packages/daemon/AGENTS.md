@@ -108,7 +108,7 @@ with formulation, avoiding a GC race.
 
 ## Gateway
 
-The gateway (`src/daemon.js` line ~851) rejects requests for non-local node IDs with `"Gateway can only provide local values"`. After a daemon restart, the node number changes, so any client holding a stale formula ID from a previous session will hit this error.
+The gateway (in `src/manager.js`) rejects requests for non-local node IDs with `"Gateway can only provide local values"`. After a daemon restart, the node number changes, so any client holding a stale formula ID from a previous session will hit this error.
 
 ## Testing
 
