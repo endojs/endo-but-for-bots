@@ -43,8 +43,14 @@ import harden from '@endo/harden';
  * @property {boolean} [shell]
  *   If true, run the argv through a system shell.  The host spawner
  *   forwards this to Node's `child_process.spawn`; the sandbox
- *   spawner translates it into an explicit `['/bin/sh', '-c', ...]`
- *   invocation inside the slice.
+ *   spawner refuses it.
+ * @property {number} [timeoutMs]
+ *   Hard ceiling after which the spawner may terminate the process tree.
+ *   The host spawner ignores it (the caller owns the timeout); the
+ *   sandbox spawner hands it to the slice.
+ * @property {number} [maxOutputBytes]
+ *   Per-stream byte budget the caller keeps.  The host spawner ignores
+ *   it; the sandbox spawner derives the slice's byte limits from it.
  */
 
 /**
@@ -207,8 +213,7 @@ export const makeHostSpawner = ({
 
     if (useShell) {
       // In shell mode we treat the entire argv as a single shell
-      // command line (joined with spaces), matching the sandbox
-      // spawner's `['/bin/sh', '-c', argv.join(' ')]` shape and the
+      // command line (joined with spaces), matching the
       // way LLMs typically use the `bash` tool — they routinely emit a
       // single-string `args: ["ls -F"]` payload because they think of
       // bash as taking a command, not an argv list.  We let the

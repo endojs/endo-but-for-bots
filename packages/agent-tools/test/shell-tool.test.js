@@ -160,6 +160,7 @@ const makeFakeShell = () => {
         allowedCommands: ['echo'],
         timeoutMs: 1000,
         maxOutputBytes: 1024,
+        engine: 'host',
       }),
   });
   return { shell, calls };

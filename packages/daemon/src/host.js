@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, SandboxFactoryLike, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 /** @import { SessionRecordDirectory } from './session-record-store.js' */
@@ -25,6 +25,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { cancelPendingIterator } from './cancelable-iterator.js';
+import { assertSandboxBackendAvailable } from './shell-engine.js';
 import {
   assertPetName,
   assertPetNamePath,
@@ -104,8 +105,14 @@ export const normalizeShellPolicy = policy => {
   if (!policy || typeof policy !== 'object') {
     throw makeError(X`provideShell: policy must be an object`);
   }
-  const { allowedCommands, timeoutMs, maxOutputBytes, env, searchPath } =
-    /** @type {Record<string, unknown>} */ (policy);
+  const {
+    allowedCommands,
+    timeoutMs,
+    maxOutputBytes,
+    env,
+    searchPath,
+    engine = 'host',
+  } = /** @type {Record<string, unknown>} */ (policy);
   if (
     !Array.isArray(allowedCommands) ||
     allowedCommands.length === 0 ||
@@ -150,6 +157,11 @@ export const normalizeShellPolicy = policy => {
   if (typeof normalizedSearchPath !== 'string') {
     throw makeError(X`provideShell: policy.searchPath must be a string`);
   }
+  if (engine !== 'host' && engine !== 'sandbox') {
+    throw makeError(
+      X`provideShell: policy.engine must be 'host' or 'sandbox', got ${q(engine)}`,
+    );
+  }
   const timeoutMsValue = /** @type {number} */ (timeoutMs);
   const maxOutputBytesValue = /** @type {number} */ (maxOutputBytes);
   return harden({
@@ -158,6 +170,7 @@ export const normalizeShellPolicy = policy => {
     maxOutputBytes: maxOutputBytesValue,
     env: harden(normalizedEnv),
     searchPath: normalizedSearchPath,
+    engine,
   });
 };
 harden(normalizeShellPolicy);
@@ -1409,13 +1422,44 @@ export const makeHostMaker = ({
         );
       }
 
+      // The sandbox factory is a capability, so it is recorded as a formula
+      // dependency beside the mount rather than persisted in the policy.
+      const { sandbox } = /** @type {{ sandbox?: unknown }} */ (policy);
+      /** @type {FormulaIdentifier | undefined} */
+      let sandboxId;
+      if (normalizedPolicy.engine === 'sandbox') {
+        if (sandbox === undefined) {
+          throw makeError(
+            X`provideShell: engine 'sandbox' requires policy.sandbox, a SandboxFactory capability`,
+          );
+        }
+        sandboxId = getIdForRef(sandbox);
+        if (sandboxId === undefined) {
+          throw makeError(
+            X`provideShell: policy.sandbox must be a capability this daemon holds`,
+          );
+        }
+        await assertSandboxBackendAvailable(
+          /** @type {ERef<SandboxFactoryLike>} */ (sandbox),
+        );
+      } else if (sandbox !== undefined) {
+        throw makeError(
+          X`provideShell: policy.sandbox is only meaningful with engine 'sandbox'`,
+        );
+      }
+
       /** @type {DeferredTasks<ShellDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       tasks.push(identifiers =>
         E(directory).storeIdentifier(namePath, identifiers.shellId),
       );
 
-      const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
+      const { value } = await formulateShell(
+        mountId,
+        normalizedPolicy,
+        sandboxId,
+        tasks,
+      );
       return value;
     };
 

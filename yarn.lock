@@ -2585,8 +2585,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/host-spawner@workspace:packages/host-spawner"
   dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
@@ -3350,6 +3354,7 @@ __metadata:
     "@endo/exo": "workspace:^"
     "@endo/exo-shell": "workspace:^"
     "@endo/exo-stream": "workspace:^"
+    "@endo/host-spawner": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/patterns": "workspace:^"
