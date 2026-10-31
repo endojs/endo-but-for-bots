@@ -98,9 +98,9 @@ binary64 neighbor:
 
 | Case | Exact result | Accepted bits | Producers |
 | --- | --- | --- | --- |
-| `054.js` | 1.30082042684064683187… | `3ff4d0291473fd4a` | glibc ≤ 2.39, Rust std, libm |
+| `054.js` | 1.30082042684064683187... | `3ff4d0291473fd4a` | glibc <= 2.39, Rust std, libm |
 | | | `3ff4d0291473fd4b` | correctly rounded, glibc 2.43 |
-| `055.js` | 1.47504478124142499418… | `3ff799c88e79140d` | glibc ≤ 2.39, Rust std |
+| `055.js` | 1.47504478124142499418... | `3ff799c88e79140d` | glibc <= 2.39, Rust std |
 | | | `3ff799c88e79140c` | correctly rounded, glibc 2.43, libm |
 
 Each pair contains the two faithful roundings that bracket the exact result.
