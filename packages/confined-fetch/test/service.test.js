@@ -329,24 +329,28 @@ test('the service refuses to start without both endowed time seams', async t => 
 
   await t.throwsAsync(
     () =>
-      makeConfinedFetchServiceCore({
-        store,
-        fetch,
-        now: () => 1000,
-        allowedOrigins: [ALLOWED],
-      }),
+      makeConfinedFetchServiceCore(
+        /** @type {any} */ ({
+          store,
+          fetch,
+          now: () => 1000,
+          allowedOrigins: [ALLOWED],
+        }),
+      ),
     {
       message: /delay and now seams built from the endowed timer are required/,
     },
   );
   await t.throwsAsync(
     () =>
-      makeConfinedFetchServiceCore({
-        store,
-        fetch,
-        delay: async () => undefined,
-        allowedOrigins: [ALLOWED],
-      }),
+      makeConfinedFetchServiceCore(
+        /** @type {any} */ ({
+          store,
+          fetch,
+          delay: async () => undefined,
+          allowedOrigins: [ALLOWED],
+        }),
+      ),
     {
       message: /delay and now seams built from the endowed timer are required/,
     },
