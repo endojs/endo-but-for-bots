@@ -46,9 +46,19 @@ test('Timer rejects and clears the host timer when the cancellation token fulfil
     setTimeout: () => handle,
     clearTimeout: candidate => cleared.push(candidate),
   });
-  await t.throwsAsync(() => timer.delay(10, Promise.resolve('done')), {
-    message: /must not fulfill/,
-  });
+  await t.throwsAsync(
+    () =>
+      timer.delay(
+        10,
+        // A token that fulfills breaks the cancellation contract on purpose.
+        /** @type {Promise<never>} */ (
+          /** @type {unknown} */ (Promise.resolve('done'))
+        ),
+      ),
+    {
+      message: /must not fulfill/,
+    },
+  );
   t.deepEqual(cleared, [handle]);
 });
 
