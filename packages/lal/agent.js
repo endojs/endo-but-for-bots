@@ -249,34 +249,34 @@ export const make = (guestPowers, _context) => {
     const existingMessages = /** @type {any[]} */ (
       await E(powers).listMessages()
     );
-    for (const msg of existingMessages) {
+    for (const message of existingMessages) {
       // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+      if (message.from === selfLocator && message.type === 'form') {
+        formMessageId = message.messageId;
       }
     }
 
     const messageIterator = iterateReader(E(powers).followMessages());
     while (true) {
-      const { value: message, done } = await messageIterator.next();
+      const { value: nextMessage, done } = await messageIterator.next();
       if (done) break;
 
-      const msg = /** @type {any} */ (message);
+      const message = /** @type {any} */ (nextMessage);
 
       // Capture the form's messageId from our own outbound message.
       // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+      if (message.from === selfLocator && message.type === 'form') {
+        formMessageId = message.messageId;
       } else if (
-        msg.type === 'value' &&
+        message.type === 'value' &&
         // eslint-disable-next-line @endo/restrict-comparison-operands
-        msg.replyTo === formMessageId
+        message.replyTo === formMessageId
       ) {
         // Only process value messages that reply to our form.
         try {
           // Resolve the submitted values from the value message.
           const config = /** @type {WorkerConfig} */ (
-            await E(powers).lookupById(msg.valueId)
+            await E(powers).lookupById(message.valueId)
           );
 
           const { name } = config;
@@ -284,7 +284,7 @@ export const make = (guestPowers, _context) => {
           if (activeWorkers.has(name)) {
             // A worker is already running for this name.
             await E(powers).reply(
-              msg.number,
+              message.number,
               [`Agent "${name}" already exists.`],
               [],
               [],
@@ -327,7 +327,7 @@ export const make = (guestPowers, _context) => {
             });
 
             await E(powers).reply(
-              msg.number,
+              message.number,
               [`Agent "${name}" is now running.`],
               [],
               [],
@@ -339,7 +339,7 @@ export const make = (guestPowers, _context) => {
           console.error('[lal] Form submission error:', errorMessage);
           try {
             await E(powers).reply(
-              msg.number,
+              message.number,
               [`Error creating agent: ${errorMessage}`],
               [],
               [],
