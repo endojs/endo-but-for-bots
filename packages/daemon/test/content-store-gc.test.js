@@ -1,4 +1,6 @@
 // @ts-nocheck
+// prefer-endo-primitives-exempt: these Far worker/manager facet stubs predate
+// this rename-only change; converting them to guarded exos is out of scope.
 
 // Establish a perimeter:
 // eslint-disable-next-line import/order

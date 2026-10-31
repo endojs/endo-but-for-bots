@@ -47,6 +47,7 @@ import {
  * @import {EReturn} from '@endo/eventual-send';
  * @import {ExecutionContext} from 'ava';
  * @import {FormulaNumber, NodeNumber} from '../src/types.js';
+ * @import {ManagerDatabase} from '../src/manager-database.js';
  */
 
 const cryptoPowers = makeCryptoPowers(crypto);
@@ -91,7 +92,7 @@ const drainIterator = async (iteratorRef, count) => {
  * Open a read-only handle to the daemon's database for test inspection.
  *
  * @param {string} statePath
- * @returns {import('../src/manager-database.js').ManagerDatabase}
+ * @returns {ManagerDatabase}
  */
 const openTestDb = statePath => {
   return makeManagerDatabase({
