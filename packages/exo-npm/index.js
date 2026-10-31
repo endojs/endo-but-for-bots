@@ -1,4 +1,6 @@
 // @ts-check
+// reexport-policy-exempt: this is the package's own entry point, not a
+// compatibility shim; each name has no older home to deprecate.
 
 export {
   RegistryTamperedError,
@@ -16,11 +18,7 @@ export {
   makeMemoryPackageCacheTable,
 } from './src/reference-backend.js';
 
-export {
-  makeMvsResolveHook,
-  satisfiesRange,
-  parseRangeMajor,
-} from './src/mvs-resolver.js';
+export { makeMvsResolveHook, satisfiesRange } from './src/mvs-resolver.js';
 
 export {
   mapSnapshot,
