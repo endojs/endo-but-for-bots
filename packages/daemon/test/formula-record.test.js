@@ -311,7 +311,7 @@ test('makeFormulaRecord surfaces Git remote policy bounds', t => {
     },
     pushRefspecs: {
       kind: 'literal',
-      value: [],
+      value: ['refs/heads/agent/*:refs/heads/agent/*'],
     },
     allowedBranches: {
       kind: 'literal',
@@ -365,7 +365,7 @@ test('makeFormulaRecord defaults omitted Git remote policy bounds', t => {
   });
 });
 
-test('makeFormulaRecord reports a revoked Git remote with absent pushRefspecs', t => {
+test('makeFormulaRecord derives pushRefspecs for a revoked Git remote that stored none', t => {
   const formula = /** @type {Formula} */ (
     /** @type {unknown} */ ({
       type: 'git-remote',
@@ -384,6 +384,37 @@ test('makeFormulaRecord reports a revoked Git remote with absent pushRefspecs', 
   const { properties } = makeFormulaRecord(formula, aNumber);
 
   t.false('credential' in properties);
-  t.deepEqual(properties.pushRefspecs, { kind: 'literal', value: [] });
+  t.deepEqual(properties.pushRefspecs, {
+    kind: 'literal',
+    value: ['refs/heads/agent/*:refs/heads/agent/*'],
+  });
   t.deepEqual(properties.revoked, { kind: 'literal', value: true });
+});
+
+test('makeFormulaRecord reports an allowed local-file transport', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'git-remote',
+      gitId: 'git-id',
+      name: 'local',
+      policy: {
+        url: 'file:///srv/git/endo.git',
+        allowedDirections: ['fetch'],
+        fetchRefspecs: ['+refs/heads/*:refs/remotes/local/*'],
+        allowLocalFileTransport: true,
+      },
+    })
+  );
+
+  const { properties } = makeFormulaRecord(formula, aNumber);
+
+  t.deepEqual(properties.url, {
+    kind: 'literal',
+    value: 'file:///srv/git/endo.git',
+  });
+  t.deepEqual(properties.pushRefspecs, { kind: 'literal', value: [] });
+  t.deepEqual(properties.allowLocalFileTransport, {
+    kind: 'literal',
+    value: true,
+  });
 });

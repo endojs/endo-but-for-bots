@@ -1925,6 +1925,25 @@ export interface SecretManagerDirectory {
 
 export type FarEndoGuest = FarRef<EndoGuest>;
 
+/**
+ * Options accepted by `EndoHost.provideGitRemote`: the remote's name, its
+ * fixed endpoint, and the policy the minted `GitRemote` enforces.
+ */
+export type GitRemoteProvisionOptions = {
+  name: string;
+  url: string;
+  allowedDirections?: Array<'fetch' | 'push'>;
+  fetchRefspecs?: string[];
+  pushRefspecs?: string[];
+  defaultPullRef?: string;
+  allowedBranches?: string[];
+  allowForcePush?: boolean;
+  allowTags?: boolean;
+  allowDelete?: boolean;
+  allowLocalFileTransport?: boolean;
+  credential?: unknown;
+};
+
 export interface EndoHost extends EndoAgent {
   /**
    * Provide a daemon-local administrative owner for a private directory.
@@ -2058,20 +2077,7 @@ export interface EndoHost extends EndoAgent {
   provideGitRemote(
     gitCap: unknown,
     petName: string | string[],
-    opts: {
-      name: string;
-      url: string;
-      allowedDirections?: Array<'fetch' | 'push'>;
-      fetchRefspecs?: string[];
-      pushRefspecs?: string[];
-      defaultPullRef?: string;
-      allowedBranches?: string[];
-      allowForcePush?: boolean;
-      allowTags?: boolean;
-      allowDelete?: boolean;
-      allowLocalFileTransport?: boolean;
-      credential?: unknown;
-    },
+    opts: GitRemoteProvisionOptions,
   ): Promise<GitRemote>;
   /**
    * Host-only constructive clone. Composes a repo-less remote endpoint

@@ -1,5 +1,7 @@
 // @ts-check
 
+import { normalizeGitRemotePolicy } from '@endo/exo-git';
+
 /** @import { Formula, FormulaIdentifier, FormulaNumber, FormulaProperty, FormulaRecord } from './types.js' */
 
 /**
@@ -353,9 +355,18 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
         kind: 'literal',
         value: formula.policy.fetchRefspecs,
       };
+      // A profile granted through `allowedBranches` stores no
+      // `pushRefspecs`; report the refspecs the remote actually enforces,
+      // derived by the same normalizer, so inspection never understates the
+      // push authority. Only the push-relevant fields are normalized, so a
+      // fetch-side setting cannot make inspection throw.
+      const { defaultPullRef: _defaultPullRef, ...pushPolicy } = formula.policy;
       properties.pushRefspecs = {
         kind: 'literal',
-        value: formula.policy.pushRefspecs ?? [],
+        value: normalizeGitRemotePolicy({
+          name: formula.name,
+          policy: { ...pushPolicy, fetchRefspecs: [] },
+        }).pushRefspecs,
       };
       if (formula.policy.allowedBranches !== undefined) {
         properties.allowedBranches = {
