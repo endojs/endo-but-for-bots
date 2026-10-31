@@ -768,7 +768,7 @@ test('a queued removal never removes a replacement by stale identity', async t =
   const revived = await boot(daemon);
   const children = await E(revived.boundFacet(1)).list();
   t.deepEqual(
-    children.map((/** @type {any} */ c) => [c.name, c.phase]),
+    children.map((/** @type {any} */ child) => [child.name, child.phase]),
     [['helper', 'Committed']],
     'replay kept the live replacement',
   );

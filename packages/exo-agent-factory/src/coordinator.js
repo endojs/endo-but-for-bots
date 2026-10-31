@@ -90,7 +90,7 @@ const childName = (
   /** @type {string} */ operationKey,
   /** @type {string} */ piece,
 ) => `c${operationKey}.${piece}`;
-const childPattern = /^c(\d+)\.(\d+)\./;
+const childPattern = new RegExp(String.raw`^c(\d+)\.(\d+)\.`);
 
 /**
  * Create, or revive, the factory coordinator over its private host.
