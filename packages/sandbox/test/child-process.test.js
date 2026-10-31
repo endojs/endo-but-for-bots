@@ -3,8 +3,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
-import { killProcessGroup } from '../src/drivers/child-process.js';
+import {
+  killProcessGroup,
+  startControlCommand,
+} from '../src/drivers/child-process.js';
 
 /**
  * `killProcessGroup` aims a signal at a negative pid, so it is the one
@@ -106,4 +111,168 @@ test('killProcessGroup ignores a child that never spawned', t => {
     })
   );
   t.notThrows(() => killProcessGroup(unspawned, 'SIGKILL'));
+});
+
+/** @param {import('ava').ExecutionContext} t */
+const controlFixture = t => {
+  const child = new EventEmitter();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const signals = [];
+  let refusesKill = false;
+  Object.assign(child, {
+    stdout,
+    stderr,
+    kill: signal => {
+      signals.push(signal);
+      if (refusesKill) throw Error('kill refused');
+      return true;
+    },
+  });
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    stdout.end();
+    stderr.end();
+    child.emit('close', 0, null);
+  };
+  t.teardown(close);
+  return {
+    cp: /** @type {any} */ ({ spawn: () => child }),
+    child,
+    stdout,
+    stderr,
+    signals,
+    close,
+    refuseKill: () => {
+      refusesKill = true;
+    },
+  };
+};
+
+test('control cancellation reports failure while retaining native closure', async t => {
+  t.timeout(3000);
+  const f = controlFixture(t);
+  const control = startControlCommand(f.cp, 'command', []);
+  const rejected = t.throwsAsync(control.result, { message: /aborted/ });
+  let closed = false;
+  void control.closed.then(() => {
+    closed = true;
+  });
+  control.abort();
+  await rejected;
+  t.deepEqual(f.signals, ['SIGKILL']);
+  t.true(control.wasInterrupted());
+  t.false(closed);
+  f.close();
+  await control.closed;
+  t.true(closed);
+  control.abort();
+  t.deepEqual(f.signals, ['SIGKILL']);
+});
+
+test('a control error and failed kill do not release process ownership', async t => {
+  t.timeout(3000);
+  const f = controlFixture(t);
+  const control = startControlCommand(f.cp, 'command', []);
+  const rejected = t.throwsAsync(control.result, { message: 'control error' });
+  f.child.emit('error', Error('control error'));
+  await rejected;
+  let closed = false;
+  void control.closed.then(() => {
+    closed = true;
+  });
+  f.refuseKill();
+  control.abort();
+  await Promise.resolve();
+  t.false(closed);
+  t.true(control.wasInterrupted());
+  f.close();
+  await control.closed;
+});
+
+test('a control deadline bounds the result but not native closure', async t => {
+  t.timeout(3000);
+  const f = controlFixture(t);
+  const control = startControlCommand(f.cp, 'command', [], { timeoutMs: 5 });
+  await t.throwsAsync(control.result, { message: /timed out/ });
+  let closed = false;
+  void control.closed.then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  t.false(closed);
+  t.deepEqual(f.signals, ['SIGKILL']);
+  f.close();
+  await control.closed;
+});
+
+test('a reaped control child is not signalled while inherited pipes remain open', async t => {
+  t.timeout(3000);
+  const f = controlFixture(t);
+  const control = startControlCommand(f.cp, 'command', []);
+  const rejected = t.throwsAsync(control.result, { message: /aborted/ });
+  f.child.emit('exit', 0, null);
+  control.abort();
+  await rejected;
+  t.deepEqual(f.signals, []);
+  t.false(control.wasInterrupted());
+  f.close();
+  await control.closed;
+});
+
+test('natural control completion retains captured output without an interruption', async t => {
+  const f = controlFixture(t);
+  const control = startControlCommand(f.cp, 'command', []);
+  f.stdout.write('output');
+  f.stderr.write('diagnostic');
+  f.child.emit('exit', 0, null);
+  f.close();
+  t.deepEqual(await control.result, {
+    code: 0,
+    signal: null,
+    stdout: 'output',
+    stderr: 'diagnostic',
+  });
+  await control.closed;
+  t.false(control.wasInterrupted());
+});
+
+test('failed or cancelled spawning has no acquired child to retain', async t => {
+  const noSpawn = /** @type {any} */ ({
+    spawn: () => {
+      throw Error('spawn failed');
+    },
+  });
+  const failed = startControlCommand(noSpawn, 'command', []);
+  t.false(failed.hasChild());
+  await t.throwsAsync(failed.result, { message: 'spawn failed' });
+  await failed.closed;
+  const cancelled = startControlCommand(noSpawn, 'command', [], {
+    isCancelled: () => true,
+  });
+  t.false(cancelled.hasChild());
+  await t.throwsAsync(cancelled.result, { message: /aborted/ });
+  await cancelled.closed;
+  t.false(cancelled.wasInterrupted());
+});
+
+test('control lifetime observes real Node process closure', async t => {
+  t.timeout(5000);
+  const control = startControlCommand(
+    /** @type {any} */ ({ spawn }),
+    process.execPath,
+    ['-e', "process.stdout.write('hello')"],
+  );
+  t.teardown(async () => {
+    control.abort();
+    await control.closed;
+  });
+  const result = await control.result;
+  await control.closed;
+  t.true(control.hasChild());
+  t.is(result.code, 0);
+  t.is(result.stdout, 'hello');
+  t.false(control.wasInterrupted());
 });

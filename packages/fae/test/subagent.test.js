@@ -11,6 +11,7 @@ import {
   isSameFormula,
   makeSubagentDelegations,
   makeSubagentTools,
+  assertSubagentCapabilities,
   messageText,
 } from '../src/subagent.js';
 
@@ -48,6 +49,7 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
     notifySent = () => resolve(undefined);
   });
   const powers = Far('Powers', {
+    lookup: async path => names[Array.isArray(path) ? path.join('/') : path],
     // `locate`'s daemon guard is `M.call().rest(NamePathShape)`: the path
     // arrives as separate name arguments, and an array would be rejected
     // outright. The stub enforces that so a call shape the daemon refuses
@@ -63,7 +65,7 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
     storeLocator: async (path, locator) => {
       names[Array.isArray(path) ? path.join('/') : path] = locator;
     },
-    send: async (path, strings) => {
+    send: async (path, strings, edgeNames = [], petNames = []) => {
       const key = Array.isArray(path) ? path.join('/') : path;
       nextId += 1;
       stream.push(
@@ -72,7 +74,8 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
           from: locatorFor(PARENT),
           to: names[key],
           strings: harden([...strings]),
-          names: harden([]),
+          names: harden([...edgeNames]),
+          petNames: harden([...petNames]),
           messageId: `out-${nextId}`,
           number: nextNumber,
         }),
@@ -406,6 +409,7 @@ test('the sets of closed asks and known subagents are bounded', async t => {
   const delegations = makeSubagentDelegations({
     powers: mailbox.powers,
     timers,
+    limits: { maxClosedAsks: 32, maxKnownSubagents: 32 },
   });
   /** @param {number} index */
   const childFor = index =>
@@ -522,6 +526,11 @@ test('ask rejects an out-of-range timeout and an oversized task', async t => {
   const delegations = makeSubagentDelegations({
     powers: mailbox.powers,
     timers,
+    limits: {
+      replyTimeoutSeconds: 300,
+      maxTimeoutSeconds: 3600,
+      maxTaskChars: 32_768,
+    },
   });
   await t.throwsAsync(
     delegations.ask({ name: 'helper', task: 'x', timeoutSeconds: 0 }),
@@ -571,6 +580,14 @@ test('spawnSubagent binds the subagent under the parent’s own authority', asyn
     harden({ name: 'helper', systemPrompt: 'be terse' }),
   );
   t.regex(result, /Spawned subagent "helper"/);
+  for (const guidance of [
+    spawnTool.help(),
+    spawnTool.schema().function.description,
+  ]) {
+    t.true(guidance.includes('recursively fact-check'));
+    t.true(guidance.includes('no additional capabilities'));
+    t.true(guidance.includes('concrete stopping condition'));
+  }
   t.deepEqual(spawned[0], {
     name: 'helper',
     options: { systemPrompt: 'be terse' },
@@ -581,6 +598,108 @@ test('spawnSubagent binds the subagent under the parent’s own authority', asyn
   await t.throwsAsync(spawnTool.execute(harden({ name: 'Bad Name' })), {
     message: /must match/,
   });
+});
+
+test('spawn resolves only explicit capabilities before creating the child', async t => {
+  const mailbox = makeMailbox({
+    names: { 'repo/git': 'git-value', private: 'not-given' },
+  });
+  const { timers } = makeManualTimers();
+  const spawned = [];
+  const tools = makeSubagentTools({
+    powers: mailbox.powers,
+    spawner: Far('Spawner', {
+      spawn: async (name, options) => {
+        spawned.push(options);
+        return harden({ name, locator: locatorFor(CHILD) });
+      },
+    }),
+    delegations: makeSubagentDelegations({ powers: mailbox.powers, timers }),
+  });
+  const tool = tools.get('spawnSubagent');
+  const result = await tool.execute({
+    name: 'helper',
+    attachments: [{ name: 'project', petName: ['repo', 'git'] }],
+  });
+  t.deepEqual(spawned, [
+    { capabilities: [{ name: 'project', value: 'git-value' }] },
+  ]);
+  t.true(result.includes('["subagents", "helper"]'));
+  t.is(
+    mailbox.stream.length,
+    0,
+    'spawn introduces capabilities without starting a mail turn',
+  );
+  await t.throwsAsync(
+    tool.execute({
+      name: 'other',
+      attachments: [{ name: '@self', petName: 'private' }],
+    }),
+    { message: /Invalid pet name/ },
+  );
+  t.is(spawned.length, 1, 'invalid attachment must not leave a child');
+});
+
+test('capability introductions reject duplicates and missing values', t => {
+  t.throws(
+    () =>
+      assertSubagentCapabilities([
+        { name: 'project', value: 1 },
+        { name: 'project', value: 2 },
+      ]),
+    { message: /Duplicate/ },
+  );
+  t.throws(
+    () =>
+      assertSubagentCapabilities(/** @type {any} */ ([{ name: 'project' }])),
+    { message: /needs a value/ },
+  );
+});
+
+test('askSubagent carries capabilities with the correlated task', async t => {
+  t.timeout(5000);
+  const mailbox = makeMailbox({
+    names: { 'subagents/helper': locatorFor(CHILD) },
+  });
+  const { timers } = makeManualTimers();
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+  });
+  const tools = makeSubagentTools({
+    powers: mailbox.powers,
+    spawner: Far('Spawner', {}),
+    delegations,
+  });
+  const result = tools.get('askSubagent').execute({
+    name: 'helper',
+    task: 'Review this snapshot',
+    attachments: [
+      { name: 'snapshot', petName: ['project', 'readonly'] },
+      { name: 'tests', petName: 'test-source' },
+    ],
+  });
+  await mailbox.whenSent();
+  const outbound = mailbox.stream[0];
+  t.deepEqual(outbound.strings, ['Review this snapshot', '', '']);
+  t.deepEqual(outbound.names, ['snapshot', 'tests']);
+  t.deepEqual(outbound.petNames, [['project', 'readonly'], 'test-source']);
+  delegations.claim(
+    harden({
+      ...outbound,
+      messageId: 'unrelated',
+      names: ['different', 'tests'],
+    }),
+  );
+  delegations.claim(outbound);
+  delegations.claim(
+    mailbox.deliverReply({
+      from: locatorFor(CHILD),
+      replyTo: outbound.messageId,
+      text: 'Reviewed',
+    }),
+  );
+  t.is(await result, 'Reviewed');
 });
 
 test('every subagent tool advertises a well-formed schema', t => {
@@ -757,5 +876,7 @@ test('a parent may add to a subagent’s standing prompt but not replace it', t 
   );
   t.true(composed.startsWith(base));
   t.true(composed.includes('You are a subagent.'));
+  t.true(composed.includes('recursively fact-check'));
+  t.true(composed.includes('Do the assigned work yourself by default'));
   t.true(composed.includes('rm -rf /'));
 });

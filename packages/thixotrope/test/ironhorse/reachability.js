@@ -11,8 +11,8 @@ import { makeTestOcapn } from '../_util.js';
 import { makeFixture } from './_fixture.js';
 
 /** @param {Awaited<ReturnType<typeof makeFixture>>} fixture */
-const parkWorkers = async fixture => {
-  // Startup replays pending journals, and parking one vat can deliver traffic
+const sleepWorkers = async fixture => {
+  // Startup replays pending journals, and sleeping one vat can deliver traffic
   // that wakes another. Drain transport queues until the whole graph is asleep.
   for (let pass = 0; pass < 10; pass += 1) {
     for (const id of fixture.daemon.listWorkerIds()) {
@@ -22,7 +22,7 @@ const parkWorkers = async fixture => {
     if (fixture.daemon.inspectReachability().workers.every(node => !node.awake))
       return;
   }
-  throw Error('Workers did not quiesce after parking');
+  throw Error('Workers did not quiesce after sleeping');
 };
 
 test.serial(
@@ -34,7 +34,7 @@ test.serial(
     // Recovery may already have awakened the owner. Exercise that condition
     // explicitly so this test does not depend on random worker iteration order.
     await fixture.daemon.getWorker(fixture.ownerId).wake();
-    await parkWorkers(fixture);
+    await sleepWorkers(fixture);
     const report = fixture.daemon.inspectReachability();
     t.deepEqual(report.collectible, []);
     t.deepEqual(
@@ -52,7 +52,7 @@ test.serial(
     t.deepEqual(await fixture.daemon.collectVats(), []);
     fixture.daemon.unpublish(fixture.publication);
     await fixture.restart();
-    await parkWorkers(fixture);
+    await sleepWorkers(fixture);
     const snapshotPaths = [fixture.guestId, fixture.ownerId].map(id => {
       const snapshot = fixture.store.provideWorkerStore(id).getMeta().snapshot;
       if (!snapshot) throw Error('Expected a persisted heap snapshot');
@@ -71,7 +71,7 @@ test.serial(
     // must still remove the complete island without resurrecting deleted stores.
     for (let pass = 0; pass < 3; pass += 1) {
       // eslint-disable-next-line no-await-in-loop
-      await parkWorkers(fixture);
+      await sleepWorkers(fixture);
       // eslint-disable-next-line no-await-in-loop
       await fixture.daemon.collectVats();
       // eslint-disable-next-line no-await-in-loop
@@ -105,7 +105,7 @@ test.serial(
     );
     t.is(await E(root).read(), 0n);
     fixture.daemon.unpublish(fixture.publication);
-    await parkWorkers(fixture);
+    await sleepWorkers(fixture);
     const report = fixture.daemon.inspectReachability();
     t.true(
       report.workers
@@ -136,7 +136,7 @@ test.serial(
     }
     t.true(disconnected);
     await fixture.restart();
-    await parkWorkers(fixture);
+    await sleepWorkers(fixture);
     t.deepEqual(
       fixture.daemon.inspectReachability().collectible,
       [fixture.ownerId, fixture.guestId].sort(),

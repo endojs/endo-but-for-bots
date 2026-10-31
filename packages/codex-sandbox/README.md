@@ -8,6 +8,25 @@ The lifecycle factory provisions through an injected resource owner and refuses
 to run unless it receives the exact effective sandbox attestation.
 The low-level client remains injectable for protocol tests and adapters:
 
+`saveThreadState` is required and accepts the complete operational thread record:
+identity, tool-set binding and recovery markers.
+Thread creation and subsequent write-ahead/settlement updates await that writer;
+a failed write prevents dispatch or continuation rather than saving identity alone.
+
+Native Codex subagents are disabled with both `multi_agent` feature flags.
+Delegation goes through Floot's Endo `spawnSubagent` tool, which owns the helper's
+session, capabilities, and recovery journal.
+The broker-backed transport verifies the effective feature configuration before
+admitting a turn.
+
+For recovery, Floot can supply a complete native checkpoint followed by settled
+dialogue and tool records from a later failed turn.
+The client reconciles its outstanding turn, restores the checkpoint into a fresh
+thread, and injects the later records before dispatching a new prompt.
+Injection records historical tool results without executing tools again.
+Unknown outcomes require resolution and all tool calls must be accounted for;
+evidence hidden within an unsafe checkpoint still prevents continuation.
+
 ```js
 import { makeCodexClient } from '@endo/codex-sandbox';
 import { startAppServerTransport } from '@endo/codex-sandbox/app-server-transport.js';
@@ -27,7 +46,12 @@ const client = makeCodexClient({
   toolSetId,
 });
 
-const reader = await E(client).send('Review the current changes');
+// `transcript` is the stack's record of the conversation
+// (`@endo/hosted-agent/transcript-records.js`); a new thread is restored from
+// it through `thread/inject_items` before the prompt runs.
+const reader = await E(client).send('Review the current changes', {
+  transcript,
+});
 ```
 
 App-server is the Codex CLI transport, not an independent billing identity.
@@ -35,13 +59,13 @@ When the CLI is authenticated with ChatGPT it operates against the eligible
 ChatGPT subscription; when authenticated with an API key it uses API billing.
 This package deliberately exposes neither authentication nor account/session
 administration to the sandboxed agent.
-Hosted subscription deployment is disabled because no vendor-supported
-configuration lets a broker supply the subscription credential: Codex's LLM-proxy
-mode authenticates with the CLI's own `~/.codex/auth.json`, so pointing it at a
-broker would put the reusable token in the slice.
-The broker does support a refreshing `oauth` credential it holds itself, which
-is not a subscription; see [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) for
-the finding and its sources.
+An explicit experimental host composition now keeps renewable ChatGPT credentials
+in general Secrets and sends inference through a credential-free custom provider.
+The host maps that provider to the fixed Codex subscription Responses route.
+This path has live acceptance evidence, but is not a claim of a stable public
+subscription-proxy API.
+See [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) for setup and bounded-trial
+limitations, and [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) for the history.
 
 `send()` returns an Endo reader of provider-neutral events:
 
@@ -54,8 +78,11 @@ the finding and its sources.
 - terminal `end` or `abort`
 
 Only one turn may run at a time. Closing the reader interrupts that exact turn;
-a second concurrent `send()` is rejected. `models()` reads the app-server model
-catalog rather than relying on hard-coded model or reasoning-effort lists.
+a second concurrent `send()` is rejected.
+The hosted run's `models()` reads the same account catalog used for model
+admission, respecting its subscription pin and excluding pinned-only accounts
+from automatic selection. Native clients and execution owners do not perform
+model discovery; their protocol covers execution and checkpoint acknowledgement.
 A successful `end` contains an opaque checkpoint. A durable consumer stores it
 with the committed conversation node and calls `acknowledge(checkpoint)`; if
 that call is lost, it supplies `acknowledgedCheckpoint` on the next `send()`.
@@ -85,5 +112,7 @@ telemetry; they are also retained in the client's bounded `status()` result.
 
 Read [SECURITY-MODEL.md](./SECURITY-MODEL.md),
 [SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md),
-[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md), and
-[MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) before enabling hosted sessions.
+[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md),
+[HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) and
+[DEPLOYMENT-ACCEPTANCE.md](./DEPLOYMENT-ACCEPTANCE.md) before enabling hosted
+sessions; [MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) is the historical PR gate.

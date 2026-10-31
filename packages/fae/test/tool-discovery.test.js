@@ -1,6 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
 import { discoverTools, executeTool } from '../src/tools.js';
@@ -119,4 +120,38 @@ test('an agent with no tools directory still gets its built-ins', async t => {
   });
   const { toolMap } = await discoverTools(host, local);
   t.deepEqual([...toolMap.keys()], ['exec']);
+});
+
+test('a namespace with no tools/ directory is asked, not made to fail', async t => {
+  // Listing a missing name is an error the daemon logs with a stack; this
+  // runs once per model round for every session.
+  const calls = [];
+  const host = Far('Powers', {
+    has: async name => {
+      calls.push(`has ${name}`);
+      return false;
+    },
+    list: async directory => {
+      calls.push(`list ${directory}`);
+      throw Error('Unknown pet name: "tools"');
+    },
+    lookup: async () => {
+      throw Error('unreachable');
+    },
+  });
+  const { storedTools } = await discoverTools(host, new Map());
+  t.deepEqual(storedTools, []);
+  t.deepEqual(calls, ['has tools']);
+});
+
+test('a namespace that has tools/ is listed as before', async t => {
+  const stored = { greeter: makeStoredTool('greet') };
+  const base = makeHost(stored);
+  const host = Far('Powers', {
+    has: async name => name === 'tools',
+    list: directory => E(base).list(directory),
+    lookup: path => E(base).lookup(path),
+  });
+  const { toolMap } = await discoverTools(host, new Map());
+  t.true(toolMap.has('greet'));
 });

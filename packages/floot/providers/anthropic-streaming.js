@@ -1,4 +1,5 @@
 // @ts-check
+import { anthropicToolContent } from '@endo/hosted-agent/image-result.js';
 /**
  * Streaming Anthropic provider for the Floot agent.
  *
@@ -9,6 +10,8 @@
  * is `chatStream(messages, tools, onToken)`, which forwards token deltas as
  * they arrive and still resolves to the same buffered `{ message }` result.
  */
+
+import { projectUsage, tokenCount } from '@endo/hosted-agent/token-usage.js';
 
 /** @import { Anthropic } from '@anthropic-ai/sdk' */
 /** @typedef {import('@anthropic-ai/sdk').default} AnthropicClient */
@@ -25,6 +28,7 @@
  * @property {string} content
  * @property {Array<{ id?: string, function: { name: string, arguments: string|object }}>} [tool_calls]
  * @property {string} [tool_call_id]
+ * @property {boolean} [failed]
  */
 
 /**
@@ -87,7 +91,8 @@ const toAnthropicMessages = messages => {
           {
             type: 'tool_result',
             tool_use_id: toolUseId,
-            content: msg.content,
+            content: anthropicToolContent(msg.content),
+            ...(msg.failed === undefined ? {} : { is_error: msg.failed }),
           },
         ],
       });
@@ -162,11 +167,35 @@ const rethrowAnthropic = error => {
     status === 401 || errBody?.type === 'authentication_error';
   if (isAuthError) {
     throw new Error(
-      'Anthropic API authentication failed (invalid or expired API key). Check FLOOT_AUTH_TOKEN (or LAL_AUTH_TOKEN).',
+      'Anthropic API authentication failed (invalid or expired API key). Check the configured Secret.',
     );
   }
   throw error;
 };
+
+/**
+ * Anthropic's `usage` as Floot's disjoint counts. Its three input kinds are
+ * already disjoint, and it does not count thinking apart from output. The API
+ * does not say how large the model's window is, so that is reported as
+ * unknown.
+ *
+ * @param {any} reported
+ */
+export const usageFromAnthropic = reported =>
+  projectUsage({
+    inputTokens: reported.input_tokens,
+    outputTokens: reported.output_tokens,
+    cachedInputTokens: reported.cache_read_input_tokens,
+    cacheWriteInputTokens: reported.cache_creation_input_tokens,
+    context: {
+      usedTokens:
+        tokenCount(reported.input_tokens) +
+        tokenCount(reported.cache_read_input_tokens) +
+        tokenCount(reported.cache_creation_input_tokens) +
+        tokenCount(reported.output_tokens),
+      windowTokens: 0,
+    },
+  });
 
 /**
  * Create a streaming Anthropic-backed chat provider.
@@ -174,7 +203,7 @@ const rethrowAnthropic = error => {
  * @param {{ apiKey: string, model: string, maxTokens?: number }} options
  * @returns {{
  *   chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }>,
- *   chatStream: (messages: CommonChatMessage[], tools: CommonTool[], onToken?: (delta: string) => void, signal?: AbortSignal) => Promise<{ message: CommonChatMessage, usage?: { inputTokens: number, outputTokens: number } }>,
+ *   chatStream: (messages: CommonChatMessage[], tools: CommonTool[], onToken?: (delta: string) => void, signal?: AbortSignal) => Promise<{ message: CommonChatMessage, usage?: import('@endo/hosted-agent/token-usage.js').TokenUsage }>,
  * }}
  */
 export const makeStreamingAnthropicProvider = ({
@@ -237,10 +266,7 @@ export const makeStreamingAnthropicProvider = ({
         }
         const response = await stream.finalMessage();
         const usage = response.usage
-          ? {
-              inputTokens: response.usage.input_tokens || 0,
-              outputTokens: response.usage.output_tokens || 0,
-            }
+          ? usageFromAnthropic(response.usage)
           : undefined;
         return { message: fromAnthropicMessage(response), usage };
       } catch (error) {

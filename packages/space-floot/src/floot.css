@@ -4,18 +4,18 @@
  * imported as a JS side-effect so the package stays loadable under Node.
  */
 .floot-app {
-  --fl-bg: #0f0f10;
-  --fl-surface: #17171a;
-  --fl-surface2: #1f1f23;
-  --fl-surface3: #26262b;
-  --fl-border: #2a2a2e;
-  --fl-border-strong: #3a3a40;
-  --fl-text: #e4e4e7;
-  --fl-text-muted: #8a8a92;
-  --fl-text-faint: #5e5e66;
+  --fl-bg: var(--bg-primary, #0f0f10);
+  --fl-surface: var(--bg-secondary, #17171a);
+  --fl-surface2: var(--bg-sidebar, #1f1f23);
+  --fl-surface3: var(--bg-hover, #26262b);
+  --fl-border: var(--border-color, #2a2a2e);
+  --fl-border-strong: var(--text-muted, #3a3a40);
+  --fl-text: var(--text-primary, #e4e4e7);
+  --fl-text-muted: var(--text-secondary, #8a8a92);
+  --fl-text-faint: var(--text-muted, #5e5e66);
   --fl-user: #2563eb;
   --fl-user-text: #fff;
-  --fl-assistant: #27272a;
+  --fl-assistant: var(--bg-active, #27272a);
   --fl-accent: #3b82f6;
   --fl-red: #ef4444;
   --fl-green: #22c55e;
@@ -110,18 +110,30 @@
 .floot-session-item.active .floot-session-name {
   color: var(--fl-text);
 }
+/* Always a circle, in one of three states. The box is pinned (no padding, no
+   border, fixed both ways) so nothing the host page styles can reshape it, and
+   the state modifiers are namespaced: a bare `.error` here collided with
+   chat's global `.error` rule and drew an ellipse. */
 .floot-status-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  box-sizing: border-box;
+  display: block;
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
   background: var(--fl-text-faint);
 }
-.floot-status-dot.streaming {
+.floot-status-dot-passive {
+  background: var(--fl-text-faint);
+}
+.floot-status-dot-working {
   background: var(--fl-accent);
   animation: floot-dot-pulse 1.2s ease-in-out infinite;
 }
-.floot-status-dot.error {
+.floot-status-dot-error {
   background: var(--fl-red);
 }
 @keyframes floot-dot-pulse {
@@ -139,6 +151,15 @@
 }
 .floot-session-name {
   font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* What the session runs on. One line: a long model id is cut, and the full
+   text is the element's title. */
+.floot-session-runtime {
+  font-size: 0.72rem;
+  color: var(--fl-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -259,6 +280,44 @@
 }
 .floot-header-btn.on {
   color: var(--fl-accent);
+}
+/* Labeled header controls (the journal, a pending network request). A label
+   is wider than the icon square, so the chip sizes to its text instead of
+   clipping to 34px. The badge carries the part that needs the operator and
+   collapses to a dot on narrow screens, where the words would crowd out the
+   session title. */
+.floot-header-btn.chip {
+  width: auto;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--fl-border);
+  background: var(--fl-surface2);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.floot-header-btn.chip:hover {
+  border-color: var(--fl-border-strong);
+  background: var(--fl-surface3);
+}
+.floot-header-btn.chip.on {
+  color: var(--fl-accent);
+  border-color: var(--fl-accent);
+}
+.floot-header-btn.chip.attention {
+  color: var(--fl-amber);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.floot-header-btn.chip.attention.on {
+  border-color: var(--fl-amber);
+}
+.floot-header-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--fl-amber);
+  font-size: 0.68rem;
+  font-weight: 500;
 }
 
 .floot-messages {
@@ -417,14 +476,50 @@
   gap: 0.4rem;
   flex-shrink: 0;
 }
-.floot-status-bar.error {
-  color: var(--fl-red);
-}
 .floot-tokens {
   margin-left: auto;
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.floot-account.blocked {
+  color: var(--fl-danger, #c0392b);
+  opacity: 1;
+}
+.floot-settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-weight: 600;
+}
+.floot-settings-subheading {
+  margin-top: 0.4rem;
+  font-size: 0.85em;
+  color: var(--fl-text-muted);
+}
+.floot-settings-refresh {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 4px;
+  background: var(--fl-surface);
+  color: inherit;
+  cursor: pointer;
+}
+
+.floot-settings-action {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.floot-settings-note {
+  font-size: 0.85em;
+  opacity: 0.8;
 }
 
 .floot-meter {
@@ -547,6 +642,8 @@
   font-size: 1.15rem;
 }
 .floot-mic:hover {
+  /* Override the host page's button:hover, including sticky touch hover. */
+  background: var(--fl-surface2);
   border-color: var(--fl-text-muted);
 }
 .floot-mic.listening {
@@ -558,7 +655,7 @@
   color: var(--fl-green);
   animation: floot-mic-pulse 1.5s ease infinite;
 }
-.floot-mic.error {
+.floot-mic.floot-mic-error {
   border-color: var(--fl-red);
   color: var(--fl-red);
 }
@@ -695,6 +792,8 @@
   color: #7c6fbf;
 }
 .floot-action-preview {
+  min-width: 0;
+  flex: 1;
   color: #6b6b8c;
 }
 .floot-actions-body {
@@ -723,6 +822,45 @@
 }
 .floot-action-section.result .floot-tool-pre {
   color: #bbf7d0;
+}
+.floot-diff-result {
+  display: grid;
+  gap: 0.5rem;
+}
+.floot-diff-summary {
+  max-height: none;
+}
+.floot-diff {
+  max-height: 360px;
+  padding: 0.35rem 0;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+  color: #d8d8f0;
+  background: #111120;
+  border: 1px solid #2a2a3e;
+  border-radius: 4px;
+}
+.floot-diff-line {
+  display: block;
+  min-height: 1.25em;
+  padding: 0 0.6rem;
+}
+.floot-diff-line.header {
+  color: #a5b4fc;
+  font-weight: 600;
+}
+.floot-diff-line.hunk {
+  color: #c4b5fd;
+  background: #1e1e36;
+}
+.floot-diff-line.added {
+  color: #bbf7d0;
+  background: rgb(20 83 45 / 35%);
+}
+.floot-diff-line.removed {
+  color: #fecaca;
+  background: rgb(127 29 29 / 35%);
 }
 
 /* JavaScript tokens for the exec-family entries. */
@@ -760,6 +898,23 @@
   opacity: 0.55;
   background: #2a2a3e;
   color: #b8b8cc;
+}
+/* Why queued messages are not moving, above them. */
+.floot-pending-hold {
+  align-self: flex-end;
+  max-width: 80%;
+  margin: 0.2rem 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 2px solid var(--fl-accent);
+  font-size: 0.78rem;
+  color: var(--fl-text-muted);
+}
+.floot-pending-note {
+  font-size: 0.72rem;
+  color: var(--fl-text-faint);
+}
+.floot-pending-interrupted .floot-pending-note {
+  color: var(--fl-red);
 }
 .floot-pending-actions {
   display: flex;
@@ -910,11 +1065,59 @@
   flex-direction: column;
   gap: 0.6rem;
 }
+/* A thought inside an action group reads as prose, not code: the app's face
+   rather than the group's monospace, whole words, and no scroll box. */
+.floot-action.thought .floot-action-name {
+  color: #c4b5fd;
+}
+.floot-thought-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--fl-text-muted);
+}
+.floot-thought-note {
+  margin: 0.4rem 0;
+  font-size: 0.75rem;
+  color: var(--fl-text-muted);
+}
 .floot-settings-row {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.85rem;
+}
+.floot-settings-capacity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.floot-settings-capacity > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.floot-capacity-meter,
+.floot-capacity-unknown {
+  display: inline-block;
+  width: 10rem;
+  max-width: 100%;
+  height: 0.8rem;
+}
+.floot-capacity-unknown {
+  height: 0.4rem;
+  border-radius: 0.2rem;
+  background: var(--fl-border);
+}
+.floot-capacity-text {
+  font-size: 0.75rem;
+  color: var(--fl-text-muted);
 }
 .floot-settings-label {
   font-size: 0.72rem;
@@ -984,7 +1187,19 @@
     justify-content: center;
   }
   .floot-header {
+    gap: 0.4rem;
     padding: 0.6rem 0.75rem;
+  }
+  .floot-header-btn.chip {
+    padding: 0 0.5rem;
+  }
+  .floot-header-badge {
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--fl-amber);
+    font-size: 0;
   }
   .floot-messages {
     padding: 0.75rem;
@@ -1002,16 +1217,12 @@
     max-width: 92%;
   }
 
-  /* An action header is name + preview + state on one line; on a phone the
-     preview has nowhere to go, so let the row wrap instead of clipping the
-     part that says what the action did. */
-  .floot-actions-head,
-  .floot-action-head {
+  /* Group details may wrap; individual command previews stay on one line. */
+  .floot-actions-head {
     flex-wrap: wrap;
   }
 
-  .floot-actions-detail,
-  .floot-action-preview {
+  .floot-actions-detail {
     flex-basis: 100%;
     white-space: normal;
   }
@@ -1038,4 +1249,361 @@
   .floot-pending-input {
     width: 100%;
   }
+}
+/* ── Operator panels ─────────────────────────────────────────────────────────
+   The turn journal and the sandbox-network panel are prose and small forms
+   over evidence text. They render inside the chat shell, whose global
+   `button`, `textarea` and `select` rules would otherwise dress them in the
+   shell's theme; the rules below keep them in Floot's, and outrank the shell's
+   pseudo-class rules by carrying the panel class. */
+.floot-operator-panel {
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.floot-operator-panel h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.floot-operator-panel h4 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fl-text-muted);
+}
+.floot-operator-panel p {
+  margin: 0.5rem 0;
+  max-width: 72ch;
+  color: var(--fl-text-muted);
+}
+.floot-operator-panel p[role='status'] {
+  color: var(--fl-text);
+}
+.floot-operator-panel .floot-panel-note.warn {
+  color: var(--fl-amber);
+}
+.floot-operator-panel pre {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+.floot-operator-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.6rem 0;
+  max-width: 40rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fl-text-muted);
+}
+.floot-operator-panel textarea,
+.floot-operator-panel select {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  outline: none;
+  box-shadow: none;
+}
+.floot-operator-panel textarea {
+  min-height: 4rem;
+  resize: vertical;
+}
+.floot-operator-panel select {
+  background-image: none;
+  -webkit-appearance: auto;
+  appearance: auto;
+}
+.floot-operator-panel textarea:focus,
+.floot-operator-panel select:focus {
+  border-color: var(--fl-accent);
+  box-shadow: none;
+}
+.floot-operator-panel button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.floot-operator-panel button:hover {
+  border-color: var(--fl-border-strong);
+  background: var(--fl-surface3);
+}
+.floot-operator-panel button:active {
+  transform: none;
+}
+.floot-operator-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--fl-border);
+  background: var(--fl-surface2);
+}
+.floot-operator-panel button[aria-pressed='true'] {
+  color: var(--fl-accent);
+  border-color: var(--fl-accent);
+}
+.floot-operator-panel button.primary {
+  border-color: var(--fl-accent);
+  background: var(--fl-accent);
+  color: #fff;
+}
+.floot-operator-panel button.primary:hover {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+.floot-operator-panel button.primary:disabled {
+  border-color: var(--fl-accent);
+  background: var(--fl-accent);
+}
+.floot-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+.floot-panel-actions > p,
+.floot-panel-actions > span {
+  margin: 0;
+}
+
+/* The journal itself: a full pane in place of the transcript. */
+.floot-recovery {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+.floot-recovery pre {
+  max-height: 20rem;
+}
+.floot-recovery-turn {
+  margin: 0.5rem 0;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface);
+}
+.floot-recovery-turn > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+.floot-recovery-turn > summary::-webkit-details-marker {
+  display: none;
+}
+.floot-recovery-turn > summary::before {
+  content: '▸';
+  width: 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--fl-text-muted);
+}
+.floot-recovery-turn[open] > summary::before {
+  content: '▾';
+}
+.floot-recovery-turn > summary:hover {
+  background: var(--fl-surface2);
+}
+.floot-recovery-turn.unknown {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.floot-recovery-turn.unknown > summary {
+  color: var(--fl-amber);
+}
+.floot-recovery-turn.acknowledged > summary {
+  color: var(--fl-text-muted);
+}
+.floot-recovery-turn-body {
+  padding: 0 0.75rem 0.75rem;
+}
+
+/* The sandbox-network panel: a section at the top of settings. */
+.floot-network-policy {
+  padding-block: 0.5rem 1rem;
+  border-bottom: 1px solid var(--fl-border);
+}
+.floot-network-policy pre {
+  max-height: 12rem;
+}
+.floot-network-request {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.06);
+}
+.floot-network-request h4 {
+  margin-top: 0;
+  color: var(--fl-amber);
+}
+
+/* A turn that ended without finishing: a plain line, its raw reason folded. */
+.floot-msg.floot-turn-status {
+  color: var(--fl-text-muted);
+  font-style: italic;
+}
+.floot-turn-status-detail {
+  margin-top: 0.35rem;
+  font-style: normal;
+}
+.floot-turn-status-detail > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+}
+.floot-turn-status-detail pre {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+}
+
+.floot-presets fieldset {
+  border: 0;
+  padding: 0;
+  margin-top: 1rem;
+  min-width: 0;
+}
+.floot-preset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+}
+.floot-preset-field input,
+.floot-preset-field select,
+.floot-preset-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem;
+  border-radius: 0.4rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  font: inherit;
+}
+.floot-preset-object {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.floot-preset-endowment {
+  border-inline-start: 2px solid currentColor;
+  padding-inline-start: 0.75rem;
+  margin: 1rem 0;
+}
+.floot-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.floot-compose {
+  position: relative;
+}
+
+/* Shared Chat token UI, scoped to Floot's system-theme palette. */
+.floot-composer-anchor {
+  flex: 1;
+  min-width: 0;
+}
+.floot-composer-editor {
+  position: relative;
+}
+.floot-input {
+  white-space: pre-wrap;
+  overflow-y: auto;
+  min-height: 1.4em;
+}
+.floot-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--fl-text-muted);
+  pointer-events: none;
+}
+.floot-input[aria-disabled='true'] {
+  opacity: 0.6;
+}
+#floot-root .chat-token {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--fl-accent);
+  border-radius: 5px;
+  color: var(--fl-accent);
+  background: var(--fl-surface2);
+  white-space: nowrap;
+}
+#floot-root .chat-token::before {
+  content: '@';
+}
+#floot-root .token-edge::before {
+  content: ':';
+}
+#floot-root .token-menu {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--fl-surface);
+  color: var(--fl-text);
+  border: 1px solid var(--fl-border);
+  border-radius: 10px;
+  z-index: 200;
+}
+#floot-root .token-menu.visible {
+  display: block;
+}
+#floot-root .token-menu-item {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+#floot-root .token-menu-item.selected {
+  background: var(--fl-accent);
+  color: var(--fl-surface);
+}
+#floot-root .token-menu-hint,
+#floot-root .token-menu-empty {
+  padding: 8px 12px;
+  color: var(--fl-text-muted);
+  font-size: 12px;
 }

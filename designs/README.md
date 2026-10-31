@@ -43,6 +43,29 @@ reading of comments, and corrects two that described the unbound `lockdown` as
 a `Halt::NotImplemented` scope fold when a reference is an ordinary
 `ReferenceError`. Moves the boot fingerprint, so the `ironhorse-snapshot`
 golden identities are regenerated and prior snapshots are refused at restore),
+[durable-posix-environments](durable-posix-environments.md)
+(2026-10-02; In Progress M10 follow-up for portable Shell/process alignment, durable
+development presets, Fae/Codex inference and compaction; contract review precedes estimation, with no added
+implementation prerequisite or critical-path duration for PR #1248),
+[hosted-native-recovery-investigation](hosted-native-recovery-investigation.md)
+(2026-09-21; Proposed M10 research follow-up, not a prerequisite architecture for
+PR #1248; one additional Proposed document, with no implementation estimate or
+change to milestone durations/critical path until the alternatives are reviewed),
+[Floot/backend architecture audit](../packages/floot/ARCHITECTURE-AUDIT.md)
+(2026-09-21; living FA-01–FA-13 remediation register within the existing hosted-agent
+sandbox unification scope; two reproduced context/history bugs, legacy retirement,
+and ownership/deduplication findings; no additional milestone or estimate),
+[hosted-agent-subscriptions](hosted-agent-subscriptions.md) (added 2026-09-20;
+subscription status for hosted agents read from the rate-limit headers the
+broker drops today and published for views to subscribe to; several
+subscriptions per provider behind one pool that drains the one whose allowance
+resets soonest, stays put while the prompt cache is warm, and redispatches a
+held request on the next subscription when one drains mid-turn; operator-only
+Codex reset credits; context occupancy from every backend, with the Claude
+cached-token undercount it found; and delegation to a peer as two capabilities,
+a runner and an attenuated share with its own journalled budget, over bytes
+exo-streams read with a buffer; records which provider facts came from the
+pinned binaries and which remain unverified),
 [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
 (added 2026-09-14; the ordering proposal for the daemon SES and worker-protocol
 acceptance scope PR #1263 fenced off — fifteen architecture-review findings in
@@ -58,6 +81,30 @@ promotes slot-machine field access from a private `__get__` delivery to a
 first-class `get` verb and adds distinct `index` / `untag` lanes, the matching
 `HandledPromise` and `E` surfaces, dedicated canonical-CBOR payloads, and
 strict JavaScript/Rust supervisor parity),
+[paseo-meta-harness-report](paseo-meta-harness-report.md) (added 2026-09-17;
+an external reverse-engineering report of Paseo's provider layer, vendored
+verbatim as the citable text behind
+[hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md)'s
+comparison — Paseo instruments the same three CLIs and makes the opposite bet,
+letting each provider's own store be the durable transcript authority and
+persisting only a handle; not an Endo design, and its paths are Paseo's),
+[hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) (added
+2026-09-12; one guest authority domain, session-scoped revocable inference without
+request-count leases or expiry, persistent runtimes, shared services, and an
+explicit justification table for retained and removed protections; revised after
+adversarial review to distinguish turn interruption from a Settings emergency stop,
+preserve background mount access, keep CLI eval calls tied to active-turn context,
+distinguish future process-facing CapTP access, and replace unused implementations
+directly; acceptance covers Node-hosted services/controllers, Linux/Podman, and the
+pinned vendor CLIs, with Ironhorse outside this work's scope,
+including the record-deletion collection failure and cross-worker supervisor risk;
+the administrative owner belongs at a daemon-local boundary, and fresh caplet
+workers now wait for reference publication before process acquisition; inert MCP
+kits retain cleanup before startup and drain admitted host calls; controller
+construction must defer capability-bundle revival until explicit activation;
+the September 17 Codex migration now uses the shared owners and directory storage,
+with Tokyo tool-use, stop/revocation, restart recall, and deletion acceptance passed;
+transport/journal simplification and final conformance remain In Progress),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
@@ -124,10 +171,13 @@ authenticated encrypted QUIC connection carrying netstring-framed OCapN
 messages under the `ocapn/netstring/0` ALPN; `@number0/iroh` is optional
 and injectable so CI tests run against an in-memory mock, with a
 real-endpoint integration test gated behind `ENDO_IROH_INTEGRATION=1`),
-[thixotrope](thixotrope.md) (added 2026-07-16, rewritten 2026-09-08;
+[thixotrope](thixotrope.md) (added 2026-07-16, revised 2026-09-30;
 `@endo/thixotrope` is an orthogonally persistent object-capability machine with an OCapN comms hub,
 XS and Ironhorse worker engines, durable guest references and listeners, a persistent workspace,
-application installation, and retention diagnostics.
+one installation registry for applications and directory-native resources, each in a vat of its
+own, a manager and adapter kit for native resources, a guest prelude with exo interface guards in
+every vat, acknowledged alarm settlement, configurable Ironhorse defaults, retention diagnostics,
+and a glossary that gives each term one meaning.
 The main design describes current architecture and delivery limitations; potential upgrades,
 revocation mechanisms, and persistence-boundary experiments live in the package's designs directory),
 [endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
@@ -186,6 +236,9 @@ siblings),
 primitive and the nine-layer pivot from SturdyRef: `@endo/parcel`, the
 initial/shared location-authority split, `E.open`, inline marshal forms, and the
 unchanged `ocapn-sturdyref` wire tag),
+[sturdyref-shim-contract](sturdyref-shim-contract.md) (added 2026-09-30,
+revised 2026-10-14; the layer 1 Parcel shim contract and consequences for the
+existing nine-layer stack),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
 2026-06-23, transformed 2026-10-15; Parcel carriage and opening across
 Slot Machine: inline Smallcaps over the existing canonical-CBOR envelope,
@@ -332,6 +385,10 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-10-02 | In Progress |
+| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-21 | In Progress — phases 1 to 6 implemented; Claude and Codex pools deployed. Claude memory-only access tokens, direct usage and restart renewal passed two-account Tokyo acceptance at `00799f3f5`. Secondary Codex needs fresh login; live exhaustion handover and soak remain. |
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-30 | In Progress — shared provisioner, factory and execution envelope; generation 188 passes four-backend lifecycle and ordinary restart acceptance; duplicate argument encoding and obsolete vendor broker constructors removed in newer source; simplicity and bounded-context findings remain in the [refactor alignment audit](../packages/floot/REFACTOR-ALIGNMENT.md) and [architecture audit/remediation register](../packages/floot/ARCHITECTURE-AUDIT.md) |
+| [hosted-native-recovery-investigation](hosted-native-recovery-investigation.md) | 2026-09-21 | 2026-09-21 | Proposed — separate research follow-up; producer architecture not selected |
+| [durable-posix-environments](durable-posix-environments.md) | 2026-10-01 | 2026-10-16 | Initial implementation complete — metadata-aware overload retry and first-fence diagnostics added October 16; generation 202 deploys bounded inference-local overload backoff; real 5/10-second refusal/retry probe passed. Unattended Luna run completed in 52m53s with 46 calls/three compactions and a final response; 115 package test tasks and all 110 daemon files executed. Latest package outcomes: 112 pass/three fail; daemon: 1,507 pass/six fail/five skip. Eleven unique failures and report-delivery/count caveats remain; not green CI. No real overload occurred in this run. Evidence, Secrets, renewal owners, native HOME and workspace references preserved; only the owned experiment admin stopped. Earlier DNS/proxy/CapTP/timeout/compaction acceptance recorded; two-daemon routing uses a fixture runner, not remote Podman/VM execution; manual admin cleanup, automatic GC/process-loss recovery deferred |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
@@ -364,7 +421,7 @@ LLM-agent stack).*
 | [floot-daemon-owned-turns](floot-daemon-owned-turns.md) | 2026-08-10 | 2026-09-07 | **Complete** |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-18 | In Progress |
-| [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-08-06 | In Progress |
+| [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-10-06 | In Progress |
 | [agent-follow-stream-tool](agent-follow-stream-tool.md) | 2026-05-12 | 2026-08-31 | Proposed |
 | [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) | 2026-05-21 | 2026-05-21 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
@@ -399,6 +456,7 @@ LLM-agent stack).*
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-10-15 | Proposed (Parcel carriage and opening across Slot Machine) |
 | [parcel](parcel.md) | 2026-10-14 | 2026-10-14 | Proposed |
+| [sturdyref-shim-contract](sturdyref-shim-contract.md) | 2026-09-30 | 2026-10-14 | Proposed (layer 1 Parcel contract and nine-layer pivot map) |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | In Progress |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | In Progress |
@@ -444,7 +502,7 @@ LLM-agent stack).*
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
 | [endoclaw](endoclaw.md) | 2026-03-03 | 2026-03-03 | Reference |
 | [endopi](endopi.md) | 2026-05-15 | 2026-06-25 | Reference |
-| [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-07-10 | In Progress |
+| [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-10-19 | **Complete** |
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | In Progress |
 | [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | In Progress |
 | [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
@@ -496,7 +554,7 @@ LLM-agent stack).*
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
-| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
+| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-10-18 | In Progress |
 | [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
 | [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
@@ -580,14 +638,21 @@ LLM-agent stack).*
 | [immutable-arraybuffer/immutable-arraybuffer](../packages/immutable-arraybuffer/designs/immutable-arraybuffer.md) | 2026-06-09 | 2026-08-28 | **Implemented** |
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
+| [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) | 2026-10-01 | — | Proposed |
+| [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) | 2026-10-14 | — | Proposed |
 
-**Current totals (2026-10-07, hardened-text-codecs-shim to Implemented):** 77 Complete/Implemented, 84 In Progress, 18 Not Started, 25 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**244 indexed records**). The bucket sum is 244. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 -> 25, Reference 20 -> 21, records 240 -> 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
+**Current totals (2026-10-07, hardened-text-codecs-shim to Implemented):** 77 Complete/Implemented, 84 In Progress, 18 Not Started, 27 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**246 indexed records**). The bucket sum is 246. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 -> 25, Reference 20 -> 21, records 240 -> 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
 
 The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-invitations.md) (**In Progress**: the guest `invite`/`accept` surface landed in #1305 and #1310), increasing In Progress from 83 to 84 and the indexed records from 243 to 244.
 
 The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**Proposed**: the B5 plan with its spike); it joins the M4 table, the dependency graph (between the base Cloudflare design and its addendum) and the estimates table. Its Phases 0b–4 add about 12 days of M4 work that waits on nothing else in M4 and can run beside it, so M4's projected duration and the timeline are unchanged; its Phase 5 waits on the Cloudflare review's blockers 7–11, like the two Cloudflare designs, and is not placed on the timeline.
 
 **Current totals (2026-10-16, re-derived from the summary table):** 77 Complete/Implemented, 83 In Progress, 18 Not Started, 30 Proposed, 3 Active, 21 Reference, 4 Deprecated, 3 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**249 indexed records**). The bucket sum is 249. A qualified cell folds by its leading status (an `In Progress (PR #284)` is In Progress, a `Superseded by …` is Superseded, a `Proposed (exploratory)` is Proposed). The 2026-10-07 paragraph's totals (245 records, 26 Proposed, 84 In Progress, 2 Draft, with the later one-row increments) were incremented rather than re-derived and had drifted from the table by three rows; this count replaces them. The 2026-10-16 pass adds [ironhorse-intrinsic-fault-in](ironhorse-intrinsic-fault-in.md) (Proposed) to the summary table, the M11 table, the dependency graph and the estimates table (Proposed 29 -> 30, records 248 -> 249), unestimated. The raw corpus is 252 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files are excluded (this README, `ARCHIVE.md`, `AGENTS.md`, `CLAUDE.md`, and the two package design-directory indexes), four already-indexed channel-thread research records lie outside those globs, and one design file, [daemon-mount-visible-roots](daemon-mount-visible-roots.md) (Proposed, 2026-09-30), is in the corpus but not yet in the summary table; indexing it is left to the next grooming pass, since this pass changes no other row.
+The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), bringing Proposed to 31 and the indexed records to 250 after the totals above.
+
+The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
+
+
 
 ## Roadmap
 
@@ -622,6 +687,8 @@ inventing implementation commitments.
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
 | `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
+| `hosted-agent-subscriptions` | M5 | How much of each subscription is left and when it resets, several subscriptions per provider drained soonest-to-expire with mid-turn handover, context occupancy, and delegating a runner or an attenuated share to a peer. Extends the broker and the account oracle. |
+| `hosted-agent-sandbox-unification` | M10 | Shared Claude/Codex/OpenCode runtime and revocable session authority; replaces mandatory request-count/expiry leases and redundant limits. |
 | `daemon-engo-supervisor`, `worker-rust-xs` | M11 | Supervisor and native worker path for `endor`. |
 | `hardener-indexed-cardinality` | Out of milestone | Localized `master`-based hardener performance work; no roadmap dependency or critical-path effect. |
 | `outliner-design-doc-2`, `outliner_drag_and_drop`, `OUTLINER_INTERACTION_PATTERNS`, `threading-research-overview`, `type-1-chat-spec`, `type-2-chat-spec`, `type-3-chat-spec` | M9 | UX research inputs, held as reference until an owned Chat or Outliner implementation slice needs them. |
@@ -765,6 +832,7 @@ flowchart TD
         efdeploy[floot-admin-deploy-workflows<br/><i>IN PROGRESS</i>]
         eselfupd[hosted-endo-self-update-loop<br/><i>COMPLETE</i>]
         ebroker[hosted-agent-broker-oauth<br/><i>IN PROGRESS</i>]
+        esubs[hosted-agent-subscriptions<br/><i>IN PROGRESS</i>]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
@@ -772,6 +840,7 @@ flowchart TD
         eoauth --> eproactive
         eoauth --> esheets
         eoauth -.-> ebroker
+        ebroker --> esubs
         ereminder -.-> eworkflow
         eworkflow --> efdeploy
         efdeploy --> eselfupd
@@ -841,6 +910,13 @@ flowchart TD
 
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
+        hsandbox[hosted-agent-sandbox-unification<br/><i>IN PROGRESS</i>]
+        hnrecovery[hosted-native-recovery-investigation<br/><i>PROPOSED FOLLOW-UP</i>]
+        hsandbox -. research follow-up .-> hnrecovery
+        dposix[durable-posix-environments<br/><i>INITIAL IMPLEMENTATION COMPLETE</i>]
+        dsand --> dposix
+        dtools --> dposix
+        hsandbox -. composition follow-up .-> dposix
         pfs[platform-fs<br/><i>COMPLETE</i>]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
@@ -957,6 +1033,11 @@ flowchart TD
     %% endo-posix-sandbox (dsand, Capability System) into LLM Agents by
     %% first-mention.
     dsand --> eclaude
+    dsand --> hsandbox
+    dsecret --> hsandbox
+    ebroker --> hsandbox
+    hsandbox --> esubs
+    dsecret --> esubs
 
     %% endo-workflow (eworkflow, Agent Capabilities) composes the daemon
     %% form/request mail, agentry agents, and the git loop; top-level for
@@ -1205,6 +1286,8 @@ finalized.
 | thixotrope-on-cloudflare-addendum-single-vat-hub | Proposed | Replaces the base design's architecture with single-vat hubs (vat and OCapN hub tables in one Durable Object) and a per-tenant control object for lifecycle and collection. |
 | thixotrope-wasm-worker | Proposed | The worker split into a host-neutral core and host shells, the heap store ported onto Durable Object SQLite over a host-import ABI, and the base design's Phase 0 measured in local workerd; the spike under `rust/engine/wasm-worker-spike/` passes the whole store acceptance suite inside a Durable Object. |
 | `thixotrope/message-delivery` | **Implemented** | Package-level implementation record for the durable message-delivery slice. |
+| `thixotrope/host-managed-resources` | Proposed | Package-level proposal: the installation registry out of the user's workspace, many workspaces per daemon with one default, the control socket kept in the host, typed resource descriptions. |
+| `thixotrope/production-cost-model` | Proposed | Package-level triage of an operator's five-day production report: no Ironhorse commit per crank, in-memory journal counts, a lease holder that survives SIGTERM, cadence snapshots and a `status` that answers while booting; the c-list growth is left to the engine's coming `WeakRef` support, with this package's requirements on it stated. Larger changes (a hub journal, background warming) are deferred, and settlement-time gc frames are rejected. |
 | `thixotrope/vat-replacement` | Proposed (exploratory) | Package-level replacement experiment; remains exploratory rather than a committed standalone deliverable. |
 | `daemon/iroh-network-design` | **Implemented** | Package-level Iroh transport implementation supporting the M4 networking cut. |
 
@@ -1242,6 +1325,7 @@ from M3's "build the gateway package and ship a self-host story".
 | gateway-key-recovery *(gap)* | — | **Design gap.** Operator-side bearer-token re-issue conditioned on OAuth-proof-of-identity; narrower than the removed endo-gateway Open Question 1 (Pass-Invariant-Eq), whose material is now folded into [gateway-package](gateway-package.md), and which stays open as the broader follow-up of [daemon-agent-network-identity](daemon-agent-network-identity.md). |
 | gateway-stripe-adapter *(gap)* | — | **Design gap.** Reference adapter for the `verifyPaymentProof` power Phase 8 (PR [#396](https://github.com/endojs/endo-but-for-bots/pull/396)) injected. Webhook signature validation, Stripe-API integration, idempotency, refund handling. May be small enough to live as implementation rather than design, but a short design note pinning the wire shape and failure modes reduces drift risk; recommended as a design file. |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | In Progress | Credential custody for hosted agent sessions: `authMode: 'oauth'` in `@endo/hosted-agent`'s provider broker, with expiry, single-flight refresh, a generation-checked write-ahead refresh intent, rotate-only write-back, and account binding, plus the sourced feasibility finding, which differs by vendor: Codex **does** document a path (`chatgptAuthTokens`, where the host owns the ChatGPT auth lifecycle), so that mode is **unproven rather than unavailable** and needs a live session; for Claude Code no vendor exposes the broker role to a third party for an individual subscription. Both modes stay closed here. Answers the "which credential bills this session" half of the metering rows below; distinct from [endoclaw-oauth](endoclaw-oauth.md) (generic agent-side OAuth capability, M7), which it is the bounded inference-only instance of. |
+| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | In Progress | Phases 1 to 3 implemented: disjoint usage counts and context occupancy from every backend (including the Claude cached-token undercount); a header tap in the provider transport, a read-only account source per broker, one pushed and journalled account oracle per subscription, operator-requested active reads for Codex and OpenRouter; `watchAccounts()` in Floot with a chip and a Subscriptions panel in the view. Subscription status read from the rate-limit headers the broker drops today, one account oracle per subscription with a push path, and `watchAccounts()` for views; a per-provider pool that resolves credentials inside one request, drains the member whose allowance resets soonest, stays while the prompt cache is warm, and hands a refused request to the next member; operator-only Codex reset credits with a stored idempotency intent; a disjoint `usage` event with context occupancy, fixing the Claude cached-token undercount; delegation as two capabilities, a runner that owns its listener and an attenuated share with a reserve-then-settle journalled budget; the provider response as a bytes exo-stream with a producer-side read-ahead cap. Answers the "how much is left" half of the metering rows below. Several provider facts are recorded as unverified; each names the phase it gates. |
 | gateway-resource-classes *(gap, may fold into stripe-adapter)* | — | **Design gap.** Phase 8 (PR #396) names compute (computrons), storage, network, and inference (cogitrons) as the resource classes; the per-class measurement surfaces (what counts as a computron, how cogitrons map to upstream provider tokens, how network bytes are counted across HTTP / WS / OCapN) need per-class spec text. Likely folds into `gateway-stripe-adapter` unless the metering becomes its own work. |
 
 **Exit criterion:** A user signs into a hosted gateway via OAuth,
@@ -1510,6 +1594,19 @@ inline cancel. Agent transcript memory is bounded.
 
 #### Milestone 10: Capability Confinement and Ecosystem
 
+Research follow-up: [hosted native recovery](hosted-native-recovery-investigation.md)
+is Proposed. Exit criterion: a reviewed, proportionate recovery policy/design with
+measured containment evidence. It is not an extra implementation prerequisite for
+the current hosted-agent PR; milestone duration and timeline are unchanged.
+
+Capability follow-up: [durable POSIX environments](durable-posix-environments.md)
+has completed its initial implementation and Tokyo acceptance.
+The reviewed Shell/process contract, explicit-stop durability policy and Fae Rust
+pilot passed; real two-daemon capability routing passed with a fixture runner,
+not a live remote Podman/VM environment.
+Automatic GC and native process-loss recovery remain separate follow-ups.
+No native-recovery architecture or additional milestone duration is selected.
+
 (Was **Milestone 5** before the 2026-06-03 renumbering pass. Defers
 further behind the gateway substrate because process sandboxing,
 browser automation, and channel bridges are not on the critical path
@@ -1524,6 +1621,8 @@ ecosystem.
 | ~~daemon-os-sandbox-plugin~~ | Superseded by [endo-posix-sandbox](endo-posix-sandbox.md) | Replaced by `endo-posix-sandbox`; retained as historical proposal |
 | endo-posix-sandbox | In Progress (Phase 3) | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
 | daemon-capability-persona | In Progress | Epithets and delegation |
+| durable-posix-environments | Initial implementation complete | Floot development preset and Tokyo Luna Rust/auto-free workspace pilots passed alongside compaction, cancellation, policy changes, explicit-stop restart/recall and disposal. Two-daemon routing tested with a fixture runner, not live remote Podman/VM execution. Manual admin cleanup; automatic GC and process-loss recovery deferred. Execution, administration, storage, inference and conversation ownership stay distinct. |
+| hosted-agent-sandbox-unification | In Progress | Revocable inference grants and shared Claude/OpenCode MCP protocol/framing/relay with simultaneous tool admission and interruption fencing, plus shared cleanup/session ownership and generic public egress services with one listener image landed. Codex now selects external turn sandboxing and disables its managed proxy; the proxy now binds loopback and the privileged address helper is removed; the shared network contract and OpenCode public broker grants are available. Podman now retains failed removals and bwrap retains children until stdio closes, both fencing pending acquisition through the common ownership registry; factory disposal now permanently fences admission and retains failed cleanup for retry without rewriting process history. OpenCode now separates turn fencing from cleanup completion, retains failed/late acquisition cleanup, propagates stop failures before replacement/deletion, and refuses to release storage after rejected acquisitions without cleanup handles; cross-formula supervision and reconciliation remain pending. Claude/OpenCode now share static session powers with persisted exact dependencies instead of generated source. The shared ownership registry and passive session-record store now live in the daemon package below native adapters; selective release retains logical plans and stable dependencies after an incarnation stops. The uncommitted OpenCode integration targets original dependency/path recovery, backend re-mint cleanup ownership, client-incarnation release, and deletion retry with a persisted reuse fence, but real-daemon record deletion currently fails through worker collection. The daemon-local owner now passes Node cross-worker collection and lifecycle acceptance while preserving ordinary worker collection semantics; copy-only forwarding and exact host-incarnation claims keep disposable authority inside the daemon. Directory construction now balances transferred pins, with fresh collection regressions. Configured daemon-owned construction and activation now pass 27 owner unit tests and Node daemon acceptance: slot-free constructors, publication before dedicated worker acquisition, exact-context cleanup, retained dependency revival after persisted startup intent, restart identity reuse, and original-plan storage removal. Actual sandbox adapters, mount exchanges, and outer MCP/broker cleanup still need adoption; the earlier OpenCode draft remains uncommitted. Node worker cancellation now retains the original acquisition before it can yield and waits for child close rather than CapTP closure, using the existing grace budget; 19 focused tests include a real child fixture, while whole-session acceptance remains pending. OpenCode broker and provider-listener runtime now offer inert retained kits, with Node tests for late acquisition, failed initialization, grant cleanup, and lock/reservation retry; their async wrappers remain transitional. Simulated Podman controls do not establish native descendant or PID-based stale-recovery proof. Native runtime and daemon compatibility tracking distinguishes the remaining OpenCode integration failure from the isolated owner acceptance and native-worker gaps; Claude/Codex adoption and native crash reconciliation remain pending. A host-only factory kit tracks pending construction/probes, retains late driver contexts, and stops existing slices while draining acquisitions; a host-only runtime controller now composes exclusive ownership, factory cleanup, and shared storage. Atomic ownership markers refuse all stale takeover. Podman now requires local engine selection and retains failed preparation resources, with a host-only slice cleanup fence and shared pending/uncertain anchor and operation-create accounting. Operation cancellation spans admission; attach ownership lasts through native stdio closure, and subsequent controls bind to full container IDs. Automatic restart and inherited healthchecks are disabled. Operation removal requires positive startup evidence before releasing ownership; missing evidence remains uncertain after removal. Resolver exec shares anchor producer ownership. Podman close now composes slice cleanup with native command tracking, ordinary-observer cancellation, cleanup retries, and final command sealing; orphan removal validates full IDs. The hosted runtime composes Podman while the generic factory retains bwrap support. Runtime close attempts factory and driver shutdown independently and releases storage and the marker only after both succeed; pending native closure retains ownership. The owned daemon entrypoint retains exact invocation controllers, refuses live overlaps, observes cancellation outside the construction queue, and retries failed predecessor cleanup. Formula configuration requires an explicit private parent and aggregate generated-file budgets; separate module instances remain excluded by filesystem markers. OpenCode provisioning now selects the owned entrypoint, persists explicit configuration, and refuses stored generic factories without replacing them. Both setup paths read effective factory/state configuration by verified formula ID before checking private-directory placement. Ordinary diagnostics stay environment-blind. Existing host provisioning and persistent bindings must remain stable until the proposed record integration passes daemon acceptance; native crash reconciliation remains pending. Stronger crash recovery remains pending. The literal generated-file contract and destination checks are available; Podman supports them when given a host allocator, staging individual read-only binds until all container users are removed; bwrap still refuses them. The host-only allocator now retains aggregate byte/entry charges through cleanup failures and refuses stale roots; OpenCode provisioning wiring has landed; resolver integration remains pending. Live generated-file acceptance, hosted resolver integration, pinned CLI acceptance, hung-control recovery, supervisor behavior, and aggregate transport bounds remain pending. Shared session supervisor and revocable inference, one guest authority domain, retained runtime across turns, bounded host transports, and small Claude/Codex/OpenCode adapters; refines the existing sandbox envelope. Core original-context fences now prevent late dependency acquisition and delayed formula evaluation after cancellation; 16 Node context/formula tests cover the reproduced paths and intentional later revival. Fresh construction now returns an inert value/cancel kit, reaches cancellation outside the queue, and waits for formulation settlement before cancelling original contexts. Two injected-daemon persistence tests and a real Node pending-constructor test verify no successor, native PID closure, reference release, and sibling survival. Stalled persistence remains owned; prior-ready reconstruction still requires native cleanup, and adapter/Podman/CLI acceptance remains pending. Required acceptance is Node-hosted controllers/services on supported Linux/Podman with the pinned vendor CLIs; Ironhorse is not a requirement, and broader Endor supervisor/engine compatibility is optional separate work. The owner now accepts transient journaled tools at explicit start, reserves that resolver role, and refuses live rebinding; persistence and native adapter wiring remain separate, while MCP admission/drain and originating-turn recording stay with their existing owners. Podman and the factory now retain cleanup per preparation, preserving sibling slices and their shared allocator through retry; shared native commands and driver shutdown remain operator-owned. The shared provider runtime and issuer now expose per-listener/grant cleanup kits before acquisition, preserving sibling grants and operator budgets through retry; listener release requires original child close, while native descendant and stale-owner recovery proof remain pending. A host-only native service now exposes inert cleanup scopes over the shared driver and allocator, with recovery lookup and copy-only resolved acquisition/spawn; the existing operator entrypoint lifetime is reused. Injected-driver tests pass; actual adapter and native Podman acceptance remain pending. A provider-scope facade now returns inert session handles over one retained issuer, with exact scoped revocation and passive recovery lookup; ten tests pass, while controller adoption remains pending. OpenCode now composes the scopes with one retained local broker kit, independently reaching scope drain and broker/runtime shutdown and retaining failed stages; seven Node tests use simulated native controls. Its unconfined entrypoint now shares the retained native-service owner with the sandbox and takes one exact SecretBlob dependency plus an explicit persisted operator profile. A real Node daemon test verifies original credential identity after name replacement and restart, with no reads or native startup for inert scopes; setup provisioning and controller adoption remain pending. The native factory entrypoint now requires literal null powers, retaining cancellation of pending constructor input while importing no scratch-provider authority; capability-based factory construction keeps its provider requirement. Podman slice and provider runtimes now use the shared allowlist and retain each runtime’s captured operator environment across acquisition and cleanup, disable automatic guest proxy forwarding, and preserve explicitly configured guest proxies. Controlled command tests pass; operator configuration/default credential files remain trusted authority and native acceptance remains pending. Provider stderr now continuously drains with a bounded copied diagnostic preview and no lifetime-byte disconnection of inference; two regressions verify HTTP inference and explicit cleanup after oversized logs. |
 | daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, live inventory-path metadata, replacement, revocation, post-revocation deletion with retained audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
 | endoclaw-browser | In Progress | Playwright-backed `Browser` exo with origin allowlist |
@@ -1536,8 +1635,14 @@ ecosystem.
 authority enforced — sandboxed processes, confined filesystem, auditable
 identity. Browser automation available for web research and form filling.
 Agents reachable from external messaging platforms via channel bridges.
+The unified hosted adapters must also pass the same authority, revocation,
+long-session, and resource-containment acceptance tests.
 
 **Estimated duration (1 dev):** 8-12 weeks
+
+Hosted sandbox unification is provisionally L / 2-4 developer weeks within the
+existing M10 confinement estimate, not an additive project or critical-path change.
+Recalibrate after its CLI compatibility phase if that envelope proves insufficient.
 
 ---
 
@@ -1644,6 +1749,8 @@ an explicit accounting disposition.
 | `immutable-arraybuffer/immutable-arraybuffer` | Implemented, none | M2 historical |
 | `thixotrope/message-delivery` | Implemented, none | M4 |
 | `thixotrope/vat-replacement` | S-M, 3-5 days exploratory | M4 |
+| `thixotrope/host-managed-resources` | M, not estimated; registry move first | M4 |
+| `thixotrope/production-cost-model` | S for the first batch; larger items deferred | M4 |
 
 #### Calibration round 2026-05-20
 
@@ -1931,6 +2038,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | gateway-key-recovery *(gap)* | S-M | 3 days | 5 | Design gap; operator-side bearer-token re-issue (referenced by M6 P4 slice) |
 | gateway-stripe-adapter *(gap)* | S-M | 3 days | 5 | Design gap; reference adapter for `verifyPaymentProof` (referenced by M6 P3 slice) |
 | hosted-agent-broker-oauth | S-M | 3 days | 5 | Broker-side OAuth lifecycle (expiry, single-flight refresh, write-ahead refresh intent, rotate-only write-back, account binding, one bounded retry) plus the vendor feasibility finding; landed. Remaining effort is the live acceptance matrix against a real upstream, not further design. |
+| hosted-agent-subscriptions | L | 3-4 weeks (provisional) | 5 | Nine phases; phases 1 to 4 (usage and context, readings, subscribing, bytes stream) are about one week and useful with a single subscription. The pool, handover and shares depend on live tests with two accounts and a real peer connection; re-estimate after phase 4. Off the critical path. |
 | endo-gateway-mcp | M | ~2 weeks | 6 | MCP JSON-RPC termination; counted under M6 as the MCP-bridge milestone's own work. Design merged today (PR [#376](https://github.com/endojs/endo-but-for-bots/pull/376)) |
 | familiar-unified-weblet-server | M | 3 days | 7 | Web-server restructuring; design revised in PR #100 |
 | familiar-chat-weblet-hosting | M | 4-5 days | 7 | Iframe hosting, guest profiles (1.2x bump) |
@@ -1963,6 +2071,9 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | namehub-interface-unification | S | 1-2 days | 9 | Introduce `ReadableNameHubInterface`; refactor `MountInterface` and inventory-component dispatch; defers mount-entry locator question |
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
+| hosted-agent-sandbox-unification | L | 2-4 weeks (provisional, non-additive) | 10 | Refines the existing M10 sandbox envelope: compatibility, shared authority/lifecycle, three adapter migrations, and live conformance. Re-estimate after Phase 1; no additional critical-path duration assigned. |
+| hosted-native-recovery-investigation | Unestimated | Research decision first; no implementation duration assigned | 10 | Compare manual recovery, existing containment, and per-session services; separate follow-up, not added to M10 duration or timeline. |
+| durable-posix-environments | Initial implementation complete | Initial acceptance passed; follow-ups unestimated | 10 | Floot preset, Tokyo Luna Rust/auto-free pilots and two-daemon fixture routing passed. Automatic GC, native process-loss recovery and live remote Podman/VM execution remain outside the proven initial scope. No additional M10 duration or timeline assigned. |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
 | daemon-secret-manager | XL | 4-6 weeks | 10 | Endo-native singleton for arbitrary secret bytes, pluggable durable backend, `@secrets` management directory, ordinary `secrets` pet store, existing lookup/marshal formulas, audit, replacement, revocation, restart durability with a recorded crash-reconciliation gap, canary leak tests, and the Secret Blobs Space; capability possession is the only authorization; decomposes the secret-storage slice already included in daemon-capability-bank, so this estimate is not additive to that row |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
@@ -2016,6 +2127,10 @@ No milestone became newly complete in this pass, so no milestone was moved to
 the archive.  M1 and M2 remain the previously completed historical milestones.
 
 ### Timeline
+
+The 2026-09-12 hosted sandbox unification plan refines existing M10 work.
+Its provisional estimate is non-additive, so the milestone durations and timeline
+remain unchanged pending the compatibility phase.
 
 ```mermaid
 gantt

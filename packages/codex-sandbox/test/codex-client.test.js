@@ -1,9 +1,21 @@
 // @ts-check
 import '@endo/init';
+import {
+  encodeImageResult,
+  imageDataUrl,
+} from '@endo/hosted-agent/image-result.js';
 
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
+import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
+import {
+  responsesApiItems,
+  readResponsesApiItems,
+} from '@endo/hosted-agent/transcript-records.js';
+// Internal test harness, deliberately not a runtime package export.
+// eslint-disable-next-line import/no-relative-packages
+import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
 
 import { makeCodexClient } from '../src/codex-client.js';
 
@@ -12,6 +24,449 @@ const INITIALIZE_RESULT = harden({
   platformFamily: 'unix',
   platformOs: 'linux',
   userAgent: 'codex-test',
+});
+
+test('a complete thread-state writer is required before transport startup', t => {
+  let starts = 0;
+  for (const writer of [undefined, null, 'invalid']) {
+    // Deliberately untyped boundary input; an old identity-only callback
+    // cannot satisfy the operational persistence contract.
+    const options = /** @type {any} */ ({
+      sessionId: 'missing-state-writer',
+      saveThreadState: writer,
+      saveThreadId: async () => undefined,
+      start: async () => {
+        starts += 1;
+        throw Error('must not start');
+      },
+    });
+    t.throws(() => makeCodexClient(options), {
+      message: 'Codex requires a thread-state writer',
+    });
+  }
+  t.is(starts, 0);
+});
+
+test('obsolete per-turn instructions refuse before transport work without reserving a turn', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    clientOptions: { developerInstructions: 'Configured prompt' },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const developerInstructions of ['old prompt', '', undefined]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('hello', {
+          systemPrompt: 'Current',
+          developerInstructions,
+        }),
+      {
+        message: /Per-turn developerInstructions is unsupported/,
+      },
+    );
+  }
+  t.deepEqual(fixture.sent, []);
+  const reader = await fixture.client.send('hello', {
+    systemPrompt: 'Current',
+  });
+  const start = fixture.sent.find(message => message.method === 'thread/start');
+  t.is(start.params.developerInstructions, 'Current');
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('catalog rotation restores the conversation once and reconciles the old catalog first', async t => {
+  t.timeout(5000);
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  const transcript = harden([
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: 'Previously wrote the report.',
+    },
+  ]);
+  const reader = await fixture.client.send('continue', { transcript });
+  const methods = fixture.sent.map(message => message.method);
+  t.true(methods.indexOf('thread/resume') < methods.indexOf('thread/revert'));
+  t.true(methods.indexOf('thread/revert') < methods.indexOf('thread/start'));
+  t.like(saved[0], { threadId: 'thread-saved', toolSetId: 'old-tools' });
+  const first = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(first.params.threadId, 'thread-new');
+  // The prompt alone: the conversation reached the new thread through
+  // `inject_items`, never through the turn's input.
+  t.deepEqual(first.params.input, [
+    { type: 'text', text: 'continue', text_elements: [] },
+  ]);
+  const inject = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  t.is(inject.params.threadId, 'thread-new');
+  t.true(JSON.stringify(inject.params.items).includes('Previously wrote'));
+  // No preamble, and nowhere for one to live: the turn's input is the prompt
+  // and nothing else. The authority claim the old wrapper made is enforced by
+  // the session's pinned tool catalog, and telling a model its own history is
+  // evidence it must not rely on cost real behaviour for nothing.
+  t.is(first.params.input.length, 1);
+  t.is(first.params.input[0].text, 'continue');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  await fixture.client.acknowledge('turn-2');
+  const second = await fixture.client.send('next', {});
+  t.is(
+    fixture.sent.filter(message => message.method === 'turn/start').at(-1)
+      .params.input.length,
+    1,
+  );
+  await fixture.client.interrupt();
+  await drain(second);
+});
+
+test('rotation with missing or invalid history fails before altering the old thread', async t => {
+  // A conversation too long to replay is no longer among these: it is
+  // restored. What still fails is a rotation with no conversation to carry
+  // across at all — there is no text channel left to fall back to.
+  for (const opts of [{}, { transcript: [] }]) {
+    const fixture = makeFixture({
+      threadId: 'thread-saved',
+      clientOptions: { savedToolSetId: 'old-tools', toolSetId: 'new-tools' },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => fixture.client.send('continue', opts), {
+      message: /context rotation requires/,
+    });
+    t.false(
+      fixture.sent.some(message => message.method?.startsWith('thread/')),
+    );
+  }
+});
+
+test('a thread inherited across incarnations is superseded, not resumed', async t => {
+  // The rule this pins: within an incarnation a session keeps using the
+  // thread it started; across incarnations the stack's records decide. A
+  // thread id in the saved state can only have been written by a previous
+  // incarnation, so it names the CLI's own surviving store -- which is
+  // exactly what the records exist to replace. With no outstanding marker,
+  // it need not be present or opened before replacement.
+  //
+  // With no records handed in there is nothing to replay, and that is not a
+  // refusal: an empty stack claim honestly means no conversation, so the
+  // fresh thread simply starts empty. Requiring records is reserved for a
+  // catalog rotation, where a conversation is being carried across an
+  // authority boundary and dropping it silently would be the bug.
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { savedToolSetId: 'same', toolSetId: 'same' },
+  });
+  const reader = await fixture.client.send('continue', {});
+  t.false(
+    fixture.sent.some(message => message.method === 'thread/resume'),
+    'acknowledged native history is not required for journal restoration',
+  );
+  t.true(
+    fixture.sent.some(message => message.method === 'thread/start'),
+    'and then superseded by one this incarnation owns',
+  );
+  const started = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(
+    started.params.threadId,
+    'thread-new',
+    'the turn runs on the new thread, never the inherited one',
+  );
+  t.deepEqual(started.params.input, [
+    { type: 'text', text: 'continue', text_elements: [] },
+  ]);
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('an empty saved thread restores continuity again after a failed first turn is reverted', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { savedRecovery: { baseTurnId: null } },
+  });
+  const first = await fixture.client.send('first', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'completed dialogue' },
+    ],
+  });
+  await fixture.client.interrupt();
+  await drain(first);
+  const second = await fixture.client.send('retry', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'completed dialogue' },
+    ],
+  });
+  const requests = fixture.sent.filter(
+    message => message.method === 'turn/start',
+  );
+  t.is(requests.length, 2);
+  // Each turn carries only its prompt; the history went through the import.
+  t.true(requests.every(message => message.params.input.length === 1));
+  await fixture.client.interrupt();
+  await drain(second);
+});
+
+test('a committed checkpoint is acknowledged under its original catalog before rotation', async t => {
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: {
+        baseTurnId: null,
+        turnId: 'turn-1',
+        status: 'completed',
+      },
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  const reader = await fixture.client.send('continue', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'completed dialogue' },
+    ],
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'thread-new',
+  );
+  t.like(
+    saved.find(state => state.threadId === 'thread-new'),
+    {
+      recovery: { baseTurnId: null, previousCheckpoint: 'turn-1' },
+    },
+  );
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  await fixture.client.acknowledge('turn-2');
+  t.is(
+    saved.at(-1).recovery,
+    undefined,
+    'native commit clears old checkpoint lineage',
+  );
+});
+
+test('a long conversation is restored, not refused', async t => {
+  // A conversation is restored on every revival until it is deleted. There is
+  // no length at which the stack declines to hand a session its own history:
+  // the bound that used to sit here refused exactly the long conversations
+  // that most need their context back.
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+      maxPromptBytes: 500,
+    },
+  });
+  const history = '界'.repeat(100);
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: history },
+  ]);
+  const reader = await fixture.client.send('continue', { transcript });
+  const start = fixture.sent.find(message => message.method === 'turn/start');
+  // The prompt stays the prompt; the conversation went through the import,
+  // whole, well past the 500-byte prompt bound the old check measured it
+  // against.
+  t.deepEqual(start.params.input, [
+    { type: 'text', text: 'continue', text_elements: [] },
+  ]);
+  const inject = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  t.true(JSON.stringify(inject.params.items).includes(history));
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+});
+test('replacement revival preserves only its exact old-thread acknowledgement lineage', async t => {
+  for (const turnId of [undefined, 'failed-first']) {
+    const saved = [];
+    const fixture = makeFixture({
+      threadId: 'thread-saved',
+      existingTurnIds: turnId ? [turnId] : [],
+      clientOptions: {
+        savedRecovery: {
+          baseTurnId: null,
+          ...(turnId ? { turnId } : {}),
+          previousCheckpoint: 'old-committed',
+        },
+        saveThreadState: async state => {
+          saved.push(state);
+        },
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('wrong', {
+          transcript: [{ kind: 'message', role: 'user', content: 'history' }],
+          acknowledgedCheckpoint: 'unrelated',
+        }),
+      { message: /not awaiting acknowledgement/ },
+    );
+    // eslint-disable-next-line no-await-in-loop
+    const reader = await fixture.client.send('retry', {
+      transcript: [{ kind: 'message', role: 'user', content: 'history' }],
+      acknowledgedCheckpoint: 'old-committed',
+    });
+    t.is(
+      fixture.sent.find(message => message.method === 'turn/start').params.input
+        .length,
+      1,
+    );
+    t.true(
+      saved.every(
+        state => state.recovery.previousCheckpoint === 'old-committed',
+      ),
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await fixture.client.interrupt();
+    // eslint-disable-next-line no-await-in-loop
+    await drain(reader);
+  }
+});
+
+test('a crash after empty reconciliation retains the durable empty marker and lineage', async t => {
+  /** @type {any} */
+  let captured;
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, previousCheckpoint: 'old-committed' },
+      saveThreadState: async state => {
+        captured = state;
+        throw Error('Lost empty reconciliation acknowledgement');
+      },
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('retry', {
+        transcript: [{ kind: 'message', role: 'user', content: 'history' }],
+        acknowledgedCheckpoint: 'old-committed',
+      }),
+    { message: /Lost empty reconciliation acknowledgement/ },
+  );
+  t.like(captured, {
+    recovery: { baseTurnId: null, previousCheckpoint: 'old-committed' },
+  });
+  const revived = makeFixture({
+    threadId: captured.threadId,
+    clientOptions: { savedRecovery: captured.recovery },
+  });
+  const reader = await revived.client.send('retry', {
+    transcript: [{ kind: 'message', role: 'user', content: 'history' }],
+    acknowledgedCheckpoint: 'old-committed',
+  });
+  // The prompt alone: a restored conversation travels by `inject_items`.
+  t.is(
+    revived.sent.find(message => message.method === 'turn/start').params.input
+      .length,
+    1,
+  );
+  t.true(
+    revived.sent.some(message => message.method === 'thread/inject_items'),
+  );
+  t.false(revived.sent.some(message => message.method === 'thread/turns/list'));
+  await revived.client.interrupt();
+  await drain(reader);
+});
+
+test('a superseded thread leaves the revived turn with no base to revert to', async t => {
+  // The write-ahead marker names the turn a crash would have to be reconciled
+  // against. It used to name the inherited thread's latest turn, because the
+  // turn would have run there. It no longer does: the turn runs on a thread
+  // this incarnation started, which has no turns yet, so the honest base is
+  // null and a reconciliation reverts the new thread to empty rather than to
+  // somebody else's checkpoint.
+  //
+  // The inherited thread's own turns are not forgotten -- they are read
+  // during reconciliation, before the supersession, which is what
+  // 'Floot retry after revival ...' covers.
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  const reader = await fixture.client.send('next');
+  t.like(saved[0], { threadId: 'thread-new', recovery: { baseTurnId: null } });
+  t.false(
+    saved.some(state => state.threadId === 'thread-saved'),
+    "the inherited thread is never re-saved as this incarnation's own",
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('rotation refuses divergent old checkpoint history without forgetting the marker', async t => {
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['unrelated'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'expected' },
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  await t.throwsAsync(() =>
+    fixture.client.send('continue', {
+      transcript: [
+        { kind: 'message', role: 'user', content: 'prior dialogue' },
+      ],
+    }),
+  );
+  t.false(fixture.sent.some(message => message.method === 'thread/start'));
+  t.deepEqual(saved, []);
 });
 
 // What app-server 0.152.0 answers to `account/read` with an API key
@@ -51,42 +506,61 @@ const makeQueue = () => {
 
 /**
  * @param {{
+ *   injectFails?: boolean | number,
  *   threadId?: string,
- *   saveThreadId?: (threadId: string) => Promise<void>,
+ *   saveThreadState?: Parameters<typeof makeCodexClient>[0]['saveThreadState'],
  *   clientOptions?: Record<string, any>,
  *   interruptError?: string,
  *   interruptTerminal?: boolean,
  *   beforeTurnResponse?: any[],
  *   turnIdValue?: any,
  *   turnStatus?: any,
- *   modelListResult?: any,
  *   accountReadResult?: any,
  *   brokerEndpoint?: string,
+ *   network?: any,
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
+ *   restoredTurnIds?: string[],
+ *   missingInheritedRollout?: boolean,
+ *   turnCounterStart?: number,
  *   announceTurns?: boolean,
+ *   closeFailures?: number,
  * }} [options]
  */
 const makeFixture = ({
+  injectFails = false,
   threadId,
-  saveThreadId,
+  saveThreadState = async () => undefined,
   clientOptions = {},
   interruptError,
   interruptTerminal = true,
   beforeTurnResponse = [],
   turnIdValue,
   turnStatus = 'inProgress',
-  modelListResult,
   accountReadResult,
   brokerEndpoint,
+  network,
   configReadResult,
   existingTurnIds = [],
+  // How many turns the app-server has ever named, which stops being the same
+  // as how many the current thread holds once a session supersedes a thread
+  // it inherited: the new thread is empty, but the ids already handed out are
+  // not available again.
+  turnCounterStart = existingTurnIds.length,
   announceTurns = true,
+  closeFailures = 0,
+  restoredTurnIds = [],
+  missingInheritedRollout = false,
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
   let transportClosed = false;
-  let turnNumber = existingTurnIds.length;
+  // Which thread the client is running on right now. A session that inherits
+  // a thread across incarnations supersedes it rather than resuming it, so
+  // "the saved thread" and "the active thread" are no longer the same name,
+  // and a test that pushes a server notification has to address the live one.
+  let activeThread = threadId;
+  let turnNumber = turnCounterStart;
   const turnIds = [...existingTurnIds];
   const push = message => {
     if (message?.method === 'turn/completed') {
@@ -117,16 +591,55 @@ const makeFixture = ({
         });
         break;
       case 'thread/start':
+        activeThread = 'thread-new';
         push({
           id: message.id,
-          result: { thread: { id: 'thread-new' } },
+          result: { thread: { id: activeThread } },
         });
         break;
       case 'thread/resume':
+        if (missingInheritedRollout && !message.params.path) {
+          push({
+            id: message.id,
+            error: { code: -32_000, message: 'Native rollout missing' },
+          });
+          break;
+        }
+        activeThread = message.params.threadId;
+        if (message.params.path)
+          turnIds.splice(0, turnIds.length, ...restoredTurnIds);
         push({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
         });
+        break;
+      case 'thread/read':
+        push({
+          id: message.id,
+          result: {
+            thread: {
+              id: activeThread,
+              path: '/codex-home/sessions/rollout-test.jsonl',
+            },
+          },
+        });
+        break;
+      case 'thread/inject_items':
+        // An app-server too old to know the method refuses it; this one
+        // knows it. `injectFails` exercises the other case.
+        if (
+          injectFails === true ||
+          (typeof injectFails === 'number' &&
+            sent.filter(entry => entry.method === 'thread/inject_items')
+              .length === injectFails)
+        ) {
+          push({
+            id: message.id,
+            error: { code: -32_601, message: 'method not found' },
+          });
+        } else {
+          push({ id: message.id, result: {} });
+        }
         break;
       case 'thread/revert': {
         const index = turnIds.indexOf(message.params.beforeTurnId);
@@ -142,7 +655,7 @@ const makeFixture = ({
         push({
           id: message.id,
           result: {
-            data: latest ? [{ id: latest }] : [],
+            data: latest ? [{ id: latest, status: 'completed' }] : [],
             nextCursor: null,
             backwardsCursor: null,
           },
@@ -192,51 +705,36 @@ const makeFixture = ({
           });
         }
         break;
-      case 'model/list':
-        push({
-          id: message.id,
-          result:
-            modelListResult === undefined
-              ? {
-                  data: [
-                    {
-                      id: 'gpt-test',
-                      displayName: 'GPT Test',
-                      description: 'Test model',
-                      isDefault: true,
-                      defaultReasoningEffort: 'high',
-                      supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
-                    },
-                  ],
-                  nextCursor: null,
-                }
-              : modelListResult,
-        });
-        break;
       default:
         throw Error(`unexpected request ${message.method}`);
     }
   };
   const transport = {
     brokerEndpoint,
+    network,
     messages: queue.messages,
     send,
     close: async () => {
       transportClosed = true;
       queue.close();
+      if (closeFailures > 0) {
+        closeFailures -= 1;
+        throw Error('transient transport close failure');
+      }
     },
   };
   const client = makeCodexClient({
     start: async () => transport,
     sessionId: 'session-1',
     threadId,
-    saveThreadId,
+    saveThreadState,
     ...clientOptions,
   });
   return {
     client,
     push,
     sent,
+    activeThreadId: () => activeThread,
     isClosed: () => transportClosed,
   };
 };
@@ -252,6 +750,889 @@ const drain = async reader => {
 // timer queue is enough to know that nothing else is going to happen.
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+const nativeTestBinding = harden({
+  model: '',
+  systemPrompt: '',
+  toolSetId: '',
+  cwd: '/workspace',
+  cliVersion: '0.152.0',
+  modelProvider: 'endo_broker',
+});
+const nativeTestSnapshot = (binding = nativeTestBinding) =>
+  harden({
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    context: [],
+    payload: JSON.stringify({
+      capture: {
+        sessionId: 'old-native',
+        turnId: 'old-turn',
+        baseInstructions: 'native base',
+        payload: 'native bytes\n',
+      },
+      binding,
+    }),
+  });
+const nativeTestTransport = (overrides = {}) => ({
+  capture: async request => ({
+    sessionId: request.sessionId,
+    turnId: request.turnId,
+    baseInstructions: 'native base',
+    payload: 'native bytes\n',
+  }),
+  restore: async request => ({
+    sessionId: request.target.sessionId,
+    rolloutPath: '/codex-home/sessions/fresh-native.jsonl',
+    sha256: 'digest',
+  }),
+  cancel: async () => {},
+  close: async () => {},
+  ...overrides,
+});
+
+test('native capture completes outside the notification pump and precedes end', async t => {
+  t.timeout(5000);
+  const captures = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        capture: async request => {
+          captures.push(request);
+          return nativeTestTransport().capture(request);
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.deepEqual(
+    events.filter(event => event.type !== 'phase').map(event => event.type),
+    ['native-context', 'end'],
+  );
+  t.deepEqual(captures, [
+    {
+      rolloutPath: '/codex-home/sessions/rollout-test.jsonl',
+      sessionId: 'thread-new',
+      turnId: 'turn-1',
+    },
+  ]);
+  const checkpoint = events.find(
+    event => event.type === 'native-context',
+  ).checkpoint;
+  t.deepEqual(checkpoint.context, []);
+  t.deepEqual(JSON.parse(checkpoint.payload).binding, nativeTestBinding);
+});
+
+for (const cancel of ['interrupt', 'terminate']) {
+  test(`native capture ${cancel} drains helper and cannot publish late success`, async t => {
+    t.timeout(5000);
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let capturing = false;
+    let reaped = false;
+    const fixture = makeFixture({
+      clientOptions: {
+        nativeContext: nativeTestTransport({
+          capture: async request => {
+            capturing = true;
+            await gate;
+            return nativeTestTransport().capture(request);
+          },
+          cancel: async () => {
+            reaped = true;
+            release();
+          },
+          close: async () => {
+            reaped = true;
+            release();
+          },
+        }),
+      },
+    });
+    t.teardown(async () => {
+      release();
+      await fixture.client.terminate();
+    });
+    const reader = await fixture.client.send('hello');
+    fixture.push({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-new',
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    });
+    while (!capturing) {
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+    await fixture.client[cancel]();
+    const events = await drain(reader);
+    t.true(reaped);
+    t.false(
+      events.some(event => ['end', 'native-context'].includes(event.type)),
+    );
+    t.is(events.at(-1).type, 'abort');
+  });
+}
+
+test('native restoration reconciles inherited ledger and persists actual resumed baseline', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const fixture = makeFixture({
+    threadId: 'old-native',
+    existingTurnIds: ['turn-1'],
+    restoredTurnIds: ['rollout-1'],
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      saveThreadState: async state => {
+        writes.push(state);
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+  });
+  const methods = fixture.sent.map(message => message.method);
+  const resume = fixture.sent.findIndex(
+    message => message.method === 'thread/resume' && message.params.path,
+  );
+  t.true(methods.indexOf('thread/revert') < resume);
+  t.false(methods.includes('thread/inject_items'));
+  t.like(
+    writes.find(state => state.threadId === 'fresh-native'),
+    { recovery: { baseTurnId: 'rollout-1' } },
+  );
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'fresh-native',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('native snapshot binding mismatch refuses before any transport work', async t => {
+  const fixture = makeFixture({
+    clientOptions: { nativeContext: nativeTestTransport() },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const binding of [
+    { ...nativeTestBinding, model: 'changed' },
+    { ...nativeTestBinding, systemPrompt: 'changed' },
+    { ...nativeTestBinding, toolSetId: 'changed' },
+    { ...nativeTestBinding, cwd: '/other' },
+    { ...nativeTestBinding, cliVersion: 'old' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('hello', {
+          transcript: [nativeTestSnapshot(binding)],
+        }),
+      { message: /binding changed/ },
+    );
+  }
+  t.deepEqual(fixture.sent, []);
+});
+
+test('recovery restores a native checkpoint and injects late settled evidence once before continuing', async t => {
+  t.timeout(5000);
+  const calls = [];
+  const fixture = makeFixture({
+    threadId: 'old-native',
+    existingTurnIds: ['failed-turn'],
+    restoredTurnIds: ['restored-checkpoint'],
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, turnId: 'failed-turn' },
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      callTool: async (...args) => {
+        calls.push(args);
+        return 'must not run';
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const suffix = [
+    { kind: 'message', role: 'user', content: 'Diagnose the failure' },
+    {
+      kind: 'tool-call',
+      id: 'grep',
+      name: 'endo_exec',
+      args: '{"code":"read diagnostic"}',
+    },
+    { kind: 'tool-result', id: 'grep', content: 'late result' },
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: '[Floot turn outcome-unknown: correlation failed]',
+    },
+  ];
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot(), ...suffix],
+  });
+  const methods = fixture.sent.map(message => message.method);
+  t.true(
+    methods.indexOf('thread/revert') < methods.indexOf('thread/inject_items'),
+  );
+  t.true(
+    methods.indexOf('thread/inject_items') < methods.indexOf('turn/start'),
+  );
+  const injected = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  t.is(injected.params.threadId, 'fresh-native');
+  t.deepEqual(
+    injected.params.items.filter(item => item.type === 'function_call_output'),
+    [{ type: 'function_call_output', call_id: 'grep', output: 'late result' }],
+  );
+  t.deepEqual(calls, []);
+  const started = fixture.sent.find(message => message.method === 'turn/start');
+  const turnId = 'turn-2';
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: started.params.threadId,
+      turn: { id: turnId, status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  const checkpoint = events.find(
+    event => event.type === 'native-context',
+  ).checkpoint;
+  await fixture.client.acknowledge(turnId);
+  const next = await fixture.client.send('next', { transcript: [checkpoint] });
+  t.is(
+    fixture.sent.filter(message => message.method === 'thread/inject_items')
+      .length,
+    1,
+  );
+  t.deepEqual(calls, []);
+  await fixture.client.interrupt();
+  await drain(next);
+});
+
+test('native suffix recovery refuses dangling calls before transport and failed injection before a prompt', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const fixture = makeFixture({
+    injectFails: true,
+    clientOptions: {
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      saveThreadState: async state => {
+        writes.push(state);
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const call = { kind: 'tool-call', id: 'effect', name: 'exec', args: '{}' };
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot(), call],
+      }),
+    { message: /unsettled suffix/ },
+  );
+  t.deepEqual(fixture.sent, []);
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [
+          nativeTestSnapshot(),
+          call,
+          { kind: 'tool-result', id: 'effect', content: 'done' },
+        ],
+      }),
+    { message: /method not found/ },
+  );
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.deepEqual(writes, []);
+});
+
+test('malformed native capture refuses before restoration or protocol effects', async t => {
+  let restored = 0;
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        restore: async () => {
+          restored += 1;
+          throw Error('unexpected restore');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const capture of [
+    undefined,
+    null,
+    {},
+    { sessionId: 'old', turnId: 'turn', baseInstructions: '', payload: 'torn' },
+  ]) {
+    const checkpoint = {
+      ...nativeTestSnapshot(),
+      payload: JSON.stringify({ binding: nativeTestBinding, capture }),
+    };
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => fixture.client.send('hello', { transcript: [checkpoint] }),
+      { message: /capture is malformed/ },
+    );
+  }
+  t.is(restored, 0);
+  t.deepEqual(fixture.sent, []);
+});
+
+test('native restoration cancellation drains held helper before any prompt dispatch', async t => {
+  t.timeout(5000);
+  let restoring = false;
+  let closed = false;
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const fixture = makeFixture({
+    clientOptions: {
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      nativeContext: nativeTestTransport({
+        restore: async request => {
+          restoring = true;
+          await gate;
+          return nativeTestTransport().restore(request);
+        },
+        close: async () => {
+          closed = true;
+          release();
+        },
+      }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const sending = fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+  });
+  void sending.catch(() => {});
+  while (!restoring) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  await t.throwsAsync(() => fixture.client.interrupt(), {
+    message: /interrupted during startup/,
+  });
+  await t.throwsAsync(sending, { message: /restoration cancelled/ });
+  t.true(closed);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
+test('restored nonempty baseline retains exact prior checkpoint lineage after reconstruction', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'interrupted-projection',
+    existingTurnIds: ['rollout-1'],
+    restoredTurnIds: ['rollout-1'],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: 'rollout-1',
+        previousCheckpoint: 'prior-host-checkpoint',
+      },
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      nativeContext: nativeTestTransport(),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+    acknowledgedCheckpoint: 'prior-host-checkpoint',
+  });
+  t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'fresh-native',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+for (const restoredBase of [null, 'rollout-1']) {
+  test(`fresh native restoration retains journal lineage across setup crash (${restoredBase})`, async t => {
+    t.timeout(5000);
+    /** @type {{ threadId: string, recovery?: { baseTurnId: string | null, previousCheckpoint?: string } } | undefined} */
+    let persisted;
+    const restoredTurnIds = restoredBase === null ? [] : [restoredBase];
+    const options = {
+      transcript: [nativeTestSnapshot()],
+      acknowledgedCheckpoint: 'prior-host-checkpoint',
+    };
+    const first = makeFixture({
+      restoredTurnIds,
+      clientOptions: {
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'fresh-native',
+          timestamp: '2026-09-24T00:00:00.000Z',
+        }),
+        saveThreadState: async state => {
+          persisted = state;
+          throw Error('Synthetic crash after projection persistence');
+        },
+      },
+    });
+    t.teardown(() => first.client.terminate());
+    await t.throwsAsync(() => first.client.send('continue', options), {
+      message: /Synthetic crash after projection persistence/,
+    });
+    t.deepEqual(persisted, {
+      threadId: 'fresh-native',
+      recovery: {
+        baseTurnId: restoredBase,
+        previousCheckpoint: 'prior-host-checkpoint',
+      },
+    });
+    t.false(first.sent.some(message => message.method === 'turn/start'));
+    if (!persisted) throw Error('Expected persisted recovery state');
+    const second = makeFixture({
+      threadId: persisted.threadId,
+      existingTurnIds: restoredTurnIds,
+      restoredTurnIds,
+      clientOptions: {
+        savedRecovery: persisted.recovery,
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'fresh-successor',
+          timestamp: '2026-09-24T00:00:01.000Z',
+        }),
+      },
+    });
+    t.teardown(() => second.client.terminate());
+    const reader = await second.client.send('continue', options);
+    t.false(second.sent.some(message => message.method === 'thread/revert'));
+    t.is(
+      second.sent.find(message => message.method === 'turn/start').params
+        .threadId,
+      'fresh-successor',
+    );
+    await second.client.interrupt();
+    await drain(reader);
+  });
+}
+
+for (const acknowledged of [false, true]) {
+  test(`missing disposable native rollout restores from journal after acknowledgement (${acknowledged})`, async t => {
+    t.timeout(5000);
+    const fixture = makeFixture({
+      threadId: 'missing-native',
+      missingInheritedRollout: true,
+      restoredTurnIds: ['rollout-1'],
+      clientOptions: {
+        ...(acknowledged
+          ? {
+              savedRecovery: {
+                baseTurnId: null,
+                turnId: 'prior-host-checkpoint',
+                status: 'completed',
+              },
+            }
+          : {}),
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'restored-native',
+          timestamp: '2026-09-24T00:00:00.000Z',
+        }),
+      },
+    });
+    t.teardown(() => fixture.client.terminate());
+    const reader = await fixture.client.send('continue', {
+      transcript: [nativeTestSnapshot()],
+      acknowledgedCheckpoint: 'prior-host-checkpoint',
+    });
+    t.false(
+      fixture.sent.some(
+        message => message.method === 'thread/resume' && !message.params.path,
+      ),
+    );
+    t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+    t.is(
+      fixture.sent.find(message => message.method === 'turn/start').params
+        .threadId,
+      'restored-native',
+    );
+    await fixture.client.interrupt();
+    await drain(reader);
+  });
+}
+
+test('missing native rollout with outstanding work refuses before replacement or dispatch', async t => {
+  let restored = 0;
+  const fixture = makeFixture({
+    threadId: 'missing-native',
+    missingInheritedRollout: true,
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: 'prior-host-checkpoint',
+        turnId: 'uncommitted-turn',
+      },
+      nativeContext: nativeTestTransport({
+        restore: async () => {
+          restored += 1;
+          throw Error('Unexpected restoration');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot()],
+        acknowledgedCheckpoint: 'prior-host-checkpoint',
+      }),
+    { message: /Native rollout missing/ },
+  );
+  t.is(restored, 0);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.true((await fixture.client.status()).needsReconciliation);
+});
+
+test('native capture failure aborts without an incomplete checkpoint or success', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        capture: async () => {
+          throw Error('Synthetic capture failure');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.false(events.some(event => ['end', 'native-context'].includes(event.type)));
+  t.regex(events.at(-1).reason, /Synthetic capture failure/);
+});
+
+test('interrupt during held terminal audit settles naturally completed turn without capture', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let auditing = false;
+  let captures = 0;
+  const fixture = makeFixture({
+    interruptTerminal: false,
+    clientOptions: {
+      auditEvent: async kind => {
+        if (kind === 'turn-terminal') {
+          auditing = true;
+          await gate;
+        }
+      },
+      nativeContext: nativeTestTransport({
+        capture: async request => {
+          captures += 1;
+          return nativeTestTransport().capture(request);
+        },
+      }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  while (!auditing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  const interrupted = fixture.client.interrupt();
+  void interrupted.catch(() => {});
+  await flush();
+  release();
+  await interrupted;
+  const events = await drain(reader);
+  t.is(captures, 0);
+  t.is(events.at(-1).type, 'abort');
+  t.false(events.some(event => event.type === 'end'));
+});
+
+const supervise = async client => {
+  const events = [];
+  const controller = makeHostedSessionSupervisor({
+    name: 'CodexTest',
+    readPlan: () => ({
+      sandboxSessionId: 'test',
+      workspaceMountPoint: '/test/mount',
+      mounterSocketDir: '/test/socket',
+    }),
+    start: async (_plan, _resolver, { own }) => {
+      own(
+        'sandbox',
+        Far('Sandbox', {
+          async close() {
+            events.push('sandbox-close');
+          },
+        }),
+      );
+      own(
+        'broker',
+        Far('Broker', {
+          async fence() {
+            events.push('fence');
+          },
+          async revoke() {
+            events.push('revoke');
+          },
+        }),
+      );
+      return client;
+    },
+    reportError: () => {},
+  });
+  const resolver = Far('Resolver', {});
+  await controller.activate('{}', resolver);
+  return {
+    controller,
+    events,
+    stop: () => controller.terminate('{}', resolver),
+  };
+};
+
+test('supervisor retries real Codex client transport cleanup', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({ closeFailures: 1 });
+  const owner = await supervise(fixture.client);
+  await owner.controller.acknowledge('checkpoint-test');
+  await t.throwsAsync(owner.stop, { message: /cleanup pending/ });
+  t.true(owner.events.includes('fence'));
+  t.true(owner.events.includes('sandbox-close'));
+  t.false((await owner.controller.status()).stopped);
+  await owner.stop();
+  t.true((await owner.controller.status()).stopped);
+  t.is(owner.events.filter(event => event === 'sandbox-close').length, 1);
+});
+
+test('supervisor fences promptly but drains an admitted Codex send checkpoint write', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(() => release());
+  let writing = false;
+  let persisted = false;
+  const fixture = makeFixture({
+    clientOptions: {
+      saveThreadState: async () => {
+        writing = true;
+        await held;
+        persisted = true;
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  const sending = owner.controller.send('hello');
+  void sending.catch(() => {});
+  while (!writing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  let stopped = false;
+  const stopping = owner.stop().then(() => {
+    stopped = true;
+  });
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.false(stopped);
+  release();
+  await Promise.allSettled([sending]);
+  await stopping;
+  t.true(persisted);
+  t.true(stopped);
+});
+
+test('shutdown during a held tool intent does not dispatch the tool after release', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let writing = false;
+  const calls = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'Test tool.',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: async (...args) => {
+        calls.push(args);
+        return 'ok';
+      },
+      auditEvent: async kind => {
+        if (kind === 'tool-intent') {
+          writing = true;
+          await held;
+        }
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  t.teardown(async () => {
+    release();
+    await owner.stop();
+  });
+  await owner.controller.send('hello');
+  fixture.push({
+    id: 91,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'call-held',
+      tool: 'lookup',
+      arguments: {},
+    },
+  });
+  while (!writing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  const stopping = owner.stop();
+  void stopping.catch(() => {});
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.false((await owner.controller.status()).stopped);
+  t.deepEqual(calls, []);
+  release();
+  await stopping;
+  t.deepEqual(
+    calls,
+    [],
+    'the intent write must not admit execution after shutdown',
+  );
+});
+
+for (const event of ['turn-terminal', 'server-request-denied', 'tool-intent']) {
+  test(`Codex shutdown drains and retains failed ${event} writes`, async t => {
+    t.timeout(5000);
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    t.teardown(() => release());
+    let hold = false;
+    let writing = false;
+    const fixture = makeFixture({
+      clientOptions: {
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'lookup',
+            description: 'Test tool.',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+        callTool: async () => 'ok',
+        auditEvent: async kind => {
+          if (hold && kind === event) {
+            writing = true;
+            await held;
+            throw Error('settlement audit failed');
+          }
+        },
+      },
+    });
+    const owner = await supervise(fixture.client);
+    await owner.controller.send('hello');
+    hold = true;
+    fixture.push(
+      event === 'turn-terminal'
+        ? {
+            method: 'turn/completed',
+            params: {
+              threadId: fixture.activeThreadId(),
+              turn: { id: 'turn-1', status: 'completed' },
+            },
+          }
+        : {
+            id: 90,
+            method:
+              event === 'tool-intent' ? 'item/tool/call' : 'unsupported/action',
+            params: {
+              threadId: fixture.activeThreadId(),
+              turnId: 'turn-1',
+              callId: 'call-1',
+              tool: 'lookup',
+              arguments: {},
+            },
+          },
+    );
+    while (!writing) {
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+    const stopping = owner.stop();
+    void stopping.catch(() => {});
+    await flush();
+    t.true(writing);
+    t.false((await owner.controller.status()).stopped);
+    release();
+    await t.throwsAsync(() => stopping, { message: /cleanup pending/ });
+    await t.throwsAsync(owner.stop, { message: /cleanup pending/ });
+  });
+}
+
 const STARTED_TURN_1 = harden({
   method: 'turn/started',
   params: {
@@ -261,11 +1642,10 @@ const STARTED_TURN_1 = harden({
 });
 
 test('initializes, persists a new thread, and streams normalized events', async t => {
-  /** @type {string | undefined} */
-  let persisted;
+  const persisted = [];
   const fixture = makeFixture({
-    saveThreadId: async value => {
-      persisted = value;
+    saveThreadState: async value => {
+      persisted.push(value);
     },
   });
   const reader = await fixture.client.send('do it', {
@@ -327,7 +1707,14 @@ test('initializes, persists a new thread, and streams normalized events', async 
   });
 
   const events = await drain(reader);
-  t.is(persisted, 'thread-new');
+  t.deepEqual(persisted[0], {
+    threadId: 'thread-new',
+    recovery: { baseTurnId: null },
+  });
+  t.like(persisted.at(-1), {
+    threadId: 'thread-new',
+    recovery: { baseTurnId: null, turnId: 'turn-1', status: 'completed' },
+  });
   t.deepEqual(
     fixture.sent.slice(0, 4).map(message => message.method),
     ['initialize', 'initialized', 'account/read', 'thread/start'],
@@ -335,14 +1722,16 @@ test('initializes, persists a new thread, and streams normalized events', async 
   const turnStart = fixture.sent.find(
     message => message.method === 'turn/start',
   );
+  t.is(
+    fixture.sent.find(message => message.method === 'thread/start').params
+      .sandbox,
+    'danger-full-access',
+  );
   t.is(turnStart.params.model, 'gpt-test');
   t.is(turnStart.params.effort, 'high');
   t.deepEqual(turnStart.params.sandboxPolicy, {
-    type: 'workspaceWrite',
-    writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
-    networkAccess: false,
-    excludeSlashTmp: true,
-    excludeTmpdirEnvVar: true,
+    type: 'externalSandbox',
+    networkAccess: 'restricted',
   });
   t.true(events.some(event => event.type === 'tool-call'));
   t.true(events.some(event => event.type === 'tool-result'));
@@ -418,13 +1807,16 @@ test('a malformed account status fails the session closed', async t => {
 });
 
 test('notifications arriving before turn/start response are replayed', async t => {
+  // No inherited thread: this is about notifications that arrive before the
+  // response that names the turn, and a session with nothing to supersede
+  // reaches that state in one step. The notifications name 'thread-new'
+  // because that is the thread a fresh session starts.
   const fixture = makeFixture({
-    threadId: 'thread-saved',
     beforeTurnResponse: [
       {
         method: 'item/agentMessage/delta',
         params: {
-          threadId: 'thread-saved',
+          threadId: 'thread-new',
           turnId: 'turn-1',
           itemId: 'msg-1',
           delta: 'response last',
@@ -433,7 +1825,7 @@ test('notifications arriving before turn/start response are replayed', async t =
       {
         method: 'turn/completed',
         params: {
-          threadId: 'thread-saved',
+          threadId: 'thread-new',
           turn: { id: 'turn-1', status: 'completed' },
         },
       },
@@ -445,13 +1837,35 @@ test('notifications arriving before turn/start response are replayed', async t =
   t.is(events.at(-1).type, 'end');
 });
 
+test('an undrained event queue fails explicitly and requests producer interruption', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture();
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('go');
+  for (let n = 0; n < 1025; n += 1) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId: 'answer',
+        delta: 'x',
+      },
+    });
+  }
+  // Let the producer process its push source without granting reader credit.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await t.throwsAsync(drain(reader), { message: /queue capacity exceeded/ });
+  t.true(fixture.sent.some(message => message.method === 'turn/interrupt'));
+});
+
 test('commentary is distinct from the final answer stream', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const reader = await fixture.client.send('go');
   fixture.push({
     method: 'item/started',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       item: { type: 'agentMessage', id: 'comment', phase: 'commentary' },
     },
@@ -459,7 +1873,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'comment',
       delta: 'working',
@@ -468,7 +1882,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/started',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       item: { type: 'agentMessage', id: 'final', phase: 'final_answer' },
     },
@@ -476,7 +1890,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'final',
       delta: 'answer',
@@ -485,7 +1899,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -500,7 +1914,7 @@ test('a turn notification without an exact turn id poisons the session', async t
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { status: 'completed' },
     },
   });
@@ -516,7 +1930,7 @@ test('turn/completed with a nonterminal status cannot release the session', asyn
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'inProgress' },
     },
   });
@@ -531,33 +1945,38 @@ test('unconsumed thread-scoped notifications do not poison an active turn', asyn
   const reader = await fixture.client.send('go');
   fixture.push({
     method: 'thread/status/changed',
-    params: { threadId: 'thread-saved', status: 'active' },
+    params: { threadId: fixture.activeThreadId(), status: 'active' },
   });
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   t.is((await drain(reader)).at(-1).type, 'end');
 });
 
-test('resumes a persisted thread and lists server-provided models', async t => {
+test('an acknowledged persisted thread is superseded under the current sandbox policy', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const reader = await fixture.client.send('continue');
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   await drain(reader);
-  t.truthy(fixture.sent.find(message => message.method === 'thread/resume'));
-  t.falsy(fixture.sent.find(message => message.method === 'thread/start'));
-  const models = await fixture.client.models();
-  t.is(models[0].id, 'gpt-test');
+  t.is(
+    fixture.sent.find(message => message.method === 'thread/start').params
+      .sandbox,
+    'danger-full-access',
+  );
+  // No outstanding marker needs reconciliation against the disposable old
+  // projection. The replacement still receives the current sandbox policy.
+  t.falsy(fixture.sent.find(message => message.method === 'thread/resume'));
+  t.truthy(fixture.sent.find(message => message.method === 'thread/start'));
 });
 
 test('malformed method results poison the pinned protocol session', async t => {
@@ -579,19 +1998,11 @@ test('malformed method results poison the pinned protocol session', async t => {
   const badStatusReader = await badTurnStatus.client.send('go');
   const badStatusEvents = await drain(badStatusReader);
   t.regex(badStatusEvents.at(-1).reason, /in-progress turn id/);
-
-  const badModels = makeFixture({ modelListResult: {} });
-  await t.throwsAsync(() => badModels.client.models(), {
-    message: /malformed model catalog/,
-  });
-  await t.throwsAsync(() => badModels.client.models(), {
-    message: 'Codex session terminated',
-  });
 });
 
 test('thread persistence failure prevents a turn from starting', async t => {
   const fixture = makeFixture({
-    saveThreadId: async () => {
+    saveThreadState: async () => {
       throw Error('disk full');
     },
   });
@@ -605,6 +2016,75 @@ test('thread persistence failure prevents a turn from starting', async t => {
     message: 'Codex session terminated',
   });
 });
+
+for (const early of [false, true]) {
+  for (const failure of [
+    Error('checkpoint directory sync failed'),
+    false,
+    undefined,
+  ]) {
+    const reason = failure instanceof Error ? failure.message : String(failure);
+    test(`completed checkpoint persistence failure delivers a terminal abort (${early ? 'before' : 'after'} turn/start reply; ${reason})`, async t => {
+      t.timeout(5000);
+      const completedWrites = [];
+      const fixture = makeFixture({
+        beforeTurnResponse: early
+          ? [
+              {
+                method: 'turn/completed',
+                params: {
+                  threadId: 'thread-new',
+                  turn: { id: 'turn-1', status: 'completed' },
+                },
+              },
+            ]
+          : [],
+        clientOptions: {
+          saveThreadState: async state => {
+            if (state.recovery?.status === 'completed') {
+              completedWrites.push(state);
+              return Promise.reject(failure);
+            }
+            return undefined;
+          },
+        },
+      });
+      t.teardown(() => fixture.client.terminate().catch(() => undefined));
+      const reader = await fixture.client.send('checkpoint failure');
+      fixture.push({
+        method: 'turn/completed',
+        params: {
+          threadId: fixture.activeThreadId(),
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      });
+      fixture.push({
+        method: 'turn/completed',
+        params: {
+          threadId: fixture.activeThreadId(),
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      });
+      const events = await drain(reader);
+      t.is(events.at(-1).type, 'abort');
+      t.is(events.at(-1).reason, reason);
+      t.false(events.some(event => event.type === 'end'));
+      t.is(events.filter(event => event.type === 'abort').length, 1);
+      await t.throwsAsync(() => fixture.client.send('must remain fenced'), {
+        message: 'Codex session terminated',
+      });
+      await t.throwsAsync(() => fixture.client.terminate(), {
+        message: reason,
+      });
+      t.is(
+        completedWrites.length,
+        1,
+        'uncertain completed publication is not retried',
+      );
+      t.true(fixture.isClosed());
+    });
+  }
+}
 
 test('concurrent turn is rejected and consumer close interrupts', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
@@ -648,7 +2128,7 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   fixture.push({
     method: 'error',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       willRetry: false,
       error: { message: 'quota exhausted' },
@@ -657,7 +2137,7 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'failed' },
     },
   });
@@ -673,7 +2153,7 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -694,7 +2174,7 @@ test('a persisted Floot checkpoint acknowledges a completed backend turn', async
   first.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: first.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -719,7 +2199,7 @@ test('a persisted Floot checkpoint acknowledges a completed backend turn', async
   second.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: second.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -733,7 +2213,7 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -746,13 +2226,93 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
   t.is((await drain(second)).at(-1).checkpoint, 'turn-2');
   await fixture.client.acknowledge('turn-2');
+  t.deepEqual(
+    fixture.sent
+      .filter(message => message.method === 'turn/start')
+      .map(message => message.params.sandboxPolicy),
+    [
+      { type: 'externalSandbox', networkAccess: 'restricted' },
+      { type: 'externalSandbox', networkAccess: 'restricted' },
+    ],
+  );
   await fixture.client.terminate();
+});
+
+test('Floot retry after revival acknowledges the durable base then reconciles the failed turn', async t => {
+  t.timeout(1000);
+  let state;
+  const failed = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: null,
+        turnId: 'turn-1',
+        status: 'completed',
+      },
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  t.teardown(() => failed.client.terminate());
+  const reader = await failed.client.send('fails', {
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  failed.push({
+    method: 'turn/completed',
+    params: {
+      threadId: failed.activeThreadId(),
+      turn: { id: 'turn-2', status: 'failed' },
+    },
+  });
+  t.is((await drain(reader)).at(-1).type, 'abort');
+  await failed.client.terminate();
+  const revived = makeFixture({
+    // The thread the failed incarnation ended on -- not the one it began
+    // with. It superseded its inherited thread, so that is the thread holding
+    // the failed turn, and the thread the retry must revert before it runs.
+    // It holds only `turn-2`: `turn-1` belongs to the thread that was
+    // superseded, which is why the failed turn's durable base is null and why
+    // reverting before `turn-2` has to leave this thread empty.
+    threadId: /** @type {any} */ (state).threadId,
+    existingTurnIds: ['turn-2'],
+    turnCounterStart: 2,
+    clientOptions: {
+      savedRecovery: /** @type {any} */ (state).recovery,
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  t.teardown(() => revived.client.terminate());
+  const retry = await revived.client.send('retry', {
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  const revert = revived.sent.find(
+    message => message.method === 'thread/revert',
+  );
+  t.is(revert.params.beforeTurnId, 'turn-2');
+  const methods = revived.sent.map(message => message.method);
+  t.true(methods.indexOf('thread/revert') < methods.indexOf('turn/start'));
+  revived.push({
+    method: 'turn/completed',
+    params: {
+      threadId: revived.activeThreadId(),
+      turn: { id: 'turn-3', status: 'completed' },
+    },
+  });
+  t.deepEqual((await drain(retry)).at(-1), {
+    type: 'end',
+    checkpoint: 'turn-3',
+  });
+  await revived.client.acknowledge('turn-3');
 });
 
 test('a failed thread-binding audit is retried before dispatch', async t => {
@@ -775,11 +2335,13 @@ test('a failed thread-binding audit is retried before dispatch', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   await drain(reader);
+  // The failed binding audit must be retried before dispatch. No outstanding
+  // marker requires an extra binding to the old inherited projection.
   t.is(bindingAttempts, 2);
   await fixture.client.acknowledge('turn-1');
   await fixture.client.terminate();
@@ -803,7 +2365,7 @@ test('reconciliation is idempotent after revert wins a crash', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -843,13 +2405,18 @@ test('reconciliation marker survives a failed completion audit', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   await drain(reader);
   t.is(reconciliationAudits, 2);
-  t.true(persisted.some(state => state.recovery === undefined));
+  t.like(persisted[0], { recovery: { baseTurnId: null } });
+  t.is(
+    persisted[0].recovery.turnId,
+    undefined,
+    'the reconciled empty thread retains no abandoned turn',
+  );
   await fixture.client.terminate();
 });
 
@@ -862,7 +2429,7 @@ test('a failed turn without terminal confirmation poisons the session', async t 
   fixture.push({
     method: 'error',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       willRetry: false,
       error: { message: 'upstream failed' },
@@ -897,7 +2464,7 @@ test('interrupt keeps the turn reserved until terminal confirmation', async t =>
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'interrupted' },
     },
   });
@@ -918,14 +2485,14 @@ test('late completion from an interrupted turn cannot end its successor', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-2',
       itemId: 'msg-2',
       delta: 'new turn',
@@ -934,7 +2501,7 @@ test('late completion from an interrupted turn cannot end its successor', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -975,7 +2542,7 @@ test('operation approvals are automatically accepted inside the Endo sandbox', a
     id: 92,
     method: 'item/commandExecution/requestApproval',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'command-1',
       command: 'touch output.txt',
@@ -1001,7 +2568,7 @@ test('permission-profile expansion is not an exposed approval capability', async
     id: 921,
     method: 'item/permissions/requestApproval',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'permission-1',
       permissions: {
@@ -1226,7 +2793,84 @@ test('teardown synchronously rejects a new turn before its close audit', async t
   await closing;
 });
 
+test('a native child cannot borrow parent tools and a late parent result survives quarantine', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve('late parent result');
+  });
+  const calls = [];
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 0,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'Test tool.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: (name, args) => {
+        calls.push({ name, args });
+        return held;
+      },
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const reader = await fixture.client.send('diagnose');
+  const parent = {
+    threadId: 'thread-new',
+    turnId: 'turn-1',
+    callId: 'parent-call',
+    namespace: null,
+    tool: 'wait',
+    arguments: { source: 'parent' },
+  };
+  fixture.push({ id: 990, method: 'item/tool/call', params: parent });
+  await flush();
+  t.is(calls.length, 1);
+  fixture.push({
+    id: 991,
+    method: 'item/tool/call',
+    params: {
+      ...parent,
+      threadId: 'native-child',
+      turnId: 'child-turn',
+      callId: 'child-call',
+      arguments: { source: 'child' },
+    },
+  });
+  const events = await drain(reader);
+  t.is(events.at(-1).type, 'abort');
+  t.true(fixture.isClosed());
+  t.deepEqual(calls, [{ name: 'wait', args: { source: 'parent' } }]);
+  t.false(
+    audit.some(
+      entry =>
+        entry.kind === 'tool-intent' && entry.payload.callId === 'child-call',
+    ),
+  );
+  release();
+  await fixture.client.terminate();
+  const results = audit.filter(entry => entry.kind === 'tool-result');
+  t.is(results.length, 1);
+  t.like(results[0].payload, {
+    threadId: 'thread-new',
+    turnId: 'turn-1',
+    callId: 'parent-call',
+    success: true,
+    result: 'late parent result',
+  });
+});
+
 test('a timed-out Endo tool poisons the session until late settlement', async t => {
+  t.timeout(5000);
   /** @type {(value?: any) => void} */
   let settle = () => {};
   const audit = [];
@@ -1263,9 +2907,16 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   });
   t.is((await drain(reader)).at(-1).type, 'abort');
   t.true(fixture.isClosed());
-  await t.throwsAsync(() => fixture.client.terminate(), {
-    message: /unsettled Endo tool call/,
+  let stopped = false;
+  const stopping = fixture.client.terminate().then(() => {
+    stopped = true;
   });
+  t.teardown(async () => {
+    settle('late result');
+    await stopping;
+  });
+  await flush();
+  t.false(stopped);
   settle('late result');
   for (let tries = 0; tries < 20; tries += 1) {
     if (audit.some(entry => entry.kind === 'tool-late-settled')) break;
@@ -1274,7 +2925,120 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   }
   t.true(audit.some(entry => entry.kind === 'tool-outcome-unknown'));
   t.true(audit.some(entry => entry.kind === 'tool-late-settled'));
-  await fixture.client.terminate();
+  await stopping;
+  t.true(stopped);
+});
+
+test('supervisor fences independently while Codex termination drains an admitted tool', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve('tool result');
+  });
+  let entered = false;
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 0,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'Test tool.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: () => {
+        entered = true;
+        return held;
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  t.teardown(async () => {
+    release();
+    await owner.stop();
+  });
+  await owner.controller.send('hello');
+  fixture.push({
+    id: 953,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'wait-drain',
+      tool: 'wait',
+      arguments: {},
+    },
+  });
+  while (!entered) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  let stopped = false;
+  const stopping = owner.stop().then(() => {
+    stopped = true;
+  });
+  void stopping.catch(() => {});
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.true(owner.events.includes('sandbox-close'));
+  t.true(owner.events.includes('revoke'));
+  t.false(stopped);
+  t.throws(() => owner.controller.send('too late'), {
+    message: /stopping/,
+  });
+  release();
+  await stopping;
+  t.true(stopped);
+  t.true((await owner.controller.status()).stopped);
+});
+
+test('a failed late tool audit remains a shutdown failure after the tool settles', async t => {
+  t.timeout(5000);
+  let rejectTool = () => {};
+  const operation = new Promise((_resolve, reject) => {
+    rejectTool = () => reject(Error('late tool failure'));
+  });
+  void operation.catch(() => {});
+  t.teardown(rejectTool);
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 10,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'wait',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: () => operation,
+      auditEvent: async kind => {
+        if (kind === 'tool-late-settled') throw Error('late audit failed');
+      },
+    },
+  });
+  const reader = await fixture.client.send('first');
+  fixture.push({
+    id: 952,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'wait-1',
+      tool: 'wait',
+      arguments: {},
+    },
+  });
+  await drain(reader);
+  rejectTool();
+  await flush();
+  await t.throwsAsync(() => fixture.client.terminate(), {
+    message: /late audit failed/,
+  });
+  await t.throwsAsync(() => fixture.client.terminate(), {
+    message: /late audit failed/,
+  });
 });
 
 test('late non-JSON tool fulfillments remain call-correlated unknowns', async t => {
@@ -1342,6 +3106,9 @@ test('late non-JSON tool fulfillments remain call-correlated unknowns', async t 
 });
 
 test('an unauditable successful Endo result quarantines instead of inviting replay', async t => {
+  // The journal, not the client, decides what it can record: here it refuses
+  // the result as one storage value, which is the recording failure the
+  // client must treat as an effect it cannot vouch for.
   const fixture = makeFixture({
     clientOptions: {
       dynamicTools: [
@@ -1352,7 +3119,14 @@ test('an unauditable successful Endo result quarantines instead of inviting repl
           inputSchema: { type: 'object' },
         },
       ],
-      callTool: async () => 'x'.repeat(4 * 1024 * 1024 + 1),
+      callTool: async () => 'mutated',
+      auditEvent: async (kind, payload) => {
+        if (kind === 'tool-result' && payload.result === 'mutated') {
+          throw Error(
+            'audit payload result of 17000000 bytes exceeds the 16777216-byte storage value bound',
+          );
+        }
+      },
     },
   });
   const reader = await fixture.client.send('mutate once');
@@ -1370,7 +3144,7 @@ test('an unauditable successful Endo result quarantines instead of inviting repl
   });
   const events = await drain(reader);
   t.is(events.at(-1).type, 'abort');
-  t.regex(events.at(-1).reason, /Audit payload exceeded/);
+  t.regex(events.at(-1).reason, /storage value bound/);
   t.falsy(fixture.sent.find(message => message.id === 952));
   t.true(fixture.isClosed());
 });
@@ -1473,36 +3247,57 @@ test('a rejected post-success audit quarantines a side-effectful Endo tool', asy
   t.true(fixture.isClosed());
 });
 
-test('turn output bounds interrupt an excessive stream', async t => {
+test('a turn is not bounded in events: a long stream on one item is delivered whole', async t => {
   const fixture = makeFixture({
     threadId: 'thread-saved',
-    clientOptions: { maxTurnEvents: 1 },
+    clientOptions: { maxTurnItems: 2 },
   });
   const reader = await fixture.client.send('first');
+  for (let i = 0; i < 500; i += 1) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId: '1',
+        delta: `${i} `,
+      },
+    });
+  }
   fixture.push({
-    method: 'item/agentMessage/delta',
+    method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
-      turnId: 'turn-1',
-      itemId: '1',
-      delta: 'one',
-    },
-  });
-  fixture.push({
-    method: 'item/agentMessage/delta',
-    params: {
-      threadId: 'thread-saved',
-      turnId: 'turn-1',
-      itemId: '1',
-      delta: 'two',
+      threadId: fixture.activeThreadId(),
+      turn: { id: 'turn-1', status: 'completed' },
     },
   });
   const events = await drain(reader);
-  t.deepEqual(events.at(-1), {
-    type: 'abort',
-    reason: 'Codex turn exceeded configured output bounds',
+  t.is(events.filter(event => event.type === 'text-delta').length, 500);
+  t.is(events.at(-1).type, 'end');
+  t.falsy(fixture.sent.find(message => message.method === 'turn/interrupt'));
+});
+
+test('the identities a turn retains for deduplication are bounded, by name', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { maxTurnItems: 2 },
   });
-  t.truthy(fixture.sent.find(message => message.method === 'turn/interrupt'));
+  const reader = await fixture.client.send('first');
+  for (const itemId of ['1', '2', '3']) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId,
+        delta: 'x',
+      },
+    });
+  }
+  const events = await drain(reader);
+  t.is(events.filter(event => event.type === 'text-delta').length, 2);
+  t.like(events.at(-1), { type: 'abort' });
+  t.regex(events.at(-1).reason, /retained more than 2 item identities/);
 });
 
 test('terminate closes the transport', async t => {
@@ -1518,13 +3313,13 @@ test('terminate closes the transport', async t => {
     terminated: false,
     cleanupFailures: [],
   });
-  await fixture.client.models();
+  await fixture.client.acknowledge('checkpoint-test');
   t.true((await fixture.client.status()).ready);
   await fixture.client.terminate();
   t.true(fixture.isClosed());
   t.deepEqual(await fixture.client.status(), {
     sessionId: 'session-1',
-    threadId: null,
+    threadId: 'thread-new',
     ready: false,
     active: false,
     pendingToolCalls: 0,
@@ -1553,6 +3348,7 @@ test('terminate surfaces transport teardown failure', async t => {
   const queue = makeQueue();
   const client = makeCodexClient({
     sessionId: 'failed-close',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -1560,10 +3356,10 @@ test('terminate surfaces transport teardown failure', async t => {
           queue.push({ id: message.id, result: INITIALIZE_RESULT });
         } else if (message.method === 'account/read') {
           queue.push({ id: message.id, result: ACCOUNT_RESULT });
-        } else if (message.method === 'model/list') {
+        } else if (message.method === 'thread/start') {
           queue.push({
             id: message.id,
-            result: { data: [], nextCursor: null },
+            result: { thread: { id: 'thread-cleanup', turns: [] } },
           });
         }
       },
@@ -1573,7 +3369,7 @@ test('terminate surfaces transport teardown failure', async t => {
       },
     }),
   });
-  await client.models();
+  await client.acknowledge('checkpoint-test');
   await t.throwsAsync(() => client.terminate(), { message: 'kill failed' });
 });
 
@@ -1582,6 +3378,7 @@ test('automatic protocol failure reports teardown failure', async t => {
   const reported = [];
   const client = makeCodexClient({
     sessionId: 'failed-protocol-close',
+    saveThreadState: async () => undefined,
     reportCleanupFailure: error => {
       reported.push(error.message);
     },
@@ -1596,7 +3393,9 @@ test('automatic protocol failure reports teardown failure', async t => {
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /malformed response/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /malformed response/,
+  });
   for (let tries = 0; reported.length === 0 && tries < 20; tries += 1) {
     // eslint-disable-next-line no-await-in-loop
     await null;
@@ -1612,6 +3411,7 @@ test('a blocked write is bounded by the request deadline', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'blocked',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 10,
     start: async () => ({
       messages: queue.messages,
@@ -1622,7 +3422,9 @@ test('a blocked write is bounded by the request deadline', async t => {
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /timed out/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /timed out/,
+  });
   t.true(closed);
 });
 
@@ -1631,6 +3433,7 @@ test('a blocked initialized notification is bounded and closes the session', asy
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'blocked-initialized',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 10,
     start: async () => ({
       messages: queue.messages,
@@ -1647,7 +3450,9 @@ test('a blocked initialized notification is bounded and closes the session', asy
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /write timed out/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /write timed out/,
+  });
   t.true(closed);
 });
 
@@ -1656,6 +3461,7 @@ test('malformed matching responses poison the session', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'malformed-response',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -1667,7 +3473,9 @@ test('malformed matching responses poison the session', async t => {
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /malformed response/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /malformed response/,
+  });
   t.true(closed);
 });
 
@@ -1675,6 +3483,7 @@ test('malformed initialize results poison the pinned protocol session', async t 
   const queue = makeQueue();
   const client = makeCodexClient({
     sessionId: 'malformed-initialize',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -1688,10 +3497,10 @@ test('malformed initialize results poison the pinned protocol session', async t 
       close: async () => queue.close(),
     }),
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: /malformed initialize result/,
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: 'Codex session terminated',
   });
 });
@@ -1701,6 +3510,7 @@ test('ambiguous turn-start write failure poisons the session', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'failed-turn-write',
+    saveThreadState: async () => undefined,
     threadId: 'thread-saved',
     start: async () => ({
       messages: queue.messages,
@@ -1710,6 +3520,15 @@ test('ambiguous turn-start write failure poisons the session', async t => {
         } else if (message.method === 'account/read') {
           queue.push({ id: message.id, result: ACCOUNT_RESULT });
         } else if (message.method === 'thread/resume') {
+          queue.push({
+            id: message.id,
+            result: { thread: { id: 'thread-saved' } },
+          });
+        } else if (message.method === 'thread/start') {
+          // An inherited thread is superseded rather than resumed, so a turn
+          // runs on a thread this incarnation started. This fake gives it the
+          // same name: what is under test here is the turn, not which thread
+          // carries it, and keeping one name keeps that visible.
           queue.push({
             id: message.id,
             result: { thread: { id: 'thread-saved' } },
@@ -1752,6 +3571,7 @@ test('an interrupt requested while turn/start is unanswered waits for the announ
   let heldTurnStart;
   const client = makeCodexClient({
     sessionId: 'deferred-turn-start',
+    saveThreadState: async () => undefined,
     threadId: 'thread-saved',
     start: async () => ({
       messages: queue.messages,
@@ -1762,6 +3582,15 @@ test('an interrupt requested while turn/start is unanswered waits for the announ
         } else if (message.method === 'account/read') {
           queue.push({ id: message.id, result: ACCOUNT_RESULT });
         } else if (message.method === 'thread/resume') {
+          queue.push({
+            id: message.id,
+            result: { thread: { id: 'thread-saved' } },
+          });
+        } else if (message.method === 'thread/start') {
+          // An inherited thread is superseded rather than resumed, so a turn
+          // runs on a thread this incarnation started. This fake gives it the
+          // same name: what is under test here is the turn, not which thread
+          // carries it, and keeping one name keeps that visible.
           queue.push({
             id: message.id,
             result: { thread: { id: 'thread-saved' } },
@@ -1834,7 +3663,13 @@ test('an interrupt between the turn/start response and turn/started is deferred,
   const interrupted = fixture.client.interrupt();
   await flush();
   t.false(fixture.sent.some(message => message.method === 'turn/interrupt'));
-  fixture.push(STARTED_TURN_1);
+  fixture.push({
+    ...STARTED_TURN_1,
+    params: {
+      ...STARTED_TURN_1.params,
+      threadId: fixture.activeThreadId(),
+    },
+  });
   await interrupted;
   t.true(fixture.sent.some(message => message.method === 'turn/interrupt'));
   t.deepEqual((await drain(reader)).at(-1), {
@@ -1854,7 +3689,7 @@ test('an interrupt for a turn that ends before its announcement has nothing to d
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -1881,45 +3716,193 @@ test('a turn the app-server never announces cannot be interrupted, so the sessio
   t.regex((await drain(reader)).at(-1).reason, /not announced/);
 });
 
-test('interrupt during thread startup is a terminating barrier', async t => {
-  const queue = makeQueue();
-  /** @type {any[]} */
-  const sent = [];
-  let closed = false;
-  const client = makeCodexClient({
-    sessionId: 'deferred-thread-start',
-    start: async () => ({
-      messages: queue.messages,
-      send: async (/** @type {any} */ message) => {
-        sent.push(message);
-        if (message.method === 'initialize') {
-          queue.push({ id: message.id, result: INITIALIZE_RESULT });
-        } else if (message.method === 'account/read') {
-          queue.push({ id: message.id, result: ACCOUNT_RESULT });
+for (const phase of ['thread/start', 'thread/inject_items']) {
+  test(`interrupt during ${phase} is a terminating admission barrier`, async t => {
+    const queue = makeQueue();
+    const preparationEntered = Promise.withResolvers();
+    /** @type {any[]} */
+    const sent = [];
+    let closed = false;
+    const client = makeCodexClient({
+      sessionId: 'deferred-thread-start',
+      saveThreadState: async () => undefined,
+      requestTimeoutMs: 2000,
+      start: async () => ({
+        messages: queue.messages,
+        send: async (/** @type {any} */ message) => {
+          sent.push(message);
+          if (message.method === phase) preparationEntered.resolve(undefined);
+          if (message.method === 'initialize') {
+            queue.push({ id: message.id, result: INITIALIZE_RESULT });
+          } else if (message.method === 'account/read') {
+            queue.push({ id: message.id, result: ACCOUNT_RESULT });
+          } else if (
+            message.method === 'thread/start' &&
+            phase !== 'thread/start'
+          ) {
+            queue.push({
+              id: message.id,
+              result: { thread: { id: 'thread-new' } },
+            });
+          }
+        },
+        close: async () => {
+          closed = true;
+          queue.close();
+        },
+      }),
+    });
+    t.teardown(() => client.terminate());
+    let sendP;
+    let interruption;
+    await exercisePromptCancellation(t, {
+      start: async () => {
+        sendP = client.send('must not execute', {
+          transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
+        });
+        sendP.catch(() => undefined);
+        await preparationEntered.promise;
+        t.true(
+          sent.some(message => message.method === phase),
+          'the actual native preparation request is held',
+        );
+      },
+      cancel: async () => {
+        interruption = client.interrupt();
+        interruption.catch(() => undefined);
+        await new Promise(resolve => setImmediate(resolve));
+      },
+      whileHeld: async () => {
+        await t.throwsAsync(() => client.send('next requested turn'), {
+          message: /Codex session (terminated|already has an active turn)/,
+        });
+      },
+      release: () => {
+        const held = sent.find(message => message.method === phase);
+        queue.push({
+          id: held.id,
+          result:
+            phase === 'thread/start' ? { thread: { id: 'thread-new' } } : {},
+        });
+      },
+      settle: async () => {
+        if (phase === 'thread/start') {
+          await t.throwsAsync(interruption, {
+            message: /interrupted during startup/,
+          });
+        } else {
+          await interruption;
+        }
+        t.true(closed);
+        if (phase === 'thread/start') {
+          await t.throwsAsync(sendP, { message: /interrupted during startup/ });
+        } else {
+          const terminal = (await drain(await sendP)).at(-1);
+          t.is(terminal.type, 'abort');
+          t.regex(terminal.reason, /before prompt admission/);
+        }
+        await t.throwsAsync(() => client.send('next requested turn'), {
+          message: 'Codex session terminated',
+        });
+      },
+      admitted: () =>
+        sent
+          .filter(message => message.method === 'turn/start')
+          .map(message => message.params.input[0].text),
+      expected: [],
+    });
+  });
+}
+
+test('interrupt during ledger admission fences the prompt and terminal-microtask successor', async t => {
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let entered = () => {};
+  const held = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  const saved = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      saveThreadState: async state => {
+        saved.push(state);
+        // The first write records the newly created empty thread. The second
+        // is the write-ahead ledger admission, before any native turn/start.
+        if (saved.length === 2) {
+          entered();
+          await gate;
         }
       },
-      close: async () => {
-        closed = true;
-        queue.close();
-      },
-    }),
+    },
   });
-  const sendP = client.send('first');
-  sendP.catch(() => undefined);
-  await null;
-  for (let tries = 0; tries < 50; tries += 1) {
-    if (sent.some(message => message.method === 'thread/start')) break;
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
-  await t.throwsAsync(() => client.interrupt(), {
-    message: /interrupted during startup/,
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
   });
-  t.true(closed);
-  await t.throwsAsync(sendP, { message: /interrupted during startup/ });
-  await t.throwsAsync(() => client.send('second'), {
+  let sendP;
+  let interruption;
+  let successor;
+  await exercisePromptCancellation(t, {
+    start: async () => {
+      sendP = fixture.client.send('must not execute');
+      sendP.catch(() => undefined);
+      await held;
+      t.is(saved.length, 2);
+      t.deepEqual(saved[0], {
+        threadId: 'thread-new',
+        recovery: { baseTurnId: null },
+      });
+      t.deepEqual(saved[1], saved[0]);
+    },
+    cancel: async () => {
+      interruption = fixture.client.interrupt();
+      interruption.catch(() => undefined);
+      // Run at the public cancellation completion microtask, not a later
+      // timer: reservation release must not admit a successor before poison.
+      successor = interruption.then(() =>
+        fixture.client.send('immediate successor'),
+      );
+      successor.catch(() => undefined);
+    },
+    whileHeld: async () => {
+      await t.throwsAsync(() => fixture.client.send('next requested turn'), {
+        message: 'Codex session already has an active turn',
+      });
+    },
+    release,
+    settle: async () => {
+      await interruption;
+      await t.throwsAsync(successor, { message: 'Codex session terminated' });
+      const terminal = (await drain(await sendP)).at(-1);
+      t.is(terminal.type, 'abort');
+      t.regex(terminal.reason, /before prompt admission/);
+      t.true(fixture.isClosed());
+    },
+    admitted: () =>
+      fixture.sent
+        .filter(message => message.method === 'turn/start')
+        .map(message => message.params.input[0].text),
+    expected: [],
+  });
+});
+
+test('an immediate interrupt fences a reserved send before its reader is returned', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture();
+  t.teardown(() => fixture.client.terminate());
+  const sending = fixture.client.send('must not execute');
+  const failedSend = t.throwsAsync(sending, { message: /terminated|startup/ });
+  const stopping = fixture.client.interrupt();
+  await t.throwsAsync(stopping, { message: /during startup/ });
+  await failedSend;
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.true((await fixture.client.status()).terminated);
+  await t.throwsAsync(fixture.client.send('successor'), {
     message: 'Codex session terminated',
   });
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
 });
 
 test('an idle interrupt cannot terminate a turn that starts afterward', async t => {
@@ -1931,7 +3914,7 @@ test('an idle interrupt cannot terminate a turn that starts afterward', async t 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -1944,6 +3927,7 @@ test('JSON-RPC error metadata is preserved without unsafe replay', async t => {
   let sends = 0;
   const client = makeCodexClient({
     sessionId: 'overloaded',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -1963,9 +3947,12 @@ test('JSON-RPC error metadata is preserved without unsafe replay', async t => {
     }),
   });
 
-  const error = await t.throwsAsync(() => client.models(), {
-    message: /code -32001.*Server overloaded/,
-  });
+  const error = await t.throwsAsync(
+    () => client.acknowledge('checkpoint-test'),
+    {
+      message: /code -32001.*Server overloaded/,
+    },
+  );
   t.truthy(error);
   t.is(sends, 1);
 });
@@ -1983,16 +3970,17 @@ test('terminate closes a transport that resolves after lazy startup', async t =>
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'late-start',
+    saveThreadState: async () => undefined,
     start: async () => {
       started();
       return deferred;
     },
   });
-  const modelsP = client.models();
-  modelsP.catch(() => undefined);
+  const acknowledging = client.acknowledge('checkpoint-test');
+  acknowledging.catch(() => undefined);
   await startEntered;
   await client.terminate();
-  await t.throwsAsync(modelsP, { message: /session terminated/ });
+  await t.throwsAsync(acknowledging, { message: /session terminated/ });
   /** @type {any} */ (resolveStart)({
     messages: queue.messages,
     send: async () => {},
@@ -2020,6 +4008,7 @@ test('startup-win termination race reports close failure', async t => {
   const reported = [];
   const client = makeCodexClient({
     sessionId: 'startup-win-termination-race',
+    saveThreadState: async () => undefined,
     reportCleanupFailure: error => {
       reported.push(error.message);
     },
@@ -2028,8 +4017,8 @@ test('startup-win termination race reports close failure', async t => {
       return deferred;
     },
   });
-  const modelsP = client.models();
-  modelsP.catch(() => undefined);
+  const acknowledging = client.acknowledge('checkpoint-test');
+  acknowledging.catch(() => undefined);
   await entered;
   // The client's start reactions are registered synchronously after start()
   // returns. Register termination afterward: startup wins Promise.race, then
@@ -2043,7 +4032,7 @@ test('startup-win termination race reports close failure', async t => {
       throw Error('startup race reap failed');
     },
   });
-  await t.throwsAsync(modelsP, { message: 'startup race reap failed' });
+  await t.throwsAsync(acknowledging, { message: 'startup race reap failed' });
   t.deepEqual(reported, ['startup race reap failed']);
   t.deepEqual((await client.status()).cleanupFailures, [
     'startup race reap failed',
@@ -2060,10 +4049,11 @@ test('startup timeout retains and closes a late transport', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'late-timeout',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 5,
     start: async () => deferred,
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: /transport startup timed out/,
   });
   resolveStart({
@@ -2092,13 +4082,14 @@ test('a late transport cleanup failure is operator-visible', async t => {
   const reported = [];
   const client = makeCodexClient({
     sessionId: 'late-cleanup-failure',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 5,
     reportCleanupFailure: error => {
       reported.push(error.message);
     },
     start: async () => deferred,
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: /transport startup timed out/,
   });
   resolveStart({
@@ -2121,6 +4112,7 @@ test('oversized prompts are rejected before transport startup', async t => {
   let starts = 0;
   const client = makeCodexClient({
     sessionId: 'bounded-input',
+    saveThreadState: async () => undefined,
     maxPromptBytes: 3,
     start: async () => {
       starts += 1;
@@ -2298,7 +4290,7 @@ test('a thread resumed from a write-ahead marker with no turn is still unmateria
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -2310,20 +4302,19 @@ test('a thread resumed from a write-ahead marker with no turn is still unmateria
   t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
 });
 
-test('broker config admission precedes model discovery and rejects inherited bearer', async t => {
+test('broker config admission precedes thread startup and rejects inherited bearer', async t => {
   const fixture = makeFixture({
     brokerEndpoint: 'http://127.0.0.1:23456',
     configReadResult: {
       config: {
         model_provider: 'endo_broker',
-        sandbox_mode: 'workspace-write',
-        approval_policy: 'never',
-        sandbox_workspace_write: {
-          network_access: false,
-          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
-          exclude_slash_tmp: true,
-          exclude_tmpdir_env_var: true,
+        sandbox_mode: 'danger-full-access',
+        features: {
+          network_proxy: { enabled: false },
+          multi_agent: false,
+          multi_agent_v2: false,
         },
+        approval_policy: 'never',
         model_providers: {
           endo_broker: {
             name: 'Endo broker',
@@ -2336,10 +4327,9 @@ test('broker config admission precedes model discovery and rejects inherited bea
       },
     },
   });
-  await t.throwsAsync(() => fixture.client.models(), {
+  await t.throwsAsync(() => fixture.client.acknowledge('checkpoint-test'), {
     message: /additional configuration/,
   });
-  t.false(fixture.sent.some(message => message.method === 'model/list'));
   t.false(fixture.sent.some(message => message.method === 'thread/start'));
   t.true(fixture.isClosed());
 });
@@ -2351,14 +4341,13 @@ test('broker config admission permits a credential-free provider', async t => {
     configReadResult: {
       config: {
         model_provider: 'endo_broker',
-        sandbox_mode: 'workspace-write',
-        approval_policy: 'never',
-        sandbox_workspace_write: {
-          network_access: false,
-          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
-          exclude_slash_tmp: true,
-          exclude_tmpdir_env_var: true,
+        sandbox_mode: 'danger-full-access',
+        features: {
+          network_proxy: { enabled: false },
+          multi_agent: false,
+          multi_agent_v2: false,
         },
+        approval_policy: 'never',
         model_providers: {
           endo_broker: {
             name: 'Endo broker',
@@ -2371,9 +4360,348 @@ test('broker config admission permits a credential-free provider', async t => {
     },
   });
   t.teardown(() => fixture.client.terminate());
-  await fixture.client.models();
+  await fixture.client.acknowledge('checkpoint-test');
   t.true(
     fixture.sent.findIndex(message => message.method === 'config/read') <
-      fixture.sent.findIndex(message => message.method === 'model/list'),
+      fixture.sent.findIndex(message => message.method === 'thread/start'),
   );
+});
+
+test('admitted public networking is passed to the external turn policy', async t => {
+  const network = harden({
+    policy: 'public-internet',
+    proxyUrl: 'http://127.0.0.1:23457',
+    dnsHost: '127.0.0.53',
+    resolverConfigPath: '/private/provider/public-resolv.conf',
+  });
+  const fixture = makeFixture({
+    brokerEndpoint: 'http://127.0.0.1:23456',
+    network,
+    accountReadResult: { account: null, requiresOpenaiAuth: false },
+    configReadResult: {
+      config: {
+        model_provider: 'endo_broker',
+        sandbox_mode: 'danger-full-access',
+        features: {
+          network_proxy: { enabled: false },
+          multi_agent: false,
+          multi_agent_v2: false,
+        },
+        approval_policy: 'never',
+        model_providers: {
+          endo_broker: {
+            name: 'Endo broker',
+            base_url: 'http://127.0.0.1:23456/v1',
+            wire_api: 'responses',
+            requires_openai_auth: false,
+          },
+        },
+      },
+    },
+  });
+  const reader = await fixture.client.send('inspect');
+  t.deepEqual(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .sandboxPolicy,
+    { type: 'externalSandbox', networkAccess: 'enabled' },
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+  await fixture.client.terminate();
+});
+
+test('transport metadata alone cannot enable native networking without broker config admission', async t => {
+  const fixture = makeFixture({ network: { policy: 'public-internet' } });
+  const reader = await fixture.client.send('inspect');
+  t.deepEqual(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .sandboxPolicy,
+    { type: 'externalSandbox', networkAccess: 'restricted' },
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+  await fixture.client.terminate();
+});
+
+test('a new thread is restored through inject_items, not through its prompt', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+    },
+  });
+  const reader = await fixture.client.send('continue', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'write the report' },
+      { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"r"}' },
+      { kind: 'tool-result', id: 'c1', content: 'wrote r' },
+    ],
+  });
+  const inject = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  // `thread/inject_items` appends raw Responses API items without starting a
+  // user turn, so a restored tool call is a call rather than a line about one.
+  t.is(inject.params.threadId, 'thread-new');
+  t.deepEqual(
+    inject.params.items.map(item => item.type),
+    ['message', 'function_call', 'function_call_output'],
+  );
+  // And the turn carries only the turn: the history is no longer read into
+  // the prompt when the thread already holds it.
+  const start = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(start.params.input.length, 1);
+  t.is(start.params.input[0].text, 'continue');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+});
+
+test('an app-server without inject_items refuses the turn rather than degrading it', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    injectFails: true,
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+    },
+  });
+  const reader = await fixture.client.send('continue', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'write the report' },
+    ],
+  });
+  // The conversation used to go into the turn's input when the method was
+  // refused. That kept the session answering while the mechanism meant to
+  // carry its history was broken, and a degraded answer reads exactly like a
+  // good one. The turn fails instead, and never starts.
+  const events = await drain(reader);
+  const abort = events.at(-1);
+  t.is(abort.type, 'abort');
+  t.regex(abort.reason, /refused .* restored items/);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
+test('dynamic image tools deliver pixels beyond the text cap and retain replay evidence', async t => {
+  t.timeout(5000);
+  const image = harden({
+    mimeType: /** @type {const} */ ('image/png'),
+    data: 'AAAA'.repeat(600_000),
+  });
+  const encoded = encodeImageResult(image);
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolSetId: 'images-v1',
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'viewImage',
+          description: 'See an image',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: async () => encoded,
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('inspect');
+  t.teardown(() => fixture.client.terminate());
+  fixture.push({
+    id: 993,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'image-call',
+      namespace: null,
+      tool: 'viewImage',
+      arguments: {},
+    },
+  });
+  for (let tries = 0; tries < 30; tries += 1) {
+    if (fixture.sent.some(message => message.id === 993)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.deepEqual(fixture.sent.find(message => message.id === 993)?.result, {
+    success: true,
+    contentItems: [{ type: 'inputImage', imageUrl: imageDataUrl(image) }],
+  });
+  t.is(
+    audit.find(entry => entry.kind === 'tool-result')?.payload.result,
+    encoded,
+  );
+  fixture.push({
+    method: 'item/completed',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      item: {
+        type: 'dynamicToolCall',
+        id: 'image-call',
+        tool: 'viewImage',
+        arguments: {},
+        contentItems: [{ type: 'inputImage', imageUrl: imageDataUrl(image) }],
+        success: true,
+      },
+    },
+  });
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  const imageEvent = events.find(event => event.type === 'tool-result');
+  t.is(imageEvent?.result, encoded);
+  const records = harden([
+    {
+      kind: /** @type {const} */ ('tool-call'),
+      id: 'image-call',
+      name: 'viewImage',
+      args: '{}',
+    },
+    {
+      kind: /** @type {const} */ ('tool-result'),
+      id: 'image-call',
+      content: imageEvent.result,
+    },
+  ]);
+  t.deepEqual(readResponsesApiItems(responsesApiItems(records)), records);
+});
+
+for (const mode of ['fresh', 'catalog rotation', 'native suffix']) {
+  test(`${mode} restores multiple large images in ordered bounded requests`, async t => {
+    t.timeout(5000);
+    const native = mode === 'native suffix';
+    const records = [0, 1].flatMap(index => [
+      {
+        kind: /** @type {const} */ ('tool-call'),
+        id: `shot-${index}`,
+        name: 'viewImage',
+        args: '{}',
+      },
+      {
+        kind: /** @type {const} */ ('tool-result'),
+        id: `shot-${index}`,
+        content: encodeImageResult({
+          mimeType: 'image/png',
+          data: (index ? 'BBBB' : 'AAAA').repeat(600_000),
+        }),
+      },
+    ]);
+    const fixture = makeFixture({
+      ...(mode === 'catalog rotation'
+        ? { threadId: 'thread-saved', existingTurnIds: ['turn-1'] }
+        : {}),
+      clientOptions: {
+        ...(mode === 'catalog rotation'
+          ? {
+              savedToolSetId: 'old-tools',
+              toolSetId: 'new-tools',
+              savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+            }
+          : {}),
+        ...(native
+          ? {
+              nativeContext: nativeTestTransport(),
+              makeNativeIdentity: () => ({
+                sessionId: 'fresh-native',
+                timestamp: '2026-10-25T18:40:00.000Z',
+              }),
+            }
+          : {}),
+        callTool: async () => {
+          throw Error('Replay must never execute tools');
+        },
+      },
+    });
+    t.teardown(() => fixture.client.terminate());
+    const reader = await fixture.client.send('continue', {
+      transcript: [...(native ? [nativeTestSnapshot()] : []), ...records],
+    });
+    const requests = fixture.sent.filter(
+      message => message.method === 'thread/inject_items',
+    );
+    t.is(requests.length, 2);
+    t.deepEqual(
+      requests.flatMap(message => message.params.items),
+      responsesApiItems(records),
+    );
+    t.true(
+      requests.every(
+        message =>
+          new TextEncoder().encode(`${JSON.stringify(message)}\n`).length <=
+          4 * 1024 * 1024,
+      ),
+    );
+    const startIndex = fixture.sent.findIndex(
+      message => message.method === 'turn/start',
+    );
+    t.true(startIndex > fixture.sent.indexOf(requests.at(-1)));
+    await fixture.client.interrupt();
+    await drain(reader);
+  });
+}
+
+test('a failed later native image batch leaves the checkpoint unpublished and never starts inference', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const records = [0, 1].flatMap(index => [
+    {
+      kind: /** @type {const} */ ('tool-call'),
+      id: `shot-${index}`,
+      name: 'viewImage',
+      args: '{}',
+    },
+    {
+      kind: /** @type {const} */ ('tool-result'),
+      id: `shot-${index}`,
+      content: encodeImageResult({
+        mimeType: 'image/png',
+        data: 'AAAA'.repeat(600_000),
+      }),
+    },
+  ]);
+  const fixture = makeFixture({
+    injectFails: 2,
+    clientOptions: {
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-10-25T18:40:00.000Z',
+      }),
+      saveThreadState: async state => writes.push(state),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot(), ...records],
+      }),
+    { message: /method not found/ },
+  );
+  t.is(
+    fixture.sent.filter(message => message.method === 'thread/inject_items')
+      .length,
+    2,
+  );
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.deepEqual(writes, []);
 });

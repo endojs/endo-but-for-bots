@@ -7,6 +7,11 @@ import { E } from '@endo/eventual-send';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { parseLocator } from '@endo/daemon/locator.js';
+import { assertNamePath, assertPetName } from '@endo/daemon/pet-name.js';
+import {
+  DEFAULT_WORKLOAD_LIMITS,
+  readWorkloadLimit,
+} from '@endo/hosted-agent/workload-limits.js';
 
 /**
  * @typedef {import('./tool-makers.js').ToolSchema} ToolSchema
@@ -16,6 +21,63 @@ import { parseLocator } from '@endo/daemon/locator.js';
 /** The parent's pet-store directory holding one entry per live subagent. */
 export const SUBAGENT_DIRECTORY = 'subagents';
 harden(SUBAGENT_DIRECTORY);
+
+/** @typedef {{ name: string, value: any }} SubagentCapability */
+/** @typedef {{ name: string, petName: string | string[] }} SubagentAttachment */
+
+const attachmentSchema = harden({
+  type: 'array',
+  description:
+    'Capabilities to give this child explicitly. name is its inventory name ' +
+    '(or mail attachment label); petName is your local name or array of path segments. ' +
+    'A capability does not share your native filesystem path with the child.',
+  items: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      petName: {
+        anyOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string' }, minItems: 1 },
+        ],
+      },
+    },
+    required: ['name', 'petName'],
+    additionalProperties: false,
+  },
+});
+
+/**
+ * Validate explicit introductions before any child is created or changed.
+ * @param {SubagentCapability[]} capabilities
+ */
+export const assertSubagentCapabilities = capabilities => {
+  Array.isArray(capabilities) || Fail`Subagent capabilities must be an array`;
+  const names = new Set();
+  for (const capability of capabilities) {
+    (capability && typeof capability === 'object') ||
+      Fail`Invalid subagent capability`;
+    assertPetName(capability.name);
+    !names.has(capability.name) || Fail`Duplicate subagent capability name`;
+    Object.hasOwn(capability, 'value') ||
+      Fail`Subagent capability needs a value`;
+    names.add(capability.name);
+  }
+};
+harden(assertSubagentCapabilities);
+
+/** @param {SubagentAttachment[]} attachments */
+const assertAttachments = attachments => {
+  Array.isArray(attachments) || Fail`Subagent attachments must be an array`;
+  assertSubagentCapabilities(
+    attachments.map(({ name }) => ({ name, value: undefined })),
+  );
+  for (const { petName } of attachments) {
+    const path = typeof petName === 'string' ? [petName] : petName;
+    (Array.isArray(path) && path.length > 0) || Fail`Invalid attachment path`;
+    assertNamePath(path);
+  }
+};
 
 /**
  * Infix that makes a subagent's names in the factory host derivable from its
@@ -75,9 +137,9 @@ export const reservedSubagentSuffixes = harden([
  * longest name derived from an agent is `profile-for-<name>-spawner-handle`,
  * 27 characters of decoration, and each level of delegation adds
  * `.sub.<name>`, 68 more. At 255 characters — `isValidName`'s cap — that
- * admits two levels; `DEFAULT_MAX_SUBAGENT_DEPTH` is 1. A deployment raising
- * the depth bound past 2 with maximal names would have `provideGuest` reject
- * a name mid-build.
+ * admits two levels with maximal names, even when the configured workload
+ * depth is larger. Shorter names allow deeper trees. Provisioning preflights
+ * every derived name before touching the host; depth never relaxes this format.
  */
 export const agentNamePattern = /^[a-z][a-z0-9-]{0,62}$/;
 harden(agentNamePattern);
@@ -110,10 +172,82 @@ export const assertAgentName = name => {
 harden(assertAgentName);
 
 const MIN_ASK_TIMEOUT_SECONDS = 1;
-const MAX_ASK_TIMEOUT_SECONDS = 3600;
-const DEFAULT_ASK_TIMEOUT_SECONDS = 300;
-const MAX_TASK_LENGTH = 32_768;
-const MAX_ANSWER_LENGTH = 262_144;
+export const DEFAULT_SUBAGENT_LIMITS = harden({
+  replyTimeoutSeconds: DEFAULT_WORKLOAD_LIMITS.subagentReplyTimeoutSeconds,
+  maxTimeoutSeconds: DEFAULT_WORKLOAD_LIMITS.subagentMaxReplyTimeoutSeconds,
+  maxTaskChars: DEFAULT_WORKLOAD_LIMITS.subagentTaskChars,
+  maxAnswerChars: DEFAULT_WORKLOAD_LIMITS.subagentAnswerChars,
+  maxClosedAsks: 65_536,
+  maxKnownSubagents: 65_536,
+});
+harden(DEFAULT_SUBAGENT_LIMITS);
+
+/** Explicit operator knobs shared by driver setup and the two harnesses. */
+export const SUBAGENT_LIMIT_SUFFIXES = harden({
+  replyTimeoutSeconds: 'SUBAGENT_TIMEOUT_SECONDS',
+  maxTimeoutSeconds: 'SUBAGENT_MAX_TIMEOUT_SECONDS',
+  maxTaskChars: 'SUBAGENT_MAX_TASK_CHARS',
+  maxAnswerChars: 'SUBAGENT_MAX_ANSWER_CHARS',
+  maxClosedAsks: 'SUBAGENT_MAX_CLOSED_ASKS',
+  maxKnownSubagents: 'SUBAGENT_MAX_KNOWN_SUBAGENTS',
+});
+harden(SUBAGENT_LIMIT_SUFFIXES);
+
+export const FAE_WORKLOAD_ENV_KEYS = harden([
+  'FAE_MAX_TOOL_ROUNDS',
+  'FAE_MAX_SUBAGENTS',
+  'FAE_MAX_SUBAGENT_DEPTH',
+  'FAE_PROVIDER_REQUEST_TIMEOUT_MS',
+  ...Object.values(SUBAGENT_LIMIT_SUFFIXES).map(suffix => `FAE_${suffix}`),
+]);
+harden(FAE_WORKLOAD_ENV_KEYS);
+
+/**
+ * Select only workload knobs, never topology, prompts or credentials.
+ * @param {Record<string,string|undefined>} env
+ */
+export const selectFaeWorkloadEnv = env =>
+  harden(
+    Object.fromEntries(
+      FAE_WORKLOAD_ENV_KEYS.filter(
+        name => env[name] !== undefined && env[name] !== '',
+      ).map(name => [name, /** @type {string} */ (env[name])]),
+    ),
+  );
+harden(selectFaeWorkloadEnv);
+
+/** @param {Partial<typeof DEFAULT_SUBAGENT_LIMITS>} [limits] */
+export const assertSubagentLimits = (limits = {}) => {
+  const settings = { ...DEFAULT_SUBAGENT_LIMITS, ...limits };
+  for (const value of Object.values(settings)) {
+    (Number.isInteger(value) && value > 0 && value <= 0x7fff_ffff) ||
+      Fail`Invalid subagent workload limit`;
+  }
+  (settings.replyTimeoutSeconds <= settings.maxTimeoutSeconds &&
+    settings.maxTimeoutSeconds <= Math.floor(0x7fff_ffff / 1000)) ||
+    Fail`Invalid subagent reply deadline`;
+  return harden(settings);
+};
+harden(assertSubagentLimits);
+
+/**
+ * @param {Record<string,string|undefined>} env
+ * @param {string} prefix
+ */
+export const readSubagentLimits = (env, prefix) =>
+  assertSubagentLimits(
+    Object.fromEntries(
+      Object.entries(SUBAGENT_LIMIT_SUFFIXES).map(([field, suffix]) => [
+        field,
+        readWorkloadLimit(
+          env,
+          `${prefix}_${suffix}`,
+          DEFAULT_SUBAGENT_LIMITS[field],
+        ),
+      ]),
+    ),
+  );
+harden(readSubagentLimits);
 
 /**
  * Closed asks — answered, or timed out — whose further replies are still worth
@@ -123,14 +257,12 @@ const MAX_ANSWER_LENGTH = 262_144;
  * closed ask is forgotten and a very late reply to it lands in the inbox as
  * ordinary mail.
  */
-const MAX_CLOSED_ASKS = 32;
 
 /**
  * Subagents this registry has put a question to, whose unsolicited mail it
  * consumes. Bounded the same way; a parent may hold at most
  * `DEFAULT_MAX_SUBAGENTS` at once, so eviction is a formality.
  */
-const MAX_KNOWN_SUBAGENTS = 32;
 
 /**
  * @param {unknown} name
@@ -197,6 +329,19 @@ export const messageText = message => {
 };
 harden(messageText);
 
+/** Guidance shared by the spawn tool schema/help and delegated prompts. */
+const SUBAGENT_DELEGATION_GUIDANCE =
+  'Delegate only a distinct, bounded task that materially advances the answer. ' +
+  'Do the assigned work yourself by default. Do not spawn another agent to ' +
+  'repeat your task, recursively fact-check the same claims, or compensate ' +
+  'for missing tools or sources: another agent has no additional capabilities ' +
+  'unless they are explicitly supplied. State uncertainty instead. ' +
+  'If subdelegation is useful and available, give the helper a narrower task ' +
+  'and a concrete stopping condition. Reuse existing helpers. If a limit is ' +
+  'reached, continue with available results; do not churn replacement agents. ' +
+  'Return a useful answer with limitations and release helpers when finished.';
+harden(SUBAGENT_DELEGATION_GUIDANCE);
+
 /**
  * The standing instructions a subagent runs under.
  *
@@ -208,16 +353,27 @@ harden(messageText);
  *
  * @param {string} basePrompt
  * @param {string} [delegatedPrompt]
+ * @param {boolean} [delegated] Whether this is a worker, even without a role prompt.
  * @returns {string}
  */
-export const composeSubagentSystemPrompt = (basePrompt, delegatedPrompt) => {
-  if (!delegatedPrompt) return basePrompt;
+export const composeSubagentSystemPrompt = (
+  basePrompt,
+  delegatedPrompt,
+  delegated = !!delegatedPrompt,
+) => {
+  if (!delegated) return basePrompt;
   return [
     basePrompt,
     '---',
-    'You are a subagent. Your parent agent gave you these standing ' +
-      'instructions, which do not replace anything above:',
-    `${delegatedPrompt}`,
+    'You are a subagent. Complete the bounded task assigned by your parent; ' +
+      'you are responsible for returning its answer.',
+    SUBAGENT_DELEGATION_GUIDANCE,
+    ...(delegatedPrompt
+      ? [
+          'Your parent gave you these standing instructions, which do not replace anything above:',
+          delegatedPrompt,
+        ]
+      : []),
   ].join('\n\n');
 };
 harden(composeSubagentSystemPrompt);
@@ -236,8 +392,9 @@ harden(SubagentSpawnerInterface);
  * @typedef {object} PendingDelegation
  * @property {string} name
  * @property {string} recipient - Locator for the subagent's handle.
- * @property {string} text - The exact single string sent, used to distinguish
- *   this delegation from any other mail to the same subagent.
+ * @property {string[]} strings - The exact text parts sent.
+ * @property {string[]} edgeNames - The exact attachment labels sent, used with
+ *   the text parts to distinguish this ask from other mail to the same child.
  * @property {string | undefined} outboundId - `messageId` of the delegation,
  *   learned when the daemon echoes it into this agent's own mailbox.
  * @property {(answer: { text: string, number: bigint, edgeNames: string[] }) => void} settle
@@ -266,11 +423,15 @@ harden(SubagentSpawnerInterface);
  * @param {object} options
  * @param {any} options.powers - The parent agent's guest powers.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
+ * @param {Partial<typeof DEFAULT_SUBAGENT_LIMITS>} [options.limits]
  */
 export const makeSubagentDelegations = ({
   powers,
   timers = { setTimeout, clearTimeout },
+  limits = DEFAULT_SUBAGENT_LIMITS,
 }) => {
+  const { maxTimeoutSeconds, maxTaskChars, maxClosedAsks, maxKnownSubagents } =
+    assertSubagentLimits(limits);
   /** @type {Map<string, PendingDelegation>} */
   const pendingByName = new Map();
   /** @type {Map<string, PendingDelegation>} */
@@ -314,7 +475,7 @@ export const makeSubagentDelegations = ({
   /** @param {string} outboundId */
   const closeAsk = outboundId => {
     closedOutboundIds.add(outboundId);
-    while (closedOutboundIds.size > MAX_CLOSED_ASKS) {
+    while (closedOutboundIds.size > maxClosedAsks) {
       const [oldest] = closedOutboundIds;
       closedOutboundIds.delete(oldest);
     }
@@ -324,7 +485,7 @@ export const makeSubagentDelegations = ({
   const remember = recipient => {
     knownSubagents.delete(recipient);
     knownSubagents.add(recipient);
-    while (knownSubagents.size > MAX_KNOWN_SUBAGENTS) {
+    while (knownSubagents.size > maxKnownSubagents) {
       const [oldest] = knownSubagents;
       knownSubagents.delete(oldest);
     }
@@ -363,8 +524,13 @@ export const makeSubagentDelegations = ({
           delegation.outboundId === undefined &&
           isSameFormula(to, delegation.recipient) &&
           Array.isArray(message.strings) &&
-          message.strings.length === 1 &&
-          message.strings[0] === delegation.text
+          message.strings.length === delegation.strings.length &&
+          delegation.strings.every(
+            (text, index) => message.strings[index] === text,
+          ) &&
+          (Array.isArray(names) ? names.length : 0) ===
+            delegation.edgeNames.length &&
+          delegation.edgeNames.every((name, index) => names[index] === name)
         ) {
           delegation.outboundId = messageId;
           pendingByOutboundId.set(messageId, delegation);
@@ -424,21 +590,24 @@ export const makeSubagentDelegations = ({
    * @param {string} request.name
    * @param {string} request.task
    * @param {number} request.timeoutSeconds
+   * @param {SubagentAttachment[]} [request.attachments]
    * @returns {Promise<{ text: string, number: bigint, edgeNames: string[] }>}
    */
-  const ask = async ({ name, task, timeoutSeconds }) => {
+  const ask = async ({ name, task, timeoutSeconds, attachments = [] }) => {
     assertSubagentName(name);
-    (typeof task === 'string' &&
-      task !== '' &&
-      task.length <= MAX_TASK_LENGTH) ||
-      Fail`Subagent task must be a non-empty string of at most ${q(MAX_TASK_LENGTH)} characters`;
+    assertAttachments(attachments);
+    (typeof task === 'string' && task !== '' && task.length <= maxTaskChars) ||
+      Fail`Subagent task must be a non-empty string of at most ${q(maxTaskChars)} characters`;
     (Number.isInteger(timeoutSeconds) &&
       timeoutSeconds >= MIN_ASK_TIMEOUT_SECONDS &&
-      timeoutSeconds <= MAX_ASK_TIMEOUT_SECONDS) ||
-      Fail`Subagent timeout must be a whole number of seconds between ${q(MIN_ASK_TIMEOUT_SECONDS)} and ${q(MAX_ASK_TIMEOUT_SECONDS)}`;
+      timeoutSeconds <= maxTimeoutSeconds) ||
+      Fail`Subagent timeout must be a whole number of seconds between ${q(MIN_ASK_TIMEOUT_SECONDS)} and ${q(maxTimeoutSeconds)}`;
     !pendingByName.has(name) ||
       Fail`Subagent ${q(name)} already has a question in flight`;
     if (closedReason !== undefined) throw closedReason;
+    const strings = harden([task, ...attachments.map(() => '')]);
+    const edgeNames = harden(attachments.map(attachment => attachment.name));
+    const petNames = harden(attachments.map(attachment => attachment.petName));
 
     /** @type {import('@endo/promise-kit').PromiseKit<{ text: string, number: bigint, edgeNames: string[] }>} */
     const answerKit = makePromiseKit();
@@ -454,7 +623,8 @@ export const makeSubagentDelegations = ({
       // exists only to hold the slot; `claim` cannot match an empty recipient
       // because `isSameFormula` rejects a non-locator.
       recipient: '',
-      text: task,
+      strings,
+      edgeNames,
       outboundId: undefined,
       settle: answerKit.resolve,
       fail: answerKit.reject,
@@ -500,7 +670,7 @@ export const makeSubagentDelegations = ({
     try {
       // The registry is armed before the send so that the echo of this very
       // message cannot be observed by the inbox loop before it can be matched.
-      await E(powers).send(path, harden([task]), harden([]), harden([]));
+      await E(powers).send(path, strings, edgeNames, petNames);
       const outcome = await Promise.race([
         answerKit.promise.then(answer => harden({ answer })),
         deadline.then(() => harden({ answer: undefined })),
@@ -561,6 +731,7 @@ harden(makeSubagentDelegations);
  * @param {any} options.powers - The parent agent's guest powers.
  * @param {any} options.spawner - A `SubagentSpawner` capability.
  * @param {ReturnType<typeof makeSubagentDelegations>} options.delegations
+ * @param {Partial<typeof DEFAULT_SUBAGENT_LIMITS>} [options.limits]
  * @param {boolean} [options.retainsAttachments] - Whether a claimed reply stays
  *   in the inbox long enough to adopt what it carries. Both harnesses dismiss
  *   a claimed reply — a replayed one would start an exchange between two
@@ -574,7 +745,9 @@ export const makeSubagentTools = ({
   spawner,
   delegations,
   retainsAttachments = false,
+  limits = DEFAULT_SUBAGENT_LIMITS,
 }) => {
+  const { replyTimeoutSeconds, maxAnswerChars } = assertSubagentLimits(limits);
   /** @type {Map<string, FaeTool>} */
   const tools = new Map();
 
@@ -586,11 +759,15 @@ export const makeSubagentTools = ({
         function: {
           name: 'spawnSubagent',
           description:
-            'Create a subagent: a separate agent with its own conversation, ' +
-            'inbox, and pet name directory. Use it to run a self-contained ' +
-            'piece of work without spending your own context on it. The ' +
-            'subagent is reachable by mail at the name you choose; put ' +
-            'questions to it with askSubagent and release it with stopSubagent.',
+            `Create a subagent: a separate agent with its own conversation, ` +
+            `inbox, and pet name directory. Use it to run a self-contained ` +
+            `piece of work without spending your own context on it. The ` +
+            `attachments are installed explicitly in its own inventory; ` +
+            `your files and other capabilities are not inherited. The ` +
+            `subagent is reachable by mail at the name you choose; put ` +
+            `questions to it with askSubagent and release it with stopSubagent. ${
+              SUBAGENT_DELEGATION_GUIDANCE
+            }`,
           parameters: {
             type: 'object',
             properties: {
@@ -606,18 +783,33 @@ export const makeSubagentTools = ({
                   "The subagent's standing instructions. Give it the role and " +
                   'the shape of the answer you want back.',
               },
+              attachments: attachmentSchema,
             },
             required: ['name'],
           },
         },
       }),
     async execute(args) {
-      const { name, systemPrompt } = /** @type {any} */ (args);
+      const {
+        name,
+        systemPrompt,
+        attachments = [],
+      } = /** @type {any} */ (args);
       assertSubagentName(name);
+      assertAttachments(attachments);
+      const capabilities = await Promise.all(
+        attachments.map(async ({ name: capabilityName, petName }) => ({
+          name: capabilityName,
+          value: await E(powers).lookup(petName),
+        })),
+      );
       const { locator } = /** @type {any} */ (
         await E(spawner).spawn(
           name,
-          harden(systemPrompt ? { systemPrompt } : {}),
+          harden({
+            ...(systemPrompt ? { systemPrompt } : {}),
+            ...(capabilities.length ? { capabilities } : {}),
+          }),
         )
       );
       // The parent binds the subagent under its own authority, so the spawner
@@ -626,9 +818,12 @@ export const makeSubagentTools = ({
         await E(powers).makeDirectory(SUBAGENT_DIRECTORY);
       }
       await E(powers).storeLocator([SUBAGENT_DIRECTORY, name], locator);
-      return `Spawned subagent "${name}". Ask it something with askSubagent.`;
+      return `Spawned subagent "${name}". Mail path: ["subagents", "${name}"]. Ask it something with askSubagent.`;
     },
-    help: () => 'Create a subagent reachable by mail under subagents/<name>.',
+    help: () =>
+      `Create a subagent reachable by mail under subagents/<name>. ${
+        SUBAGENT_DELEGATION_GUIDANCE
+      }`,
   });
 
   const askTool = harden({
@@ -641,7 +836,8 @@ export const makeSubagentTools = ({
           description:
             'Send a task to a subagent by mail and wait for its reply. ' +
             'Returns the reply text. The subagent keeps its own conversation ' +
-            'between questions, so follow-ups can be terse.',
+            'between questions, so follow-ups can be terse. Optional ' +
+            'attachments travel with this task; tell the child to adopt them.',
           parameters: {
             type: 'object',
             properties: {
@@ -657,26 +853,33 @@ export const makeSubagentTools = ({
               },
               timeoutSeconds: {
                 type: 'integer',
-                description: `How long to wait for a reply (default ${DEFAULT_ASK_TIMEOUT_SECONDS}).`,
+                description: `How long to wait for a reply (default ${replyTimeoutSeconds}).`,
               },
+              attachments: attachmentSchema,
             },
             required: ['name', 'task'],
           },
         },
       }),
     async execute(args) {
-      const { name, task, timeoutSeconds } = /** @type {any} */ (args);
+      const {
+        name,
+        task,
+        timeoutSeconds,
+        attachments = [],
+      } = /** @type {any} */ (args);
       const answer = await delegations.ask({
         name,
         task,
+        attachments,
         timeoutSeconds:
           timeoutSeconds === undefined
-            ? DEFAULT_ASK_TIMEOUT_SECONDS
+            ? replyTimeoutSeconds
             : Number(timeoutSeconds),
       });
       const text =
-        answer.text.length > MAX_ANSWER_LENGTH
-          ? `${answer.text.slice(0, MAX_ANSWER_LENGTH)}\n\n(truncated)`
+        answer.text.length > maxAnswerChars
+          ? `${answer.text.slice(0, maxAnswerChars)}\n\n(truncated)`
           : answer.text;
       if (answer.edgeNames.length === 0) return text;
       const edges = answer.edgeNames

@@ -2,6 +2,8 @@
 
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, X } from '@endo/errors';
+import { M, mustMatch } from '@endo/patterns';
+import { makePodmanHostEnvironment } from '@endo/sandbox/podman-host-environment.js';
 import {
   readNetworkNamespace,
   readNamespaceIdentities,
@@ -17,14 +19,17 @@ import {
   rmdir,
   symlink,
   unlink,
+  open,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
 import { makeProviderPipe } from './provider-pipe.js';
+import { readPublicEgressLimits } from './public-egress.js';
 
-const execute = promisify(execFile);
+/** @import { FileHandle } from 'node:fs/promises' */
+
 const LABEL = 'io.endo.provider.owner';
 /**
  * @param {Promise<any>} promise
@@ -60,7 +65,13 @@ const readStart = async pid => {
 };
 
 /**
- * Concrete rootless Podman listener owner. The only byte channel to the worker
+ * Construct an inert rootless Podman listener owner. Retain the kit before
+ * open(); close() fences admission and retains failed initialization cleanup
+ * and listener release for retry. The operator owns persistent directory and
+ * resolver contents; this kit releases native handles and ownership markers.
+ * Direct listener release requires the original child's close event. Other
+ * Podman command completion and stale-owner recovery limits are unchanged.
+ * The only byte channel to the worker
  * is inherited stdin/stdout. The pinned listener image contains no credential.
  * Its process namespaces remain separate from model slices sharing only netns.
  * Host powers are injectable exclusively for controlled tests.
@@ -69,45 +80,64 @@ const readStart = async pid => {
  * @param {string} options.imageRef Pinned listener image, including its SHA-256 digest.
  * @param {string} options.ownerId Stable operator-owned cleanup scope.
  * @param {string} options.stateDirectory Private directory for a process lock.
- * @param {number} [options.maxListeners]
+ * @param {number} [options.maxListeners] Initial concurrent listener capacity.
  * @param {any} [options.host] Trusted host powers, never session inputs.
+ * @param {Record<string,string>} [options.env] Operator host environment overrides, never guest env.
+ * @param {boolean} [options.publicInternet] Operator initially enables optional public listeners.
+ *
+ * Capacity and the public-network ceiling are operator settings, not identity:
+ * `configure()` changes both for the next admission. Turning public networking
+ * off also stops every live public listener; lowering capacity stops nothing.
  */
-export const makePodmanProviderListenerRuntime = async ({
+export const makePodmanProviderListenerRuntimeKit = ({
   imageRef,
   ownerId,
   stateDirectory,
   host = {},
+  env = {},
   maxListeners = 16,
+  publicInternet = false,
 }) => {
+  const egressLimits = readPublicEgressLimits(env);
   (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(ownerId) &&
     /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(imageRef)) ||
     Fail`Invalid provider runtime identity`;
-  (Number.isInteger(maxListeners) && maxListeners > 0 && maxListeners <= 256) ||
-    Fail`Invalid listener capacity`;
+  /** @param {{ maxListeners: unknown, publicInternet: unknown }} settings */
+  const assertSettings = settings => {
+    (Number.isInteger(settings.maxListeners) &&
+      /** @type {number} */ (settings.maxListeners) > 0 &&
+      /** @type {number} */ (settings.maxListeners) <= 256) ||
+      Fail`Invalid listener capacity`;
+    typeof settings.publicInternet === 'boolean' ||
+      Fail`Invalid public network configuration`;
+  };
+  assertSettings({ maxListeners, publicInternet });
+  let capacity = maxListeners;
+  let publicAllowed = publicInternet;
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
-  // Host-side rootless Podman configuration, never container environment.
-  // Proxy and credential variables are deliberately excluded.
-  const hostEnvironment = Object.fromEntries(
-    ['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']
-      .filter(name => process.env[name] !== undefined)
-      .map(name => [name, process.env[name]]),
-  );
-  hostEnvironment.PATH ??= '/usr/bin:/bin';
+  const hostEnvironment = makePodmanHostEnvironment(process.env, env);
+  // Low-level injection preserves the default argv/environment construction in
+  // tests. High-level run/launch remain trusted complete host implementations.
+  const execute = host.executeFile ?? promisify(execFile);
+  const spawnChild = host.spawn ?? spawn;
   const run =
     host.run ??
     (args =>
-      execute('podman', args, {
+      execute('podman', ['--remote=false', '--syslog=false', ...args], {
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
         killSignal: 'SIGKILL',
-        env: hostEnvironment,
+        // A fresh copy per process: Node adds NODE_V8_COVERAGE to the env
+        // object it is handed when coverage is enabled, which the hardened
+        // capture refuses.
+        env: { ...hostEnvironment },
       }));
   const launch =
     host.launch ??
     (args =>
-      spawn('podman', args, {
+      spawnChild('podman', ['--remote=false', '--syslog=false', ...args], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: hostEnvironment,
+        env: { ...hostEnvironment },
       }));
   const procfs =
     host.procfs ??
@@ -116,46 +146,41 @@ export const makePodmanProviderListenerRuntime = async ({
       readLink: path => readlink(path),
     });
   const processStart = host.readStart ?? readStart;
-  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-  const directory = await lstat(stateDirectory);
-  // eslint-disable-next-line no-bitwise
-  const sharedPermissions = directory.mode & 0o077;
-  (directory.isDirectory() &&
-    directory.uid === process.getuid?.() &&
-    sharedPermissions === 0) ||
-    Fail`Provider runtime state directory is not private`;
-  const start = await processStart(process.pid);
-  start !== null || Fail`Provider runtime requires a procfs process identity`;
-  const identity = `${process.pid}-${start}`;
-  const lockPath = join(stateDirectory, `${ownerId}.lock`);
-  try {
-    await symlink(identity, lockPath);
-  } catch (error) {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
-      throw error;
-    const recoveryPath = join(stateDirectory, `${ownerId}.recover`);
-    // Serialize stale-owner recovery. An abandoned recovery directory refuses
-    // admission for operator repair; it never licenses two live owners.
-    await mkdir(recoveryPath, { mode: 0o700 });
-    try {
-      const previous = await readlink(lockPath);
-      const match = /^(\d+)-(\d+)$/.exec(previous);
-      if (!match) throw makeError(X`Invalid provider runtime lock`);
-      const previousStart = await processStart(Number(match[1]));
-      previousStart !== match[2] ||
-        Fail`Provider runtime owner is already active`;
-      await unlink(lockPath);
-      await symlink(identity, lockPath);
-    } finally {
-      await rmdir(recoveryPath);
-    }
-  }
   /** @type {Set<() => Promise<void>>} */
   const cleanup = new Set();
   /** @type {Set<() => Promise<void>>} */
   const pendingCleanup = new Set();
-  let released = false;
+  /** @type {Set<() => Promise<void>>} */
+  const publicListeners = new Set();
+  let resolverReady = false;
   let disposed = false;
+  let initialized = false;
+  let lockOwned = false;
+  let recoveryOwned = false;
+  let sweepRequired = false;
+  /** @type {string | undefined} */
+  let identity;
+  /** @type {FileHandle | undefined} */
+  let resolverFile;
+  /** @type {Promise<typeof runtime> | undefined} */
+  let opening;
+  /** @type {Promise<void> | undefined} */
+  let closing;
+  const lockPath = join(stateDirectory, `${ownerId}.lock`);
+  const recoveryPath = join(stateDirectory, `${ownerId}.recover`);
+  const resolverConfigPath = join(stateDirectory, 'public-resolv.conf');
+  const openFile = host.open ?? open;
+  const removeLink = host.unlink ?? unlink;
+  const removeRecovery = host.rmdir ?? rmdir;
+  const assertOpen = () => {
+    !disposed || Fail`Provider runtime disposed`;
+  };
+  const closeResolver = async () => {
+    if (resolverFile) {
+      await resolverFile.close();
+      resolverFile = undefined;
+    }
+  };
   let queue = Promise.resolve();
   /**
    * @template T
@@ -180,7 +205,7 @@ export const makePodmanProviderListenerRuntime = async ({
   const remove = async name => {
     await run(['rm', '-f', '--ignore', '--time', '1', name]);
   };
-  try {
+  const sweep = async () => {
     const old = await run([
       'ps',
       '-aq',
@@ -197,193 +222,487 @@ export const makePodmanProviderListenerRuntime = async ({
       // eslint-disable-next-line no-await-in-loop
       await remove(id);
     }
-  } catch (error) {
-    await unlink(lockPath);
-    throw error;
-  }
-  const startListener = ({ endpoint, limits }) =>
-    serialize(async () => {
-      !disposed || Fail`Provider runtime disposed`;
-      await retryCleanup();
-      cleanup.size < maxListeners || Fail`Provider listener capacity exceeded`;
-      const name = `endo-provider-${randomUUID()}`;
-      let child;
-      let pipe;
-      let control;
-      let stopping;
-      let live = false;
-      let channelClosed = false;
-      let namespaceId;
-      const stop = () => {
-        if (stopping) return stopping;
-        live = false;
-        pendingCleanup.add(stop);
-        stopping = (async () => {
+  };
+  // The public listeners' resolver file, written once and immutable after.
+  // Made at open when the operator allows public networking, else at the
+  // first public admission after `configure()` allows it.
+  const provideResolver = async () => {
+    await null;
+    if (resolverReady) return;
+    // A handle an earlier failed attempt could not close is closed first,
+    // never replaced and leaked.
+    await closeResolver();
+    const resolverContents =
+      'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n';
+    try {
+      resolverFile = await openFile(resolverConfigPath, 'wx', 0o444);
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+        throw error;
+    }
+    if (resolverFile) {
+      try {
+        assertOpen();
+        await resolverFile.writeFile(resolverContents);
+        assertOpen();
+        await resolverFile.chmod(0o444);
+        await closeResolver();
+      } catch (error) {
+        // This process created the file and did not finish it: remove it, so
+        // the next public admission writes it whole instead of refusing it.
+        // An unclosed handle stays for the next attempt or close() to retry.
+        await removeLink(resolverConfigPath).catch(() => {});
+        throw error;
+      }
+    }
+    const resolverStat = await lstat(resolverConfigPath);
+    // eslint-disable-next-line no-bitwise
+    const resolverMode = resolverStat.mode & 0o777;
+    (resolverStat.isFile() &&
+      resolverStat.uid === process.getuid?.() &&
+      resolverMode === 0o444 &&
+      (await readFile(resolverConfigPath, 'utf8')) === resolverContents) ||
+      Fail`Public resolver configuration is not immutable`;
+    resolverReady = true;
+  };
+  const initialize = async () => {
+    assertOpen();
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    assertOpen();
+    const directory = await lstat(stateDirectory);
+    // eslint-disable-next-line no-bitwise
+    const sharedPermissions = directory.mode & 0o077;
+    (directory.isDirectory() &&
+      directory.uid === process.getuid?.() &&
+      sharedPermissions === 0) ||
+      Fail`Provider runtime state directory is not private`;
+    assertOpen();
+    const start = await processStart(process.pid);
+    start !== null || Fail`Provider runtime requires a procfs process identity`;
+    identity = `${process.pid}-${start}`;
+    assertOpen();
+    if (publicAllowed) await provideResolver();
+    assertOpen();
+    try {
+      await symlink(identity, lockPath);
+      lockOwned = true;
+      sweepRequired = true;
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+        throw error;
+      // Serialize stale-owner recovery. An abandoned recovery directory refuses
+      // admission for operator repair; it never licenses two live owners.
+      assertOpen();
+      await mkdir(recoveryPath, { mode: 0o700 });
+      recoveryOwned = true;
+      try {
+        const previous = await readlink(lockPath);
+        const match = /^(\d+)-(\d+)$/.exec(previous);
+        if (!match) throw makeError(X`Invalid provider runtime lock`);
+        const previousStart = await processStart(Number(match[1]));
+        previousStart !== match[2] ||
+          Fail`Provider runtime owner is already active`;
+        assertOpen();
+        await removeLink(lockPath);
+        await symlink(identity, lockPath);
+        lockOwned = true;
+        sweepRequired = true;
+      } finally {
+        await removeRecovery(recoveryPath);
+        recoveryOwned = false;
+      }
+    }
+    assertOpen();
+    await sweep();
+    sweepRequired = false;
+    assertOpen();
+    initialized = true;
+  };
+  /**
+   * Retain one listener's cleanup before its queued acquisition. This uses the
+   * runtime's existing admission queue, listener capacity and cleanup sets.
+   * stop() targets only this acquisition, including failed startup; it fences
+   * immediately and never equates rejection with native release.
+   * @param {{endpoint:any,limits:any,network?:{endpoint:any}} | {network:{endpoint:any}}} configuration
+   */
+  const startKit = configuration => {
+    const networkOnly =
+      Object.keys(configuration).length === 1 &&
+      Object.hasOwn(configuration, 'network');
+    const allowed = [
+      'endpoint',
+      'limits',
+      ...(Object.hasOwn(configuration, 'network') ? ['network'] : []),
+    ];
+    networkOnly ||
+      (Object.keys(configuration).length === allowed.length &&
+        allowed.every(key => Object.hasOwn(configuration, key))) ||
+      Fail`Invalid listener configuration`;
+    const { network } = configuration;
+    if (Object.hasOwn(configuration, 'network'))
+      mustMatch(harden(network), harden({ endpoint: M.remotable() }));
+    // Operator limits cross the private bootstrap, not the worker's environment
+    // or session input. Keep the credential-free image's ambient-env fence.
+    const workerNetwork =
+      network &&
+      harden({
+        ...network,
+        limits: {
+          maxConnections: egressLimits.maxConnections,
+          timeoutMs: egressLimits.timeoutMs,
+          maxUploadBytes: egressLimits.maxBytes,
+          maxDownloadBytes: egressLimits.maxBytes,
+        },
+      });
+    !networkOnly ||
+      network?.endpoint ||
+      Fail`Network worker requires egress authority`;
+    const { endpoint, limits } = /** @type {{endpoint:any,limits:any}} */ (
+      configuration
+    );
+    const name = `endo-provider-${randomUUID()}`;
+    let child;
+    let pipe;
+    let control;
+    /** @type {Promise<void> | undefined} */
+    let stopping;
+    let admitted = false;
+    let acquiring = true;
+    let inactive = false;
+    let cleaned = false;
+    let live = false;
+    let channelClosed = false;
+    let namespaceId;
+    let networkEvidence;
+    const assertAdmission = () => {
+      assertOpen();
+      !inactive || Fail`Provider listener inactive`;
+    };
+    /** @returns {Promise<void>} */
+    const stop = () => {
+      inactive = true;
+      live = false;
+      // Closing the private pipe can unblock a pending handshake. The final
+      // removal still waits for this acquisition to settle, not its public
+      // result (whose rejection handler itself requests cleanup).
+      if (acquiring) pipe?.close();
+      if (cleaned) return Promise.resolve();
+      if (stopping) return stopping;
+      if (admitted) pendingCleanup.add(stop);
+      stopping = (async () => {
+        await acquisition.catch(() => {});
+        if (admitted) {
           if (control) await deadline(E(control).stop(), 1000).catch(() => {});
           pipe?.close();
-          // Container removal, not killing only the attached podman CLI, reaps
-          // the isolated worker. Failure retains this closure for a retry.
+          // Retain the runtime's existing native removal/closure contract;
+          // this per-listener owner does not add descendant-quiescence proof.
           await remove(name);
           if (child) await deadline(child.finished, 5000);
           cleanup.delete(stop);
           pendingCleanup.delete(stop);
-        })().catch(error => {
-          stopping = undefined;
-          throw error;
-        });
-        return stopping;
-      };
-      cleanup.add(stop);
-      try {
-        const subprocess = launch([
-          'run',
-          '--pull=never',
-          '-i',
-          '--name',
-          name,
-          '--label',
-          `${LABEL}=${ownerId}`,
-          '--network=none',
-          '--pid=private',
-          '--ipc=private',
-          // Rootless Podman establishes its mapped user namespace; admission
-          // verifies its identity instead of requesting a nested empty map.
-          '--user',
-          '1000:1000',
-          '--read-only',
-          '--read-only-tmpfs=false',
-          '--cap-drop=ALL',
-          '--security-opt=no-new-privileges',
-          '--memory=256m',
-          '--memory-swap=256m',
-          '--pids-limit=64',
-          '--cpus=1',
-          '--ulimit',
-          'nofile=1024:1024',
-          '--ulimit',
-          'core=0:0',
-          '--env',
-          'HOME=/home/node',
-          '--env',
-          'LANG=C.UTF-8',
-          '--env',
-          'LC_ALL=C.UTF-8',
-          '--entrypoint=node',
-          imageRef,
-          '/opt/endo-provider-worker.mjs',
-        ]);
-        const finished = new Promise(resolve => {
-          subprocess.once('error', () => resolve(undefined));
-          subprocess.once('close', () => resolve(undefined));
-        });
-        child = { process: subprocess, finished };
-        let errorBytes = 0;
-        subprocess.stderr.on('data', chunk => {
-          errorBytes += chunk.byteLength;
-          if (errorBytes <= 4096) host.onStderr?.(chunk);
-          if (errorBytes > 4096) pipe?.close();
-        });
-        pipe = makeProviderPipe({
-          input: subprocess.stdout,
-          output: subprocess.stdin,
-          bootstrap: harden({ endpoint, limits }),
-        });
-        void pipe.closed.then(() => {
-          channelClosed = true;
-          live = false;
-        });
-        control = await deadline(pipe.getBootstrap(), 10_000);
-        const ready = await deadline(E(control).ready(), 10_000);
-        (ready.protocol === 'ProviderListenerV1' &&
-          /^http:\/\/127\.0\.0\.1:\d+$/.test(ready.endpoint)) ||
-          Fail`Provider listener handshake failed`;
-        const observe = async () => {
-          live || Fail`Provider listener inactive`;
-          const { stdout } = await run([
-            'inspect',
-            '--format',
-            '{{json .}}',
-            name,
-          ]);
-          const inspected = JSON.parse(stdout);
-          /** @type {unknown} */
-          const pid = inspected.State?.Pid;
-          if (typeof pid !== 'number')
-            throw makeError(X`Provider listener PID missing`);
-          (inspected.State?.Running === true &&
-            Number.isInteger(pid) &&
-            pid > 0 &&
-            inspected.ImageDigest === imageDigest &&
-            inspected.Config?.Labels?.[LABEL] === ownerId &&
-            inspected.HostConfig?.NetworkMode === 'none' &&
-            inspected.HostConfig?.ReadonlyRootfs === true) ||
-            Fail`Provider listener process identity mismatch`;
-          const [network, namespaces, posture] = await Promise.all([
-            readNetworkNamespace(procfs, pid),
-            readNamespaceIdentities(procfs, pid),
-            readProcessStatus(procfs, pid),
-          ]);
-          (network.interfaces.length === 1 &&
-            network.interfaces[0] === 'lo' &&
-            network.routableRoutes === 0 &&
-            Object.values(namespaces).every(value => value.unshared) &&
-            posture.uid === 1000 &&
-            posture.gid === 1000 &&
-            posture.noNewPrivs === true &&
-            posture.seccompMode === 2 &&
-            posture.effectiveCapabilities === 0n &&
-            posture.permittedCapabilities === 0n &&
-            posture.boundingCapabilities === 0n &&
-            (!namespaceId || namespaceId === network.namespaceId)) ||
-            Fail`Provider listener isolation is not proved`;
-          const final = JSON.parse(
-            (await run(['inspect', '--format', '{{json .}}', name])).stdout,
-          );
-          (live &&
-            !channelClosed &&
-            final.State?.Running === true &&
-            final.State?.Pid === pid &&
-            final.ImageDigest === imageDigest &&
-            final.Config?.Labels?.[LABEL] === ownerId) ||
-            Fail`Provider listener changed during observation`;
-          namespaceId = network.namespaceId;
-          return harden({
-            endpoint: ready.endpoint,
-            containerName: name,
-            networkNamespaceId: namespaceId,
-            listenerImageDigest: imageDigest,
-          });
-        };
-        !channelClosed || Fail`Provider listener channel closed`;
-        live = true;
-        await observe();
-        !channelClosed || Fail`Provider listener channel closed`;
-        void pipe.closed.then(() => stop()).catch(() => {});
-        return harden({ observe, stop, closed: pipe.closed });
-      } catch (error) {
-        await stop().catch(cleanupError => {
-          throw AggregateError(
-            [error, cleanupError],
-            'Provider listener startup and cleanup failed',
-          );
-        });
-        throw AggregateError([error], 'Provider listener startup failed');
+          publicListeners.delete(stop);
+        }
+        cleaned = true;
+      })().catch(error => {
+        stopping = undefined;
+        throw error;
+      });
+      return stopping;
+    };
+    const acquisition = serialize(async () => {
+      if (network !== undefined) {
+        (publicAllowed && network.endpoint) ||
+          Fail`Public network is not configured by the operator`;
       }
+      assertAdmission();
+      initialized || Fail`Provider runtime is not open`;
+      await retryCleanup();
+      assertAdmission();
+      cleanup.size < capacity || Fail`Provider listener capacity exceeded`;
+      if (network !== undefined) {
+        await provideResolver();
+        assertAdmission();
+        publicAllowed || Fail`Public network is not configured by the operator`;
+      }
+      cleanup.add(stop);
+      if (network !== undefined) publicListeners.add(stop);
+      admitted = true;
+      const subprocess = launch([
+        'run',
+        '--http-proxy=false',
+        '--pull=never',
+        '-i',
+        // The inference pipe is this process's attached stdio. Left to its
+        // default, Podman also copies every attached byte to its log driver,
+        // which on a systemd host is the journal: whole request bodies, kept
+        // under the daemon's unit for as long as the journal is. Attachment
+        // does not read the log, so the pipe and `host.onStderr` are as they
+        // were; only the second copy is gone.
+        '--log-driver=none',
+        '--name',
+        name,
+        '--label',
+        `${LABEL}=${ownerId}`,
+        '--network=none',
+        ...(network ? ['--sysctl=net.ipv4.ip_unprivileged_port_start=0'] : []),
+        '--pid=private',
+        '--ipc=private',
+        // Rootless Podman establishes its mapped user namespace; admission
+        // verifies its identity instead of requesting a nested empty map.
+        '--user',
+        '1000:1000',
+        '--read-only',
+        '--read-only-tmpfs=false',
+        '--cap-drop=ALL',
+        '--security-opt=no-new-privileges',
+        '--memory=256m',
+        '--memory-swap=256m',
+        '--pids-limit=64',
+        '--cpus=1',
+        '--ulimit',
+        'nofile=1024:1024',
+        '--ulimit',
+        'core=0:0',
+        '--env',
+        'HOME=/home/node',
+        '--env',
+        'LANG=C.UTF-8',
+        '--env',
+        'LC_ALL=C.UTF-8',
+        '--entrypoint=node',
+        imageRef,
+        '/opt/endo-provider-worker.mjs',
+      ]);
+      const finished = new Promise(resolve => {
+        subprocess.once('close', () => resolve(undefined));
+      });
+      child = { process: subprocess, finished };
+      // A process error rejects admission but does not prove native stdio has
+      // closed. Keep observing errors until the original close event arrives.
+      subprocess.on('error', () => {
+        channelClosed = true;
+        live = false;
+        pipe?.close();
+      });
+      // Drain stderr for the child's entire lifetime. Diagnostics get a copied
+      // prefix of each chunk, bounded per chunk and not in total: a listener
+      // reporting its fifth failed request is still heard. Log volume has no
+      // authority to close the inference pipe, and the listener is the
+      // operator's pinned image, whose every failure the slice paid a metered
+      // request for.
+      const diagnosticChunkBytes = host.onStderr ? 4096 : 0;
+      subprocess.stderr.on('data', chunk => {
+        if (diagnosticChunkBytes === 0) return;
+        host.onStderr?.(
+          Uint8Array.from(chunk.subarray(0, diagnosticChunkBytes)),
+        );
+      });
+      pipe = makeProviderPipe({
+        input: subprocess.stdout,
+        output: subprocess.stdin,
+        bootstrap: harden(
+          networkOnly
+            ? { network: workerNetwork }
+            : {
+                endpoint,
+                limits,
+                ...(network ? { network: workerNetwork } : {}),
+              },
+        ),
+      });
+      void pipe.closed.then(() => {
+        channelClosed = true;
+        live = false;
+      });
+      control = await deadline(pipe.getBootstrap(), 10_000);
+      const ready = await deadline(E(control).ready(), 10_000);
+      (networkOnly
+        ? ready.protocol === 'ManagedNetworkV1' &&
+          Object.keys(ready).length === 1
+        : ready.protocol === 'ProviderListenerV1' &&
+          Object.keys(ready).length === 2 &&
+          /^http:\/\/127\.0\.0\.1:\d+$/.test(ready.endpoint)) ||
+        Fail`Provider listener handshake failed`;
+      const observe = async () => {
+        live || Fail`Provider listener inactive`;
+        const { stdout } = await run([
+          'inspect',
+          '--format',
+          '{{json .}}',
+          name,
+        ]);
+        const inspected = JSON.parse(stdout);
+        /** @type {unknown} */
+        const pid = inspected.State?.Pid;
+        if (typeof pid !== 'number')
+          throw makeError(X`Provider listener PID missing`);
+        (inspected.State?.Running === true &&
+          Number.isInteger(pid) &&
+          pid > 0 &&
+          inspected.ImageDigest === imageDigest &&
+          inspected.Config?.Labels?.[LABEL] === ownerId &&
+          inspected.HostConfig?.NetworkMode === 'none' &&
+          inspected.HostConfig?.ReadonlyRootfs === true) ||
+          Fail`Provider listener process identity mismatch`;
+        const [observedNetwork, namespaces, posture] = await Promise.all([
+          readNetworkNamespace(procfs, pid),
+          readNamespaceIdentities(procfs, pid),
+          readProcessStatus(procfs, pid),
+        ]);
+        (observedNetwork.interfaces.length === 1 &&
+          observedNetwork.interfaces[0] === 'lo' &&
+          observedNetwork.routableRoutes === 0 &&
+          Object.values(namespaces).every(value => value.unshared) &&
+          posture.uid === 1000 &&
+          posture.gid === 1000 &&
+          posture.noNewPrivs === true &&
+          posture.seccompMode === 2 &&
+          posture.effectiveCapabilities === 0n &&
+          posture.permittedCapabilities === 0n &&
+          posture.boundingCapabilities === 0n &&
+          (!namespaceId || namespaceId === observedNetwork.namespaceId)) ||
+          Fail`Provider listener isolation is not proved`;
+        const final = JSON.parse(
+          (await run(['inspect', '--format', '{{json .}}', name])).stdout,
+        );
+        (live &&
+          !channelClosed &&
+          final.State?.Running === true &&
+          final.State?.Pid === pid &&
+          final.ImageDigest === imageDigest &&
+          final.Config?.Labels?.[LABEL] === ownerId) ||
+          Fail`Provider listener changed during observation`;
+        namespaceId = observedNetwork.namespaceId;
+        return harden({
+          ...(networkOnly ? {} : { endpoint: ready.endpoint }),
+          containerName: name,
+          networkNamespaceId: namespaceId,
+          listenerImageDigest: imageDigest,
+          ...(networkEvidence ? { network: networkEvidence } : {}),
+        });
+      };
+      assertAdmission();
+      !channelClosed || Fail`Provider listener channel closed`;
+      live = true;
+      await observe();
+      if (network) {
+        const activated = await deadline(E(control).activateNetwork(), 10_000);
+        const proxy = new URL(activated.proxyUrl);
+        (activated.policy === 'public-internet' &&
+          activated.dnsHost === '127.0.0.53' &&
+          proxy.protocol === 'http:' &&
+          proxy.hostname === '127.0.0.1' &&
+          proxy.port !== '' &&
+          proxy.username === '' &&
+          proxy.password === '' &&
+          proxy.pathname === '/' &&
+          proxy.search === '' &&
+          proxy.hash === '') ||
+          Fail`Public network listener handshake failed`;
+        networkEvidence = harden({
+          policy: 'public-internet',
+          proxyUrl: proxy.origin,
+          dnsHost: '127.0.0.53',
+          resolverConfigPath,
+        });
+        await observe();
+      }
+      !channelClosed || Fail`Provider listener channel closed`;
+      void pipe.closed.then(() => stop()).catch(() => {});
+      assertAdmission();
+      return harden({ observe, stop, closed: pipe.closed });
+    }).finally(() => {
+      acquiring = false;
     });
-  return harden({
-    start: startListener,
-    retryCleanup: () => serialize(retryCleanup),
-    dispose: () =>
-      serialize(async () => {
-        if (released) return;
-        disposed = true;
+    const value = acquisition.catch(async error => {
+      if (!admitted) throw error;
+      await stop().catch(cleanupError => {
+        throw AggregateError(
+          [error, cleanupError],
+          'Provider listener startup and cleanup failed',
+        );
+      });
+      throw AggregateError([error], 'Provider listener startup failed');
+    });
+    // A lifecycle owner may observe stop() without consuming the failed value.
+    void value.catch(() => {});
+    return harden({ value, stop });
+  };
+  /** @returns {Promise<void>} */
+  const close = () => {
+    disposed = true;
+    if (closing) return closing;
+    const attempt = (async () => {
+      await opening?.catch(() => {});
+      await serialize(async () => {
         for (const clean of cleanup) pendingCleanup.add(clean);
         await retryCleanup();
-        const current = await readlink(lockPath);
-        current === identity || Fail`Provider runtime lock ownership changed`;
-        await unlink(lockPath);
-        released = true;
-      }),
+        await closeResolver();
+        // A failed initialization sweep is retained as cleanup work. Its
+        // historical failure does not prevent a successful explicit retry.
+        if (sweepRequired) {
+          await sweep();
+          sweepRequired = false;
+        }
+        if (lockOwned) {
+          const current = await readlink(lockPath);
+          current === identity || Fail`Provider runtime lock ownership changed`;
+          await removeLink(lockPath);
+          lockOwned = false;
+        }
+        if (recoveryOwned) {
+          await removeRecovery(recoveryPath);
+          recoveryOwned = false;
+        }
+      });
+    })();
+    closing = attempt;
+    void attempt.catch(() => {
+      if (closing === attempt) closing = undefined;
+    });
+    return attempt;
+  };
+  /**
+   * The operator's current capacity and public-network ceiling. Applies to
+   * the next admission; turning public networking off stops live public
+   * listeners, whose grants their issuer then revokes.
+   *
+   * @param {{ maxListeners?: number, publicInternet?: boolean }} settings
+   */
+  const configure = async settings => {
+    await null;
+    assertOpen();
+    const next = {
+      maxListeners: settings.maxListeners ?? capacity,
+      publicInternet: settings.publicInternet ?? publicAllowed,
+    };
+    assertSettings(next);
+    capacity = next.maxListeners;
+    publicAllowed = next.publicInternet;
+    if (!publicAllowed) {
+      const results = await Promise.allSettled(
+        [...publicListeners].map(stop => stop()),
+      );
+      const failures = results.flatMap(result =>
+        result.status === 'rejected' ? [result.reason] : [],
+      );
+      if (failures.length)
+        throw AggregateError(failures, 'Public listener shutdown pending');
+    }
+  };
+  const runtime = harden({
+    startKit,
+    retryCleanup: () => serialize(retryCleanup),
+    dispose: close,
   });
+  const openRuntime = () => {
+    assertOpen();
+    opening ??= Promise.resolve().then(async () => {
+      await initialize();
+      return runtime;
+    });
+    return opening;
+  };
+  return harden({ open: openRuntime, close, configure });
 };
-harden(makePodmanProviderListenerRuntime);
+harden(makePodmanProviderListenerRuntimeKit);

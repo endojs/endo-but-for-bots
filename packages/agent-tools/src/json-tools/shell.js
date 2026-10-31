@@ -102,7 +102,8 @@ const shellToolSchemas = harden({
             timeoutMs: {
               type: 'number',
               description:
-                'Per-call timeout in ms; may only narrow the policy timeout.',
+                'Override the default invocation timeout in ms, longer or shorter. ' +
+                'Use a positive integer up to 2147483647; omit to use inspect().timeoutMs.',
             },
           },
           description: 'Optional per-call execution options.',
@@ -114,7 +115,7 @@ const shellToolSchemas = harden({
   },
   inspect: {
     description:
-      'Report the shell policy bounds: the command allowlist, timeout, and ' +
+      'Report the command allowlist, default invocation timeout, and ' +
       'output cap. Reveals no host path.',
     parameters: {
       type: 'object',

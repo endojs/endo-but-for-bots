@@ -89,3 +89,36 @@ arrive as `::ffff:10.x.x.x`.
 > WebSocket connection to the gateway.  They do not add authentication or
 > encryption.  Use a VPN or other transport-layer protection when exposing
 > the gateway beyond localhost.
+
+### Formula disposal and reconstruction
+
+An unconfined module receives a context with `whenCancelled()`,
+`whenDisposed()`, and `addDisposalHook(hook)` methods.
+Register a remotable callable hook using eventual send and await registration
+before starting work that requires cleanup.
+Registration after cancellation is refused.
+The daemon invokes the hook by eventual send and awaits its result.
+
+Cancellation withdraws the old controller immediately, but reconstruction of
+that exact formula is refused while its disposal is pending.
+After successful disposal, a subsequent lookup can reconstruct the formula.
+Failed disposal keeps reconstruction fenced for the life of that daemon;
+repeated lookup attempts do not discard the failure or construct a successor.
+Pending and failed disposal have distinct errors.
+Lookup does not implicitly wait for disposal: cleanup hooks that look up each
+other's cancelled formulas must fail instead of deadlocking on each other.
+
+Collection also fences each exact formula before withdrawing its controller,
+including formulas with no live controller. The fence remains until durable
+deletion and cleanup succeed; uncertain deletion or cleanup leaves a failed
+fence for the daemon's lifetime. Reads already in flight are invalidated before
+collection and cannot put stale formula bytes back into the graph, even after
+successful cleanup clears its fence. These read tokens exist only while reads
+are in flight; successful collection does not accumulate permanent tombstones.
+
+Hooks must fence retained application facets and drain admitted operations;
+revoking a client's route alone does not stop activity already running in a
+worker.
+This barrier orders incarnations of one formula, not independently created
+formulas over the same resources.
+It is not persistent proof of native resource cleanup after daemon or host loss.

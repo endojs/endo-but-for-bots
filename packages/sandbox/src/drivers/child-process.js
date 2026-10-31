@@ -3,6 +3,7 @@
 /* global Buffer, clearTimeout, process, setTimeout */
 
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 /**
  * Child-process helpers shared by the backend drivers.
@@ -17,94 +18,147 @@ import { makeError, q, X } from '@endo/errors';
  */
 
 /**
- * Spawn a child process and collect its stdout / stderr.
+ * Start a control command with separate outcome and native lifetime evidence.
+ * Timeout, cancellation, and error can reject result before closed settles.
+ * The host owner must retain the command until closed; neither a rejected
+ * result nor accepted SIGKILL proves the child has been reaped.
  *
- * A `timeoutMs` deadline or a `cancelled` token bounds control commands
- * that must not stall the sandbox lifecycle: on expiry or cancellation
- * the child is hard-killed and the promise rejects with a structured
- * error.
+ * closed covers this direct child and its stdio, not arbitrary descendants or
+ * remote engine work. wasInterrupted records a requested termination, not proof
+ * of its effect; drivers must preserve uncertain effects for reconciliation.
+ * hasChild records whether spawn returned a child handle. False proves that
+ * this attempt acquired none; true does not prove that native startup succeeded.
  *
  * @param {typeof import('child_process')} cpModule
  * @param {string} command
  * @param {string[]} args
- * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled }} [options]
- * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
+ * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled, env?: Readonly<Record<string,string>> }} [options]
  */
-export const spawnAndCollect = (cpModule, command, args, options = {}) => {
-  const { timeoutMs, cancelled, isCancelled } = options;
-  return new Promise((resolve, reject) => {
-    if (isCancelled?.()) {
-      reject(makeError(X`${q(command)} control command aborted`));
-      return;
-    }
-    let child;
-    try {
-      child = cpModule.spawn(command, args, { stdio: 'pipe' });
-    } catch (e) {
-      reject(/** @type {Error} */ (e));
-      return;
-    }
-    /** @type {Buffer[]} */
-    const stdoutChunks = [];
-    /** @type {Buffer[]} */
-    const stderrChunks = [];
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let deadline;
-    // Release the deadline timer on whichever outcome lands first. The
-    // cancellation reaction, unlike an abort listener, cannot be
-    // detached from a still-pending token, so it is guarded by
-    // `settled` instead: a late cancellation of an already-settled
-    // command must not signal the exited child.
-    let settled = false;
-    const release = () => {
-      settled = true;
-      if (deadline !== undefined) clearTimeout(deadline);
-    };
-    /** @param {Error} failure */
-    const abandon = failure => {
-      if (settled) return;
+export const startControlCommand = (cpModule, command, args, options = {}) => {
+  const { timeoutMs, cancelled, isCancelled, env } = options;
+  /** @type {ReturnType<typeof makePromiseKit<{ code: number | null; signal: string | null; stdout: string; stderr: string }>>} */
+  const outcome = makePromiseKit();
+  /** @type {ReturnType<typeof makePromiseKit<void>>} */
+  const closure = makePromiseKit();
+  /** @type {import('child_process').ChildProcess | undefined} */
+  let child;
+  let settled = false;
+  let exited = false;
+  let closed = false;
+  let interrupted = false;
+  /** @type {Buffer[]} */
+  const stdoutChunks = [];
+  /** @type {Buffer[]} */
+  const stderrChunks = [];
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let deadline;
+  const release = () => {
+    settled = true;
+    if (deadline !== undefined) clearTimeout(deadline);
+    stdoutChunks.length = 0;
+    stderrChunks.length = 0;
+  };
+  /** @param {Error} error */
+  const fail = error => {
+    if (settled) return;
+    release();
+    outcome.reject(error);
+  };
+  /** @param {Error} [reason] */
+  const abort = (
+    reason = makeError(X`${q(command)} control command aborted`),
+  ) => {
+    if (closed) return;
+    fail(reason);
+    // Node can retain pid after exit while inherited pipes remain open. Never
+    // signal that stale identity; closure still waits for the pipes to settle.
+    if (child !== undefined && !exited) {
+      interrupted = true;
       try {
         child.kill('SIGKILL');
       } catch {
-        // The control command may already have exited.
+        // Failure is not a release. The owner still has the unresolved closure.
       }
-      release();
-      reject(failure);
-    };
-    child.stdout?.on('data', chunk => stdoutChunks.push(chunk));
-    child.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    child.once('error', error => {
-      release();
-      reject(error);
+    }
+  };
+  const control = harden({
+    result: outcome.promise,
+    closed: closure.promise,
+    abort,
+    wasInterrupted: () => interrupted,
+    hasChild: () => child !== undefined,
+  });
+  if (isCancelled?.()) {
+    fail(makeError(X`${q(command)} control command aborted`));
+    closed = true;
+    closure.resolve(undefined);
+    return control;
+  }
+  try {
+    child = cpModule.spawn(command, args, {
+      stdio: 'pipe',
+      ...(env ? { env } : {}),
     });
-    child.once('close', (code, exitSignal) => {
-      release();
-      resolve({
+  } catch (error) {
+    fail(/** @type {Error} */ (error));
+    closed = true; // No child was acquired.
+    closure.resolve(undefined);
+    return control;
+  }
+  child.stdout?.on('data', chunk => {
+    if (!settled) stdoutChunks.push(chunk);
+  });
+  child.stderr?.on('data', chunk => {
+    if (!settled) stderrChunks.push(chunk);
+  });
+  child.once('error', fail);
+  child.once('exit', () => {
+    exited = true;
+  });
+  child.once('close', (code, signal) => {
+    closed = true;
+    if (!settled) {
+      outcome.resolve({
         code,
-        signal: exitSignal,
+        signal,
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
       });
-    });
-    if (timeoutMs !== undefined) {
-      deadline = setTimeout(
-        () =>
-          abandon(
-            makeError(
-              X`${q(command)} control command timed out after ${q(timeoutMs)}ms`,
-            ),
-          ),
-        timeoutMs,
-      );
-      if (typeof deadline.unref === 'function') deadline.unref();
+      release();
     }
-    if (cancelled !== undefined) {
-      cancelled.catch(() =>
-        abandon(makeError(X`${q(command)} control command aborted`)),
-      );
-    }
+    closure.resolve(undefined);
   });
+  if (timeoutMs !== undefined) {
+    deadline = setTimeout(
+      () =>
+        abort(
+          makeError(
+            X`${q(command)} control command timed out after ${q(timeoutMs)}ms`,
+          ),
+        ),
+      timeoutMs,
+    );
+    if (typeof deadline.unref === 'function') deadline.unref();
+  }
+  if (cancelled !== undefined) {
+    void cancelled.catch(() => abort());
+  }
+  return control;
 };
+harden(startControlCommand);
+
+/**
+ * Collect a command outcome. Callers that own resources the command can create
+ * must use startControlCommand and retain its separate closure evidence.
+ * A deadline bounds result settlement, not child or descendant lifetime.
+ *
+ * @param {typeof import('child_process')} cpModule
+ * @param {string} command
+ * @param {string[]} args
+ * @param {Parameters<typeof startControlCommand>[3]} [options]
+ */
+export const spawnAndCollect = (cpModule, command, args, options = {}) =>
+  startControlCommand(cpModule, command, args, options).result;
 harden(spawnAndCollect);
 
 /**

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-08-06 |
+| **Updated** | 2026-10-06 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
 | **Status** | In Progress |
 
@@ -274,8 +274,11 @@ interface Shell {
   `searchPath`, `LC_ALL=C`); the host process env is never inherited.
   No secret reaches a child by default.
 - **Bounded output.** `stdout` / `stderr` accumulate to
-  `maxOutputBytes` each and set `truncated`; a per-call `timeoutMs` can
-  only narrow the policy value. Timeout kills the process group.
+  `maxOutputBytes` each and set `truncated`.
+  A per-call `timeoutMs` overrides the policy's default, longer or shorter,
+  within the native timer range; omission uses the recorded default.
+  The Floot development preset defaults to ten minutes.
+  Timeout initiates termination through the selected engine.
 - **Buffered first.** `exec` returns a complete `ShellResult`.
   Streaming stdio for long-running processes is deferred; when a
   consumer needs it, the exo-stream shapes proven by

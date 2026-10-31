@@ -2,12 +2,12 @@
 
 import { makeExo } from '@endo/exo';
 
-import { PassableWriterInterface } from './type-guards.js';
+import { CloseablePassableWriterInterface } from './type-guards.js';
 import { makeWriterPump } from './writer-pump.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
-/** @import { SomehowAsyncIterable, MakeWriterOptions, PassableWriter } from './types.js' */
+/** @import { SomehowAsyncIterable, MakeWriterOptions, CloseablePassableWriter } from './types.js' */
 
 /**
  * Create a PassableWriter Exo from a local iterator (Responder/Consumer side).
@@ -35,7 +35,7 @@ import { makeWriterPump } from './writer-pump.js';
  * @template {Passable} [TWriteReturn=undefined]
  * @param {SomehowAsyncIterable<unknown, TWrite>} iterator
  * @param {MakeWriterOptions} [options]
- * @returns {PassableWriter<TWrite, TWriteReturn>}
+ * @returns {CloseablePassableWriter<TWrite, TWriteReturn>}
  */
 export const writerFromIterator = (iterator, options = {}) => {
   const { buffer = 0, writePattern, writeReturnPattern } = options;
@@ -46,13 +46,14 @@ export const writerFromIterator = (iterator, options = {}) => {
     writeReturnPattern,
   });
 
-  return /** @type {PassableWriter<TWrite, TWriteReturn>} */ (
+  return /** @type {CloseablePassableWriter<TWrite, TWriteReturn>} */ (
     /** @type {unknown} */ (
       makeExo(
         'PassableWriter',
-        PassableWriterInterface,
+        CloseablePassableWriterInterface,
         /** @type {any} */ ({
           stream: pump,
+          close: pump.close,
 
           /**
            * Returns the pattern for validating TWrite (yielded values).

@@ -17,70 +17,22 @@ import { assertNoDuplicates, makeSetOfElements } from './copySet.js';
 // TODO share more code with keycollection-operators.js.
 
 /**
- * Asserts that `elements` is already rank sorted by `rankCompare`, where there
- * may be contiguous regions of elements tied for the same rank.
- * Returns an iterable that will enumerate all the elements in order
- * according to `fullOrder`, which should differ from `rankOrder` only
- * by being more precise.
- *
- * This should be equivalent to resorting the entire `elements` array according
- *  to `fullOrder`. However, it optimizes for the case where these contiguous
- * runs that need to be resorted are either absent or small.
+ * Refine rank-sorted elements into this merge's full order.
+ * Rank ties can overlap: [a] ties with [b], and [b] with [a, 0], while
+ * [a] and [a, 0] compare by length. Partitioning by ties to one key can
+ * therefore leave elements out of full order across adjacent windows.
  *
  * @template {Passable} T
  * @param {T[]} elements
  * @param {RankCompare} rankCompare
  * @param {FullCompare} fullCompare
- * @returns {Iterable<T>}
+ * @returns {T[]}
  */
-const windowResort = (elements, rankCompare, fullCompare) => {
+const fullSort = (elements, rankCompare, fullCompare) => {
   assertRankSorted(elements, rankCompare);
-  const { length } = elements;
-  let i = 0;
-  let optInnerIterator;
-  return harden({
-    [Symbol.iterator]: () =>
-      harden({
-        next: () => {
-          if (optInnerIterator) {
-            const result = optInnerIterator.next();
-            if (result.done) {
-              optInnerIterator = undefined;
-              // fall through
-            } else {
-              return result;
-            }
-          }
-          if (i < length) {
-            const value = elements[i];
-            let j = i + 1;
-            while (j < length && rankCompare(value, elements[j]) === 0) {
-              j += 1;
-            }
-            if (j === i + 1) {
-              i = j;
-              return harden({ done: false, value });
-            }
-            const similarRun = elements.slice(i, j);
-            i = j;
-            const resorted = sortByRank(similarRun, fullCompare);
-            // Providing the same `fullCompare` should cause a memo hit
-            // within `assertNoDuplicates` enabling it to avoid a
-            // redundant resorting.
-            assertNoDuplicates(resorted, fullCompare);
-            // This is the raw JS array iterator whose `.next()` method
-            // does not harden the IteratorResult, in violation of our
-            // conventions. Fixing this is expensive and I'm confident the
-            // unfrozen value does not escape this file, so I'm leaving this
-            // as is.
-            optInnerIterator = resorted[Symbol.iterator]();
-            return optInnerIterator.next();
-          } else {
-            return harden({ done: true, value: null });
-          }
-        },
-      }),
-  });
+  const sorted = sortByRank(elements, fullCompare);
+  assertNoDuplicates(sorted, fullCompare);
+  return sorted;
 };
 
 /**
@@ -101,8 +53,8 @@ const merge = (xelements, yelements) => {
   // to this one `merge` call and does not survive it.
   const fullCompare = makeFullOrderComparatorKit().antiComparator;
 
-  const xs = windowResort(xelements, compareAntiRank, fullCompare);
-  const ys = windowResort(yelements, compareAntiRank, fullCompare);
+  const xs = fullSort(xelements, compareAntiRank, fullCompare);
+  const ys = fullSort(yelements, compareAntiRank, fullCompare);
   return harden({
     [Symbol.iterator]: () => {
       // These four `let` variables are buffering one ahead from the underlying
@@ -118,14 +70,18 @@ const merge = (xelements, yelements) => {
       const xi = xs[Symbol.iterator]();
       const nextX = () => {
         !xDone || Fail`Internal: nextX should not be called once done`;
-        ({ done: xDone, value: x } = xi.next());
+        const result = xi.next();
+        xDone = result.done;
+        if (!result.done) x = result.value;
       };
       nextX();
 
       const yi = ys[Symbol.iterator]();
       const nextY = () => {
         !yDone || Fail`Internal: nextY should not be called once done`;
-        ({ done: yDone, value: y } = yi.next());
+        const result = yi.next();
+        yDone = result.done;
+        if (!result.done) y = result.value;
       };
       nextY();
 

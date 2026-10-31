@@ -1,0 +1,180 @@
+# window=10 lines, tests=False
+crate	normalized_lines	lines_in_duplicated_runs	pct
+benches	52	0	0.0
+ironhorse-262	4714	44	0.9
+ironhorse-compile	13812	216	1.6
+ironhorse-fuzz	1684	20	1.2
+ironhorse-meter	1037	98	9.5
+ironhorse-regexp	5529	114	2.1
+ironhorse-runtime	118	58	49.2
+ironhorse-snapshot	20474	759	3.7
+ironhorse-text	128	0	0.0
+ironhorse-unicode	143	0	0.0
+ironhorse-vm	64103	2924	4.6
+stack-depth-prototypes	96	0	0.0
+stack-lanes	955	0	0.0
+wasm-worker-spike	882	62	7.0
+xs-oracle	923	130	14.1
+
+# largest duplicated runs (normalized lines, path:first-last)
+40	ironhorse-vm/src/interp/natives/temporal.rs:1192-1244
+40	ironhorse-vm/src/interp/natives/temporal.rs:1417-1469
+38	ironhorse-snapshot/src/image.rs:7084-7122
+36	ironhorse-snapshot/src/image.rs:7287-7323
+35	ironhorse-vm/src/interp/suspend.rs:725-768
+35	ironhorse-vm/src/interp/suspend.rs:935-986
+34	ironhorse-compile/src/parser.rs:2358-2400
+34	ironhorse-vm/src/value.rs:3063-3114
+31	ironhorse-vm/src/interp/suspend.rs:262-299
+31	wasm-worker-spike/src/session.rs:34-70
+31	wasm-worker-spike/src/session.rs:83-119
+30	ironhorse-vm/src/interp/suspend.rs:457-487
+29	ironhorse-snapshot/src/image.rs:7839-7868
+29	ironhorse-runtime/src/lib.rs:41-83
+29	ironhorse-runtime/src/lib.rs:137-179
+27	xs-oracle/src/lib.rs:316-352
+27	ironhorse-vm/src/interp/natives/dispatch.rs:2460-2486
+27	ironhorse-vm/src/interp/natives/dispatch.rs:6104-6130
+26	ironhorse-snapshot/src/store.rs:3660-3685
+26	ironhorse-snapshot/src/store.rs:3703-3728
+25	ironhorse-compile/src/coder.rs:2390-2416
+25	ironhorse-compile/src/coder.rs:2578-2604
+23	ironhorse-vm/src/interp/natives/dispatch.rs:2231-2253
+23	ironhorse-vm/src/interp/natives/dispatch.rs:3418-3440
+22	xs-oracle/src/lib.rs:392-422
+22	ironhorse-vm/src/interp/natives/dispatch.rs:118-143
+22	ironhorse-vm/src/interp/natives/dispatch.rs:420-445
+22	ironhorse-vm/src/interp/natives/dispatch.rs:628-653
+22	ironhorse-vm/src/interp/natives/dispatch.rs:1230-1255
+22	ironhorse-vm/src/interp/natives/dispatch.rs:1356-1381
+22	ironhorse-vm/src/interp/bigint.rs:387-411
+22	ironhorse-vm/src/interp/bigint.rs:433-457
+21	ironhorse-meter/src/default_keys.rs:27-47
+21	ironhorse-vm/src/interp/intrinsic_order.rs:39-59
+21	ironhorse-vm/src/interp/natives/buffer.rs:236-259
+21	ironhorse-vm/src/interp/natives/buffer.rs:559-582
+20	xs-oracle/examples/modprobe.rs:41-69
+20	xs-oracle/examples/probe.rs:66-94
+20	ironhorse-snapshot/src/image.rs:10808-10829
+19	ironhorse-vm/src/interp/natives/array.rs:284-302
+19	ironhorse-vm/src/interp/natives/array.rs:668-686
+19	ironhorse-vm/src/interp/natives/dispatch.rs:222-243
+19	ironhorse-vm/src/interp/natives/dispatch.rs:276-295
+19	ironhorse-vm/src/interp/natives/dispatch.rs:3679-3701
+19	ironhorse-vm/src/interp/natives/dispatch.rs:3849-3871
+19	ironhorse-snapshot/src/image.rs:9473-9493
+19	ironhorse-snapshot/src/image.rs:10022-10042
+18	ironhorse-meter/src/sha256.rs:67-87
+18	ironhorse-meter/src/sha256.rs:116-136
+18	ironhorse-vm/src/interp/natives/array.rs:400-424
+18	ironhorse-vm/src/interp/natives/array.rs:4597-4618
+18	ironhorse-vm/src/interp/natives/buffer.rs:736-757
+18	ironhorse-vm/src/interp/property/object.rs:178-202
+18	ironhorse-vm/src/interp/apply.rs:191-213
+18	ironhorse-vm/src/interp/apply.rs:368-398
+17	ironhorse-meter/src/default_keys.rs:62-78
+17	ironhorse-vm/src/interp/intrinsic_order.rs:73-89
+17	ironhorse-vm/src/interp/natives/promise.rs:462-482
+17	ironhorse-vm/src/interp/natives/promise.rs:1122-1139
+17	ironhorse-vm/src/interp/natives/dispatch.rs:3651-3670
+17	ironhorse-vm/src/interp/natives/dispatch.rs:3821-3840
+17	ironhorse-vm/src/interp/natives/dispatch.rs:4955-4973
+17	ironhorse-vm/src/interp/natives/dispatch.rs:5093-5110
+17	ironhorse-vm/src/interp/natives/intl.rs:392-410
+17	ironhorse-vm/src/interp/natives/intl.rs:1107-1125
+17	ironhorse-vm/src/interp/property/integrity.rs:189-211
+17	ironhorse-vm/src/interp/property/integrity.rs:270-291
+16	ironhorse-vm/src/interp/natives/array.rs:344-367
+16	ironhorse-vm/src/interp/natives/array.rs:3925-3943
+16	ironhorse-vm/src/interp/natives/array.rs:3952-3970
+16	ironhorse-vm/src/interp/natives/promise.rs:1189-1208
+16	ironhorse-vm/src/interp/property/object.rs:135-153
+16	ironhorse-vm/src/interp/natives/dispatch.rs:3509-3527
+16	ironhorse-vm/src/interp/natives/dispatch.rs:3604-3622
+16	ironhorse-vm/src/interp/frames.rs:405-420
+16	ironhorse-vm/src/interp/natives/uri.rs:168-185
+16	ironhorse-vm/src/interp/natives/annex_b.rs:174-191
+16	ironhorse-vm/src/interp/natives/temporal.rs:252-273
+16	ironhorse-vm/src/interp/natives/temporal.rs:384-405
+16	ironhorse-vm/src/interp/natives/regexp.rs:120-139
+16	ironhorse-vm/src/interp/property/indexed.rs:424-443
+16	ironhorse-vm/src/interp/property/indexed.rs:487-506
+16	ironhorse-snapshot/src/image.rs:6604-6620
+16	ironhorse-regexp/src/matcher.rs:396-415
+16	ironhorse-regexp/src/matcher.rs:460-479
+15	xs-oracle/src/lib.rs:545-566
+15	ironhorse-vm/src/interp/invoke.rs:164-183
+15	ironhorse-vm/src/interp/invoke.rs:1192-1209
+15	ironhorse-vm/src/interp/natives/promise.rs:1655-1670
+15	ironhorse-vm/src/interp/natives/buffer.rs:860-875
+15	ironhorse-vm/src/interp/date.rs:110-128
+15	ironhorse-vm/src/interp/date.rs:210-228
+15	ironhorse-vm/src/interp/iterable.rs:179-198
+15	ironhorse-vm/src/interp/natives/collection.rs:550-569
+15	ironhorse-vm/src/interp/apply.rs:257-273
+15	ironhorse-vm/src/interp/apply.rs:332-348
+15	ironhorse-vm/src/interp/natives/resource.rs:105-123
+15	ironhorse-vm/src/interp/natives/resource.rs:134-151
+15	ironhorse-vm/src/interp/property/indexed.rs:1002-1020
+15	ironhorse-snapshot/src/image.rs:847-873
+15	ironhorse-snapshot/src/image.rs:902-928
+15	ironhorse-snapshot/src/image.rs:6680-6695
+15	ironhorse-snapshot/src/image.rs:6712-6728
+15	ironhorse-snapshot/src/image.rs:6739-6755
+14	ironhorse-meter/src/default_keys.rs:47-60
+14	ironhorse-vm/src/interp/intrinsic_order.rs:59-72
+14	ironhorse-vm/src/interp/natives/dispatch.rs:341-354
+14	ironhorse-vm/src/interp/natives/dispatch.rs:5017-5032
+14	ironhorse-vm/src/interp/natives/dispatch.rs:5135-5150
+14	ironhorse-vm/src/interp/iterable.rs:88-102
+14	ironhorse-vm/src/interp/natives/collection.rs:239-256
+14	ironhorse-vm/src/interp/natives/collection.rs:455-472
+14	ironhorse-vm/src/interp/natives/collection.rs:493-507
+14	ironhorse-vm/src/interp/natives/regexp.rs:608-622
+14	ironhorse-vm/src/interp/natives/regexp.rs:678-692
+14	ironhorse-snapshot/src/image.rs:10668-10682
+14	ironhorse-regexp/src/matcher.rs:335-352
+14	ironhorse-regexp/src/matcher.rs:559-576
+13	xs-oracle/examples/modprobe.rs:20-32
+13	xs-oracle/examples/probe.rs:43-55
+
+# clone pairs (first shared window of each run -> partner locations)
+40	ironhorse-vm/src/interp/natives/temporal.rs:1192-1244	<->	ironhorse-vm/src/interp/natives/temporal.rs:1417
+38	ironhorse-snapshot/src/image.rs:7084-7122	<->	ironhorse-snapshot/src/image.rs:7287
+35	ironhorse-vm/src/interp/suspend.rs:725-768	<->	ironhorse-vm/src/interp/suspend.rs:935
+34	ironhorse-compile/src/parser.rs:2358-2400	<->	ironhorse-vm/src/value.rs:3063
+31	ironhorse-vm/src/interp/suspend.rs:262-299	<->	ironhorse-vm/src/interp/suspend.rs:457
+31	wasm-worker-spike/src/session.rs:34-70	<->	wasm-worker-spike/src/session.rs:83
+29	ironhorse-snapshot/src/image.rs:7839-7868	<->	ironhorse-snapshot/src/image.rs:7093, ironhorse-snapshot/src/image.rs:7296, ironhorse-snapshot/src/store.rs:3660, ironhorse-snapshot/src/store.rs:3703
+29	ironhorse-runtime/src/lib.rs:41-83	<->	ironhorse-runtime/src/lib.rs:137
+27	xs-oracle/src/lib.rs:316-352	<->	xs-oracle/src/lib.rs:545
+27	ironhorse-vm/src/interp/natives/dispatch.rs:2460-2486	<->	ironhorse-vm/src/interp/natives/dispatch.rs:6104
+25	ironhorse-compile/src/coder.rs:2390-2416	<->	ironhorse-compile/src/coder.rs:2578
+23	ironhorse-vm/src/interp/natives/dispatch.rs:2231-2253	<->	ironhorse-vm/src/interp/natives/dispatch.rs:3418
+22	xs-oracle/src/lib.rs:392-422	<->	xs-oracle/src/lib.rs:325, xs-oracle/src/lib.rs:554
+22	ironhorse-vm/src/interp/natives/dispatch.rs:118-143	<->	ironhorse-vm/src/interp/natives/dispatch.rs:420, ironhorse-vm/src/interp/natives/dispatch.rs:628, ironhorse-vm/src/interp/natives/dispatch.rs:1230, ironhorse-vm/src/interp/natives/dispatch.rs:1356
+22	ironhorse-vm/src/interp/bigint.rs:387-411	<->	ironhorse-vm/src/interp/bigint.rs:433
+21	ironhorse-meter/src/default_keys.rs:27-47	<->	ironhorse-vm/src/interp/intrinsic_order.rs:39
+21	ironhorse-vm/src/interp/natives/buffer.rs:236-259	<->	ironhorse-vm/src/interp/natives/buffer.rs:559
+20	xs-oracle/examples/modprobe.rs:41-69	<->	xs-oracle/examples/probe.rs:66
+20	ironhorse-snapshot/src/image.rs:10808-10829	<->	ironhorse-snapshot/src/image.rs:9473, ironhorse-snapshot/src/image.rs:10022
+19	ironhorse-vm/src/interp/natives/array.rs:284-302	<->	ironhorse-vm/src/interp/natives/array.rs:668
+19	ironhorse-vm/src/interp/natives/dispatch.rs:222-243	<->	ironhorse-vm/src/interp/natives/dispatch.rs:276, ironhorse-vm/src/interp/natives/dispatch.rs:341
+19	ironhorse-vm/src/interp/natives/dispatch.rs:3679-3701	<->	ironhorse-vm/src/interp/natives/dispatch.rs:3849
+18	ironhorse-meter/src/sha256.rs:67-87	<->	ironhorse-meter/src/sha256.rs:116
+18	ironhorse-vm/src/interp/natives/array.rs:400-424	<->	ironhorse-vm/src/interp/property/object.rs:178
+18	ironhorse-vm/src/interp/natives/array.rs:4597-4618	<->	ironhorse-vm/src/interp/natives/buffer.rs:736
+18	ironhorse-vm/src/interp/apply.rs:191-213	<->	ironhorse-vm/src/interp/apply.rs:368
+17	ironhorse-meter/src/default_keys.rs:62-78	<->	ironhorse-vm/src/interp/intrinsic_order.rs:73
+17	ironhorse-vm/src/interp/natives/promise.rs:462-482	<->	ironhorse-vm/src/interp/natives/promise.rs:1122
+17	ironhorse-vm/src/interp/natives/dispatch.rs:3651-3670	<->	ironhorse-vm/src/interp/natives/dispatch.rs:3509, ironhorse-vm/src/interp/natives/dispatch.rs:3604, ironhorse-vm/src/interp/natives/dispatch.rs:3769, ironhorse-vm/src/interp/natives/dispatch.rs:3821
+17	ironhorse-vm/src/interp/natives/dispatch.rs:4955-4973	<->	ironhorse-vm/src/interp/natives/dispatch.rs:5093
+17	ironhorse-vm/src/interp/natives/intl.rs:392-410	<->	ironhorse-vm/src/interp/natives/intl.rs:1107
+17	ironhorse-vm/src/interp/property/integrity.rs:189-211	<->	ironhorse-vm/src/interp/property/integrity.rs:270
+16	ironhorse-vm/src/interp/natives/array.rs:344-367	<->	ironhorse-vm/src/interp/iterable.rs:82
+16	ironhorse-vm/src/interp/natives/array.rs:3925-3943	<->	ironhorse-vm/src/interp/natives/array.rs:3952
+16	ironhorse-vm/src/interp/natives/promise.rs:1189-1208	<->	ironhorse-vm/src/interp/natives/regexp.rs:120
+16	ironhorse-vm/src/interp/property/object.rs:135-153	<->	ironhorse-vm/src/interp/natives/collection.rs:487
+16	ironhorse-vm/src/interp/frames.rs:405-420	<->	ironhorse-vm/src/interp/suspend.rs:281, ironhorse-vm/src/interp/suspend.rs:472, ironhorse-vm/src/interp/suspend.rs:734, ironhorse-vm/src/interp/suspend.rs:949
+16	ironhorse-vm/src/interp/natives/uri.rs:168-185	<->	ironhorse-vm/src/interp/natives/annex_b.rs:174
+16	ironhorse-vm/src/interp/natives/temporal.rs:252-273	<->	ironhorse-vm/src/interp/natives/temporal.rs:384

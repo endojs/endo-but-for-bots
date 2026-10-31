@@ -1,0 +1,185 @@
+// @ts-check
+import '@endo/init';
+import test from 'ava';
+import path from 'node:path';
+
+import {
+  makeSandboxSessionId,
+  readMounterEnv,
+  readSessionPlan,
+} from '../src/opencode-session-plan.js';
+
+const plan = harden({
+  sessionId: 'session-a',
+  sandboxSessionId: makeSandboxSessionId('session-a'),
+  rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
+  accountRef: 'openrouter-main',
+  networkPolicy: 'off',
+  workspaceDir: '/workspaces/session-a-0123456789ab',
+  workspaceMountPoint: '/mounts/session-a-0123456789ab',
+  mcpDir: '/private/session-a-0123456789ab/mcp',
+  mounterSocketDir: '/private/session-a-0123456789ab/9p',
+  model: 'openrouter/anthropic/claude-sonnet-4',
+});
+
+test('a recorded plan parses without deployment resource settings', t => {
+  const parsed = readSessionPlan(JSON.stringify(plan));
+  t.false(Object.hasOwn(parsed, 'nativeProfile'));
+  t.is(parsed.workspaceDir, plan.workspaceDir);
+  t.is(parsed.model, plan.model);
+  t.false('systemPrompt' in parsed);
+  const { systemPrompt: _, ...rest } = readSessionPlan(
+    JSON.stringify({ ...plan, systemPrompt: 'persona' }),
+  );
+  t.deepEqual(rest, parsed);
+});
+
+/** @type {readonly [string, unknown, RegExp][]} */
+const refused = harden([
+  ['a non-record', 'null', /plan must be a record/],
+  ['an array', '[]', /plan must be a record/],
+  [
+    'a missing id',
+    JSON.stringify({ ...plan, sessionId: '' }),
+    /Missing session plan field "sessionId"/,
+  ],
+  [
+    'an unknown policy',
+    JSON.stringify({ ...plan, networkPolicy: 'lan' }),
+    /network policy/,
+  ],
+  [
+    'a non-text model',
+    JSON.stringify({ ...plan, model: 7 }),
+    /"model" must be text/,
+  ],
+  [
+    'a relative path',
+    JSON.stringify({ ...plan, mcpDir: 'private/mcp' }),
+    /absolute path for "mcpDir"/,
+  ],
+  [
+    'a trailing slash',
+    JSON.stringify({ ...plan, workspaceDir: '/workspaces/a/' }),
+    /absolute path for "workspaceDir"/,
+  ],
+  [
+    'a dot segment',
+    JSON.stringify({ ...plan, workspaceDir: '/workspaces/../a' }),
+    /absolute path for "workspaceDir"/,
+  ],
+  [
+    'the filesystem root',
+    JSON.stringify({ ...plan, workspaceMountPoint: '/' }),
+    /absolute path for "workspaceMountPoint"/,
+  ],
+  [
+    'a socket directory inside the guest-visible relay directory',
+    JSON.stringify({ ...plan, mounterSocketDir: `${plan.mcpDir}/9p` }),
+    /"mcpDir" and "mounterSocketDir" must be disjoint/,
+  ],
+  [
+    'a mount point inside its backing storage',
+    JSON.stringify({
+      ...plan,
+      workspaceMountPoint: `${plan.workspaceDir}/mount`,
+    }),
+    /"workspaceMountPoint" and "workspaceDir" must be disjoint/,
+  ],
+]);
+
+for (const [name, text, message] of refused) {
+  test(`a plan with ${name} is refused`, t => {
+    t.throws(() => readSessionPlan(/** @type {string} */ (text)), { message });
+  });
+}
+
+test('a foreign workspace records no owned directory, and the id derivation is stable', t => {
+  const { workspaceDir: _, ...neither } = plan;
+  t.throws(() => readSessionPlan(JSON.stringify(neither)), {
+    message: /must record an owned or an operator-supplied workspace/,
+  });
+  const foreign = { ...neither, workspaceHostPath: '/srv/worktrees/a' };
+  const parsed = readSessionPlan(JSON.stringify(foreign));
+  t.false('workspaceDir' in parsed);
+  t.is(parsed.workspaceHostPath, '/srv/worktrees/a');
+  t.throws(
+    () =>
+      readSessionPlan(JSON.stringify({ ...plan, workspaceHostPath: '/srv/x' })),
+    { message: /cannot record both/ },
+  );
+  // An operator-supplied workspace joins the disjointness rule: exported to
+  // the guest, it must not contain this session's sockets or mount point.
+  t.throws(
+    () =>
+      readSessionPlan(
+        JSON.stringify({
+          ...neither,
+          workspaceHostPath: path.dirname(plan.mcpDir),
+        }),
+      ),
+    { message: /"mcpDir" and "workspaceHostPath" must be disjoint/ },
+  );
+  t.is(makeSandboxSessionId('session-a'), makeSandboxSessionId('session-a'));
+  t.regex(makeSandboxSessionId('Session A!'), /^session-a-[0-9a-f]{12}$/);
+  t.regex(makeSandboxSessionId('!!!'), /^opencode-[0-9a-f]{12}$/);
+  t.not(makeSandboxSessionId('a'), makeSandboxSessionId('b'));
+});
+
+test('mounter settings are recorded verbatim and refused as the mounter would refuse them', t => {
+  const settings = { NINEP_SUDO: '1', NINEP_MOUNT_PROGRAM: 'sudo -n mount' };
+  t.deepEqual(
+    readSessionPlan(JSON.stringify({ ...plan, mounterEnv: settings }))
+      .mounterEnv,
+    settings,
+  );
+  t.false(Object.hasOwn(readSessionPlan(JSON.stringify(plan)), 'mounterEnv'));
+  /** @type {[unknown, RegExp][]} */
+  const refusedSettings = [
+    [{ NINEP_SOCKET_DIR: '/x' }, /Unknown mounter setting "NINEP_SOCKET_DIR"/],
+    [{ XDG_RUNTIME_DIR: '/x' }, /Unknown mounter setting "XDG_RUNTIME_DIR"/],
+    [{ NINEP_SUDO: 'yes' }, /"NINEP_SUDO" must be "1"/],
+    [{ NINEP_MOUNT_PROGRAM: '' }, /must be non-empty text/],
+    [
+      { NINEP_UMOUNT_PROGRAM: 'rm -rf' },
+      /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
+    ],
+    [['mount'], /must be a record/],
+  ];
+  for (const [mounterEnv, message] of refusedSettings) {
+    t.throws(() => readMounterEnv(mounterEnv), { message });
+    t.throws(() => readSessionPlan(JSON.stringify({ ...plan, mounterEnv })), {
+      message,
+    });
+  }
+});
+
+test('retired per-session native profiles are refused rather than ignored', t => {
+  t.throws(
+    () => readSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
+    {
+      message: /Unknown session plan field "nativeProfile"/,
+    },
+  );
+});
+
+test('retired native session resume IDs are refused rather than ignored', t => {
+  for (const opencodeSessionId of ['', 'ses_old', null]) {
+    t.throws(
+      () => readSessionPlan(JSON.stringify({ ...plan, opencodeSessionId })),
+      { message: /Unknown session plan field "opencodeSessionId"/ },
+    );
+  }
+});
+
+test('unknown fields are refused rather than dropped', t => {
+  for (const [name, mutated] of [
+    ['stateDirectory', { ...plan, stateDirectory: '/host/records' }],
+    ['imageRef', { ...plan, imageRef: 'x' }],
+    ['credentialKind', { ...plan, credentialKind: 'apiKey' }],
+  ]) {
+    t.throws(() => readSessionPlan(JSON.stringify(mutated)), {
+      message: new RegExp(`Unknown session plan field "${name}"; recreate`),
+    });
+  }
+});

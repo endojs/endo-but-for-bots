@@ -1,0 +1,10 @@
+const r = [];
+const T = (f) => { try { r.push(String(f())); } catch (e) { r.push(e.name); } };
+T(() => String.fromCharCode(2**63).charCodeAt(0));
+T(() => String.fromCharCode(2**64 + 2**20).charCodeAt(0));
+T(() => String.fromCharCode(-(2**63) - 2**12).charCodeAt(0));
+T(() => String.fromCharCode(1e300).charCodeAt(0));
+T(() => String.fromCharCode(65.9, -1, 65536 + 66).split('').map(c => c.charCodeAt(0)).join());
+T(() => 'abc'.at(-Infinity));
+T(() => 'abc'.charCodeAt(2**64));
+throw new Error(JSON.stringify(r));

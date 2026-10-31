@@ -5,12 +5,13 @@ import { encodeBase64 } from '@endo/base64';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { asyncIterate } from './async-iterate.js';
-import { PassableBytesReaderInterface } from './type-guards.js';
+import { CloseablePassableBytesReaderInterface } from './type-guards.js';
 import { makeReaderPump } from './reader-pump.js';
+import { makePumpLifecycle } from './pump-lifecycle.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
-/** @import { SomehowAsyncIterable, PassableBytesReader, MakeBytesReaderOptions } from './types.js' */
+/** @import { SomehowAsyncIterable, CloseablePassableBytesReader, MakeBytesReaderOptions } from './types.js' */
 
 /**
  * Convert a local AsyncIterator<Uint8Array> to a remote PassableBytesReader reference
@@ -44,7 +45,7 @@ import { makeReaderPump } from './reader-pump.js';
  *
  * @param {SomehowAsyncIterable<Uint8Array>} bytesIterator
  * @param {MakeBytesReaderOptions} [options]
- * @returns {PassableBytesReader}
+ * @returns {CloseablePassableBytesReader}
  */
 export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   const { buffer = 0, readReturnPattern, cancelPending } = options;
@@ -52,7 +53,9 @@ export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   // Forward cleanup explicitly. A generator-based map closes itself when a
   // cancelled pull completes or rejects, so a subsequent return() would never
   // reach the byte source.
-  const iterator = asyncIterate(bytesIterator);
+  // Both wire encodings share one source owner, so closing either protocol
+  // cannot duplicate source cleanup or leave a sibling pull alive.
+  const sourceLifecycle = makePumpLifecycle(asyncIterate(bytesIterator));
   /**
    * Adapt the shared byte iterator, transforming each yielded chunk.
    *
@@ -70,16 +73,13 @@ export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
         : harden({ done: false, value: encode(result.value) });
     return harden({
       async next() {
-        const result = await iterator.next();
+        const result = await sourceLifecycle.next();
         return encodeResult(result);
       },
       /** @param {undefined} [value] */
       async return(value) {
         await null;
-        if (iterator.return) {
-          return encodeResult(await iterator.return(value));
-        }
-        return harden({ done: /** @type {const} */ (true), value });
+        return encodeResult(await sourceLifecycle.release(value));
       },
     });
   };
@@ -92,9 +92,12 @@ export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   );
 
   // @ts-expect-error Exo pump types use Passable where template expects specific subtype
-  return makeExo('PassableBytesReader', PassableBytesReaderInterface, {
+  return makeExo('PassableBytesReader', CloseablePassableBytesReaderInterface, {
     stream: pump,
     streamBase64: pumpBase64,
+    close: async () => {
+      await Promise.all([pump.close(), pumpBase64.close()]);
+    },
 
     /**
      * Returns the pattern for validating TReadReturn (return value).

@@ -1,0 +1,173 @@
+// @ts-check
+/** @import { RandomPowers } from '../platform/random.js' */
+/** @import { SocketConnection, SocketPowers } from '../platform/sockets.js' */
+import { E } from '@endo/eventual-send';
+import harden from '@endo/harden';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { makeOcapn } from '@endo/ocapn';
+import { syrupCodec } from '@endo/ocapn/syrup';
+import { makePromiseKit } from '@endo/promise-kit';
+
+import { makePipeNetwork } from '../net/pipe-network.js';
+import { silentLogger } from '../platform/logging.js';
+
+// Local admin frames have a four-byte length, capped before allocation.
+const MAX_FRAME = 8 * 1024 * 1024;
+const secret = frozenBytes(new TextEncoder().encode('admin'));
+
+/**
+ * An OCapN session over a private Unix socket. Each socket has fresh client
+ * tables; the fixed pipe identities authorize nothing beyond socket access.
+ * @param {object} powers
+ * @param {SocketPowers} powers.sockets
+ * @param {RandomPowers} powers.random
+ * @param {SocketConnection} socket
+ * @param {'host' | 'worker'} role
+ * @param {object} [admin]
+ */
+export const makeLocalControl = async (
+  { sockets, random },
+  socket,
+  role,
+  admin = undefined,
+) => {
+  /** @type {import('@endo/promise-kit').PromiseKit<void>} */
+  const { promise: closed, resolve: finish } = makePromiseKit();
+  let ended = false;
+  /** @type {Awaited<ReturnType<typeof makeOcapn>> | undefined} */
+  let client;
+  /** @param {Error} error */
+  const drop = error => void socket.writer.throw(error);
+  const pipe = makePipeNetwork({
+    codec: syrupCodec,
+    workerId: 'local-admin-v1',
+    role,
+    send: bytes => {
+      if (ended) return;
+      if (bytes.length > MAX_FRAME) {
+        drop(Error('Admin frame too large'));
+        return;
+      }
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, bytes.length);
+      // Not awaited: the pipe's send is synchronous, and the host keeps the
+      // order of writes. A write the host cannot complete ends the session.
+      socket.writer.next(header).catch(drop);
+      socket.writer.next(bytes).catch(drop);
+    },
+  });
+  void (async () => {
+    let target = new Uint8Array(4);
+    let offset = 0;
+    let header = true;
+    try {
+      for await (const bytes of socket.reader) {
+        let cursor = 0;
+        while (cursor < bytes.length) {
+          const length = Math.min(
+            target.length - offset,
+            bytes.length - cursor,
+          );
+          target.set(bytes.subarray(cursor, cursor + length), offset);
+          offset += length;
+          cursor += length;
+          if (offset === target.length) {
+            if (header) {
+              const size = new DataView(target.buffer).getUint32(0);
+              if (size === 0 || size > MAX_FRAME)
+                throw Error('Invalid admin frame length');
+              target = new Uint8Array(size);
+            } else {
+              pipe.deliver(target);
+              target = new Uint8Array(4);
+            }
+            header = !header;
+            offset = 0;
+          }
+        }
+      }
+    } catch (error) {
+      drop(/** @type {Error} */ (error));
+    }
+    await socket.closed;
+    ended = true;
+    pipe.close();
+    client?.shutdown();
+    finish();
+  })();
+  client = await makeOcapn({
+    randomBytes: length => random.randomBytes(length),
+    logger: silentLogger,
+    codec: syrupCodec,
+    network: pipe.network,
+    locator: new Map(admin === undefined ? [] : [['admin', admin]]),
+  });
+  if (ended) client.shutdown();
+  else await client.provideSession(pipe.peerLocation);
+  const close = () => {
+    client?.shutdown();
+    pipe.close();
+    drop(Error('Local control closed'));
+  };
+  return harden({
+    closed,
+    close,
+    getAdmin: async () => {
+      if (!client || ended) throw Error('Supervisor disconnected');
+      const session = await client.provideSession(pipe.peerLocation);
+      return E(/** @type {any} */ (session.getBootstrap())).fetch(secret);
+    },
+  });
+};
+harden(makeLocalControl);
+
+/**
+ * @param {object} powers
+ * @param {SocketPowers} powers.sockets
+ * @param {RandomPowers} powers.random
+ * @param {string} socketPath
+ * @param {{ workspace?: string }} [options] the workspace this connection
+ *   speaks for; `default` when none is named
+ */
+export const connectLocalControl = async (
+  { sockets, random },
+  socketPath,
+  { workspace = undefined } = {},
+) => {
+  const socket = sockets.connectPath(socketPath);
+  const control = await makeLocalControl({ sockets, random }, socket, 'host');
+  const disconnected = control.closed.then(() => {
+    throw Error(
+      'Supervisor disconnected; evaluation outcome may be unknown. No retry was sent.',
+    );
+  });
+  // The disconnect can occur while the terminal is idle.
+  disconnected.catch(() => {});
+  try {
+    const admin = await Promise.race([control.getAdmin(), disconnected]);
+    if (workspace !== undefined)
+      await Promise.race([E(admin).selectWorkspace(workspace), disconnected]);
+    return harden({
+      close: control.close,
+      closed: control.closed,
+      /**
+       * @param {string} method
+       * @param {any[]} args
+       */
+      call: (method, ...args) =>
+        Promise.race([E(admin)[method](...args), disconnected]),
+      /**
+       * Race a call made on a reference the administration handed out
+       * against the connection, as `call` races its own.
+       * @template T
+       * @param {Promise<T>} promise
+       * @returns {Promise<T>}
+       */
+      race: promise => Promise.race([promise, disconnected]),
+    });
+  } catch (error) {
+    control.close();
+    throw error;
+  }
+};
+harden(connectLocalControl);

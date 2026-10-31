@@ -2,16 +2,46 @@
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { createServer } from 'node:http';
+
+import {
+  INFERENCE_PATHS,
+  forwardableHeaders,
+  splitInferenceTarget,
+} from './provider-paths.js';
 
 /** @import { Socket } from 'node:net' */
 /** @import { IncomingMessage, ServerResponse } from 'node:http' */
+
+/**
+ * How far ahead of the HTTP consumer the listener reads a bytes response. On
+ * the pipe to a broker on the same host it costs nothing; across a network to
+ * a peer's broker it is what keeps a token stream from paying a round trip
+ * per chunk.
+ */
+const RESPONSE_READ_AHEAD = 64;
+/**
+ * The base64 of the largest chunk a broker sends (`RESPONSE_CHUNK_BYTES`,
+ * 32 KiB), with room to spare: a chunk past this is not one a broker made.
+ */
+const MAX_BASE64_CHUNK_CHARS = 65_536;
+
+/**
+ * @typedef {object} ProviderHttpDiagnostic
+ * @property {'headers' | 'length' | 'upload' | 'endpoint' | 'response' | 'stream'} stage
+ * @property {{ method: boolean, path: boolean, host: boolean, origin: boolean, cookie: boolean, authorization: boolean, encoding: boolean, contentType: boolean }} [checks]
+ */
 
 /**
  * Credential-free HTTP adapter for a single inference capability. Run this
  * inside the operator's isolated broker namespace, with the endpoint supplied
  * over a private capability transport. Loopback binding alone is NOT process
  * isolation and this module issues no confinement attestation.
+ *
+ * The harness's own headers cross to the broker, minus the ones the broker
+ * owns (see BROKER_OWNED_HEADERS); the broker applies its own after them, so a
+ * slice can describe its request but never authenticate it.
  *
  * Each connection serves one request. Deadlines include uploads, upstream
  * inference, and slow consumers. An unresponsive endpoint retains its admission
@@ -32,6 +62,14 @@ import { createServer } from 'node:http';
  * @param {number} options.timeoutMs - Signed 32-bit host timer duration
  * @param {(callback: () => void, delay: number) => unknown} [options.setTimer]
  * @param {(timer: unknown) => void} [options.clearTimer]
+ * @param {readonly string[]} [options.allowedPaths] Exact POST paths admitted;
+ *   defaults to the shared inference-path set.
+ * @param {'reject' | 'strip'} [options.clientAuthorization] `reject` refuses a
+ *   client Authorization header outright; `strip` admits it and never
+ *   forwards it. Callers that must send a placeholder key (an OpenAI-compatible
+ *   SDK that refuses to start without one) use `strip`; the broker injects the
+ *   real credential upstream either way.
+ * @param {(diagnostic: ProviderHttpDiagnostic) => void | Promise<void>} [options.onDiagnostic] Host-only fixed metadata; never request values.
  */
 export const makeProviderHttpListener = async ({
   endpoint,
@@ -45,6 +83,9 @@ export const makeProviderHttpListener = async ({
     globalThis.clearTimeout(
       /** @type {ReturnType<typeof globalThis.setTimeout>} */ (timer),
     ),
+  allowedPaths = INFERENCE_PATHS,
+  clientAuthorization = 'reject',
+  onDiagnostic = () => {},
 }) => {
   (Number.isInteger(port) && port >= 0 && port <= 65_535) || Fail`Invalid port`;
   (Number.isInteger(maxConnections) &&
@@ -58,6 +99,24 @@ export const makeProviderHttpListener = async ({
     Fail`Invalid HTTP byte limits`;
   (Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 0x7fff_ffff) ||
     Fail`Invalid HTTP deadline`;
+  (Array.isArray(allowedPaths) && allowedPaths.length > 0) ||
+    Fail`Invalid inference paths`;
+  // Copy and re-validate: the admission decision must not follow a caller's
+  // later mutation of the array, and only exact canonical targets are
+  // admitted. A target may carry a bounded query; matching below stays an
+  // exact comparison against the whole request target either way.
+  const paths = harden(
+    allowedPaths.map(path => {
+      const target = splitInferenceTarget(path);
+      (target !== undefined &&
+        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
+        Fail`Invalid inference path`;
+      return path;
+    }),
+  );
+  clientAuthorization === 'reject' ||
+    clientAuthorization === 'strip' ||
+    Fail`Invalid client authorization mode`;
   /** @type {Set<Socket>} */
   const sockets = new Set();
   /** @type {Set<() => void>} */
@@ -101,36 +160,41 @@ export const makeProviderHttpListener = async ({
       return;
     }
     let stopped = false;
-    let reader;
+    /** Release the byte reader, including after its stream reaches EOF. */
+    /** @type {(() => void) | undefined} */
+    let closeReader;
     const stop = () => {
       if (stopped) return;
       stopped = true;
-      if (reader)
-        void E(reader)
-          .return()
-          .catch(() => {});
+      if (closeReader) closeReader();
     };
     pending.add(stop);
     response.once('close', stop);
+    /** @type {ProviderHttpDiagnostic['stage']} */
+    let stage = 'headers';
+    const checks = harden({
+      method: request.method === 'POST',
+      path: paths.includes(request.url || ''),
+      host: request.headers.host === authority,
+      origin: request.headers.origin === undefined,
+      cookie: request.headers.cookie === undefined,
+      authorization:
+        clientAuthorization === 'strip' ||
+        request.headers.authorization === undefined,
+      encoding: request.headers['content-encoding'] === undefined,
+      contentType: /^application\/json(?:;\s*charset=utf-8)?$/i.test(
+        request.headers['content-type'] || '',
+      ),
+    });
     try {
-      (request.method === 'POST' &&
-        ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
-          request.url || '',
-        ) &&
-        request.headers.host === authority &&
-        request.headers.origin === undefined &&
-        request.headers.cookie === undefined &&
-        request.headers.authorization === undefined &&
-        request.headers['content-encoding'] === undefined &&
-        /^application\/json(?:;\s*charset=utf-8)?$/i.test(
-          request.headers['content-type'] || '',
-        )) ||
-        Fail`Invalid inference request`;
+      Object.values(checks).every(Boolean) || Fail`Invalid inference request`;
+      stage = 'length';
       const length = request.headers['content-length'];
       length === undefined ||
         (/^\d+$/.test(length) && BigInt(length) <= maxRequestBytes) ||
         Fail`Request too large`;
       const decoder = new TextDecoder('utf-8', { fatal: true });
+      stage = 'upload';
       let bytes = 0n;
       const parts = [];
       for await (const chunk of request) {
@@ -140,18 +204,26 @@ export const makeProviderHttpListener = async ({
       }
       parts.push(decoder.decode());
       !stopped || Fail`HTTP consumer disconnected`;
-      const result = await E(endpoint).requestStream(
-        harden({
-          method: 'POST',
-          path: request.url,
-          body: parts.join(''),
-        }),
-      );
-      reader = result.reader;
-      if (stopped) {
+      stage = 'endpoint';
+      const message = harden({
+        method: 'POST',
+        path: request.url,
+        body: parts.join(''),
+        headers: forwardableHeaders(request.headers),
+      });
+      !stopped || Fail`HTTP consumer disconnected`;
+      const result = await E(endpoint).requestByteStream(message);
+      // Until the response is known to be one worth streaming, closing it is
+      // a call on the reader itself; the bytes stream is not opened, with its
+      // read-ahead, for a response that is about to be refused.
+      const { reader } = result;
+      closeReader = () =>
         void E(reader)
-          .return()
+          .close()
           .catch(() => {});
+      stage = 'response';
+      if (stopped) {
+        closeReader();
         return;
       }
       /** @type {unknown} */
@@ -164,6 +236,15 @@ export const makeProviderHttpListener = async ({
           result.contentType,
         )) ||
         Fail`Invalid inference response`;
+      const chunks = iterateBytesReader(reader, {
+        buffer: RESPONSE_READ_AHEAD,
+        stringLengthLimit: MAX_BASE64_CHUNK_CHARS,
+      });
+      // The consumer may have gone while the stream was being opened.
+      if (stopped) {
+        closeReader();
+        return;
+      }
       response.writeHead(status, {
         'content-type': result.contentType,
         'cache-control': 'no-store',
@@ -173,16 +254,18 @@ export const makeProviderHttpListener = async ({
         connection: 'close',
       });
       response.flushHeaders();
+      stage = 'stream';
       let responseBytes = 0n;
       for (;;) {
         // eslint-disable-next-line no-await-in-loop
-        const chunk = await E(reader).next();
+        const chunk = await chunks.next();
         !stopped || Fail`HTTP consumer disconnected`;
         if (chunk.done) break;
-        typeof chunk.value === 'string' || Fail`Invalid inference chunk`;
-        responseBytes += BigInt(new TextEncoder().encode(chunk.value).length);
+        const { value } = chunk;
+        value instanceof Uint8Array || Fail`Invalid inference chunk`;
+        responseBytes += BigInt(value.byteLength);
         responseBytes <= maxResponseBytes || Fail`Response too large`;
-        if (!response.write(chunk.value)) {
+        if (!response.write(value)) {
           // Stop pulling upstream while TCP applies backpressure.
           // eslint-disable-next-line no-await-in-loop
           await new Promise((resolve, reject) => {
@@ -205,6 +288,15 @@ export const makeProviderHttpListener = async ({
       }
       response.end();
     } catch (_error) {
+      try {
+        void Promise.resolve(
+          onDiagnostic(
+            harden({ stage, ...(stage === 'headers' ? { checks } : {}) }),
+          ),
+        ).catch(() => {});
+      } catch (_diagnosticError) {
+        // Host diagnostics must not change HTTP settlement or echo errors.
+      }
       if (!response.headersSent && !response.destroyed) {
         response.writeHead(502, {
           connection: 'close',

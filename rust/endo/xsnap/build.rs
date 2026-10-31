@@ -48,7 +48,10 @@ fn main() {
     println!("cargo:rerun-if-changed=prebuilt/libxs.a");
     // Link math and pthread
     println!("cargo:rustc-link-lib=m");
-    println!("cargo:rustc-link-lib=pthread");
+    // Android's bionic provides pthread symbols in libc, without libpthread.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+        println!("cargo:rustc-link-lib=pthread");
+    }
     println!("cargo:rustc-link-lib=dl");
 }
 

@@ -3,6 +3,8 @@
 import { E } from '@endo/eventual-send';
 
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
+import { selectFaeWorkloadEnv } from './src/subagent.js';
+import { readFaeWorkloadConfig } from './src/workload-config.js';
 import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   DEFAULT_MAX_SUBAGENTS,
@@ -34,6 +36,7 @@ import {
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (powers, _context, { env } = {}) => {
+  readFaeWorkloadConfig(env ?? {});
   const parentName = env?.SUBAGENT_PARENT || '';
   if (parentName === '') {
     throw Error('Subagent spawner requires SUBAGENT_PARENT');
@@ -102,6 +105,7 @@ export const make = async (powers, _context, { env } = {}) => {
     depth,
     maxDepth,
     maxSubagents,
+    workloadEnv: selectFaeWorkloadEnv(env ?? {}),
     ...(systemPrompt ? { systemPrompt } : {}),
   });
 };

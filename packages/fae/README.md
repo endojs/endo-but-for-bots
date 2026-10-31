@@ -4,6 +4,8 @@ An LLM agent manager for Endo. Fae runs as a factory caplet inside the
 Endo daemon, creating named agent instances that process inbox messages
 via an LLM and adopt tool capabilities at runtime.
 
+For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](../floot/OPENROUTER.md#fae).
+
 ## Architecture
 
 Fae uses a three-layer architecture:
@@ -140,6 +142,17 @@ Every agent has these tools available immediately:
 - `send`, `reply`, `listMessages`, `dismiss` — mail operations
 - `adoptTool` — adopt a tool capability from an incoming message
 
+### Inspecting mailbox messages
+
+`listMessages()` returns immediately with mailbox entries, including lifecycle promises.
+`dismissed` resolves only after removal, and a request's `settled` resolves after resolve/reject.
+Do not await these while handling that same message or blindly await every field.
+Read explicit metadata and payload fields; `done` means content complete, not task answered.
+Use `help("listMessages")` for a safe inspection example.
+Reply before dismissal, since `reply(number)` requires the retained mailbox entry.
+Floot automatically replies and dismisses its task after the agent finishes;
+do not dismiss the active task or wait for its dismissal yourself.
+
 ### Creating tool caplets
 
 Create example tools (greet, math, timestamp) in the host's inventory:
@@ -242,6 +255,62 @@ The capability that mints subagents is endowed per agent, so withholding it
 withholds the tools.
 See [SUBAGENTS.md](./SUBAGENTS.md).
 
+## Capability discovery and source reading
+
+`list` takes no arguments and lists petnames, not filesystem entries.
+`lookup({ petName })` retrieves a value; it does not accept `method` or `args`.
+These tools and `exec` reject unknown named arguments before dispatch.
+Floot additionally advertises and validates closed top-level argument envelopes
+for every built-in tool, including `store`, `remove`, and `listMessages`.
+This does not close nested JSON values or change stored/extra tools' own schemas.
+`describeCapability({ petName, method? })` uses CapTP method introspection and
+the capability's existing `help(method)` documentation for signatures/examples.
+It never invents signatures for undocumented methods.
+If a capability only accepts zero-argument `help()`, discovery falls back to its
+overview and labels that scope; if documentation fails, callable names remain
+available with an explicit unavailable notice.
+Invoke a discovered method using `exec` (`endo_exec` in Codex), for example:
+
+```js
+const source = await E(powers).lookup('review-source');
+return await E(source).help('glob');
+```
+
+Prefer `readSources` for bounded source-file reads and literal searches:
+
+```json
+{
+  "petName": "review-source",
+  "items": [
+    { "path": ["README.md"], "startLine": 1, "lineCount": 40 },
+    { "path": ["src", "agent.js"], "search": "checkpoint" }
+  ]
+}
+```
+
+The petname must already name a mount with `lookup(pathSegments)` returning a
+streamable blob; no ambient filesystem or new read/write authority is granted.
+Mount confinement, read-only enforcement, and revocation remain authoritative.
+Each of at most eight items independently returns `{ index, ok, lines }` or
+`{ index, ok: false, error }`, preserving successful reads when another fails.
+Lines have 1-based `line` numbers and `text`.
+Search is case-sensitive literal substring matching, not a regex or recursive
+filesystem scan; use the mount's documented `glob` to discover candidate paths.
+
+Each file scans at most 1 MiB through flow-controlled blob streaming, closing the
+reader at the ceiling; a compliant mount supplies bounded chunks.
+It returns at most 200 lines and 8,000 text characters per item (defaults: line 1,
+80 lines), with `scanTruncated` and `outputTruncated` flags.
+The entire serialized response is additionally capped at 48,000 characters,
+including JSON escaping, divided evenly across requested items.
+This leaves headroom for a second serialization layer in Floot's durable journal;
+quote/backslash-heavy sources may therefore return fewer text characters.
+A truncated scan is not evidence that a requested range or match does not exist.
+Files beyond the scan prefix require another endowed navigation capability;
+this tool does not silently fall back to an unbounded whole-file read.
+Remote I/O errors are deliberately generic rather than exposing paths, locators,
+or arbitrary exception data; invalid arguments retain actionable validation errors.
+
 ## Provider credentials
 
 The LLM auth token is held by the daemon's secret manager, not by a pet-store
@@ -255,16 +324,43 @@ An agent reads the token afresh for every turn, so replacing the bytes
 (`SecretAdmin.replaceBase64`) rotates every running agent at once and revoking
 the secret stops the next turn rather than merely the next provisioning.
 The provider is rebuilt only when the bytes actually change.
-A deployment still carrying a plaintext `authToken` in its provider config keeps
-working, with a warning: that arrangement cannot be rotated, revoked, or
-audited.
+Provider configs containing an `authToken` field are rejected, even beside a
+Secret capability. Import credentials into Secrets and remove the obsolete
+field before use. A failed Secret import does not publish a provider config.
+Tokenless local providers remain supported.
 
-Going the other way — replacing a managed secret with a plaintext token — takes
-more than re-running setup.
-Setup drops the factory's own `llm-auth-secret`, so newly created agents get
-none, but every agent already provisioned holds the `SecretBlob` in its own
-namespace and the resolver prefers a capability over a config value.
+The form's optional raw-token input is an explicit import into Secrets, not a
+fallback. The daemon stores form submissions before the factory processes them;
+use an existing Secret name to avoid placing credentials in form messages.
+These changes do not erase historical form or provider records.
+
+Removing a credential binding does not revoke copies already delegated.
 A `SecretBlob` hands its holder the bytes by design, so the way to stop those
 agents using the old token is to **revoke the secret**, which is what the secret
 manager is for; removing the pet name from the provider config is not a
 revocation.
+
+## Image inputs
+
+`viewImage({ petName, path? })` reads a PNG, JPEG, or WebP from an already-held
+Endo readable blob, tree, mount, or git workspace and supplies image input to a
+vision-capable model.
+For example, `{"petName":"workspace","path":["screenshots","mobile.png"]}`
+reads the workspace's worktree; omit `path` for an adopted blob.
+The byte limit is 2 MiB and paths must be relative segments.
+The tool does not fetch URLs or grant filesystem access.
+
+For visual development, use a granted browser or shell to render desktop and
+mobile screenshots, inspect browser errors, call `viewImage`, and iterate.
+Report any unavailable verification instead of claiming that a syntax check
+verified the scene.
+See [Floot's image-input guide](../floot/README.md#reading-images-and-checking-visual-work)
+for transport and recovery details.
+
+When inference fails after a new image read, Fae checkpoints a receipt for that
+turn's image inputs so subsequent requests can recover without replaying the
+rejected bytes.
+Earlier successful images and the original immutable tool records remain intact.
+This recovery checkpoint survives restart; the agent may explicitly read a corrected
+image again.
+Compaction and diagnostic logs use image receipts rather than base64 text.

@@ -1,0 +1,8 @@
+k=125 n=3200 captures=400000 rc=0 ironhorse=.119296420 s node=.034586774 s
+k=250 n=1600 captures=400000 rc=0 ironhorse=.229505574 s node=.031054155 s
+k=500 n=800 captures=400000 rc=0 ironhorse=.320521462 s node=.037094333 s
+k=1000 n=400 captures=400000 rc=0 ironhorse=.598498903 s node=.026815019 s
+k=2000 n=200 captures=400000 rc=0 ironhorse=1.131711619 s node=.031322721 s
+k=4000 n=100 captures=400000 rc=0 ironhorse=2.184044523 s node=.042393872 s
+k=8000 n=50 captures=400000 rc=0 ironhorse=4.014176195 s node=.043456543 s
+k=32000 n=12 captures=384000 rc=0 ironhorse=16.076785801 s node=.082186988 s

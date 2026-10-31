@@ -1,4 +1,5 @@
 // @ts-check
+import { imageResultText } from '@endo/hosted-agent/image-result.js';
 /* eslint-disable no-await-in-loop */
 
 // Floot consumes this provider-neutral stream contract; Codex-specific JSON-RPC
@@ -7,6 +8,17 @@
 import { makeError } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { addUsage } from '@endo/hosted-agent/token-usage.js';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
+import {
+  assertTranscriptRecord,
+  encodeTranscriptRecord,
+  pairToolCalls,
+} from '@endo/hosted-agent/transcript-records.js';
+
+import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
+
+/** @import { TranscriptContextRecord } from '@endo/hosted-agent/transcript-records.js' */
 
 // Stands in for a result the backend never reported. Persisted as the tool
 // message's content, so the transcript says what happened instead of carrying
@@ -23,15 +35,49 @@ export const UNSETTLED_TOOL_RESULT =
 harden(UNSETTLED_TOOL_RESULT);
 
 /**
+ * One interleaving-preserving slice of a hosted turn: assistant text, or a
+ * round of tool calls with their results. The transcript is rebuilt from these
+ * in order, so text that preceded a tool call stays before it instead of
+ * being concatenated onto the final answer.
+ *
+ * A `compaction` segment is where the backend replaced the conversation it
+ * was carrying with a summary of it. Its position is the boundary: what
+ * precedes it is history the model no longer holds. The stack records it
+ * because the stack owns the transcript — restore a compacted conversation
+ * without the boundary and the whole pre-compaction history becomes live
+ * context again, which can overflow the model on the first turn after a
+ * revival.
+ *
+ * @typedef {{ type: 'text', text: string }
+ *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean, beforeTranscriptOrdinal: string }
+ *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null, failed?: boolean }> }
+ *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} HostedTurnSegment
+ */
+
+/**
  * @typedef {object} HostedTurnPartial
  * @property {boolean} delivered - whether the backend took the prompt at all:
  *   anything it emitted before a terminal means it did; a spawn refusal or a
  *   stop before dispatch arrives as a leading abort.
+ * @property {boolean} [outcomeUnknown] - transport failure may hide external effects.
  * @property {string} finalContent - the reply text that streamed.
- * @property {Array<{ id: string, name: string, args: string, result: string | null }>} toolCalls
+ * @property {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} usage
+ * @property {Array<{ id: string, name: string, args: string, result: string | null, failed?: boolean }>} toolCalls
  *   - the tool activity that streamed (`result` is null for a call the turn
  *   ended before settling).
+ * @property {HostedTurnSegment[]} [segments] - `finalContent` and `toolCalls`
+ *   in stream order, for callers that persist the transcript.
  */
+
+/**
+ * How much of one turn the host keeps in memory before it is committed: the
+ * answer text plus every observed call's arguments and result, in UTF-16
+ * code units. It matches the 16 Mi frame the bounded readers hold resident
+ * and the storage-value bound of the turn journal, which is where this
+ * material goes next; it is not an output ceiling on the backend, whose own
+ * queue is bounded by credit where it is delivered.
+ */
+const MAX_RETAINED_CHARS = DEFAULT_WORKLOAD_LIMITS.transcriptChars;
 
 /**
  * Fail a turn with what the backend already did with it. A backend whose
@@ -41,20 +87,56 @@ harden(UNSETTLED_TOOL_RESULT);
  *
  * @param {string} reason
  * @param {HostedTurnPartial} partial
+ * @param {Error} [error]
  * @returns {Error}
  */
-const failTurn = (reason, partial) => {
-  const error = Error(reason);
+const failTurn = (reason, partial, error = Error(reason)) => {
   Object.defineProperty(error, 'hostedTurn', {
     value: harden({
       delivered: partial.delivered,
+      ...(partial.outcomeUnknown ? { outcomeUnknown: true } : {}),
       finalContent: partial.finalContent,
+      usage: partial.usage,
       toolCalls: partial.toolCalls.map(call => harden({ ...call })),
+      ...(partial.segments
+        ? { segments: freezeSegments(partial.segments) }
+        : {}),
     }),
     enumerable: false,
   });
   return error;
 };
+
+/**
+ * @param {HostedTurnSegment} segment
+ * @returns {HostedTurnSegment}
+ */
+const freezeSegment = segment => {
+  if (segment.type === 'thinking') return harden({ ...segment });
+  if (segment.type === 'text')
+    return harden({ type: 'text', text: segment.text });
+  if (segment.type === 'compaction')
+    return harden({
+      type: 'compaction',
+      summary: segment.summary,
+      ...(segment.retainedTail === undefined
+        ? {}
+        : { retainedTail: segment.retainedTail }),
+    });
+  return harden({
+    type: 'tools',
+    calls: segment.calls.map(call => harden({ ...call })),
+  });
+};
+
+/**
+ * Copy a mutable segment list into a hardened, self-contained value. Call
+ * objects are shared with the caller's `toolCalls`, so copy before freezing.
+ *
+ * @param {HostedTurnSegment[]} segments
+ * @returns {HostedTurnSegment[]}
+ */
+const freezeSegments = segments => harden(segments.map(freezeSegment));
 
 /**
  * What a failed hosted turn had already done, when the error came from
@@ -71,7 +153,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], beforeSend?: () => Promise<void>, recordToolEvent?: (event: any) => Promise<void>, recordTranscript?: (ordinal: string, record: any) => Promise<void>, completeTranscript?: (count: string) => Promise<void>, maxRetainedChars?: number }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -82,13 +164,56 @@ export const runHostedTurn = async ({
   reasoningEffort,
   systemPrompt,
   acknowledgedCheckpoint,
+  transcript,
+  beforeSend,
+  recordToolEvent,
+  recordTranscript,
+  completeTranscript,
+  maxRetainedChars = MAX_RETAINED_CHARS,
 }) => {
+  const recordObservedTool = async event => {
+    if (!recordToolEvent) return;
+    try {
+      await recordToolEvent(event);
+    } catch (error) {
+      journalFailed = true;
+      throw error;
+    }
+  };
+  let transcriptOrdinal = 0;
+  let journalText = '';
+  let journalFailed = false;
+  let finalNativeContext = false;
+  const recordContext = async record => {
+    finalNativeContext = false;
+    if (!recordTranscript) return;
+    try {
+      await recordTranscript(`${transcriptOrdinal}`, record);
+      transcriptOrdinal += 1;
+    } catch (error) {
+      journalFailed = true;
+      throw error;
+    }
+  };
+  const flushContextText = async () => {
+    if (!journalText || journalFailed) return;
+    await recordContext({
+      kind: 'message',
+      role: 'assistant',
+      content: journalText,
+    });
+    journalText = '';
+  };
+  // Journal dispatch intent before granting the backend the prompt. Failure
+  // here is not a producer failure: no send or interruption has been issued.
+  if (!signal?.aborted && beforeSend) await beforeSend();
   if (signal?.aborted) {
     return harden({
       delivered: false,
       finalContent: '',
       usage: undefined,
       toolCalls: [],
+      segments: harden([]),
     });
   }
   /** @type {ReturnType<typeof iterateReader> | undefined} */
@@ -104,6 +229,7 @@ export const runHostedTurn = async ({
     rejectAbort = reject;
   });
   const onAbort = () => {
+    finishThinking();
     cancellationP = (async () => {
       await null;
       // Reader close initiates cancellation, but its local return can settle
@@ -134,13 +260,57 @@ export const runHostedTurn = async ({
   };
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
   let delivered = false;
+  let terminal = false;
   let finalContent = '';
   let checkpoint;
-  /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
+  /** @type {HostedTurnSegment[]} */
+  const segments = [];
+  let pendingText = '';
+  /** @type {Extract<HostedTurnSegment, {type: 'thinking'}> | undefined} */
+  let thinking;
+  /** @type {Extract<HostedTurnSegment, {type: 'thinking'}> | undefined} */
+  let lastThinking;
+  let thinkingCount = 0;
+  // Display-only public reasoning preview, bounded across this whole turn.
+  // Truncation is visible and never fails an otherwise successful turn.
+  let thinkingRoom = 65_536;
+  const finishThinking = () => {
+    if (!thinking) return;
+    thinking.endedAt = Math.max(thinking.startedAt, Date.now());
+    writer.thinking({ ...thinking, text: '' });
+    thinking = undefined;
+  };
+  const flushText = () => {
+    finishThinking();
+    if (pendingText.length === 0) return;
+    segments.push({ type: 'text', text: pendingText });
+    pendingText = '';
+  };
+  // Ordinary progress commentary is not model reasoning. Keep its bounded
+  // live tail out of both the answer channel and the thinking display.
+  let lastCommentaryAt = 0;
+  let commentaryTail = '';
+  /** @type {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} */
   let usage;
-  /** @type {Array<{ id: string, name: string, args: string, result: string | null }>} */
+  /** @type {Array<{ id: string, name: string, args: string, result: string | null, failed?: boolean }>} */
   const toolCalls = [];
   const callsById = new Map();
+  // What this turn holds in memory until it is committed: the answer text and
+  // every observed call's arguments and result. This is the one place a
+  // turn's output accumulates on the host side, so it is the place the bound
+  // lives; the adapters bound what they queue for delivery, not what a turn
+  // keeps. Exceeding it fails the turn with what was retained, and the
+  // producer is interrupted like any other failed turn.
+  let retainedChars = 0;
+  /** @param {string} chunk */
+  const retain = chunk => {
+    retainedChars += chunk.length;
+    if (retainedChars > maxRetainedChars) {
+      throw Error(
+        `hosted turn exceeded its retained transcript bound of ${maxRetainedChars} characters`,
+      );
+    }
+  };
   await null;
   try {
     const readerP = E(client).send(
@@ -150,6 +320,11 @@ export const runHostedTurn = async ({
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(acknowledgedCheckpoint ? { acknowledgedCheckpoint } : {}),
+        // The stack's own record of this conversation, as transcript records
+        // (`@endo/hosted-agent/transcript-records.js`). An adapter restores
+        // its CLI's native store from these when it has no live conversation
+        // to continue.
+        ...(transcript === undefined ? {} : { transcript }),
       }),
     );
     const outcome = signal
@@ -164,6 +339,7 @@ export const runHostedTurn = async ({
         finalContent: '',
         usage: undefined,
         toolCalls: [],
+        segments: harden([]),
       });
     }
     iterator = iterateReader(/** @type {any} */ (outcome.reader));
@@ -178,80 +354,280 @@ export const runHostedTurn = async ({
       if ('aborted' in nextOutcome) break;
       if (nextOutcome.result.done) break;
       const event = /** @type {any} */ (nextOutcome.result.value);
+      if (!['abort', 'end', 'usage', 'phase'].includes(event?.type)) {
+        finalNativeContext = false;
+      }
       // Anything the backend emits before a terminal means it took the prompt;
       // a spawn refusal or a stop before dispatch arrives as a leading abort.
       if (event?.type !== 'abort') delivered = true;
       switch (event?.type) {
+        case 'thinking-delta': {
+          const incoming = `${event.text || ''}`;
+          if (incoming === '') break;
+          if (!thinking) {
+            // Bound metadata too: empty answer/idle boundaries must not turn
+            // a text preview bound into an unbounded list of tiny blocks.
+            if (thinkingCount >= 64) {
+              if (lastThinking && !lastThinking.truncated) {
+                lastThinking.truncated = true;
+                writer.thinking({ ...lastThinking, text: '' });
+              }
+              break;
+            }
+            flushText();
+            // Preserve the display boundary without sending reasoning to the
+            // model. A later presentation snapshot anchors to this frontier.
+            await flushContextText();
+            thinkingCount += 1;
+            thinking = {
+              type: 'thinking',
+              id: `thinking-${thinkingCount}`,
+              text: '',
+              startedAt: Date.now(),
+              truncated: false,
+              beforeTranscriptOrdinal: `${transcriptOrdinal}`,
+            };
+            segments.push(thinking);
+            lastThinking = thinking;
+          }
+          const chunk = incoming.slice(0, thinkingRoom);
+          thinkingRoom -= chunk.length;
+          thinking.text += chunk;
+          thinking.truncated ||= chunk.length < incoming.length;
+          writer.thinking({
+            id: thinking.id,
+            text: chunk,
+            startedAt: thinking.startedAt,
+            truncated: thinking.truncated,
+          });
+          writer.setPhase('thinking');
+          break;
+        }
         case 'phase':
+          if (event.phase === 'idle') finishThinking();
           writer.setPhase(`${event.phase || 'thinking'}`);
           break;
         case 'text-delta': {
+          finishThinking();
           const textDelta = `${event.text || ''}`;
+          retain(textDelta);
           finalContent += textDelta;
+          pendingText += textDelta;
           writer.delta(textDelta);
+          if (recordTranscript) {
+            journalText += textDelta;
+            if (journalText.length >= 65_536) await flushContextText();
+          }
           break;
         }
-        case 'commentary-delta':
+        case 'commentary-delta': {
+          finishThinking();
           // Floot's delta channel is spoken and persisted as answer text. Keep
           // Codex progress out of that channel until Floot has a distinct,
-          // non-TTS commentary event.
+          // non-TTS commentary event; a bounded phase tail is live-only.
+          commentaryTail = `${commentaryTail}${event.text || ''}`.slice(-160);
+          const now = Date.now();
+          if (now - lastCommentaryAt >= 1000) {
+            lastCommentaryAt = now;
+            const tail = commentaryTail.replace(/\s+/g, ' ').trim();
+            if (tail) writer.setPhase(`progress: ${tail}`);
+          }
           break;
+        }
         case 'tool-call':
           writer.setPhase('using tools');
           {
+            flushText();
+            await flushContextText();
             const call = {
               id: `${event.id || ''}`,
               name: `${event.name || 'tool'}`,
               args: `${event.args || ''}`,
               result: null,
             };
+            if (!call.id || callsById.has(call.id))
+              throw Error('Hosted tool call requires a unique nonempty ID');
+            retain(call.args);
             toolCalls.push(call);
             callsById.set(call.id, call);
+            const lastSegment = segments[segments.length - 1];
+            if (lastSegment?.type === 'tools') {
+              lastSegment.calls.push(call);
+            } else {
+              segments.push({ type: 'tools', calls: [call] });
+            }
+            await recordObservedTool({
+              type: 'observed-tool-call',
+              callId: call.id,
+              name: call.name,
+              args: call.args,
+            });
+            await recordContext({
+              kind: 'tool-call',
+              id: call.id,
+              name: call.name,
+              args: call.args,
+            });
             writer.toolCall(call);
           }
           break;
         case 'tool-result': {
+          finishThinking();
+          await flushContextText();
           const result = `${event.result || ''}`;
           const call = callsById.get(`${event.id || ''}`);
-          if (call) call.result = result;
+          if (!call || call.result !== null)
+            throw Error('Hosted tool result has no unsettled matching call');
+          retain(result);
+          const toolOutcome =
+            typeof event.ok === 'boolean' ? { failed: !event.ok } : {};
+          call.result = result;
+          Object.assign(call, toolOutcome);
+          await recordObservedTool({
+            type: 'observed-tool-result',
+            callId: call.id,
+            result,
+            ...toolOutcome,
+          });
+          await recordContext({
+            kind: 'tool-result',
+            id: call.id,
+            content: result,
+            ...toolOutcome,
+          });
           writer.toolResult({
             id: `${event.id || ''}`,
             name: `${event.name || 'tool'}`,
-            result,
+            result: imageResultText(result),
+            ...toolOutcome,
           });
+          break;
+        }
+        case 'native-context': {
+          if (!recordTranscript) {
+            throw Error('Native context requires durable transcript recording');
+          }
+          if (toolCalls.some(call => call.result === null)) {
+            throw Error(
+              'Native context cannot cross an unsettled hosted tool call',
+            );
+          }
+          flushText();
+          await flushContextText();
+          const nativeContext = assertTranscriptRecord(event.checkpoint);
+          if (nativeContext.kind !== 'native-context') {
+            throw Error('Expected native context checkpoint');
+          }
+          if (
+            pairToolCalls(nativeContext.context, { perTurn: true }).unanswered
+              .length
+          ) {
+            throw Error('Native context must contain settled tool calls');
+          }
+          retain(encodeTranscriptRecord(nativeContext));
+          // Native state is context data, not presentation and never evidence
+          // that a host effect completed. Persist the whole unit before end.
+          await recordContext(nativeContext);
+          finalNativeContext = true;
+          break;
+        }
+        case 'compaction': {
+          if (toolCalls.some(call => call.result === null)) {
+            throw Error(
+              'Compaction cannot cross an unsettled hosted tool call',
+            );
+          }
+          // The backend replaced the conversation it was carrying with a
+          // summary. Recorded as a segment so it keeps its place in the turn:
+          // the boundary is a position, not a fact about the turn as a whole.
+          flushText();
+          await flushContextText();
+          const compaction = assertCompactionCheckpoint({
+            kind: 'compaction',
+            summary: event.summary,
+            ...(Object.hasOwn(event, 'retainedTail')
+              ? { retainedTail: event.retainedTail }
+              : {}),
+          });
+          // Context snapshots count toward the same retained-turn bound as
+          // text and tool evidence, including their structured representation.
+          retain(encodeTranscriptRecord(compaction));
+          await recordContext(compaction);
+          segments.push({
+            type: 'compaction',
+            summary: compaction.summary,
+            ...(compaction.retainedTail === undefined
+              ? {}
+              : { retainedTail: compaction.retainedTail }),
+          });
+          writer.setPhase('summarizing the conversation so far');
           break;
         }
         case 'usage':
           // App-server reports `tokenUsage.last` once per model call. An
           // agentic turn can make several model calls around tool use, so the
           // provider-neutral turn total is the sum of these updates.
-          if (!usage) usage = { inputTokens: 0, outputTokens: 0 };
-          usage.inputTokens += Number(event.inputTokens) || 0;
-          usage.outputTokens += Number(event.outputTokens) || 0;
+          // The counts are disjoint and add; `context` is a reading of the
+          // last model call and the latest one wins.
+          usage = addUsage(usage, event);
           break;
         case 'abort':
+          terminal = true;
+          await flushContextText();
+          flushText();
+          // A normalized abort is a stopped-producer boundary. A final,
+          // durably recorded native snapshot can be complete even though the
+          // inference failed. Reader failures and cancellation never take this
+          // path; neither silence nor a partial transcript proves completeness.
+          if (
+            finalNativeContext &&
+            !journalFailed &&
+            !signal?.aborted &&
+            toolCalls.every(call => call.result !== null) &&
+            completeTranscript
+          ) {
+            try {
+              await completeTranscript(`${transcriptOrdinal}`);
+            } catch (error) {
+              journalFailed = true;
+              throw error;
+            }
+          }
           throw failTurn(`${event.reason || 'hosted turn aborted'}`, {
             delivered,
             finalContent,
+            usage,
             toolCalls,
+            segments,
           });
         case 'end':
           checkpoint =
             typeof event.checkpoint === 'string' && event.checkpoint !== ''
               ? event.checkpoint
               : undefined;
-          // A tool the backend started and never reported on would otherwise
-          // sit in the transcript looking permanently in progress: the live
-          // view keeps it pending and the persisted history records an empty
-          // result. Settle it explicitly, on both.
+          // Close the UI placeholder, but retain the missing result in the
+          // partial record. A terminal with unresolved tools is not success.
           for (const call of toolCalls) {
             if (call.result === null) {
-              call.result = UNREPORTED_TOOL_RESULT;
               writer.toolResult({
                 id: call.id,
                 name: call.name,
-                result: call.result,
+                result: UNREPORTED_TOOL_RESULT,
               });
+            }
+          }
+          if (toolCalls.some(call => call.result === null)) {
+            throw Error('hosted turn ended with unsettled tool calls');
+          }
+          terminal = true;
+          flushText();
+          await flushContextText();
+          if (completeTranscript) {
+            try {
+              await completeTranscript(`${transcriptOrdinal}`);
+            } catch (error) {
+              journalFailed = true;
+              throw error;
             }
           }
           return harden({
@@ -259,30 +635,79 @@ export const runHostedTurn = async ({
             finalContent,
             usage,
             toolCalls: toolCalls.map(call => harden({ ...call })),
+            segments: freezeSegments(segments),
             ...(checkpoint ? { checkpoint } : {}),
           });
         default:
         // Forward compatibility: unknown normalized event kinds are ignored.
       }
     }
+    if (!signal?.aborted) {
+      throw Error('hosted turn ended without a terminal event');
+    }
+  } catch (error) {
+    finishThinking();
+    // EOF, broken readers, and failed durable recording are not producer stop
+    // barriers. Keep the turn occupied until interruption is confirmed.
+    if (!terminal && !cancellationP) {
+      try {
+        await E(client).interrupt();
+      } catch {
+        flushText();
+        throw failTurn(
+          'Hosted turn cancellation failed: producer stop was not confirmed',
+          { delivered, finalContent, usage, toolCalls, segments },
+        );
+      }
+    }
+    flushText();
+    if (cancellationP) await cancellationP;
+    if (!journalFailed) {
+      try {
+        await flushContextText();
+      } catch {
+        // Preserve the original failure. The journal itself fences admission.
+      }
+    }
+    throw failTurn(error instanceof Error ? error.message : String(error), {
+      delivered,
+      ...(!terminal ? { outcomeUnknown: true } : {}),
+      finalContent,
+      usage,
+      toolCalls,
+      segments,
+    });
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort);
     // Transport failures must not release the turn while interruption is pending.
     // A failed barrier takes precedence so the session can quarantine itself.
-    if (cancellationP) await cancellationP;
+    if (cancellationP) {
+      try {
+        await cancellationP;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        // Unconfirmed producer stop deliberately overrides every turn outcome.
+        flushText();
+        // eslint-disable-next-line no-unsafe-finally
+        throw failTurn(
+          reason,
+          { delivered, finalContent, usage, toolCalls, segments },
+          new AggregateError([error], reason),
+        );
+      }
+    }
   }
-  if (!signal?.aborted) {
-    throw failTurn('hosted turn ended without a terminal event', {
-      delivered,
-      finalContent,
-      toolCalls,
-    });
-  }
+  // The signal-abort path breaks out of the loop without a terminal event;
+  // flush any text that streamed after the last tool round so the mirrored
+  // partial keeps it.
+  flushText();
+  await flushContextText();
   return harden({
     delivered,
     finalContent,
     usage,
     toolCalls: toolCalls.map(call => harden({ ...call })),
+    segments: freezeSegments(segments),
     ...(checkpoint ? { checkpoint } : {}),
   });
 };

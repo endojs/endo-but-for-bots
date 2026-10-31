@@ -21,6 +21,7 @@ import type {
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
 import type { ContentKind, ContentSourceHint } from './locator.js';
+import type { makeSessionOwner } from './session-owner.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -412,6 +413,50 @@ export type ShellDeferredTaskParams = {
   shellId: FormulaIdentifier;
 };
 
+export type EnvironmentRecipe = {
+  policy: Pick<ShellPolicy, 'allowedCommands' | 'timeoutMs' | 'maxOutputBytes'>;
+  networkPolicy: 'off' | 'public-internet';
+};
+
+export interface EnvironmentAdmin {
+  inspect(): Promise<{
+    phase: 'idle' | 'active' | 'disposed';
+    networkPolicy: 'off' | 'public-internet';
+    interrupted: boolean;
+    active: boolean;
+  }>;
+  stop(): Promise<void>;
+  /**
+   * Operator attestation after independently excluding a lost owner's admission
+   * and proving its native producers/resources stopped. Only cold interrupted
+   * environments with no acquired controller accept this. Records the evidence
+   * before reopening admission; does not perform or establish native cleanup.
+   */
+  acknowledgeExternalCleanup(note: string): Promise<void>;
+  setNetworkPolicy(policy: 'off' | 'public-internet'): Promise<void>;
+  dispose(): Promise<void>;
+  help(): string;
+}
+
+export type EnvironmentKit = { shell: EndoShell; admin: EnvironmentAdmin };
+export type EnvironmentFormula = {
+  type: 'environment';
+  runner: FormulaIdentifier;
+  workspace: FormulaIdentifier;
+  state: FormulaIdentifier;
+  recipe: EnvironmentRecipe;
+};
+export type EnvironmentFacetFormula = {
+  type: 'environment-facet';
+  environment: FormulaIdentifier;
+  facet: 'shell' | 'admin';
+};
+export type EnvironmentDeferredTaskParams = {
+  environmentId: FormulaIdentifier;
+  shellId: FormulaIdentifier;
+  adminId: FormulaIdentifier;
+};
+
 /**
  * The confinement mode a formula-owned HTTP policy can honor across a daemon
  * restart on its own. `tofu-prompt` / `tofu-attenuator` are excluded because
@@ -717,6 +762,8 @@ export type Formula =
   | ScratchMountFormula
   | GitFormula
   | ShellFormula
+  | EnvironmentFormula
+  | EnvironmentFacetFormula
   | HttpClientFormula
   | GitCredentialFormula
   | GitRemoteFormula
@@ -865,6 +912,8 @@ export interface Context {
    * The identifier for the associated formula.
    */
   id: FormulaIdentifier;
+  /** Refuse further acquisition through this original context after cancellation. */
+  assertActive: () => void;
   /**
    * Cancel the value, preparing it for garbage collection. Cancellation
    * propagates to all values that depend on this value.
@@ -1843,6 +1892,12 @@ export interface SecretCatalogEntry {
 
 export interface SecretCatalog {
   list(): Promise<SecretCatalogEntry[]>;
+  /**
+   * Select administration by an exact read facet from this secret manager.
+   * Requires catalog authority; foreign or wrapped facets are refused.
+   * Revoked records remain administrable, but deleted records are refused.
+   */
+  adminFor(blob: SecretBlob): Promise<SecretAdmin>;
 }
 
 export type SecretAuditEvent = {
@@ -1871,6 +1926,21 @@ export interface SecretManagerDirectory {
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
+  /**
+   * Provide a daemon-local administrative owner for a private directory.
+   * Creates missing directory parents; refuses a changed retained binding.
+   * Disposable record/client capabilities are not exported to the caller.
+   * Another host cannot claim the same directory in this daemon incarnation.
+   * A revived host formula also cannot take over its earlier incarnation's
+   * claim; cancellation does not prove that admitted cleanup has drained.
+   * Owners and their client forwarding facets are fenced when this host or
+   * the original directory incarnation is cancelled; that fence is not native
+   * cleanup proof.
+   */
+  provideSessionOwner(
+    recordsPath: NameOrPath,
+    controllerSpecifier?: string,
+  ): Promise<ReturnType<typeof makeSessionOwner>>;
   form(
     recipientNameOrPath: string | string[],
     description: string,
@@ -1908,7 +1978,8 @@ export interface EndoHost extends EndoAgent {
    * read-write parent may still be narrowed to a read-only child.
    */
   provideSubMount(
-    mountName: string | string[],
+    /** The parent by pet name, or the daemon-minted mount capability itself. */
+    mountName: string | string[] | EndoMount,
     subpath: string[],
     newName: string | string[],
     opts?: { readOnly?: boolean },
@@ -1946,6 +2017,18 @@ export interface EndoHost extends EndoAgent {
     petName: string | string[],
     policy: ShellPolicy,
   ): Promise<EndoShell>;
+  /**
+   * Capture exact local or remote runner/workspace dependencies. Passive
+   * restoration never starts native work. Retain the admin root until explicit
+   * disposal succeeds; dropping roots does not implement environment GC.
+   */
+  provideEnvironment(
+    runner: object,
+    workspace: EndoMount,
+    adminName: NameOrPath,
+    shellName: NameOrPath,
+    recipe: EnvironmentRecipe,
+  ): Promise<EnvironmentKit>;
   /**
    * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
    * the use-facing client to `petName`. Unlike `provideShell` / `provideGit`
@@ -2068,6 +2151,8 @@ export interface EndoHost extends EndoAgent {
     opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
+  /** Create a directory without returning its collectible capability to the caller. */
+  createDirectory(petNamePath: string | string[]): Promise<void>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
   evaluate(
     workerPetName: string | string[] | undefined,
@@ -2164,6 +2249,17 @@ export interface EndoHost extends EndoAgent {
    * `EndoInspector` already denotes the per-formula reference walker.)
    */
   diagnostics(): Promise<EndoDiagnostics>;
+  /**
+   * Read the stored construction environment of a local make-unconfined,
+   * make-archive, or make-from-tree formula without reviving it.
+   * Returns an empty record when the supported formula has no stored env.
+   * Rejects other formula types and cross-peer identifiers.
+   * Values may contain credentials: this method is available only on EndoHost,
+   * not on guests, diagnostics, or ordinary formula inspection records.
+   */
+  getFormulaEnvironment(
+    identifier: FormulaIdentifier,
+  ): Promise<Record<string, string>>;
   /**
    * Snapshot every retention path from a GC root to the target,
    * identified by an endo:// locator. Pet-store edges along the
@@ -2772,6 +2868,7 @@ export type DaemonicPowers = {
 export type FormulateResult<T> = Promise<{
   id: FormulaIdentifier;
   value: T;
+  context: Context;
 }>;
 
 export type DeferredTask<T extends Record<string, string | string[]>> = (
@@ -2835,6 +2932,8 @@ type FormulateNumberedHostParams = {
 };
 
 export type FormulaValueTypes = {
+  environment: EnvironmentKit;
+  'environment-facet': EndoShell | EnvironmentAdmin;
   directory: EndoDirectory;
   mount: EndoMount;
   network: EndoNetwork;
@@ -2900,12 +2999,9 @@ export interface DaemonCore {
     workerLabel?: string,
   ) => FormulateResult<unknown>;
 
+  /** Transfers one transient pin; release after publication or its failure. */
   formulateDirectory: (
     nodeNumber?: NodeNumber,
-  ) => FormulateResult<EndoDirectory>;
-
-  formulateDirectoryForStore: (
-    storeId: FormulaIdentifier,
   ) => FormulateResult<EndoDirectory>;
 
   getPeerIdForNodeIdentifier: (
@@ -3010,6 +3106,8 @@ export interface DaemonCore {
 
   getFormulaForId: (id: FormulaIdentifier) => Promise<Formula>;
 
+  getActiveContext: (id: FormulaIdentifier) => Context | undefined;
+
   formulateNumberedGuest: (
     identifiers: FormulateNumberedGuestParams,
   ) => FormulateResult<EndoGuest>;
@@ -3066,6 +3164,12 @@ export interface DaemonCore {
     policy: ShellPolicy,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
+  formulateEnvironment: (
+    runner: FormulaIdentifier,
+    workspace: FormulaIdentifier,
+    recipe: EnvironmentRecipe,
+    deferredTasks: DeferredTasks<EnvironmentDeferredTaskParams>,
+  ) => FormulateResult<EnvironmentKit>;
 
   formulateHttpClient: (
     policy: HttpClientPolicy,
@@ -3121,6 +3225,7 @@ export interface DaemonCore {
     env?: Record<string, string>,
     trustedShims?: string[],
     workerLabel?: string,
+    retainWorker?: (id: FormulaIdentifier, context: Context) => void,
   ) => FormulateResult<unknown>;
 
   formulateWorker: (

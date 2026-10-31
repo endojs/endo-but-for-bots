@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 
 import { tokenizeJs } from './highlight.js';
 
@@ -102,6 +102,139 @@ export const linkify = text => {
 };
 harden(linkify);
 
+// ── Thinking ─────────────────────────────────────────────────────────────────
+// A backend's public reasoning is machinery, like its tool calls: it folds
+// into the same collapsed group, with its duration on the group's header.
+
+/** @param {FlootMessage} msg */
+const isThought = msg => msg.role === 'thinking';
+
+/** @param {FlootMessage} msg */
+const thoughtRunning = msg =>
+  isThought(msg) &&
+  typeof msg.thinking?.startedAt === 'number' &&
+  msg.thinking.endedAt === undefined;
+
+/**
+ * How long a thought streamed for, as observed: until it ended, or until now.
+ *
+ * @param {FlootMessage} msg
+ * @param {number} now
+ */
+const thoughtMs = (msg, now) => {
+  const startedAt = msg.thinking?.startedAt;
+  if (typeof startedAt !== 'number') return 0;
+  return Math.max(0, (msg.thinking?.endedAt ?? now) - startedAt);
+};
+
+/**
+ * @param {FlootMessage} msg
+ * @param {number} now
+ */
+const thoughtSeconds = (msg, now) => Math.floor(thoughtMs(msg, now) / 1000);
+
+/** @param {number} seconds */
+const formatDuration = seconds =>
+  `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+
+/**
+ * "Thought for 1m2s", or "Thinking… (0m5s)" while it streams.
+ *
+ * @param {number} seconds
+ * @param {boolean} running
+ */
+export const thoughtLabel = (seconds, running) =>
+  running
+    ? `Thinking… (${formatDuration(seconds)})`
+    : `Thought for ${formatDuration(seconds)}`;
+harden(thoughtLabel);
+
+/**
+ * A clock that ticks once a second while something streams, so a live
+ * duration moves without a delta to prompt it.
+ *
+ * @param {boolean} running
+ */
+const useNow = running => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  return now;
+};
+
+/**
+ * The head's one-line glimpse of a thought: its opening words, bounded. Not
+ * `actionPreview`, which reads a shell command out of JSON; reasoning that
+ * happens to be JSON must not come up as a command.
+ *
+ * @param {string} text
+ */
+export const thoughtPreview = text =>
+  text.slice(0, 240).replace(/\s+/g, ' ').trim();
+harden(thoughtPreview);
+
+/**
+ * One thought inside an action group: its duration and a preview on the
+ * closed head, the reasoning itself when opened. Closed by default.
+ *
+ * @param {{ msg: FlootMessage, now: number }} props
+ * @returns {VNode}
+ */
+const ThoughtEntry = ({ msg, now }) => {
+  const [open, setOpen] = useState(false);
+  const running = thoughtRunning(msg);
+  const text = msg.text || '';
+  // Recomputed only when the text changes, not on every tick of the clock.
+  const preview = useMemo(() => thoughtPreview(text), [text]);
+  return h(
+    'div',
+    { class: `floot-action thought${open ? ' open' : ''}` },
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'floot-action-head',
+        'aria-expanded': open ? 'true' : 'false',
+        onClick: () => setOpen(!open),
+      },
+      h(
+        'span',
+        { class: 'floot-caret', 'aria-hidden': 'true' },
+        open ? '▾' : '▸',
+      ),
+      h(
+        'span',
+        { class: 'floot-action-name' },
+        thoughtLabel(thoughtSeconds(msg, now), running),
+      ),
+      h('span', { class: 'floot-action-preview' }, preview),
+    ),
+    open
+      ? h(
+          'div',
+          { class: 'floot-action-body' },
+          h(
+            'div',
+            { class: 'floot-thought-note' },
+            'Public reasoning from the backend. Duration measures the observed streaming interval.',
+          ),
+          h('pre', { class: 'floot-thought-text' }, text),
+          msg.thinking?.truncated
+            ? h(
+                'div',
+                { class: 'floot-thought-note' },
+                'Reasoning preview truncated.',
+              )
+            : null,
+        )
+      : null,
+  );
+};
+
 // ── Agent actions ────────────────────────────────────────────────────────────
 
 /**
@@ -136,6 +269,63 @@ export const formatPayload = payload => {
 harden(formatPayload);
 
 /**
+ * Find a unified diff carried by a tool result. Edit tools use both of the
+ * result shapes this accepts: a plain summary followed by the diff, and a JSON
+ * record whose `diff` field contains it. The non-diff part is retained so the
+ * renderer does not hide result metadata such as the applied-edit count.
+ *
+ * @param {string | null | undefined} payload
+ * @returns {{ summary: string, diff: string } | null}
+ */
+export const extractUnifiedDiff = payload => {
+  const source = `${payload == null ? '' : payload}`;
+  const trimmed = source.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        typeof parsed.diff === 'string'
+      ) {
+        const diff = parsed.diff;
+        if (/^--- [^\n]+\n\+\+\+ [^\n]+\n@@ /u.test(diff)) {
+          const { diff: _diff, ...metadata } = parsed;
+          const summary = Object.keys(metadata).length
+            ? JSON.stringify(metadata, null, 2)
+            : '';
+          return harden({ summary, diff });
+        }
+      }
+    } catch {
+      // A non-JSON result may still contain a plain unified diff below.
+    }
+  }
+
+  const match = /(?:^|\n)(--- [^\n]+\n\+\+\+ [^\n]+\n@@ )/u.exec(source);
+  if (!match) return null;
+  const start = match.index + (match[0].startsWith('\n') ? 1 : 0);
+  return harden({
+    summary: source.slice(0, start).trimEnd(),
+    diff: source.slice(start),
+  });
+};
+harden(extractUnifiedDiff);
+
+/**
+ * @param {string} line
+ * @returns {'header' | 'hunk' | 'added' | 'removed' | 'context'}
+ */
+export const classifyUnifiedDiffLine = line => {
+  if (line.startsWith('--- ') || line.startsWith('+++ ')) return 'header';
+  if (line.startsWith('@@ ')) return 'hunk';
+  if (line.startsWith('+')) return 'added';
+  if (line.startsWith('-')) return 'removed';
+  return 'context';
+};
+harden(classifyUnifiedDiffLine);
+
+/**
  * The JavaScript an `exec`-family call actually runs. Its args are a JSON
  * record whose `code` field holds the source; showing that source directly
  * (rather than the JSON envelope with its escaped newlines) is what makes the
@@ -159,26 +349,44 @@ export const extractExecCode = args => {
 harden(extractExecCode);
 
 /**
- * Collapse a run of actions into the summary its closed header shows: how many
- * ran in total, and how many of each tool.
+ * Collapse a run of actions into the summary its closed header shows: how long
+ * the backend thought, how many tools ran in total, and how many of each.
+ * Thoughts are part of the run but not counted as actions.
  *
- * @param {FlootMessage[]} actions
+ * @param {FlootMessage[]} entries tool and thinking messages, in order
+ * @param {number} [now] for a thought still streaming
  * @returns {{ total: number, counts: Array<{ name: string, count: number }>,
- *   label: string, detail: string }}
+ *   thought: string, thinking: boolean, label: string, detail: string }}
  */
-export const summarizeActions = actions => {
+export const summarizeActions = (entries, now = Date.now()) => {
   /** @type {Map<string, number>} */
   const tally = new Map();
-  for (const action of actions) {
-    const name = action.name || 'tool';
-    tally.set(name, (tally.get(name) || 0) + 1);
+  let total = 0;
+  let ms = 0;
+  let thoughts = 0;
+  let thinking = false;
+  for (const entry of entries) {
+    if (isThought(entry)) {
+      thoughts += 1;
+      // Summed in milliseconds, floored once: two short thoughts still add up.
+      ms += thoughtMs(entry, now);
+      if (thoughtRunning(entry)) thinking = true;
+    } else {
+      total += 1;
+      const name = entry.name || 'tool';
+      tally.set(name, (tally.get(name) || 0) + 1);
+    }
   }
   const counts = [...tally.entries()].map(([name, count]) => ({ name, count }));
-  const total = actions.length;
+  const thought = thoughts ? thoughtLabel(Math.floor(ms / 1000), thinking) : '';
+  const actions = total ? `${total} action${total === 1 ? '' : 's'}` : '';
   return {
     total,
     counts,
-    label: `${total} action${total === 1 ? '' : 's'}`,
+    thought,
+    thinking,
+    // "Thought for 1m2s · 3 actions", or whichever half the run has.
+    label: [thought, actions].filter(Boolean).join(' · '),
     detail: counts
       .map(({ name, count }) => (count > 1 ? `${name} ×${count}` : name))
       .join(', '),
@@ -186,16 +394,23 @@ export const summarizeActions = actions => {
 };
 harden(summarizeActions);
 
-// One line of context for a collapsed action, so a closed entry still says what
-// it did.
-const PREVIEW_MAX = 80;
-const previewOf = (/** @type {string} */ text) => {
-  const line = `${text || ''}`.split('\n').find(l => l.trim()) || '';
-  const trimmed = line.trim();
-  return trimmed.length > PREVIEW_MAX
-    ? `${trimmed.slice(0, PREVIEW_MAX - 1)}…`
-    : trimmed;
+// Display only: never use the whitespace-condensed preview as executable input.
+// CSS truncates to the available width; expanded arguments remain unchanged.
+/** @param {string} text */
+export const actionPreview = text => {
+  let preview = text;
+  try {
+    const value = JSON.parse(text);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const command = value.command ?? value.cmd;
+      if (typeof command === 'string') preview = command;
+    }
+  } catch {
+    // Raw code and incomplete JSON still get a useful single-line preview.
+  }
+  return preview.replace(/\s+/g, ' ').trim();
 };
+harden(actionPreview);
 
 /**
  * A `<pre>` of source, colourised when it is JavaScript. Token spans are built
@@ -233,6 +448,32 @@ const CodeBlock = ({ code, language }) => {
 };
 
 /**
+ * A unified diff whose rows remain text nodes, with line classes supplying the
+ * preview's colour and signposting.
+ *
+ * @param {{ diff: string }} props
+ * @returns {VNode}
+ */
+const DiffBlock = ({ diff }) =>
+  h(
+    'pre',
+    { class: 'floot-tool-pre floot-diff' },
+    ...diff
+      .replace(/\n$/u, '')
+      .split('\n')
+      .map((line, index) =>
+        h(
+          'span',
+          {
+            key: `diff-${index}`,
+            class: `floot-diff-line ${classifyUnifiedDiffLine(line)}`,
+          },
+          line,
+        ),
+      ),
+  );
+
+/**
  * One agent action — the call and its result as a single entry, collapsed by
  * default.
  *
@@ -249,8 +490,12 @@ const ActionEntry = ({ msg }) => {
     () => (js ? extractExecCode(msg.args) : formatPayload(msg.args)),
     [js, msg.args],
   );
-  const preview = useMemo(() => previewOf(argsText), [argsText]);
+  const preview = useMemo(() => actionPreview(argsText), [argsText]);
   const hasResult = msg.result != null;
+  const diffResult = useMemo(
+    () => (hasResult ? extractUnifiedDiff(msg.result) : null),
+    [hasResult, msg.result],
+  );
   return h(
     'div',
     { class: `floot-action${open ? ' open' : ''}` },
@@ -269,6 +514,9 @@ const ActionEntry = ({ msg }) => {
       ),
       h('span', { class: 'floot-action-name' }, name),
       h('span', { class: 'floot-action-preview' }, preview),
+      msg.failed === true
+        ? h('span', { class: 'floot-action-running' }, 'failed')
+        : null,
       hasResult
         ? null
         : h('span', { class: 'floot-action-running' }, 'running…'),
@@ -292,11 +540,24 @@ const ActionEntry = ({ msg }) => {
                 'div',
                 { class: 'floot-action-section result' },
                 h('div', { class: 'floot-tool-label' }, 'result'),
-                h(
-                  'pre',
-                  { class: 'floot-tool-pre' },
-                  formatPayload(msg.result),
-                ),
+                diffResult
+                  ? h(
+                      'div',
+                      { class: 'floot-diff-result' },
+                      diffResult.summary
+                        ? h(
+                            'pre',
+                            { class: 'floot-tool-pre floot-diff-summary' },
+                            diffResult.summary,
+                          )
+                        : null,
+                      h(DiffBlock, { diff: diffResult.diff }),
+                    )
+                  : h(
+                      'pre',
+                      { class: 'floot-tool-pre' },
+                      formatPayload(msg.result),
+                    ),
               )
             : null,
         )
@@ -305,15 +566,18 @@ const ActionEntry = ({ msg }) => {
 };
 
 /**
- * Every action between two assistant replies, as one collapsible group that is
- * closed by default and summarised in its header.
+ * Everything between two assistant replies that is not a reply — the
+ * backend's thoughts and its tool calls — as one collapsible group that is
+ * closed by default and summarised in its header: how long it thought, how
+ * many tools ran. The header's duration keeps moving while a thought streams.
  *
  * @param {{ actions: FlootMessage[] }} props
  * @returns {VNode}
  */
 const ActionGroup = ({ actions }) => {
   const [open, setOpen] = useState(false);
-  const summary = summarizeActions(actions);
+  const now = useNow(actions.some(thoughtRunning));
+  const summary = summarizeActions(actions, now);
   return h(
     'div',
     { class: 'floot-msg-row assistant' },
@@ -342,8 +606,10 @@ const ActionGroup = ({ actions }) => {
         ? h(
             'div',
             { class: 'floot-actions-body' },
-            actions.map((action, index) =>
-              h(ActionEntry, { key: `action-${index}`, msg: action }),
+            actions.map((entry, index) =>
+              isThought(entry)
+                ? h(ThoughtEntry, { key: `thought-${index}`, msg: entry, now })
+                : h(ActionEntry, { key: `action-${index}`, msg: entry }),
             ),
           )
         : null,
@@ -351,10 +617,95 @@ const ActionGroup = ({ actions }) => {
   );
 };
 
+// What a person reads when a turn ends without finishing. The daemon's own
+// words (an adapter's reason, a CLI's stderr) stay one click away: they are
+// what an operator needs, and noise to everyone else.
+const TURN_STATUS_TEXT = harden({
+  failed: 'This turn did not finish.',
+  cancelled: 'This turn was stopped.',
+  'outcome-unknown':
+    'This turn stopped with an unknown outcome. Check any tool results before retrying.',
+});
+
+/**
+ * The plain summary and the raw detail of a turn-status message, which the
+ * daemon writes as `Turn <state>: <reason>` or `Turn <state>.`.
+ *
+ * @param {FlootMessage} msg
+ * @returns {{ summary: string, detail: string }}
+ */
+export const turnStatusView = msg => {
+  const state = String(msg.meta?.turnState || '');
+  const text = msg.text || '';
+  const prefix = `Turn ${state}`;
+  let detail = text;
+  if (state && text.startsWith(`${prefix}: `)) {
+    detail = text.slice(prefix.length + 2);
+  } else if (state && text === `${prefix}.`) {
+    detail = '';
+  }
+  const summary = Object.hasOwn(TURN_STATUS_TEXT, state)
+    ? TURN_STATUS_TEXT[/** @type {keyof typeof TURN_STATUS_TEXT} */ (state)]
+    : `This turn ended: ${state || 'unknown state'}.`;
+  return harden({ summary, detail: detail.trim() });
+};
+harden(turnStatusView);
+
+/** @param {{ msg: FlootMessage }} props */
+const TurnStatus = ({ msg }) => {
+  const [open, setOpen] = useState(false);
+  const { summary, detail } = turnStatusView(msg);
+  return h(
+    'div',
+    { class: 'floot-msg-row assistant status' },
+    h(
+      'div',
+      { class: 'floot-msg floot-turn-status' },
+      h('span', { class: 'floot-turn-status-summary' }, summary),
+      detail
+        ? h(
+            'details',
+            { class: 'floot-turn-status-detail', open },
+            h(
+              'summary',
+              {
+                onClick: (/** @type {FlootSafeEvent} */ event) => {
+                  event.preventDefault();
+                  setOpen(!open);
+                },
+              },
+              'Details',
+            ),
+            open ? h('pre', null, detail) : null,
+          )
+        : null,
+    ),
+  );
+};
+harden(TurnStatus);
+
 /**
  * @param {{ msg: FlootMessage, canReplay: boolean, onReplay: (text: string) => void, replaying: boolean }} props
  * @returns {VNode}
  */
+/** @param {FlootMessage} msg */
+const messageBody = msg => {
+  const message = msg.role === 'user' && msg.meta?.message;
+  if (!message) return linkify(msg.text || '');
+  return message.strings.flatMap((part, index) => [
+    part,
+    ...(index < message.names.length
+      ? [
+          h(
+            'span',
+            { class: 'chat-token', title: 'Attached object' },
+            h('span', { class: 'token-name' }, message.names[index]),
+          ),
+        ]
+      : []),
+  ]);
+};
+
 const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
   const text = msg.text || '';
   const mailFrom = msg.meta && msg.meta.mail && msg.meta.mail.from;
@@ -367,7 +718,7 @@ const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
         h('span', { class: 'token message-token' }, `@${mailFrom}`),
       )
     : null;
-  const bubble = h('div', { class: 'floot-msg' }, ...linkify(text));
+  const bubble = h('div', { class: 'floot-msg' }, ...messageBody(msg));
   // A finished assistant message offers a replay button when TTS is wired.
   if (msg.role === 'assistant' && canReplay && text.trim()) {
     return h(
@@ -400,7 +751,10 @@ harden(Bubble);
  * marks both fields optional because a sent message has neither; this is the one
  * place the pairing is established, so nothing downstream has to assert it.
  *
- * @typedef {FlootMessage & { pendingId: number }} FlootPendingMessage
+ * The id is whatever the host addresses the submission by: the daemon's queue
+ * issues strings, and an older host that queued in the page issued numbers.
+ *
+ * @typedef {FlootMessage & { pendingId: number | string }} FlootPendingMessage
  */
 
 /**
@@ -412,7 +766,9 @@ harden(Bubble);
  * @returns {msg is FlootPendingMessage}
  */
 const isPending = msg =>
-  Boolean(msg.pending) && typeof msg.pendingId === 'number';
+  Boolean(msg.pending) &&
+  (typeof msg.pendingId === 'number' ||
+    (typeof msg.pendingId === 'string' && msg.pendingId !== ''));
 
 /**
  * A submission the host has accepted but not yet run, shown after the live turn
@@ -420,14 +776,22 @@ const isPending = msg =>
  * (below the thinking indicator) and the muted styling already say "not sent
  * yet", and a badge on every queued line would just be noise.
  *
- * @param {{ msg: FlootPendingMessage, onSendNow?: (id: number) => void,
- *   onEdit?: (id: number, text: string) => void,
- *   onDelete?: (id: number) => void }} props
+ * `pendingState` refines it. `sending` is a message on its way — accepted by
+ * the page and not yet by the daemon, or claimed by the daemon and starting —
+ * and has no controls: there is nothing left to edit or cancel. `interrupted`
+ * is one the daemon was sending when it restarted, so nobody knows whether it
+ * arrived; it says so, and the user sends it again or deletes it.
+ *
+ * @param {{ msg: FlootPendingMessage, onSendNow?: (id: number | string) => void,
+ *   onEdit?: (id: number | string, text: string) => void,
+ *   onDelete?: (id: number | string) => void }} props
  * @returns {VNode}
  */
 const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
   const text = msg.text || '';
   const id = msg.pendingId;
+  const sending = msg.pendingState === 'sending';
+  const interrupted = msg.pendingState === 'interrupted';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
 
@@ -481,10 +845,30 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
     );
   }
 
+  if (sending) {
+    return h(
+      'div',
+      { class: 'floot-msg-row user pending floot-pending-sending' },
+      h('div', { class: 'floot-msg' }, ...messageBody(msg)),
+      h('div', { class: 'floot-pending-note' }, 'Sending…'),
+    );
+  }
+
   return h(
     'div',
-    { class: 'floot-msg-row user pending' },
-    h('div', { class: 'floot-msg' }, text),
+    {
+      class: `floot-msg-row user pending${
+        interrupted ? ' floot-pending-interrupted' : ''
+      }`,
+    },
+    h('div', { class: 'floot-msg' }, ...messageBody(msg)),
+    interrupted
+      ? h(
+          'div',
+          { class: 'floot-pending-note', role: 'status' },
+          'May already have been sent: the service restarted while sending it.',
+        )
+      : null,
     h(
       'div',
       { class: 'floot-pending-actions' },
@@ -496,10 +880,10 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
               class: 'floot-pending-action',
               onClick: () => onSendNow(id),
             },
-            'Send now',
+            interrupted ? 'Send again' : 'Send now',
           )
         : null,
-      onEdit
+      onEdit && !msg.meta?.message?.names.length
         ? h(
             'button',
             {
@@ -579,8 +963,8 @@ const RawBlock = (/** @type {string} */ key, /** @type {FlootMessage} */ msg) =>
 
 /**
  * One row of the rendered transcript: a message bubble, or a run of consecutive
- * tool messages that collapses together as a single action group. `index` is
- * the row's position in the snapshot, which is what keys it.
+ * tool and thinking messages that collapses together as a single action group.
+ * `index` is the row's position in the snapshot, which is what keys it.
  *
  * @typedef {{ kind: 'bubble', index: number, msg: FlootMessage }
  *   | { kind: 'actions', index: number, actions: FlootMessage[] }} TranscriptRow
@@ -589,8 +973,8 @@ const RawBlock = (/** @type {string} */ key, /** @type {FlootMessage} */ msg) =>
 /**
  * Split the snapshot's messages into what the transcript renders in place and
  * the queued submissions, which render after the live turn instead. Consecutive
- * tool messages — one turn's worth of actions, the run between two replies —
- * are grouped so they collapse together.
+ * tool and thinking messages — one turn's worth of machinery, the run between
+ * two replies — are grouped so they collapse together.
  *
  * A row's `index` is its position in `messages`, which is what keys it. That is
  * only stable because the host appends queued submissions AFTER everything
@@ -611,10 +995,13 @@ export const projectTranscript = messages => {
     if (isPending(msg)) {
       pending.push(msg);
       i += 1;
-    } else if (msg.role === 'tool') {
+    } else if (msg.role === 'tool' || isThought(msg)) {
       const actions = [];
       let j = i;
-      while (j < messages.length && messages[j].role === 'tool') {
+      while (
+        j < messages.length &&
+        (messages[j].role === 'tool' || isThought(messages[j]))
+      ) {
         actions.push(messages[j]);
         j += 1;
       }
@@ -634,22 +1021,27 @@ harden(projectTranscript);
  * @returns {VNode}
  */
 export const MessageList = ({ state, controller, debug = false }) => {
-  const { messages, streamingText, busy, loaded, voice } = state;
+  const { messages, streamingText, loaded, voice } = state;
+  // A turn this page can stop, for the queue's "Send now".
+  const { busy } = state;
+  // Anything under way shows the thinking indicator, including a turn that
+  // arrived by mail, which has no Stop.
+  const thinking = busy || Boolean(state.working);
   const canReplay = Boolean(voice && voice.hasTts);
   const replayingText = voice && voice.replayingText;
   // Older hosts may not offer these; each control simply does not render.
   const onSendNow =
     typeof controller.sendPendingNow === 'function'
-      ? (/** @type {number} */ id) => controller.sendPendingNow?.(id)
+      ? (/** @type {number | string} */ id) => controller.sendPendingNow?.(id)
       : undefined;
   const onEditPending =
     typeof controller.editPending === 'function'
-      ? (/** @type {number} */ id, /** @type {string} */ text) =>
+      ? (/** @type {number | string} */ id, /** @type {string} */ text) =>
           controller.editPending?.(id, text)
       : undefined;
   const onDeletePending =
     typeof controller.cancelPending === 'function'
-      ? (/** @type {number} */ id) => controller.cancelPending?.(id)
+      ? (/** @type {number | string} */ id) => controller.cancelPending?.(id)
       : undefined;
 
   const { rows: projected, pending } = projectTranscript(messages);
@@ -661,18 +1053,39 @@ export const MessageList = ({ state, controller, debug = false }) => {
    *
    * @returns {VNode[]}
    */
-  const pendingRows = () =>
-    pending.map((msg, index) =>
+  // A held queue sends nothing until the user says so, so its head offers
+  // "Send now" with no turn to cut short; an interrupted message offers it
+  // wherever it sits, because that is how the user answers "send it again".
+  const held = Boolean(state.pendingHold);
+  const pendingRows = () => [
+    ...(held && pending.length
+      ? [
+          h(
+            'div',
+            {
+              key: 'pending-hold',
+              class: 'floot-pending-hold',
+              role: 'status',
+            },
+            state.pendingHold,
+          ),
+        ]
+      : []),
+    ...pending.map((msg, index) =>
       h(PendingBubble, {
         // Keyed by the placeholder's own id so an edit re-renders in place and
         // deleting one does not reset the edit state of the next.
         key: `pending-${msg.pendingId}`,
         msg,
-        onSendNow: index === 0 && busy ? onSendNow : undefined,
+        onSendNow:
+          (index === 0 && (busy || held)) || msg.pendingState === 'interrupted'
+            ? onSendNow
+            : undefined,
         onEdit: onEditPending,
         onDelete: onDeletePending,
       }),
-    );
+    ),
+  ];
 
   if (!loaded) {
     // A queued message stays visible across a history reload too — it is the
@@ -691,7 +1104,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
     );
   }
 
-  const hasContent = messages.length > 0 || streamingText || busy;
+  const hasContent = messages.length > 0 || streamingText || thinking;
   if (!hasContent) {
     return h(
       'div',
@@ -710,7 +1123,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
       rawRows.push(
         RawBlock('raw-streaming', { role: 'assistant', text: streamingText }),
       );
-    } else if (busy) {
+    } else if (thinking) {
       rawRows.push(h(ThinkingRow, { key: 'thinking' }));
     }
     return h('div', { class: 'floot-messages' }, rawRows);
@@ -719,16 +1132,23 @@ export const MessageList = ({ state, controller, debug = false }) => {
   // Keys are positional: the transcript is append-mostly, so an index key is
   // stable and lets Preact reuse rows across streaming re-renders.
   /** @type {VNode[]} */
+  // A group's key carries the session too: what a reader opened in one
+  // session must not come up open at the same position in another.
   const rows = projected.map(row =>
     row.kind === 'actions'
-      ? h(ActionGroup, { key: `actions-${row.index}`, actions: row.actions })
-      : h(Bubble, {
-          key: `msg-${row.index}`,
-          msg: row.msg,
-          canReplay,
-          replaying: canReplay && replayingText === (row.msg.text || ''),
-          onReplay: text => controller.replayMessage(text),
-        }),
+      ? h(ActionGroup, {
+          key: `${state.activeSessionId || ''}:actions-${row.index}`,
+          actions: row.actions,
+        })
+      : row.msg.meta?.turnStatus
+        ? h(TurnStatus, { key: `msg-${row.index}`, msg: row.msg })
+        : h(Bubble, {
+            key: `msg-${row.index}`,
+            msg: row.msg,
+            canReplay,
+            replaying: canReplay && replayingText === (row.msg.text || ''),
+            onReplay: text => controller.replayMessage(text),
+          }),
   );
   // The in-progress assistant bubble, or a thinking indicator before any text.
   if (streamingText) {
@@ -739,7 +1159,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
         h('div', { class: 'floot-msg streaming' }, ...linkify(streamingText)),
       ),
     );
-  } else if (busy) {
+  } else if (thinking && !messages.some(message => thoughtRunning(message))) {
     rows.push(h(ThinkingRow, { key: 'thinking' }));
   }
   // Queued submissions come after the live turn's output, in the order they

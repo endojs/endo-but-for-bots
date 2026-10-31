@@ -43,10 +43,27 @@
 # Lower it if a future large pull request ever pressures a bucket into the
 # ceiling; raise it to trade a wider safety margin for fewer processes.
 #
+# A package COUNT is only a proxy for what actually fills a project service:
+# the size of the TypeScript programs it holds. One outsized package can
+# exhaust a bucket on its own, and then it is that package's own files that
+# the service stops resolving -- `packages/daemon` did exactly this once its
+# test tree grew, reporting every one of its own files as unresolvable while
+# the five small packages sharing its bucket linted clean. Lowering the count
+# does not help there, because the package is over the ceiling by itself:
+# measured, daemon linted clean alone and alone with one neighbour, and failed
+# intermittently with two.
+#
+# So a package larger than ESLINT_SOLO_FILE_COUNT (default 200 lintable files)
+# gets a process to itself. That bounds by the thing that matters while
+# leaving the count rule to handle everything else, and it costs one extra
+# process per oversized package -- today: ses, daemon, and the test262-runner
+# corpus, whose files the flat config ignores anyway.
+#
 # Exits non-zero if any batch reports errors.
 set -eu
 
 : "${ESLINT_BUCKET_SIZE:=6}"
+: "${ESLINT_SOLO_FILE_COUNT:=200}"
 
 status=0
 
@@ -74,8 +91,27 @@ flush_bucket() {
   count=0
 }
 
-# One bucket per ESLINT_BUCKET_SIZE workspace packages.
+# Lintable JavaScript files under a package, ignoring directories no lint
+# ever walks. This is a size proxy for the package's TypeScript program, not
+# an exact count of what eslint will visit -- the flat config's ignores still
+# decide that, and a package this overcounts is only linted more carefully
+# than it needed to be.
+count_lintable() {
+  find "$1" \
+    \( -name node_modules -o -name dist -o -name .cache -o -name tmp \) -prune -o \
+    -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) -print 2>/dev/null |
+    wc -l
+}
+
+# One bucket per ESLINT_BUCKET_SIZE workspace packages, except that a package
+# over ESLINT_SOLO_FILE_COUNT takes a process to itself: see the note above on
+# why count alone is not a sufficient bound.
 for pkg in packages/*/; do
+  if [ "$(count_lintable "${pkg}")" -gt "${ESLINT_SOLO_FILE_COUNT}" ]; then
+    flush_bucket "$@"
+    lint "$@" "${pkg}"
+    continue
+  fi
   bucket="${bucket} ${pkg}"
   count=$((count + 1))
   if [ "${count}" -ge "${ESLINT_BUCKET_SIZE}" ]; then

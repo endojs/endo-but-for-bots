@@ -45,6 +45,10 @@ export const makeMemoryBackend = () => {
       }
       return roots;
     },
+
+    async getNodes() {
+      return [...nodes.values()];
+    },
   };
 
   return harden(backend);

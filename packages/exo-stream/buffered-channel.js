@@ -21,6 +21,9 @@
 //   the acknowledge tail so the consumer's close completes promptly, discarding
 //   buffered events.
 //
+// Delivered events are dropped from the buffer (in blocks); what it retains is
+// what the consumer has not taken yet.
+//
 // Buffer semantics: there is deliberately no producer-side bound. `push` is
 // fire-and-forget and the buffer is unbounded — a bound would require either
 // blocking the producer (a lockstep pipe, which could stall reading a child
@@ -49,6 +52,9 @@ import { BufferedReaderInterface } from './type-guards.js';
 /** @import { StreamNode, StreamYieldNode, MakeBufferedReaderOptions, BufferedReaderKit } from './types.js' */
 
 const { freeze } = Object;
+
+/** How many delivered events accumulate before the buffer drops them. */
+const DELIVERED_BLOCK = 64;
 
 /** Sentinel distinguishing "the pump finished" from a synchronize node. */
 const DONE = harden({});
@@ -137,6 +143,14 @@ export const makeBufferedReader = (options = {}) => {
       if (cursor < buffer.length) {
         const value = buffer[cursor];
         cursor += 1;
+        // A delivered event is the consumer's now. Holding it here as well
+        // cost nothing while a channel lived only as long as one turn, but a
+        // long-lived subscription would keep every event it ever carried.
+        // Dropped in blocks so a take stays O(1) amortised.
+        if (cursor >= DELIVERED_BLOCK) {
+          buffer.splice(0, cursor);
+          cursor = 0;
+        }
         return harden({ value, done: false });
       }
       if (finished) return harden({ value: undefined, done: true });
@@ -265,6 +279,8 @@ export const makeBufferedReader = (options = {}) => {
     reader,
     close: finalize,
     isClosed: () => finished,
+    isStarted: () => streaming,
+    buffered: () => buffer.length - cursor,
     setOnClose: fn => {
       closeHook = fn;
     },

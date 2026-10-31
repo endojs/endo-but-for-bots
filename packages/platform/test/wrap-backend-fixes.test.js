@@ -646,3 +646,64 @@ test('Directory.getAttrs() throws ENOENT on a removed path', async t => {
 
   await t.throwsAsync(() => E(dir).getAttrs(), { message: /ENOENT/ });
 });
+
+for (const fails of [false, true]) {
+  test(`OpenFile writer cleanup waits for ${fails ? 'failed' : 'successful'} commit without repeating it`, async t => {
+    t.timeout(5000);
+    let entered;
+    const started = new Promise(resolve => {
+      entered = resolve;
+    });
+    let settle = () => {
+      t.fail('backend commit gate must be initialized');
+    };
+    const pending = new Promise((resolve, reject) => {
+      settle = () =>
+        fails ? reject(Error('backend commit failed')) : resolve(undefined);
+    });
+    t.teardown(() => settle());
+    let commits = 0;
+    const backend = makeStubBackend({
+      write: async (_path, bytes) => {
+        if (!bytes.length) return;
+        commits += 1;
+        entered(undefined);
+        await pending;
+      },
+    });
+    const root = await E(wrapBackend(backend)).root();
+    const file = await E(root).create('file', {});
+    t.teardown(() => E(file).close());
+    const writer = await E(file).write(0n);
+    const iterator = iterateBytesWriter(writer);
+    await iterator.next(utf8('admitted bytes'));
+    const result = iterator.return();
+    void result.catch(() => {});
+    await started;
+    let closed = false;
+    const closing = E(writer)
+      .close()
+      .then(() => {
+        closed = true;
+      });
+    const outcomes = Promise.allSettled([result, closing]);
+    await new Promise(resolve => setImmediate(resolve));
+    t.false(closed, 'close cannot acknowledge while backend work is pending');
+    settle();
+    const [writeOutcome] = await outcomes;
+    t.is(writeOutcome.status, fails ? 'rejected' : 'fulfilled');
+    if (fails) {
+      await t.throwsAsync(() => iterator.return(), {
+        message: /backend commit failed/,
+      });
+    }
+    await E(writer).close();
+    await E(writer).close();
+    t.is(commits, 1, 'cleanup must never replay the backend write');
+    if (fails) {
+      await t.throwsAsync(() => iterator.return(), {
+        message: /backend commit failed/,
+      });
+    }
+  });
+}

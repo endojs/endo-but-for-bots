@@ -46,6 +46,7 @@
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",

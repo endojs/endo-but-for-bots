@@ -1,0 +1,3588 @@
+// @ts-check
+import test from '@endo/ses-ava/prepare-endo.js';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { makeOpenRouterProvider } from '@endo/lal/providers/index.js';
+import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+
+// Internal adapter conformance: exercise real translation and journal wiring.
+// eslint-disable-next-line import/no-relative-packages
+import { makeClaudeClient } from '../../claude-sandbox/src/claude-client.js';
+// eslint-disable-next-line import/no-relative-packages
+import { makeSubscriptionResponsesProvider } from '../../lal/providers/subscription-responses.js';
+// eslint-disable-next-line import/no-relative-packages
+import { translateClaudeTurn } from '../../claude-sandbox/src/claude-hosted-events.js';
+import {
+  readClaudeTranscript,
+  writeClaudeTranscript,
+} from '../../claude-sandbox/src/claude-transcript-writer.js'; // eslint-disable-line import/no-relative-packages
+
+import { makeStreamingAgent } from '../agent.js';
+import { makeReplyChannel } from '../src/stream.js';
+import { makeTurnJournal } from '../src/turn-journal.js';
+import { readContextTranscript } from '../src/context-transcript.js';
+import { usageCounts } from './helpers/usage.js';
+
+/** @import { RuntimeConfig } from '../src/runtime-config.js' */
+/** @import { TranscriptRecord } from '@endo/hosted-agent/transcript-records.js' */
+
+const fixture = () => {
+  const store = new Map();
+  let refusedType;
+  let beforeStore;
+  let afterStore;
+  let beforeLookup;
+  const accessedNames = [];
+  const nameOf = name => {
+    const key = Array.isArray(name) ? name.join('.') : name;
+    accessedNames.push(key);
+    return key;
+  };
+  const powers = harden({
+    async list(prefix) {
+      return harden(prefix === 'tools' ? [] : [...store.keys()]);
+    },
+    async has(name) {
+      return store.has(nameOf(name));
+    },
+    async remove(name) {
+      store.delete(nameOf(name));
+    },
+    async lookup(name) {
+      if (beforeLookup) await beforeLookup(nameOf(name));
+      if (!store.has(nameOf(name))) throw Error('Not found');
+      return store.get(nameOf(name));
+    },
+    async storeValue(value, name) {
+      if (beforeStore) await beforeStore(value);
+      if (value?.type === refusedType && refusedType)
+        throw Error('Storage unavailable');
+      if (store.has(nameOf(name))) throw Error('No overwrite');
+      store.set(nameOf(name), value);
+      if (afterStore) await afterStore(value);
+    },
+    async followMessages() {
+      return harden({ [Symbol.asyncIterator]: () => harden({}) });
+    },
+  });
+  return {
+    powers,
+    store,
+    accessedNames,
+    events: () =>
+      [...store.entries()]
+        .filter(([name]) => name.startsWith('floot-turn-event-'))
+        .map(([, event]) => event),
+    refuse: type => {
+      refusedType = type;
+    },
+    beforeStore: hook => {
+      beforeStore = hook;
+    },
+    afterStore: hook => {
+      afterStore = hook;
+    },
+    beforeLookup: hook => {
+      beforeLookup = hook;
+    },
+  };
+};
+
+const effectTool = execute =>
+  harden({
+    schema: () =>
+      harden({
+        type: 'function',
+        function: {
+          name: 'effect',
+          description: 'Test side effect',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      }),
+    execute,
+    help: () => 'Test side effect',
+  });
+const callEffect = () =>
+  harden({
+    message: {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'effect-call',
+          type: 'function',
+          function: { name: 'effect', arguments: '{}' },
+        },
+      ],
+    },
+  });
+const completed = () =>
+  harden({ message: { role: 'assistant', content: 'Done' } });
+
+for (const format of ['claude-code-jsonl-v1', 'another-native-format']) {
+  test(`agent selects argument comparison only for Claude checkpoints (${format})`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const options = {
+      input: 'old input',
+      backendId: 'test',
+      modelId: 'test',
+      nativeContextFormat: format,
+    };
+    const old = await journal.begin(options);
+    await journal.dispatch(old);
+    await journal.append(old, {
+      type: 'tool-intent',
+      callId: 'host-effect',
+      name: 'effect',
+      args: '42',
+    });
+    await journal.append(old, {
+      type: 'tool-result',
+      callId: 'host-effect',
+      result: 'ran',
+    });
+    await journal.append(old, { type: 'finish', state: 'failed' });
+    const context = readClaudeTranscript(
+      writeClaudeTranscript(
+        [
+          {
+            kind: 'tool-call',
+            id: `recovered-context_${old}_0`,
+            name: 'effect',
+            args: '42',
+          },
+          {
+            kind: 'tool-result',
+            id: `recovered-context_${old}_0`,
+            content: 'ran',
+          },
+        ],
+        { sessionUuid: 'composition-test', cwd: '/workspace', version: 'test' },
+      ),
+    );
+    const captured = await journal.begin({
+      ...options,
+      input: 'captured input',
+    });
+    await journal.dispatch(captured);
+    await journal.recordTranscript(captured, '0', {
+      kind: 'native-context',
+      format,
+      payload: 'opaque',
+      context,
+    });
+    await journal.completeTranscript(captured, '1');
+    await journal.append(captured, { type: 'finish', state: 'completed' });
+    /** @type {readonly TranscriptRecord[] | undefined} */
+    let received;
+    const client = harden({
+      async send(_text, config) {
+        received = config.transcript;
+        const channel = makeBufferedReader();
+        channel.push({ type: 'end' });
+        return channel.reader;
+      },
+      async terminate() {
+        /* No external resources in this fixture. */
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => client },
+      'Test',
+      {
+        journalPowers: f.powers,
+        nativeContextFormat: format,
+        portableContextFallback: true,
+      },
+    );
+    t.teardown(() => agent.shutdown());
+    await agent.converse('continue', makeReplyChannel().writer);
+    if (!received) throw Error('Expected backend transcript');
+    const calls = received.filter(record => record.kind === 'tool-call');
+    t.deepEqual(
+      calls.map(record => record.args),
+      format === 'claude-code-jsonl-v1'
+        ? ['{"value":42}']
+        : ['{"value":42}', '42'],
+    );
+    t.is(
+      (await makeTurnJournal(f.powers).get(old)).tools[0].args,
+      '42',
+      'native comparison does not rewrite durable evidence',
+    );
+  });
+}
+
+for (const boundary of ['onBegun', 'setup']) {
+  for (const revive of [false, true]) {
+    test(`native pre-send cancellation at ${boundary} preserves history without poisoning context (revive=${revive})`, async t => {
+      t.timeout(5000);
+      const f = fixture();
+      const controller = new AbortController();
+      let release = () => {};
+      const setup = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      let entered = () => {};
+      const entering = new Promise(resolve => {
+        entered = () => resolve(undefined);
+      });
+      t.teardown(release);
+      const transcripts = [];
+      const client = harden({
+        async send(_text, options) {
+          transcripts.push(options.transcript);
+          const channel = makeBufferedReader();
+          channel.push({ type: 'text-delta', text: 'Done' });
+          channel.push({
+            type: 'native-context',
+            checkpoint: {
+              kind: 'native-context',
+              format: 'codex-rollout-v1',
+              payload: 'opaque',
+              context: [],
+            },
+          });
+          channel.push({ type: 'end' });
+          return channel.reader;
+        },
+        async terminate() {
+          /* No external resources in this fixture. */
+        },
+      });
+      /** @type {RuntimeConfig} */
+      const runtime = {
+        kind: 'hosted',
+        provideHostedClient: async () => {
+          entered();
+          if (boundary === 'setup') await setup;
+          return client;
+        },
+      };
+      const options = {
+        journalPowers: f.powers,
+        nativeContextFormat: 'codex-rollout-v1',
+      };
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        runtime,
+        'Test',
+        options,
+      );
+      t.teardown(() => agent.shutdown());
+      const cancellation = agent.converse(
+        'cancelled input',
+        makeReplyChannel().writer,
+        undefined,
+        controller.signal,
+        undefined,
+        async () => {
+          if (boundary === 'onBegun') controller.abort();
+        },
+      );
+      if (boundary === 'setup') {
+        await entering;
+        controller.abort();
+        release();
+      }
+      await cancellation;
+      t.is(transcripts.length, 0);
+      t.false(f.events().some(event => event.type === 'dispatch-intent'));
+      const [cancelled] = await agent.getTurns();
+      t.is(cancelled.state, 'cancelled');
+      t.is(cancelled.dispatchState, 'not-dispatched');
+      t.true(
+        (await agent.getTranscript()).some(
+          row => row.content === 'cancelled input',
+        ),
+      );
+      let next = agent;
+      if (revive) {
+        await agent.shutdown();
+        next = await makeStreamingAgent(
+          f.powers,
+          undefined,
+          runtime,
+          'Test',
+          options,
+        );
+        t.teardown(() => next.shutdown());
+      }
+      await next.converse('next input', makeReplyChannel().writer);
+      t.is(transcripts.length, 1);
+      t.false(JSON.stringify(transcripts[0]).includes('cancelled input'));
+      t.is((await next.getTurns())[0].input, 'cancelled input');
+      t.is((await next.getTurns())[1].state, 'completed');
+    });
+  }
+}
+
+for (const fault of ['beforeStore', 'afterStore']) {
+  for (const kind of ['hosted', 'provider']) {
+    test(`${kind} dispatch intent ${fault} failure refuses send and revival preserves uncertainty`, async t => {
+      t.timeout(5000);
+      const f = fixture();
+      let sends = 0;
+      const client = harden({
+        async send() {
+          sends += 1;
+          throw Error('Unexpected send');
+        },
+        async terminate() {
+          /* No external resources in this fixture. */
+        },
+      });
+      const provider = harden({
+        async chatStream() {
+          sends += 1;
+          return completed();
+        },
+      });
+      /** @type {RuntimeConfig} */
+      const runtime =
+        kind === 'hosted'
+          ? { kind: 'hosted', provideHostedClient: () => client }
+          : { kind: 'provider', provideProvider: () => provider };
+      f[fault](event => {
+        if (event.type === 'dispatch-intent') throw Error('Marker unavailable');
+      });
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        runtime,
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => agent.shutdown());
+      await t.throwsAsync(
+        agent.converse('uncertain input', makeReplyChannel().writer),
+      );
+      t.is(sends, 0);
+      t.is(
+        f.events().some(event => event.type === 'dispatch-intent'),
+        fault === 'afterStore',
+      );
+      await agent.shutdown();
+      f.beforeStore(undefined);
+      f.afterStore(undefined);
+      const revived = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        runtime,
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => revived.shutdown());
+      const [turn] = await revived.getTurns();
+      t.is(
+        turn.dispatchState,
+        fault === 'afterStore' ? 'possibly-dispatched' : 'not-dispatched',
+      );
+      t.is(turn.state, 'outcome-unknown');
+      t.is(sends, 0, 'revival never replays the uncertain input');
+      const context = await readContextTranscript(makeTurnJournal(f.powers));
+      t.is(
+        context.some(row => row.content === 'uncertain input'),
+        fault === 'afterStore',
+        'a persisted marker retains uncertain input rather than claiming non-dispatch',
+      );
+    });
+  }
+}
+
+for (const refusal of ['rejection', 'leading abort']) {
+  test(`native ${refusal} after dispatch intent remains unsafe after revival`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    let sends = 0;
+    const client = harden({
+      async send() {
+        sends += 1;
+        if (refusal === 'rejection') throw Error('Send refused');
+        const channel = makeBufferedReader();
+        channel.push({ type: 'abort', reason: 'Send refused' });
+        return channel.reader;
+      },
+      async interrupt() {
+        /* No external resources in this fixture. */
+      },
+      async terminate() {
+        /* No external resources in this fixture. */
+      },
+    });
+    /** @type {RuntimeConfig} */
+    const runtime = { kind: 'hosted', provideHostedClient: () => client };
+    const options = {
+      journalPowers: f.powers,
+      nativeContextFormat: 'codex-rollout-v1',
+    };
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      runtime,
+      'Test',
+      options,
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(
+      agent.converse('refused input', makeReplyChannel().writer),
+    );
+    t.is(sends, 1);
+    t.is((await agent.getTurns())[0].dispatchState, 'possibly-dispatched');
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      runtime,
+      'Test',
+      options,
+    );
+    t.teardown(() => revived.shutdown());
+    await t.throwsAsync(
+      revived.converse('successor', makeReplyChannel().writer),
+    );
+    t.is(
+      sends,
+      1,
+      'no silent native-context fallback after an actual send attempt',
+    );
+  });
+}
+
+// Run this full native-checkpoint round trip before the file's concurrent
+// journal workloads, so their CPU work cannot consume its stall deadline.
+test.serial(
+  'verified Claude failure journals native context and restores without becoming success',
+  async t => {
+    t.timeout(10_000);
+    const f = fixture();
+    const wire = JSON.parse(
+      await readFile(
+        new URL(
+          '../../claude-sandbox/test/fixtures/coverage-failed-turn.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    // Start at the fixture's admitted prompt, without its unrelated seeded past.
+    const before = wire.rows.findIndex(row => row.uuid === wire.cut.beforeUuid);
+    const rows = wire.rows.slice(before + 1);
+    rows[0].parentUuid = null;
+    const payload = `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+    const captured = {
+      type: 'endo_context',
+      retainedTail: readClaudeTranscript(payload),
+      nativeContext: {
+        format: 'claude-code-jsonl-v1',
+        transcript: payload,
+        leafUuid: rows.at(-1).uuid,
+      },
+    };
+    const outputs = new WeakMap();
+    const spawned = [];
+    const slice = harden({
+      async spawn(argv) {
+        const index = spawned.length;
+        const proc = harden({
+          async wait() {
+            return { code: index === 0 ? 1 : 0, signal: null };
+          },
+          async kill() {
+            /* No native resources in this transport fixture. */
+          },
+        });
+        outputs.set(proc, index === 0 ? wire.events : [captured]);
+        spawned.push([...argv]);
+        return proc;
+      },
+      async dispose() {
+        /* No native resources in this transport fixture. */
+      },
+    });
+    const native = makeClaudeClient({
+      sessionId: 'verified-failure',
+      createdAt: '2026-09-24T00:00:00Z',
+      // Deliberately partial transport double: stdout/stderr are injected below.
+      slice: /** @type {any} */ (slice),
+      workspaceMountPoint: '/unused-fixture',
+      backend: 'podman',
+      sha256: value => createHash('sha256').update(value).digest('hex'),
+      makeStdoutIterable: proc =>
+        harden({
+          async *[Symbol.asyncIterator]() {
+            for (const event of outputs.get(proc))
+              yield new TextEncoder().encode(`${JSON.stringify(event)}\n`);
+          },
+        }),
+      makeStderrIterable: () =>
+        harden({
+          async *[Symbol.asyncIterator]() {
+            yield new TextEncoder().encode('original producer diagnostic');
+          },
+        }),
+    });
+    const client = harden({
+      async send(prompt, options) {
+        return translateClaudeTurn(await E(native).send(prompt, options));
+      },
+      async terminate() {
+        await E(native).terminate();
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => client },
+      'Test',
+      { journalPowers: f.powers, nativeContextFormat: 'claude-code-jsonl-v1' },
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(
+      agent.converse(wire.cut.prompt, makeReplyChannel().writer),
+      {
+        message: /error_max_turns/,
+      },
+    );
+    t.is(spawned.length, 2);
+    t.is(spawned[1][1], '/opt/endo/capture-compaction.mjs');
+    const turn = (await agent.getTurns())[0];
+    t.is(turn.state, 'failed');
+    t.true(turn.transcriptComplete);
+    t.regex(turn.error, /original producer diagnostic/);
+    t.true(
+      (await agent.getTranscript()).some(
+        record =>
+          record.kind === 'native-context' && record.payload === payload,
+      ),
+    );
+    await agent.shutdown();
+    /** @type {readonly any[] | undefined} */
+    let restored;
+    const next = harden({
+      async send(prompt, options) {
+        t.true(prompt.includes('continue'));
+        restored = options.transcript;
+        const channel = makeBufferedReader();
+        channel.push({
+          type: 'abort',
+          reason: 'stop after inspecting restored context',
+        });
+        return channel.reader;
+      },
+      async terminate() {
+        /* No resource owned by this observer. */
+      },
+    });
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => next },
+      'Test',
+      { journalPowers: f.powers, nativeContextFormat: 'claude-code-jsonl-v1' },
+    );
+    t.teardown(() => revived.shutdown());
+    await t.throwsAsync(
+      revived.converse('continue', makeReplyChannel().writer),
+      {
+        message: /stop after inspecting restored context/,
+      },
+    );
+    if (restored === undefined)
+      throw Error('Restored context was not supplied');
+    t.is(restored[0].kind, 'native-context');
+    t.is(restored[0].payload, payload);
+    t.regex(restored.at(-1).content, /Floot turn failed.*error_max_turns/s);
+    t.is(
+      spawned.length,
+      2,
+      'history inspection and restoration did not rerun the native tool',
+    );
+  },
+);
+
+test('first native-required failure stays readable but cannot resume portably after revival', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  let sends = 0;
+  const client = harden({
+    async send() {
+      sends += 1;
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'thinking-delta',
+        text: 'private native reasoning',
+      });
+      channel.push({ type: 'text-delta', text: 'partial answer' });
+      channel.push({ type: 'abort', reason: 'capture unavailable' });
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+  });
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('first', makeReplyChannel().writer), {
+    message: /capture unavailable/,
+  });
+  t.is(
+    f.events().find(event => event.type === 'begin').nativeContextFormat,
+    'claude-code-jsonl-v1',
+  );
+  t.true(
+    (await agent.getTranscript()).some(
+      record =>
+        record.kind === 'message' && record.content === 'partial answer',
+    ),
+  );
+  await t.throwsAsync(agent.converse('retry', makeReplyChannel().writer), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+  await agent.shutdown();
+  // The old begin record carries the requirement even if a later descriptor no
+  // longer advertises it. Only a backend declaring `continuity: 'transcript'`
+  // (portableContextFallback) may take the portable path instead; see the
+  // next test. This agent does not, so it still refuses.
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    runtime,
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  await t.throwsAsync(
+    revived.converse('after restart', makeReplyChannel().writer),
+    { message: /cannot conceal unresolved or recovered tool evidence/ },
+  );
+  t.is(sends, 1);
+});
+
+test('a transcript-continuity backend resumes portably after a failed native capture', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  /** @type {any[]} */
+  const supplied = [];
+  let sends = 0;
+  const client = harden({
+    async send(_prompt, opts) {
+      sends += 1;
+      supplied.push(opts?.transcript);
+      const channel = makeBufferedReader();
+      if (sends === 1) {
+        channel.push({ type: 'text-delta', text: 'partial answer' });
+        channel.push({ type: 'abort', reason: 'capture unavailable' });
+      } else {
+        channel.push({ type: 'text-delta', text: 'second answer' });
+        channel.push({ type: 'end' });
+      }
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    portableContextFallback: true,
+  });
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('first', makeReplyChannel().writer), {
+    message: /capture unavailable/,
+  });
+  await agent.converse('retry', makeReplyChannel().writer);
+  t.is(sends, 2);
+  const portable = supplied[1];
+  t.false(portable.some(record => record.kind === 'native-context'));
+  t.deepEqual(
+    portable
+      .filter(record => record.kind === 'message')
+      .map(record => [record.role, record.content])
+      .slice(0, 2),
+    [
+      ['user', 'first'],
+      ['assistant', 'partial answer'],
+    ],
+  );
+  t.true(
+    (await agent.getTranscript()).some(
+      record => record.kind === 'message' && record.content === 'second answer',
+    ),
+  );
+});
+
+test('a completed turn without a native checkpoint resumes portably with its reply', async t => {
+  // A Claude reply that streamed and passed coverage, whose capture failed,
+  // now completes without a checkpoint (live 2026-09-25).
+  t.timeout(10_000);
+  const f = fixture();
+  /** @type {any[]} */
+  const supplied = [];
+  let sends = 0;
+  const client = harden({
+    async send(_prompt, opts) {
+      sends += 1;
+      supplied.push(opts?.transcript);
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'text-delta',
+        text: sends === 1 ? 'full answer' : 'follow-up answer',
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    portableContextFallback: true,
+  });
+  t.teardown(() => agent.shutdown());
+  await agent.converse('first', makeReplyChannel().writer);
+  await agent.converse('second', makeReplyChannel().writer);
+  t.deepEqual(
+    supplied[1]
+      .filter(record => record.kind === 'message')
+      .map(record => [record.role, record.content]),
+    [
+      ['user', 'first'],
+      ['assistant', 'full answer'],
+    ],
+  );
+  t.false((await agent.getHistory()).some(message => message.meta?.turnStatus));
+});
+
+for (const fault of ['beforeStore', 'afterStore']) {
+  test(`mail begin publication ${fault} failure prevents inference and preserves committed receipt`, async t => {
+    const f = fixture();
+    let requests = 0;
+    const provider = harden({
+      async chatStream() {
+        requests += 1;
+        return completed();
+      },
+    });
+    f[fault](value => {
+      if (value.type === 'begin') throw Error('Begin publication refused');
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    const mail = harden({ from: 'sender', messageNumber: '123' });
+    await t.throwsAsync(
+      agent.converse('Incoming task', makeReplyChannel().writer, { mail }),
+    );
+    t.is(requests, 0);
+    if (fault === 'afterStore') t.deepEqual(f.events()[0].mail, mail);
+    else t.deepEqual(f.events(), []);
+    await agent.shutdown();
+    f.beforeStore(undefined);
+    f.afterStore(undefined);
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => revived.shutdown());
+    const turns = await revived.getTurns();
+    if (fault === 'beforeStore') t.deepEqual(turns, []);
+    else {
+      t.is(turns.length, 1);
+      t.deepEqual(turns[0].mail, mail);
+      t.is(turns[0].input, 'Incoming task');
+      t.is(turns[0].state, 'outcome-unknown');
+    }
+  });
+}
+
+test('oversized backend token is refused before successful journal settlement or acknowledgement', async t => {
+  const f = fixture();
+  let acknowledgements = 0;
+  const hostedClient = harden({
+    async send() {
+      const stream = makeBufferedReader();
+      stream.push({ type: 'text-delta', text: 'Done' });
+      stream.push({ type: 'end', checkpoint: 'x'.repeat(8193) });
+      return stream.reader;
+    },
+    async acknowledge() {
+      acknowledgements += 1;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Hello', makeReplyChannel().writer), {
+    message: /Invalid turn journal text/,
+  });
+  t.is(acknowledgements, 0);
+  t.false([...f.store.keys()].some(name => name.startsWith('ct-')));
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'failed');
+  t.is(turn.backendCheckpoint, undefined);
+});
+
+test('cancelled hosted thinking is journaled after the interrupt barrier', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const controller = new AbortController();
+  const stream = makeBufferedReader();
+  let interrupted = false;
+  const hostedClient = harden({
+    async send() {
+      stream.push({ type: 'thinking-delta', text: 'partial reasoning' });
+      return stream.reader;
+    },
+    async interrupt() {
+      interrupted = true;
+      stream.close();
+    },
+  });
+  f.beforeStore(value => {
+    if (value.type === 'presentation') t.true(interrupted);
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  const writer = makeReplyChannel().writer;
+  await agent.converse(
+    'Hello',
+    harden({
+      ...writer,
+      thinking: event => {
+        writer.thinking(event);
+        controller.abort();
+      },
+    }),
+    undefined,
+    controller.signal,
+  );
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  const [turn] = await revived.getTurns();
+  t.is(turn.state, 'cancelled');
+  t.like(JSON.parse(turn.presentation.payload)[0], {
+    text: 'partial reasoning',
+    beforeTranscriptOrdinal: '0',
+  });
+  t.false(
+    JSON.stringify(await revived.getTranscript()).includes('partial reasoning'),
+  );
+});
+
+for (const fault of ['none', 'beforeStore', 'afterStore', 'abort']) {
+  test(`hosted thinking presentation survives journal reconstruction: ${fault}`, async t => {
+    const f = fixture();
+    let acknowledges = 0;
+    f.beforeStore(value => {
+      if (value.type === 'presentation' && fault === 'beforeStore')
+        throw Error('Lost presentation');
+    });
+    if (fault === 'afterStore')
+      f.afterStore(value => {
+        if (value.type === 'presentation') throw Error('Lost presentation');
+      });
+    const hostedClient = harden({
+      async send() {
+        const stream = makeBufferedReader();
+        stream.push({ type: 'thinking-delta', text: 'public reasoning' });
+        stream.push(
+          fault === 'abort'
+            ? { type: 'abort', reason: 'provider failed' }
+            : { type: 'end', checkpoint: 'native-turn-1' },
+        );
+        return stream.reader;
+      },
+      async acknowledge() {
+        acknowledges += 1;
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    const result = agent.converse('Hello', makeReplyChannel().writer);
+    if (fault === 'none') await result;
+    else await t.throwsAsync(result);
+    t.is(acknowledges, fault === 'none' ? 1 : 0);
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => revived.shutdown());
+    const [turn] = await revived.getTurns();
+    t.false(
+      JSON.stringify(await revived.getTranscript()).includes(
+        'public reasoning',
+      ),
+    );
+    if (fault === 'beforeStore') t.is(turn.presentation, undefined);
+    else
+      t.like(JSON.parse(turn.presentation.payload)[0], {
+        text: 'public reasoning',
+        beforeTranscriptOrdinal: '0',
+      });
+  });
+}
+
+for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
+  test(`hosted acknowledgement follows checkpoint journal publication: ${fault}`, async t => {
+    const f = fixture();
+    let acknowledges = 0;
+    const sent = [];
+    if (fault === 'beforeStore' || fault === 'afterStore') {
+      f[fault](value => {
+        if (value.type === 'finish') throw Error('Lost finish');
+      });
+    }
+    const hostedClient = harden({
+      async send(_text, options) {
+        sent.push(options);
+        const stream = makeBufferedReader();
+        stream.push({ type: 'text-delta', text: 'Done' });
+        stream.push({ type: 'end', checkpoint: 'native-turn-1' });
+        return stream.reader;
+      },
+      async acknowledge(checkpoint) {
+        acknowledges += 1;
+        t.is(checkpoint, 'native-turn-1');
+        const finish = f.events().find(event => event.type === 'finish');
+        t.is(finish.backendCheckpoint, checkpoint);
+        t.is(finish.state, 'completed');
+        if (fault === 'ack') throw Error('Acknowledgement transport failed');
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    const result = agent.converse('Hello', makeReplyChannel().writer);
+    if (fault === 'beforeStore' || fault === 'afterStore') {
+      await t.throwsAsync(result, { message: /uncertain storage/ });
+      t.is(acknowledges, 0);
+    } else {
+      await result;
+      t.is(acknowledges, 1);
+    }
+    await agent.shutdown();
+    t.false(
+      [...f.store.values()].some(
+        value => value.metadata?.backendCheckpoint !== undefined,
+      ),
+    );
+
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => revived.shutdown());
+    const [turn] = await revived.getTurns();
+    t.is(
+      turn.backendCheckpoint,
+      fault === 'beforeStore' ? undefined : 'native-turn-1',
+    );
+    f.beforeStore(undefined);
+    f.afterStore(undefined);
+    await revived.converse('Continue', makeReplyChannel().writer);
+    t.is(sent[0].acknowledgedCheckpoint, undefined);
+    t.is(
+      sent[1].acknowledgedCheckpoint,
+      fault === 'beforeStore' ? undefined : 'native-turn-1',
+    );
+  });
+}
+
+for (const treeName of ['ct-leaf', 'ct-root', 'ct-obsolete-node']) {
+  test(`existing ${treeName} refuses construction before journal or backend access without modifying state`, async t => {
+    const f = fixture();
+    f.store.set(treeName, harden({ obsolete: 'preserve for export' }));
+    f.store.set(
+      'floot-turn-event-00000000000000000001',
+      harden({ malformed: true }),
+    );
+    const before = [...f.store.entries()];
+    let requests = 0;
+    let reads = 0;
+    f.beforeLookup(() => {
+      reads += 1;
+      throw Error('Must reject tree before reading journal');
+    });
+    const provider = harden({
+      async chatStream() {
+        requests += 1;
+        return completed();
+      },
+    });
+    await t.throwsAsync(
+      makeStreamingAgent(
+        f.powers,
+        undefined,
+        {
+          kind: 'provider',
+          provideProvider: () => provider,
+        },
+        'Test',
+        { journalPowers: f.powers },
+      ),
+      {
+        message:
+          'Legacy Floot conversation tree requires retirement or export before journal-only recovery',
+      },
+    );
+    t.is(requests, 0);
+    t.is(reads, 0);
+    t.deepEqual([...f.store.entries()], before);
+  });
+}
+
+test('journal checkpoint survives a later partial turn without conversation tree state', async t => {
+  const f = fixture();
+  const seen = [];
+  const hostedClient = harden({
+    async send(text, options) {
+      seen.push(options.acknowledgedCheckpoint);
+      const stream = makeBufferedReader();
+      if (text === 'Partial') {
+        stream.push({ type: 'text-delta', text: 'partial response' });
+        stream.push({ type: 'abort', reason: 'provider failure' });
+      } else stream.push({ type: 'end', checkpoint: 'journal-token' });
+      return stream.reader;
+    },
+    async acknowledge() {
+      return undefined;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('First', makeReplyChannel().writer);
+  await t.throwsAsync(agent.converse('Partial', makeReplyChannel().writer), {
+    message: /provider failure/,
+  });
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  await revived.converse('Continue', makeReplyChannel().writer);
+  t.deepEqual(seen, [undefined, 'journal-token', 'journal-token']);
+  t.false([...f.store.keys()].some(name => name.startsWith('ct-')));
+});
+
+test('checkpoint recovery orders archived evidence by turn rather than publication', async t => {
+  const f = fixture();
+  const options = { input: 'seed', backendId: 'codex', modelId: 'luna' };
+  const initial = makeTurnJournal(f.powers);
+  const oldest = await initial.begin(options);
+  await initial.dispatch(oldest);
+  const journal = makeTurnJournal(f.powers);
+  for (let i = 0; i < 290; i += 1) {
+    // Deliberately await sequential journal writes.
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, {
+      type: 'finish',
+      state: 'completed',
+      ...(i === 0 ? { backendCheckpoint: 'newer-token' } : {}),
+    });
+  }
+  await journal.append(oldest, {
+    type: 'finish',
+    state: 'completed',
+    backendCheckpoint: 'older-token',
+  });
+  for (let i = 0; i < 35; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  const archive = await journal.listArchived();
+  t.true(
+    /** @type {any[]} */ (archive).findIndex(turn => turn.turnId === oldest) >
+      /** @type {any[]} */ (archive).findIndex(
+        turn => turn.backendCheckpoint === 'newer-token',
+      ),
+  );
+  const hostedClient = harden({
+    async send(_text, config) {
+      t.is(config.acknowledgedCheckpoint, 'newer-token');
+      const stream = makeBufferedReader();
+      stream.push({ type: 'end' });
+      return stream.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Continue', makeReplyChannel().writer);
+});
+
+test('cancellation during transcript sealing does not commit a successful turn', async t => {
+  const f = fixture();
+  const abort = new AbortController();
+  f.beforeStore(value => {
+    if (value.type === 'transcript-complete') abort.abort();
+  });
+  const provider = harden({
+    async chatStream() {
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse(
+    'Hello',
+    makeReplyChannel().writer,
+    undefined,
+    abort.signal,
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'cancelled');
+  t.true(turn.transcriptComplete);
+  t.is(turn.conversationNodeId, undefined);
+  const before = await agent.getTranscript();
+  t.is(
+    before.filter(
+      record => record.kind === 'message' && record.content === 'Done',
+    ).length,
+    1,
+  );
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), before);
+  t.is((await revived.getTurns())[0].state, 'cancelled');
+});
+
+test('parallel identical calls keep distinct results after partial transcript publication', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let releaseFirst;
+  const first = new Promise(resolve => {
+    releaseFirst = resolve;
+  });
+  t.teardown(() => releaseFirst());
+  f.afterStore(value => {
+    if (value.type === 'tool-result' && value.result === 'Second result')
+      releaseFirst();
+  });
+  let faulted = false;
+  f.beforeStore(value => {
+    if (value.type === 'transcript-record') {
+      const record = JSON.parse(value.payload);
+      if (record.kind === 'tool-result' && record.id === 'second') {
+        faulted = true;
+        throw Error('Lost second transcript result');
+      }
+    }
+  });
+  let effects = 0;
+  let requests = 0;
+  const provider = harden({
+    async chatStream() {
+      requests += 1;
+      return harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: ['first', 'second'].map(id => ({
+            ...callEffect().message.tool_calls[0],
+            id,
+          })),
+        },
+      });
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            if (effects === 1) {
+              await first;
+              return 'First result';
+            }
+            return 'Second result';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Run twice', makeReplyChannel().writer), {
+    message: /uncertain storage/,
+  });
+  t.true(faulted);
+  t.is(effects, 2);
+  t.is(requests, 1);
+  t.deepEqual(
+    f
+      .events()
+      .filter(event => event.type === 'tool-result')
+      .map(event => event.result),
+    ['Second result', 'First result'],
+  );
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  const transcript = await revived.getTranscript();
+  t.is(transcript.filter(record => record.kind === 'tool-call').length, 2);
+  t.deepEqual(
+    transcript
+      .filter(record => record.kind === 'tool-result')
+      .map(record => [record.id, record.content])
+      .sort(),
+    [
+      ['first', 'First result'],
+      ['second', 'Second result'],
+    ],
+  );
+});
+
+for (const missingId of [false, true]) {
+  test(`direct malformed arguments remain one refused call (missing id ${missingId})`, async t => {
+    const f = fixture();
+    let calls = 0;
+    let effects = 0;
+    const provider = harden({
+      async chatStream() {
+        calls += 1;
+        if (calls !== 1) throw Error('Later provider failure');
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                ...(missingId ? {} : { id: 'malformed' }),
+                type: 'function',
+                function: { name: 'effect', arguments: '{"broken":' },
+              },
+            ],
+          },
+        });
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
+      'Test',
+      {
+        journalPowers: f.powers,
+        extraTools: new Map([
+          [
+            'effect',
+            effectTool(async () => {
+              effects += 1;
+              return 'Unexpected';
+            }),
+          ],
+        ]),
+      },
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(agent.converse('Try it', makeReplyChannel().writer), {
+      message: /Later provider/,
+    });
+    const transcript = await agent.getTranscript();
+    const toolCalls = transcript.filter(record => record.kind === 'tool-call');
+    const results = transcript.filter(record => record.kind === 'tool-result');
+    t.is(effects, 0);
+    t.is(toolCalls.length, 1);
+    t.is(results.length, 1);
+    t.is(toolCalls[0].id, missingId ? 'floot-synth-0-0' : 'malformed');
+    t.is(results[0].id, toolCalls[0].id);
+    t.regex(results[0].content, /could not parse/);
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getTranscript(), transcript);
+  });
+}
+
+for (const phase of ['beforeStore', 'afterStore']) {
+  for (const boundary of ['call', 'result', 'seal', 'finish']) {
+    test(`direct ${boundary} ${phase} failure reconstructs its acknowledged prefix`, async t => {
+      t.timeout(5000);
+      const f = fixture();
+      let faulted = false;
+      f[phase](value => {
+        const record =
+          value.type === 'transcript-record'
+            ? JSON.parse(value.payload)
+            : undefined;
+        const matches =
+          boundary === 'call'
+            ? record?.kind === 'tool-call'
+            : boundary === 'result'
+              ? record?.kind === 'tool-result'
+              : boundary === 'seal'
+                ? value.type === 'transcript-complete'
+                : value.type === 'finish';
+        if (matches && !faulted) {
+          faulted = true;
+          throw Error('Injected publication failure');
+        }
+      });
+      let effects = 0;
+      let calls = 0;
+      const provider = harden({
+        async chatStream() {
+          calls += 1;
+          return calls === 1 ? callEffect() : completed();
+        },
+      });
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        {
+          kind: 'provider',
+          provideProvider: () => provider,
+        },
+        'Test',
+        {
+          journalPowers: f.powers,
+          extraTools: new Map([
+            [
+              'effect',
+              effectTool(async () => {
+                effects += 1;
+                return 'Changed once';
+              }),
+            ],
+          ]),
+        },
+      );
+      t.teardown(() => agent.shutdown());
+      await t.throwsAsync(
+        agent.converse('Change it', makeReplyChannel().writer),
+      );
+      t.true(faulted);
+      t.is(effects, boundary === 'call' ? 0 : 1);
+      await agent.shutdown();
+      const revived = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        {
+          kind: 'provider',
+          provideProvider: () => provider,
+        },
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => revived.shutdown());
+      const transcript = await revived.getTranscript();
+      const toolCalls = transcript.filter(
+        record => record.kind === 'tool-call',
+      );
+      const results = transcript.filter(
+        record => record.kind === 'tool-result',
+      );
+      t.is(
+        toolCalls.length,
+        boundary === 'call' && phase === 'beforeStore' ? 0 : 1,
+      );
+      t.is(results.length, boundary === 'call' ? 0 : 1);
+      if (results.length) t.is(results[0].content, 'Changed once');
+      if (boundary === 'finish') {
+        t.is(
+          transcript.filter(
+            record => record.kind === 'message' && record.content === 'Done',
+          ).length,
+          1,
+        );
+        t.true((await revived.getTurns())[0].transcriptComplete);
+      }
+      t.is(calls, boundary === 'call' || boundary === 'result' ? 1 : 2);
+    });
+  }
+}
+
+for (const hook of ['beforeStore', 'afterStore']) {
+  test(`provider cancellation while initial transcript ${hook} awaits acknowledgement refuses inference`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    const controller = new AbortController();
+    let sends = 0;
+    let entered = () => {};
+    const entering = new Promise(resolve => {
+      entered = () => resolve(undefined);
+    });
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    t.teardown(release);
+    f[hook](async event => {
+      if (event.type === 'transcript-record' && event.ordinal === '0') {
+        t.is(JSON.parse(event.payload).role, 'user');
+        entered();
+        await held;
+      }
+    });
+    const provider = harden({
+      async chatStream() {
+        sends += 1;
+        return completed();
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'provider', provideProvider: () => provider },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    const turn = agent.converse(
+      'cancel before inference',
+      makeReplyChannel().writer,
+      undefined,
+      controller.signal,
+    );
+    await entering;
+    t.true(f.events().some(event => event.type === 'dispatch-intent'));
+    controller.abort();
+    t.is(sends, 0);
+    release();
+    await turn;
+    t.is(
+      sends,
+      0,
+      'late transcript acknowledgement must not invoke the provider',
+    );
+    const [record] = await agent.getTurns();
+    t.is(record.dispatchState, 'possibly-dispatched');
+    t.is(record.state, 'cancelled');
+    t.false(record.transcriptComplete === true);
+    t.false(
+      f
+        .events()
+        .some(event => event.type === 'finish' && event.state === 'completed'),
+    );
+  });
+}
+
+for (const boundary of ['transcript-record', 'tool-intent']) {
+  test(`direct cancellation during ${boundary} publication refuses effects`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    const abort = new AbortController();
+    let effects = 0;
+    f.beforeStore(value => {
+      if (
+        value.type === boundary &&
+        (boundary !== 'transcript-record' ||
+          JSON.parse(value.payload).kind === 'tool-call')
+      )
+        abort.abort();
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: (
+          value => () =>
+            value
+        )(
+          harden({
+            async chatStream() {
+              return callEffect();
+            },
+          }),
+        ),
+      },
+      'Test',
+      {
+        journalPowers: f.powers,
+        extraTools: new Map([
+          [
+            'effect',
+            effectTool(async () => {
+              effects += 1;
+              return 'Changed';
+            }),
+          ],
+        ]),
+      },
+    );
+    t.teardown(() => agent.shutdown());
+    await agent.converse(
+      'Change it',
+      makeReplyChannel().writer,
+      undefined,
+      abort.signal,
+    );
+    t.is(effects, 0);
+    const [turn] = await agent.getTurns();
+    t.is(turn.state, 'cancelled');
+    t.false(turn.transcriptComplete === true);
+    if (boundary === 'tool-intent') {
+      t.is(turn.tools.length, 1);
+      t.true(turn.tools[0].settled);
+      t.regex(turn.tools[0].result, /aborted/);
+    }
+  });
+}
+
+test('direct dialogue prefix survives a later provider failure and reconstruction', async t => {
+  const f = fixture();
+  let calls = 0;
+  const records = () =>
+    f
+      .events()
+      .filter(event => event.type === 'transcript-record')
+      .map(event => JSON.parse(event.payload));
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          async chatStream(_context, _tools, onDelta) {
+            calls += 1;
+            if (calls === 1)
+              return harden({
+                message: {
+                  ...callEffect().message,
+                  content: 'I will change it once.',
+                },
+              });
+            onDelta('The change succeeded, but');
+            throw Error('Disconnected');
+          },
+        }),
+      ),
+    },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            t.deepEqual(
+              records().map(record => record.kind),
+              ['message', 'message', 'tool-call'],
+            );
+            return 'Changed once';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Change it', makeReplyChannel().writer), {
+    message: /Disconnected/,
+  });
+  t.deepEqual(
+    records().map(record => record.kind),
+    ['message', 'message', 'tool-call', 'tool-result', 'message'],
+  );
+  t.false(f.events().some(event => event.type === 'transcript-complete'));
+  const before = await agent.getTranscript();
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          async chatStream() {
+            return completed();
+          },
+        }),
+      ),
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), before);
+  t.true(
+    before.some(
+      record =>
+        record.kind === 'message' &&
+        record.content === 'I will change it once.',
+    ),
+  );
+  t.true(
+    before.some(
+      record =>
+        record.kind === 'message' &&
+        record.content === 'The change succeeded, but',
+    ),
+  );
+  t.is(before.filter(record => record.kind === 'tool-call').length, 1);
+  t.is(before.filter(record => record.kind === 'tool-result').length, 1);
+});
+
+test('direct provider refuses effects when its dialogue cannot be journaled', async t => {
+  const f = fixture();
+  let effects = 0;
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          async chatStream() {
+            f.refuse('transcript-record');
+            return callEffect();
+          },
+        }),
+      ),
+    },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            return 'Changed';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Change it', makeReplyChannel().writer), {
+    message: /uncertain storage/,
+  });
+  t.is(effects, 0);
+  t.false(f.events().some(event => event.type === 'tool-intent'));
+});
+
+test('recorded compaction survives reconstruction into direct-provider context', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      channel.push({ type: 'text-delta', text: 'superseded answer' });
+      channel.push({
+        type: 'compaction',
+        summary: 'retained summary',
+        retainedTail: [
+          { kind: 'message', role: 'user', content: 'tail request' },
+          { kind: 'tool-call', id: 'old-call', name: 'read', args: '{}' },
+          {
+            kind: 'tool-result',
+            id: 'old-call',
+            content: '[Old tool result content cleared]',
+          },
+        ],
+      });
+      channel.push({ type: 'text-delta', text: 'after boundary' });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('superseded request', makeReplyChannel().writer);
+  const transcript = await agent.getTranscript();
+  t.true(transcript.some(record => record.kind === 'compaction'));
+  t.false(
+    (await agent.getHistory()).some(row => row.content === 'tail request'),
+  );
+  t.deepEqual((await agent.getTurns())[0].tools, []);
+  t.deepEqual((await agent.getTurns())[0].activity, []);
+  await agent.shutdown();
+  const contexts = [];
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      return completed();
+    },
+  });
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), transcript);
+  await revived.converse('continue now', makeReplyChannel().writer);
+  const replay = contexts[0].filter(message => message.role !== 'system');
+  t.deepEqual(replay, [
+    { role: 'assistant', content: 'retained summary' },
+    { role: 'user', content: 'tail request' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'floot-history-2',
+          type: 'function',
+          function: { name: 'read', arguments: '{}' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'floot-history-2',
+      content: '[Old tool result content cleared]',
+    },
+    { role: 'assistant', content: 'after boundary' },
+    { role: 'user', content: 'continue now' },
+  ]);
+  t.deepEqual(
+    (await revived.getTranscript()).slice(0, transcript.length),
+    transcript,
+  );
+});
+
+test('end-of-turn compaction restores retained tools and final answer exactly once', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  let nativeExecutions = 0;
+  let replayExecutions = 0;
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'tool-call',
+        id: 'native-call',
+        name: 'effect',
+        args: '{}',
+      });
+      nativeExecutions += 1;
+      channel.push({
+        type: 'tool-result',
+        id: 'native-call',
+        name: 'effect',
+        result: 'Changed once',
+      });
+      channel.push({ type: 'text-delta', text: 'Final native answer' });
+      // Models the completed-turn capture cut, not the earlier native boundary.
+      channel.push({
+        type: 'compaction',
+        summary: 'Earlier context summary',
+        retainedTail: [
+          { kind: 'tool-call', id: 'native-call', name: 'effect', args: '{}' },
+          { kind: 'tool-result', id: 'native-call', content: 'Changed once' },
+          {
+            kind: 'message',
+            role: 'assistant',
+            content: 'Final native answer',
+          },
+        ],
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const tools = {
+    extraTools: new Map([
+      [
+        'effect',
+        effectTool(async () => {
+          replayExecutions += 1;
+          return 'Unexpected replay';
+        }),
+      ],
+    ]),
+  };
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers, ...tools },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Change it', makeReplyChannel().writer);
+  const transcript = await agent.getTranscript();
+  const history = await agent.getHistory();
+  t.is(history.filter(row => row.content === 'Final native answer').length, 1);
+  t.is(nativeExecutions, 1);
+  t.is(replayExecutions, 0);
+  await agent.shutdown();
+  const contexts = [];
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () =>
+        harden({
+          async chatStream(context) {
+            contexts.push(context);
+            return completed();
+          },
+        }),
+    },
+    'Test',
+    { journalPowers: f.powers, ...tools },
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), transcript);
+  t.deepEqual(await revived.getHistory(), history);
+  await revived.converse('Continue', makeReplyChannel().writer);
+  t.deepEqual(
+    contexts[0].filter(message => message.role !== 'system'),
+    [
+      { role: 'assistant', content: 'Earlier context summary' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'floot-history-1',
+            type: 'function',
+            function: { name: 'effect', arguments: '{}' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'floot-history-1',
+        content: 'Changed once',
+      },
+      { role: 'assistant', content: 'Final native answer' },
+      { role: 'user', content: 'Continue' },
+    ],
+  );
+  t.is(nativeExecutions, 1);
+  t.is(replayExecutions, 0);
+});
+
+test('Responses overload after metadata retries without repeating a completed tool', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const requests = [];
+  const delays = [];
+  let effects = 0;
+  let revocations = 0;
+  const call = id => ({
+    type: 'function_call',
+    id: `item-${id}`,
+    call_id: id,
+    name: 'effect',
+    arguments: '{}',
+    status: 'completed',
+  });
+  const completion = output => ({
+    type: 'response.completed',
+    response: { status: 'completed', output },
+  });
+  const attempts = [
+    [completion([call('committed')])],
+    [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: call('discarded'),
+      },
+      {
+        type: 'response.reasoning_summary_text.delta',
+        delta: 'Private partial reasoning',
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        delta: '{}',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: call('discarded'),
+      },
+      {
+        type: 'response.metadata',
+        response_id: 'private-response-id',
+        metadata: { private: 'not published' },
+      },
+      {
+        type: 'error',
+        error: {
+          code: 'server_is_overloaded',
+          type: 'service_unavailable_error',
+        },
+      },
+    ],
+    [
+      completion([
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Done' }],
+        },
+      ]),
+    ],
+  ];
+  const provider = makeSubscriptionResponsesProvider({
+    model: 'test-luna',
+    sessionId: 'overload-with-committed-tool',
+    sleep: async ms => {
+      delays.push(ms);
+    },
+    subscription: Far('RetrySubscription', {
+      describe: () => harden({ models: ['test-luna'] }),
+      openEndpoint: () =>
+        Far('RetryEndpoint', {
+          requestByteStream: request => {
+            const events = attempts[requests.length];
+            if (!events) throw Error('Unexpected extra inference');
+            requests.push(JSON.parse(request.body));
+            const bytes = new TextEncoder().encode(
+              events
+                .map(event => `data: ${JSON.stringify(event)}\n\n`)
+                .join(''),
+            );
+            return harden({
+              status: 200,
+              contentType: 'text/event-stream',
+              reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
+            });
+          },
+          revoke: () => {
+            revocations += 1;
+          },
+        }),
+    }),
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'provider', provideProvider: () => provider },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            return 'Changed once';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Implement and validate', makeReplyChannel().writer);
+  t.is(effects, 1);
+  t.is(requests.length, 3);
+  t.is(revocations, 3);
+  t.deepEqual(delays, [5000]);
+  t.deepEqual(requests[1], requests[2]);
+  t.true(
+    requests[2].input.some(
+      item =>
+        item.type === 'function_call_output' &&
+        item.call_id === 'committed' &&
+        item.output === 'Changed once',
+    ),
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'completed');
+  t.is(turn.tools.length, 1);
+  t.true(turn.tools[0].settled);
+  t.false(JSON.stringify(await agent.getHistory()).includes('discarded'));
+});
+
+for (const event of [
+  { type: 'error', code: 'invalid_encrypted_content' },
+  {
+    type: 'response.failed',
+    response: { error: { code: 'server_error' } },
+  },
+  {
+    type: 'response.incomplete',
+    response: { incomplete_details: { reason: 'max_output_tokens' } },
+  },
+]) {
+  test(`Responses ${event.type} details remain durable without replay`, async t => {
+    t.timeout(10_000);
+    const f = fixture();
+    let requests = 0;
+    let revoked = 0;
+    const provideProvider = () =>
+      makeSubscriptionResponsesProvider({
+        model: 'test-luna',
+        sessionId: 'durable-error-test',
+        subscription: Far('TestSubscription', {
+          describe: async () => harden({ models: ['test-luna'] }),
+          openEndpoint: async () =>
+            Far('TestEndpoint', {
+              requestByteStream: async () => {
+                requests += 1;
+                const bytes = new TextEncoder().encode(
+                  `data: ${JSON.stringify({ ...event, message: 'PRIVATE_PROMPT' })}\n\n`,
+                );
+                return harden({
+                  status: 200,
+                  contentType: 'text/event-stream',
+                  reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
+                });
+              },
+              revoke: async () => {
+                revoked += 1;
+              },
+            }),
+        }),
+      });
+    /** @type {RuntimeConfig} */
+    const spec = { kind: 'provider', provideProvider };
+    const agent = await makeStreamingAgent(f.powers, undefined, spec, 'Test', {
+      journalPowers: f.powers,
+    });
+    t.teardown(() => agent.shutdown());
+    const error = await t.throwsAsync(
+      agent.converse('Do the work', makeReplyChannel().writer),
+      { message: /Subscription inference ended unsuccessfully/ },
+    );
+    const before = await agent.getTurns();
+    t.is(before[0].state, 'failed');
+    t.is(before[0].error, error.message);
+    t.regex(
+      before[0].error,
+      /code=invalid_encrypted_content|code=server_error|reason=max_output_tokens/,
+    );
+    t.false(before[0].error.includes('PRIVATE_PROMPT'));
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      spec,
+      'Test',
+      {
+        journalPowers: f.powers,
+      },
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getTurns(), before);
+    t.true(
+      (await revived.getHistory()).some(row =>
+        String(row.content).includes(error.message),
+      ),
+    );
+    t.is(requests, 1);
+    t.is(revoked, 1);
+  });
+}
+
+for (const failure of ['empty', 'HTTP 503']) {
+  test(`OpenRouter ${failure} remains a failed turn with usage after reconstruction`, async t => {
+    t.timeout(10_000);
+    const f = fixture();
+    let requests = 0;
+    const provider = makeOpenRouterProvider({
+      apiKey: 'test-not-a-key',
+      model: 'openrouter/free',
+      fetchImpl: async url => {
+        if (String(url).endsWith('/models')) return Response.json({ data: [] });
+        requests += 1;
+        return Response.json(
+          {
+            usage: { prompt_tokens: 10, completion_tokens: 3 },
+            choices: [
+              {
+                finish_reason: 'stop',
+                message: {
+                  role: 'assistant',
+                  content: '',
+                },
+              },
+            ],
+          },
+          { status: failure === 'empty' ? 200 : 503 },
+        );
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(
+      agent.converse('Recall the saved word', makeReplyChannel().writer),
+      {
+        message: failure === 'empty' ? /empty assistant response/ : /HTTP 503/,
+      },
+    );
+    const before = await agent.getTurns();
+    t.is(before.length, 1);
+    t.is(before[0].state, 'failed');
+    t.is(before[0].usage.inputTokens, 10);
+    t.is(before[0].usage.outputTokens, 3);
+    const usage = await agent.getUsage();
+    t.is(usage.inputTokens, 10);
+    t.is(usage.outputTokens, 3);
+    t.is(usage.turns, 0);
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getTurns(), before);
+    t.deepEqual(await revived.getUsage(), usage);
+    t.true(
+      (await revived.getHistory()).some(row =>
+        String(row.content).includes(
+          failure === 'empty' ? 'empty assistant response' : 'HTTP 503',
+        ),
+      ),
+    );
+    t.is(requests, 1);
+  });
+}
+
+test('provider usage notifications and returned totals are not double counted', async t => {
+  const f = fixture();
+  const roundUsage = usageCounts({ inputTokens: 11, outputTokens: 3 });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )({
+        async chatStream(_messages, _tools, _onToken, _signal, onUsage) {
+          onUsage?.(usageCounts({ inputTokens: 5, outputTokens: 1 }));
+          onUsage?.(usageCounts({ inputTokens: 6, outputTokens: 2 }));
+          return {
+            message: { role: 'assistant', content: 'Done' },
+            usage: roundUsage,
+          };
+        },
+      }),
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Hello', makeReplyChannel().writer);
+  t.is((await agent.getUsage()).inputTokens, 11);
+  t.is((await agent.getUsage()).outputTokens, 3);
+});
+
+test('usage context follows dispatch order across late archive publication', async t => {
+  const f = fixture();
+  const options = { input: 'seed', backendId: 'provider', modelId: 'free' };
+  const initial = makeTurnJournal(f.powers);
+  const old = await initial.begin(options);
+  await initial.dispatch(old);
+  const journal = makeTurnJournal(f.powers);
+  for (let i = 0; i < 290; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, {
+      type: 'finish',
+      state: i === 1 ? 'failed' : 'completed',
+      usage: {
+        inputTokens: 1,
+        ...(i === 0 ? { context: { usedTokens: 20, windowTokens: 1000 } } : {}),
+        ...(i === 1 ? { context: { usedTokens: 30, windowTokens: 0 } } : {}),
+      },
+    });
+  }
+  await journal.append(old, {
+    type: 'finish',
+    state: 'outcome-unknown',
+    usage: { inputTokens: 7, context: { usedTokens: 10, windowTokens: 100 } },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(harden({ chatStream: async () => completed() })),
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  f.beforeLookup(name => {
+    if (name.startsWith('ct-')) throw Error('Usage must not read tree');
+  });
+  t.deepEqual(await agent.getUsage(), {
+    ...usageCounts({ inputTokens: 297 }),
+    turns: 289,
+    incompleteTurns: 2,
+    context: { usedTokens: 30, windowTokens: 1000 },
+  });
+  f.beforeLookup(undefined);
+  await agent.resolveTurn(old, 'Known recovered outcome');
+  for (let i = 0; i < 35; i += 1) {
+    // Use the actual agent writer so the original journal incarnation owns
+    // every subsequent publication and archive cache update.
+    // eslint-disable-next-line no-await-in-loop
+    await agent.converse('Later', makeReplyChannel().writer);
+  }
+  t.deepEqual((await agent.getUsage()).context, {
+    usedTokens: 30,
+    windowTokens: 1000,
+  });
+  t.is((await agent.getUsage()).inputTokens, 297);
+});
+
+for (const backend of ['provider', 'hosted']) {
+  for (const fault of ['before-finish', 'after-finish']) {
+    test(`${backend} journal finish alone controls usage accounting: ${fault}`, async t => {
+      const f = fixture();
+      const perTurn = usageCounts({ inputTokens: 11, outputTokens: 3 });
+      /** @type {RuntimeConfig} */
+      const config =
+        backend === 'provider'
+          ? {
+              kind: 'provider',
+              provideProvider: (
+                value => () =>
+                  value
+              )(
+                harden({
+                  chatStream: async () =>
+                    harden({ ...completed(), usage: perTurn }),
+                }),
+              ),
+            }
+          : {
+              kind: 'hosted',
+              provideHostedClient: () =>
+                harden({
+                  async send() {
+                    const channel = makeBufferedReader();
+                    channel.push({ type: 'usage', ...perTurn });
+                    channel.push({ type: 'end' });
+                    return channel.reader;
+                  },
+                }),
+            };
+      f.beforeStore(value => {
+        if (fault === 'before-finish' && value.type === 'finish')
+          throw Error('Refused write');
+      });
+      f.afterStore(value => {
+        if (fault === 'after-finish' && value.type === 'finish')
+          throw Error('Lost reply');
+      });
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        config,
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => agent.shutdown());
+      await t.throwsAsync(agent.converse('Go', makeReplyChannel().writer));
+      await agent.shutdown();
+      f.beforeStore(undefined);
+      f.afterStore(undefined);
+      const revived = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        config,
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => revived.shutdown());
+      t.deepEqual(await revived.getUsage(), {
+        ...(fault === 'before-finish' ? usageCounts({}) : perTurn),
+        turns: fault === 'after-finish' ? 1 : 0,
+        incompleteTurns: 0,
+      });
+    });
+  }
+}
+
+test('usage projection failure cannot undo successful journal settlement', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  for (let i = 0; i < 290; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin({
+      input: 'seed',
+      backendId: 'provider',
+      modelId: 'free',
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  let refuse = false;
+  f.afterStore(value => {
+    if (value.type === 'finish') refuse = true;
+  });
+  f.beforeLookup(name => {
+    if (refuse && name.startsWith('floot-turn-archive-'))
+      throw Error('Totals unavailable');
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          chatStream: async () =>
+            harden({ ...completed(), usage: usageCounts({ inputTokens: 11 }) }),
+        }),
+      ),
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  let updates = 0;
+  await agent.converse(
+    'Go',
+    harden({
+      ...makeReplyChannel().writer,
+      usage: () => {
+        updates += 1;
+      },
+    }),
+  );
+  t.is(updates, 0);
+  const lastTurn = (await agent.getTurns()).at(-1);
+  if (!lastTurn) throw Error('Expected the completed turn');
+  t.is(lastTurn.state, 'completed');
+  refuse = false;
+  t.is((await agent.getUsage()).inputTokens, 11);
+  t.is((await agent.getUsage()).turns, 291);
+});
+
+for (const backend of ['provider', 'hosted']) {
+  test(`${backend} usage survives journal-only revival and ignores obsolete usage cache`, async t => {
+    const f = fixture();
+    const obsolete = harden({ inputTokens: 999_999, turns: 999 });
+    f.store.set('floot-usage', obsolete);
+    const perTurn = usageCounts({ inputTokens: 11, outputTokens: 3 });
+    /** @type {RuntimeConfig} */
+    const config =
+      backend === 'provider'
+        ? {
+            kind: 'provider',
+            provideProvider: (
+              value => () =>
+                value
+            )(
+              harden({
+                async chatStream() {
+                  return harden({ ...completed(), usage: perTurn });
+                },
+              }),
+            ),
+          }
+        : {
+            kind: 'hosted',
+            provideHostedClient: () =>
+              harden({
+                async send() {
+                  const channel = makeBufferedReader();
+                  channel.push({ type: 'usage', ...perTurn });
+                  channel.push({ type: 'text-delta', text: 'Done' });
+                  channel.push({ type: 'end' });
+                  return channel.reader;
+                },
+              }),
+          };
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      config,
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    t.deepEqual(await agent.getUsage(), {
+      ...usageCounts({}),
+      turns: 0,
+      incompleteTurns: 0,
+    });
+    await agent.converse('First', makeReplyChannel().writer);
+    t.false(
+      [...f.store.values()].some(
+        value => value.metadata?.usageTotals !== undefined,
+      ),
+    );
+    t.false([...f.store.keys()].some(name => name.startsWith('ct-')));
+    t.deepEqual(await agent.getUsage(), {
+      ...perTurn,
+      turns: 1,
+      incompleteTurns: 0,
+    });
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      config,
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getUsage(), await agent.getUsage());
+    await revived.converse('Second', makeReplyChannel().writer);
+    t.deepEqual(await revived.getUsage(), {
+      ...usageCounts({ inputTokens: 22, outputTokens: 6 }),
+      turns: 2,
+      incompleteTurns: 0,
+    });
+    t.is(f.store.get('floot-usage'), obsolete);
+    t.false(f.accessedNames.includes('floot-usage'));
+  });
+}
+
+test('archived failures remain in UI history and direct-provider context', async t => {
+  t.timeout(20_000);
+  const f = fixture();
+  let requests = 0;
+  /** @type {{lastContext: {content?: string}[] | undefined, restoredTranscript: TranscriptRecord[] | undefined}} */
+  const observed = { lastContext: undefined, restoredTranscript: undefined };
+  const provider = harden({
+    async chatStream(context) {
+      requests += 1;
+      observed.lastContext = context;
+      if (requests === 1) throw Error('Archived failure');
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(
+    agent.converse('Preserve this failed request', makeReplyChannel().writer),
+  );
+  for (let index = 0; index < 290; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await agent.converse(`Later request ${index}`, makeReplyChannel().writer);
+  }
+  t.true(
+    (await agent.getArchivedTurns()).some(
+      turn => turn.input === 'Preserve this failed request',
+    ),
+  );
+  t.true(
+    (await agent.getArchivedTurnsPage()).records.some(
+      turn => turn.input === 'Preserve this failed request',
+    ),
+  );
+  t.is((await agent.getUsage()).incompleteTurns, 1);
+  t.true(
+    (await agent.getHistory()).some(
+      message => message.content === 'Preserve this failed request',
+    ),
+  );
+  if (!observed.lastContext) throw Error('Expected the provider context');
+  t.true(
+    observed.lastContext.some(
+      message => message.content === 'Preserve this failed request',
+    ),
+  );
+  await agent.shutdown();
+  const hostedClient = harden({
+    async send(input, options) {
+      t.is(input, 'New hosted request');
+      observed.restoredTranscript = options.transcript;
+      const channel = makeBufferedReader();
+      channel.push({ type: 'text-delta', text: 'Restored' });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  t.teardown(() => revived.shutdown());
+  await revived.converse('New hosted request', makeReplyChannel().writer);
+  if (!observed.restoredTranscript)
+    throw Error('Expected the restored transcript');
+  t.true(
+    observed.restoredTranscript.some(
+      record =>
+        record.kind === 'message' &&
+        record.content === 'Preserve this failed request',
+    ),
+  );
+  t.false(
+    observed.restoredTranscript.some(
+      record =>
+        record.kind === 'message' && record.content === 'New hosted request',
+    ),
+  );
+});
+
+test('direct-provider recovery hydrates full input and tool evidence, not UI previews', async t => {
+  const f = fixture();
+  const input = `${'i'.repeat(9000)}INPUT-TAIL`;
+  const args = { text: `${'a'.repeat(9000)}ARGS-TAIL` };
+  const result = `${'r'.repeat(9000)}RESULT-TAIL`;
+  const contexts = [];
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      if (contexts.length === 1)
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'long-call',
+                type: 'function',
+                function: { name: 'effect', arguments: JSON.stringify(args) },
+              },
+            ],
+          },
+        });
+      if (contexts.length === 2) throw Error('Failed after long effect');
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([['effect', effectTool(async () => result)]]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse(input, makeReplyChannel().writer));
+  await agent.converse('Continue without repeating', makeReplyChannel().writer);
+  const restored = contexts[2];
+  t.true(restored.some(message => message.content === input));
+  t.true(
+    restored.some(
+      message => message.role === 'tool' && message.content === result,
+    ),
+  );
+  const call = restored
+    .flatMap(message => message.tool_calls || [])
+    .find(item => item.function.name === 'effect');
+  t.deepEqual(JSON.parse(call.function.arguments), args);
+  t.is(
+    restored.filter(message => message.content === 'Continue without repeating')
+      .length,
+    1,
+  );
+});
+
+test('direct tools persist intent before effects and failed effects remain in later model context', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const contexts = [];
+  let effects = 0;
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        t.is(f.events().at(-1).type, 'tool-intent');
+        effects += 1;
+        return 'Changed the external resource once';
+      }),
+    ],
+  ]);
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      if (contexts.length === 1)
+        return harden({
+          ...callEffect(),
+          usage: { inputTokens: 7, outputTokens: 3 },
+        });
+      if (contexts.length === 2)
+        throw Error('Provider disconnected after effect');
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  await t.throwsAsync(agent.converse('Change it', makeReplyChannel().writer), {
+    message: /disconnected after effect/,
+  });
+  await agent.converse('Summarize, do not repeat', makeReplyChannel().writer);
+  t.is(effects, 1);
+  t.true(
+    contexts[2].some(
+      message =>
+        message.role === 'tool' &&
+        message.content === 'Changed the external resource once',
+    ),
+  );
+  t.true(
+    contexts[2].some(
+      message =>
+        message.content ===
+        '[Floot turn failed: Provider disconnected after effect]',
+    ),
+  );
+  t.deepEqual(
+    (await agent.getTurns()).map(turn => turn.state),
+    ['failed', 'completed'],
+  );
+  t.deepEqual(
+    (await agent.getTurns())[0].usage,
+    usageCounts({ inputTokens: 7, outputTokens: 3 }),
+  );
+  t.deepEqual(
+    (await agent.getHistory()).map(
+      message => message.content || message.result,
+    ),
+    [
+      'Change it',
+      'Changed the external resource once',
+      'Turn failed: Provider disconnected after effect',
+      'Summarize, do not repeat',
+      'Done',
+    ],
+  );
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  t.deepEqual(await revived.getHistory(), await agent.getHistory());
+  t.deepEqual(
+    (await revived.getTurns())[0].usage,
+    usageCounts({ inputTokens: 7, outputTokens: 3 }),
+  );
+});
+
+test('failed hosted turn preserves reported partial usage across revival without claiming success', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'usage',
+        inputTokens: 13,
+        outputTokens: 5,
+        cachedInputTokens: 900,
+        context: { usedTokens: 918, windowTokens: 4000 },
+      });
+      channel.push({
+        type: 'abort',
+        reason: 'Provider failed after metered work',
+      });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  await t.throwsAsync(
+    agent.converse('Metered attempt', makeReplyChannel().writer),
+    { message: /Provider failed after metered work/ },
+  );
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  const [turn] = await revived.getTurns();
+  t.is(turn.state, 'failed');
+  const spent = usageCounts({
+    inputTokens: 13,
+    outputTokens: 5,
+    cachedInputTokens: 900,
+    context: { usedTokens: 918, windowTokens: 4000 },
+  });
+  t.deepEqual(turn.usage, spent);
+  // The turn did not complete, but its tokens were spent and its reading is
+  // the newest the session has: both are in what the session reports.
+  t.deepEqual(await revived.getUsage(), {
+    ...spent,
+    turns: 0,
+    incompleteTurns: 1,
+  });
+});
+
+test('hosted snapshot tools durably authorize effects and preserve failures without stream tool events', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let effects = 0;
+  const inputs = [];
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        t.is(f.events().at(-1).type, 'tool-intent');
+        effects += 1;
+        return 'Hosted effect completed';
+      }),
+    ],
+  ]);
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: async snapshot =>
+        harden({
+          async interrupt() {
+            await null;
+          },
+          async send(input) {
+            inputs.push(input);
+            if (inputs.length > 1) {
+              const channel = makeBufferedReader();
+              channel.push({ type: 'text-delta', text: 'Recovered safely' });
+              channel.push({ type: 'end' });
+              return channel.reader;
+            }
+            await snapshot.execute('effect', harden({}));
+            t.is(f.events().at(-1).type, 'tool-result');
+            throw Error('Hosted provider disconnected');
+          },
+        }),
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  await t.throwsAsync(
+    agent.converse('Change hosted resource', makeReplyChannel().writer),
+    { message: /Hosted provider disconnected/ },
+  );
+  const [turn] = await agent.getTurns();
+  t.is(effects, 1);
+  t.is(turn.state, 'outcome-unknown');
+  t.is(turn.tools[0].result, 'Hosted effect completed');
+  t.deepEqual(turn.activity, []);
+  t.is((await agent.getHistory())[1].result, 'Hosted effect completed');
+  t.is(inputs.length, 1);
+  await agent.converse('Inspect, do not repeat', makeReplyChannel().writer);
+  t.regex(inputs[1], /Previous incomplete-turn recovery evidence/);
+  t.regex(inputs[1], /Hosted effect completed/);
+  t.regex(inputs[1], /External effects are not undone/);
+  t.regex(inputs[1], /Current user request:\nInspect, do not repeat/);
+  t.is(effects, 1);
+  t.is(
+    (await agent.getTurns())[1].input,
+    'Inspect, do not repeat',
+    'Recovery envelope does not replace original durable input',
+  );
+  await agent.converse('Unrelated follow-up', makeReplyChannel().writer);
+  t.regex(inputs[2], /Hosted effect completed/);
+  t.regex(inputs[2], /outcome-unknown/);
+  t.is((await agent.getTurns())[0].resolution, undefined);
+  t.is(effects, 1);
+  await agent.resolveTurn(
+    turn.turnId,
+    'Operator independently verified all hosted effects',
+  );
+  await agent.converse('After resolution', makeReplyChannel().writer);
+  t.is(inputs[3], 'After resolution');
+});
+
+test('aliased backend observations retain distinct execution evidence without claiming duplicate effects', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let effects = 0;
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        effects += 1;
+        return 'Effect happened once';
+      }),
+    ],
+  ]);
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: async snapshot =>
+        harden({
+          async send() {
+            const result = await snapshot.execute('effect', harden({}));
+            const channel = makeBufferedReader();
+            channel.push({
+              type: 'tool-call',
+              id: 'native-alias',
+              name: 'endo_effect',
+              args: '{}',
+            });
+            channel.push({
+              type: 'tool-result',
+              id: 'native-alias',
+              name: 'endo_effect',
+              result,
+            });
+            channel.push({
+              type: 'abort',
+              reason: 'Provider declined further work',
+            });
+            return channel.reader;
+          },
+        }),
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  await t.throwsAsync(
+    agent.converse('Apply effect', makeReplyChannel().writer),
+    { message: /Provider declined further work/ },
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'failed');
+  t.is(turn.activity[0].name, 'endo_effect');
+  t.is(turn.tools[0].name, 'effect');
+  const tools = (await agent.getHistory()).filter(
+    message => message.role === 'tool',
+  );
+  t.is(tools.length, 2);
+  t.is(tools[0].name, 'endo_effect');
+  t.is(tools[0].result, 'Effect happened once');
+  t.is(tools[1].name, 'effect');
+  t.regex(
+    tools[1].result,
+    /Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution/,
+  );
+  t.regex(tools[1].result, /Effect happened once/);
+  t.is(effects, 1);
+});
+
+test('failed mail turns restore journaled receipt and tool evidence after revival', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const contexts = [];
+  let effects = 0;
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        effects += 1;
+        return 'Mail-origin effect completed';
+      }),
+    ],
+  ]);
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      if (contexts.length === 1) return callEffect();
+      if (contexts.length === 2) throw Error('Failed after mail-origin effect');
+      return completed();
+    },
+  });
+  const first = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  await t.throwsAsync(
+    first.converse('Mail request', makeReplyChannel().writer, {
+      mail: { messageNumber: 'mail-1' },
+    }),
+    { message: /Failed after mail-origin effect/ },
+  );
+  const history = await first.getHistory();
+  t.deepEqual(
+    history.map(message => message.content || message.result),
+    [
+      'Mail request',
+      'Mail-origin effect completed',
+      'Turn failed: Failed after mail-origin effect',
+    ],
+  );
+  t.is(history[0].meta.mail.messageNumber, 'mail-1');
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  t.deepEqual(await revived.getHistory(), history);
+  await revived.converse(
+    'Continue without repeating',
+    makeReplyChannel().writer,
+  );
+  t.is(effects, 1);
+  t.true(
+    contexts[2].some(
+      message =>
+        message.role === 'tool' &&
+        message.content === 'Mail-origin effect completed',
+    ),
+  );
+  t.deepEqual(
+    (await revived.getHistory()).map(
+      message => message.content || message.result,
+    ),
+    [
+      'Mail request',
+      'Mail-origin effect completed',
+      'Turn failed: Failed after mail-origin effect',
+      'Continue without repeating',
+      'Done',
+    ],
+  );
+});
+
+test('repeated typed receipt hides only duplicate display input, not new admission or effects', async t => {
+  const f = fixture();
+  const inputs = [
+    'First typed request',
+    `Second full input ${'detail '.repeat(2000)}TAIL`,
+  ];
+  const contexts = [];
+  let effects = 0;
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      if (contexts.length === 1 || contexts.length === 3) return callEffect();
+      if (contexts.length === 4)
+        throw Error('Second attempt failed after effect');
+      return harden({
+        message: { role: 'assistant', content: 'First attempt completed' },
+      });
+    },
+  });
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        effects += 1;
+        return `Explicit attempt effect ${effects}`;
+      }),
+    ],
+  ]);
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  t.teardown(() => agent.shutdown());
+  const meta = harden({
+    mail: { messageNumber: 'same-receipt', from: 'sender' },
+  });
+  await agent.converse(inputs[0], makeReplyChannel().writer, meta);
+  await t.throwsAsync(
+    agent.converse(inputs[1], makeReplyChannel().writer, meta),
+    { message: /Second attempt failed/ },
+  );
+  t.is(effects, 2);
+  t.is(contexts.length, 4);
+  t.is(
+    contexts[0].filter(message => message.role === 'user').at(-1).content,
+    inputs[0],
+  );
+  t.is(
+    contexts[2].filter(message => message.role === 'user').at(-1).content,
+    inputs[1],
+  );
+  const history = await agent.getHistory();
+  t.deepEqual(
+    history.filter(row => row.role === 'user').map(row => row.content),
+    [inputs[0]],
+  );
+  t.true(history.some(row => row.content === 'First attempt completed'));
+  t.true(
+    history.some(
+      row => row.content === 'Turn failed: Second attempt failed after effect',
+    ),
+  );
+  t.deepEqual(
+    history.filter(row => row.result).map(row => row.result),
+    ['Explicit attempt effect 1', 'Explicit attempt effect 2'],
+  );
+  t.deepEqual(
+    (await agent.getTurns()).map(turn => turn.state),
+    ['completed', 'failed'],
+  );
+  t.false([...f.store.keys()].some(name => name.startsWith('ct-')));
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getHistory(), history);
+  t.deepEqual(
+    (await revived.getTranscript())
+      .filter(row => row.kind === 'message' && row.role === 'user')
+      .map(row => row.content),
+    inputs,
+  );
+  t.is(effects, 2);
+  t.is(contexts.length, 4);
+});
+
+test('lost result writes poison dispatch; revival permits unrelated work without replay or resolution', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let effects = 0;
+  let calls = 0;
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        effects += 1;
+        f.refuse('tool-result');
+        return 'Effect happened but result could not be recorded';
+      }),
+    ],
+  ]);
+  const provider = harden({
+    async chatStream() {
+      calls += 1;
+      return callEffect();
+    },
+  });
+  const first = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  await t.throwsAsync(first.converse('Apply once', makeReplyChannel().writer), {
+    message: /uncertain storage/,
+  });
+  await t.throwsAsync(
+    first.converse('Do not replay', makeReplyChannel().writer),
+    { message: /uncertain storage/ },
+  );
+  t.is(calls, 1);
+  t.is(effects, 1);
+  f.refuse(undefined);
+  const safeProvider = harden({
+    async chatStream(context) {
+      calls += 1;
+      t.true(
+        context.some(
+          message =>
+            message.role === 'tool' &&
+            /outcome unknown; do not automatically retry/.test(message.content),
+        ),
+      );
+      return completed();
+    },
+  });
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => safeProvider,
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  const [uncertain] = await revived.getTurns();
+  t.is(uncertain.state, 'outcome-unknown');
+  t.is(uncertain.tools[0].settled, undefined);
+  t.is(calls, 1);
+  await revived.converse('Continue safely', makeReplyChannel().writer);
+  t.is(calls, 2);
+  t.is(effects, 1);
+  t.is((await revived.getTurns())[0].resolution, undefined);
+  await revived.resolveTurn(
+    uncertain.turnId,
+    'Operator verified the effect happened once',
+  );
+  const [resolved, next] = await revived.getTurns();
+  t.is(resolved.state, 'outcome-unknown');
+  t.is(resolved.resolution, 'Operator verified the effect happened once');
+  t.is(next.state, 'completed');
+});
+
+test('failed intent persistence never dispatches the actual Endo tool', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  f.refuse('tool-intent');
+  let effects = 0;
+  const extraTools = new Map([
+    [
+      'effect',
+      effectTool(async () => {
+        effects += 1;
+        return 'unsafe';
+      }),
+    ],
+  ]);
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(harden({ chatStream: async () => callEffect() })),
+    },
+    'Test',
+    { journalPowers: f.powers, extraTools },
+  );
+  await t.throwsAsync(
+    agent.converse('Do not execute without intent', makeReplyChannel().writer),
+    { message: /uncertain storage/ },
+  );
+  t.is(effects, 0);
+  t.deepEqual(
+    f.events().map(event => event.type),
+    ['begin', 'dispatch-intent', 'transcript-record', 'transcript-record'],
+  );
+});
+
+test('native activity without result remains unknown while unrelated later work completes', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let sends = 0;
+  const hostedClient = harden({
+    async interrupt() {
+      await null;
+    },
+    async send() {
+      sends += 1;
+      const channel = makeBufferedReader();
+      if (sends > 1) {
+        channel.push({ type: 'text-delta', text: 'Unrelated answer' });
+        channel.push({ type: 'end' });
+        return channel.reader;
+      }
+      channel.push({
+        type: 'tool-call',
+        id: 'native',
+        name: 'shell',
+        args: '{}',
+      });
+      channel.push({ type: 'text-delta', text: 'Claimed success' });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  await t.throwsAsync(
+    agent.converse('Native operation', makeReplyChannel().writer),
+    { message: /Tool outcome unknown|unsettled tool|without.*result/i },
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'outcome-unknown');
+  t.is(turn.activity[0].settled, undefined);
+  await agent.converse(
+    'Do not blindly replay; answer an unrelated question',
+    makeReplyChannel().writer,
+  );
+  t.is(sends, 2);
+  const [prior, next] = await agent.getTurns();
+  t.is(prior.state, 'outcome-unknown');
+  t.is(prior.resolution, undefined);
+  t.is(next.state, 'completed');
+  t.deepEqual(next.activity, []);
+});
+
+test('interrupt closes hosted tool admission before backend acknowledgement and preserves admitted context', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const barrier = () => {
+    let resolve = () => {};
+    const promise = new Promise(done => {
+      resolve = () => done(undefined);
+    });
+    return harden({ promise, resolve });
+  };
+  const sent = barrier();
+  const effectStarted = barrier();
+  const finishEffect = barrier();
+  const interruptStarted = barrier();
+  const finishInterrupt = barrier();
+  const events = makeBufferedReader();
+  const controller = new AbortController();
+  let turn = Promise.resolve();
+  t.teardown(async () => {
+    controller.abort();
+    finishEffect.resolve();
+    finishInterrupt.resolve();
+    events.close();
+    await turn;
+  });
+  /** @type {{ execute(name: string, args: object): Promise<string> } | undefined} */
+  let tools;
+  let effects = 0;
+  let sends = 0;
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: async snapshot => {
+        tools = snapshot;
+        await t.throwsAsync(() => snapshot.execute('effect', harden({})), {
+          message: /outside an active Floot turn/,
+        });
+        return harden({
+          async send() {
+            sends += 1;
+            if (sends === 1) {
+              sent.resolve();
+              return events.reader;
+            }
+            await snapshot.execute('effect', harden({}));
+            const completedEvents = makeBufferedReader();
+            completedEvents.push({ type: 'text-delta', text: 'Done' });
+            completedEvents.push({ type: 'end' });
+            t.teardown(() => completedEvents.close());
+            return completedEvents.reader;
+          },
+          async interrupt() {
+            interruptStarted.resolve();
+            await finishInterrupt.promise;
+            events.close();
+          },
+        });
+      },
+    },
+    'Test',
+    {
+      journalPowers: f.powers,
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            effectStarted.resolve();
+            await finishEffect.promise;
+            return 'Effect completed';
+          }),
+        ],
+      ]),
+    },
+  );
+  turn = agent.converse(
+    'First turn',
+    makeReplyChannel().writer,
+    undefined,
+    controller.signal,
+  );
+  await sent.promise;
+  if (!tools) throw Error('Hosted tool snapshot was not provisioned');
+  const hostedTools = tools;
+  const admitted = hostedTools.execute('effect', harden({}));
+  await effectStarted.promise;
+  const firstTurnId = (await agent.getTurns())[0].turnId;
+
+  controller.abort();
+  // Assert before waiting for the backend interrupt callback as well as while
+  // its acknowledgement is withheld. Neither window permits another effect.
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+  await interruptStarted.promise;
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+  t.is(effects, 1);
+  t.is(f.events().filter(event => event.type === 'tool-intent').length, 1);
+  finishEffect.resolve();
+  t.is(await admitted, 'Effect completed');
+  const result = f.events().find(event => event.type === 'tool-result');
+  t.is(result.turnId, firstTurnId);
+  finishInterrupt.resolve();
+  await turn;
+  t.is((await agent.getTurns())[0].tools[0].result, 'Effect completed');
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+
+  // The same runtime/tool capability can admit calls for a subsequent turn.
+  await agent.converse('Second turn', makeReplyChannel().writer);
+  t.is(sends, 2);
+  t.is(effects, 2);
+  const [first, second] = await agent.getTurns();
+  t.not(second.turnId, first.turnId);
+  t.is(first.tools.length, 1);
+  t.is(second.tools.length, 1);
+});
+
+test('a turn stopped before its backend sized the window keeps the size already known', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let turn = 0;
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      turn += 1;
+      if (turn === 1) {
+        channel.push({
+          type: 'usage',
+          inputTokens: 10,
+          outputTokens: 2,
+          context: { usedTokens: 150_000, windowTokens: 200_000 },
+        });
+        channel.push({ type: 'text-delta', text: 'ok' });
+        channel.push({ type: 'end' });
+      } else {
+        // A mid-turn reading: the request is known, the window is not yet.
+        channel.push({
+          type: 'usage',
+          context: { usedTokens: 160_000, windowTokens: 0 },
+        });
+        channel.push({ type: 'abort', reason: 'stopped by the operator' });
+      }
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    { journalPowers: f.powers },
+  );
+  await agent.converse('first', makeReplyChannel().writer);
+  await t.throwsAsync(agent.converse('second', makeReplyChannel().writer), {
+    message: /stopped by the operator/,
+  });
+  t.deepEqual((await agent.getUsage()).context, {
+    usedTokens: 160_000,
+    windowTokens: 200_000,
+  });
+});

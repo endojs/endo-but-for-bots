@@ -253,7 +253,7 @@ export const makeContainerMountBridge = (
       const handle = await E(fsMounter).mount(
         fs,
         mountPoint,
-        harden({ lazyUnmount: true, readOnly }),
+        harden({ readOnly }),
       );
       try {
         const mountCap = await E(hostAgent).provideMount(

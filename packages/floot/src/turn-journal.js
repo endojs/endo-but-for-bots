@@ -1,0 +1,1234 @@
+// @ts-check
+
+import { Fail, q } from '@endo/errors';
+import { E } from '@endo/eventual-send';
+import { passStyleOf } from '@endo/pass-style';
+import { projectUsage } from '@endo/hosted-agent/token-usage.js';
+
+import { validateChatMessage } from './session-mentions.js';
+import { encodeJournalPresentation } from './journal-presentation.js';
+import {
+  assertContextEvidence,
+  certifyContextEvidence,
+} from './context-evidence.js';
+import {
+  assertTranscriptBudget,
+  DEFAULT_TRANSCRIPT_LIMITS,
+  encodeJournalTranscript,
+  transcriptIndex,
+} from './journal-transcript.js';
+
+const PREFIX = 'floot-turn-event-';
+const CONTENT_PREFIX = 'floot-turn-content-';
+const SNAPSHOT_PREFIX = 'floot-turn-snapshot-';
+const ARCHIVE_PREFIX = 'floot-turn-archive-';
+const SNAPSHOT_VERSION = 3;
+
+/**
+ * Bounds, and what each one protects.
+ *
+ * There is no journal-lifetime ceiling. The journal used to refuse its
+ * 10,001st event, which made a long healthy session end in "capacity
+ * exhausted" and needed operator archival. What that ceiling bounded was the
+ * replay — every event read back into memory at every start — and the
+ * resident record map that held every turn's full text. Snapshots and archival
+ * reduce that work, but do not establish a global memory bound: unresolved
+ * turns and the lifetime storage-name index can still grow.
+ *
+ * `MAX_EVENT_SIZE` bounds one stored event. Every text field is cut to
+ * `PREVIEW_CHARS` before the event is written, with the full text stored as
+ * its own value and referenced, so an event never approaches this by the
+ * writer's own construction; the bound is what a replay refuses if storage
+ * hands back something the writer could not have produced.
+ *
+ * `MAX_CONTENT_CHARS` bounds one content value. A value is one JSON document
+ * the daemon holds whole while it is marshalled to storage and back, so this
+ * is a configurable workload guard separate from the native wire readers — a
+ * storage-value bound, not a model output ceiling: a tool result larger than this
+ * is refused at the call, which fails one tool call rather than the session.
+ *
+ * `RETAINED_TURNS` bounds the settled part of the record map. Older settled turns are moved
+ * to archive chunks in storage and read back only on request; a turn with an
+ * unresolved outcome is never archived, because it is the evidence recovery
+ * needs in front of it.
+ *
+ * `SNAPSHOT_EVERY` bounds replay. A snapshot is the record map at an event
+ * sequence; replay reads the newest snapshot and only the events after it.
+ *
+ * Nothing the conversation wrote is ever removed here. Events, content
+ * values and archive chunks are the transcript, and the transcript is kept
+ * until the session itself is removed in Endo and collected; a snapshot is a
+ * derived accelerator, so the only value this journal ever discards is a
+ * snapshot a newer one has superseded. Storage grows with the conversation
+ * — that is what keeping it means. Replay starts at the latest snapshot, but
+ * that snapshot and resident memory can grow with unresolved turns. Startup
+ * also lists all storage names. Storage scaling is a deferred concern, not a
+ * guarantee established by these per-value and settled-turn bounds.
+ */
+const MAX_EVENT_SIZE = 131_072;
+const PREVIEW_CHARS = 8192;
+/** How many distinct serving models one turn may record. */
+const MAX_SERVED_BY = 16;
+// Replay checks the structural signed-length profile, never a lowered budget.
+const MAX_CONTENT_CHARS = 0x7fff_ffff;
+const RETAINED_TURNS = 256;
+const SNAPSHOT_EVERY = 64;
+const ARCHIVE_CHUNK_TURNS = 256;
+
+/** Text fields an event may carry that are externalized when large. */
+const CONTENT_FIELDS = harden({
+  begin: harden(['input']),
+  'tool-intent': harden(['args']),
+  'observed-tool-call': harden(['args']),
+  'tool-result': harden(['result']),
+  'observed-tool-result': harden(['result']),
+  'transcript-record': harden(['payload']),
+  presentation: harden(['payload']),
+  finish: harden(['output', 'error']),
+  resolve: harden([]),
+});
+
+/**
+ * Copy only inert JSON data, never Error objects, promises, or capabilities.
+ * @param {unknown} value
+ * @param {number} [depth]
+ * @returns {any}
+ */
+const copyData = (value, depth = 0) => {
+  depth <= 20 || Fail`Turn journal data nesting exceeds its storage profile`;
+  if (value === undefined) return undefined;
+  const style = passStyleOf(harden(value));
+  if (style === 'null' || style === 'boolean' || style === 'string')
+    return value;
+  if (style === 'number' && Number.isFinite(value)) return value;
+  if (style === 'copyArray') {
+    return /** @type {unknown[]} */ (value).map(item =>
+      copyData(item, depth + 1),
+    );
+  }
+  if (style === 'copyRecord') {
+    return Object.fromEntries(
+      Object.entries(/** @type {Record<string, unknown>} */ (value))
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, copyData(item, depth + 1)]),
+    );
+  }
+  throw Fail`Turn journal accepts only inert JSON data`;
+};
+
+/**
+ * @param {unknown} value
+ * @param {number} [limit]
+ * @param {boolean} [allowEmpty]
+ */
+const assertText = (value, limit = 1024, allowEmpty = false) => {
+  (typeof value === 'string' &&
+    (allowEmpty || value.length > 0) &&
+    value.length <= limit) ||
+    Fail`Invalid turn journal text field`;
+};
+
+/**
+ * Explicit tool classification; absence is unknown, never inferred from text.
+ * @param {unknown} value
+ */
+const assertToolFailure = value => {
+  value === undefined ||
+    typeof value === 'boolean' ||
+    Fail`Invalid turn journal tool failure flag`;
+};
+
+/**
+ * Opaque backend acknowledgement token, not model context or a capability.
+ * The 8192-character limit is a journal storage profile, not a provider limit.
+ * @param {unknown} value
+ */
+export const assertBackendCheckpoint = value => {
+  assertText(value, PREVIEW_CHARS);
+};
+harden(assertBackendCheckpoint);
+
+/** @param {any} record */
+const assertCheckpointState = record => {
+  (record !== null && typeof record === 'object') ||
+    Fail`Invalid turn journal checkpoint record`;
+  ['not-dispatched', 'possibly-dispatched'].includes(record.dispatchState) ||
+    Fail`Invalid turn journal dispatch state`;
+  for (const call of [...record.tools, ...record.activity]) {
+    assertToolFailure(call.failed);
+    call.failed === undefined ||
+      call.settled === true ||
+      Fail`Tool failure flag requires a settled outcome`;
+  }
+  if (record.dispatchState === 'not-dispatched') {
+    (record.state !== 'completed' &&
+      record.tools?.length === 0 &&
+      record.activity?.length === 0 &&
+      (record.transcript?.length ?? 0) === 0 &&
+      !record.transcriptComplete &&
+      record.presentation === undefined &&
+      (record.output === undefined || record.output === '') &&
+      record.outputRef === undefined &&
+      record.usage === undefined &&
+      record.servedBy === undefined &&
+      record.backendCheckpoint === undefined) ||
+      Fail`Execution evidence requires dispatch intent`;
+  }
+  if (record.nativeContextFormat !== undefined)
+    assertText(record.nativeContextFormat, 128);
+  if (record.backendCheckpoint === undefined) return;
+  assertBackendCheckpoint(record.backendCheckpoint);
+  (record.terminal === true && record.state === 'completed') ||
+    Fail`Backend checkpoint requires a completed turn`;
+  [record.tools, record.activity].every(
+    calls =>
+      Array.isArray(calls) && calls.every(call => call?.settled === true),
+  ) || Fail`Backend checkpoint requires settled tool evidence`;
+};
+
+/**
+ * Presentation/receipt metadata, never model instructions or sender authority.
+ * Message numbers are opaque mailbox-local identities, not numeric counters here.
+ * @param {unknown} value
+ */
+const assertMailReceipt = value => {
+  if (value === undefined) return;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw Fail`Invalid turn journal mail receipt`;
+  }
+  const keys = Object.keys(value);
+  (keys.length > 0 &&
+    keys.every(key => ['from', 'messageNumber'].includes(key))) ||
+    Fail`Invalid turn journal mail receipt fields`;
+  const mail = /** @type {{ from?: unknown, messageNumber?: unknown }} */ (
+    value
+  );
+  if (Object.hasOwn(mail, 'from')) assertText(mail.from, PREVIEW_CHARS);
+  if (Object.hasOwn(mail, 'messageNumber')) assertText(mail.messageNumber, 128);
+};
+
+/** @param {bigint | number} sequence */
+const pad = sequence => `${sequence}`.padStart(20, '0');
+
+/** @param {string} name */
+const sequenceOf = name => BigInt(name.slice(name.lastIndexOf('-') + 1));
+
+/**
+ * A content reference as a record carries it: where the full text is, and
+ * how long it is, beside the preview that replaced it.
+ *
+ * @param {unknown} ref
+ */
+const assertContentRef = ref => {
+  const { name, chars } = /** @type {{ name?: unknown, chars?: unknown }} */ (
+    typeof ref === 'object' && ref !== null ? ref : {}
+  );
+  (typeof name === 'string' &&
+    new RegExp(`^${CONTENT_PREFIX}\\d{20}-[a-z]+$`).test(name) &&
+    typeof chars === 'number' &&
+    Number.isSafeInteger(chars) &&
+    chars > PREVIEW_CHARS) ||
+    Fail`Invalid turn journal content reference`;
+  return /** @type {{ name: string, chars: number }} */ ({ name, chars });
+};
+
+/**
+ * Canonical transcript encoding starts with kind. Check the bounded preview
+ * as well as the index so metadata selection cannot hide a mismatched entry.
+ * Missing metadata requires session retirement, not an eager history migration.
+ * @param {any} entry
+ */
+const assertTranscriptKind = entry => {
+  (typeof entry.kind === 'string' &&
+    [
+      'message',
+      'tool-call',
+      'tool-result',
+      'compaction',
+      'native-context',
+    ].includes(entry.kind)) ||
+    Fail`Missing or invalid transcript kind index; retire legacy session`;
+  (typeof entry.payload === 'string' &&
+    entry.payload.startsWith(`{"kind":"${entry.kind}",`)) ||
+    Fail`Transcript kind index does not match payload`;
+};
+
+/**
+ * Append-only, single-writer journal scoped to one Floot agent's powers.
+ * Storage failure is ambiguous: this incarnation is permanently poisoned.
+ * A new incarnation replays from the newest snapshot and preserves unresolved
+ * outcomes. All operations are serialized, including reads and
+ * acknowledgements.
+ *
+ * Storage holds four kinds of value, each immutable once written:
+ * `floot-turn-event-<seq>` for events not yet covered by a snapshot,
+ * `floot-turn-content-<seq>-<field>` for text a record refers to rather than
+ * carries, `floot-turn-snapshot-<seq>` for the record map as of that event,
+ * and `floot-turn-archive-<n>` for settled turns beyond the retained window.
+ *
+ * @param {any} powers
+ * @param {{ maxChars?: number, maxRecords?: number, maxContentChars?: number }} [limits]
+ */
+export const makeTurnJournal = (powers, limits = {}) => {
+  const { maxChars, maxRecords, maxContentChars } = {
+    ...DEFAULT_TRANSCRIPT_LIMITS,
+    ...limits,
+  };
+  for (const [value, upper] of [
+    [maxChars, 0xffff_ffff],
+    [maxRecords, 0xffff_ffff],
+    [maxContentChars, 0x7fff_ffff],
+  ]) {
+    (Number.isInteger(value) && value > 0 && value <= upper) ||
+      Fail`Invalid turn journal workload limit`;
+  }
+  /** @type {Map<string, any>} */
+  const records = new Map();
+  let next = 1n;
+  // The event sequence the current snapshot covers, and its storage name.
+  let through = 0n;
+  /** @type {string | undefined} */
+  let snapshotName;
+  let sinceSnapshot = 0;
+  let archivedTurns = 0;
+  let archiveChunks = 0;
+  /** @type {{ turnId: string, ordinal: string, sequence: string, chunk: string } | null} */
+  let archivedCheckpoint = null;
+  /** @type {Set<string>} */
+  let names = new Set();
+  let initialized = false;
+  let poisoned = false;
+  let queue = Promise.resolve();
+
+  /**
+   * @param {any} event
+   * @param {bigint} sequence
+   * @param {boolean} recovered
+   */
+  const prepare = (event, sequence, recovered) => {
+    const { type, turnId } = event;
+    // A replayed event may predate content references, when a field could
+    // fill the whole event; a new one is cut to a preview before it is written.
+    const textLimit = recovered ? MAX_EVENT_SIZE : PREVIEW_CHARS;
+    if (type === 'begin') {
+      turnId === `${sequence}` || Fail`Invalid turn journal begin ID`;
+      !records.has(turnId) || Fail`Duplicate turn journal begin`;
+      event.dispatchState === 'not-dispatched' ||
+        Fail`Invalid turn journal initial dispatch state`;
+      assertText(event.input, textLimit, true);
+      assertText(event.backendId);
+      assertText(event.modelId, 1024, true);
+      if (event.nativeContextFormat !== undefined)
+        assertText(event.nativeContextFormat, 128);
+      if (event.reasoningEffort !== undefined)
+        assertText(event.reasoningEffort);
+      if (event.inputRef !== undefined) assertContentRef(event.inputRef);
+      assertMailReceipt(event.mail);
+      if (event.message !== undefined) validateChatMessage(event.message);
+      const record = {
+        turnId,
+        dispatchState: 'not-dispatched',
+        input: event.input,
+        ...(event.inputRef === undefined ? {} : { inputRef: event.inputRef }),
+        backendId: event.backendId,
+        modelId: event.modelId,
+        ...(event.nativeContextFormat === undefined
+          ? {}
+          : { nativeContextFormat: event.nativeContextFormat }),
+        ...(event.mail === undefined ? {} : { mail: event.mail }),
+        ...(event.message === undefined ? {} : { message: event.message }),
+        ...(event.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: event.reasoningEffort }),
+        state: recovered ? 'outcome-unknown' : 'pending',
+        tools: [],
+        // Provider-native activity is observed after the fact, not a claim
+        // that Floot durably authorized the effect before execution.
+        activity: [],
+      };
+      return () => {
+        records.set(turnId, record);
+      };
+    }
+    const record = records.get(turnId);
+    record || Fail`Unknown turn journal turn`;
+    if (type === 'dispatch-intent') {
+      (!record.terminal && record.dispatchState === 'not-dispatched') ||
+        Fail`Invalid turn journal dispatch transition`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot dispatch a recovered turn`;
+      return () => {
+        record.dispatchState = 'possibly-dispatched';
+      };
+    }
+    if (
+      [
+        'presentation',
+        'transcript-record',
+        'transcript-complete',
+        'tool-intent',
+        'observed-tool-call',
+      ].includes(type)
+    ) {
+      record.dispatchState === 'possibly-dispatched' ||
+        Fail`Execution evidence requires dispatch intent`;
+    }
+    if (type === 'presentation') {
+      (!record.terminal && record.presentation === undefined) ||
+        Fail`Presentation already settled`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot append presentation for a recovered turn`;
+      assertText(event.payload, textLimit);
+      if (event.payloadRef !== undefined) assertContentRef(event.payloadRef);
+      return () => {
+        record.presentation = {
+          payload: event.payload,
+          ...(event.payloadRef === undefined
+            ? {}
+            : { payloadRef: event.payloadRef }),
+        };
+      };
+    } else if (type === 'transcript-record') {
+      assertTranscriptKind(event);
+      !record.terminal || Fail`Transcript record after terminal turn`;
+      !record.transcriptComplete || Fail`Transcript already complete`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot append transcript for a recovered turn`;
+      const entries = record.transcript ?? [];
+      transcriptIndex(event.ordinal, entries.length) === entries.length ||
+        Fail`Duplicate stored transcript ordinal`;
+      assertText(event.payload, textLimit);
+      if (event.payloadRef !== undefined) assertContentRef(event.payloadRef);
+      const chars =
+        (record.transcriptChars ?? 0) +
+        (event.payloadRef?.chars ?? event.payload.length);
+      assertTranscriptBudget(chars);
+      const entry = {
+        kind: event.kind,
+        ordinal: event.ordinal,
+        sequence: `${sequence}`,
+        payload: event.payload,
+        ...(event.payloadRef === undefined
+          ? {}
+          : { payloadRef: event.payloadRef }),
+      };
+      return () => {
+        entries.push(entry);
+        record.transcript = entries;
+        record.transcriptChars = chars;
+      };
+    } else if (type === 'transcript-complete') {
+      (!record.terminal && !record.transcriptComplete) ||
+        Fail`Transcript already settled`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot complete recovered transcript`;
+      event.count === `${record.transcript?.length ?? 0}` ||
+        Fail`Transcript completion frontier mismatch`;
+      return () => {
+        record.transcriptComplete = true;
+        record.transcriptEndSequence = `${sequence}`;
+      };
+    } else if (type === 'tool-intent' || type === 'observed-tool-call') {
+      !record.terminal || Fail`Tool intent after terminal turn`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot dispatch tools for a recovered turn`;
+      assertText(event.callId);
+      assertText(event.name);
+      // Arguments are recorded as the text the caller serialized; a record
+      // that carries them structured is inert data already and stays so.
+      if (typeof event.args === 'string')
+        assertText(event.args, textLimit, true);
+      if (event.argsRef !== undefined) assertContentRef(event.argsRef);
+      const calls = type === 'tool-intent' ? record.tools : record.activity;
+      !calls.some(tool => tool.callId === event.callId) ||
+        Fail`Duplicate tool journal call ID`;
+      const tool = {
+        callId: event.callId,
+        sequence: `${sequence}`,
+        name: event.name,
+        args: event.args,
+        ...(event.argsRef === undefined ? {} : { argsRef: event.argsRef }),
+      };
+      return () => {
+        calls.push(tool);
+      };
+    } else if (type === 'tool-result' || type === 'observed-tool-result') {
+      const calls = type === 'tool-result' ? record.tools : record.activity;
+      const tool = calls.find(item => item.callId === event.callId);
+      tool || Fail`Tool result without intent`;
+      !tool.settled || Fail`Duplicate tool journal result`;
+      if (typeof event.result === 'string')
+        assertText(event.result, textLimit, true);
+      if (event.resultRef !== undefined) assertContentRef(event.resultRef);
+      assertToolFailure(event.failed);
+      return () => {
+        tool.result = event.result;
+        if (event.failed !== undefined) tool.failed = event.failed;
+        if (event.resultRef !== undefined) tool.resultRef = event.resultRef;
+        tool.settled = true;
+        tool.resultSequence = `${sequence}`;
+      };
+    } else if (type === 'finish') {
+      !record.terminal || Fail`Duplicate terminal turn journal event`;
+      for (const key of ['output', 'error']) {
+        if (event[key] !== undefined) assertText(event[key], textLimit, true);
+      }
+      for (const key of ['outputRef', 'errorRef']) {
+        if (event[key] !== undefined) assertContentRef(event[key]);
+      }
+      ['completed', 'failed', 'cancelled', 'outcome-unknown'].includes(
+        event.state,
+      ) || Fail`Invalid terminal turn journal state`;
+      if (event.servedBy !== undefined) {
+        const { servedBy } = event;
+        (Array.isArray(servedBy) && servedBy.length <= MAX_SERVED_BY) ||
+          Fail`Invalid turn journal servedBy`;
+        for (const served of servedBy) assertText(served, 256);
+      }
+      const state =
+        record.tools.some(tool => !tool.settled) ||
+        record.activity.some(tool => !tool.settled)
+          ? 'outcome-unknown'
+          : event.state;
+      assertCheckpointState({
+        ...event,
+        dispatchState: record.dispatchState,
+        transcript: record.transcript,
+        transcriptComplete: record.transcriptComplete,
+        presentation: record.presentation,
+        terminal: true,
+        state,
+        tools: record.tools,
+        activity: record.activity,
+      });
+      return () => {
+        record.terminal = true;
+        record.state = state;
+        record.reportedState = event.state;
+        for (const key of [
+          'output',
+          'outputRef',
+          'error',
+          'errorRef',
+          'usage',
+          'servedBy',
+          'backendCheckpoint',
+        ]) {
+          if (event[key] !== undefined) {
+            // Usage is kept as the five disjoint counts and the last context
+            // reading, whatever else a caller attached; a record written
+            // before the newer counts existed reads them as 0.
+            record[key] =
+              key === 'usage' ? projectUsage(event.usage) : event[key];
+          }
+        }
+      };
+    } else if (type === 'resolve') {
+      record.state === 'outcome-unknown' ||
+        Fail`Only unknown outcomes need resolution`;
+      !record.resolution || Fail`Turn outcome already resolved`;
+      assertText(event.note, 8192);
+      return () => {
+        record.resolution = event.note;
+      };
+    } else {
+      throw Fail`Unknown turn journal event type`;
+    }
+  };
+
+  /**
+   * A settled turn needs nothing in front of recovery; it may be archived.
+   * @param record
+   */
+  const archivable = record =>
+    record.terminal === true &&
+    (record.state !== 'outcome-unknown' || record.resolution !== undefined);
+
+  /** @param {unknown} snapshot */
+  const loadSnapshot = snapshot => {
+    const data = copyData(snapshot);
+    const counts = [data?.archivedTurns, data?.archiveChunks];
+    (data &&
+      typeof data === 'object' &&
+      data.version === SNAPSHOT_VERSION &&
+      typeof data.through === 'string' &&
+      /^\d+$/.test(data.through) &&
+      Array.isArray(data.records) &&
+      counts.every(
+        count =>
+          typeof count === 'number' &&
+          Number.isSafeInteger(count) &&
+          count >= 0,
+      )) ||
+      Fail`Invalid turn journal snapshot`;
+    for (const record of data.records) {
+      (record &&
+        typeof record.turnId === 'string' &&
+        /^\d+$/.test(record.turnId) &&
+        !records.has(record.turnId)) ||
+        Fail`Invalid turn journal snapshot record`;
+      assertCheckpointState(record);
+      assertMailReceipt(record.mail);
+      if (record.message !== undefined) validateChatMessage(record.message);
+      record.contextEvidence === undefined ||
+        Fail`Context evidence certificate requires archive origin`;
+      // A turn the snapshotting incarnation still had in flight is one this
+      // incarnation cannot finish; a later event may still settle it.
+      if (record.state === 'pending') record.state = 'outcome-unknown';
+      records.set(record.turnId, record);
+    }
+    through = BigInt(data.through);
+    next = through + 1n;
+    archivedTurns = data.archivedTurns;
+    archiveChunks = data.archiveChunks;
+    const checkpoint = data.archivedCheckpoint;
+    if (checkpoint !== null) {
+      (checkpoint &&
+        typeof checkpoint === 'object' &&
+        Object.keys(checkpoint).length === 4 &&
+        ['turnId', 'sequence'].every(
+          key =>
+            typeof checkpoint[key] === 'string' &&
+            /^[1-9][0-9]*$/.test(checkpoint[key]),
+        ) &&
+        typeof checkpoint.chunk === 'string' &&
+        /^(0|[1-9][0-9]*)$/.test(checkpoint.chunk) &&
+        typeof checkpoint.ordinal === 'string' &&
+        /^(0|[1-9][0-9]{0,9})$/.test(checkpoint.ordinal) &&
+        Number(checkpoint.ordinal) < 0xffff_ffff &&
+        BigInt(checkpoint.chunk) < BigInt(archiveChunks) &&
+        BigInt(checkpoint.turnId) < BigInt(checkpoint.sequence) &&
+        BigInt(checkpoint.sequence) <= through) ||
+        Fail`Invalid archived checkpoint index`;
+    }
+    archivedCheckpoint = checkpoint;
+  };
+
+  const initialize = async () => {
+    if (initialized) return;
+    names = new Set(
+      (await E(powers).list()).filter(name => typeof name === 'string'),
+    );
+    // The newest snapshot is the one to trust: an older one left behind by a
+    // crash between writing the new one and removing the old is a stale copy
+    // of the same immutable history.
+    const snapshots = [...names]
+      .filter(name => name.startsWith(SNAPSHOT_PREFIX))
+      .sort();
+    if (snapshots.length > 0) {
+      snapshotName = snapshots[snapshots.length - 1];
+      loadSnapshot(await E(powers).lookup(snapshotName));
+      for (const record of records.values()) {
+        // Bounded display metadata is validated without admitting it to context.
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation(record);
+        const entries = record.transcript ?? [];
+        Array.isArray(entries) || Fail`Invalid transcript snapshot`;
+        let previous = BigInt(record.turnId);
+        let chars = 0;
+        for (const [index, entry] of entries.entries()) {
+          transcriptIndex(entry.ordinal, index) === index ||
+            Fail`Invalid transcript snapshot ordinal`;
+          (typeof entry.sequence === 'string' &&
+            /^[1-9][0-9]*$/.test(entry.sequence)) ||
+            Fail`Invalid transcript journal sequence`;
+          const sequence = BigInt(entry.sequence);
+          (sequence > previous && sequence <= through) ||
+            Fail`Invalid transcript journal order`;
+          previous = sequence;
+          // eslint-disable-next-line no-await-in-loop
+          await validateTranscriptPayload(entry, true);
+          chars += entry.payloadRef?.chars ?? entry.payload.length;
+        }
+        assertTranscriptBudget(chars);
+        chars === (record.transcriptChars ?? 0) ||
+          Fail`Invalid transcript snapshot content count`;
+        if (record.transcriptComplete !== undefined) {
+          (record.transcriptComplete === true &&
+            typeof record.transcriptEndSequence === 'string' &&
+            /^[1-9][0-9]*$/.test(record.transcriptEndSequence)) ||
+            Fail`Invalid transcript completion marker`;
+          const end = BigInt(record.transcriptEndSequence);
+          (end > previous && end <= through) ||
+            Fail`Invalid transcript completion order`;
+        } else {
+          record.transcriptEndSequence === undefined ||
+            Fail`Unexpected transcript completion position`;
+        }
+      }
+      if (archivedCheckpoint !== null) {
+        const checkpoint = archivedCheckpoint;
+        const chunk = await readArchiveChunk(BigInt(checkpoint.chunk), true);
+        const turn = chunk.find(record => record.turnId === checkpoint.turnId);
+        const entry = turn?.transcript?.[Number(checkpoint.ordinal)];
+        (turn !== undefined &&
+          archivable(turn) &&
+          (entry?.kind === 'compaction' || entry?.kind === 'native-context') &&
+          entry.ordinal === checkpoint.ordinal &&
+          entry.sequence === checkpoint.sequence) ||
+          Fail`Archived checkpoint index does not match archive`;
+      }
+    }
+    const journalNames = [...names]
+      .filter(name => name.startsWith(PREFIX) && sequenceOf(name) > through)
+      .sort();
+    for (const name of journalNames) {
+      name === `${PREFIX}${pad(next)}` ||
+        Fail`Turn journal sequence is missing or malformed`;
+      // Sequential reads cap transient memory while preserving event order.
+      // eslint-disable-next-line no-await-in-loop
+      const event = copyData(await E(powers).lookup(name));
+      JSON.stringify(event).length <= MAX_EVENT_SIZE ||
+        Fail`Turn journal event too large`;
+      if (event.type === 'transcript-record') {
+        // eslint-disable-next-line no-await-in-loop
+        await validateTranscriptPayload(event, true);
+      }
+      if (event.type === 'presentation') {
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation({
+          transcript: records.get(event.turnId)?.transcript,
+          presentation: event,
+        });
+      }
+      prepare(event, next, true)();
+      next += 1n;
+    }
+    sinceSnapshot = journalNames.length;
+    initialized = true;
+  };
+
+  /** @param {() => Promise<any>} operation */
+  const serialized = operation => {
+    const result = queue.then(async () => {
+      !poisoned ||
+        Fail`Turn journal unavailable after an uncertain storage operation`;
+      try {
+        await initialize();
+      } catch (error) {
+        poisoned = true;
+        throw error;
+      }
+      return operation();
+    });
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
+  /**
+   * Store one value. Any failure is ambiguous — the value may or may not have
+   * landed — so it poisons this incarnation, exactly as an event write does.
+   *
+   * @param {unknown} value
+   * @param {string} name
+   */
+  const store = async (value, name) => {
+    try {
+      await E(powers).storeValue(value, name);
+    } catch (error) {
+      poisoned = true;
+      throw error;
+    }
+    names.add(name);
+  };
+
+  /**
+   * Remove a derived value a newer one supersedes: a superseded snapshot, or
+   * an archive chunk a crash left uncounted. Never an event or content value.
+   * A failure here leaves a harmless extra value and is not ambiguous about
+   * the history, so it does not poison.
+   *
+   * @param {string} name
+   */
+  const discard = async name => {
+    await null;
+    try {
+      await E(powers).remove(name);
+      names.delete(name);
+    } catch {
+      // Left for the next snapshot to try again.
+    }
+  };
+
+  /**
+   * Move the oldest settled turns beyond the retained window into an archive
+   * chunk. Returns true if the record map changed.
+   */
+  const archive = async () => {
+    const settled = [...records.values()]
+      .filter(archivable)
+      .sort((a, b) => (BigInt(a.turnId) < BigInt(b.turnId) ? -1 : 1));
+    if (settled.length <= RETAINED_TURNS) return false;
+    const excess = settled.slice(
+      0,
+      Math.min(settled.length - RETAINED_TURNS, ARCHIVE_CHUNK_TURNS),
+    );
+    const name = `${ARCHIVE_PREFIX}${pad(archiveChunks)}`;
+    const archived = [];
+    try {
+      for (const record of excess) {
+        const copy = JSON.parse(JSON.stringify(record));
+        // eslint-disable-next-line no-await-in-loop
+        const certificate = await certifyContextEvidence(copy, readContent);
+        if (certificate !== undefined) copy.contextEvidence = certificate;
+        archived.push(copy);
+      }
+    } catch (error) {
+      poisoned = true;
+      throw error;
+    }
+    // A chunk of this index can already exist only if a previous incarnation
+    // wrote it and then failed before the snapshot that would have counted
+    // it; the snapshot in force says it is not part of the history.
+    if (names.has(name)) await discard(name);
+    // Stored as a detached copy: hardening the live records would freeze
+    // the map's own objects against the events still to come.
+    await store(
+      harden({
+        version: SNAPSHOT_VERSION,
+        records: archived,
+      }),
+      name,
+    );
+    for (const record of excess) {
+      for (const entry of record.transcript ?? []) {
+        if (
+          (entry.kind === 'compaction' || entry.kind === 'native-context') &&
+          (archivedCheckpoint === null ||
+            BigInt(record.turnId) > BigInt(archivedCheckpoint.turnId) ||
+            (record.turnId === archivedCheckpoint.turnId &&
+              Number(entry.ordinal) > Number(archivedCheckpoint.ordinal)))
+        ) {
+          archivedCheckpoint = {
+            turnId: record.turnId,
+            ordinal: entry.ordinal,
+            sequence: entry.sequence,
+            chunk: `${archiveChunks}`,
+          };
+        }
+      }
+      records.delete(record.turnId);
+    }
+    archiveChunks += 1;
+    archivedTurns += excess.length;
+    return true;
+  };
+
+  /**
+   * Write the record map as of the last event. Ordered so that a crash at any
+   * point leaves a replayable history: the chunk before the snapshot that
+   * counts it, the new snapshot before the old one goes. The events it covers
+   * stay where they are; they are simply not read again.
+   */
+  const snapshot = async () => {
+    await archive();
+    const covered = next - 1n;
+    const name = `${SNAPSHOT_PREFIX}${pad(covered)}`;
+    await store(
+      harden({
+        version: SNAPSHOT_VERSION,
+        through: `${covered}`,
+        records: JSON.parse(JSON.stringify([...records.values()])),
+        archivedTurns,
+        archiveChunks,
+        archivedCheckpoint,
+      }),
+      name,
+    );
+    snapshotName = name;
+    through = covered;
+    sinceSnapshot = 0;
+    for (const stale of [...names]) {
+      if (stale.startsWith(SNAPSHOT_PREFIX) && stale !== name) {
+        // eslint-disable-next-line no-await-in-loop
+        await discard(stale);
+      }
+    }
+  };
+
+  /**
+   * Plan each large text field's preview and referenced value without writes.
+   * Admission, event size and schema validation must all finish before any
+   * content is stored: a refused event must not occupy its next content names.
+   *
+   * @param {any} event
+   * @param {bigint} sequence
+   */
+  const planExternalization = (event, sequence) => {
+    const fields = CONTENT_FIELDS[event.type] || [];
+    let result = event;
+    /** @type {{ name: string, text: string }[]} */
+    const contents = [];
+    for (const field of fields) {
+      const text = event[field];
+      if (typeof text === 'string') {
+        text.length <= maxContentChars ||
+          Fail`Turn journal ${q(field)} exceeds the ${q(maxContentChars)}-character storage value bound`;
+        if (text.length > PREVIEW_CHARS) {
+          const name = `${CONTENT_PREFIX}${pad(sequence)}-${field}`;
+          contents.push({ name, text });
+          result = {
+            ...result,
+            [field]: text.slice(0, PREVIEW_CHARS),
+            [`${field}Ref`]: { name, chars: text.length },
+          };
+        }
+      }
+    }
+    return harden({ event: result, contents });
+  };
+
+  /** @param {any} value */
+  const write = async value => {
+    await null;
+    const { event, contents } = planExternalization(copyData(value), next);
+    JSON.stringify(event).length <= MAX_EVENT_SIZE ||
+      Fail`Turn journal event too large`;
+    // Validate without mutating or copying the session's accumulated history.
+    // The serialized operation retains this commit until storage acknowledges
+    // the immutable event. No other operation can change its target meanwhile.
+    const commit = prepare(event, next, false);
+    // Content precedes its referencing event, so an uncertain publication
+    // leaves an orphan rather than a dangling reference. Storage failures
+    // still poison this incarnation; only pure validation refusals are safe
+    // to retry at the same event sequence.
+    for (const { name, text } of contents) {
+      // eslint-disable-next-line no-await-in-loop
+      await store(text, name);
+    }
+    await store(event, `${PREFIX}${pad(next)}`);
+    commit();
+    next += 1n;
+    sinceSnapshot += 1;
+    if (sinceSnapshot >= SNAPSHOT_EVERY) await snapshot();
+  };
+
+  /**
+   * @param {bigint | number} index @param {boolean} [metadataOnly]
+   * @param metadataOnly
+   */
+  const readArchiveChunk = async (index, metadataOnly = false) => {
+    const chunk = copyData(
+      await E(powers).lookup(`${ARCHIVE_PREFIX}${pad(index)}`),
+    );
+    const chunkRecords = chunk?.records;
+    (chunk?.version === SNAPSHOT_VERSION &&
+      Array.isArray(chunkRecords) &&
+      chunkRecords.length > 0 &&
+      chunkRecords.length <= ARCHIVE_CHUNK_TURNS) ||
+      Fail`Invalid turn journal archive chunk`;
+    for (const record of chunkRecords) {
+      assertCheckpointState(record);
+      assertMailReceipt(record.mail);
+      if (record.message !== undefined) validateChatMessage(record.message);
+      assertContextEvidence(record);
+      if (!metadataOnly) {
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation(record);
+      }
+      for (const entry of record.transcript ?? []) {
+        // eslint-disable-next-line no-await-in-loop
+        await validateTranscriptPayload(entry, true);
+      }
+    }
+    return chunkRecords;
+  };
+
+  /** @param {{ name: string, chars: number }} ref */
+  const readContent = async ref => {
+    const { name, chars } = assertContentRef(ref);
+    names.has(name) || Fail`Unknown turn journal content`;
+    const text = await E(powers).lookup(name);
+    (typeof text === 'string' && text.length === chars) ||
+      Fail`Turn journal content does not match its reference`;
+    return /** @type {string} */ (text);
+  };
+
+  /**
+   * Replay validates references without loading the full retained history.
+   * Full canonical payload validation occurs when content is consumed.
+   * @param {any} entry
+   * @param {boolean} [metadataOnly]
+   */
+  const validateTranscriptPayload = async (entry, metadataOnly = false) => {
+    assertTranscriptKind(entry);
+    assertText(entry.payload, PREVIEW_CHARS);
+    if (entry.payloadRef !== undefined) {
+      const { name, chars } = assertContentRef(entry.payloadRef);
+      (names.has(name) &&
+        chars <= MAX_CONTENT_CHARS &&
+        entry.payload.length === PREVIEW_CHARS) ||
+        Fail`Invalid transcript content reference`;
+      if (metadataOnly) return undefined;
+    }
+    const payload =
+      entry.payloadRef !== undefined
+        ? await readContent(entry.payloadRef)
+        : entry.payload;
+    (typeof payload === 'string' && payload.length <= MAX_CONTENT_CHARS) ||
+      Fail`Invalid transcript payload`;
+    const decoded = JSON.parse(payload);
+    encodeJournalTranscript(decoded) === payload ||
+      Fail`Noncanonical transcript payload`;
+    decoded.kind === entry.kind ||
+      Fail`Transcript kind index does not match full payload`;
+    if (entry.payloadRef !== undefined) {
+      entry.payload === payload.slice(0, PREVIEW_CHARS) ||
+        Fail`Transcript preview does not match its content`;
+    }
+    return payload;
+  };
+
+  /** @param {any} record */
+  const validatePresentation = async record => {
+    if (record.presentation === undefined) return undefined;
+    const entry = record.presentation;
+    assertText(entry.payload, PREVIEW_CHARS);
+    const payload =
+      entry.payloadRef === undefined
+        ? entry.payload
+        : await readContent(entry.payloadRef);
+    (entry.payload === payload.slice(0, PREVIEW_CHARS) &&
+      encodeJournalPresentation(
+        JSON.parse(payload),
+        record.transcript?.length ?? 0,
+      ) === payload) ||
+      Fail`Invalid journal presentation payload`;
+    return payload;
+  };
+
+  return harden({
+    /**
+     * @param {string} turnId @param {unknown} blocks
+     * @param blocks
+     */
+    recordPresentation: (turnId, blocks) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        const payload = encodeJournalPresentation(
+          blocks,
+          record.transcript?.length ?? 0,
+        );
+        if (record.presentation !== undefined) {
+          payload === (await validatePresentation(record)) ||
+            Fail`Conflicting turn presentation`;
+          return;
+        }
+        await write({ type: 'presentation', turnId, payload });
+      }),
+    /**
+     * @param {string} turnId @param {string} count
+     * @param count
+     */
+    completeTranscript: (turnId, count) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        count === `${record.transcript?.length ?? 0}` ||
+          Fail`Transcript completion frontier mismatch`;
+        if (record.transcriptComplete) return;
+        await write({ type: 'transcript-complete', turnId, count });
+      }),
+    /**
+     * Read and validate one full payload lazily, without hydrating other turns.
+     * @param {string} turnId
+     * @param {string} ordinal
+     */
+    readTranscriptRecord: (turnId, ordinal) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        const entries = record.transcript ?? [];
+        const entry = entries[transcriptIndex(ordinal, entries.length)];
+        entry || Fail`Unknown transcript ordinal`;
+        return harden(JSON.parse(await validateTranscriptPayload(entry)));
+      }),
+    /**
+     * Persist one ordered context record. Identical retries are no-ops even
+     * after settlement; new positions require a live pending turn. No tool is
+     * executed or accounted by this operation. Content precedes publication.
+     * @param {string} turnId
+     * @param {string} ordinal
+     * @param {unknown} value
+     * @param {string} [expectedFrontier] Compaction's captured journal cut.
+     */
+    recordTranscript: (turnId, ordinal, value, expectedFrontier) =>
+      serialized(async () => {
+        if (expectedFrontier !== undefined)
+          expectedFrontier === `${next}` || Fail`Compaction source changed`;
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        /** @type {Array<{kind: string, ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
+        const entries = record.transcript ?? [];
+        const index = transcriptIndex(ordinal, entries.length);
+        const payload = encodeJournalTranscript(value);
+        if (index < entries.length) {
+          payload === (await validateTranscriptPayload(entries[index])) ||
+            Fail`Conflicting transcript ordinal`;
+          return;
+        }
+        payload.length <= maxContentChars ||
+          Fail`Transcript content bound exceeded`;
+        !record.terminal || Fail`Transcript record after terminal turn`;
+        !record.transcriptComplete || Fail`Transcript already complete`;
+        record.state === 'pending' ||
+          Fail`Cannot append transcript for a recovered turn`;
+        index < maxRecords || Fail`Transcript record count bound exceeded`;
+        assertTranscriptBudget(
+          (record.transcriptChars ?? 0) + payload.length,
+          maxChars,
+        );
+        await write({
+          type: 'transcript-record',
+          turnId,
+          ordinal,
+          kind: JSON.parse(payload).kind,
+          payload,
+        });
+      }),
+    /** @param {{ input: string, backendId: string, modelId: string, nativeContextFormat?: string, reasoningEffort?: string, message?: import('./session-mentions.js').ChatMessage, mail?: {from?: string, messageNumber?: string} }} options */
+    begin: options =>
+      serialized(async () => {
+        // Unknown historical effects are evidence, not a session-wide
+        // admission lock. New work does not retry any recovered dispatch.
+        ![...records.values()].some(record => record.state === 'pending') ||
+          Fail`A turn is already active`;
+        const turnId = `${next}`;
+        await write({
+          ...options,
+          type: 'begin',
+          turnId,
+          dispatchState: 'not-dispatched',
+        });
+        return turnId;
+      }),
+    /** @param {string} turnId */
+    dispatch: turnId =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        (record && !record.terminal && record.state === 'pending') ||
+          Fail`Cannot dispatch a recovered or terminal turn`;
+        if (record.dispatchState === 'possibly-dispatched') return;
+        await write({ type: 'dispatch-intent', turnId });
+      }),
+    /**
+     * @param {string} turnId
+     * @param {any} event
+     */
+    append: (turnId, event) =>
+      serialized(async () => {
+        [
+          'tool-intent',
+          'tool-result',
+          'observed-tool-call',
+          'observed-tool-result',
+          'finish',
+        ].includes(event.type) || Fail`Invalid appended turn journal event`;
+        await write({ ...event, turnId });
+      }),
+    /** @param {string} turnId */
+    get: turnId =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        return harden(JSON.parse(JSON.stringify(record)));
+      }),
+    /**
+     * The retained records: every turn with an unresolved outcome, and the
+     * most recent settled ones. Older settled turns are in `listArchived`.
+     */
+    list: () =>
+      serialized(async () =>
+        harden(JSON.parse(JSON.stringify([...records.values()]))),
+      ),
+    // One serialized cut of both halves of the journal. Readers may yield
+    // between archive pages without losing turns moved out of the retained map.
+    readView: () =>
+      serialized(async () =>
+        harden({
+          frontier: `${next}`,
+          retained: JSON.parse(JSON.stringify([...records.values()])),
+          archivedTurns,
+          archiveCursor: `0:${archiveChunks}`,
+          archivedCheckpoint:
+            archivedCheckpoint === null ? null : { ...archivedCheckpoint },
+        }),
+      ),
+    /**
+     * One committed chunk in archive publication order, not global turn order.
+     * The cursor pins the committed end across appends and reconstruction. It
+     * is copy data, not a capability or a durable subscription. Never accepts
+     * storage names, nor exposes an orphan chunk ahead of its snapshot.
+     * @param {string} [cursor]
+     * @returns {Promise<{records: any[], next: string | null}>}
+     */
+    listArchivedPage: cursor =>
+      serialized(async () => {
+        const text = cursor === undefined ? `0:${archiveChunks}` : cursor;
+        (typeof text === 'string' &&
+          text.length <= 64 &&
+          /^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$/.test(text)) ||
+          Fail`Invalid turn journal archive cursor`;
+        const [index, end] = text.split(':').map(value => BigInt(value));
+        (index <= end && end <= BigInt(archiveChunks)) ||
+          Fail`Invalid turn journal archive cursor`;
+        if (index === end) return harden({ records: [], next: null });
+        const page = await readArchiveChunk(index);
+        return harden({
+          records: page,
+          next: index + 1n < end ? `${index + 1n}:${end}` : null,
+        });
+      }),
+    /**
+     * All settled turns beyond the retained window, in archive publication
+     * order. Materializes the archive on request rather than retaining it.
+     */
+    listArchived: () =>
+      serialized(async () => {
+        const archived = [];
+        for (let index = 0; index < archiveChunks; index += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          const chunk = await readArchiveChunk(index);
+          archived.push(...chunk);
+        }
+        return harden(archived);
+      }),
+    /**
+     * The full text a record refers to. A reference is data a record carries,
+     * not a capability: only names this journal wrote resolve.
+     *
+     * @param {{ name: string, chars: number }} ref
+     */
+    readContent: ref => serialized(() => readContent(ref)),
+    status: () =>
+      serialized(async () =>
+        harden({
+          usedEvents: `${next - 1n}`,
+          retainedTurns: records.size,
+          archivedTurns,
+        }),
+      ),
+    // This barrier still initializes storage and observes any prior failure.
+    assertReady: () => serialized(async () => undefined),
+    /**
+     * @param {string} turnId
+     * @param {string} note
+     */
+    resolve: (turnId, note) =>
+      serialized(async () => {
+        assertText(note, 8192);
+        note.trim().length > 0 || Fail`Resolution note must not be blank`;
+        await write({ type: 'resolve', turnId, note });
+      }),
+  });
+};
+harden(makeTurnJournal);

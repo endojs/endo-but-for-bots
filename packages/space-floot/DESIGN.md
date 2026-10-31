@@ -124,16 +124,19 @@ The controller is the model; `FlootApp` is the view.
 controller = {
   // --- reactive state (pure data; re-read after every `change` notification) ---
   getState() => {
-    sessions: Array<{ id, title, createdAt, presetId, model, streaming, error }>,
+    sessions: Array<{ id, title, createdAt, presetId, model, backendLabel,
+      modelLabel, status: 'passive' | 'working' | 'error', pendingCount }>,
     activeSessionId: string | null,
     presets: Array<{ id, title, description }>,
     models: Array<{ id, title, description, default }>,  // selectable for a new session
     messages: Array<FlootMessage>,   // active session transcript (history + live turn)
     streamingText: string,           // in-progress assistant bubble, '' when idle
     phase: string,                   // 'thinking' | 'using tools' | ...
-    busy: boolean,                   // a turn is streaming for the active session
+    busy: boolean,                   // a turn this page can stop is in flight
+    working: boolean,                // anything is under way, incl. a mail turn
+    pendingHold: string,             // why queued messages are not moving, or ''
     status: string,                  // status-bar text
-    usage: { inputTokens, outputTokens } | null,
+    usage: { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, context?, contextPercent } | null,
     // voice (all booleans/numbers/strings — no audio objects):
     voice: {
       hasMic, hasTts, micActive, speaking, ttsEnabled, ttsSpeaking,
@@ -154,6 +157,26 @@ controller = {
 
 Notes:
 
+- The host does not drive the conversation; it subscribes to it.
+  The daemon owns the transcript, the turn in flight and the queue of messages
+  waiting their turn, and says when any of them changes (`session.watch()`,
+  `factory.watchSessions()` in `@endo/floot`). The host renders what it is told:
+  `send` is `session.enqueue(text)`, and the daemon decides when that becomes a
+  turn. Nothing in the host is a queue, a lock or a timer, so:
+  - selecting another session, or starting a new one, never waits for a turn —
+    the session left behind keeps running, and its queue with it;
+  - a message sent behind a running turn outlives the page that sent it, and a
+    second page sees it;
+  - mail, a turn another page started, a network request the model raised and a
+    session an agent spawned all appear without being asked for.
+  The one thing the host holds is a message for the round trip between the
+  keystroke and the daemon's acknowledgement (`pendingState: 'sending'`), so it
+  never vanishes from the screen.
+- Every session row has a status circle in one of three states — `passive`,
+  `working`, `error` — reported by the daemon (`activity`), and a line saying
+  what backend and model it runs. State classes are namespaced
+  (`floot-status-dot-error`): the space's stylesheet shares a document with
+  chat's, whose bare `.error` rule once turned the circle into an ellipse.
 - `FlootApp` re-renders on `subscribe` notifications via a tiny
   `useReducer(c => c + 1, 0)` + a mount-once effect; it reads `getState()` each
   render.
@@ -170,8 +193,10 @@ Notes:
 - `FlootApp.js` — shell + subscription glue; composes the pieces.
 - `SessionSidebar.js` — session list, status dots (from `streaming`/`error`),
   preset pills, new/rename/delete controls, mobile drawer.
-- `MessageList.js` — history + live turn: user/assistant/mail bubbles, tool rows
-  (call + result), streaming caret, thinking indicator, replay buttons.
+- `MessageList.js` — history + live turn: user/assistant/mail bubbles, one
+  collapsed actions group per run between replies holding the backend's
+  thoughts and its tool calls (call + result), streaming caret, thinking
+  indicator, replay buttons.
 - `ComposeBar.js` — input, send/stop button, mic + speaker toggles, VAD meter.
 - `SettingsPanel.js` — the folded-in transcription/debug surface: live transcript
   view, mic/VAD meter detail, STT/TTS object info, token totals.
@@ -302,6 +327,64 @@ grow-to-fit purely in CSS (restored in the post-review cleanup, commit
 
 ## Verification and gaps
 
+### Sandbox network policy
+
+The settings panel displays the selected session's supported sandbox network
+policies and requires an explicit Apply action after selecting a policy.
+Agent requests appear as a header indicator and an approve/deny panel; request
+reasons are untrusted plain text, and operator decisions require a nonempty note.
+The host rechecks liveness before writes and the session enforces request-ID CAS.
+Changing a policy supersedes pending requests and affects the next turn only.
+To revoke access during a turn, Stop it first and wait for it to settle.
+
+Off blocks external sandbox networking, not inference service access or authority
+already granted through Endo capability tools.
+Public internet initially provides an HTTP/HTTPS proxy to public ports 80 and 443.
+Private, link-local, metadata, direct network, UDP, and standard SSH port 22 access
+are not enabled.
+HTTPS CONNECT tunnels are opaque: the proxy does not inspect their application
+protocol or payload, and public servers may receive uploads from the workspace.
+Older or unsupported backends are explicitly unavailable, never shown as enforcing
+Off by default.
+An incomplete transition displays no verified policy and permits only an explicit
+retry of its pending policy; sending stays disabled until the transition finishes.
+Reads and mutations are fenced against stale selected sessions, duplicate actions,
+active/queued turns, and unavailable session lifecycles.
+
+### Turn journal and recovery
+
+The header's Journal panel displays durable turn dispositions, errors, and the
+operator's acknowledgment notes.
+Endo write-ahead tool records and observed native/backend activity are shown
+separately; neither an observed native result nor acknowledgment proves external
+effects succeeded or undoes them.
+Journal payloads are rendered as plain text through the confined renderer, not
+interpreted as HTML or executable links.
+The panel mounts at most 50 turn summaries per page and renders evidence only
+after a turn is expanded.
+Evidence is paged one item and 8192 text characters at a time, with navigation
+to inspect the full contents rather than silently truncating them.
+Where supported, capacity and a near-capacity warning are displayed as well.
+
+Only an unresolved `outcome-unknown` turn offers acknowledgment.
+The operator must confirm that external effects were checked and supply a
+nonempty recovery note before allowing another turn.
+Acknowledgment never retries a turn.
+Known unresolved outcomes disable sending before optimistic transcript entries
+are added, while an active turn's Stop control remains available.
+The host disables this action for active or queued turns, rechecks daemon
+liveness before calling `resolveTurn`, and relies on the session's own atomic
+admission checks for cross-browser races.
+Switching sessions invalidates pending reads and undispatched actions; notes
+and confirmations are reset with the selected session.
+
+The host discovers optional journal methods with CapTP introspection.
+Older sessions without those methods retain chat support and show journal
+unavailability; failed reads never manufacture an empty, healthy journal.
+Sessions with lifecycle errors remain visible in the sidebar with sending and
+recovery disabled instead of being silently filtered out.
+Fix service/storage failures outside this UI before retrying or reloading.
+
 - CI covers lint, type-check, and the chat `vite build` (the integration smoke
   for "Floot mounts in the Preact shell").
 - Mic / Web-Audio / VAD paths are **not** runtime-verifiable in this environment;
@@ -311,3 +394,46 @@ grow-to-fit purely in CSS (restored in the post-review cleanup, commit
 - The `floot/`-directory provisioning runs only against a live daemon (no
   automated test), so it is validated by `node --check` + lint here and a manual
   `endo run` there.
+
+### Inventory mentions
+
+Text uses the same host-owned token composer as Chat with Fae: type `@`,
+select an object, use `/` to browse one directory at a time, and optionally
+choose a label with `:`. Enter selects a result; a subsequent Enter sends.
+The composer and sent messages show chips. The Android app uses this same web UI
+and its system-theme colors. Paste and drop insert plain text only.
+
+Text ingress preserves `{strings, names}` and selected inventory references.
+Voice ingress carries a plain transcript; naming an object in spoken text does
+not attach it. A future voice selection flow can produce the same structured
+message after selecting references explicitly. Both paths share the durable queue.
+
+The client saves its structured draft, retry ID and selected object identities
+before dispatch. The trusted host resolves the selected paths and checks they did
+not change during resolution. Queue observers receive message text and labels,
+never capabilities. A retry recovers an accepted receipt before resolving mutable
+source names; an unaccepted retry rejects changed identities. Receipts retain
+identity metadata only, releasing unadopted references when the turn finishes.
+Hosts without the structured submission endpoint refuse attachments explicitly.
+
+After journal admission, the serial turn stages at most 32 references in fixed
+slots inside its private session directory and delivers an ordinary Endo package
+to its guest. The package's message number and edge labels are supplied as turn
+context. The existing `adopt` and `adoptTool` tools give those references names
+chosen by the agent. Delivery itself creates no guest inventory bindings.
+The normal inbox recognizes the package as owned by the UI turn and does not
+answer or dismiss it independently. Lost delivery acknowledgements are reconciled
+against the mailbox, without blindly delivering again.
+
+The package is dismissed only after model/tool settlement; adopted references
+remain in the guest inventory. Temporary slots are swept after delivery and on
+cleanup. Cleanup failure prevents more turns until lifecycle cleanup succeeds.
+After restart, orphaned self-origin packages are dismissed by the normal inbox
+without starting work, and interrupted queued sends retain their existing recovery
+rules. Session deletion unlinks the owned private directory, including any staging
+slots left by a crash. There is no persistent mention-to-generated-name catalog.
+
+Removing a chip before Send removes the attachment. Queued attachment messages
+must be cancelled and recomposed to change their references; plain queued text
+remains editable. Labels are validated before queue admission and automatic labels
+are unique even when the same object is selected more than once.

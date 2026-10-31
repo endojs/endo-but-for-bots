@@ -1,0 +1,15 @@
+const out = {};
+const t = (k, f) => { try { out[k] = f(); } catch (e) { out[k] = "throws " + e.name + ": " + e.message; } };
+t("ownNames", () => Object.getOwnPropertyNames(RegExp.prototype).sort().join(","));
+t("hasOwnFlags", () => RegExp.prototype.hasOwnProperty("flags"));
+t("inFlags", () => "flags" in RegExp.prototype);
+t("descGlobal", () => typeof Object.getOwnPropertyDescriptor(RegExp.prototype, "global"));
+t("descSource", () => typeof Object.getOwnPropertyDescriptor(RegExp.prototype, "source"));
+t("protoGlobal", () => RegExp.prototype.global);
+t("protoSource", () => RegExp.prototype.source);
+t("protoFlags", () => RegExp.prototype.flags);
+t("instGlobal", () => /a/g.global);
+t("speciesDesc", () => typeof Object.getOwnPropertyDescriptor(RegExp, Symbol.species));
+t("lastIndexDesc", () => JSON.stringify(Object.getOwnPropertyDescriptor(/a/, "lastIndex")));
+t("deleteGlobalThenRead", () => { const ok = delete RegExp.prototype.global; return [ok, /a/g.global]; });
+throw new Error(JSON.stringify(out));

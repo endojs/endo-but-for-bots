@@ -298,6 +298,59 @@ test('an aborted turn cannot be acknowledged into a commit', async t => {
   t.like(ledger.status(), { needsReconciliation: true });
 });
 
+test('replayed base acknowledgement preserves a recovered failed turn until reconciliation', async t => {
+  const store = makeStore();
+  const recovery = harden({
+    baseCheckpoint: 'turn-1',
+    checkpoint: 'turn-2',
+    status: /** @type {const} */ ('started'),
+  });
+  const ledger = makeTurnLedger({ persist: store.persist, recovery });
+  await ledger.acknowledge('turn-1');
+  await ledger.acknowledge('turn-1');
+  t.deepEqual(store.writes, []);
+  t.is(ledger.getRecord(), recovery);
+  t.like(ledger.status(), { needsReconciliation: true });
+  for (const checkpoint of ['turn-2', 'unrelated']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(ledger.acknowledge(checkpoint), {
+      message: /not awaiting acknowledgement/,
+    });
+  }
+  const reverts = [];
+  t.true(
+    await ledger.reconcile({
+      readLatestCheckpoint: async () => (reverts.length ? 'turn-1' : 'turn-2'),
+      revertBefore: async checkpoint => {
+        reverts.push(checkpoint);
+      },
+    }),
+  );
+  t.deepEqual(reverts, ['turn-2']);
+  t.deepEqual(store.writes, [null]);
+  t.false(ledger.status().needsReconciliation);
+});
+
+test('base acknowledgement never clears an in-flight or completed newer turn', async t => {
+  const store = makeStore();
+  const ledger = makeTurnLedger({ persist: store.persist });
+  const turn = await ledger.begin({ baseCheckpoint: 'turn-1' });
+  await turn.observe('turn-2');
+  const started = ledger.getRecord();
+  await ledger.acknowledge('turn-1');
+  t.is(ledger.getRecord(), started);
+  t.like(ledger.status(), { inFlight: true, needsReconciliation: true });
+  t.is(store.writes.length, 2);
+  await turn.settle({ type: 'completed', checkpoint: 'turn-2' });
+  const completed = ledger.getRecord();
+  await ledger.acknowledge('turn-1');
+  t.is(ledger.getRecord(), completed);
+  t.is(store.writes.length, 3);
+  t.true(ledger.status().needsReconciliation);
+  await ledger.acknowledge('turn-2');
+  t.is(store.latest(), null);
+});
+
 test('a ledger requires a persist hook', t => {
   t.throws(() => makeTurnLedger(/** @type {any} */ ({})), {
     message: /requires a persist hook/,

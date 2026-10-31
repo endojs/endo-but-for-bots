@@ -12,12 +12,14 @@ const setupContextMaker = () => {
   /** @type {Map<FormulaIdentifier, { context: any }>} */
   const controllerForId = new Map();
   const formulaTypes = new Map();
+  const revived = [];
 
   const makeContext = makeContextMaker({
     controllerForId,
     provideController: formulaId => {
       let controller = controllerForId.get(formulaId);
       if (!controller) {
+        revived.push(formulaId);
         const ctx = makeContext(formulaId);
         controller = { context: ctx };
         controllerForId.set(formulaId, controller);
@@ -38,7 +40,7 @@ const setupContextMaker = () => {
     return ctx;
   };
 
-  return { createContext, controllerForId };
+  return { createContext, controllerForId, revived };
 };
 
 test('context cancel resolves disposed', async t => {
@@ -156,6 +158,26 @@ test('cancel removes controller from map', async t => {
   // Note: createContext registers a new controller, but cancel removes it.
   // The test validates that cancel() calls controllerForId.delete(id).
   t.pass('cancel completes without error');
+});
+
+test('cancelled context cannot revive a dependency or its own successor', async t => {
+  const { createContext, controllerForId } = setupContextMaker();
+  const ctx = createContext(id('cancelled:node'));
+  await ctx.cancel(new Error('Original context cancelled'));
+  t.throws(() => ctx.thisDiesIfThatDies(id('absent:node')), {
+    message: 'Original context cancelled',
+  });
+  t.false(controllerForId.has(id('absent:node')));
+  t.false(controllerForId.has(id('cancelled:node')));
+});
+
+test('cancelled dependency does not revive a missing dependent to cancel it', async t => {
+  const { createContext, controllerForId, revived } = setupContextMaker();
+  const ctx = createContext(id('cancelled:node'));
+  await ctx.cancel(new Error('Original context cancelled'));
+  ctx.thatDiesIfThisDies(id('absent:node'));
+  t.deepEqual(revived, []);
+  t.false(controllerForId.has(id('absent:node')));
 });
 
 test('synchronously throwing onCancel hook does not wedge disposal', async t => {

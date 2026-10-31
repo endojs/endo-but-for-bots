@@ -1,0 +1,164 @@
+# window=10 lines, tests=True
+crate	normalized_lines	lines_in_duplicated_runs	pct
+ironhorse-262	15622	1265	8.1
+ironhorse-compile	5704	98	1.7
+ironhorse-fuzz	10	0	0.0
+ironhorse-regexp	1112	0	0.0
+ironhorse-runtime	335	0	0.0
+ironhorse-snapshot	13872	594	4.3
+ironhorse-unicode	35	0	0.0
+ironhorse-vm	25463	1532	6.0
+xs-oracle	82	0	0.0
+
+# largest duplicated runs (normalized lines, path:first-last)
+47	ironhorse-vm/tests/cross_segment_callee_callability.rs:17-74
+47	ironhorse-vm/tests/engine_throws_are_catchable.rs:17-74
+41	ironhorse-vm/tests/relink_preserves_guest_edits.rs:115-161
+41	ironhorse-snapshot/tests/persist_gates.rs:151-197
+41	ironhorse-snapshot/tests/dynamic_segments.rs:23-69
+39	ironhorse-vm/tests/engine_unwind_boundaries.rs:23-67
+39	ironhorse-vm/tests/surrogate_values.rs:97-141
+31	ironhorse-vm/tests/surrogate_values.rs:154-190
+23	ironhorse-snapshot/tests/reentry_bench.rs:17-48
+23	ironhorse-snapshot/tests/dispatch_bench.rs:18-49
+22	ironhorse-vm/tests/typed_array_at.rs:103-129
+22	ironhorse-vm/tests/typed_array_find_last.rs:177-203
+21	ironhorse-vm/tests/allocation_admission_audit.rs:313-333
+21	ironhorse-vm/tests/allocation_admission_audit.rs:356-376
+20	ironhorse-vm/src/interp/tests.rs:3336-3356
+20	ironhorse-vm/src/interp/tests.rs:3372-3392
+20	ironhorse-vm/tests/dispatch_loop_control_transfer.rs:7-26
+20	ironhorse-vm/tests/throw_construction_sites.rs:9-28
+19	ironhorse-vm/tests/exotic_prototypes.rs:13-38
+19	ironhorse-vm/tests/constructor_prototype_reads.rs:15-40
+19	ironhorse-vm/tests/direct_eval_context.rs:12-37
+19	ironhorse-vm/tests/constructor_edges.rs:12-37
+19	ironhorse-vm/tests/intrinsic_expando_order.rs:17-42
+19	ironhorse-vm/tests/number_formatting.rs:12-37
+19	ironhorse-vm/tests/optional_chain_calls.rs:16-41
+19	ironhorse-vm/tests/intrinsic_surface.rs:12-37
+19	ironhorse-vm/tests/inherited_index_set.rs:13-38
+19	ironhorse-vm/tests/for_in_enumeration.rs:22-47
+19	ironhorse-vm/tests/promise_execution_bench.rs:14-35
+19	ironhorse-vm/tests/array_execution_bench.rs:15-35
+19	ironhorse-vm/tests/host_callables.rs:396-415
+19	ironhorse-vm/tests/catch_scope_restore.rs:6-25
+18	ironhorse-vm/tests/property_execution_bench.rs:14-32
+18	ironhorse-vm/tests/regexp_execution_bench.rs:14-32
+18	ironhorse-vm/tests/json_execution_bench.rs:14-32
+17	ironhorse-compile/tests/coder_byte_identity.rs:312-331
+17	ironhorse-compile/tests/coder_byte_identity.rs:2621-2640
+17	ironhorse-vm/tests/guest_compartment.rs:8-31
+17	ironhorse-vm/tests/native_lockdown.rs:10-36
+17	ironhorse-vm/tests/ses_boot_intrinsics.rs:2-24
+17	ironhorse-vm/tests/buffer_execution_bench.rs:15-32
+17	ironhorse-vm/tests/calendar_execution_bench.rs:14-31
+17	ironhorse-vm/tests/collection_execution_bench.rs:15-32
+17	ironhorse-vm/tests/scalar_execution_bench.rs:15-32
+17	ironhorse-vm/tests/finding_6f0b586a80019097_regexp_source.rs:26-46
+17	ironhorse-vm/tests/finding_2276f4edebdcb3bb_regexp_source.rs:25-45
+17	ironhorse-snapshot/tests/promise_carry.rs:21-51
+17	ironhorse-snapshot/tests/error_data_carry.rs:23-54
+16	ironhorse-vm/tests/common/mod.rs:68-84
+16	ironhorse-vm/tests/annex_b_intrinsics.rs:5-25
+16	ironhorse-vm/tests/dispatch_execution_bench.rs:16-31
+16	ironhorse-vm/tests/math_provider_comparison.rs:35-52
+16	ironhorse-vm/tests/math_provider_comparison.rs:84-101
+16	ironhorse-vm/tests/ses_prelude_reach.rs:316-334
+16	ironhorse-vm/tests/ses_prelude_reach.rs:465-483
+15	ironhorse-262/tests/array_to_locale_string.rs:6-25
+15	ironhorse-262/tests/array_join.rs:5-24
+15	ironhorse-262/tests/function_constructor_family.rs:33-55
+15	ironhorse-262/tests/eval_declaration_semantics.rs:15-36
+14	ironhorse-262/tests/bigint_intrinsic.rs:5-20
+14	ironhorse-262/tests/bigint_arithmetic_relational.rs:6-21
+14	ironhorse-262/tests/bigint_bitwise.rs:6-21
+14	ironhorse-262/tests/bigint_exponentiation.rs:6-21
+14	ironhorse-vm/tests/engine_throws_are_catchable.rs:77-94
+14	ironhorse-vm/tests/guest_compartment.rs:214-228
+14	ironhorse-vm/tests/guest_compartment.rs:269-283
+14	ironhorse-vm/tests/native_try_fences_caller_handlers.rs:19-36
+14	ironhorse-vm/tests/allocation_admission_audit.rs:20-33
+14	ironhorse-vm/tests/dispatch_loop_control_transfer.rs:22-35
+14	ironhorse-vm/tests/finding_ab889c8f6184c60d_regexp_source.rs:28-47
+14	ironhorse-vm/tests/finding_a136f9038a1001fb_regexp_source.rs:31-50
+14	ironhorse-snapshot/tests/iterator_carry.rs:23-48
+14	ironhorse-snapshot/tests/language_rows_carry.rs:19-44
+14	ironhorse-snapshot/tests/name_floor_carry.rs:13-36
+14	ironhorse-snapshot/tests/typed_array_carry.rs:16-41
+14	ironhorse-snapshot/tests/async_generator_carry.rs:12-38
+14	ironhorse-snapshot/tests/async_carry.rs:3-29
+14	ironhorse-snapshot/tests/shared_machine.rs:209-226
+14	ironhorse-snapshot/tests/commit_token_source.rs:104-121
+13	ironhorse-262/tests/typed_array_from_source.rs:15-28
+13	ironhorse-262/tests/dataview_detach_and_reflection.rs:8-21
+13	ironhorse-262/tests/class_semantics.rs:5-18
+13	ironhorse-262/tests/typed_array_element_coercion.rs:6-19
+13	ironhorse-262/tests/super_null_home_prototype.rs:14-27
+13	ironhorse-262/tests/array_buffer_transfer.rs:7-20
+13	ironhorse-262/tests/set_prototype_cycle.rs:13-26
+13	ironhorse-262/tests/inherited_floor_regressions.rs:21-34
+13	ironhorse-262/tests/atomics_single_agent.rs:12-25
+13	ironhorse-262/tests/error_stack_accessor.rs:17-30
+13	ironhorse-262/tests/function_prototype_property.rs:14-27
+13	ironhorse-262/tests/globalthis_live_binding.rs:22-35
+13	ironhorse-262/tests/symbol_description_accessor.rs:22-35
+13	ironhorse-262/tests/typed_array_ctor_coercion.rs:21-34
+13	ironhorse-262/tests/symbol_keyed_properties.rs:16-29
+13	ironhorse-262/tests/typed_array_exotic_internals.rs:24-37
+13	ironhorse-262/tests/reflect_intrinsic.rs:24-37
+13	ironhorse-262/tests/typed_array_bigint.rs:13-26
+13	ironhorse-262/tests/array_buffer_ctor_coercion.rs:17-30
+13	ironhorse-262/tests/dataview_bigint.rs:13-26
+13	ironhorse-262/tests/array_buffer_slice.rs:7-20
+13	ironhorse-262/tests/not_callable_caught_raise.rs:23-36
+13	ironhorse-262/tests/proxy_traps.rs:20-33
+13	ironhorse-262/tests/iterator_protocol_errors.rs:14-27
+13	ironhorse-262/tests/native_mxtry_boundary.rs:21-34
+13	ironhorse-262/tests/dataview_coercion.rs:5-18
+13	ironhorse-262/tests/array_generic_receiver.rs:19-32
+13	ironhorse-262/tests/resizable_buffers.rs:10-23
+13	ironhorse-262/tests/has_own_property_mop.rs:19-32
+13	ironhorse-262/tests/native_callable_invocation.rs:19-32
+13	ironhorse-262/tests/instanceof_semantics.rs:5-18
+13	ironhorse-262/tests/tagged_templates.rs:10-23
+13	ironhorse-262/tests/global_binding_attributes.rs:22-35
+13	ironhorse-262/tests/errors_coercions_strict.rs:10-23
+13	ironhorse-262/tests/array_push_pop_generic.rs:8-21
+13	ironhorse-262/tests/array_change_by_copy.rs:7-20
+13	ironhorse-262/tests/array_sort.rs:8-21
+13	ironhorse-262/tests/array_concat_generic.rs:9-22
+13	ironhorse-262/tests/array_shift_unshift_generic.rs:8-21
+13	ironhorse-262/tests/array_slice_generic.rs:7-20
+13	ironhorse-262/tests/intl_numberformat_format_getter.rs:19-33
+
+# clone pairs (first shared window of each run -> partner locations)
+47	ironhorse-vm/tests/cross_segment_callee_callability.rs:17-74	<->	ironhorse-vm/tests/engine_throws_are_catchable.rs:17, ironhorse-vm/tests/relink_preserves_guest_edits.rs:115, ironhorse-snapshot/tests/persist_gates.rs:151, ironhorse-snapshot/tests/dynamic_segments.rs:23
+39	ironhorse-vm/tests/engine_unwind_boundaries.rs:23-67	<->	ironhorse-vm/tests/surrogate_values.rs:97
+31	ironhorse-vm/tests/surrogate_values.rs:154-190	<->	ironhorse-vm/tests/engine_unwind_boundaries.rs:31, ironhorse-vm/tests/surrogate_values.rs:105, ironhorse-vm/tests/cross_segment_callee_callability.rs:27, ironhorse-vm/tests/engine_throws_are_catchable.rs:27
+23	ironhorse-snapshot/tests/reentry_bench.rs:17-48	<->	ironhorse-snapshot/tests/dispatch_bench.rs:18
+22	ironhorse-vm/tests/typed_array_at.rs:103-129	<->	ironhorse-vm/tests/typed_array_find_last.rs:177
+21	ironhorse-vm/tests/allocation_admission_audit.rs:313-333	<->	ironhorse-vm/tests/allocation_admission_audit.rs:356
+20	ironhorse-vm/src/interp/tests.rs:3336-3356	<->	ironhorse-vm/src/interp/tests.rs:3372
+20	ironhorse-vm/tests/dispatch_loop_control_transfer.rs:7-26	<->	ironhorse-vm/tests/throw_construction_sites.rs:9
+19	ironhorse-vm/tests/exotic_prototypes.rs:13-38	<->	ironhorse-vm/tests/constructor_prototype_reads.rs:15, ironhorse-vm/tests/direct_eval_context.rs:12, ironhorse-vm/tests/constructor_edges.rs:12, ironhorse-vm/tests/intrinsic_expando_order.rs:17
+19	ironhorse-vm/tests/promise_execution_bench.rs:14-35	<->	ironhorse-vm/tests/buffer_execution_bench.rs:15, ironhorse-vm/tests/property_execution_bench.rs:14, ironhorse-vm/tests/calendar_execution_bench.rs:14, ironhorse-vm/tests/regexp_execution_bench.rs:14
+19	ironhorse-vm/tests/host_callables.rs:396-415	<->	ironhorse-vm/tests/catch_scope_restore.rs:6
+17	ironhorse-compile/tests/coder_byte_identity.rs:312-331	<->	ironhorse-compile/tests/coder_byte_identity.rs:2621
+17	ironhorse-vm/tests/guest_compartment.rs:8-31	<->	ironhorse-vm/tests/native_lockdown.rs:10, ironhorse-vm/tests/ses_boot_intrinsics.rs:2
+17	ironhorse-vm/tests/finding_6f0b586a80019097_regexp_source.rs:26-46	<->	ironhorse-vm/tests/finding_2276f4edebdcb3bb_regexp_source.rs:25
+17	ironhorse-snapshot/tests/promise_carry.rs:21-51	<->	ironhorse-snapshot/tests/error_data_carry.rs:23
+16	ironhorse-vm/tests/common/mod.rs:68-84	<->	ironhorse-vm/tests/engine_unwind_boundaries.rs:51, ironhorse-vm/tests/surrogate_values.rs:125, ironhorse-vm/tests/surrogate_values.rs:174, ironhorse-vm/tests/cross_segment_callee_callability.rs:47
+16	ironhorse-vm/tests/math_provider_comparison.rs:35-52	<->	ironhorse-vm/tests/math_provider_comparison.rs:84
+16	ironhorse-vm/tests/ses_prelude_reach.rs:316-334	<->	ironhorse-vm/tests/ses_prelude_reach.rs:465
+15	ironhorse-262/tests/array_to_locale_string.rs:6-25	<->	ironhorse-262/tests/array_join.rs:5
+15	ironhorse-262/tests/function_constructor_family.rs:33-55	<->	ironhorse-262/tests/eval_declaration_semantics.rs:15
+14	ironhorse-262/tests/bigint_intrinsic.rs:5-20	<->	ironhorse-262/tests/bigint_arithmetic_relational.rs:6, ironhorse-262/tests/bigint_bitwise.rs:6, ironhorse-262/tests/bigint_exponentiation.rs:6
+14	ironhorse-vm/tests/engine_throws_are_catchable.rs:77-94	<->	ironhorse-vm/tests/native_try_fences_caller_handlers.rs:19
+14	ironhorse-vm/tests/guest_compartment.rs:214-228	<->	ironhorse-vm/tests/guest_compartment.rs:269
+14	ironhorse-vm/tests/allocation_admission_audit.rs:20-33	<->	ironhorse-vm/tests/dispatch_loop_control_transfer.rs:22
+14	ironhorse-vm/tests/finding_ab889c8f6184c60d_regexp_source.rs:28-47	<->	ironhorse-vm/tests/finding_a136f9038a1001fb_regexp_source.rs:31
+14	ironhorse-snapshot/tests/iterator_carry.rs:23-48	<->	ironhorse-snapshot/tests/language_rows_carry.rs:19, ironhorse-snapshot/tests/name_floor_carry.rs:13, ironhorse-snapshot/tests/typed_array_carry.rs:16
+14	ironhorse-snapshot/tests/async_generator_carry.rs:12-38	<->	ironhorse-snapshot/tests/async_carry.rs:3
+14	ironhorse-snapshot/tests/shared_machine.rs:209-226	<->	ironhorse-snapshot/tests/commit_token_source.rs:104
+13	ironhorse-262/tests/typed_array_from_source.rs:15-28	<->	ironhorse-262/tests/dataview_detach_and_reflection.rs:8, ironhorse-262/tests/class_semantics.rs:5, ironhorse-262/tests/typed_array_element_coercion.rs:6, ironhorse-262/tests/super_null_home_prototype.rs:14

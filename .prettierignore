@@ -20,3 +20,7 @@ test262
 
 /packages/thixotrope/dist-ironhorse/
 /packages/thixotrope/dist-xs/
+
+# Generated Android web assets and Gradle output.
+/packages/floot-android/android/app/src/main/assets/chat/
+/packages/floot-android/android/**/build/

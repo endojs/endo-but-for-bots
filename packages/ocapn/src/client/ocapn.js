@@ -16,6 +16,7 @@
  */
 
 import harden from '@endo/harden';
+
 import { ZERO_N } from '@endo/nat';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
@@ -29,13 +30,25 @@ import { makePassableCodecs } from '../codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
 import { locationToLocationId, toHex } from './util.js';
-import { randomGiftId } from '../cryptography.js';
 import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
 import { makeReferenceKit } from './ref-kit.js';
 import { makeGrantDetails } from './grant-tracker.js';
+import { makeGcBatcher } from '../codecs/gc-batch.js';
+
+const gcBatching = true;
+
+/**
+ * The message a durable-session embedder's peer sees when a host answer it was
+ * awaiting is broken because the process that owed it died. Only the message
+ * crosses the wire (`desc:error` carries one field), so a peer that wants to
+ * retry exactly that case has to compare against this text; export it once so
+ * no one respells it.
+ */
+export const PENDING_ANSWER_ABORTED_MESSAGE =
+  'session resumed after restart; pending answer aborted';
 
 /**
  * @typedef {any} LocalResolver
@@ -62,6 +75,7 @@ const sink = harden(() => {});
  * @property {Logger} logger
  * @property {(message: any) => void} rawDispatch
  * @property {(reason?: any) => void} onReject
+ * @property {(error: Error) => void} onSendError
  * @property {(message: any) => void} rawSend
  * @property {() => void} clearPendingRefCounts
  * @property {() => void} commitSentRefCounts
@@ -82,9 +96,10 @@ const sink = harden(() => {});
  * @param {MakeOcapnCommsKitOptions} opts
  * @returns {OcapnCommsKit}
  */
-const makeOcapnCommsKit = ({
+export const makeOcapnCommsKit = ({
   logger,
   onReject,
+  onSendError,
   rawDispatch,
   rawSend,
   clearPendingRefCounts,
@@ -139,7 +154,7 @@ const makeOcapnCommsKit = ({
   /**
    * @param {Record<string, any>} message
    */
-  const send = message => {
+  const sendNow = message => {
     // Don't throw here if unplugged, just don't send.
     if (didUnplug()) {
       logger.info(`Unplugged, not sending message:`, message);
@@ -170,6 +185,30 @@ const makeOcapnCommsKit = ({
       logger.info('Error in send', error);
       clearPendingRefCounts();
       throw error;
+    }
+  };
+
+  const gcBatch = makeGcBatcher(sendNow);
+  let gcFlushScheduled = false;
+  /** @param {Record<string, any>} message */
+  const send = message => {
+    if (!gcBatching) {
+      sendNow(message);
+      return;
+    }
+    gcBatch.send(message);
+    if (gcBatch.hasPending() && !gcFlushScheduled) {
+      gcFlushScheduled = true;
+      void Promise.resolve()
+        .then(() => {
+          gcFlushScheduled = false;
+          gcBatch.flush();
+        })
+        .catch(error => {
+          // A GC write failure must close the session, not silently lose deltas
+          // or retry a possibly accepted decrement with a fresh identity.
+          onSendError(error);
+        });
     }
   };
 
@@ -230,6 +269,7 @@ const makeOcapnCommsKit = ({
     subscribeMessages,
   });
 };
+harden(makeOcapnCommsKit);
 
 /**
  * @typedef {(handler: RemoteKitHandler) => RemoteKit} MakeRemoteKitForHandler
@@ -714,12 +754,14 @@ const makeBootstrapObject = (
  * @param {boolean} [debugMode] - **EXPERIMENTAL**: If true, exposes `_debug` object with internal APIs for testing. Default: false.
  * @param {{
  *   onExport?: (slot: Slot, value: object) => void,
+ *   onExportReleased?: (slot: Slot) => void,
  *   onImport?: (slot: Slot, value: object) => void,
  *   onPendingResolver?: (resolverSlot: Slot, target: { kind: 'promise' | 'answer', position: bigint }) => void,
  *   onResolverSettled?: (resolverSlot: Slot) => void,
  * }} [sessionHooks]
  *   optional per-session observation hooks for durable-session
- *   embedders: export- and import-slot assignment, resolver
+ *   embedders: export- and import-slot assignment, an export the peer has
+ *   fully released (its record can be dropped), resolver
  *   obligations taken on (with the durable name of their target), and
  *   resolver obligations settled (record can be dropped)
  * @returns {Ocapn}
@@ -1054,6 +1096,19 @@ export const makeOcapn = (
         if (slot !== undefined) {
           // eslint-disable-next-line no-use-before-define
           ocapnTable.dropSlot(slot, Number(wireDelta));
+          // A durable-session embedder records exports so a restart can
+          // re-seat them; one the peer no longer holds needs no record.
+          if (
+            sessionHooks !== undefined &&
+            sessionHooks.onExportReleased !== undefined &&
+            ocapnTable.getSlotForValue(value) === undefined
+          ) {
+            try {
+              sessionHooks.onExportReleased(slot);
+            } catch (err) {
+              logger.error(`sessionHooks.onExportReleased failed`, err);
+            }
+          }
         }
       }
     },
@@ -1093,6 +1148,7 @@ export const makeOcapn = (
   } = makeOcapnCommsKit({
     logger,
     onReject,
+    onSendError: abort,
     rawDispatch: dispatchMessage,
     // eslint-disable-next-line no-use-before-define
     rawSend: serializeAndSendMessage,
@@ -1293,7 +1349,7 @@ export const makeOcapn = (
       peer: { publicKey: receiverPublicKeyForGifter },
     } = gifterReceiverSession;
     const gifterSideId = gifterExporterSession.self.keyPair.publicKey.id;
-    const giftId = randomGiftId();
+    const giftId = cryptography.randomGiftId();
     const signedHandoffGive = cryptography.makeSignedHandoffGive(
       receiverPublicKeyForGifter,
       exporterLocation,
@@ -1420,9 +1476,7 @@ export const makeOcapn = (
         // The computation that owed this answer died with the
         // previous process: reject rather than hang or re-execute.
         E.sendOnly(resolver).break(
-          harden(
-            Error('session resumed after restart; pending answer aborted'),
-          ),
+          harden(Error(PENDING_ANSWER_ABORTED_MESSAGE)),
         );
       }
     },

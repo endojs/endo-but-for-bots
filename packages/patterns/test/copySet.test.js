@@ -12,7 +12,7 @@ import {
   makeCopySet,
   getCopySetKeys,
 } from '../src/keys/checkKey.js';
-import { keyEQ } from '../src/keys/compareKeys.js';
+import { keyEQ, setCompare } from '../src/keys/compareKeys.js';
 import {
   setIsSuperset,
   setIsDisjoint,
@@ -140,6 +140,22 @@ test('operations on golden inputs', t => {
   t.deepEqual(z, makeTagged('copySet', ['c', 'b']));
   t.deepEqual(xMy, makeTagged('copySet', ['c']));
   t.deepEqual(yIz, makeTagged('copySet', ['b']));
+});
+
+test('set operations resolve overlapping remotable rank ties', t => {
+  const short = harden([exampleAlice]);
+  const other = harden([exampleCarol]);
+  const long = harden([exampleAlice, 0]);
+  // short ties with other, and other ties with long, but short and long
+  // compare by length. A contiguous window of ties to its first key misses
+  // one of these keys when the full comparator refines the remotables.
+  const whole = makeCopySet([short, other, long]);
+  const subset = makeCopySet([short, long]);
+  t.true(setIsSuperset(whole, subset));
+  t.is(setCompare(whole, subset), 1);
+  t.true(keyEQ(setIntersection(whole, subset), subset));
+  t.true(keyEQ(setUnion(whole, subset), whole));
+  t.true(keyEQ(setDisjointSubtract(whole, subset), makeCopySet([other])));
 });
 
 test('setIsSuperset', async t => {

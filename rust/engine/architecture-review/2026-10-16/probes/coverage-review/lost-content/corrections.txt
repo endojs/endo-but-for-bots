@@ -1,0 +1,440 @@
+## CMP-1 [confirmed] critical
+LOC: rust/engine/ironhorse-vm/src/interp/eval.rs:323-380 (create_dynamic_function); rust/engine/ironhorse-compile/src/scoper.rs:421-432 (Goal has no FormalParameters/FunctionBody goal); packages/ses/src/make-function-constructor.js:47-56; packages/thixotrope/scripts/bundle-ironhorse-worker.mjs:14,39-42
+CORR: None material. The function spans eval.rs:323-380 (the eval_source call is at :379). The environment reasoning is at realm.rs:855-880, not 860-880.
+
+## CMP-2 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-compile/src/lexer.rs:146-187 (chars Vec<u32> + offsets Vec<usize>), lexer.rs:37-48 (Lexeme.start/end, never read outside lexer.rs), ast.rs:137-207 (Item/Node boxes), coder.rs:378-382,744-753 (Code records); reached from rust/engine/ironhorse-vm/src/interp/eval.rs:90
+CORR: The map says 'only computrons bound it'. In fact the source is also bounded by the chunk ceiling as a guest string, so the bound is ~110-170x the chunk ceiling in host bytes, not unbounded. The infallibility is already documented as a known gap (WASM-MEMORY.md:552-556); the novelty is the 220-345x magnitude and its uncharged status. Scenario sharpened: at the recommended 4 MiB ceiling, a 2M-unit eval needs ~550 MB.
+
+## CMP-3 [downgraded] medium
+LOC: rust/engine/ironhorse-compile/src/coder.rs:3552-3568; rust/engine/ironhorse-compile/src/scoper.rs:803-833 (hoist_field_init_scope), scoper.rs:1373-1376; rust/engine/ironhorse-vm/src/interp/eval.rs:117-121
+CORR: Severity: under the rubric this is a spec-feature refusal (medium), not a host panic or a common-path wrong result. Code lines are coder.rs:3552-3568 (the map's 3549-3569 is fine as a range).
+
+## CMP-5 [confirmed] medium
+LOC: rust/engine/ironhorse-compile/src/parser.rs:821-850 (unwrap_reference_cover, clone at :826); parser/stmt.rs:1254-1275 (binding_from_expression, clone at :1260); stmt.rs:1384-1412 (fallback = top.clone()); stmt.rs:1614-1645 (check_strict_binding_top clones the stack top; check_strict_binding iterates
+CORR: Amplification depends on the shape: ~4x for 85 paren levels around a member target in this probe (the map's Rust probe measured ~10x on a larger source); ~29x for the 80-deep arrow-parameter pattern.
+
+## CMP-6 [confirmed] medium
+LOC: rust/engine/ironhorse-compile/src/scoper.rs:1533-1542 (hoist_var)
+CORR: None. The recommendation's claim that 'the coder already has a separate body scope' was not re-verified.
+
+## CMP-7 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-compile/src/lexer.rs:874-879 (finish_integer_or_bigint_radix float accumulate); lexer.rs:827-850 (scan_number_octal legacy branch)
+CORR: Spec basis: the map invokes RoundMVResult's '20 significant digits' rule. That rule applies only to decimal literals. Non-decimal and legacy-octal literals must be correctly rounded at any length, so the divergence is broader than the map states (0x1000000000000008000000001 and other long hex literals also must round exactly; they happen to agree here). Lines: lexer.rs:874-879 and 827-850.
+
+## CMP-12 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-compile/src/parser/stmt.rs:483 (function_statement: "no block (strict code)"), stmt.rs:421 ("labeled function"); rust/engine/ironhorse-compile/src/lexer.rs comment scanning (no HTML-like comment branch); scoper (no B.3.3 block-function var hoisting)
+CORR: Test262 counts: the map's 586/76/13/157 came from the expectation lists. The whole-tree report.json gives 578 shared-positive-test-failure, 76 shared-test262-failure, 8 negative-type-unmatched, 6 ironhorse-failure and 151 covered for annexB/language. B.3.3 is a silent behavioral difference (typeof gives 'undefined'), not a refusal.
+
+## CMP-13 [confirmed] low
+LOC: rust/engine/ironhorse-compile/src/parser.rs:2357 (number_to_ecma_string) vs rust/engine/ironhorse-vm/src/value.rs:3062; parser.rs:2316 (string_key_to_index) vs ironhorse-vm/src/interp/numeric.rs:550 (string_to_index); ironhorse-compile/src/coder.rs:6556-6582 (bigint_limbs_le) vs ironhorse-vm/src/int
+CORR: The map's '3-10x per computron' is ~5x in this re-measurement. number_to_ecma_string is 42 non-comment lines per copy (45 with comments).
+
+## INT-2 [downgraded] medium
+LOC: rust/endo/src/ironhorse_engine.rs:1071-1081 (catch_store_fault re-raises), :1482-1525 (eval's only rewind paths), :727-773 (ephemeral evaluate: no unwind boundary around execution), :637-640 (only production Halt::Panic(EngineFault)); rust/engine/ironhorse-vm/src/interp.rs:2973-2992 (run_shared_outc
+CORR: Severity: the persistent-state corruption requires a caller that catches the unwind, and PersistentMachine has no production caller; the production thixotrope worker fails safe. Medium, not high.
+
+## INT-4 [downgraded] low
+LOC: rust/endo/src/ironhorse_engine.rs:692-698 and :722 ("Each evaluate creates a fresh Realm" / "Each evaluation has a fresh Realm and meter"); rust/engine/ironhorse-vm/src/compartment.rs:782-786 (`relink_crank(..).map_err(|_| Halt::Decode(InvalidSymbols))`), :1289 ("The single Realm shared by all compa
+CORR: Severity lowered to low: no production code path reuses an ephemeral Machine. Doc line range is :692-698 plus :722.
+
+## INT-5 [downgraded] low
+LOC: rust/engine/ironhorse-vm/src/interp.rs:1796-1811 (is_panic); rust/endo/src/ironhorse_engine.rs:280-313 (describe_halt), :370-394 (ExecutionOutcome::classify), :193 and :959 (SymbolMismatch); rust/endo/src/engine/js_machine.rs:87-122, :342-356 (JsMachineErrorKind, classify)
+CORR: Severity lowered to low: there are no production consumers of ExecutionOutcome or JsMachine.
+
+## INT-7 [confirmed] low
+LOC: rust/engine/ironhorse-fuzz/src/lib.rs:2243-2251 (gen_compile_program); :157-162 (gen_program), :241-247 (gen_statement_program), :273-281 (gen_stage2b_program); Bytes at :92-119
+CORR: Also affects arm 1 (statement seed0 limited to 5 of 20 values), which the map did not mention.
+
+## INT-9 [confirmed-with-corrections] low
+LOC: rust/endo/src/ironhorse_engine.rs:592-593 (compile_atoms_with_meter -> Goal::Eval, rust/engine/ironhorse-compile/src/coder.rs:6904-6910); rust/thixotrope-ironhorse-worker/src/main.rs:131-133 (Goal::Script; same in the spike); rust/thixotrope-xs-worker/src/main.rs:125-137 (wraps source in `try { ... 
+CORR: The map's mechanism for the XS worker is wrong. The XS worker does not evaluate the crank as strict indirect eval: its try-block wrapper turns 'use strict' into an ordinary expression statement, so code runs sloppy and `var` becomes global on both thixotrope workers (the map's `var g` case would print "number" on both). The function-declaration divergence in the map's scenario is real, but it arises because the try block makes `function` block-scoped and XS has no Annex B hoisting. The genuine thixotrope-pair divergences are strictness, top-level function declarations, and completion values. The endo-seam (Eval) vs IronHorse-worker (Script) divergence stands as measured. Added observation: the worker's Script goal does not persist top-level `let` across cranks. Severity lowered to low because only host-authored boot scripts are evaluated as top-level cranks in thixotrope.
+
+## INT-11 [confirmed-with-corrections] low
+LOC: rust/engine/xs-oracle/csrc/xs_shim.c:293-304 (xs_oracle_create_machine, inlined into the three run entries), :342 (`started`); warning-clean claim in the fxEndorLoadScript comment at :210-215
+CORR: The 'warning-clean' claim is the fxEndorLoadScript comment at :210-215. The build has 51 -Wclobbered warnings in total, 47 of them from the vendored XS sources, so the 'trains readers to ignore' argument applies to the build as a whole, and a -Werror fix must be per-file.
+
+## INT-12 [confirmed] low
+LOC: rust/endo/src/bin/endor.rs:143-146 -> rust/endo/src/ironhorse_engine.rs:823-844 (run_script, no thread spawn); contract rust/engine/ironhorse-vm/src/lib.rs:90-111
+CORR: Call site is endor.rs:143-146.
+
+## INT-13 [confirmed] low
+LOC: rust/thixotrope-ironhorse-worker/src/main.rs:17-195 ≡ rust/engine/wasm-worker-spike/src/session.rs:24-202; ironhorse-runtime/src/lib.rs:28-127; rust/endo/src/ironhorse_engine.rs:598-641; rust/engine/ironhorse-262/src/lib.rs (2 sites); 10 test copies
+CORR: Of the 11 non-test copies, 3 are in the wasm-worker-spike, which its README says carries no production code; 8 copies are in shipped crates.
+
+## INT-14 [confirmed-with-corrections] low
+LOC: rust/engine/stack-depth-prototypes/*.patch (six patches, 4,725 lines including headers); rust/engine/stack-depth-prototypes/README.md:9, :13
+CORR: The README does not claim the patches apply to HEAD. It scopes the claim to 'the commit that added this directory'. The defect is the unrecorded base, not a false statement. The total is 4,725 lines by wc.
+
+## RGX-1 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-regexp/src/matcher.rs:127 (MAX_MATCH_STATES = 65_536), :152-174 (save_captures admission), push sites :339, :563, :647, :686; rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:556-558 (resource_limit -> Halt::HeapExhausted); second path rust/engine/ironhorse-regexp/src/comp
+CORR: (1) Line numbers drifted: the matcher push sites are matcher.rs:339/563/647/686 (the map said 336/560/644/683), and the VM conversion is natives/regexp.rs:557. (2) The test262 counts are per case in report.json: 452 RegExp cases with reason ironhorse-aborted-limit (444 property-escapes/generated, 4 unicodeSets/generated, 3 CharacterClassEscapes positive, 1 quantifier-integer-limit). The map's '~680 case/mode skips' and '8 aborted' counted case x mode. The category is 'unsupported' and the outcome is 'run-skip'; there is no 'skip:' label. (3) built-ins/RegExp/quantifier-integer-limit.js does not abort on the state ceiling. It aborts at compile time: quantifier_parse_digits returns CompileError::ResourceLimit for a bound above 0x7FFFFFFF (compile.rs:2221-2223), and build_regexp maps that to HeapExhausted (natives/regexp.rs:348-349). This is a second guest-reachable uncatchable halt with the same failure mode. (4) The map says XS special-cases single-charset greedy loops. That was not verified. What is established is that the XS oracle completes every one of these cases.
+
+## RGX-2 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs:214-247 (the only use of regexp_getter_ids); rust/engine/ironhorse-vm/src/interp/link.rs:46-56 and :120-129 (ids from the program symbol table); rust/engine/ironhorse-vm/src/interp/boot.rs:1427-1443 (prototype gets only exec/test/toString
+CORR: (1) The mechanism is narrower than 'the name is not spelled as an identifier'. Bracket and computed reads fail even when the program spells .global elsewhere (p28: [true, undefined]), because only the static GET_PROPERTY arm consults the getter ids. (2) The bypass is also worse than the map stated: the special case pre-empts own data properties on the instance and subclass accessor overrides (shadowOwn -> false instead of 42; subclass get flags -> 'g' instead of 'zz'). Reflect.get, the in operator, and RegExp.prototype.source/flags (undefined instead of "(?:)"/"") also diverge. (3) The test262 counts are per case: 86 ironhorse-failure cases in the ten accessor directories (flags 14; global, ignoreCase, multiline 10 each; the other six 7 each). The map's 28/18/12 counted case x mode.
+
+## RGX-3 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:1098-1156 (each result property is put only `if let Some(id) = self.regexp_result_ids.*`), :1223 (indices.groups likewise); ids resolved at rust/engine/ironhorse-vm/src/interp/link.rs:57-62 and :130-133
+CORR: (1) The map's scenario 'JSON.stringify(/(?<y>a)/.exec("a")) differs' is wrong. JSON.stringify of an Array serializes only indexed elements, so both engines print ["a","a"] (p31). (2) Severity is lowered to medium. Dot access and destructuring, the common ways to read these properties, intern the names and work. Only reflection, spread/assign, and computed-key reads in programs that never spell the name diverge. Only one test262 case fails, because harness/regExpUtils.js matchValidator spells .index and .input. (3) Line range: the property puts start at regexp.rs:1098.
+
+## RGX-4 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:383-404 (code/data buffer bytes only charged as meter work via charge_chunk_work, program stored in the regexps HashMap); rust/engine/ironhorse-vm/src/interp/admission.rs:104-112 (charge_chunk_work = meter only); rust/engine/ironhorse-vm/src/inte
+CORR: (1) The material defect is a heap-ceiling bypass, not only per-instance waste. Program bytes are charged to the meter but never counted against the chunk ceiling (side_storage_charge omits regexps). Severity is raised to high under the brief's 'resource bound ... can be bypassed'. (2) charset_unicode_fold_targets (compile.rs:1261) does not sweep 1.1M scalars. It iterates the fold-mapping table (FOLD0 plus FOLD1 x 16 planes), and \p{Lu}/iu costs only 569 compile computrons. The O(range) work is charset_range under i (compile.rs:1401-1460, not 1422), which is metered per code point and mirrors XS fxCharSetRange. (3) Timings in release: 40 ms (not 137 ms) for [\0-\u{10FFFF}]/iu, and 4.0 s (not 13.7 s) for the 2,000-instance loop. The 501.5 MB RSS reproduces exactly. (4) The RGI_PLUS per-emoji step figure was not re-run.
+
+## RGX-5 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:1041-1053 (regexp_exec_inner: str_units(off) then regexp_subject_bytes(&subject_units) on every call); :1008-1034 (regexp_subject_bytes uses reserve_scratch, which admits the bytes but charges no per-element work); :946-990 (regexp_string_iterato
+CORR: (1) Lens and severity: the per-exec O(n) work is not charged at all (34 computrons per exec at both 16 and 4,194,304 units). This is a metering hole with unbounded amplification, not only a performance issue, so severity is raised to high. (2) Release timings are lower than the map's: 1.0 s for match_g, 2.1 s for split and 1.0 s for replace at n=16000 (the map said 3.4 s, 8.9 s and 3.76 s). (3) matchAll's HeapExhausted is not RGX-1 (the state ceiling), because /a/ retains no backtrack states. It is chunk-arena exhaustion: each next() allocates a fresh 64 KB copy of the subject string, and nothing is collected mid-run.
+
+## RGX-6 [downgraded] low
+LOC: rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:519-563 (match_regexp_metered: the unarmed arm `None if !meter.is_armed() => { meter.tick_raw(delta); true }`, budget effectively unbounded); rust/engine/ironhorse-vm/src/interp/interp.rs:2823-2836 (run_bounded) and dispatch.rs:264 (step_limit ch
+CORR: Downgraded from medium to low. Exponential backtracking with no meter armed is inherent to backtracking matchers: node and XS hang the same way, and the armed path is correctly bounded. What remains is a gap between documentation and behaviour, affecting test and fuzz hosts: run_bounded's step limit does not cover native matcher work.
+
+## SNI-4 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-snapshot/src/slot_codec.rs:115-129 (kind and payload arm decoded independently); rust/engine/ironhorse-snapshot/src/image.rs:5091-5111 (bounds only); rust/engine/ironhorse-vm/src/interp/property/ordinary.rs:74-90 (own_property_slots: `while !cur.is_null() { ... out.push(cur); c
+CORR: Severity raised from medium to high: the map left the OOM path static; the verifier probe shows Object.freeze on the cyclic chain grows host memory by >1 GiB under an armed, refusing meter, i.e. a resource bound bypass reachable from a crafted container. Location line range for own_property_slots is ordinary.rs:74-90.
+
+## SNI-5 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-snapshot/src/atom.rs:186-192
+CORR: Timings in the map were debug-build; release: 14.7 ms (8k), 46 ms (16k), 150 ms (32k), 654 ms (64k), 6.1 s (128k atoms / 1 MiB). The '512 KB container burns 30 s' title figure becomes about 0.65 s in release; a 1 MiB container burns about 6 s.
+
+## SNI-6 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-snapshot/src/snapshot_roster.rs:1472-1504 (per-row instruction_len walk); repeated in rust/engine/ironhorse-vm/src/interp/persist.rs:1782-1801; per-cur_func (not per-body) memoization plus O(F) nested-body subtraction at snapshot_roster.rs:2060-2098 and rust/engine/ironhorse-vm
+CORR: Release timing is ~4.5 ms per row per MiB (map: ~90 ms, debug). Gate line range is snapshot_roster.rs:1472-1504.
+
+## SNI-8 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-snapshot/src/image.rs:993-1012 (encode_heap_into writes every record, free or not); rust/engine/ironhorse-vm/src/value.rs:1277-1290 (SlotArena::free pushes onto the free list and never truncates the arena)
+CORR: Location: the no-shrink behaviour is at ironhorse-vm/src/value.rs:1277-1290 (SlotArena::free), not persist.rs:245-250, which documents only the boot-footprint floor.
+
+## SNI-9 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-snapshot/src/image.rs:5419-5440 (core-atom gate only for format>=15, canonical-bytes gate only for format>=16); KEYS decoded into image.keys and never used (snapshot_roster.rs:79-108); CREA.initial_slot_count never compared with the HEAP slot count (image.rs:152-180); rust/engi
+CORR: Atoms are partially version-gated (ASYN trailers 23/24, shared FUNC 21/22); the claim 'not version-gated' is overstated, but the format-15 restamp escape is real.
+
+## SNS-1 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/persist.rs:4545-4551; rust/engine/ironhorse-snapshot/src/machine.rs:1161-1176; shared flag set at rust/engine/ironhorse-vm/src/interp/realm.rs:854 and interp/shared_persist.rs:512; daemon default checkpoint_every: 1 at rust/endo/src/ironhorse_engine.rs:922-929
+CORR: Magnitudes on this run: the shared no-op is 13.0 ms vs 0.21 ms standalone (about 62x) at 2.4 MB of small state. The map's 18.1 ms / 0.29 ms come from another run; the ratio matches.
+
+## SNS-2 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/snapshot_dirty.rs:141-146 (Tracked::deref_mut marks one bit per table); rust/engine/ironhorse-snapshot/src/machine.rs:1161-1176; rust/engine/ironhorse-snapshot/src/store_sections.rs:206-233 (validate_batch / validate_payload canonical re-decode); rust/endo/ironhorse-stor
+CORR: On this run small[0]++ at n=100000 took 29.7 ms (the map says 49 ms); the bytes written are identical.
+
+## SNS-3 [downgraded] low
+LOC: rust/engine/ironhorse-vm/src/interp/persist.rs:688-723 (reaction scan), :724-728 and :810-816 (non_persisting_functions over self.functions), doc claim :561-576; caller rust/engine/ironhorse-snapshot/src/machine.rs:1084
+CORR: Release cost on this run is 3.7 ms at 100k closures (the map says 6.6 ms). Downgraded to low: about 37 ns per function per checkpoint is a minor cost next to SNS-1 (13 ms per no-op at 2.4 MB) on the production path, and SNS-2 already makes any function-creating crank O(functions). The stale doc premise (lens 6) stands.
+
+## SNS-4 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-snapshot/src/machine.rs:1396-1404 (decode panic); rust/engine/ironhorse-vm/src/value.rs:313-372 (validate_records assert!s) and :2169-2176 (extent length assert!); rust/engine/ironhorse-snapshot/src/machine.rs:677-685 and rust/endo/src/ironhorse_engine.rs:1071-1081 (catch_store
+CORR: The panic is reachable earlier than the map says. For bulk-side-table-referenced pages it fires during the lazy resume itself (daemon open and rewind), not only on the first crank that touches the page. The daemon's open and rewind call resume_shared without any catch_store_fault, so even a typed StoreFault raised during resume is not converted there.
+
+## SNS-7 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-snapshot/src/store.rs:1745-1830 (migrate_step, LADDER); tests rust/engine/ironhorse-snapshot/tests/migration.rs:47-103, :504-597; rust/endo/ironhorse-store-sqlite/tests/migration.rs:69-100, tests/migration_fixtures.rs:204-266, tests/semantic_migration.rs:19-31
+CORR: There are five committed real-bytes store fixtures, not two: two FileStore files and three SQLite files (store-v5.sqlite, store-v35-stage1.sqlite, compat-8047.sqlite), plus container fixtures. All of them stop at the boot gate.
+
+## SNS-12 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-snapshot/src/store.rs:804-809 (StoreManifest::decode), also :1695-1699, :1797-1800, :1913-1917, :2141-2145, :2315-2319; classify :311-340; daemon open rust/endo/src/ironhorse_engine.rs:1138-1168 and store_failure contract :1100-1110; rule tests/store_failure_classes.rs:157-164
+CORR: There are six sites, not five: 807, 1697, 1799 (migrate_step's fallback), 1915, 2143 and 2317. Because decode already refuses, the later checks are mostly unreachable duplicates. The decode gate also covers too-old schemas (<5), not only newer ones. The map says no test covers a newer store schema. In fact store.rs:3480-3489 asserts the Corrupt variant for STORE_SCHEMA_VERSION+1 (and MIN_SUPPORTED-1), and sqlite lib.rs:1615-1635 and :2245-2275 exercise schema+1; none asserts its class.
+
+## SNS-13 [confirmed] low
+LOC: rust/endo/ironhorse-store-sqlite/src/lib.rs:70 (page_col), :199, :202, :250, :541, :757, :955, :1070 (content); :355, :367, :398 (pragma refusals); sql_err fallback :53-63; contrast row_key :78-80, MissingRow at :242-246 and :1066-1068
+CORR: Minor nuance: a journal_mode=WAL read-back mismatch can in principle reflect a VFS/filesystem limitation rather than the file. That is still permanent for that deployment, so Unsupported (not Transient) remains the right class.
+
+## T262-1 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-262/src/xst.rs:716-718 (BothAbort -> oracle_unresolved_name_skip), xst.rs:779-790 (oracle-host-missing-{temporal,intl}), xst.rs:813-816 (over-acceptance), xst.rs:1054-1062; rust/engine/ironhorse-262/src/report.rs:182-187, report.rs:102-106, report.rs:1176, report.rs:1250; rust/
+CORR: (1) The map's Temporal scenario says "the published report says built-ins/Temporal has 0 covered and 890 Ironhorse failures"; 890 is the per-row (case/mode) count from the shards. The published report.json is per file and shows 445 ironhorse-failure files (and 4,157 skipped, 1 unsupported, 0 covered). (2) The map says 709 ironhorse-failure rows are Ironhorse passes (705 over-acceptance + 4 result-divergence); the 15,205 headline uses 705. The 4 result-divergence rows are a non-primitive completion-rendering mismatch, not clearly test262 passes. (3) "reached only from the BothAbort arm": oracle_unresolved_name_skip is also called in the IronhorseOnlyComplete arm (xst.rs:802), but there the exact-string Temporal/Intl checks run first, so in practice every oracle-host-missing-global:{Temporal,Intl} row is a BothAbort row; the conclusion holds.
+
+## T262-4 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-262/src/xst.rs:1541-1561 (CanBlockIsFalse pre-skip and substring pre-skip); rust/engine/ironhorse-vm/src/interp/natives/buffer.rs:2231-2233 (`if op >= 10 { return Err(Step::Host(Halt::Refused("atomics:wait-notify"))); }`)
+CORR: Single-agent over-capture is 116 files, not "roughly 118". "Read inverted" is relative to Ironhorse's own (non-blocking) agent, not to XS: XS skips CanBlockIsFalse too, and the Ironhorse code inherited that.
+
+## T262-5 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-262/src/report.rs:189-229 (INFRASTRUCTURE_REASONS and the default `Category::Infrastructure` at report.rs:226-228); emitters rust/engine/ironhorse-262/src/xst.rs:1813-1819 (module:resolution-linking), xst.rs:1824-1826 (module:compiler-byte-divergence), xst.rs:1852 (module:compi
+CORR: module:compiler-rejected holds 6 ES2022 arbitrary-module-namespace-names cases (not 1) and 92 import-defer cases (not 97).
+
+## T262-7 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-regexp/src/matcher.rs:127 (`pub const MAX_MATCH_STATES: usize = 65_536;`), mapped at rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:556-558 (`if outcome.resource_limit { return Err(Step::Host(Halt::HeapExhausted)); }`); harness label rust/engine/ironhorse-262/src/xst.rs:
+CORR: Severity raised to high: the halt is reachable from ordinary greedy patterns on inputs over about 64 k characters (not only test262's 1.1M-code-point property-escape subjects), it is uncatchable, and XS completes the same programs.
+
+## T262-10 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-262/src/xst.rs:2382-2399 (mode row derivation when mode_outcomes is empty), xst.rs:2607-2611 (timeout result has no mode_outcomes), xst.rs:1856-1861 (module result has none)
+CORR: The default-flag single-row group is 328 files (230 + 95 + 3), not 325, so the total is 830 + 31 + 328 = 1,189, not 1,186.
+
+## T262-12 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-262/src/test262.rs:36-277 (Class, classify, classify_run, concatenating assemble, Report, run_files); rust/engine/ironhorse-262/src/lib.rs:1134 (compartment_dual_run; its record type starts at lib.rs:1083); rust/engine/ironhorse-262/src/report.rs:701 (read_batch), :837 (aggrega
+CORR: compartment_dual_run itself is at lib.rs:1134; lib.rs:1083 is the start of its CompartmentDualRun record type and doc comment.
+
+## BOOT-2 [downgraded] medium
+LOC: rust/engine/ironhorse-vm/src/interp/enumerate.rs:66-72,95-153 (for_in_level_keys -> own_enumeration_keys raw slot walk); rust/engine/ironhorse-vm/src/interp/natives/regexp.rs:1819-1823 (GetSubstitution $<name>); passless interning at natives/json.rs:1768, natives/regexp.rs:1125,1230, natives/collect
+CORR: Mechanism and probes are accurate. Severity lowered: the rubric's 'high' requires wrong results on common paths; both triggers need a runtime-only name colliding with an intrinsic member and an unusual observer (prototype-chain surgery under an intrinsic, or $<name> against a non-groups object), so 'medium' (spec divergence on edge cases) fits.
+
+## BOOT-3 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/property/keys.rs:530-539 (also 659-676, 748-756); rust/engine/ironhorse-vm/src/interp/link.rs:1502-1511 (install_pending_intrinsics), 384-830 (install_named_intrinsic_bindings: roster clones at 576/680/699/818, functions.iter().find_map at 566); rust/engine/ironho
+CORR: Wall-time magnitudes are load-dependent: this run measured ~130-143 us per novel key (2.86 s / 20k) rather than the map's 286 us (5.7 s / 20k); the closure-count effect was larger here (50k closures: 9.5 s, not 6.4 s). The ratios and the computron figures (470,300 vs 522,703) reproduce exactly. The dominant cost is the allocating &str->SymbolName conversion inside SymbolIds::get (87% of instructions), with the functions-map scan as a secondary term growing with live closures.
+
+## BOOT-4 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/link.rs:313-335 (missing_environment_global_bindings), called unconditionally at link.rs:1522; reached from rust/engine/ironhorse-vm/src/interp/property/keys.rs:539,676,755; rust/engine/ironhorse-vm/src/symbols.rs:24-26
+CORR: None of substance; absolute wall times were ~40% lower than the map's in this run (load-dependent), ratio and computrons reproduce. The attribution, stated as static in the map, is now confirmed by profile.
+
+## BOOT-5 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/link.rs:1403-1419 (clone + linear position per crank name), 1457 -> bind_program_symbols at link.rs:20-71; stale doc comment at link.rs:1370-1376
+CORR: Magnitudes are about 3x lower than the map's (map: 130.17 ms growing / 12.80 ms reuse at 50k keys; this run: 40.5 ms / 2.2 ms) - wall times are load-dependent; the linear growth in N reproduces. Also note documentation drift the map did not mention: relink_crank's doc comment (link.rs:1370-1376) still says a table-extending crank is 'Refused fail-closed when ... the heap STORES a runtime-interned id', while the code comment at ~1420-1428 says the split id space 'retires that refusal entirely' and no such refusal exists in the code.
+
+## BOOT-6 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/realm.rs:700,725-892 (new_shared_realm_machine[_configured]); rust/engine/ironhorse-vm/src/interp/shared_persist.rs:216 (restore_shared_machine) and :816 (restore_shared_evaluators); rust/engine/ironhorse-vm/src/interp/restore.rs:56-61,363-372
+CORR: Absolute timings are load-dependent: this run measured 38 ms per Machine (so >=76 ms of reference builds per shared restore), not 90 ms / >=180 ms. The structure (two reference Machines per shared restore) is exactly as described.
+
+## BOOT-7 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch.rs:4843-4880 (exec_module refusals), 4919-4923 (pushes undefined), 4936-4945 (exec_import / exec_import_meta); rust/engine/ironhorse-vm/src/module.rs:177-184 (ModuleStatus), 626-643 (evaluate/inner_eval); rust/engine/ironhorse-vm/src/module_snapshot.rs:23
+CORR: The map's test262 counts (1,582 dynamic-import, 197 TLA, 137 static-linking, 47 resolution-linking, 1,894 pass) were tallied from expectation shard lines, which list sloppy and strict modes separately and were filtered by file name; the report at this commit gives 436 / 207 / 133 / 34 (the last classified infrastructure, not unsupported) / 5 cases, plus 21 compiler-unimplemented:module, 98 module:compiler-rejected and 32 module:compiler-byte-divergence. Even the shards contain 798 module:dynamic-import lines, not 1,582. Everything else holds.
+
+## BOOT-8 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/compartment.rs:1-9,84-97; rust/engine/ironhorse-vm/src/interp/realm.rs:244-253; rust/engine/ironhorse-vm/src/compartment.rs:574-581
+CORR: Relative to XS (the parity target), Compartment.prototype is missing only import and importNow; XS has no `load`, no `module` (commented out) and no `name` getter on Compartment.prototype, so listing those as missing and recommending a `name` getter is SES parity, not XS parity. ModuleSource is a genuine XS global that ironhorse lacks.
+
+## BOOT-9 [downgraded] low
+LOC: rust/engine/ironhorse-vm/src/interp/property/keys.rs:53-58 (admit_guest_key_count: catchable RangeError) and link.rs:1268-1271 (eval relink TableFull -> RangeError); rust/engine/ironhorse-vm/src/interp/dispatch.rs:288-290 and natives/promise.rs:876-878 (Halt::Refused('property-key:id-space-exhausted
+CORR: The map calls this 'one condition' surfaced four ways; more precisely there are two layered conditions by design (soft guest-key ceiling vs hard id-space latch), and the inconsistency is that the soft ceiling alone is reported three different ways (RangeError, HeapExhausted, Decode/TableFull). Severity lowered to low: the outcome is deterministic per entry path (no replica divergence) and reaching it requires ~64k distinct names; the harm is misclassification for host supervisors, i.e. maintainability/ontology.
+
+## BOOT-11 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-vm/src/interp/link.rs:448-468,470-485,494-509,520-530,544-554 and natives/array.rs:606-625 (iterator-name interning + value_id/done_id seeding); link.rs:199-207 and 437-445 (set-method list); link.rs:235-305 vs 1663-1702 (global binding selection); rust/engine/ironhorse-runtime
+CORR: 'Dead' is true except on the saturated id-space-exhausted path of append_name_key (keys.rs:131-138), which inserts into symbol_ids without refreshing caches; that path poisons the machine before the next instruction, so the seeding has no observable effect there either. Minor line-range drift: the second iterator block starts at link.rs:470, not 475.
+
+## CORE-2 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/iteration.rs:7-167 (dispatch_for_of; FOR_AWAIT_OF fallback at :73-101, built-in fast paths :102-165, generic arm :158-165)
+CORR: The map's test262 counts (58 fail rows / 16 pass rows) are per-mode rows; the whole-tree report has 29 ironhorse-failure, 8 covered and 1 unsupported cases under built-ins/AsyncFromSyncIteratorPrototype. The map also omits the larger same-root family: 36 async-generator yield*-over-sync-iterable cases and 3 for-await-of tick-order cases. Line range: the fallback block is :73-101 (comment at :73-74).
+
+## CORE-3 [downgraded] medium
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs:44-196 (Temporal Instant/Duration/Plain*/ZonedDateTime), :197-203 (DisposableStack disposed), :214-249 (RegExp source/flags/flag getters), :250-284 (Intl.Locale), :285-299 (Intl.Collator compare)
+CORR: Severity lowered to medium: the shortcut keeps dot access and the internal flag readers correct; the divergences are computed-key, Reflect, descriptor and shadowing cases. The map's duplication claim is wrong: there are no native Temporal or Locale getters for the shortcut to duplicate; the shortcut is the only implementation, and the missing-accessor problem covers Temporal, Intl.Locale, Collator.compare and DisposableStack.disposed as well as RegExp. The test262 count is 86 report cases (the map's 172 counts strict and sloppy rows).
+
+## CORE-4 [downgraded] medium
+LOC: rust/engine/ironhorse-vm/src/interp/boot.rs:62-66 (default global allocated with SlotIndex::NULL prototype); rust/engine/ironhorse-vm/src/interp/realm.rs:941-943 (create_environment: compartment globals likewise); workarounds at rust/engine/ironhorse-vm/src/interp/dispatch/environment.rs:114-141 (GE
+CORR: Severity lowered to medium (host-defined per spec; one test262 failure; bare-name resolution works). Scope extended: Compartment globals (realm.rs:941-943) have the same null prototype.
+
+## CORE-6 [downgraded] medium
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch.rs:3170-3190 (exec_string allocates a fresh chunk per STRING_* dispatch); rust/engine/ironhorse-vm/src/interp/function.rs:314-378 (per-closure slots; see CORE-12); rust/engine/RECLAMATION.md:63-66 and rust/engine/ARCHITECTURE.md:268-272 (policy: no collec
+CORR: Severity lowered to medium: the no-in-crank-collection behavior is a documented, deliberate policy (RECLAMATION.md:63) and the halt is deterministic; XS's per-literal allocation is the same, so the divergence is entirely in collection policy, which the dispatch changes only mitigate.
+
+## CORE-7 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/frames.rs:323-452 (enter_call; id_map taken at :408, restored at :577); rust/engine/ironhorse-vm/src/interp/dispatch.rs:2522-2536 (exec_run callee classification probes), :1572-1582 (exec_new_local), :2864-2876 (exec_new_closure); rust/engine/ironhorse-vm/src/inte
+CORR: Minor: re-measured figures differ slightly (call adds about 4,200 instructions, 3 locals add about 1,600 each, hashing is about 1,630 per call marginal rather than 1,700).
+
+## CORE-8 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs:197-203 (disposed arm), with the brand guard chain at :15-347; rust/engine/ironhorse-vm/src/symbols.rs:22-27 (SymbolIds::get); rust/engine/ironhorse-text/src/lib.rs:107-111 (From<&str> for SymbolName)
+CORR: Minor: SymbolIds::get is about 1,160 instructions per read (60% of the 1,930 inclusive), and the From<&str> conversion makes two allocations (Vec<u16>, then Vec<u8>), not one.
+
+## CORE-10 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch.rs:443-451 (UNWIND: `Rc::make_mut(&mut self.id_map).retain(|_, &mut idx| idx < keep)`); :4628-4641 (CATCH pushes a CatchJump holding `id_map: self.id_map.clone()`); :1579 (NEW_LOCAL make_mut)
+CORR: The map underestimates the magnitude: at 20,000 frame bindings the measured overhead is about 279,000 instructions per iteration (about 14 per binding), not about 100,000; the map's wall-time figure came from a loaded host.
+
+## FN-1 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/iteration.rs:18-60 (for await reads only @@asyncIterator) and :74-166 (built-in-shape fallback); rust/engine/ironhorse-vm/src/interp/natives/promise.rs:941-956 (yield* stand-in)
+CORR: The test262 figures in the map are case-modes from the expectation shards. Against report.json the family is about 115 failing files: 29 AsyncFromSyncIteratorPrototype, 36 yield-star-sync-{next,return,throw}, 48 yield-star-getiter-*sync*, and 2 for-await-of. The mechanism and severity stand.
+
+## FN-2 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/errors.rs:10-22 (capture_error_frames); rust/engine/ironhorse-vm/src/interp.rs:1567-1576 (ErrorInfo.frames: Vec<String>); rust/engine/ironhorse-vm/src/interp/natives/dispatch.rs:7681-7711 (stack getter clones ErrorInfo and builds an unadmitted Vec<u16>)
+CORR: The scenario is stronger than the map states. The name need not be a 4,000-character source identifier: a computed-key method name of any runtime length works, so 20 errors were enough to pin about 390 MiB.
+
+## FN-3 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/side_ledger.rs:13-31 (side_storage_charge sums only arrays, index_props, collections and segments); rust/engine/ironhorse-vm/src/side_storage.rs:1-9; rust/engine/ironhorse-vm/src/interp.rs:679-683 (BoundData.args: Vec<Slot>); rust/engine/ironhorse-vm/src/interp/fu
+CORR: The side_storage.rs the map cites is rust/engine/ironhorse-vm/src/side_storage.rs, not under interp/. The decisive table enumeration is interp/side_ledger.rs:13-31. Bound arguments are not limited to about 2,000-4,000 per slot as the map states: via a native apply they reach 1e6 per bound function, which makes the per-slot cost effectively unbounded.
+
+## FN-4 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/promise.rs:718-740
+CORR: The title's 'no observable then reads' is wrong. The Get of `then` is performed (promise.rs:706-716). What is skipped is the job, the later `then` call, and its SpeciesConstructor `constructor` read.
+
+## FN-5 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/suspend.rs:1144-1169 (schedule_native_await)
+CORR: Add the fourth test262 file (ticks-with-async-iter-resolved-promise-and-constructor-lookup-two.js), and note the other callers of the helper (Array.fromAsync and the async generator yield/await steps).
+
+## FN-9 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/eval.rs:323-380 (create_dynamic_function), compiled via eval_source(&source, false) with a default EvalContext (eval.rs:71-76)
+CORR: The cited test262 failure is not evidence of this defect. annexB/built-ins/Function/createdynfn-html-open-comment-body.js fails only as error-message-differs (oracle 'missing identifier', ironhorse 'missing expression'). No test262 failure in report.json is attributable to the injection.
+
+## FN-10 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/frames.rs:347-350 with :13-15 and :29-31
+CORR: The map's 'XS handles about 4,000' was not verified, and the exact XS figure depends on the oracle's stack size. Otherwise accurate.
+
+## FN-11 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/state.rs:91; inserts at rust/engine/ironhorse-vm/src/interp/dispatch.rs:1579, :2871 and interp/environment.rs:555; retain at dispatch.rs:449; mem::take at interp/frames.rs:408 and interp/suspend.rs:55, 284, 475, 737, 952; Rc clone into CatchJump at dispatch.rs:463
+CORR: Not all of the '3+ mallocs per call' are due to id_map. id_map accounts for 2 per call with bindings (the Rc box from mem::take and the table), and 1 per binding-free call. The others are the args Vec (frames.rs:340) and the re-allocated locals Vec. The try-let cost measured 149 B per iteration here, not 353 B; the allocation count (2.0) matches.
+
+## FN-13 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/promise.rs:1741 and :1790; rust/engine/ironhorse-vm/src/interp/iterable.rs:179 and :209; also natives/array.rs:435, natives/collection.rs:550/1324/1352/1431/1580/1843/2784, natives/buffer.rs:905, natives/intl.rs:883
+CORR: This is broader than the Promise and IterableToList sites. `new Set(iterable)` (and, by the same pattern, Map and the other collection loops) hits the same cap, as probe v13 shows.
+
+## FN-18 [confirmed] low
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch.rs:2452 (XS_CODE_RUN_TAIL* handled as RUN); harness pre-skip rust/engine/ironhorse-262/src/xst.rs:54
+CORR: The 35 are test262 files (report.json counts per file), not case-modes.
+
+## FN-19 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-vm/src/interp/suspend.rs:224-411 (resume_generator), 425-525 (resume_generator_in_place), 700-880 (step_async_generator), 901-1121 (step_async); frame records rust/engine/ironhorse-vm/src/interp.rs:2138 (CallerState), 2259 (CatchJump), 2313 (SavedFrame), 2344 (SavedJump)
+CORR: The map left the SavedFrame/this_captures consequence unprobed. It is a real, if obscure, guest-visible divergence (probe v19). The duplication finding is otherwise accurate.
+
+## MEM-1 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/value.rs:1226-1231 (SlotArena::alloc ceiling check); rust/engine/ironhorse-vm/src/value.rs:2561-2567 (ChunkArena append ceiling); rust/engine/ironhorse-vm/src/interp/gc.rs:6-14 (admit_collection: quiescent boundary only); rust/engine/RECLAMATION.md:63-66
+CORR: None of substance. The concat bisection point was re-confirmed (16,377 completes). The test262 link is indirect: the 452 aborted-limit RegExp cases are recorded without the halt kind.
+
+## MEM-2 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/gc_tables.rs:723-740 (owner_pairs/private_pairs full scan per marked slot); gc_tables.rs:40-47 (owner_pair/both_pair retain per swept slot via prune_swept); gc_tables.rs:824-848 (WeakMap rescan each ephemeron round); gc_tables.rs:868-896 (whole-arena symbol-key sc
+CORR: Re-measured times differ modestly from the map (16k own-getter GC 3.75 s here vs 3.05 s in the map); the quadratic trend and the conclusion are unchanged. The '200,000 objects -> over six minutes' figure is an extrapolation, not a measurement.
+
+## MEM-3 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/function.rs:763-775 and :847-854 (bind args reserved as scratch, retained in BoundData); rust/engine/ironhorse-vm/src/interp/natives/resource.rs:121, :149, :176 (records.push); rust/engine/ironhorse-vm/src/interp/natives/weak.rs:195 (cells.push); rust/engine/ironh
+CORR: Docs partly acknowledge the gap (RECLAMATION.md:56 'These limits do not bound total process memory', :62, WASM-BLOCKERS B8); the contradiction is with WASM-MEMORY.md's Decisions. Reaction vectors and async frames are slot-bounded (they end in HeapExhausted); the unbounded-by-ceilings shapes are bind args, disposal records and finalization cells.
+
+## MEM-4 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/value.rs:2677-2687 (slice_mut marks [start, start+len) dirty); value.rs:2348-2364 (mark_dirty_range); rust/engine/ironhorse-vm/src/interp/natives/buffer.rs:1691-1695 (fill), :1698-1715 (reverse), :1306-1398 (sort); element stores calling slice_mut(buf.data, pos + size) (
+CORR: Wall times are machine-dependent: the 1e8 fill took 71 s here (map: 90.6 s) and the 16M fill 3.5 s in this run (map: 2.0-2.3 s). The 12e6 sort halts at admission, before allocating the 288 MB scratch.
+
+## MEM-6 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/state.rs (46 std HashMap<SlotIndex, _> tables, e.g. functions, promises, bound_functions); rust/engine/ironhorse-vm/src/bulk.rs:175 (items: BTreeMap<u32, Slot>); rust/engine/ironhorse-vm/src/interp.rs:880 (FuncInfo.name: String beside name_chunk)
+CORR: XS figures in the map are estimates (no XS binary measured); the IronHorse and Node figures are measured.
+
+## MEM-7 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/value.rs:2818 (compact_local truncates without shrink); value.rs:843-868 (slots, free, free_marks, marks grow only); rust/engine/ironhorse-vm/src/interp/gc.rs:110-133 (no side-table shrink); rust/engine/ironhorse-vm/src/interp/natives/buffer.rs:2505-2508 (zeroed host Vec
+CORR: Map figure 'after run 27.6 MB / after GC 31.8 MB' re-measured as 26.2 / 30.2 MiB (units differ); same conclusion.
+
+## NOBJ-1 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/array.rs:2056-2059 (array_generic_index_id); callers array.rs:2495,2519,2568-2637,2677-2678,2787-2858,2935-2936,3010,3213,4565,4571, plus regexp.rs:656,823,984,1687 and string.rs:156; name table rust/engine/ironhorse-vm/src/interp/property/keys.rs:53-82,12
+CORR: Minor: the post-fill name count is 24,409 at this commit (map said 24,407). Callers also exist outside the region (regexp.rs:656,823,984,1687; string.rs:156), which mint per capture/split index.
+
+## NOBJ-2 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/buffer.rs:1306-1395 (typed_array_sort; insertion loop 1333-1388)
+CORR: Wall numbers vary with machine load (map: 20k 1.675 s; this run 0.686 s) but the ratio and the linear computron count reproduce exactly (5,013 computrons at 20k).
+
+## NOBJ-3 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/collection.rs:2323-2325 (key_list_contains), 2370-2459 (union, intersection, difference, symmetricDifference; retain at 2428,2438,2450), 2709-2741 (groupBy record! macro: buckets.iter().position / reprs.iter().position)
+CORR: Only four of the seven Set methods use the linear lists (the map's architecture section says 'All seven'). Absolute wall times differ from the map's run (union 20k: map 4.2 s, here 1.64 s) but the shape and computron counts reproduce exactly.
+
+## NOBJ-4 [confirmed-with-corrections] high
+LOC: (a) rust/engine/ironhorse-vm/src/interp/natives/dispatch.rs:4975-5046 (dense splice: charges 4981-4999, full copy + clear_items + re-insert 5001-5046); (b) rust/engine/ironhorse-vm/src/bulk.rs:791-808 (weak-kind remove_entry: keys.remove + position rewrite + entries.remove); (c) rust/engine/ironhors
+CORR: Severity raised from medium to high: the splice case reproduces at ~27,000x baseline ns/computron at n=200k and grows without bound with n, which is a bypassable meter per the rubric. The cleanup location is weak.rs:259-271 (map said 265-270). WeakMap ratios on this run are lower than the map's (1,464 vs 16,533 ns/computron at 20k) because of machine variance; the 26x Map/WeakMap gap at equal computrons is the stable signal.
+
+## NOBJ-5 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/array.rs:4275-4277 (array_compare_elements default arm), called from array_stable_sort 4284-4331; only charge at array.rs:4548
+CORR: Severity raised to high (41,000x baseline, unbounded in string length; same class as NOBJ-2). The map's 'RSS reaching 485 MB in xst for 5,000 copies' is mis-attributed: the sort itself keeps maxrss at 10.9 MB (copies are freed per comparison). The 485 MB appears only when the script then completes normally with the array still live (v5.js 484.6 MB vs v6.js, identical but ending in a throw, 10.8 MB, and v7.js nulling the array, 10.9 MB), i.e. in end-of-run processing in run_script_source, not in sort. Also: several of my first long-string probes (n5_longstr_1000.js etc.) failed with `TypeError: C: xsSet ?: not writable` because they pushed a function-local const; that is the separate defect NOBJ-NEW-1, not this one.
+
+## NOBJ-7 [downgraded] low
+LOC: rust/engine/ironhorse-vm/src/interp/natives/buffer.rs:378-431 (array_buffer_transfer), 438-460 (reallocate_array_buffer), 2498-2519 (alloc_array_buffer: zeroed host Vec then chunks.alloc copy)
+CORR: The HeapExhausted symptom is the documented quiescent-only collection policy and reproduces with plain ArrayBuffer or string allocation churn, so it is not evidence of a transfer-specific defect; severity lowered to low (extra copy and chunk per call).
+
+## NOBJ-8 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/resource.rs:213-267
+CORR: test262 count: 2 failing files plus 1 unsupported in the whole-tree report, not '4 cases' (the map likely counted strict and sloppy shard rows).
+
+## NOBJ-9 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs:197-203; no `disposed` getter is installed on either prototype (resource.rs, native_ids.rs, boot.rs)
+CORR: test262 count is 8 failing files of 14 in the whole-tree report (map said 16, apparently counting both strict/sloppy shard rows).
+
+## NOBJ-10 [confirmed-with-corrections] medium
+LOC: StepLimit caps: rust/engine/ironhorse-vm/src/interp/natives/array.rs:435/491 (Array.from), collection.rs:550/613 (Map/Set/WeakMap/WeakSet ctors), collection.rs:1324-1328 (drop budget), 1352/1373, 1431/1464, 1580/1627, 1843/1947 (iterator helpers), buffer.rs:905/938 (TypedArray.from), and outside the
+CORR: More sites than listed: interp/property/object.rs:213 (Object.fromEntries) and interp/iterable.rs:179 (iterable_method_to_list, used e.g. by the TypedArray constructor at dispatch.rs:1152) also end in StepLimit; the map's 'ten built-ins' undercounts. Note that most realistic >1M loops in one crank hit HeapExhausted first.
+
+## NOBJ-11 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/array.rs:4539-4549 (sort/toSorted: ARRAY_SORT_CAP check, then reserve_scratch(length)); 4427-4440 (with/toReversed/toSpliced up-front cap); per-iteration caps at 2397-2423 (join), 2558-2621 (shift/unshift), 2671-2674 (reverse), 2781-2841 (splice), 2924-292
+CORR: The map implies the generic reverse/shift/splice caps produce Refused on sparse Arrays; at this commit those paths fail earlier with NOBJ-1's RangeError for any real Array longer than ~64k, so only the up-front caps (sort/toSorted, with/toReversed/toSpliced, join) are reachable today. The map's 'p14_reverse_sparse.js' evidence was a toReversed probe, not reverse.
+
+## NOBJ-12 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/boot.rs:742-768 (TypedArray readonly roster) and the TypedArray routing in rust/engine/ironhorse-vm/src/interp/natives/dispatch.rs:2271-2317: no NativeMethod exists for them; the Array versions are at dispatch.rs:4816-4921 and array.rs:4338
+CORR: test262 impact is 38 failing files in the whole-tree report (with 21, toSorted 9, toReversed 8), not 76 (the map's figure double-counts shard rows).
+
+## NOBJ-13 [confirmed-with-corrections] medium
+LOC: Constructor halt: rust/engine/ironhorse-vm/src/interp/natives/collection.rs:316-330; method TypeErrors: collection.rs:92-94,121-123,2577-2579 and rust/engine/ironhorse-vm/src/interp/natives/weak.rs:22-27
+CORR: test262 counts: 5 refused and 23 unsupported in the whole-tree report (map said 12 refused and about 30). Additional divergence: registered symbols also hit the Refused halt in the constructors although the spec mandates TypeError for them.
+
+## NOBJ-15 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/bulk.rs:159-185 (ArrayData { length, items: BTreeMap<u32, Slot>, attributed }); rust/engine/ironhorse-vm/src/side_storage.rs:45 (ARRAY_ITEM_BYTES = width::<(u32, Slot)>() = 32) and 93-97 (array_items_charge by capacity class)
+CORR: The under-charge is 1.74x only at exact power-of-two counts; capacity-class charging over-charges just above each boundary (64 vs 55.6 B/item), and an array pushed to the ceiling halts at ~240 MB RSS, not ~445 MB. The finding stands as a memory/perf design issue rather than a ceiling bypass.
+
+## NVAL-1 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/natives/string.rs:434-451 (StringIncludes), :459-535 (StringIndexOf/StringLastIndexOf); rust/engine/ironhorse-vm/src/interp/admission.rs:84-95 (charge_and_check takes raw 16.16 units)
+CORR: None material. Measured undercharge on this machine: includes ~7 computrons for ~2.8 s (expected ~76M at baseline rate); indexOf ~6.1k computrons for ~3.1 s.
+
+## NVAL-2 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/bigint.rs:97-113 (schoolbook bi_mul_mag), :118-153 (bit-serial bi_div_rem_mag with an allocating bi_sub_mag per quotient bit), :351-378 (bi_to_decimal), :428-474 (parse_bigint_string); rust/engine/ironhorse-vm/src/interp/natives/bigint.rs:438-491 (bigint_arith cha
+CORR: Net rendering-time gap between x.toString() and String(x) is ~70x on this run (2.1 s vs 0.03 s after subtracting 0.13 s setup), not 13x as the map stated (the map's figure included setup in both). Computron counts reproduce exactly (build-independent). Added: an armed meter at limit 12000 lets the BigInt program complete at 36607 computrons, i.e. the charge lands after the work and straight-line code reaches no check point.
+
+## NVAL-3 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/strings.rs:130-142 (concat_add), :170-172 (to_string_units_metered copies the operand), rust/engine/ironhorse-vm/src/value.rs:15 (DEFAULT_CHUNK_CEILING = 256 MiB), rust/engine/RECLAMATION.md:63 ('No collection runs within a crank.')
+CORR: Threshold is ~16,400 appends (16,000 succeeds, 16,500 halts), consistent with sum(2i) reaching 256 MiB at i ~= 16,384; the map's '~15,000' / '18,000 fails' bracket was loose but not wrong in substance.
+
+## NVAL-4 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs:44-53 (Instant), :54-73 (Duration), :74-128 (Plain*), :129+ (Zoned), ~:250 (Locale), :285-298 (Collator compare)
+CORR: Intl.DateTimeFormat.prototype.format is NOT an undefined-valued data property as the map said: it is a data property whose value is a function (JSON.stringify of the descriptor dropped the function). It works via Reflect.get; the divergence there is only data property vs spec accessor. Collator.prototype.compare is the case with no property at all. Also confirmed: Object.create(duration).years returns undefined (spec TypeError).
+
+## NVAL-5 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/locale.rs:903-962 (collator_compare_units), :964-988 (numeric_collation_cmp); callers interp/natives/string.rs:651-670 and interp/natives/dispatch.rs:2828-2844
+CORR: The map's row `Intl.Collator('en',{sensitivity:'accent'}).compare('a','A')`: IH -1 is wrong; IH returns 0, matching Node. Accent and base sensitivity do fold case; the defect is that base does not fold accents, plus the ordering defects above.
+
+## NVAL-6 [confirmed] high
+LOC: rust/engine/ironhorse-vm/src/interp/temporal.rs:1409-1494 (resolve_time_zone: 23-row table, 22 distinct zones, 'DST not modeled'), :1167-1174 (resolve_zoned_time_zone reuses it), :1176-1178 (bracketed offset must equal the fixed offset); rust/engine/ironhorse-vm/src/interp/natives/intl.rs:450-459 (D
+CORR: Table has 23 rows but 22 distinct zones (asia/calcutta aliases Asia/Kolkata).
+
+## NVAL-7 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/temporal.rs:158-179 (temporal_plain_valid: no ISO range limits; kind 5 = obsolete Calendar), :181-252 (parse_temporal_plain: `text.split('[')` drops annotations including critical ones; str::parse accepts '+1'), :962-1019 (instant parse requires seconds); rust/eng
+CORR: Added a defect the map missed: Plain*.prototype.until/since ignore their options argument (natives/temporal.rs:432-438), so largestUnit/smallestUnit/roundingMode are silently dropped. 'Invisible to the gate' is slightly overstated: the 890 pinned fail entries do detect changes in IronHorse's own abort text, but they cannot judge correctness because the oracle side is a ReferenceError.
+
+## NVAL-8 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/locale.rs:225-248 (locale_is_supported), :182-202 (maximize_locale), :272-298 (list patterns), :816-901 (plural categories/select), :466-677 (DTF parts); rust/engine/ironhorse-vm/src/intl_number.rs:884-913 (comma-decimal set); rust/engine/ironhorse-vm/src/interp/n
+CORR: The intl402 785/3357 figure includes 2029 intl402/Temporal tests; the non-Temporal Intl pass rate is 673/1328 (51%), not ~23%. The map's DTF hour/minute row compared different instants (Node '8:00 AM'); on the same instant the only difference is the missing zero-pad ('7:0 AM' vs '7:00 AM').
+
+## NVAL-9 [confirmed-with-corrections] medium
+LOC: Halt::Refused: rust/engine/ironhorse-vm/src/interp/natives/string.rs:148-151 (String.raw > 2^24 segments), :741-746 (padStart/padEnd > 2^24 units); interp/natives/bigint.rs:264-265, :338-349, :638-640 (asN, **, << > 64 Ki bits); interp/natives/json.rs:664-667 and :1045-1046 (lengths > u32). Catchabl
+CORR: There is a fifth class the map did not list: heap-ceiling admission (reserve_units -> Halt::HeapExhausted) for 'abc'.repeat(2**28), where engines throw a catchable RangeError. Also the padStart cap (2^24 units) is far below the heap ceiling that repeat honours, so equal-size results get different outcomes.
+
+## NVAL-10 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/json.rs:1585-1597
+CORR: Location is json.rs:1585-1597 (the from_str_radix call is at 1589-1591 as cited). Added: rawJSON lets stringify emit invalid JSON.
+
+## NVAL-11 [confirmed] medium
+LOC: rust/engine/ironhorse-vm/src/interp/numeric.rs:84-99 (parse_int: `result = result * radix as f64 + digit as f64`), :233-242 (non-decimal string_to_number: `acc = acc * r as f64 + d`)
+CORR: The 30-digit decimal row is in the spec's implementation-approximated range (digits after the 20th may be zeroed), but IH's answer is not the correct rounding of either the true or the 20-digit-truncated value, so it remains a divergence.
+
+## NVAL-12 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/number.rs:148-152 (Fround), :82-94 (Hypot), :116-132 (Round)
+CORR: The map said the test262 Math failures are 'random and cross-realm'; all five failures in the XS-oracle sweep are built-ins/Math/random/* (Math.random is absent), none cross-realm.
+
+## NVAL-16 [confirmed] low
+LOC: rust/engine/ironhorse-vm/src/interp/natives/string.rs:73-80
+CORR: None. The other `trunc() as i64` sites (natives/dispatch.rs:4643, :4833) clamp array indices, where saturation is harmless.
+
+## NVAL-17 [confirmed] low
+LOC: rust/engine/ironhorse-vm/src/interp/strings.rs:113-118 (new_string_units: 'an interned "", no metered fxNewChunk' but calls self.chunks.alloc(&[])); rust/engine/ironhorse-vm/src/value.rs:2506-2586 (alloc has no zero-length fast path; appends a 4-byte header)
+CORR: Map marked this as static-only; it is now confirmed by probe.
+
+## PROP-1 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/interp/property/keys.rs:713-721 (to_property_id, 13 callers); rust/engine/ironhorse-vm/src/interp/natives/array.rs:2056-2059 (array_generic_index_id, 29 callers: 24 array.rs, 4 regexp.rs, 1 string.rs); rust/engine/ironhorse-vm/src/interp/property.rs:327, :524, :576, :725
+CORR: property_write.rs:451 is the computed-key class/object-literal method/getter/setter define path (`{ [i]() {} }`), not a sloppy primitive write; the sloppy `(5)[i] = v` / exotic fallback is property.rs:725. The ownKeys-trap comparison does NOT intern indices (to_read_key yields ReadKey::Index); it interns only non-index strings returned by the trap.
+
+## PROP-2 [downgraded] medium
+LOC: rust/engine/ironhorse-vm/src/interp/property/keys.rs:126-160 (append_name_key), :183-205 (intern_symbol_key_reserved), :54-68 (admit_guest_key_count); rust/engine/ironhorse-vm/src/interp/state.rs:2455 (#[gc_weak(symbol_keys)]); rust/engine/ARCHITECTURE.md:349-353
+CORR: ARCHITECTURE.md does state the budget is monotone and not reclaimed ('not reclamation or an unlimited lifetime key budget'); the undocumented parts are non-reuse of collected symbol ids, and the index (PROP-1), eval-identifier and template-site drains. Severity lowered from high to medium because the limit is a documented, catchable design choice.
+
+## PROP-3 [confirmed-with-corrections] high
+LOC: rust/engine/ironhorse-vm/src/property_index.rs:66-82 (free -> drop_owner of every dependent owner), :85-100 (synchronize drops owners on a changed link), :152-158 (Walk::End rebuild without throttle), :14-18 (Watched with per-node HashSet); rust/engine/ironhorse-vm/src/value.rs:1325-1350 (find_prope
+CORR: The full-index threshold is a chain longer than 32 nodes, not 40: PropertyIndex::find restarts its 32-node linear scan at the chain head (the 8 nodes find_property already scanned are rescanned). find_property is at value.rs:1325, not 1340-1360. The owner is dropped through two routes (free() and synchronize() on the predecessor's changed `next`), not only free().
+
+## PROP-4 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/property/keys.rs:539 (resolve_at_key), :676 (to_read_key), :755 (to_property_id); rust/engine/ironhorse-vm/src/interp/link.rs:1502-1537 (install_pending_intrinsics), :313-335 (missing_environment_global_bindings)
+CORR: The map's main recommendation (guard the three call sites by `symbol_names.len() > installed_names_len`, as intern_implicit_key does) is insufficient/unsafe on its own: that guard already exists inside install_pending_intrinsics for the shared-surface half, and the expensive half (missing_environment_global_bindings) is deliberately unguarded because per-environment global bindings can be missing even when the machine-wide floor has advanced (compartments). The fix needs a dirty flag or generation for the environment catch-up, not just the floor check.
+
+## PROP-5 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/property/proxy.rs:1224-1248 (proxy_call_step, no callability gate); rust/engine/ironhorse-vm/src/interp/invoke.rs:568-580 (proxy_run_step); rust/engine/ironhorse-vm/src/interp/function.rs:664-676 (slot_is_callable stops at a revoked layer); contrast proxy.rs:1279-
+CORR: The map said no test262 test covers either case; the sweep has two ironhorse-failure cases for the revoked/typeof half (built-ins/Proxy/revocable/target-is-revoked-function-proxy.js, language/expressions/typeof/proxy.js). The call path is at invoke.rs:568-580 (proxy_run_step), near but not at :576.
+
+## PROP-6 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/property.rs:965-999 (mop_set_prototype_inner)
+CORR: The map said the test262 tests pass only by luck; in fact two dedicated tests (setPrototypeOf-with-non-circular-values.js and -__proto__.js) fail in the sweep. The 'evil injection' scenario is not a capability escape, since pre-lockdown code can mutate Object.prototype directly.
+
+## PROP-7 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/boot.rs:62-66
+CORR: language/global-code/script-decl-lex.js, cited by the map, is categorized 'unsupported' (shared-positive-test-failure: the XS oracle also fails it), not an IronHorse failure. The test262 impact is larger than the map's two cases: 10 ironhorse-failure cases are attributable.
+
+## PROP-8 [confirmed-with-corrections] medium
+LOC: rust/engine/ironhorse-vm/src/interp/natives/array.rs:1369-1375 (new_reused_iterator_result), :1390, :1541-1543; rust/engine/ironhorse-vm/src/interp/natives/collection.rs:625, :662 (allocation), :2040-2041 (collection_iterator_next rewrite), :2968-2969 (string_iterator_next rewrite); rust/engine/iron
+CORR: collection.rs:824-825 (iterator_wrapper_return) and :929-930 (helper_iter_result) allocate FRESH result objects and are not reuse sites; the reuse sites are allocated at array.rs:1390 and collection.rs:625/662 and rewritten at collection.rs:2040-2041 and :2968-2969. enumerate.rs:35/331 is the internal for-in enumerator, whose result object is not guest-visible.
+
+## PROP-10 [confirmed-with-corrections] low
+LOC: rust/engine/ironhorse-vm/src/symbols.rs:22-27 (SymbolIds::get); rust/engine/ironhorse-text/src/lib.rs:107, :122 (From<&str>, From<&SymbolName> clone); rust/engine/ironhorse-vm/src/interp/property/keys.rs:559-561 (index_read_key_id: index.to_string()); rust/engine/ironhorse-vm/src/interp/property/ind
+CORR: The map's '~18k instructions per iteration' for the a.indexOf loop was not reproduced; this run measured ~9.6k Ir/iteration (exotic_own_descriptor's ~3.4k share matches).
+

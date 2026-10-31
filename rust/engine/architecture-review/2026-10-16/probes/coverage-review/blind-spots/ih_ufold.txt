@@ -1,0 +1,5 @@
+InternalError: ironhorse halted: HeapExhausted
+
+real	0m1.247s
+user	0m1.154s
+sys	0m0.092s

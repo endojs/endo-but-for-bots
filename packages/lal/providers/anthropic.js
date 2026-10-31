@@ -1,4 +1,5 @@
 // @ts-check
+import { anthropicToolContent } from '@endo/hosted-agent/image-result.js';
 /**
  * Anthropic API provider for the Lal agent.
  * Converts our common message/tool format to Anthropic's API and back.
@@ -83,7 +84,7 @@ const toAnthropicMessages = messages => {
           {
             type: 'tool_result',
             tool_use_id: toolUseId,
-            content: msg.content,
+            content: anthropicToolContent(msg.content),
           },
         ],
       });
@@ -96,7 +97,7 @@ const toAnthropicMessages = messages => {
 /**
  * Create an Anthropic-backed chat provider.
  * @param {{ apiKey: string, model: string }} options
- * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
+ * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage, usage?: Record<string, unknown> }> }}
  */
 export const makeAnthropicProvider = ({ apiKey, model }) => {
   /** @type {Promise<AnthropicClient> | undefined} */
@@ -118,10 +119,7 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
       const { system, messages: anthropicMessages } =
         toAnthropicMessages(messages);
       console.log('[LAL] Calling Anthropic API...');
-      console.log(
-        '[LAL] Messages:',
-        JSON.stringify(anthropicMessages, null, 2),
-      );
+      console.log('[LAL] Message count:', anthropicMessages.length);
       /** @type {Anthropic.Message} */
       let response;
       try {
@@ -178,7 +176,36 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
         message.tool_calls = toolCalls;
       }
 
-      return { message };
+      // Anthropic's three input kinds are already disjoint, and it does not
+      // count thinking apart from output. The API does not say how large the
+      // model's window is, so that is reported as unknown.
+      const reported = response.usage;
+      if (!reported || typeof reported !== 'object') return { message };
+      const count = (/** @type {unknown} */ value) =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0
+          ? Math.trunc(value)
+          : 0;
+      const usage = {
+        inputTokens: count(reported.input_tokens),
+        outputTokens: count(reported.output_tokens),
+        cachedInputTokens: count(reported.cache_read_input_tokens),
+        cacheWriteInputTokens: count(reported.cache_creation_input_tokens),
+        reasoningOutputTokens: 0,
+      };
+      return {
+        message,
+        usage: {
+          ...usage,
+          context: {
+            usedTokens:
+              usage.inputTokens +
+              usage.outputTokens +
+              usage.cachedInputTokens +
+              usage.cacheWriteInputTokens,
+            windowTokens: 0,
+          },
+        },
+      };
     },
   };
 };

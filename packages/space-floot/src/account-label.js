@@ -1,0 +1,373 @@
+// @ts-check
+
+import harden from '@endo/harden';
+
+/**
+ * How a backend's account is worded for a person: what its plan is, how full
+ * each rate-limit window is and when it resets, credits, banked resets, and
+ * how old the figures are. Pure, so a view can render it and a test can read
+ * it. The data is `AccountView` from `@endo/floot/src/account-watch.js`.
+ *
+ * @typedef {{
+ *   windowId: string, title: string, usedPercent: number | null,
+ *   resetsAt: string, windowSeconds: number | null,
+ *   limit: string | null, used: string | null, remaining: string | null,
+ * }} AccountWindow
+ * @typedef {{
+ *   accountId: string, providerId: string, title: string,
+ *   uses: Array<{backendId: string, subscriptionId?: string}>,
+ *   resetKey?: string, label?: string,
+ *   plan: { planId: string, title: string, state: string, source: string },
+ *   windows: AccountWindow[], limitReached: boolean,
+ *   credits: { balance: string | null, hasCredits: boolean, unlimited: boolean } | null,
+ *   resetCredits: { availableCount: number, credits: Array<{ id: string, status: string, grantedAt: string, expiresAt: string }> | null } | null,
+ *   reset?: { pending: { creditId: string | null, startedAt: string, lastAttemptAt: string, attempts: number, lastAnswer?: string } | null, last: { outcome: string, creditId: string | null, at: string } | null } | null,
+ *   source: string, observedAt: string,
+ * }} Account
+ */
+
+/** How a settled redeem is worded. */
+const RESET_OUTCOMES = {
+  reset: 'redeemed; the windows were reset',
+  redeemed: 'redeemed',
+  alreadyRedeemed: 'had already been redeemed',
+  nothingToReset: 'nothing to reset; no credit was spent',
+  noCredit: 'no credit was available',
+  refused: 'refused by the provider; no credit was spent',
+  abandoned: 'given up while unconfirmed',
+};
+
+/**
+ * What a person can do about an account's banked resets, or null: nothing is
+ * offered where the daemon bound no admin (`reset` is absent), or where there
+ * is no credit and no redeem waiting for its answer.
+ *
+ * @param {Account} account
+ * @returns {{ key: string, label: string, pending: boolean, confirm: string, abandon: { label: string, confirm: string } | null } | null}
+ */
+export const accountRedeem = account => {
+  if (!account.reset || !account.resetKey) return null;
+  const key = account.resetKey;
+  const name = account.label
+    ? `${account.title} (${account.label})`
+    : account.title;
+  if (account.reset.pending) {
+    return {
+      key,
+      label: 'Ask again',
+      pending: true,
+      confirm: `Ask ${name} again about the unconfirmed redeem? It is the same request, so it cannot spend a second reset, but it may be the one that spends the first.`,
+      // The way out when the provider will never say.
+      abandon: {
+        label: 'Give up',
+        confirm: `Give up on the unconfirmed redeem of ${name}? If it was in fact accepted, a redeem you make afterwards spends a second reset.`,
+      },
+    };
+  }
+  if (!account.resetCredits || account.resetCredits.availableCount <= 0) {
+    return null;
+  }
+  return {
+    key,
+    label: 'Redeem a reset',
+    pending: false,
+    confirm: `Spend one banked reset of ${name}? It clears the rate-limit windows now and cannot be undone.`,
+    abandon: null,
+  };
+};
+
+/**
+ * The accounts a session can be served from: the one it is pinned to, or
+ * every account of its backend.
+ *
+ * @param {Account[] | undefined} accounts
+ * @param {{ backendId?: string, subscription?: string } | undefined} session
+ * @returns {Account[]}
+ */
+export const accountsOfSession = (accounts, session) => {
+  if (!session) return [];
+  return (accounts ?? []).filter(account =>
+    account.uses.some(
+      use =>
+        use.backendId === (session.backendId || 'provider') &&
+        (!session.subscription ||
+          session.subscription === 'auto' ||
+          use.subscriptionId === session.subscription),
+    ),
+  );
+};
+
+/**
+ * A span of time in its two largest units: "3d 4h", "2h 10m", "45s".
+ *
+ * @param {number} ms
+ */
+export const formatSpan = ms => {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  const units = [
+    ['d', 86_400],
+    ['h', 3600],
+    ['m', 60],
+    ['s', 1],
+  ];
+  const parts = [];
+  let rest = seconds;
+  for (const [label, size] of /** @type {Array<[string, number]>} */ (units)) {
+    const count = Math.floor(rest / size);
+    if (count > 0 || (label === 's' && parts.length === 0)) {
+      parts.push(`${count}${label}`);
+      rest -= count * size;
+    }
+    if (parts.length === 2) break;
+  }
+  return parts.join(' ');
+};
+
+/**
+ * A window as it stands now. A reading ages: once a window's reset time has
+ * passed, the allowance is back, whatever the last reading said.
+ *
+ * @param {AccountWindow} window
+ * @param {number} nowMs
+ */
+export const windowNow = (window, nowMs) => {
+  const resetMs = Date.parse(window.resetsAt);
+  const hasReset = Number.isFinite(resetMs);
+  const expired = hasReset && resetMs <= nowMs;
+  const usedPercent = expired ? 0 : window.usedPercent;
+  return {
+    usedPercent,
+    expired,
+    exhausted: usedPercent !== null && usedPercent >= 100,
+    resetsInMs: hasReset && !expired ? resetMs - nowMs : null,
+  };
+};
+
+const shortName = (/** @type {AccountWindow} */ window) => {
+  if (window.windowSeconds === 18_000) return '5h';
+  if (window.windowSeconds === 604_800) return 'wk';
+  if (window.windowSeconds === 86_400) return 'day';
+  return window.windowId === 'primary' ? 'short' : 'long';
+};
+
+/**
+ * The header's chip for the backend of the session on screen: '' when there
+ * is nothing known worth a glance.
+ *
+ * @param {Account | undefined} account
+ * @param {number} nowMs
+ */
+export const accountChip = (account, nowMs) => {
+  if (!account) return '';
+  const parts = [];
+  // The long window first: it is the one that runs out.
+  const ordered = [...account.windows].sort(
+    (a, b) => (b.windowSeconds ?? 0) - (a.windowSeconds ?? 0),
+  );
+  for (const window of ordered) {
+    const { usedPercent, resetsInMs, exhausted } = windowNow(window, nowMs);
+    if (usedPercent !== null) {
+      const name = shortName(window);
+      if (!exhausted) {
+        // Never "100%" for a window that still has room.
+        parts.push(`${name} ${Math.min(99, Math.round(usedPercent))}%`);
+      } else if (resetsInMs !== null) {
+        parts.push(`${name} used up, back in ${formatSpan(resetsInMs)}`);
+      } else {
+        parts.push(`${name} used up`);
+      }
+    }
+  }
+  if (parts.length === 0 && account.credits?.balance) {
+    parts.push(`${account.credits.balance} credits`);
+  }
+  return parts.join(' · ');
+};
+
+/** How long a "limit reached" with no window to say when it lifts is believed. */
+const UNDATED_BLOCK_MS = 3_600_000;
+
+// Observations are stamped by the daemon, but displayed against the browser's
+// clock. Allow a small difference, not an arbitrarily future-dated reading.
+const DISPLAY_CLOCK_SKEW_MS = 5000;
+
+/**
+ * Capacity is a recent observation, not a prediction that a reset refilled it.
+ * An hour is the display freshness bound; it does not alter pool scheduling.
+ * @param {Account} account
+ * @param {number} nowMs
+ */
+export const accountCapacity = (account, nowMs) =>
+  account.windows.map(window => {
+    const observed = Date.parse(account.observedAt);
+    const reset = Date.parse(window.resetsAt);
+    const lastRedeem = [
+      'reset',
+      'redeemed',
+      'alreadyRedeemed',
+      'abandoned',
+    ].includes(account.reset?.last?.outcome || '')
+      ? Date.parse(account.reset?.last?.at || '')
+      : NaN;
+    let note = '';
+    if (account.reset?.pending) note = 'reset unconfirmed';
+    else if (
+      (Number.isFinite(reset) && reset <= nowMs) ||
+      lastRedeem > observed
+    )
+      note = 'refresh after reset';
+    else if (account.source === 'remembered')
+      note = 'saved reading; no live reading available';
+    else if (account.source !== 'observed')
+      note = 'no live usage reading available';
+    else if (!Number.isFinite(observed))
+      note = 'reading has no valid timestamp';
+    else if (observed - nowMs > DISPLAY_CLOCK_SKEW_MS)
+      note = 'reading is ahead of this device’s clock';
+    else if (nowMs - observed >= UNDATED_BLOCK_MS)
+      note = `last reading ${formatSpan(nowMs - observed)} ago; refresh needed`;
+    else if (
+      typeof window.usedPercent !== 'number' ||
+      !Number.isFinite(window.usedPercent)
+    )
+      note = 'usage not published';
+    const remaining = note
+      ? null
+      : Math.max(0, Math.min(100, 100 - Number(window.usedPercent)));
+    return { title: window.title || window.windowId, remaining, note };
+  });
+harden(accountCapacity);
+
+/**
+ * Whether the account cannot spend right now, as far as is known.
+ *
+ * A full window blocks until it resets. The provider's own word that the
+ * limit is reached, with no window full (depleted credits, a spend control),
+ * stands until every window the reading named has reset: one of them
+ * resetting does not refill credits. A reading that named no window cannot
+ * say when it lifts, so it is believed for an hour and then no longer.
+ *
+ * @param {Account | undefined} account
+ * @param {number} nowMs
+ */
+export const accountBlocked = (account, nowMs) => {
+  if (!account) return false;
+  const windows = account.windows.map(window => windowNow(window, nowMs));
+  if (windows.some(window => window.exhausted)) return true;
+  if (!account.limitReached) return false;
+  if (windows.length > 0) return !windows.every(window => window.expired);
+  const at = Date.parse(account.observedAt);
+  return Number.isFinite(at) && nowMs - at < UNDATED_BLOCK_MS;
+};
+
+/**
+ * @param {string} observedAt
+ * @param {string} source
+ * @param {number} nowMs
+ */
+const provenance = (observedAt, source, nowMs) => {
+  if (source === 'unavailable') return 'nothing known yet';
+  const at = Date.parse(observedAt);
+  const age = Number.isFinite(at) ? `${formatSpan(nowMs - at)} ago` : '';
+  if (source === 'observed') return age ? `as of ${age}` : 'observed';
+  if (source === 'remembered') {
+    return age ? `remembered from ${age}` : 'remembered';
+  }
+  return 'declared by the operator';
+};
+
+/**
+ * The settings panel's account of every backend's subscription.
+ *
+ * @param {Account[] | undefined} accounts
+ * @param {number} nowMs
+ * @returns {Array<{ id: string, title: string, rows: Array<[string, string]>, redeem: ReturnType<typeof accountRedeem> }>}
+ */
+export const accountSections = (accounts, nowMs) =>
+  (accounts ?? []).map(account => {
+    /** @type {Array<[string, string]>} */
+    const rows = [];
+    if (account.plan.title || account.plan.planId) {
+      rows.push(['Plan', account.plan.title || account.plan.planId]);
+    }
+    for (const window of account.windows) {
+      const { expired, resetsInMs } = windowNow(window, nowMs);
+      const usedPercent = window.usedPercent;
+      const used =
+        typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)
+          ? 'usage not published'
+          : `${expired ? 'last observed ' : ''}${usedPercent}% used`;
+      const counts =
+        window.remaining !== null && window.limit !== null
+          ? `, ${window.remaining} of ${window.limit} left`
+          : '';
+      let reset = '';
+      if (expired)
+        reset = ' — has reset since this reading; refresh after reset';
+      else if (resetsInMs !== null)
+        reset = ` — resets in ${formatSpan(resetsInMs)}`;
+      rows.push([window.title || window.windowId, `${used}${counts}${reset}`]);
+    }
+    if (accountBlocked(account, nowMs)) {
+      rows.push(['Status', 'limit reached']);
+    }
+    if (account.credits) {
+      let credits = 'none';
+      if (account.credits.unlimited) credits = 'unlimited';
+      else if (account.credits.balance !== null)
+        credits = account.credits.balance;
+      else if (account.credits.hasCredits) credits = 'some';
+      rows.push(['Credits', credits]);
+    }
+    if (account.resetCredits && account.resetCredits.availableCount > 0) {
+      const expiries = (account.resetCredits.credits ?? [])
+        .map(credit => Date.parse(credit.expiresAt))
+        .filter(ms => Number.isFinite(ms) && ms > nowMs)
+        .sort((a, b) => a - b);
+      rows.push([
+        'Banked resets',
+        `${account.resetCredits.availableCount}${
+          expiries.length
+            ? `, the first expires in ${formatSpan(expiries[0] - nowMs)}`
+            : ''
+        }`,
+      ]);
+    }
+    const ago = (/** @type {string} */ at) => {
+      const ms = Date.parse(at);
+      return Number.isFinite(ms) && ms <= nowMs
+        ? ` ${formatSpan(nowMs - ms)} ago`
+        : '';
+    };
+    if (account.reset?.pending) {
+      rows.push([
+        'Redeem',
+        account.reset.pending.lastAnswer === 'refused'
+          ? `unconfirmed: the last ask${ago(account.reset.pending.lastAttemptAt)} was refused, but an earlier one may have been accepted`
+          : `unconfirmed: asked${ago(account.reset.pending.lastAttemptAt)} and no answer came back`,
+      ]);
+    } else if (account.reset?.last) {
+      const { outcome, at } = account.reset.last;
+      rows.push([
+        'Last redeem',
+        `${
+          RESET_OUTCOMES[
+            /** @type {keyof typeof RESET_OUTCOMES} */ (outcome)
+          ] || 'answered in words this does not know'
+        }${ago(at)}`,
+      ]);
+    }
+    rows.push([
+      'Figures',
+      provenance(account.observedAt, account.source, nowMs),
+    ]);
+    return {
+      redeem: accountRedeem(account),
+      id: account.accountId,
+      // Presentation may change without changing account or reset authority.
+      title: account.label
+        ? `${account.title} — ${account.label}`
+        : account.title,
+      rows,
+    };
+  });

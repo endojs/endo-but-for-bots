@@ -5,6 +5,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { mustMatch } from '@endo/patterns';
 
 import { asyncIterate } from './async-iterate.js';
+import { makePumpLifecycle } from './pump-lifecycle.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef } from '@endo/eventual-send' */
@@ -84,11 +85,12 @@ const MAX_CREDIT = 2 ** 16;
  * @template {Passable} [TReadReturn=undefined]
  * @param {SomehowAsyncIterable<TRead, undefined, TReadReturn>} iterable
  * @param {ReaderPumpOptions} [options]
- * @returns {(synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>}
+ * @returns {((synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>) & {close: () => Promise<void>}}
  */
 export const makeReaderPump = (iterable, options = {}) => {
   const { buffer = 0, readPattern, readReturnPattern, cancelPending } = options;
   const iterator = asyncIterate(iterable);
+  const lifecycle = makePumpLifecycle(iterator);
 
   /**
    * @param {ERef<StreamNode<undefined, TReadReturn>>} synPromise
@@ -150,6 +152,15 @@ export const makeReaderPump = (iterable, options = {}) => {
       cancellation = Promise.resolve().then(() => cancelPending(reason));
       cancellation.catch(() => undefined);
     };
+
+    const closingSignal = makePromiseKit();
+    const finish = lifecycle.admit(() => {
+      if (close === undefined)
+        close = { value: /** @type {TReadReturn} */ (undefined) };
+      cancel();
+      closingSignal.resolve(undefined);
+      return cancellation;
+    });
 
     const currentClose = () => close;
     const currentFailure = () => failure;
@@ -242,12 +253,10 @@ export const makeReaderPump = (iterable, options = {}) => {
         const settleClose = async value => {
           await cancellation;
           let returnValue = value;
-          if (iterator.return) {
-            released = true;
-            returnValue = /** @type {TReadReturn} */ (
-              (await iterator.return(returnValue)).value
-            );
-          }
+          released = true;
+          returnValue = /** @type {TReadReturn} */ (
+            (await lifecycle.release(returnValue)).value
+          );
           if (readReturnPattern !== undefined) {
             mustMatch(returnValue, readReturnPattern);
           }
@@ -272,7 +281,13 @@ export const makeReaderPump = (iterable, options = {}) => {
               }
               // A rejected node throws here, into the error path below; the
               // walker records the same rejection as the failure.
-              await syn;
+              await new Promise((resolve, reject) => {
+                Reflect.apply(promiseThen, syn, [resolve, reject]);
+                Reflect.apply(promiseThen, closingSignal.promise, [
+                  resolve,
+                  reject,
+                ]);
+              });
             }
           }
           const failed = currentFailure();
@@ -292,7 +307,7 @@ export const makeReaderPump = (iterable, options = {}) => {
           // Pull next value from iterator (no sync value for Reader - it's undefined)
           let result;
           try {
-            result = await iterator.next();
+            result = await lifecycle.next();
           } catch (error) {
             // Only the hook's exact cancellation reason represents a normal
             // interruption. Other errors, especially generator finally errors,
@@ -342,10 +357,10 @@ export const makeReaderPump = (iterable, options = {}) => {
         // On failure, preserve the primary error if cancellation also fails.
         cancel();
         await cancellation?.catch(() => undefined);
-        if (iterator.return && !released) {
+        if (!released) {
           released = true;
           try {
-            await iterator.return();
+            await lifecycle.release();
           } catch {
             // The initiator sees the error that ended the stream, not one
             // its cleanup raised on top of it.
@@ -362,12 +377,13 @@ export const makeReaderPump = (iterable, options = {}) => {
       } finally {
         finished = true;
         parkedSyn = undefined;
+        finish();
       }
     })();
 
     return ackHead;
   };
 
-  return pump;
+  return harden(Object.assign(pump, { close: lifecycle.close }));
 };
 harden(makeReaderPump);

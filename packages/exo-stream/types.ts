@@ -354,6 +354,14 @@ export interface BufferedReaderKit<TRead extends Passable = Passable> {
   close: () => void;
   /** True once a terminal event was pushed or the consumer closed early */
   isClosed: () => boolean;
+  /**
+   * True once a consumer has called `stream()`. Until then nothing watches for
+   * the consumer going away, so a producer that hands readers to remote
+   * parties can use this to give up on one that was never opened.
+   */
+  isStarted: () => boolean;
+  /** Events pushed and not yet taken by the consumer. */
+  buffered: () => number;
   /** Replace the onClose hook (e.g. wired after construction) */
   setOnClose: (fn: () => void) => void;
 }
@@ -437,3 +445,40 @@ export interface IterateBytesWriterOptions<
   /** Number of data values to pre-send before waiting for acks (default 0) */
   buffer?: number;
 }
+
+/**
+ * Resource owner for one source iterator, shared by its admitted streams.
+ * close() permanently fences stream admission and source pulls, cooperatively
+ * interrupts pending work, and waits for admitted work and source cleanup.
+ * Failed source cleanup stays owned for retry. Stream I/O or validation errors
+ * remain on the stream chain and do not by themselves make close() reject.
+ *
+ * The source's return() must fulfill with done:true after cleaning up its
+ * resources. An unfinished result remains owned for explicit retry. An absent
+ * return() declares no separately owned cleanup. A pending next() must settle
+ * naturally or cooperate with the local interruption hook.
+ */
+export interface StreamEndpointClose {
+  close(): Promise<void>;
+}
+
+// Intersections rather than `interface … extends`: the code-mode declaration
+// extractor in `@endo/agent-tools` flattens an interface's bases and does not
+// substitute a generic base's type arguments, so these stay type aliases.
+export type CloseablePassableReader<
+  TRead extends Passable = Passable,
+  TReadReturn extends Passable = Passable,
+> = PassableReader<TRead, TReadReturn> & StreamEndpointClose;
+
+export type CloseablePassableWriter<
+  TWrite extends Passable = Passable,
+  TWriteReturn extends Passable = Passable,
+> = PassableWriter<TWrite, TWriteReturn> & StreamEndpointClose;
+
+export type CloseablePassableBytesReader<
+  TReadReturn extends Passable = undefined,
+> = PassableBytesReader<TReadReturn> & StreamEndpointClose;
+
+export type CloseablePassableBytesWriter<
+  TWriteReturn extends Passable = undefined,
+> = PassableBytesWriter<TWriteReturn> & StreamEndpointClose;

@@ -1072,11 +1072,21 @@ test('well formed patterns', t => {
 });
 
 test('M.choose well-formedness', async t => {
+  const malformedPayloadMessage =
+    /^match:choose payload: \[.+?\] - Must be \[string, Record<string, Pattern>\]$/s;
   // @ts-expect-error purposeful type violation for testing
   t.throws(() => M.choose(), {
     message:
       'match:choose payload: ["[undefined]","[undefined]"] - Must be [string, Record<string, Pattern>]',
   });
+
+  // JSON error rendering can contain literal Unicode line separators.
+  for (const separator of ['\u2028', '\u2029']) {
+    // @ts-expect-error purposeful type violation for testing
+    t.throws(() => M.choose(separator, null), {
+      message: malformedPayloadMessage,
+    });
+  }
 
   await fc.assert(
     fc.property(fc.array(arbPassable, { minLength: 1, maxLength: 2 }), args => {
@@ -1094,8 +1104,7 @@ test('M.choose well-formedness', async t => {
       } else {
         // @ts-expect-error purposeful type violation for testing
         t.throws(() => M.choose(...args), {
-          message:
-            /^match:choose payload: \[.+?\] - Must be \[string, Record<string, Pattern>\]$/,
+          message: malformedPayloadMessage,
         });
       }
     }),

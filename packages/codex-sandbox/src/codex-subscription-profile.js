@@ -1,0 +1,60 @@
+// @ts-check
+
+import { Fail } from '@endo/errors';
+
+/** @import { BrokerPolicy, ProviderRequestAdapter } from '@endo/hosted-agent/provider-broker.js' */
+
+/**
+ * Fixed host-side ChatGPT subscription translation. OAuth describes the
+ * credential mechanism; this adapter, not the shared broker, owns the
+ * subscription endpoint and account headers.
+ * No origin, path, or header override comes from operator JSON or the guest.
+ * The provider account, where the profile names one (a broker over one
+ * credential, or a pool's member), is the policy's `accountRef`, which the
+ * credential must be bound to, and the request header; a pool's own profile
+ * names none, and each member's request goes out under its own.
+ *
+ * @param {{accountRef?: string}} config
+ * @returns {{policy: BrokerPolicy, adaptRequest?: ProviderRequestAdapter}}
+ */
+export const makeCodexSubscriptionProfile = ({ accountRef }) => {
+  accountRef === undefined ||
+    /^[A-Za-z0-9_-]{1,256}$/.test(accountRef) ||
+    Fail`Invalid Codex subscription account`;
+  if (accountRef === undefined) {
+    return harden({
+      policy: {
+        origin: 'https://chatgpt.com',
+        authMode: 'oauth',
+        routes: [{ method: 'POST', path: '/v1/responses' }],
+        maxConcurrentRequests: 4,
+        maxRequestBytes: 8n * 1024n ** 2n,
+        maxResponseBytes: 16n * 1024n ** 2n,
+      },
+    });
+  }
+  return harden({
+    policy: {
+      accountRef,
+      origin: 'https://chatgpt.com',
+      authMode: 'oauth',
+      routes: [{ method: 'POST', path: '/v1/responses' }],
+      maxConcurrentRequests: 4,
+      maxRequestBytes: 8n * 1024n ** 2n,
+      maxResponseBytes: 16n * 1024n ** 2n,
+    },
+    adaptRequest: ({ path, data }) => {
+      path === '/v1/responses' || Fail`Codex subscription route denied`;
+      (data.store === false && data.stream === true) ||
+        Fail`Subscription inference requires non-stored streaming responses`;
+      return harden({
+        path: '/backend-api/codex/responses',
+        headers: {
+          'chatgpt-account-id': accountRef,
+          originator: 'codex_cli_rs',
+        },
+      });
+    },
+  });
+};
+harden(makeCodexSubscriptionProfile);

@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-20",
+  "method": "Fresh local demo after ordinary CLI daemon restart; real HTTP send and SSE state push; Notes is a local self contact; three sequential sends, no value seeds; includes default idle/snapshot policies, excludes browser paint.",
+  "results": [
+    {
+      "trial": 1,
+      "acceptedMs": 149.661208,
+      "inboxPushedMs": 150.253166,
+      "acceptedAndPushedMs": 150.253166
+    },
+    {
+      "trial": 2,
+      "acceptedMs": 235.69458300000002,
+      "inboxPushedMs": 235.89308300000005,
+      "acceptedAndPushedMs": 235.89308300000005
+    },
+    {
+      "trial": 3,
+      "acceptedMs": 242.00912500000004,
+      "inboxPushedMs": 242.10666600000002,
+      "acceptedAndPushedMs": 242.10666600000002
+    }
+  ],
+  "runtime": {
+    "format": 2,
+    "hostProtocol": "sequenced-hub-outbox-v1",
+    "worker": "2a9dfa6d1a6d4c4f65d06c22806f733a2978248c24076b8f6a6c8f5c514e2d86",
+    "bootstrap": [
+      "bb6dc4d5a85a1d57d16340acbf7443e0543431e5e77863121c9764a457bec258",
+      "7056a4f5c2372d696fed16c2ebb67de4a953664fb1b789ab44cbdcd5043aa252"
+    ],
+    "limits": {
+      "crankBudget": "10000000",
+      "bootstrapBudget": "1000000000",
+      "slotCeiling": 1000000,
+      "chunkCeiling": 268435456
+    }
+  },
+  "mailboxPlacement": "workspace",
+  "incrementalSubscriptionsVerified": true,
+  "ordinaryCliRestartVerified": true
+}

@@ -8,38 +8,56 @@
 export {};
 
 /**
- * `pending` marks a submission the host has accepted but not yet run: it is
+ * `pending` marks a submission that has been accepted but not yet run: it is
  * queued behind the turn in flight, and `pendingId` identifies it to
- * `sendPendingNow`, `editPending` and `cancelPending`.
+ * `sendPendingNow`, `editPending` and `cancelPending`. The queue is the
+ * daemon's, so it survives the page; `pendingState` says where a message is:
+ * `queued`, `sending` (on its way, nothing left to edit) or `interrupted` (the
+ * daemon restarted while sending it, so it may or may not have arrived).
  *
  * @typedef {{
- *   role: 'user' | 'assistant' | 'tool',
+ *   role: 'user' | 'assistant' | 'tool' | 'thinking',
+ *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
  *   text?: string,
  *   id?: string,
  *   name?: string,
  *   args?: string,
  *   result?: string | null,
+ *   failed?: boolean,
  *   pending?: boolean,
- *   pendingId?: number,
- *   meta?: { mail?: { from?: string } },
+ *   pendingId?: number | string,
+ *   pendingState?: 'queued' | 'sending' | 'interrupted',
+ *   meta?: { message?: {strings: string[], names: string[]}, mail?: { from?: string }, turnStatus?: boolean, turnState?: string },
  * }} FlootMessage
  */
 
 /**
+ * `backendLabel` and `modelLabel` say what the session runs on, in words the
+ * host resolved from the factory's catalogs (ids are not for reading).
+ * `status` is what the session's status circle shows: `passive` (nothing
+ * running), `working` (a turn in flight) or `error`. `idle` and `streaming`
+ * are the older names for the first two and still read the same way.
+ *
  * @typedef {{
  *   id: string,
  *   title: string,
  *   createdAt: number,
  *   presetId: string,
  *   model?: string,
- *   status?: 'idle' | 'streaming' | 'error',
+ *   backendLabel?: string,
+ *   modelLabel?: string,
+ *   reasoningEffort?: string,
+ *   subscription?: string,
+ *   status?: 'passive' | 'working' | 'error' | 'idle' | 'streaming',
  *   messageCount?: number,
+ *   pendingCount?: number,
  *   loaded?: boolean,
+ *   lifecycle?: string,
  * }} FlootSessionMeta
  */
 
 /**
- * @typedef {{ id: string, title: string, description?: string }} FlootPreset
+ * @typedef {{ id: string, title: string, description?: string, templateId?: string, backendId?: string, modelId?: string, reasoningEffort?: string, networkPolicy?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
  */
 
 /**
@@ -52,10 +70,32 @@ export {};
  *   default?: boolean,
  *   defaultReasoningEffort?: string | null,
  *   backendId?: string,
+ *   backendTitle?: string,
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],
+ *   supportedNetworkPolicies?: string[],
+ *   subscriptions?: Array<{ id: string, label: string, pinnedOnly?: boolean }>,
+ *   subscriptionIds?: string[],
  * }} FlootModel
+ */
+
+/**
+ * How a backend's discovery stands, per account: whether its catalog is
+ * current, stale, unavailable or unsupported, when it was read, and how many
+ * models it lists. Shown beside the picker so an empty list says why.
+ * @typedef {{
+ *   backendId: string,
+ *   backendTitle?: string,
+ *   accounts: Array<{
+ *     subscriptionId: string,
+ *     label?: string,
+ *     pinnedOnly?: boolean,
+ *     state: string,
+ *     observedAt: number | null,
+ *     modelCount: number,
+ *   }>,
+ * }} FlootCatalog
  */
 
 /**
@@ -67,6 +107,7 @@ export {};
  *   target: { value: string },
  *   key?: string,
  *   shiftKey?: boolean,
+ *   isComposing?: boolean,
  *   preventDefault: () => void,
  *   stopPropagation: () => void,
  * }} FlootSafeEvent
@@ -98,20 +139,35 @@ export {};
  */
 
 /**
+ * `busy` is a turn this page can stop; `working` is the session doing anything
+ * at all, which includes a turn that arrived by mail and has no Stop.
+ * `pendingHold` is why queued messages are not moving, when they are not.
+ *
  * @typedef {{
  *   sessions: FlootSessionMeta[],
  *   activeSessionId: string | null,
  *   presets: FlootPreset[],
  *   models: FlootModel[],
+ *   catalogs?: FlootCatalog[],
+ *   discoveryError?: string,
  *   messages: FlootMessage[],
  *   streamingText: string,
  *   phase: string,
  *   busy: boolean,
+ *   working?: boolean,
+ *   pendingHold?: string,
  *   loaded: boolean,
  *   status: string,
  *   input: string,
  *   settingsOpen: boolean,
- *   usage: { inputTokens: number, outputTokens: number } | null,
+ *   presetSettings?: {busy: boolean, error: string, message: string, configuration: any},
+ *   recovery?: FlootRecovery,
+ *   network?: FlootNetwork,
+ *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
+ *   unavailable?: boolean,
+ *   usage: import('./usage-label.js').UsageView | null,
+ *   accounts?: import('./account-label.js').Account[],
+ *   accountAction?: { key: string, busy: boolean, message: string, error: boolean } | null,
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
  * }} FlootState
@@ -122,19 +178,53 @@ export {};
  * @property {() => FlootState} getState
  * @property {(listener: () => void) => () => void} subscribe
  * @property {(text?: string) => void} send
+ * @property {() => void} [forgetUnconfirmedSend]
+ * @property {() => Promise<void>} [exportObjects]
  * @property {() => void} stop
- * @property {(pendingId: number) => void} [sendPendingNow]
- * @property {(pendingId: number, text: string) => void} [editPending]
- * @property {(pendingId: number) => void} [cancelPending]
+ * @property {(pendingId: number | string) => void} [sendPendingNow]
+ * @property {(pendingId: number | string, text: string) => void} [editPending]
+ * @property {(pendingId: number | string) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string, networkPolicy?: string) => void} newSession
+ * @property {() => void} [refreshDiscovery] Read what the backends list now, for the picker.
  * @property {(id: string, title: string) => void} renameSession
+ * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
+ * @property {(key: string, confirm: string, action?: 'redeem' | 'replay' | 'abandon') => void} [redeemAccountReset] Use the account view's exact resetKey, never its accountId or display label, to spend one reset, retry, or give up after confirmation.
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
  * @property {() => void} toggleTts
  * @property {(name: 'voice' | 'speed' | 'noiseScale' | 'noiseW' |
  *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
+ * @property {() => void} [loadPresetSettings]
+ * @property {(preset: any) => void} [savePreset]
+ * @property {(id: string) => void} [deletePreset]
+ * @property {(id: string) => void} [resetPreset]
+ * @property {(id: string) => void} [setVoicePreset]
  * @property {() => void} toggleSettings
+ * @property {() => void} [emergencyStop]
+ * @property {() => void} [resumeSession]
  * @property {(text: string) => void} setInput
+ * @property {() => void} [refreshRecovery]
+ * @property {(turnId: string, note: string, confirmed: boolean) => void} [resolveTurn]
+ * @property {() => void} [refreshNetworkPolicy]
+ * @property {(policy: string) => void} [setNetworkPolicy]
+ * @property {(id: string, approve: boolean, note: string) => void} [resolveNetworkPolicyRequest]
+ */
+
+/**
+ * @typedef {{ status: string, message: string, policy: string | null,
+ *   supportedPolicies: string[], changing: boolean, canSet: boolean,
+ *   pendingPolicy?: string, blocked?: boolean,
+ *   canResolve: boolean, current?: boolean,
+ *   request?: { id: string, policy: string, reason: string } }} FlootNetwork
+ */
+
+/**
+ * @typedef {{ turnId: string, state: string, error?: string,
+ *   tools?: unknown[], activity?: unknown[], resolution?: string }} FlootJournalTurn
+ * @typedef {{ status: string, message: string, turns: FlootJournalTurn[],
+ *   canResolve: boolean, resolving: boolean, blocked?: boolean, current?: boolean,
+ *   capacity?: { usedEvents: string, retainedTurns: number, archivedTurns: number,
+ *     storage: string } | null }} FlootRecovery
  */

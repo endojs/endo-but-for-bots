@@ -85,6 +85,10 @@ export const makeConversationTree = backend => {
     async getRoots() {
       return backend.getRoots();
     },
+
+    async getNodes() {
+      return backend.getNodes();
+    },
   };
 
   return harden(tree);

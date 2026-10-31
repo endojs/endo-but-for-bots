@@ -539,6 +539,8 @@ function safeTargetSnapshot(node) {
         typeof node.value === 'boolean')
         ? node.value
         : undefined,
+    selectionStart:
+      typeof node.selectionStart === 'number' ? node.selectionStart : undefined,
     checked: 'checked' in node ? !!node.checked : undefined,
     selectedIndex: 'selectedIndex' in node ? node.selectedIndex : undefined,
   };

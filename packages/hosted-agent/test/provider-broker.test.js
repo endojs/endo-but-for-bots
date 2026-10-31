@@ -3,34 +3,136 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { Fail } from '@endo/errors';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
+  RESPONSE_CHUNK_BYTES,
   makeBrokerOAuthCredential,
-  makeProviderBrokerLease,
+  makeProviderBrokerGrant,
 } from '../src/provider-broker.js';
+import { makeProviderFetchTransport } from '../src/provider-transport.js';
+import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
+import { admitsModels } from './admits-models.js';
 
-/** @import { BrokerPolicy } from '../src/provider-broker.js' */
+/** @import { BrokerPolicy, ProviderRequestAdapter } from '../src/provider-broker.js' */
+
+// Test-side decoding only: exercise the public byte stream with no read-ahead,
+// retaining the existing text-level screening and cancellation assertions.
+const readTextResponse = async (endpoint, message) => {
+  const response = await E(endpoint).requestByteStream(message);
+  const iterator = iterateBytesReader(response.reader, { buffer: 0 });
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  return {
+    ...response,
+    reader: Far('TestDecodedReader', {
+      async next() {
+        const chunk = await iterator.next();
+        return {
+          done: chunk.done,
+          value: chunk.done
+            ? decoder.decode()
+            : decoder.decode(chunk.value, { stream: true }),
+        };
+      },
+      return: () => iterator.return(undefined),
+    }),
+  };
+};
 
 const policy = harden({
   origin: 'https://api.example.test',
   routes: [{ method: 'POST', path: '/v1/responses' }],
-  models: ['allowed'],
-  expiresAt: 1000,
-  maxRequests: 2n,
+  maxConcurrentRequests: 4,
   maxRequestBytes: 1000n,
   maxResponseBytes: 100n,
-  maxTotalBytes: 3000n,
-  maxCostMicrounits: 20n,
-  maxCostMicrounitsPerRequest: 10n,
 });
+// What the one account's catalog lists, as a grant is told it. The grant
+// itself keeps no list; see model-catalog.js.
+const admits = admitsModels(['allowed']);
 const request = harden({
   method: 'POST',
   path: '/v1/responses',
   body: '{"model":"allowed"}',
 });
+/** A response that began and never said what it cost. */
+const UNSAID = harden({
+  usage: null,
+  began: true,
+  complete: true,
+  responseBytes: 2,
+});
 const credential = 'canary-secret';
 const accessToken = 'canary-access';
 const refreshToken = 'canary-refresh';
+
+for (const streaming of [false, true]) {
+  test(`large legitimate prompt crosses broker and fetch transport (streaming=${streaming})`, async t => {
+    let dispatched = 0;
+    let secretReads = 0;
+    const largeBody = JSON.stringify({
+      model: 'allowed',
+      input: 'x'.repeat(100_100),
+    });
+    const transport = makeProviderFetchTransport({
+      fetch: async (_url, options) => {
+        dispatched += 1;
+        t.is(options?.body, largeBody);
+        return new Response('ok');
+      },
+      timeoutMs: 1000,
+      maxRequestBytes: 200_000n,
+      maxResponseBytes: 100n,
+    });
+    t.teardown(transport.dispose);
+    const broker = makeProviderBrokerGrant(
+      { ...policy, maxRequestBytes: 200_000n },
+      {
+        admits,
+        transport: transport.transport,
+        secret: Far('secret', {
+          async readBase64() {
+            secretReads += 1;
+            return globalThis.btoa(credential);
+          },
+        }),
+      },
+    );
+    t.teardown(() => E(broker.admin).revoke());
+    const result = streaming
+      ? await readTextResponse(
+          broker.endpoint,
+          harden({ ...request, body: largeBody }),
+        )
+      : await E(broker.endpoint).request(
+          harden({ ...request, body: largeBody }),
+        );
+    t.is(result.status, 200);
+    if ('reader' in result) {
+      const parts = [];
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const chunk = await E(result.reader).next();
+        if (chunk.done) break;
+        parts.push(chunk.value);
+      }
+      t.is(parts.join(''), 'ok');
+    } else t.is(result.body, 'ok');
+    for (const input of ['x'.repeat(200_001), '€'.repeat(80_000)]) {
+      const excessive = harden({
+        ...request,
+        body: JSON.stringify({ model: 'allowed', input }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        streaming
+          ? readTextResponse(broker.endpoint, excessive)
+          : E(broker.endpoint).request(excessive),
+      );
+    }
+    t.is(dispatched, 1);
+    t.is(secretReads, 1);
+  });
+}
 
 /** @param {Partial<import('../src/provider-broker.js').BrokerOAuthState>} [overrides] */
 const oauthState = (overrides = {}) =>
@@ -167,6 +269,7 @@ const makeRecord = ({
  * @param {(request: any) => Promise<any>} [options.exchange] - Token endpoint.
  * @param {any} [options.record] - An existing record to share.
  * @param {() => number} [options.clock] - A clock shared between leases.
+ * @param {ProviderRequestAdapter} [options.adaptRequest]
  */
 const setup = ({
   limits = {},
@@ -179,6 +282,7 @@ const setup = ({
   exchange,
   record: shared,
   clock,
+  adaptRequest,
 } = {}) => {
   const calls = [];
   const audit = [];
@@ -198,19 +302,21 @@ const setup = ({
     },
   });
   const powers = {
+    admits,
     secret: record
       ? record.secret
       : Far('secret', {
           readBase64: read ?? (async () => globalThis.btoa(credential)),
         }),
     transport,
+    adaptRequest,
     now,
     audit: event => {
       audit.push(event);
     },
   };
   if (record) Object.assign(powers, { credential: record.credential });
-  const lease = makeProviderBrokerLease({ ...policy, ...limits }, powers);
+  const lease = makeProviderBrokerGrant({ ...policy, ...limits }, powers);
   return {
     ...lease,
     calls,
@@ -229,13 +335,107 @@ const setup = ({
   };
 };
 
+test('trusted translation runs after admission and before credential access', async t => {
+  let adaptations = 0;
+  let reads = 0;
+  const subject = setup({
+    adaptRequest: ({ path, data }) => {
+      adaptations += 1;
+      t.is(path, '/v1/responses');
+      t.true(Object.isFrozen(data));
+      return {
+        path: '/provider/responses',
+        headers: { 'provider-account': 'owned' },
+      };
+    },
+    read: async () => {
+      reads += 1;
+      return btoa(credential);
+    },
+  });
+  await t.throwsAsync(
+    E(subject.endpoint).request(harden({ ...request, path: '/v1/account' })),
+  );
+  await t.throwsAsync(
+    E(subject.endpoint).request(
+      harden({ ...request, body: '{"model":"denied"}' }),
+    ),
+  );
+  t.is(adaptations, 0);
+  t.is(reads, 0);
+  await E(subject.endpoint).request(
+    harden({
+      ...request,
+      headers: { 'provider-account': 'guest' },
+    }),
+  );
+  t.is(adaptations, 1);
+  t.is(reads, 1);
+  t.is(subject.calls[0].url, 'https://api.example.test/provider/responses');
+  t.is(subject.calls[0].headers['provider-account'], 'owned');
+  t.is(subject.calls[0].headers.authorization, `Bearer ${credential}`);
+});
+
+test('translation cannot escape the pinned origin or replace transport-owned headers', async t => {
+  // Annotated because the cases differ in shape: left to infer, TypeScript
+  // normalizes them into a union and gives each member the other members'
+  // absent keys as `?: undefined`, which then fails the adapter's
+  // `Record<string, string>` header index signature.
+  /** @type {Array<{ path: string, headers?: Readonly<Record<string, string>> }>} */
+  const adaptations = [
+    { path: 'https://elsewhere.test/v1/responses' },
+    { path: '//elsewhere.test/v1/responses' },
+    { path: '/provider/../accounts' },
+    { path: '/provider/%2e%2e/accounts' },
+    { path: '/provider/responses#fragment' },
+    { path: '/provider/responses', headers: { authorization: 'injected' } },
+    { path: '/provider/responses', headers: { host: 'elsewhere.test' } },
+    { path: '/provider/responses', headers: { custom: 'bad\r\nheader' } },
+  ];
+  for (const adapted of adaptations) {
+    let reads = 0;
+    const subject = setup({
+      adaptRequest: () => adapted,
+      read: async () => {
+        reads += 1;
+        return btoa(credential);
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(subject.endpoint).request(request), {
+      message: /Invalid adapted inference/,
+    });
+    t.is(reads, 0);
+    t.deepEqual(subject.calls, []);
+  }
+});
+
+test('translation snapshots its result before asynchronous credential lookup', async t => {
+  const adapted = {
+    path: '/provider/responses',
+    headers: { custom: 'original' },
+  };
+  const subject = setup({
+    adaptRequest: () => adapted,
+    read: async () => {
+      adapted.path = '//elsewhere.test';
+      adapted.headers.custom = 'changed';
+      return btoa(credential);
+    },
+  });
+  await E(subject.endpoint).request(request);
+  t.is(subject.calls[0].url, 'https://api.example.test/provider/responses');
+  t.is(subject.calls[0].headers.custom, 'original');
+});
+
 test('broker injects credentials only into fixed transport and canonicalizes JSON', async t => {
   const { endpoint, calls, audit } = setup();
   t.deepEqual(
     await E(endpoint).request(
       harden({ ...request, body: '{"model":"denied","model":"allowed"}' }),
     ),
-    { status: 200, body: 'ok' },
+    // The body said nothing of its cost, and the response did begin.
+    { status: 200, body: 'ok', usage: UNSAID },
   );
   t.like(calls[0], {
     url: 'https://api.example.test/v1/responses',
@@ -277,14 +477,14 @@ test('method, paths, models and request bytes fail before touching secret', asyn
   t.is(calls.length, 0);
 });
 
-test('concurrent requests reserve all quotas before asynchronous secret reads', async t => {
+test('concurrent requests reserve slots before asynchronous secret reads', async t => {
   t.timeout(5000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve(undefined);
   });
   const { endpoint, admin } = setup({
-    limits: { maxCostMicrounits: 10n },
+    limits: { maxConcurrentRequests: 1 },
     read: async () => {
       await held;
       return globalThis.btoa(credential);
@@ -293,27 +493,83 @@ test('concurrent requests reserve all quotas before asynchronous secret reads', 
   t.teardown(() => release());
   const first = E(endpoint).request(request);
   await t.throwsAsync(() => E(endpoint).request(request), {
-    message: /quota exhausted/,
+    message: /concurrency limit/,
   });
   release();
   await first;
   t.like(await E(admin).getStatus(), {
     requests: 1n,
-    reservedCostMicrounits: 10n,
+    activeRequests: 0,
   });
 });
 
-test('request count and byte reservations independently bound admission', async t => {
-  for (const limits of [{ maxRequests: 1n }, { maxTotalBytes: 119n }]) {
-    const { endpoint } = setup({ limits });
+test('completed requests do not consume a lifetime budget', async t => {
+  const { endpoint, admin } = setup({ limits: { maxConcurrentRequests: 1 } });
+  t.teardown(() => E(admin).revoke());
+  for (let index = 0; index < 100; index += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await E(endpoint).request(request);
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => E(endpoint).request(request), {
-      message: /quota exhausted/,
-    });
+    t.is((await E(endpoint).request(request)).status, 200);
   }
-  t.pass();
+  t.like(await E(admin).getStatus(), { requests: 100n, activeRequests: 0 });
+});
+
+test('open streams retain admission slots until EOF or cancellation', async t => {
+  const grant = setup({
+    limits: { maxConcurrentRequests: 1 },
+    respondStream: async () =>
+      harden({
+        status: 200,
+        reader: Far('stream', {
+          next: async () => harden({ done: true, value: '' }),
+          return() {},
+        }),
+      }),
+  });
+  t.teardown(() => E(grant.admin).revoke());
+  const first = await readTextResponse(grant.endpoint, request);
+  await t.throwsAsync(E(grant.endpoint).request(request), {
+    message: /concurrency limit/,
+  });
+  t.true((await E(first.reader).next()).done);
+  const second = await readTextResponse(grant.endpoint, request);
+  await E(second.reader).return();
+  t.is((await E(grant.endpoint).request(request)).status, 200);
+  t.is((await E(grant.admin).getStatus()).activeRequests, 0);
+});
+
+test('transport deadline releases an abandoned stream without another pull', async t => {
+  t.timeout(5000);
+  let expire = () => {};
+  let fetches = 0;
+  const transport = makeProviderFetchTransport({
+    fetch: async () => {
+      fetches += 1;
+      return new Response(fetches === 1 ? new ReadableStream() : 'ok');
+    },
+    timeoutMs: 1000,
+    maxRequestBytes: policy.maxRequestBytes,
+    maxResponseBytes: policy.maxResponseBytes,
+    setTimer: callback => {
+      expire = callback;
+      return undefined;
+    },
+    clearTimer: () => {},
+  });
+  t.teardown(transport.dispose);
+  const grant = makeProviderBrokerGrant(
+    { ...policy, maxConcurrentRequests: 1 },
+    {
+      admits,
+      secret: Far('secret', { readBase64: async () => btoa(credential) }),
+      transport: transport.transport,
+    },
+  );
+  t.teardown(() => E(grant.admin).revoke());
+  await readTextResponse(grant.endpoint, request);
+  t.is((await E(grant.admin).getStatus()).activeRequests, 1);
+  expire();
+  t.is((await E(grant.admin).getStatus()).activeRequests, 0);
+  t.is((await E(grant.endpoint).request(request)).body, 'ok');
 });
 
 test('revocation during secret read prevents transport dispatch', async t => {
@@ -336,17 +592,17 @@ test('revocation during secret read prevents transport dispatch', async t => {
   t.is(calls.length, 0);
 });
 
-test('expiry denies new requests and response delivery', async t => {
-  const lease = setup({
-    respond: async () => {
-      lease.expire();
-      return { status: 200, body: 'ok' };
-    },
+test('session authority does not expire as the credential clock advances', async t => {
+  const grant = setup({
+    oauth: true,
+    state: oauthState({ expiresAt: 48 * 60 * 60 * 1000 }),
+    limits: { authMode: 'oauth', accountRef: 'account-1' },
   });
-  await t.throwsAsync(() => E(lease.endpoint).request(request), {
-    message: /Provider request failed/,
-  });
-  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+  t.teardown(() => E(grant.admin).revoke());
+  grant.advance(24 * 60 * 60 * 1000);
+  t.is((await E(grant.endpoint).request(request)).status, 200);
+  await E(grant.admin).revoke();
+  await t.throwsAsync(E(grant.endpoint).request(request), {
     message: /inactive/,
   });
 });
@@ -388,26 +644,39 @@ test('header injection via secret is rejected without exporting the secret', asy
   t.is(calls.length, 0);
 });
 
-test('caller headers cannot override broker authority or supply cookies', async t => {
+test('caller headers are forwarded, but never the ones the broker owns', async t => {
+  // The seam the broker keeps is authentication and authority, not the API
+  // surface: a caller describes its own request (this is what lets a CLI
+  // release adopt a capability without an outage here), and every header in
+  // BROKER_OWNED_HEADERS is dropped and re-supplied by the broker. `cookie`
+  // is forwarded now — it is the caller's to send to an origin the broker
+  // already pinned — while `authorization` and `host` are not.
   const { endpoint, calls } = setup();
   await E(endpoint).request(
     harden({
       ...request,
-      headers: { authorization: 'evil', cookie: 'ambient', host: 'evil.test' },
+      headers: {
+        authorization: 'evil',
+        cookie: 'ambient',
+        host: 'evil.test',
+        'anthropic-beta': 'context-management-2026-01-01',
+      },
     }),
   );
   t.deepEqual(calls[0].headers, {
     authorization: `Bearer ${credential}`,
+    cookie: 'ambient',
+    'anthropic-beta': 'context-management-2026-01-01',
     'content-type': 'application/json',
   });
 });
 
 test('operator policy mutation does not widen a lease', async t => {
-  const models = ['allowed'];
   const routes = [{ method: 'POST', path: '/v1/responses' }];
-  const { endpoint } = setup({ limits: { models, routes } });
-  models.push('denied');
+  const { endpoint } = setup({ limits: { routes } });
   routes[0].path = '/admin';
+  // There is no model list to widen: a model the account does not list is
+  // refused whatever the operator's values do afterwards.
   await t.throwsAsync(
     () =>
       E(endpoint).request(harden({ ...request, body: '{"model":"denied"}' })),
@@ -463,7 +732,24 @@ test('operator chooses Anthropic authorization without caller headers', async t 
   );
 });
 
-test('operator configuration cannot enable administrative routes or subscription auth', t => {
+test('broker admits the OpenRouter OpenAI-compatible route and validates client auth mode', async t => {
+  const { endpoint, calls } = setup({
+    limits: {
+      origin: 'https://openrouter.ai',
+      routes: [{ method: 'POST', path: '/api/v1/chat/completions' }],
+      clientAuthorization: 'strip',
+    },
+  });
+  await E(endpoint).request(
+    harden({ ...request, path: '/api/v1/chat/completions' }),
+  );
+  t.is(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  t.throws(() =>
+    setup({ limits: /** @type {any} */ ({ clientAuthorization: 'forward' }) }),
+  );
+});
+
+test('operator configuration cannot enable administrative routes or unprovisioned subscription auth', t => {
   t.throws(
     () =>
       setup({
@@ -471,10 +757,7 @@ test('operator configuration cannot enable administrative routes or subscription
       }),
     { message: /Invalid inference route/ },
   );
-  // Still refused, now for a recorded reason rather than for want of an
-  // implementation: neither vendor documents a configuration in which the
-  // broker holds an individual subscription credential and the slice holds
-  // none. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
+  // Naming subscription mode alone cannot conjure renewal authority.
   t.throws(
     () => setup({ limits: /** @type {any} */ ({ authMode: 'subscription' }) }),
     { message: /Unsupported broker authentication mode/ },
@@ -511,8 +794,11 @@ test('operator configuration cannot enable administrative routes or subscription
   );
 });
 
-/** @param {string[]} chunks */
-const streamingSetup = chunks => {
+/**
+ * @param {string[]} chunks
+ * @param {Partial<typeof policy>} [limits]
+ */
+const streamingSetup = (chunks, limits = {}) => {
   let cancelled = false;
   const reader = Far('reader', {
     async next() {
@@ -523,7 +809,8 @@ const streamingSetup = chunks => {
       cancelled = true;
     },
   });
-  const lease = makeProviderBrokerLease(policy, {
+  const lease = makeProviderBrokerGrant(harden({ ...policy, ...limits }), {
+    admits,
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -537,7 +824,6 @@ const streamingSetup = chunks => {
         return harden({ status: 200, reader });
       },
     }),
-    now: () => 0,
   });
   return { ...lease, cancelled: () => cancelled };
 };
@@ -547,7 +833,7 @@ test('stream rejects a credential split across chunks before disclosing its pref
     `${'safe-prefix '.repeat(2)}canary-`,
     'secret',
   ]);
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   const first = await E(response.reader).next();
   t.false(first.value.includes('canary'));
   await t.throwsAsync(() => E(response.reader).next(), {
@@ -559,7 +845,7 @@ test('stream rejects a credential split across chunks before disclosing its pref
 
 test('stream delivers UTF8 intact and checks revocation on every pull', async t => {
   const lease = streamingSetup([`${'a'.repeat(20)}😀`, 'z'.repeat(20)]);
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   t.is(response.contentType, 'application/json');
   const first = await E(response.reader).next();
   t.false(first.done);
@@ -573,7 +859,7 @@ test('stream delivers UTF8 intact and checks revocation on every pull', async t 
 test('stream preserves buffered content and yields EOF after final held suffix', async t => {
   const input = ['hello 😀', ' world!', 'x'.repeat(25)];
   const lease = streamingSetup([...input]);
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   let output = '';
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
@@ -591,7 +877,7 @@ test('stream enforces response quota and rejects encoded credential across chunk
   ]) {
     const lease = streamingSetup(chunks);
     // eslint-disable-next-line no-await-in-loop
-    const response = await E(lease.endpoint).requestStream(request);
+    const response = await readTextResponse(lease.endpoint, request);
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(response.reader).next(), {
       message: /Provider request failed/,
@@ -602,12 +888,23 @@ test('stream enforces response quota and rejects encoded credential across chunk
 
 test('cancel suppresses a pending delivery even if upstream ignores cancellation', async t => {
   t.timeout(1000);
+  /** @type {() => void} */
+  let enter = () => {};
+  const entered = new Promise(resolve => {
+    enter = () => resolve(undefined);
+  });
+  /** @type {() => void} */
+  let cancel = () => {};
+  const cancelled = new Promise(resolve => {
+    cancel = () => resolve(undefined);
+  });
   /** @type {(chunk: {done:boolean,value:string}) => void} */
   let deliver = () => {};
   const pending = new Promise(resolve => {
     deliver = resolve;
   });
-  const lease = makeProviderBrokerLease(policy, {
+  const lease = makeProviderBrokerGrant(policy, {
+    admits,
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -622,20 +919,26 @@ test('cancel suppresses a pending delivery even if upstream ignores cancellation
           status: 200,
           reader: Far('reader', {
             async next() {
+              enter();
               return pending;
             },
-            return() {},
+            return() {
+              cancel();
+            },
           }),
         });
       },
     }),
-    now: () => 0,
   });
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   const pull = E(response.reader).next();
-  await E(response.reader).return();
+  await entered;
+  const closing = E(response.reader).return();
+  await cancelled;
   deliver(harden({ done: false, value: 'x'.repeat(40) }));
-  await t.throwsAsync(pull, { message: /Provider request failed/ });
+  await closing;
+  // Closing a byte iterator settles its pending pull as EOF, not a delivery.
+  t.deepEqual(await pull, { done: true, value: '' });
 });
 
 for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
@@ -653,7 +956,8 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
         return returns;
       },
     });
-    const lease = makeProviderBrokerLease(policy, {
+    const lease = makeProviderBrokerGrant(policy, {
+      admits,
       secret: Far('secret', {
         async readBase64() {
           return btoa(credential);
@@ -670,14 +974,13 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
           });
         },
       }),
-      now: () => 0,
     });
     if (termination === 'invalid status') {
-      await t.throwsAsync(() => E(lease.endpoint).requestStream(request), {
+      await t.throwsAsync(() => readTextResponse(lease.endpoint, request), {
         message: /Provider request failed/,
       });
     } else {
-      const response = await E(lease.endpoint).requestStream(request);
+      const response = await readTextResponse(lease.endpoint, request);
       if (termination === 'return') {
         await E(response.reader).return();
         await E(response.reader).return();
@@ -685,12 +988,15 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
         await t.throwsAsync(() => E(response.reader).next(), {
           message: /Provider request failed/,
         });
-        await E(response.reader).return();
+        await t.throwsAsync(() => E(response.reader).return(), {
+          message: /Provider request failed/,
+        });
       } else {
         t.true((await E(response.reader).next()).done);
         await E(response.reader).return();
       }
     }
+    t.is((await E(lease.admin).getStatus()).activeRequests, 0);
     await E(lease.admin).revoke();
     await E(lease.admin).revoke();
     // Drain eventual sends to the same upstream target before checking count.
@@ -762,7 +1068,7 @@ test('concurrent turns share one refresh rather than racing the rotation', async
     release = () => resolve(undefined);
   });
   const lease = setup({
-    limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
+    limits: { ...oauthLimits },
     oauth: true,
     state: oauthState({ expiresAt: 10_000 }),
     exchange: async () => {
@@ -799,6 +1105,7 @@ test('a credential rejected mid-session is refreshed once and the turn survives'
   t.deepEqual(await E(lease.endpoint).request(request), {
     status: 200,
     body: 'ok',
+    usage: UNSAID,
   });
   t.is(lease.exchanges.length, 1);
   t.is(lease.calls[0].headers.authorization, `Bearer ${accessToken}`);
@@ -984,8 +1291,8 @@ test('two leases over one record never redeem the same refresh token', async t =
   t.deepEqual(
     [a, b],
     [
-      { status: 200, body: 'ok' },
-      { status: 200, body: 'ok' },
+      { status: 200, body: 'ok', usage: UNSAID },
+      { status: 200, body: 'ok', usage: UNSAID },
     ],
   );
   t.is(record.exchanges.length, 1);
@@ -1031,9 +1338,10 @@ test('the guard re-reads, so a credential refreshed elsewhere is not re-exchange
     accountRef: 'account-1',
     now: () => 0,
   });
-  const lease = makeProviderBrokerLease(
+  const lease = makeProviderBrokerGrant(
     { ...policy, ...oauthLimits },
     {
+      admits,
       secret: record.secret,
       transport: Far('transport', {
         async request(r) {
@@ -1041,7 +1349,6 @@ test('the guard re-reads, so a credential refreshed elsewhere is not re-exchange
           return { status: 200, body: 'ok' };
         },
       }),
-      now: () => 0,
       credential: credentialOverWatched,
     },
   );
@@ -1102,7 +1409,7 @@ test('a refresh response cannot store a mark of its own', async t => {
 test('a refresh that does not advance expiry is refused', async t => {
   // Otherwise every subsequent request refreshes again, silently, forever.
   const lease = setup({
-    limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
+    limits: { ...oauthLimits },
     oauth: true,
     state: oauthState({ expiresAt: 10_000 }),
     exchange: async () => oauthState({ expiresAt: 10_000 }),
@@ -1269,7 +1576,7 @@ test('a streaming oauth turn refreshes, retries and screens both tokens', async 
       });
     },
   });
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   t.is(response.status, 200);
   let text = '';
   for (;;) {
@@ -1303,7 +1610,7 @@ test('a streaming oauth turn refreshes, retries and screens both tokens', async 
         }),
       }),
   });
-  const stream = await E(leaked.endpoint).requestStream(request);
+  const stream = await readTextResponse(leaked.endpoint, request);
   await t.throwsAsync(() => E(stream.reader).next(), {
     message: /Provider request failed/,
   });
@@ -1717,6 +2024,70 @@ test('an undo that cannot land leaves the mark and the original failure', async 
   t.like(record.stored().pendingRefresh, { startedAt: 0 });
 });
 
+test('retirement never acknowledges a renewal result CAS that writes then rejects', async t => {
+  let entered;
+  /** @type {(value?: any) => void} */
+  let release = () => {
+    throw Error('Test gate is not initialized');
+  };
+  const started = new Promise(resolve => {
+    entered = resolve;
+  });
+  const paused = new Promise(resolve => {
+    release = resolve;
+  });
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      entered();
+      await paused;
+      return oauthState({
+        accessToken: 'fresh-access',
+        refreshToken: 'fresh-refresh',
+      });
+    },
+  });
+  const raw = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('LostAckRotate', {
+      replaceBase64: async (base64, options) => {
+        const result = await E(record.rotate).replaceBase64(base64, options);
+        if (record.rotations.length === 2)
+          throw Error('lost result write acknowledgement');
+        return result;
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  const owner = makePoolMemberLifecycle();
+  const current = owner.runCredential(() => raw.current());
+  const failedCurrent = t.throwsAsync(current, { message: /rotation failed/ });
+  await started;
+  let successors = 0;
+  const replacement = owner.close().then(() => {
+    successors += 1;
+  });
+  const failedReplacement = t.throwsAsync(replacement, {
+    message: /cleanup pending/,
+  });
+  release();
+  await failedCurrent;
+  await failedReplacement;
+  t.is(
+    record.stored().accessToken,
+    'fresh-access',
+    'internal rotation persistence was not fenced',
+  );
+  await t.throwsAsync(owner.close(), { message: /cleanup pending/ });
+  t.throws(() => owner.runCredential(() => raw.current()), {
+    message: /uncertain/,
+  });
+  t.is(successors, 0);
+  t.is(record.exchanges.length, 1);
+});
+
 test('a result that cannot be stored fences the record for every later owner', async t => {
   const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
   // Healthy for the intent, broken for the commit: the exact shape of a
@@ -1878,4 +2249,901 @@ test('a mark fences exchanging, not using a credential that is still good', asyn
     { message: /Broker credential consumed/ },
   );
   t.is(record.exchanges.length, 0);
+});
+
+const collectBytes = async reader => {
+  const parts = [];
+  for await (const bytes of reader) parts.push(bytes);
+  return parts;
+};
+
+test('the bytes stream is the text stream, read ahead of, with the screen beneath it', async t => {
+  const input = ['hello 😀', ' world!', 'x'.repeat(25)];
+  const lease = streamingSetup([...input]);
+  const response = await E(lease.endpoint).requestByteStream(request);
+  t.is(response.status, 200);
+  t.is(response.contentType, 'application/json');
+  // A consumer that reads well ahead gets the same bytes, in order.
+  const parts = await collectBytes(
+    iterateBytesReader(response.reader, { buffer: 64 }),
+  );
+  t.true(parts.every(part => part instanceof Uint8Array));
+  const joined = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    joined.set(part, offset);
+    offset += part.length;
+  }
+  t.is(new TextDecoder().decode(joined), input.join(''));
+
+  // The credential split across chunks is still caught before its prefix is
+  // disclosed: the screen works on text, beneath the byte encoding.
+  const leaky = streamingSetup([
+    `${'safe-prefix '.repeat(2)}canary-`,
+    'secret',
+  ]);
+  const leakyResponse = await E(leaky.endpoint).requestByteStream(request);
+  const seen = [];
+  await t.throwsAsync(async () => {
+    for await (const bytes of iterateBytesReader(leakyResponse.reader, {
+      buffer: 64,
+    })) {
+      seen.push(new TextDecoder().decode(bytes));
+    }
+  });
+  t.false(seen.join('').includes('canary'));
+});
+
+test('a bytes chunk has a ceiling, whatever the upstream sent at once', async t => {
+  // Over the response quota of the shared policy, so use a roomier one.
+  const big = 'y'.repeat(RESPONSE_CHUNK_BYTES * 2 + 10);
+  let cancelled = false;
+  const chunks = [big];
+  const lease = makeProviderBrokerGrant(
+    harden({ ...policy, maxResponseBytes: 1_000_000n }),
+    {
+      admits,
+      secret: Far('secret', { readBase64: async () => btoa(credential) }),
+      transport: Far('transport', {
+        request: async () => harden({ status: 200, body: '' }),
+        requestStream: async () =>
+          harden({
+            status: 200,
+            reader: Far('reader', {
+              next: async () => {
+                const value = chunks.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {
+                cancelled = true;
+              },
+            }),
+          }),
+      }),
+    },
+  );
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const parts = await collectBytes(
+    iterateBytesReader(response.reader, { buffer: 64 }),
+  );
+  t.true(parts.length >= 3);
+  const largest = Math.max(...parts.map(part => part.length));
+  t.true(largest <= Number(RESPONSE_CHUNK_BYTES));
+  t.is(
+    parts.reduce((n, part) => n + part.length, 0),
+    big.length,
+  );
+  t.false(cancelled);
+});
+
+test('closing the bytes stream while the upstream is quiet cancels the upstream', async t => {
+  let cancelled = false;
+  /** @type {(value: any) => void} */
+  let release = () => {};
+  const lease = makeProviderBrokerGrant(policy, {
+    admits,
+    secret: Far('secret', { readBase64: async () => btoa(credential) }),
+    transport: Far('transport', {
+      request: async () => harden({ status: 200, body: '' }),
+      requestStream: async () =>
+        harden({
+          status: 200,
+          reader: Far('reader', {
+            // Never answers on its own: a model that is thinking.
+            next: () =>
+              new Promise(resolve => {
+                release = resolve;
+              }),
+            return() {
+              cancelled = true;
+              release(harden({ done: true, value: '' }));
+            },
+          }),
+        }),
+    }),
+  });
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 64 });
+  const waiting = reader.next();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  // The pull is parked on a quiet upstream. Closing must not wait for it,
+  // must end the consumer's read cleanly, and must cancel the upstream.
+  t.false(cancelled);
+  await reader.return?.(undefined);
+  t.true((await waiting).done);
+  t.true(cancelled);
+});
+
+test('a revoked grant delivers nothing more over the bytes stream, not even what was already cut', async t => {
+  // One upstream chunk cut into several pieces: the pieces wait in the
+  // wrapper, where the screened reader's own liveness check does not reach.
+  const big = 'z'.repeat(RESPONSE_CHUNK_BYTES * 4);
+  const chunks = [big];
+  let cancelled = false;
+  const lease = makeProviderBrokerGrant(
+    harden({ ...policy, maxResponseBytes: 1_000_000n }),
+    {
+      admits,
+      secret: Far('secret', { readBase64: async () => btoa(credential) }),
+      transport: Far('transport', {
+        request: async () => harden({ status: 200, body: '' }),
+        requestStream: async () =>
+          harden({
+            status: 200,
+            reader: Far('reader', {
+              next: async () => {
+                const value = chunks.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {
+                cancelled = true;
+              },
+            }),
+          }),
+      }),
+    },
+  );
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 0 });
+  const first = await reader.next();
+  t.false(first.done);
+  await E(lease.admin).revoke();
+  const error = await t.throwsAsync(() => reader.next());
+  t.is(error.message, 'Provider request failed');
+  t.true(cancelled);
+});
+
+test('the bytes stream is bound by the response quota like the text stream', async t => {
+  const lease = streamingSetup(['x'.repeat(101)]);
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 64 });
+  await t.throwsAsync(
+    async () => {
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        if ((await reader.next()).done) break;
+      }
+    },
+    { message: /Provider request failed/ },
+  );
+  t.true(lease.cancelled());
+});
+
+/**
+ * A grant over two subscriptions. Each member has a transport of its own that
+ * records what it was sent and answers as scripted: 'ok', 'exhausted' (the
+ * bare classification a real transport throws), or 'broken'.
+ * @param {object} [root0]
+ * @param {Record<string, string[]>} [root0.scripts]
+ * @param {string[] | 'throw'} [root0.order]
+ * @param {string} [root0.echo]
+ * @param {boolean} [root0.revealExhaustion]
+ */
+const poolSetup = ({
+  scripts = { first: [], second: [] },
+  order = ['first', 'second'],
+  echo,
+  revealExhaustion,
+} = {}) => {
+  /** @type {Record<string, any[]>} */
+  const sent = { first: [], second: [] };
+  const events = [];
+  const member = id =>
+    harden({
+      id,
+      admits,
+      secret: Far(`${id} secret`, {
+        readBase64: async () => btoa(`${id}-credential`),
+      }),
+      adaptRequest: ({ path }) =>
+        harden({ path, headers: { 'x-account': `${id}-account` } }),
+      transport: Far(`${id} transport`, {
+        async request(upstream) {
+          sent[id].push(upstream);
+          const outcome = scripts[id].shift() ?? 'ok';
+          if (outcome === 'exhausted') {
+            throw Error('Provider subscription exhausted');
+          }
+          if (outcome === 'broken') throw Error('Provider transport failed');
+          return harden({ status: 200, body: echo ?? `served by ${id}` });
+        },
+        async requestStream(upstream) {
+          sent[id].push(upstream);
+          const outcome = scripts[id].shift() ?? 'ok';
+          if (outcome === 'exhausted') {
+            throw Error('Provider subscription exhausted');
+          }
+          const parts = [`streamed by ${id} `, 'x'.repeat(40)];
+          return harden({
+            status: 200,
+            reader: Far('reader', {
+              next: async () => {
+                const value = parts.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {},
+            }),
+          });
+        },
+      }),
+    });
+  const lease = makeProviderBrokerGrant(policy, {
+    audit: event => events.push(event.event),
+    ...(revealExhaustion === undefined ? {} : { revealExhaustion }),
+    pool: {
+      members: [member('first'), member('second')],
+      select: () => {
+        if (order === 'throw') throw Error('pinned subscription is gone');
+        return order;
+      },
+      served: id => events.push(`served:${id}`),
+      exhausted: id => events.push(`exhausted:${id}`),
+    },
+  });
+  return { ...lease, sent, events };
+};
+
+test('a request a drained subscription refuses is served by the next, built afresh for it', async t => {
+  const pool = poolSetup({ scripts: { first: ['exhausted'], second: [] } });
+  const response = await E(pool.endpoint).request(request);
+  t.is(response.body, 'served by second');
+  // Each member was tried once, with its own credential and its own account
+  // header: the request is not replayed, it is rebuilt.
+  t.is(pool.sent.first.length, 1);
+  t.is(pool.sent.second.length, 1);
+  t.is(pool.sent.first[0].headers.authorization, 'Bearer first-credential');
+  t.is(pool.sent.first[0].headers['x-account'], 'first-account');
+  t.is(pool.sent.second[0].headers.authorization, 'Bearer second-credential');
+  t.is(pool.sent.second[0].headers['x-account'], 'second-account');
+  t.is(pool.sent.second[0].body, pool.sent.first[0].body);
+  t.deepEqual(pool.events, [
+    'admitted',
+    'subscription-exhausted',
+    'exhausted:first',
+    'completed',
+    'served:second',
+  ]);
+  // The slot was reserved once and released.
+  t.is((await E(pool.admin).getStatus()).activeRequests, 0);
+});
+
+test('the handover is invisible to a streamed response too', async t => {
+  const pool = poolSetup({ scripts: { first: ['exhausted'], second: [] } });
+  const response = await readTextResponse(pool.endpoint, request);
+  let text = '';
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const chunk = await E(response.reader).next();
+    if (chunk.done) break;
+    text += chunk.value;
+  }
+  t.true(text.startsWith('streamed by second'));
+  t.true(pool.events.includes('exhausted:first'));
+});
+
+test('only exhaustion moves a request: any other failure is the request’s own', async t => {
+  const pool = poolSetup({ scripts: { first: ['broken'], second: [] } });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(pool.sent.second.length, 0);
+  t.false(pool.events.includes('exhausted:first'));
+});
+
+test('every subscription drained is a failure, after one attempt each', async t => {
+  const pool = poolSetup({
+    scripts: { first: ['exhausted'], second: ['exhausted'] },
+  });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(pool.sent.first.length, 1);
+  t.is(pool.sent.second.length, 1);
+  t.deepEqual(
+    pool.events.filter(event => event.startsWith('exhausted:')),
+    ['exhausted:first', 'exhausted:second'],
+  );
+  t.is((await E(pool.admin).getStatus()).activeRequests, 0);
+  // Nothing selected at all (a pinned member that is blocked) fails the
+  // same way, without touching a credential.
+  const none = poolSetup({ scripts: { first: [], second: [] }, order: [] });
+  await t.throwsAsync(() => E(none.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(none.sent.first.length + none.sent.second.length, 0);
+  t.true(none.events.includes('subscriptions-exhausted'));
+  // What the pool says, a pinned id included, is not for the endpoint's
+  // holder: a selection that throws is collapsed like any other failure.
+  const gone = poolSetup({
+    scripts: { first: [], second: [] },
+    order: 'throw',
+  });
+  await t.throwsAsync(() => E(gone.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(gone.sent.first.length + gone.sent.second.length, 0);
+});
+
+test('a credential the first subscription was sent is still screened from the second’s response', async t => {
+  // The second upstream echoes the FIRST member's credential, which did reach
+  // an upstream on the refused attempt.
+  const pool = poolSetup({
+    scripts: { first: ['exhausted'], second: [] },
+    echo: 'leaked first-credential here',
+  });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+});
+
+test('a pool’s set must be well formed', t => {
+  const member = id =>
+    harden({ id, admits, secret: Far('s', {}), transport: Far('t', {}) });
+  const make = members =>
+    makeProviderBrokerGrant(policy, {
+      pool: { members, select: () => [], served() {}, exhausted() {} },
+    });
+  t.throws(() => make([]), { message: /Invalid broker subscription set/ });
+  t.throws(() => make([member('a'), member('a')]), {
+    message: /Invalid broker subscription set/,
+  });
+  t.notThrows(() => make([member('a'), member('b')]));
+});
+
+test('a grant ignores members its pool names that it does not hold', async t => {
+  // The set gained `third` after this grant was issued.
+  const pool = poolSetup({
+    scripts: { first: [], second: [] },
+    order: ['third', 'second', 'second', 'first'],
+  });
+  const response = await E(pool.endpoint).request(request);
+  t.is(response.body, 'served by second');
+  t.is(pool.sent.second.length, 1);
+  t.is(pool.sent.first.length, 0);
+});
+
+test('the pool’s bookkeeping cannot change how a request settles', async t => {
+  const events = [];
+  const lease = makeProviderBrokerGrant(policy, {
+    pool: {
+      members: [
+        harden({
+          id: 'only',
+          admits,
+          secret: Far('secret', { readBase64: async () => btoa('only-key') }),
+          transport: Far('transport', {
+            request: async () => harden({ status: 200, body: 'fine' }),
+            requestStream: async () => {
+              throw Error('unused');
+            },
+          }),
+        }),
+      ],
+      select: () => ['only'],
+      served: () => {
+        events.push('served');
+        throw Error('bookkeeping bug');
+      },
+      exhausted() {},
+    },
+  });
+  t.is((await E(lease.endpoint).request(request)).body, 'fine');
+  t.deepEqual(events, ['served']);
+  t.is((await E(lease.admin).getStatus()).activeRequests, 0);
+});
+
+test('a member whose credential cannot be used is reported, and the request is not tried elsewhere', async t => {
+  const told = [];
+  const sent = [];
+  const member = (id, secret, transportRequest) =>
+    harden({
+      id,
+      admits,
+      secret,
+      transport: Far(`${id} transport`, {
+        request: transportRequest,
+        requestStream: async () => {
+          throw Error('unused');
+        },
+      }),
+    });
+  const lease = makeProviderBrokerGrant(policy, {
+    pool: {
+      members: [
+        // Its secret cannot be read.
+        member(
+          'broken',
+          Far('secret', {
+            readBase64: async () => {
+              throw Error('secret store unavailable');
+            },
+          }),
+          async () => harden({ status: 200, body: 'never' }),
+        ),
+        // The upstream rejects its key.
+        member(
+          'rejected',
+          Far('secret', { readBase64: async () => btoa('stale-key') }),
+          async upstream => {
+            sent.push(upstream.headers.authorization);
+            throw Error('Provider credential rejected');
+          },
+        ),
+        member(
+          'fine',
+          Far('secret', { readBase64: async () => btoa('good-key') }),
+          async () => harden({ status: 200, body: 'fine' }),
+        ),
+      ],
+      select: () =>
+        told.length === 0 ? ['broken', 'fine'] : ['rejected', 'fine'],
+      served() {},
+      exhausted() {},
+      unusable: id => told.push(id),
+    },
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.deepEqual(told, ['broken']);
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.deepEqual(told, ['broken', 'rejected']);
+  t.deepEqual(sent, ['Bearer stale-key']);
+});
+
+const ROOMY = harden({ maxResponseBytes: 10_000n });
+const COMPLETED =
+  'data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":60},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":10}}}}\n\n';
+
+test('a streamed response settles what it cost when the producer has read its end', async t => {
+  const lease = streamingSetup(
+    ['data: {"type":"response.output_text.delta","delta":"hi"}\n\n', COMPLETED],
+    ROOMY,
+  );
+  const response = await E(lease.endpoint).requestByteStream(request);
+  let settled = false;
+  void response.usage.then(() => {
+    settled = true;
+  });
+  await null;
+  t.false(settled, 'not before the stream is read');
+  await collectBytes(iterateBytesReader(response.reader, { buffer: 64 }));
+  t.deepEqual(await response.usage, {
+    began: true,
+    complete: true,
+    responseBytes: 248,
+    usage: {
+      inputTokens: 40,
+      outputTokens: 20,
+      cachedInputTokens: 60,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 10,
+    },
+  });
+});
+
+test('a stream that began and was abandoned settles with what it had said, or nothing', async t => {
+  const lease = streamingSetup(['data: {"delta":"a"}\n\n', COMPLETED], ROOMY);
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 0 });
+  await reader.next();
+  await reader.return(undefined);
+  // Cut short: not complete, so a meter charges no less than it reserved.
+  t.like(await response.usage, { began: true, complete: false });
+  t.true(lease.cancelled());
+
+  // Revoking the grant settles its open streams too: nothing waits for ever.
+  const revoked = streamingSetup(['data: {"delta":"a"}\n\n', COMPLETED], ROOMY);
+  const open = await E(revoked.endpoint).requestByteStream(request);
+  E(revoked.admin).revoke();
+  t.deepEqual(await open.usage, {
+    began: true,
+    complete: false,
+    responseBytes: 0,
+    usage: null,
+  });
+});
+
+test('a whole JSON response carries what it cost', async t => {
+  const { endpoint } = setup({
+    respond: async () => ({
+      status: 200,
+      body: '{"object":"response","usage":{"input_tokens":9,"output_tokens":4}}',
+    }),
+  });
+  const response = await E(endpoint).request(request);
+  t.deepEqual(response.usage, {
+    began: true,
+    complete: true,
+    responseBytes: 66,
+    usage: {
+      inputTokens: 9,
+      outputTokens: 4,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
+  });
+});
+
+test('exhaustion is one more bare word only for an endpoint that asked for it', async t => {
+  const scripts = () => ({ first: ['exhausted'], second: ['exhausted'] });
+  const collapsed = poolSetup({ scripts: scripts() });
+  await t.throwsAsync(() => E(collapsed.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  const revealing = poolSetup({ scripts: scripts(), revealExhaustion: true });
+  await t.throwsAsync(() => E(revealing.endpoint).request(request), {
+    message: 'Provider subscription exhausted',
+  });
+  // Every member blocked before the request is even tried reads the same.
+  const blocked = poolSetup({
+    scripts: scripts(),
+    order: [],
+    revealExhaustion: true,
+  });
+  await t.throwsAsync(() => E(blocked.endpoint).request(request), {
+    message: 'Provider subscription exhausted',
+  });
+  // Any other failure stays collapsed, whoever asks.
+  const broken = poolSetup({
+    scripts: { first: ['broken'], second: [] },
+    revealExhaustion: true,
+  });
+  await t.throwsAsync(() => E(broken.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+});
+
+test('a request the provider was given the whole deadline for is not free, though nothing arrived', async t => {
+  const lost = setup({
+    respond: async () => {
+      throw Error('Provider response lost');
+    },
+    respondStream: async () => {
+      throw Error('Provider response lost');
+    },
+  });
+  // The caller sees a failed request, like any other.
+  await t.throwsAsync(() => E(lost.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  // An endpoint a share sits on is told, since a failed call has no usage
+  // to await.
+  const told = makeProviderBrokerGrant(policy, {
+    admits,
+    secret: Far('secret', { readBase64: async () => btoa(credential) }),
+    transport: Far('transport', {
+      request: async () => {
+        throw Error('Provider response lost');
+      },
+    }),
+    revealExhaustion: true,
+  });
+  await t.throwsAsync(() => E(told.endpoint).request(request), {
+    message: 'Provider response lost',
+  });
+  // A transport failure that is not that one stays free.
+  const broken = setup({
+    respondStream: async () => {
+      throw Error('Provider transport failed');
+    },
+  });
+  await t.throwsAsync(() => E(broken.endpoint).requestByteStream(request));
+});
+
+/**
+ * A grant over two subscriptions whose accounts list different models, each
+ * answering admission for itself; what is sent to each is recorded.
+ *
+ * @param {{ first?: string[] | 'throws', second?: string[], select?: () => string[] }} [options]
+ */
+const catalogPoolSetup = ({
+  first = ['allowed'],
+  second = ['allowed'],
+  select = () => ['first', 'second'],
+} = {}) => {
+  /** @type {Record<string, any[]>} */
+  /** @type {Record<string, any[]>} */
+  const sent = { first: [], second: [] };
+  /** @type {string[]} */
+  const events = [];
+  /** @type {string[]} */
+  const secretReads = [];
+  /**
+   * @param {string} id @param {string[] | 'throws'} lists
+   * @param lists
+   */
+  const member = (id, lists) =>
+    harden({
+      id,
+      admits:
+        lists === 'throws'
+          ? async () => {
+              throw Error('catalog owner unavailable');
+            }
+          : admitsModels(lists),
+      secret: Far(`${id} secret`, {
+        readBase64: async () => {
+          secretReads.push(id);
+          return btoa(`${id}-credential`);
+        },
+      }),
+      transport: Far(`${id} transport`, {
+        async request(upstream) {
+          sent[id].push(upstream);
+          return harden({ status: 200, body: `served by ${id}` });
+        },
+        async requestStream() {
+          throw Error('unused');
+        },
+      }),
+    });
+  const lease = makeProviderBrokerGrant(policy, {
+    audit: event => events.push(event.event),
+    pool: {
+      members: [member('first', first), member('second', second)],
+      select,
+      served: id => events.push(`served:${id}`),
+      exhausted: id => events.push(`exhausted:${id}`),
+    },
+  });
+  return { ...lease, sent, events, secretReads };
+};
+
+test('a request is served only by a subscription whose account lists its model', async t => {
+  const pool = catalogPoolSetup({ first: ['other'], second: ['allowed'] });
+  const response = await E(pool.endpoint).request(request);
+  t.is(response.body, 'served by second');
+  // The first member's account does not list the model: it is not tried,
+  // and its credential is not read. The pool is told who served.
+  t.deepEqual(pool.sent.first, []);
+  t.is(pool.sent.second.length, 1);
+  t.deepEqual(pool.secretReads, ['second']);
+  t.deepEqual(pool.events, ['admitted', 'completed', 'served:second']);
+  // What the account lists is asked per request, of the model requested:
+  // the next request names what only the first account lists.
+  const other = await E(pool.endpoint).request(
+    harden({ ...request, body: '{"model":"other"}' }),
+  );
+  t.is(other.body, 'served by first');
+  t.is(pool.sent.first.length, 1);
+  t.is(pool.sent.second.length, 1);
+  t.deepEqual(pool.secretReads, ['second', 'first']);
+  await t.throwsAsync(
+    () =>
+      E(pool.endpoint).request(
+        harden({ ...request, body: '{"model":"nobody"}' }),
+      ),
+    { message: /Model denied/ },
+  );
+  t.deepEqual(pool.secretReads, ['second', 'first']);
+});
+
+test('a session pinned to a subscription that does not list the model is refused, not moved', async t => {
+  // The pool names only the pinned member, as it does for a pinned session.
+  const pool = catalogPoolSetup({
+    first: ['other'],
+    second: ['allowed'],
+    select: () => ['first'],
+  });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: /Model denied/,
+  });
+  t.deepEqual(pool.sent.second, []);
+  t.deepEqual(pool.secretReads, []);
+  t.deepEqual(pool.events, ['model-denied']);
+  t.is((await E(pool.admin).getStatus()).activeRequests, 0);
+});
+
+test('an account whose catalog cannot answer admits nothing, and no account admitting is a refusal before any spend', async t => {
+  const pool = catalogPoolSetup({ first: 'throws', second: ['allowed'] });
+  t.is((await E(pool.endpoint).request(request)).body, 'served by second');
+  const none = catalogPoolSetup({ first: 'throws', second: [] });
+  await t.throwsAsync(() => E(none.endpoint).request(request), {
+    message: /Model denied/,
+  });
+  t.deepEqual(none.secretReads, []);
+  t.deepEqual(none.events, ['model-denied']);
+});
+
+test('a grant with no account admission is refused at construction: there is no operator list to fall back on', t => {
+  t.throws(
+    () =>
+      makeProviderBrokerGrant(policy, {
+        secret: Far('secret', { readBase64: async () => btoa(credential) }),
+        transport: Far('transport', {
+          request: async () => harden({ status: 200, body: '' }),
+        }),
+      }),
+    { message: /Invalid broker subscription set/ },
+  );
+  // A policy from before account catalogs, carrying a list, is refused
+  // rather than having its list silently ignored.
+  t.throws(
+    () =>
+      makeProviderBrokerGrant(
+        /** @type {any} */ ({ ...policy, models: ['allowed'] }),
+        {
+          admits,
+          secret: Far('secret', { readBase64: async () => btoa(credential) }),
+          transport: Far('transport', {
+            request: async () => harden({ status: 200, body: '' }),
+          }),
+        },
+      ),
+    { message: /Broker policy must not name models/ },
+  );
+});
+
+test('a far subscription is asked only when its holder’s answer lists the model, and its own refusal hands the request on', async t => {
+  /** @type {any[]} */
+  const farCalls = [];
+  let opened = 0;
+  /**
+   * @param {string} id @param {string[]} lists @param {boolean} refuses
+   * @param lists
+   * @param refuses
+   */
+  const wrappedMember = (id, lists, refuses) =>
+    harden({
+      id,
+      admits: admitsModels(lists),
+      wrapped: {
+        provide: async () => {
+          opened += 1;
+          return Far(`${id} far`, {
+            request: async message => {
+              farCalls.push(message);
+              if (refuses) throw Error('Model denied');
+              return harden({ status: 200, body: `served far by ${id}` });
+            },
+            requestByteStream: async () => {
+              throw Error('unused');
+            },
+            attestation: async () => harden({}),
+            revoke: async () => {},
+          });
+        },
+        reset: () => {},
+      },
+    });
+  /**
+   * @param {string} id @param {string[]} lists
+   * @param lists
+   */
+  const ownMember = (id, lists) =>
+    harden({
+      id,
+      admits: admitsModels(lists),
+      secret: Far(`${id} secret`, {
+        readBase64: async () => btoa(`${id}-credential`),
+      }),
+      transport: Far(`${id} transport`, {
+        async request() {
+          return harden({ status: 200, body: `served by ${id}` });
+        },
+        async requestStream() {
+          throw Error('unused');
+        },
+      }),
+    });
+  /** @param {any[]} members */
+  const grant = members => {
+    /** @type {string[]} */
+    const events = [];
+    const lease = makeProviderBrokerGrant(policy, {
+      audit: event => events.push(event.event),
+      pool: {
+        members,
+        select: () => members.map(member => member.id),
+        served: id => events.push(`served:${id}`),
+        exhausted: id => events.push(`exhausted:${id}`),
+        unusable: id => events.push(`unusable:${id}`),
+      },
+    });
+    return { ...lease, events };
+  };
+  // The far share's holder lists nothing of ours: it is not even opened.
+  const skipped = grant([
+    wrappedMember('far', ['other'], false),
+    ownMember('own', ['allowed']),
+  ]);
+  t.is((await E(skipped.endpoint).request(request)).body, 'served by own');
+  t.is(opened, 0);
+  t.deepEqual(skipped.events, ['admitted', 'completed', 'served:own']);
+  // The holder's answer was the union of its accounts; the one that serves
+  // just now refuses the model, and our own account that lists it serves.
+  const refused = grant([
+    wrappedMember('far', ['allowed'], true),
+    ownMember('own', ['allowed']),
+  ]);
+  t.is((await E(refused.endpoint).request(request)).body, 'served by own');
+  t.is(opened, 1);
+  t.is(farCalls.length, 1);
+  t.deepEqual(refused.events, [
+    'admitted',
+    'model-denied',
+    'completed',
+    'served:own',
+  ]);
+  // With nobody left to hand it to, the far refusal is the request's.
+  const alone = grant([wrappedMember('far', ['allowed'], true)]);
+  await t.throwsAsync(() => E(alone.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  // A far share that lists the model serves it.
+  const served = grant([wrappedMember('far', ['allowed'], false)]);
+  t.is((await E(served.endpoint).request(request)).body, 'served far by far');
+});
+
+test('a refusal says in its audit trail whether anybody could answer', async t => {
+  /** @param {string} state */
+  const member = state =>
+    harden({
+      id: `m-${state}`,
+      admits: async () => false,
+      catalogState: () => state,
+      secret: Far('secret', { readBase64: async () => btoa('x') }),
+      transport: Far('transport', {
+        request: async () => harden({ status: 200, body: '' }),
+      }),
+    });
+  /** @param {any[]} members */
+  const refusal = async members => {
+    /** @type {string[]} */
+    const events = [];
+    const lease = makeProviderBrokerGrant(policy, {
+      audit: event => events.push(event.event),
+      pool: {
+        members,
+        select: () => members.map(entry => entry.id),
+        served() {},
+        exhausted() {},
+      },
+    });
+    await t.throwsAsync(() => E(lease.endpoint).request(request), {
+      message: /Model denied/,
+    });
+    return events;
+  };
+  t.deepEqual(await refusal([member('current')]), ['model-denied']);
+  t.deepEqual(await refusal([member('stale')]), ['model-denied']);
+  t.deepEqual(await refusal([member('unavailable'), member('unsupported')]), [
+    'catalog-unavailable',
+  ]);
+  t.deepEqual(await refusal([member('unavailable'), member('current')]), [
+    'model-denied',
+  ]);
 });

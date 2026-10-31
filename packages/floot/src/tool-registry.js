@@ -4,11 +4,15 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { passStyleOf } from '@endo/pass-style';
 import {
+  assertToolArguments,
   makeAdoptTool,
+  makeDescribeCapabilityTool,
   makeExecTool,
+  makeViewImageTool,
   makeListPetnamesTool,
   makeLookupTool,
   makeRemoveTool,
+  makeReadSourcesTool,
   makeReplyTool,
   makeSendTool,
   makeStoreTool,
@@ -199,7 +203,7 @@ harden(makeEndoToolSet);
  * `toolSetId`, so a hosted thread pinned without them cannot silently resume
  * with them.
  *
- * `accountStatus` is gated the same way, on a read-only account oracle.
+ * `accountStatus` is gated on a data-only session account reader.
  *
  * `extraTools` are session-scoped tools the factory supplies (a bounded
  * workspace publisher for a new-project session, say). They join the catalog
@@ -208,11 +212,11 @@ harden(makeEndoToolSet);
  *
  * @param {any} powers
  * @param {object} [options]
+ * @param {boolean} [options.imageInputs] Whether the backend can retain image tool results.
  * @param {any} [options.spawner] - A `SubagentSpawner` capability.
  * @param {any} [options.delegations] - The session's delegation registry.
- * @param {any} [options.accountOracle] - A read-only `HostedAccount`.
- * @param {() => Promise<{ inputTokens: number, outputTokens: number }>} [options.getUsage]
- * @param {() => string} [options.getModelId]
+ * @param {any} [options.subagentLimits] Operator delegation budgets.
+ * @param {(refresh?: boolean) => Promise<any>} [options.readAccounts]
  * @param {Set<string>} [options.settledMail]
  * @param {Map<string, any>} [options.extraTools] - Tools the factory builds
  *   for this session beyond the built-ins — the container-mount tools of a
@@ -224,11 +228,11 @@ harden(makeEndoToolSet);
 export const makeFlootToolRegistry = (
   powers,
   {
+    imageInputs = true,
     spawner,
     delegations,
-    accountOracle,
-    getUsage,
-    getModelId,
+    subagentLimits,
+    readAccounts,
     settledMail,
     extraTools,
   } = {},
@@ -236,8 +240,11 @@ export const makeFlootToolRegistry = (
   /** @type {Map<string, any>} */
   const builtins = new Map();
   builtins.set('exec', makeExecTool(powers));
+  if (imageInputs) builtins.set('viewImage', makeViewImageTool(powers));
   builtins.set('list', makeListPetnamesTool(powers));
   builtins.set('lookup', makeLookupTool(powers));
+  builtins.set('describeCapability', makeDescribeCapabilityTool(powers));
+  builtins.set('readSources', makeReadSourcesTool(powers));
   builtins.set('store', makeStoreTool(powers));
   builtins.set('remove', makeRemoveTool(powers));
   builtins.set(
@@ -283,6 +290,7 @@ export const makeFlootToolRegistry = (
       powers,
       spawner,
       delegations,
+      limits: subagentLimits,
       // A Floot session dismisses every message it handles, a delegation reply
       // included, so telling the model to adopt from one would be a lie.
       retainsAttachments: false,
@@ -290,12 +298,12 @@ export const makeFlootToolRegistry = (
       builtins.set(name, tool);
     }
   }
-  if (accountOracle) {
-    builtins.set(
-      'accountStatus',
-      makeAccountStatusTool({ oracle: accountOracle, getUsage, getModelId }),
-    );
+  if (readAccounts) {
+    builtins.set('accountStatus', makeAccountStatusTool({ readAccounts }));
   }
+  // Only this registry's built-ins have a closed named-argument convention.
+  // User-stored tools and factory extras retain their own schema semantics.
+  const builtinTools = new Set(builtins.values());
   for (const [name, tool] of extraTools ?? []) {
     if (builtins.has(name)) {
       throw Error(`Floot tool "${name}" is already defined`);
@@ -308,7 +316,21 @@ export const makeFlootToolRegistry = (
       powers,
       builtins,
     );
-    const providerSchemas = schemas.map(projectToolSchema);
+    const builtinSchemas = new Map();
+    const providerSchemas = schemas.map(schema => {
+      const projected = projectToolSchema(schema);
+      const { function: fn } = projected;
+      if (!builtinTools.has(toolMap.get(fn.name))) return projected;
+      const closed = harden({
+        ...projected,
+        function: harden({
+          ...fn,
+          parameters: harden({ ...fn.parameters, additionalProperties: false }),
+        }),
+      });
+      builtinSchemas.set(fn.name, closed);
+      return closed;
+    });
     const dynamicTools = providerSchemas.map(toDynamicTool);
     const names = dynamicTools.map(tool => tool.name).sort();
     const storedIdentities = await Promise.all(
@@ -341,7 +363,11 @@ export const makeFlootToolRegistry = (
         }),
       ),
       names,
-      execute: (name, args) => executeTool(name, args, toolMap),
+      execute: async (name, args) => {
+        const schema = builtinSchemas.get(name);
+        if (schema) assertToolArguments(schema, args);
+        return executeTool(name, args, toolMap);
+      },
     });
   };
 
