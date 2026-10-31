@@ -1,14 +1,18 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Far } from '@endo/far';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import {
   buildCompartmentMap,
   mapSnapshot,
   makeMountReadPowers,
 } from '../src/snapshot-mapper.js';
-
-const utf8Encoder = new TextEncoder();
+import {
+  makeNpmRegistryTree,
+  makePackageRegistryTree,
+} from '../src/registry-tree.js';
 
 /**
  * Build a minimal `EndoReadableTree`-shaped exo that reads from an
@@ -32,7 +36,7 @@ const makeFakeTree = files => {
       if (body === undefined) {
         throw Error(`FakeTree: no file at ${key}`);
       }
-      return utf8Encoder.encode(body);
+      return encodeUtf8(body);
     },
   });
 };
@@ -231,7 +235,7 @@ test('makeMountReadPowers reads from entry compartment', async t => {
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('./index.js');
-  t.is(new TextDecoder().decode(bytes), 'export const x = 1;');
+  t.is(decodeUtf8(bytes), 'export const x = 1;');
 });
 
 test('makeMountReadPowers reads from a registry-resolved peer directory', async t => {
@@ -252,7 +256,7 @@ test('makeMountReadPowers reads from a registry-resolved peer directory', async 
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('ses@1.0.0/lockdown.js');
-  t.is(new TextDecoder().decode(bytes), 'export const lockdown = () => {};');
+  t.is(decodeUtf8(bytes), 'export const lockdown = () => {};');
 });
 
 test('makeMountReadPowers reads from a scoped-package peer directory', async t => {
@@ -273,7 +277,7 @@ test('makeMountReadPowers reads from a scoped-package peer directory', async t =
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('@endo/patterns@1.2.1/src/main.js');
-  t.is(new TextDecoder().decode(bytes), 'export const M = {};');
+  t.is(decodeUtf8(bytes), 'export const M = {};');
 });
 
 test('makeMountReadPowers reads from a workspace member compartment', async t => {
@@ -294,7 +298,76 @@ test('makeMountReadPowers reads from a workspace member compartment', async t =>
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('lib-b/index.js');
-  t.is(new TextDecoder().decode(bytes), 'module.exports = 42;');
+  t.is(decodeUtf8(bytes), 'module.exports = 42;');
+});
+
+test('makeMountReadPowers late-binds through a registry tree', async t => {
+  // Model a real SnapshotTree: each `lookup` argument (or array element) is one
+  // *literal* path segment, walked one level at a time. A slash-joined string
+  // is not a path grammar, so `lookup('src/main.js')` must miss while
+  // `lookup(['src', 'main.js'])` resolves — the un-split call the reader used to
+  // make always failed for a nested module (a flat `index.js` is the one case
+  // that happened to work because it is a single segment either way).
+  const makeModuleBlob = content =>
+    Far('LateBoundModuleBlob', {
+      text: async () => content,
+      json: async () => undefined,
+      streamBase64: async () => undefined,
+      help: () => 'late-bound module',
+    });
+  /** @param {Record<string, unknown>} entries */
+  const makeSnapshotDir = entries =>
+    Far('LateBoundPackageTree', {
+      help: () => 'late-bound package tree',
+      has: async () => true,
+      list: async () => Object.keys(entries),
+      lookup: async path => {
+        const segments = typeof path === 'string' ? [path] : [...path];
+        let node = /** @type {any} */ (entries);
+        let resolved;
+        for (const segment of segments) {
+          if (node === undefined || typeof node !== 'object') return undefined;
+          const child = node[segment];
+          if (child === undefined) return undefined;
+          if (typeof child === 'string') {
+            resolved = makeModuleBlob(child);
+            node = undefined;
+          } else {
+            resolved = makeSnapshotDir(child);
+            node = child;
+          }
+        }
+        return resolved;
+      },
+      sha256: () => 'late-bound-hash',
+      getInfo: async () => harden({ hash: 'late-bound-hash' }),
+    });
+  const packageTree = makeSnapshotDir({
+    'index.js': 'export const late = true;',
+    src: { 'main.js': 'export const nested = true;' },
+  });
+  const operations = harden({
+    listVersions: async name => (name === 'late' ? ['1.0.0'] : undefined),
+    providePackageTree: async () =>
+      harden({ treeRef: packageTree, integrity: 'sha512-late' }),
+  });
+  const registryRoot = makePackageRegistryTree({
+    npm: makeNpmRegistryTree(operations),
+  });
+  const powers = makeMountReadPowers({
+    entrySource: makeFakeTree({}),
+    resolution: harden({
+      packagesByKey: harden({}),
+      keys: harden([]),
+      resolutionHash: '',
+    }),
+    registryRoot,
+  });
+  const bytes = await powers.read('late@1.0.0/index.js');
+  t.is(decodeUtf8(bytes), 'export const late = true;');
+  // A nested module path must resolve through segment-wise lookup.
+  const nested = await powers.read('late@1.0.0/src/main.js');
+  t.is(decodeUtf8(nested), 'export const nested = true;');
 });
 
 test('mapSnapshot produces the {compartmentMap, resolution, readPowers} trio', async t => {
@@ -325,10 +398,10 @@ test('mapSnapshot produces the {compartmentMap, resolution, readPowers} trio', a
   t.is(result.resolution.resolutionHash, 'h-snapshot');
   // The read powers can read the entry.
   const bytes = await result.readPowers.read('./main.js');
-  t.is(new TextDecoder().decode(bytes), "import 'ses';");
+  t.is(decodeUtf8(bytes), "import 'ses';");
   // And the registry-resolved compartment.
   const sesBytes = await result.readPowers.read('ses@1.5.0/index.js');
-  t.is(new TextDecoder().decode(sesBytes), '/* ses */');
+  t.is(decodeUtf8(sesBytes), '/* ses */');
 });
 
 test('mapSnapshot canonical preserves the input location', async t => {

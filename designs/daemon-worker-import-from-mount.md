@@ -219,6 +219,33 @@ example a `pnpm-workspace.yaml` workspace root) extends
 
 ## Design
 
+### Package-registry tree amendment
+
+The package-registry presentation was superseded by
+[npm-registry-as-directory-tree](npm-registry-as-directory-tree.md).
+That design changes the process boundary described by the older
+`EndoRegistry` snippets below in two load-bearing ways:
+
+1. `@registry` is now the registry root tree. It is not the deprecated
+   method-call capability.
+2. `resolveRegistryTree` runs in the daemon manager beside that tree. The eager
+   `RegistryResolution` crosses to the worker once; the tree itself and a
+   `registryP` dispatch argument do not cross.
+
+Consequently the current `MakeFromPackageFormula` shape omits the old
+`registry: FormulaIdentifier` slot. The host resolves the configured registry
+tree before dispatch and passes the eager resolution with the entry snapshot.
+The worker consumes that resolution in `mapSnapshot`; it does not call
+`E(registry).resolve` and does not issue one eventual send per dependency.
+Snapshot-mapper's cold late-bind helper remains colocated with the tree on the
+side where it runs and uses the same package/version traversal rather than the
+deprecated `fetch(name, version)` spelling.
+
+The older interface sketches later in this document are retained as the
+implementation history of the pre-migration design. Where they name an
+`EndoRegistry`, a formula `registry` slot, `registryP`, or worker-side
+`E(registry).resolve`, this amendment is authoritative.
+
 ### Capability shape
 
 A new daemon-worker method, paired with a new daemon formula

@@ -963,9 +963,9 @@ export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   size: M.call().returns(M.promise()),
 });
 
-// `EndoRegistry` brokers npm-style package resolution and tarball fetch
-// against the content-addressed store, exposed on every host as the
-// `@registry` special name.  See designs/registry-capability.md.
+// Deprecated method-protocol compatibility guard. The `@registry` special
+// name now carries the package-registry directory tree. See
+// designs/npm-registry-as-directory-tree.md.
 export const RegistryInterface = M.interface('EndoRegistry', {
   help: M.call().optional(M.string()).returns(M.string()),
   // resolve(packageJsonText, options?) -> RegistryResolution.  The entry

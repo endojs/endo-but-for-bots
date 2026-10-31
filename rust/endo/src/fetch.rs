@@ -91,6 +91,9 @@ pub enum FetchError {
     /// The requested version is not present in the registry's
     /// metadata for this package.
     VersionMissing { name: String, version: String },
+    /// The registry's packument endpoint reports that the package itself is
+    /// not published.
+    PackageMissing { url: String },
     /// The downloaded tarball failed its integrity check.
     IntegrityMismatch { expected: String, actual: String },
     /// The integrity string the registry returned was not in the
@@ -116,6 +119,9 @@ impl std::fmt::Display for FetchError {
             FetchError::BadMetadata(msg) => write!(f, "bad metadata: {msg}"),
             FetchError::VersionMissing { name, version } => {
                 write!(f, "version not in registry: {name}@{version}")
+            }
+            FetchError::PackageMissing { url } => {
+                write!(f, "package not in registry: {url}")
             }
             FetchError::IntegrityMismatch { expected, actual } => write!(
                 f,
@@ -220,10 +226,16 @@ impl Default for UreqClient {
 impl HttpClient for UreqClient {
     fn get_metadata(&self, url: &str) -> Result<Vec<u8>, FetchError> {
         let mut body = Vec::new();
-        self.request(url)
-            .set("accept", "application/json")
-            .call()
-            .map_err(|e| FetchError::Http(format!("metadata GET {url}: {e}")))?
+        let response = match self.request(url).set("accept", "application/json").call() {
+            Ok(response) => response,
+            Err(ureq::Error::Status(404, _)) => {
+                return Err(FetchError::PackageMissing {
+                    url: url.to_string(),
+                })
+            }
+            Err(error) => return Err(FetchError::Http(format!("metadata GET {url}: {error}"))),
+        };
+        response
             .into_reader()
             .read_to_end(&mut body)
             .map_err(|e| FetchError::Http(format!("metadata read {url}: {e}")))?;
@@ -278,7 +290,7 @@ impl HttpClient for OfflineClient {
 ///
 /// The returned bytes are the raw JSON body of the registry's
 /// per-package document.
-pub fn fetch_metadata_cached<H: HttpClient>(
+pub fn fetch_metadata_cached<H: HttpClient + ?Sized>(
     http: &H,
     registry_table: &RegistryTable,
     registry_url: &str,
@@ -320,7 +332,7 @@ pub fn fetch_metadata_cached<H: HttpClient>(
 /// When the registry advertises no `dist.integrity` (very old
 /// packages publish only a legacy SHA-1 `shasum`), no integrity
 /// check is performed and the integrity column is left NULL.
-pub fn fetch_package<H: HttpClient>(
+pub fn fetch_package<H: HttpClient + ?Sized>(
     http: &H,
     cas: &ContentStore,
     registry_table: &RegistryTable,
