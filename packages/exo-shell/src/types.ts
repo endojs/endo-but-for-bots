@@ -5,13 +5,30 @@ export type ShellPolicy = {
   maxOutputBytes: number;
   env?: Record<string, string>;
   searchPath?: string;
+  engine?: ShellEngine;
 };
+
+/**
+ * Which engine a provisioned shell runs its children under: `'host'`
+ * (ordinary host processes) or `'sandbox'` (an `@endo/sandbox` slice).
+ */
+export type ShellEngine = 'host' | 'sandbox';
+
+/**
+ * The engine `inspect()` reveals, so a holder can see the confinement it was
+ * granted.  Besides a {@link ShellEngine}, `'environment'` marks a shell that
+ * delegates execution to an environment runner: its children run wherever
+ * the runner placed them, and the shell itself attests nothing about their
+ * confinement.
+ */
+export type ShellInspectEngine = ShellEngine | 'environment';
 
 export type ShellInspectResult = {
   allowedCommands: readonly string[];
   /** Default invocation timeout in milliseconds, not a maximum. */
   timeoutMs: number;
   maxOutputBytes: number;
+  engine: ShellInspectEngine;
 };
 
 export type ShellResult = {
@@ -24,25 +41,10 @@ export type ShellResult = {
 
 /**
  * The engine `makeShell` drives execution through: host or sandbox, chosen by
- * the caller.  Declared structurally here so this shipped public surface does
- * not depend on a runtime dependency on `@endo/host-spawner`; that package's
- * `Spawner` is assignable to this shape.
+ * the caller.  `@endo/host-spawner` owns the seam's types, so the Shell and
+ * both spawners share one declaration.
  */
-export type Spawner = (
-  argv: string[],
-  opts?: {
-    cwd?: string;
-    env?: Record<string, string>;
-    shell?: boolean;
-    timeoutMs?: number;
-  },
-) => Promise<{
-  pid: number;
-  stdout?: AsyncIterable<Uint8Array> | null;
-  stderr?: AsyncIterable<Uint8Array> | null;
-  wait: () => Promise<{ code: number | null; signal: string | null }>;
-  kill: (signal?: string | number) => Promise<void>;
-}>;
+export type { ProcessLike, Spawner, SpawnerOptions } from '@endo/host-spawner';
 
 export type EndoShell = {
   inspect: () => Promise<ShellInspectResult>;

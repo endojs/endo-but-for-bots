@@ -41,7 +41,7 @@
   "scripts": {
     "build": "exit 0",
     "test": "ses-ava",
-    "test:drivers": "ses-ava test/bwrap.test.js test/podman.test.js",
+    "test:drivers": "ses-ava test/bwrap.test.js test/podman.test.js test/shell-engine.test.js",
     "test:policy:acceptance": "ENDO_SANDBOX_REQUIRE_POLICY=1 ses-ava test/podman.test.js --match='a live slice attests broker-only isolation from kernel state'",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "lint": "yarn lint:types && yarn lint:eslint",
@@ -56,6 +56,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
+    "@endo/host-spawner": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
@@ -65,6 +66,7 @@
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

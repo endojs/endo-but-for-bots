@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: @endo/bytes has no UTF-8 codec; TextEncoder builds fixture bytes.
 /// <reference types="ses"/>
 
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -8,12 +9,21 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
+import { makeExo } from '@endo/exo';
 import { makeShell } from '@endo/exo-shell';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
+import { M } from '@endo/patterns';
 import { makeHostSpawner } from '@endo/host-spawner';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { normalizeShellPolicy } from '../src/host.js';
 import { getMountBacking, makeMount } from '../src/mount.js';
+import {
+  makeSandboxShellEngine,
+  resolveShellFormulaEngine,
+  SANDBOX_SHELL_WORKDIR,
+} from '../src/shell-engine.js';
 
 /**
  * Provision a real on-disk mount, mirroring `git.test.js`.
@@ -66,6 +76,7 @@ const makeShellLikeFormulaMaker = (mount, policy, opts = {}) => {
       timeoutMs: policy.timeoutMs,
       maxOutputBytes: policy.maxOutputBytes,
       env: harden({ ...(policy.env || {}) }),
+      engine: policy.engine ?? 'host',
     }),
     spawner,
     readOnly: backing.readOnly,
@@ -149,6 +160,7 @@ test('provideShell composition: inspect reveals policy bounds but no host path',
     allowedCommands: ['printenv', 'pwd', 'printf'],
     timeoutMs: 10_000,
     maxOutputBytes: 65_536,
+    engine: 'host',
   });
   t.false(
     JSON.stringify(revealed).includes(root),
@@ -212,4 +224,209 @@ test('provideShell composition: a real child that traps SIGTERM is force-killed 
     elapsedMs < 8000,
     `exec settled at the timeout rather than hanging (took ${elapsedMs}ms)`,
   );
+});
+
+test('normalizeShellPolicy: engine defaults to host and accepts sandbox', t => {
+  const base = {
+    allowedCommands: ['echo'],
+    timeoutMs: 1000,
+    maxOutputBytes: 1024,
+    searchPath: '/usr/bin',
+  };
+  t.is(normalizeShellPolicy(base).engine, 'host');
+  t.is(normalizeShellPolicy({ ...base, engine: 'sandbox' }).engine, 'sandbox');
+  t.throws(() => normalizeShellPolicy({ ...base, engine: 'container' }), {
+    message: /policy.engine must be 'host' or 'sandbox'/,
+  });
+});
+
+test('a reincarnating shell formula fails closed on an unknown engine', t => {
+  t.is(resolveShellFormulaEngine(undefined), 'host', 'a pre-engine formula');
+  t.is(resolveShellFormulaEngine('host'), 'host');
+  t.is(resolveShellFormulaEngine('sandbox'), 'sandbox');
+  for (const engine of ['container', 'Sandbox', '', null, 0, {}]) {
+    t.throws(() => resolveShellFormulaEngine(engine), {
+      message: /unknown engine/,
+    });
+  }
+});
+
+/**
+ * A stand-in `SandboxFactory` recording what the shell engine asks of it.
+ * Its slice records each spawn and answers `ok` on stdout.
+ *
+ * @param {{ available: boolean, makeGate?: Promise<void> }} options
+ */
+const makeStubSandboxFactory = ({ available, makeGate = undefined }) => {
+  /** @type {any[]} */
+  const makeCalls = [];
+  /** @type {any[]} */
+  const spawnCalls = [];
+  let disposed = false;
+  const passable = name => M.interface(name, {}, { defaultGuards: 'passable' });
+  const slice = makeExo('StubSlice', passable('StubSlice'), {
+    spawn: async (argv, opts) => {
+      spawnCalls.push({ argv, opts });
+      const text = new TextEncoder().encode('ok');
+      return makeExo('StubProcess', passable('StubProcess'), {
+        pid: () => 1,
+        stdin: () =>
+          bytesWriterFromIterator(
+            (async function* consume() {
+              for (;;) yield;
+            })(),
+          ),
+        stdout: () =>
+          bytesReaderFromIterator(
+            (async function* produce() {
+              yield text;
+            })(),
+          ),
+        stderr: () =>
+          bytesReaderFromIterator(
+            (async function* produce() {
+              yield* [];
+            })(),
+          ),
+        wait: async () => harden({ code: 0, signal: null }),
+        kill: async () => {},
+      });
+    },
+    dispose: async () => {
+      disposed = true;
+    },
+  });
+  const factory = makeExo('StubSandboxFactory', passable('StubFactory'), {
+    listBackends: async () =>
+      harden([
+        available
+          ? { name: 'bwrap', available: true }
+          : { name: 'bwrap', available: false, reason: 'bwrap not found' },
+      ]),
+    make: async options => {
+      makeCalls.push(options);
+      await makeGate;
+      return slice;
+    },
+  });
+  return { factory, makeCalls, spawnCalls, isDisposed: () => disposed };
+};
+
+test('sandbox engine: the slice has no network and binds only the mount at /work', async t => {
+  const { mount } = await provisionMount(t);
+  const { factory, makeCalls, spawnCalls, isDisposed } = makeStubSandboxFactory(
+    { available: true },
+  );
+  /** @type {(() => Promise<void>)[]} */
+  const cancelHooks = [];
+  const { cwd, spawner } = await makeSandboxShellEngine({
+    factory,
+    mount,
+    context: {
+      onCancel: hook => cancelHooks.push(hook),
+      assertActive: () => {},
+    },
+  });
+  t.is(cwd, SANDBOX_SHELL_WORKDIR);
+  t.is(makeCalls.length, 1);
+  const [options] = makeCalls;
+  t.is(options.network, 'none');
+  t.is(options.seccomp, 'default');
+  t.deepEqual(options.rootfs, { kind: 'host-bind' });
+  t.is(options.mounts.length, 1);
+  t.is(options.mounts[0].cap, mount, 'the shell mount itself is bound');
+  t.is(options.mounts[0].innerPath, '/work');
+  t.is(options.mounts[0].mode, 'rw');
+  t.is(options.cwd, '/work');
+  t.false('PATH' in options.env, 'no host search path enters the slice');
+
+  const shell = makeShell({
+    cwd,
+    policy: harden({
+      allowedCommands: ['echo'],
+      timeoutMs: 1000,
+      maxOutputBytes: 4096,
+      env: { CI: 'true' },
+      engine: 'sandbox',
+    }),
+    spawner,
+  });
+  t.is((await shell.inspect()).engine, 'sandbox');
+  const result = await shell.exec('echo', ['hi']);
+  t.is(result.exitCode, 0);
+  t.deepEqual(spawnCalls[0].argv, ['echo', 'hi']);
+  t.is(spawnCalls[0].opts.cwd, '/work');
+  t.deepEqual(spawnCalls[0].opts.env, { CI: 'true' });
+
+  t.is(cancelHooks.length, 1);
+  await cancelHooks[0]();
+  t.true(isDisposed(), 'canceling the incarnation disposes the slice');
+});
+
+test('sandbox engine: a cancellation while make() is pending disposes the late slice', async t => {
+  const { mount } = await provisionMount(t);
+  /** @type {() => void} */
+  let releaseMake = () => {};
+  const makeGate = new Promise(resolve => {
+    releaseMake = () => resolve(undefined);
+  });
+  const { factory, makeCalls, isDisposed } = makeStubSandboxFactory({
+    available: true,
+    makeGate,
+  });
+  /** @type {(() => Promise<void>)[]} */
+  const cancelHooks = [];
+  const engine = makeSandboxShellEngine({
+    factory,
+    mount,
+    context: {
+      onCancel: hook => cancelHooks.push(hook),
+      assertActive: () => {},
+    },
+  });
+  // The hook exists before the slice is requested.
+  t.is(cancelHooks.length, 1);
+  while (makeCalls.length === 0) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  const cancelling = cancelHooks[0]();
+  releaseMake();
+  await cancelling;
+  t.true(isDisposed(), 'the slice that arrived after cancellation is disposed');
+  await engine;
+});
+
+test('sandbox engine: an already-canceled context acquires no slice', async t => {
+  const { mount } = await provisionMount(t);
+  const { factory, makeCalls } = makeStubSandboxFactory({ available: true });
+  await t.throwsAsync(
+    makeSandboxShellEngine({
+      factory,
+      mount,
+      context: {
+        onCancel: () => {},
+        assertActive: () => {
+          throw Error('context canceled');
+        },
+      },
+    }),
+    { message: 'context canceled' },
+  );
+  t.is(makeCalls.length, 0);
+});
+
+test('sandbox engine: an unavailable backend fails closed, never falling back to the host', async t => {
+  const { mount } = await provisionMount(t);
+  const { factory, makeCalls } = makeStubSandboxFactory({ available: false });
+  await t.throwsAsync(
+    () =>
+      makeSandboxShellEngine({
+        factory,
+        mount,
+        context: { onCancel: () => {}, assertActive: () => {} },
+      }),
+    { message: /no usable sandbox backend.*bwrap not found/ },
+  );
+  t.is(makeCalls.length, 0, 'no slice was minted');
 });

@@ -21,6 +21,7 @@ import {
   killProcessGroup,
   readableToAsyncIterable,
   spawnAndCollect,
+  sweepLeaderlessGroup,
 } from './child-process.js';
 import {
   CANONICAL_BIN_PATHS,
@@ -897,7 +898,30 @@ export const makeBwrapDriver = ({
     child.once('error', err => {
       rejectExit(err);
     });
-    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    child.once('exit', (code, signal) => {
+      // The bwrap leader can exit while the pid-namespace init it forked
+      // survives: init ignores a host SIGTERM (it installs no handler), and
+      // `--die-with-parent` arms its parent-death signal from inside the
+      // child, so a kill that lands before the child reaches prctl leaves
+      // init orphaned with the sandboxed command still under it.  Sweep the
+      // group with SIGKILL before reporting the exit; killing init tears
+      // down the whole pid namespace.  Node has already reaped the leader,
+      // so `sweepLeaderlessGroup` first proves the pgid still names this
+      // slice's group rather than a reallocated one.
+      if (child.pid !== undefined) {
+        try {
+          sweepLeaderlessGroup(child.pid);
+        } catch (e) {
+          rejectExit(
+            makeError(
+              X`bwrap could not sweep the process group after its leader exited: ${q(/** @type {Error} */ (e).message)}`,
+            ),
+          );
+          return;
+        }
+      }
+      resolveExit({ code, signal });
+    });
     exited.catch(() => undefined);
 
     // The DriverProcess surface exposes async-iterables for stdout
