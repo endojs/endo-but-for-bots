@@ -31,7 +31,10 @@ use comparison::{compare_observations, results_agree};
 /// Stage-3b XSRE matcher fuzz arm (child 8/9): a structure-aware regexp
 /// generator + differential check of `ironhorse-regexp` against the pin.
 pub mod regexp;
-pub use regexp::{differential_check_regexp, gen_regexp, RegExpCase};
+pub use regexp::{
+    differential_check_regexp, differential_check_regexp_within, gen_regexp, RegExpCase,
+    MAX_DIFFERENTIAL_MATCH_STEPS,
+};
 
 /// Stage-6 child 4: the snapshot round-trip-invariance and malformed-atom
 /// decoder fuzz arms over `ironhorse-snapshot`'s `XS_M` writer/reader.

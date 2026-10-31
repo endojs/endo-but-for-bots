@@ -212,21 +212,67 @@ fn gen_class(b: &mut Bytes) -> String {
     }
 }
 
+/// The most matcher steps one fuzzed differential case may dispatch. The
+/// generator bans unbounded quantifiers on groups, but a long chain of
+/// `.*` atoms still backtracks polynomially in the subject with a degree
+/// of dozens, and neither the port's unbudgeted matcher nor the XS shim
+/// (no meter interval) stops on its own: finding `f9cde0bda6f97f6c`
+/// hung both engines for more than 1200 seconds. At this bound a case
+/// that exhausts it costs about three seconds of instrumented fuzz
+/// build, while matches past 65536 steps (whose raw meter exceeds
+/// `u32::MAX`, the class behind the oracle-widening findings) still
+/// reach the pin.
+pub const MAX_DIFFERENTIAL_MATCH_STEPS: u64 = 1 << 25;
+
 /// Differentially check one case, returning `Ok(true)` when both engines
 /// compiled AND matched (a "real match", used to prove the corpus
 /// exercises hits), `Ok(false)` on an honest skip / agreed no-match /
 /// agreed compile-rejection, or `Err` on a matched/captures/meter
 /// divergence from the pin.
+///
+/// The port matches first, under [`MAX_DIFFERENTIAL_MATCH_STEPS`]. A case
+/// that exhausts the budget is skipped before the pin runs: the meters
+/// agree step for step, so the pin would backtrack at least as long. The
+/// VM's own `RegExp` natives bound the same work with the computron meter.
 pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> {
+    differential_check_regexp_within(case, MAX_DIFFERENTIAL_MATCH_STEPS)
+}
+
+/// [`differential_check_regexp`] with an explicit step budget, for a
+/// regression lock whose agreeing match is longer than the fuzz bound.
+pub fn differential_check_regexp_within(
+    case: &RegExpCase,
+    max_steps: u64,
+) -> Result<bool, Divergence> {
     let (pattern, flags, subject, start) = case;
     let source = format!("/{}/{} on {:?}@{}", pattern, flags, subject, start);
+
+    let compiled = ironhorse_regexp::compile(pattern, flags);
+    let outcome = match &compiled {
+        Ok(program) => {
+            let outcome = ironhorse_regexp::match_regexp_budgeted(
+                program,
+                subject.as_bytes(),
+                *start,
+                max_steps,
+                None,
+            );
+            if outcome.aborted
+                && outcome.match_meter_raw / ironhorse_regexp::XS_REGEXP_METERING >= max_steps
+            {
+                return Ok(false);
+            }
+            Some(outcome)
+        }
+        Err(_) => None,
+    };
 
     let oracle = match xs_oracle::regexp(pattern, flags, subject, *start) {
         Some(o) => o,
         None => return Ok(false), // machine startup failure, not a finding
     };
 
-    let program = match ironhorse_regexp::compile(pattern, flags) {
+    match compiled {
         Err(
             ironhorse_regexp::CompileError::BudgetExceeded
             | ironhorse_regexp::CompileError::ResourceLimit,
@@ -236,7 +282,7 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
                 detail: "regexp compilation resource refusal".into(),
             })
         }
-        Ok(p) => p,
+        Ok(_) => {}
         Err(ironhorse_regexp::CompileError::Unsupported(_)) => return Ok(false),
         Err(ironhorse_regexp::CompileError::Syntax(_)) => {
             // Both must reject; the oracle compiling it is a finding.
@@ -259,7 +305,7 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
         });
     }
 
-    let outcome = ironhorse_regexp::match_regexp(&program, subject.as_bytes(), *start);
+    let outcome = outcome.expect("a compiled program was matched");
     if outcome.matched != oracle.matched {
         return Err(Divergence {
             source,
@@ -377,7 +423,7 @@ mod tests {
         let case = gen_regexp(data);
         assert_eq!(case.2, "00\n00");
         assert_eq!(case.3, 2);
-        assert_eq!(differential_check_regexp(&case), Ok(true));
+        assert_eq!(differential_check_regexp_within(&case, u64::MAX), Ok(true));
     }
 
     #[test]
@@ -395,7 +441,7 @@ mod tests {
         assert_eq!(case.1, "i");
         assert_eq!(case.2, "\n\n\n0 ");
         assert_eq!(case.3, 2);
-        assert_eq!(differential_check_regexp(&case), Ok(true));
+        assert_eq!(differential_check_regexp_within(&case, u64::MAX), Ok(true));
     }
 
     #[test]
@@ -595,7 +641,7 @@ mod tests {
         assert!(outcome.matched, "the exact finding must remain a match");
         assert_eq!(outcome.match_meter_raw, 30_435_382_132_736);
         assert!(outcome.match_meter_raw > u64::from(u32::MAX));
-        assert_eq!(differential_check_regexp(&case), Ok(true));
+        assert_eq!(differential_check_regexp_within(&case, u64::MAX), Ok(true));
     }
 
     /// Regression for continuous-fuzz finding `8ea950859db8a5f7`. The exact
@@ -886,5 +932,46 @@ mod tests {
         assert_eq!(outcome.match_meter_raw, 5_152_440_320);
         assert!(outcome.match_meter_raw > u64::from(u32::MAX));
         assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `f9cde0bda6f97f6c`, a
+    /// libFuzzer timeout (more than 1200 seconds on one input) caught on
+    /// PR CI against llm 9a14ddf660. The exact 664-byte input folds into a
+    /// 415-byte chain of `.*` atoms with a lookbehind and a lookahead,
+    /// flags `i`, over "cccccccc"@0, ending in a `0` the subject lacks.
+    /// Every split of the subject among the `.*` atoms is tried, so both
+    /// the port's unbudgeted matcher and the XS shim ran for hours. The
+    /// differential now stops the port at
+    /// [`MAX_DIFFERENTIAL_MATCH_STEPS`] and skips the case before the pin
+    /// runs.
+    #[test]
+    fn finding_f9cde0bda6f97f6c_regexp_backtracking_stays_within_budget() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-f9cde0bda6f97f6c.input.bin");
+        assert_eq!(data.len(), 664);
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-f9cde0bda6f97f6c.pattern.txt")
+        );
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, "cccccccc");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp_budgeted(
+            &program,
+            case.2.as_bytes(),
+            case.3,
+            MAX_DIFFERENTIAL_MATCH_STEPS,
+            None,
+        );
+        assert!(outcome.aborted, "the match must outlast the budget");
+        assert!(!outcome.matched);
+        assert_eq!(
+            outcome.match_meter_raw,
+            MAX_DIFFERENTIAL_MATCH_STEPS * ironhorse_regexp::XS_REGEXP_METERING
+        );
+        assert_eq!(differential_check_regexp(&case), Ok(false));
     }
 }
