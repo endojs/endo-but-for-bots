@@ -16,7 +16,8 @@
  *
  * Hoisting the guard here gives both a single definition to import.
  * The XS bundle pays only for `@endo/patterns`, which it already
- * retains.  Import it from here, not from `./interfaces.js`.
+ * retains.  `./interfaces.js` re-exports this binding under the same
+ * name.
  *
  * Before this module existed the XS worker carried a hand-copy of the
  * guard, which could drift from the Node worker's silently.
