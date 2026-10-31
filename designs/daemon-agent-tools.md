@@ -107,7 +107,7 @@ What this document owns is the remainder:
 | Group | 2026-03 sketch | Reconciled backing | Status |
 |---|---|---|---|
 | Filesystem | `Dir` from [daemon-capability-filesystem](daemon-capability-filesystem.md) | `Filesystem` (`@endo/platform/fs/extended`) via `mountAsFilesystem(mount)` for the live worktree and `Git.filesystemAt(ref)` for history | read tool landed (#523); list / edit / stat landed (#614) |
-| Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
+| Shell | `makeShell({ cwd, allowedCommands, ... })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
 | Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); plugin provisioning and `makeHttpTool` remaining |
@@ -290,7 +290,7 @@ interface Shell {
 
 The shell formula's implementation executes through the `Spawner`
 interface genie already ships (`packages/genie/src/tools/spawner.js`):
-`spawn(argv, opts) → ProcessLike`, where `ProcessLike` mirrors
+`spawn(argv, opts) -> ProcessLike`, where `ProcessLike` mirrors
 `DriverProcess` from `@endo/sandbox/types.d.ts`. Two engines exist in
 tree today:
 
@@ -386,7 +386,7 @@ to have a guest petstore name.
 
 The network tier grants the same control / client split but is **not
 daemon-provisioned** (redirected 2026-07-13; the earlier host-method
-sketch `provideHttpClient(name, { allowedOrigins, policyMode, … })` is
+sketch `provideHttpClient(name, { allowedOrigins, policyMode, ... })` is
 superseded): per [endo-fetch](endo-fetch.md), the unconfined `@endo/fetch`
 base supplies unfettered `Fetch` only to the provisioning integration, which
 endows it plus a state directory to `@endo/confined-fetch`. The confined
@@ -535,8 +535,8 @@ document's scope.
   follows).
 - [ ] Run the worked reference flow of
   [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
-  acceptance test: branch → edit via file tools → status / diff / commit
-  via git tools → push via the remote tool → inspect the pushed ref via
+  acceptance test: branch -> edit via file tools -> status / diff / commit
+  via git tools -> push via the remote tool -> inspect the pushed ref via
   `filesystemAt` — with a shell-tool build step (`npm test`) in the
   middle. That single pass demonstrates the M3 pillar.
 
@@ -557,10 +557,12 @@ PR #636, branch `design/agentry-git-eval-scenarios`).
   the fixed `commit`, `reword`, `cherryPick`, and `rebase` history inventory.
   Both makers project the same canonical rewriter schemas and guards for those
   four tools.
-- [ ] Extend the `473b718b3` contract test (branch
+- [x] Extend the `473b718b3` contract test (branch
   `docs/agentry-git-rebase-evals`) so the exo type, `GitInterface`,
-  `packages/exo-git/src/types.js`, `types.d.ts`, and the generated
-  code-mode declarations cannot drift.
+  `packages/exo-git/src/types.ts`, `types-index.types.d.ts`, and the generated
+  code-mode declarations cannot drift
+  (`packages/agent-tools/test/git-surface-contract.test.js`, beside exo-git's
+  `kit-conformance.test.js` and `types.test-d.ts`).
 - [x] Tests: read-only rejection for each mutator; non-interactive editor
   behavior, branch attachment, and merge-topology preservation for reword.
 

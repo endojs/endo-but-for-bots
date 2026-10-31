@@ -30,7 +30,6 @@ import {
   buildGitTypeDeclarations,
   buildGitIRs,
   GIT_HISTORY_MEMBERS,
-  GIT_READONLY_MEMBERS,
 } from '../scripts/code-mode-git-extract.js';
 import {
   buildFsTypeDeclarations,
@@ -279,7 +278,6 @@ test('read-only git is a subset of read-write git and omits mutators', t => {
       `read-only member ${name} missing from read-write`,
     );
   }
-  t.deepEqual([...readOnly].sort(), [...GIT_READONLY_MEMBERS].sort());
   // A self-referential return (`readOnly(): ReadOnlyEndoGit`) must not leak the
   // mutating surface back into the read-only declaration.
   t.false(gitReadOnly.members.some(member => member.name === 'commit'));

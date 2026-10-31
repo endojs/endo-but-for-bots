@@ -473,6 +473,21 @@ type GitDiffOptions = {
     paths?: string[];
 };
 type GitFilesystem = GitExtendedFilesystem;
+type GitFollowRootOptions = {
+    cancelled?: Promise<never>;
+};
+type GitERef<T> = T | Promise<T>;
+type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
+    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
+};
+type GitRootSnapshot = {
+    type: 'snapshot';
+    revision: bigint;
+    position: GitCommitPosition | null;
+};
+type GitRootChange = GitRootSnapshot | GitRootTransition;
 type GitLogOptions = {
     maxCount?: number;
     ref?: GitRef | string;
@@ -509,7 +524,6 @@ type GitWorktreeEntry = {
     locked: boolean;
     prunable: boolean;
 };
-type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
     stream?: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
@@ -531,11 +545,6 @@ type GitStreamEndpointClose = {
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
     streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
-};
-type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern: () => unknown | undefined;
-    readReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
@@ -676,7 +685,23 @@ type GitExtendedFilesystem = {
     brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
     help: (method?: string) => string;
 };
+type GitTreeRef = {
+    algorithm: string;
+    hash: string;
+};
+type GitRemotableFilesystem = GitFilesystem & unknown;
 type GitPathEntry = GitLitePathEntry;
+type GitRootTransition = {
+    type: 'transition';
+    fromRevision: bigint;
+    toRevision: bigint;
+    position: GitCommitPosition;
+};
+type GitCommitPosition = {
+    commitOid: string;
+    tree: GitTreeRef;
+    root: GitRemotableFilesystem;
+};
 type GitStatusEntry = {
     path: string;
     index: 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
@@ -732,6 +757,9 @@ type GitStreamYieldNode<Y = unknown, R = undefined> = {
     currentBranch: () => Promise<GitRef | undefined>;
     diff: (options?: GitDiffOptions) => Promise<string>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+    followLatestRoot: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootSnapshot, undefined>>;
+    followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;
+    help: (method?: string) => string;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     readOnly: () => typeof gitReadOnly;
     revParse: (ref: GitRef | string) => Promise<GitRef>;
