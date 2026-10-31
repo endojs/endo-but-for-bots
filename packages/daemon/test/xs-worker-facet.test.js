@@ -8,6 +8,8 @@ import {
   makeXsWorkerFacet,
   standardEndowments,
 } from '../src/bus-worker-xs-facet.js';
+import { WorkerFacetForManagerInterface } from '../src/worker-facet-interface.js';
+import { WorkerFacetForManagerInterface as fromInterfaces } from '../src/interfaces.js';
 
 const neverSettles = () => new Promise(() => {});
 
@@ -18,6 +20,13 @@ const makeFacet = () => {
   });
   return { facet, terminations };
 };
+
+test('the worker-facet interface guard has exactly one definition', t => {
+  // The XS worker used to carry a hand-copy of this guard, free to
+  // drift from the Node worker's.  Identity, not deep equality, is
+  // the assertion: they must be the same object.
+  t.is(WorkerFacetForManagerInterface, fromInterfaces);
+});
 
 test('terminate raises the flag the Rust main loop polls', async t => {
   const { facet, terminations } = makeFacet();
