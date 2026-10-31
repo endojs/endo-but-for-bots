@@ -250,6 +250,8 @@ export const helpTextEntries = harden([
       list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
         'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
+      followNameChanges:
+        'followNameChanges() -> PassableReader\nReturn a reader of entry-name changes. A snapshot never changes, so the reader\nends immediately without yielding any record.',
     },
   ],
   [

@@ -868,6 +868,11 @@ Returns EndoReadable for files, ReadableTree for subdirectories.
 Example: lookup("index.html") -> EndoReadable
 Example: lookup(["assets", "style.css"]) -> EndoReadable
 
+## followNameChanges() -> PassableReader
+
+Return a reader of entry-name changes. A snapshot never changes, so the reader
+ends immediately without yielding any record.
+
 # EndoMount - Live mutable access to a filesystem directory.
 
 Paths: an array is a sequence of segments (["src", "foo.js"]); a plain

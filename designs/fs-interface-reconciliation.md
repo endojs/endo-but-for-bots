@@ -118,26 +118,37 @@ endo-fs's `lookup`/`move` calling conventions, now aligned (`lookup` is
 survives as the cross-cap `rename` primitive 9p-server needs). `subView` was
 added to the `Mount` as a genuinely-confined attenuator (F8). `copy(fromPath,
 toPath)` was added to the extended `Directory` (recursive, binary-safe),
-closing the last catalog-method gap. The `@endo/platform/fs` `Directory` guard
-now carries the catalog's `subView` and `makeFile` as well (next paragraph).
+closing the last catalog-method gap. The minimal `@endo/platform/fs`
+`Directory` guard does not yet carry the catalog's `subView` or `makeFile`
+(next paragraph).
 
 **D4 / Phase 1.5 (done).** `@endo/endo-fs` has been retired into
 `@endo/platform/fs/extended`; all six consumers are re-homed. See the commit
 `refactor: retire @endo/endo-fs into @endo/platform/fs/extended`.
 
-**Remaining Phase 1 catalog work (implemented on this branch).** The portable
-`DirectoryInterface` now includes `subView` and `makeFile`. `EndoMount` already
-implemented both operations; `makeFile` now completes the catalog contract by
-returning the live file capability and accepting either UTF-8 text or a
-`ReadableBlob` source (a `ReadableTree` source is rejected before any
-mutation). The portable guard takes `subView` and `makeFile` paths as
-`string[]`, matching the catalog and the sibling `makeDirectory`; `EndoMount`
-additionally accepts a single name or a mount entry. Immutable `SnapshotTree` capabilities now implement
-`subView` and the D6 observation contract: `followNameChanges()` returns an
-immediately-terminating reader. The earlier `streamRead` proposal was
-superseded by the shipped `bytes()` reader plus `byteRange()` / `textRange()`
-attenuation surface described in
-[readableblob-range-attenuation.md](readableblob-range-attenuation.md).
+**Remaining Phase 1 catalog work (partially landed).** Immutable
+`SnapshotTree` capabilities implement the D6 observation contract:
+`followNameChanges()` returns an immediately-terminating reader, and the
+portable `SnapshotTreeInterface` requires it. `EndoMount.makeFile` returns the
+live `EndoMountFile` and accepts UTF-8 text or a `ReadableBlob` source (a
+`ReadableTree` source is rejected before any mutation). Two catalog promotions
+are deliberately withheld from the minimal portable `Directory` and
+`SnapshotTree` contracts:
+
+- `subView` stays on `EndoMount` and the extended `Directory` until its public
+  name is settled (see the open question below). Promoting the name into every
+  third-party implementation would lock in a migration the maintainer may
+  reverse.
+- `makeFile` stays mount-specific. A portable `Directory.makeFile` returning a
+  platform `File` cannot be satisfied by `EndoMountFile`, whose `snapshot()`
+  yields a daemon readable with an asynchronous `sha256()` rather than a
+  `SnapshotBlob`. The composition `write(path, blob)` then `lookup(path)`
+  already expresses the job on every `Directory`.
+
+The earlier `streamRead` proposal was superseded by the shipped `bytes()`
+reader plus `byteRange()` / `textRange()` attenuation surface described in
+[readableblob-range-attenuation.md](readableblob-range-attenuation.md). Every
+later mention of `streamRead` in this document is historical.
 
 **Performance claims (not benchmarked).** The round-trip statements below
 (a depth-N path-array `lookup` is one message; a pipelined `lookupStep` chain
@@ -150,9 +161,11 @@ belongs to the peer-CAS work that relies on the short-circuit.
 
 **Open question: the attenuator's name.** The maintainer asked on
 [endojs/endo-but-for-bots#464](https://github.com/endojs/endo-but-for-bots/pull/464#discussion_r3434032260)
-for the re-root attenuator to be named `mount`. D5 records `subView`. The
-implementation keeps `subView` pending maintainer confirmation; a rename, if
-chosen, is a separate change across the platform and daemon surfaces.
+for the re-root attenuator to be named `mount`. D5 records `subView`, which
+already ships on `EndoMount` and the extended `Directory`. Until the name is
+settled, `subView` is not promoted into the minimal portable `Directory` or
+`SnapshotTree` contracts, so a future rename touches only those existing
+surfaces.
 
 ## What is the Problem Being Solved?
 
@@ -559,7 +572,7 @@ Every backing in §Backing-implementation conformance matrix implements a subset
 | `streamBase64` | `streamBase64() -> ReaderRef<string>` (Blob caps only) | Read entire blob as base64-encoded chunks. Falls back to the catalog's `read(offset, length)` form for backings that prefer range reads. |
 | `text` | `text() -> Promise<string>` | Read entire blob as UTF-8 text. |
 | `json` | `json() -> Promise<unknown>` | Read entire blob as parsed JSON. |
-| `streamRead` | `streamRead(offset?: bigint, length?: bigint) -> ReaderRef<Uint8Array>` (Blob caps that opt in) | Range-shaped streaming read. Aliased to `OpenFile.read(offset, length)` for endo-fs backings. Not on Readable caps that have no range surface. |
+| `streamRead` | *Superseded* by `bytes()` plus `byteRange()` / `textRange()` attenuation ([readableblob-range-attenuation.md](readableblob-range-attenuation.md)); kept here as the original proposal. `streamRead(offset?: bigint, length?: bigint) -> ReaderRef<Uint8Array>` (Blob caps that opt in) | Range-shaped streaming read. Aliased to `OpenFile.read(offset, length)` for endo-fs backings. Not on Readable caps that have no range surface. |
 
 ### Mutation
 
@@ -616,7 +629,7 @@ range I/O").
 
 | Method | Why not |
 |---|---|
-| `OpenFile.read` / `OpenFile.write` (range I/O with explicit close) | endo-fs's surface; tuned for 9P / FUSE bridge. Not appropriate for the general filesystem viewer. Backings that expose it (endo-fs) keep the method on their own `File` cap. The catalog's `streamRead(offset, length)` exposes the same job without the open / close handshake. |
+| `OpenFile.read` / `OpenFile.write` (range I/O with explicit close) | endo-fs's surface; tuned for 9P / FUSE bridge. Not appropriate for the general filesystem viewer. Backings that expose it (endo-fs) keep the method on their own `File` cap. The catalog's range-read job (shipped as `bytes()` plus `byteRange()` attenuation, superseding `streamRead`) exposes the same job without the open / close handshake. |
 | `lock` / `getLock` | endo-fs surface for advisory locks. The viewer does not need this. |
 | `xattrs` | endo-fs surface for extended attributes. The viewer does not need this in v1; a `metadata` convenience could be layered later. |
 | `Cursor` (streaming directory iteration) | endo-fs surface for very large directories. The catalog's `list(path) -> string[]` is the convenience; backings that need to stream very large directories expose `Cursor` separately. |
@@ -635,10 +648,10 @@ Cells are: **I** (implemented), **A** (absent on this backing's interface; viewe
 | `list` | I | I | I (`Cursor.toArray`) | I | I |
 | `lookup` | I (path-array) | I (path-array) | I (path-array walk; also `lookupStep`) | I (path-array) | I (path-array) |
 | `stat` | I | I | I (`getStat`) | A (no mtime; immutable) | A (no blob content) |
-| `streamBase64` | I (on `EndoMountFile`) | I | A (use `streamRead`) | I (on `EndoReadable`) | A |
-| `text` | I (on file exo); `readText(path)` on mount | I | A (use `streamRead` + decode) | I | A |
+| `streamBase64` | I (on `EndoMountFile`) | I | A (range reads via `OpenFile.read`) | I (on `EndoReadable`) | A |
+| `text` | I (on file exo); `readText(path)` on mount | I | A (range reads via `OpenFile.read` + decode) | I | A |
 | `json` | I (file exo) | I | A | I | A |
-| `streamRead` | A (no range I/O) | A | I (`OpenFile.read`) | A (whole blob only) | A |
+| `streamRead` (historical; superseded by `bytes()` + `byteRange()`) | A (no range I/O) | A | I (`OpenFile.read`) | A (whole blob only) | A |
 | `write` | I | I | I (whole-blob `write` wrapper over `create` + writer; `create` stays for range I/O) | A (immutable) | I (writes a name-binding, not blob content) |
 | `writeText` | I | I | A | A | A |
 | `writeBytes` | I (file exo) | I | I (`OpenFile.write`) | A | A |
@@ -647,9 +660,9 @@ Cells are: **I** (implemented), **A** (absent on this backing's interface; viewe
 | `move` | I (same-mount POSIX `renameat`) | I | I (`rename` cross-Directory) | D (refcount swap per move-transfer Tier 4) | I (rebind name) |
 | `copy` | I (filesystem `cp`) | I | I | D (refcount bump) | I (alias name) |
 | `makeDirectory` | I | I | I (`mkdir`) | A (CAS does not have a "create empty directory" verb) | I |
-| `makeFile` | I | I | I (`create`) | A | A (name hub does not have a blob-content concept) |
+| `makeFile` | I (mount-specific; not on the minimal portable `Directory`) | I | I (`create`) | A | A (name hub does not have a blob-content concept) |
 | `readOnly` | I | I | I (composer `readOnly(fs)`) | I (identity; CAS is already read-only) | I |
-| `subView` | I (confinement-shifting attenuator: `EndoMount.subView` returns a sub-mount whose own `confinementRoot` is the target, so `..` clamps at the sub-view root — see review finding 8; `provideSubMount` remains the persisted-formula form) | I (same) | I (`chroot(fs, path)`) | I (descend the tree manifest) | I (re-root the name hub) |
+| `subView` | I (confinement-shifting attenuator: `EndoMount.subView` returns a sub-mount whose own `confinementRoot` is the target, so `..` clamps at the sub-view root — see review finding 8; `provideSubMount` remains the persisted-formula form) | I (same) | I (`chroot(fs, path)`) | A (deferred until the attenuator's name is settled) | I (re-root the name hub) |
 | `snapshot` | I (writes a `readable-tree` to CAS) | I (same) | I\* (whole-tree checkin; the `BlobRef -> SnapshotBlob` adapter that yields the catalog shape is endo-fs ROADMAP F6, **not yet built** — see review finding 7) | I (identity; already a snapshot) | A (name bindings have no content to snapshot; viewer surfaces gap) |
 | `followNameChanges` | I (PR #277) | I (PR #277) | I (in-memory event emitter) | I (immediately-terminating empty stream; CAS is immutable — see D6) | I (existing EndoDirectory method) |
 | `help` | I | I | I | I | I |
@@ -778,13 +791,17 @@ A backing whose state is in the local process (memfs) is free to resolve its ret
 Existing call sites are categorized by which divergent name they use.
 The migration introduces aliases (both names exist on the wire) for one minor release, then the legacy name is removed.
 
-### Phase 1: Catalog land (no behavior change)
+### Phase 1: Catalog land (additive behavior)
+
+Phase 1 adds methods and widens `EndoMount.makeFile` (it now returns the
+created file and accepts a `ReadableBlob`); it renames and removes nothing.
 
 - [x] Land the catalog in `packages/platform/src/fs/interfaces.js` as the canonical guards.
-- [x] Land `subView` on `Directory` / Mutable Tree guards as a new method per the catalog (named `subView`, not `subDir`, per D5).
+- [x] Land `subView` on `EndoMount` and the extended `Directory` per the catalog (named `subView`, not `subDir`, per D5).
+- [ ] Promote `subView` into the minimal portable `Directory` and `SnapshotTree` guards. Blocked on the attenuator-name open question.
 - [x] Land `followNameChanges` on `MountInterface` per [filesystem-watchers.md](filesystem-watchers.md), and the immediately-terminating D6 form on immutable snapshot trees.
 - [x] Land the range-read job on Blob guards. The delivered surface is the `bytes()` reader plus composable `byteRange()` / `textRange()` attenuation, which supersedes the earlier `streamRead` spelling.
-- [x] Land `makeFile` on Mutable Tree. `DirectoryInterface` declares it, and `EndoMount.makeFile` accepts text or a readable blob and returns the live file cap.
+- [x] Land `makeFile` on `EndoMount`: it accepts text or a readable blob and returns the live file cap. The minimal portable `DirectoryInterface` does not declare it, because `EndoMountFile` is not a platform `File`.
 
 The platform-fs guard set after Phase 1 is the canonical catalog.
 
@@ -975,7 +992,7 @@ deferred — there is no surviving `@endo/endo-fs` package to keep them honest.
    For a `ReadableTree` (CAS), `subView` descends the tree manifest and
    returns a `ReadableTree` over the subtree's root sha256.
 
-6. **`streamRead` is opt-in.**
+6. **`streamRead` is opt-in.** *(Historical: superseded by `bytes()` plus range attenuation.)*
    Range I/O makes sense for endo-fs (9P / FUSE bridge) and possibly for a future block-storage backing.
    It does not make sense for a CAS-resident blob (whole-blob fetch is the substrate's natural unit) or a name hub (no content).
    Backings opt in by listing `streamRead` in their interface; the viewer surfaces it only when present.
@@ -1240,7 +1257,7 @@ Guards in `packages/platform/src/fs/interfaces.js` (post-consolidation):
 | `ReadableBlobRangeInterface` | `readableBlobMethodGuards` + `rangeReadMethodGuards` (the rich blob shape implementers adopt) |
 | `SnapshotBlobInterface` | `readableBlobMethodGuards` + `sha256` |
 | `ReadableTreeInterface` | `readableTreeMethodGuards` |
-| `SnapshotTreeInterface` | `readableTreeMethodGuards` + `subView` + immediately-terminating `followNameChanges` + `sha256` |
+| `SnapshotTreeInterface` | `readableTreeMethodGuards` + immediately-terminating `followNameChanges` + `sha256` |
 | `TreeWriterInterface` | `help`, `writeBlob`, `makeDirectory` (minimal push interface) |
 | `FileInterface` (Mutable Blob) | `readableBlobMethodGuards` + `writeText`, `writeBytes`, `append`, `readOnly`, `snapshot` |
 | `DirectoryInterface` (Mutable Tree) | `readableTreeMethodGuards` + `write`, `remove`, `move`, `copy`, `makeDirectory`, `readOnly`, `snapshot` |
@@ -1250,8 +1267,9 @@ The former `ContentStoreInterface` / `SnapshotStoreInterface` guards were
 remotable cap, so it needs no `M.interface`).
 
 Note: the Mutable `FileInterface` / `DirectoryInterface` are **already
-landed** (platform-fs Phase 4 shipped). `DirectoryInterface` now carries the
-catalog's `makeFile` and `subView`. `stat` remains a daemon / extended-surface
+landed** (platform-fs Phase 4 shipped). `DirectoryInterface` does not carry
+the catalog's `makeFile` or `subView`, for the reasons recorded under
+*Remaining Phase 1 catalog work*. `stat` remains a daemon / extended-surface
 operation with the aligned portable record described in
 [fs-interface-consolidation.md](fs-interface-consolidation.md); the earlier
 `streamRead` spelling was superseded by `bytes()` plus range attenuation.
@@ -1270,7 +1288,7 @@ omitted as stale — see the snapshot note above):
 | `EndoMountFile` | `text`, `streamBase64`, `json`, `getInfo`, `fetch`, `writeText`, `append`, `writeBytes`, `stat`, `snapshot`, `readOnly`, `help` |
 | `EndoMountEntry` | `segments`, `displayPath`, `child`, `help` (path descriptor; no I/O) |
 | `EndoBlob` (`EndoReadable`) | `streamBase64`, `text`, `json`, `getInfo`, `fetch`, `help` — exactly `ReadableBlobRangeInterface`; the former hex `sha256()` was removed (content hash served by `getInfo().hash`, base64) |
-| `EndoReadableTree` | `sha256` (base64), `has`, `list`, `lookup`, `subView`, immediately-terminating `followNameChanges`, `help` (content-store tree) |
+| `EndoReadableTree` | `sha256` (base64), `has`, `list`, `lookup`, immediately-terminating `followNameChanges`, `help` (content-store tree) |
 
 `EndoMount` spreads the shared name-hub records on top of `DirectoryInterface`;
 `EndoMountFile` spreads `rangeReadMethodGuards` on top of platform's `File`
