@@ -10,9 +10,9 @@ info: |
   Math.acosh is implementation-approximated, and the XS oracle uses the host
   libm. The exact result 1.47504478124142499418... lies between two binary64
   values, so the case (and its dual-run Source program) accepts exactly those
-  two faithful roundings:
-  bit pattern 3ff799c88e79140d (glibc <= 2.39, Rust std) and
-  bit pattern 3ff799c88e79140c (correctly rounded; glibc 2.43 on ubuntu-26.04,
-  libm 0.2.16). Any other value still fails.
+  two faithful roundings: the upper neighbor (glibc <= 2.39, Rust std) and
+  the lower neighbor, 1.475044781241425 (correctly rounded; glibc 2.43 on
+  ubuntu-26.04, libm 0.2.16). Any other value still fails. The exact bit
+  patterns are tabulated in rust/engine/DETERMINISM-METERING.md.
 ---*/
 assert.sameValue([1.4750447812414251, 1.475044781241425].includes(Math.acosh(2.3)), true);
