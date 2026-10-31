@@ -164,3 +164,42 @@ test('make() returns the Fetch capability over the injected transport', async t 
   t.is(await readAll(response.body), 'hi');
   t.is(calls.length, 1);
 });
+
+test('draining the body releases the transport reader lock without cancelling it', async t => {
+  const encoded = [encodeUtf8('x'), encodeUtf8('y')];
+  let released = 0;
+  let cancelledCount = 0;
+  /** @type {any} */
+  const transport = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    url: 'https://example.com/',
+    body: {
+      getReader: () => ({
+        read: async () =>
+          encoded.length > 0
+            ? { done: false, value: encoded.shift() }
+            : { done: true },
+        cancel: async () => {
+          cancelledCount += 1;
+        },
+        releaseLock: () => {
+          released += 1;
+        },
+      }),
+    },
+  });
+  const response = await E(makeFetch({ fetch: transport })).fetch(
+    'https://example.com/',
+  );
+  t.is(await readAll(response.body), 'xy');
+  t.is(released, 1);
+  t.is(cancelledCount, 0);
+});
+
+test('makeFetch refuses to construct without a transport function', t => {
+  t.throws(() => makeFetch({ fetch: /** @type {any} */ ('not-a-function') }), {
+    message: /a fetch transport is required/,
+  });
+});
