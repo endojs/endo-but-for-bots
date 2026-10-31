@@ -151,6 +151,34 @@ test('provisionWorkspaceTools passes an HTTP grant into the catalog', async t =>
   t.deepEqual(nameSet(catalog), new Set(['fetch', 'allowedOrigins']));
 });
 
+test('filesystem + git + shell + http compose without collision', t => {
+  const catalog = makeWorkspaceTools({
+    filesystem: grant('Filesystem'),
+    git: grant('Git'),
+    shell: grant('Shell'),
+    http: grant('HttpClient'),
+  });
+  t.is(catalog.length, nameSet(catalog).size, 'no name is repeated');
+  const names = nameSet(catalog);
+  for (const name of ['mountReadText', 'commit', 'exec', 'fetch']) {
+    t.true(names.has(name), `"${name}" present`);
+  }
+});
+
+test('provisionWorkspaceTools combines http with a git-derived filesystem', async t => {
+  await null;
+  const git = Far('Git', { worktree: () => grant('Mount') });
+  const catalog = await provisionWorkspaceTools({
+    git,
+    http: grant('HttpClient'),
+    filesystem: grant('Filesystem'),
+  });
+  const names = nameSet(catalog);
+  t.true(names.has('fetch'));
+  t.true(names.has('mountReadText'));
+  t.true(names.has('commit'));
+});
+
 test('provisionWorkspaceTools with no grants derives nothing', async t => {
   const catalog = await provisionWorkspaceTools();
   t.deepEqual(catalog, []);
