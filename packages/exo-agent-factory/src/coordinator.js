@@ -216,7 +216,11 @@ export const prepareChildAgentCoordinator = async ({
     const fault = /** @type {Error} */ (error).message;
     const namespace =
       namespaces.get(operation.namespaceId) || Fail`Unknown namespace`;
-    await append(namespace, { type: 'Faulted', operation: operation.key, fault });
+    await append(namespace, {
+      type: 'Faulted',
+      operation: operation.key,
+      fault,
+    });
     operation.fault = fault;
     faults.set(operation.key, fault);
   };
@@ -683,7 +687,8 @@ export const prepareChildAgentCoordinator = async ({
     // is about to remove, so no id is ever reissued within an incarnation.
     for (const name of names) {
       const match = registryPattern.exec(name);
-      if (match) nextNamespaceId = Math.max(nextNamespaceId, Number(match[1]) + 1);
+      if (match)
+        nextNamespaceId = Math.max(nextNamespaceId, Number(match[1]) + 1);
     }
     if (!names.has(registryName(ROOT))) {
       const policy = makeRootPolicy(rootPolicy);
