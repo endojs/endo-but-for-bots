@@ -371,6 +371,8 @@ export interface WorkspaceGrants {
    * because a shell can exercise authority beyond the read-only file slice.
    */
   shell?: ERef<ShellToolCapability>;
+  /** Network layer: the granted, policy-bounded `HttpClient`. */
+  http?: ERef<HttpToolCapability>;
   /**
    * Drop the file-tool write slice; forwarded to `makeMountFsTools`.
    * Cannot be combined with `shell`.

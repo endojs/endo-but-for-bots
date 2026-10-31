@@ -34,12 +34,11 @@ import { makeTool } from '../tool.js';
  *
  * Composition hazard: like every maker here, the records carry the capability's
  * bare method names, so `inspect` collides with `makeShellTool`'s and `fetch`
- * with `makeHttpTool`'s. `makeWorkspaceTools` (`../workspace.js`) qualifies the
- * two `inspect` records as `inspectGitRemote` / `inspectShell` and fails closed
- * on any remaining collision; it composes no HTTP group, so a host combining
- * this maker with `makeHttpTool` must still disambiguate `fetch` itself — one
- * of the colliding names would otherwise shadow a credential-bearing git
- * surface. Nothing in `makeTool` prefixes or dedupes.
+ * with `makeHttpTool`'s. `makeWorkspaceTools` (`../workspace.js`) qualifies
+ * these collisions as `inspectGitRemote` / `inspectShell` and
+ * `fetchGitRemote` / `fetchHttp`. One colliding name can therefore never
+ * shadow the other capability's surface. Nothing in `makeTool` prefixes or
+ * dedupes.
  *
  * Unlike `makeGitMountTools`, these methods are JSON-transparent: every option
  * in and every result out (structured `updatedRefs` / `integration` / `head`

@@ -21,7 +21,7 @@ const grant = label => Far(label, {});
 const testGrants = grants =>
   /** @type {ProvisionWorkspaceGrants} */ (/** @type {unknown} */ (grants));
 
-test('workspace agent installs only its explicit grants with qualified inspect names', async t => {
+test('workspace agent installs explicit grants with qualified tool names', async t => {
   const makeAgent = defineWorkspaceAgent({
     model: { provider: 'ollama', model: 'qwen3' },
   });
@@ -31,6 +31,7 @@ test('workspace agent installs only its explicit grants with qualified inspect n
       git: grant('Git'),
       remote: grant('GitRemote'),
       shell: grant('Shell'),
+      http: grant('HttpClient'),
     }),
   });
   const names = new Set(agent.state.tools.map(tool => tool.name));
@@ -41,7 +42,10 @@ test('workspace agent installs only its explicit grants with qualified inspect n
   t.true(names.has('exec'));
   t.true(names.has('inspectGitRemote'));
   t.true(names.has('inspectShell'));
+  t.true(names.has('fetchGitRemote'));
+  t.true(names.has('fetchHttp'));
   t.false(names.has('inspect'));
+  t.false(names.has('fetch'));
   t.is(names.size, agent.state.tools.length, 'no grant shadows another');
 });
 

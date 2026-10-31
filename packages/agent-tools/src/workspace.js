@@ -18,6 +18,7 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended';
 import { makeGitTool } from './json-tools/git.js';
 import { makeGitMountTools } from './json-tools/git-mount.js';
 import { makeGitRemoteTool } from './json-tools/git-remote.js';
+import { makeHttpTool } from './json-tools/http.js';
 import { makeShellTool } from './json-tools/shell.js';
 import { makeMountFsTools } from './json-tools/fs.js';
 import { concatDistinctTools } from './catalog.js';
@@ -27,7 +28,7 @@ import { concatDistinctTools } from './catalog.js';
  * turns a set of already-granted daemon capabilities into the flat agent-tool
  * catalog a harness advertises to a model, replacing the path-root provisioning
  * sketch (`endo grant fae fs /home/user/project`, a git subprocess rooted at a
- * host path) with composition over the trio's capabilities.
+ * host path) with composition over the granted capabilities.
  *
  * The composition realizes the two rules of daemon-agent-tools § Granting and
  * Provisioning:
@@ -35,9 +36,10 @@ import { concatDistinctTools } from './catalog.js';
  * - **Conditional composition.** A tool group is present in the catalog only
  *   when the caller holds the backing capability; an ungranted group is
  *   *absent*, not present-but-failing. This maps one grant to one group:
- *   `filesystem` → the mount file tools, `git` → the versioning tools (the
- *   JSON-safe git slice plus agent-facing `status` defaults), `remote` →
- *   the push tier, `shell` → the command tools.
+ *   `filesystem` supplies the mount file tools; `git` supplies the versioning
+ *   tools (the JSON-safe git slice plus agent-facing `status` defaults);
+ *   `remote` supplies the push tier; `shell` supplies the command tools; and
+ *   `http` supplies the confined outbound HTTP tools.
  * - **Formula-owned identity rides the granted `Git`.** Commit attribution is
  *   captured at `provideGit` / `provideGitClone` construction time and is
  *   guest-immutable (daemon-agent-tools § Commit-identity boundary). This
@@ -47,10 +49,10 @@ import { concatDistinctTools } from './catalog.js';
  *   argument crosses this seam.
  *
  * The catalog is a flat array with unique tool names, so a harness may index it
- * by name without ambiguity. The two generic `inspect` records are qualified at
- * this composition boundary as `inspectGitRemote` and `inspectShell`. Their
- * individual makers keep their established names, while a combined workspace
- * catalog remains unambiguous.
+ * by name without ambiguity. Names that collide across capability makers are
+ * qualified at this composition boundary: `inspectGitRemote`, `inspectShell`,
+ * `fetchGitRemote`, and `fetchHttp`. The individual makers keep their
+ * established names, while a combined workspace catalog remains unambiguous.
  */
 
 /**
@@ -68,6 +70,7 @@ export const makeWorkspaceTools = ({
   git,
   remote,
   shell,
+  http,
   readOnly = false,
   maxChars,
   shellOptions,
@@ -99,7 +102,10 @@ export const makeWorkspaceTools = ({
     groups.push({
       group: 'gitRemote',
       records: makeGitRemoteTool(remote),
-      names: new Map([['inspect', 'inspectGitRemote']]),
+      names: new Map([
+        ['inspect', 'inspectGitRemote'],
+        ['fetch', 'fetchGitRemote'],
+      ]),
     });
   }
   if (shell !== undefined) {
@@ -107,6 +113,13 @@ export const makeWorkspaceTools = ({
       group: 'shell',
       records: makeShellTool(shell, shellOptions),
       names: new Map([['inspect', 'inspectShell']]),
+    });
+  }
+  if (http !== undefined) {
+    groups.push({
+      group: 'http',
+      records: makeHttpTool(http),
+      names: new Map([['fetch', 'fetchHttp']]),
     });
   }
   return concatDistinctTools(groups);
@@ -129,6 +142,7 @@ export const provisionWorkspaceTools = async ({
   git,
   remote,
   shell,
+  http,
   filesystem,
   readOnly = false,
   maxChars,
@@ -145,6 +159,7 @@ export const provisionWorkspaceTools = async ({
     git,
     remote,
     shell,
+    http,
     readOnly,
     maxChars,
     shellOptions,

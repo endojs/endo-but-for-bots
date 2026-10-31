@@ -55,10 +55,11 @@ What has shipped, by layer:
   JSON-tool tail already in flight when that surface was parked.
 - **Integration.** #707 landed capability-based workspace composition and the
   worked version-controlled-filesystem loop, driven through the provisioned
-  tool catalog. `@endo/agentry/workspace-agent` adds an explicit harness that
-  receives its grants from the caller, qualifies the Shell and GitRemote
-  inspection names, and never discovers additional authority from a guest
-  petstore.
+  tool catalog. Workspace composition includes the confined HTTP group when an
+  `HttpClient` is granted and qualifies colliding Shell, GitRemote, and HTTP
+  method names. `@endo/agentry/workspace-agent` adds an explicit harness that
+  receives its grants from the caller and never discovers additional authority
+  from a guest petstore.
 - **Remaining** (the phased delta in § Implementation Plan below): the
   **sandbox-spawner shell engine** (Phase 2c, gated on
   [endo-posix-sandbox](endo-posix-sandbox.md)); the Phase 4 end-to-end
@@ -117,7 +118,7 @@ What this document owns is the remainder:
 | Shell | `makeShell({ cwd, allowedCommands, ... })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661); plugin provisioning tracked in [endo-fetch](endo-fetch.md) |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661) and is composed by `makeWorkspaceTools`; plugin provisioning tracked in [endo-fetch](endo-fetch.md) |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
 | Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus a Shell-group `grep` grammar; a capability-backed search substrate is an open question | not started |
 
@@ -644,7 +645,8 @@ Phases are ordered by what gates the M3 exit pillar. Phase 0 records
 the landed substrate; Phases 1–3 built the capability tools; Phase 4
 integrates and demonstrates the pillar. The file, Shell, local Git,
 GitRemote, and HTTP slices landed in #614, #615, #616, #705, and #661.
-#707 landed workspace composition and the worked loop. The harness
+#707 landed workspace composition and the worked loop. The catalog now also
+composes the HTTP group when its capability is granted. The harness
 integration uses an explicit `@endo/agentry` harness rather than the dynamic
 petstore discovery attempted in the archived #618, which was closed over
 concerns that discovery could leak dangerous capabilities. The remaining work
@@ -775,9 +777,9 @@ pure confinement core) and `@endo/exo-http-client` (the `HttpClient` /
   agent harness (lal front-loaded binding first; fae's `adopt` accretion
   follows). Progress: `@endo/agentry/workspace-agent` provides the explicit
   harness seam. Its caller supplies every grant, and it neither enumerates nor
-  probes a guest petstore. Workspace composition qualifies the two
-  otherwise-colliding `inspect` records as `inspectShell` and
-  `inspectGitRemote`. No lal or fae agent consumes the harness yet, so no
+  probes a guest petstore. Workspace composition qualifies the colliding
+  records as `inspectShell`, `inspectGitRemote`, `fetchGitRemote`, and
+  `fetchHttp`. No lal or fae agent consumes the harness yet, so no
   observation shows daemon-provisioned grants reaching an agent. The harness
   is new JSON-tool surface under the #731 parking; if the parking is not
   lifted for it, this item is met through code mode instead.

@@ -86,15 +86,15 @@ import { defineWorkspaceAgent } from '@endo/agentry/workspace-agent';
 
 const makeAgent = defineWorkspaceAgent({ model, instructions });
 const agent = await makeAgent({
-  workspaceGrants: { git, remote, shell },
+  workspaceGrants: { git, remote, shell, http },
   credentials,
 });
 ```
 
-In the composed catalog, the Shell grant's standalone `inspect` record always
-appears as `inspectShell`, and the GitRemote grant's as `inspectGitRemote`,
-whether or not the other grant is present. The underlying capability-specific
-makers retain their existing names.
+In the composed catalog, colliding standalone method names always appear as
+`inspectShell`, `inspectGitRemote`, `fetchGitRemote`, and `fetchHttp`, whether
+or not the other grant is present. The underlying capability-specific makers
+retain their existing names.
 
 `workspaceGrants.readOnly` only drops the file tools' write slice
 (`mountWriteText`). It does not attenuate the other grants: a `git` grant still
