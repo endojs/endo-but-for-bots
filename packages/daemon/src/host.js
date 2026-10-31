@@ -2348,6 +2348,36 @@ export const makeHostMaker = ({
       return value;
     };
 
+    /** @type {EndoHost['makeFromMount']} */
+    const makeFromMount = async (workerName, sourceName, options = {}) => {
+      const { entry, registryName, offline, ...capletOptions } = options;
+      const sourceId = await E(directory).identify(...namePathFrom(sourceName));
+      if (sourceId === undefined) {
+        throw new TypeError(`Unknown pet name for source: ${q(sourceName)}`);
+      }
+      const source = await provide(/** @type {FormulaIdentifier} */ (sourceId));
+      // A compartment map wins over a package.json, since a tree that holds
+      // both is an archive whose package.json is just one of its files.
+      if (await E(/** @type {any} */ (source)).has('compartment-map.json')) {
+        if (
+          entry !== undefined ||
+          registryName !== undefined ||
+          offline !== undefined
+        ) {
+          throw new TypeError(
+            `Source ${q(sourceName)} holds a compartment-map.json, which takes no entry, registry, or offline option`,
+          );
+        }
+        return makeFromTree(workerName, sourceName, capletOptions);
+      }
+      if (await E(/** @type {any} */ (source)).has('package.json')) {
+        return makeFromPackage(workerName, sourceName, options);
+      }
+      throw new TypeError(
+        `Source ${q(sourceName)} has neither a compartment-map.json nor a package.json at its root`,
+      );
+    };
+
     /**
      * Attempts to introduce the given names to the specified agent. The agent in question
      * must be formulated before this function is called.
@@ -3259,6 +3289,7 @@ export const makeHostMaker = ({
       makeArchive,
       makeFromTree,
       makeFromPackage,
+      makeFromMount,
       stageTree,
       makeUnconfinedFromTree,
       cancel,

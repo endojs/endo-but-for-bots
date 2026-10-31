@@ -18,8 +18,14 @@ import path from 'path';
 import http from 'http';
 import zlib from 'zlib';
 import crypto from 'crypto';
+import url from 'url';
+import fs from 'fs';
 import fsp from 'fs/promises';
 import { E } from '@endo/eventual-send';
+import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { defaultParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
+import { ZipReader } from '@endo/zip/reader.js';
 import { makeCancelKit } from '@endo/cancel';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import {
@@ -275,3 +281,104 @@ test.serial(
     });
   },
 );
+
+/**
+ * Write the source archive of `test/fixtures/archive-env-echo` out as a
+ * directory, so its root holds a compartment-map.json, and mount it.
+ *
+ * @param {any} host
+ * @param {{ statePath: string }} config
+ * @param {string} mountName
+ */
+const mountCompartmentMapTree = async (host, config, mountName) => {
+  const fixtureLocation = new URL('fixtures/archive-env-echo/', import.meta.url)
+    .href;
+  const archiveBytes = await makeCompartmentArchive(
+    makeReadPowers({ fs, url, crypto, path }),
+    fixtureLocation,
+    { parserForLanguage: defaultParserForLanguage },
+  );
+  const treeDirectory = path.join(config.statePath, '..', mountName);
+  for (const [archivePath, file] of new ZipReader(archiveBytes).files) {
+    const filePath = path.join(treeDirectory, archivePath);
+    // eslint-disable-next-line no-await-in-loop
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    // eslint-disable-next-line no-await-in-loop
+    await fsp.writeFile(filePath, file.content);
+  }
+  await E(host).provideMount(treeDirectory, mountName, { readOnly: true });
+};
+
+test.serial(
+  'makeFromMount runs a package.json root through makeFromPackage',
+  async t => {
+    const { host } = await prepare();
+    const caplet = await E(host).makeFromMount(undefined, 'entry-mount', {
+      registryName: '@registry',
+      env: { HELLO: 'from-mount' },
+    });
+    t.deepEqual(await E(caplet).majors(), { entry: 1, dependency: 2 });
+    t.is(await E(caplet).getEnvVar('HELLO'), 'from-mount');
+  },
+);
+
+test.serial(
+  'makeFromMount runs a compartment-map.json root through makeFromTree',
+  async t => {
+    const { host, config } = await prepare();
+    await mountCompartmentMapTree(host, config, 'tree-mount');
+    const caplet = await E(host).makeFromMount(undefined, 'tree-mount', {
+      env: { HELLO: 'from-tree' },
+    });
+    t.is(await E(caplet).getEnvVar('HELLO'), 'from-tree');
+  },
+);
+
+test.serial(
+  'makeFromMount refuses package options for a compartment-map.json root',
+  async t => {
+    const { host, config } = await prepare();
+    await mountCompartmentMapTree(host, config, 'tree-mount');
+    await t.throwsAsync(
+      E(host).makeFromMount(undefined, 'tree-mount', { offline: true }),
+      { message: /compartment-map\.json, which takes no entry/ },
+    );
+  },
+);
+
+test.serial(
+  'makeFromMount refuses a root with neither a compartment map nor a package',
+  async t => {
+    const { host, config } = await prepare();
+    const emptyDirectory = path.join(config.statePath, '..', 'empty');
+    await fsp.mkdir(emptyDirectory);
+    await E(host).provideMount(emptyDirectory, 'empty-mount', {
+      readOnly: true,
+    });
+    await t.throwsAsync(E(host).makeFromMount(undefined, 'empty-mount'), {
+      message: /neither a compartment-map\.json nor a package\.json/,
+    });
+  },
+);
+
+test.serial(
+  'makeFromMount offline succeeds once the registry holds every package',
+  async t => {
+    const { host } = await prepare();
+    await E(host).makeFromMount(undefined, 'entry-mount');
+    const caplet = await E(host).makeFromMount(undefined, 'entry-mount', {
+      offline: true,
+    });
+    t.deepEqual(await E(caplet).majors(), { entry: 1, dependency: 2 });
+  },
+);
+
+test.serial('makeFromMount reports an unknown registry name', async t => {
+  const { host } = await prepare();
+  await t.throwsAsync(
+    E(host).makeFromMount(undefined, 'entry-mount', {
+      registryName: 'no-such-registry',
+    }),
+    { message: /Unknown pet name for registry/ },
+  );
+});
