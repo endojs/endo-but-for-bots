@@ -45,6 +45,16 @@ test('endo make --help advertises --mount, --registry, and --offline', async t =
   t.regex(stdout, /--offline/);
 });
 
+test('endo run --mount refuses arguments beyond its entry', async t => {
+  const { exitCode, stderr } = await execa(
+    process.execPath,
+    [endoBin, 'run', '--mount', 'app', 'main.js', 'extra'],
+    { reject: false },
+  );
+  t.not(exitCode, 0);
+  t.regex(stderr, /takes no arguments beyond its entry/);
+});
+
 test('checkMountFlags accepts each source on its own', t => {
   t.is(checkMountFlags({ mountName: 'app' }), undefined);
   t.is(
