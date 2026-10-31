@@ -44,7 +44,7 @@ import { makeNodeHostToolPowers } from './host-tool-powers-node.js';
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, ManagerWorkerFacet, ManagerPowers, FilePowers, WorkerManagerFacet } from './types.js' */
 
-// Re-export shared powers from daemon-node-powers.
+// Re-export shared powers from manager-node-powers.
 export { makeFilePowers, makeCryptoPowers, makeManagerPersistencePowers };
 
 /**

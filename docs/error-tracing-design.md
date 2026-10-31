@@ -249,7 +249,7 @@ than a Node `Buffer`-specific calculation.
 ### Daemon aggregator
 
 The aggregate lives in `daemonCore` (in
-[`packages/daemon/src/daemon.js`](../packages/daemon/src/daemon.js))
+[`packages/daemon/src/manager.js`](../packages/daemon/src/manager.js))
 and is constructed once per daemon process.
 Its shape is:
 
@@ -391,7 +391,7 @@ without requiring an exit-error context.
 - The daemon does not expose the aggregate over the gateway to
   remote peers.
   The `traces` facet is reachable through the host formula only,
-  and the existing gateway check (`src/daemon.js`'s "Gateway can
+  and the existing gateway check (`src/manager.js`'s "Gateway can
   only provide local values" guard) is sufficient.
 - Error messages in the buffer are the same strings SES's causal
   console would already print to the worker log.
@@ -439,12 +439,12 @@ without requiring an exit-error context.
 - `packages/daemon/src/worker-node.js` — install the
   `process.on('unhandledRejection')` handler that calls
   `pushTrace`.
-- `packages/daemon/src/daemon-go-powers.js` and
-  `packages/daemon/src/daemon-node-powers.js` — pass the daemon's
+- `packages/daemon/src/manager-go-powers.js` and
+  `packages/daemon/src/manager-node-powers.js` — pass the daemon's
   per-worker `marshalSaveError` through `makeNetstringCapTP` so
   the daemon side records the daemon-side `errorId` and registers
   aliases.
-- `packages/daemon/src/daemon.js` — own the aggregate buffer and
+- `packages/daemon/src/manager.js` — own the aggregate buffer and
   its indices; expose `recordTrace`, `aliasTrace`, `lookupTrace`,
   and `recentTraces` through `daemonCore`; thread them into
   `makeDaemonFacetForWorker` and into `makeHostMaker`.

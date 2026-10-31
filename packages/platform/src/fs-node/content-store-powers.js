@@ -20,7 +20,7 @@ import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
  * blobs with.  Platform owns the `ContentStoreFilePowers` contract
  * (`@endo/platform/fs/lite/types`), so it also owns the canonical Node
  * implementation of it — the same subset the daemon's own
- * `daemon-node-powers.js` builds — rather than leaving each consumer
+ * `manager-node-powers.js` builds — rather than leaving each consumer
  * (or test) to hand-roll a duplicate over `node:fs`.
  *
  * @returns {ContentStoreFilePowers}
