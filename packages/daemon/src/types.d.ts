@@ -14,8 +14,10 @@ import type {
 import type { HttpClient, HttpClientControl } from '@endo/exo-http-client';
 import type {
   DirectoryWriteSource,
+  File as PlatformFile,
   PathEntry,
   PathEntryIssuer,
+  ReadableBlobSource,
   ReadableTree,
   SnapshotTree,
   TreeEntry,
@@ -1420,6 +1422,11 @@ export interface EndoReadableTree {
   lookup(
     path: string | readonly string[],
   ): Promise<EndoReadableTree | EndoReadable>;
+  subView(path: string | readonly string[]): Promise<EndoReadableTree>;
+  followNameChanges(): import('@endo/exo-stream').PassableReader<
+    never,
+    undefined
+  >;
   help(method?: string): string;
 }
 
@@ -1552,7 +1559,7 @@ export interface EndoMountFile {
  * `Directory` contract.  Overlapping methods (`has`, `list`, `lookup`,
  * `write`, `remove`, `move`, `copy`, `makeDirectory`, `snapshot`) match
  * the platform shapes; mount-specific extensions (`entry`, `stat`,
- * `displayPath`, `readText`, `maybeReadText`, `writeText`, `makeFile`)
+ * `displayPath`, `readText`, `maybeReadText`, `writeText`)
  * are additive; `readOnly()` narrows to a structural `ReadableTree`
  * view.
  */
@@ -1645,8 +1652,8 @@ export interface EndoMount extends PathEntryIssuer {
   makeDirectory(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
   makeFile(
     path: string | string[] | EndoMountEntry,
-    content?: string,
-  ): Promise<void>;
+    content?: ReadableBlobSource | string,
+  ): Promise<PlatformFile>;
   remove(path: string | string[] | EndoMountEntry): Promise<void>;
   move(
     from: string | string[] | EndoMountEntry,

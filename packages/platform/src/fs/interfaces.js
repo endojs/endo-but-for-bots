@@ -180,6 +180,10 @@ harden(ReadableTreeInterface);
 
 export const SnapshotTreeInterface = M.interface('SnapshotTree', {
   ...readableTreeMethodGuards,
+  subView: M.call(NameOrPathShape).returns(M.promise()),
+  // Immutable snapshots cannot produce changes. They expose the observation
+  // method uniformly as an immediately-terminating reader.
+  followNameChanges: M.call().returns(M.remotable('PassableReader')),
   sha256: M.call().returns(M.string()),
   size: M.call().returns(M.promise()),
 });
@@ -220,6 +224,9 @@ harden(FileInterface);
 
 export const DirectoryInterface = M.interface('Directory', {
   ...readableTreeMethodGuards,
+  // Confined, transient subtree view. Unlike `lookup`, the returned
+  // Directory establishes the selected path as its own root.
+  subView: M.call(NameOrPathShape).returns(M.promise()),
   write: M.call(M.arrayOf(M.string()), M.remotable()).returns(M.promise()),
   remove: M.call(M.arrayOf(M.string())).returns(M.promise()),
   move: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(
@@ -229,6 +236,11 @@ export const DirectoryInterface = M.interface('Directory', {
     M.promise(),
   ),
   makeDirectory: M.call(M.arrayOf(M.string())).returns(M.promise()),
+  // Construct a mutable file and return its live File capability. The
+  // optional initial value is either UTF-8 text or a ReadableBlob source.
+  makeFile: M.call(NameOrPathShape)
+    .optional(M.or(M.string(), M.remotable()))
+    .returns(M.promise()),
   readOnly: M.call().returns(M.remotable('ReadableTree')),
   snapshot: M.call().returns(M.promise()),
 });

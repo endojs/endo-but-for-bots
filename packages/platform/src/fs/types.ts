@@ -100,6 +100,11 @@ export type DirectoryWriteSource = ReadableBlobSource | ReadableTree;
  * manifest byte length.
  */
 export type SnapshotTree = ReadableTree & {
+  subView: (petNamePath: string | readonly string[]) => Promise<SnapshotTree>;
+  followNameChanges: () => import('@endo/exo-stream').PassableReader<
+    never,
+    undefined
+  >;
   sha256: () => string;
   size: () => Promise<bigint>;
 };
@@ -253,11 +258,16 @@ export interface Directory {
   has: (...path: string[]) => Promise<boolean>;
   list: (...path: string[]) => Promise<string[]>;
   lookup: (path: string | string[]) => Promise<unknown>;
+  subView: (path: string | string[]) => Promise<Directory>;
   write: (path: string[], value: DirectoryWriteSource) => Promise<void>;
   remove: (path: string[]) => Promise<void>;
   move: (from: string[], to: string[]) => Promise<void>;
   copy: (from: string[], to: string[]) => Promise<void>;
   makeDirectory: (path: string[]) => Promise<Directory>;
+  makeFile: (
+    path: string | string[],
+    initial?: ReadableBlobSource | string,
+  ) => Promise<File>;
   readOnly: () => ReadableTree;
   snapshot: () => Promise<SnapshotTree>;
 }

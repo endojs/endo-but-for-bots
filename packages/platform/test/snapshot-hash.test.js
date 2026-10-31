@@ -11,6 +11,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { encodeBase64 } from '@endo/base64';
 import { decodeHex } from '@endo/hex';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { snapshotBlobMethods } from '../src/fs/snapshot-blob.js';
 import { snapshotTreeMethods } from '../src/fs/snapshot-tree.js';
@@ -89,4 +90,41 @@ test('SnapshotTree.size() returns the manifest size', async t => {
     sampleHex,
   );
   t.is(await tree.size(), 9n);
+});
+
+test('SnapshotTree.followNameChanges terminates immediately', async t => {
+  const tree = snapshotTreeMethods(
+    /** @type {any} */ (makeStubStore(new Uint8Array(2), true)),
+    sampleHex,
+  );
+  const changes = [];
+  for await (const change of iterateReader(tree.followNameChanges())) {
+    changes.push(change);
+  }
+  t.deepEqual(changes, []);
+});
+
+test('SnapshotTree.subView returns only tree children', async t => {
+  const childTree = harden({ label: 'child tree' });
+  const store = harden({
+    fetch: () =>
+      harden({
+        json: async () =>
+          harden([
+            harden(['directory', 'tree', 'child-tree-hash']),
+            harden(['file', 'blob', 'child-blob-hash']),
+          ]),
+        makeFileReader: makeBytesReader(new Uint8Array()),
+      }),
+    loadBlob: () => harden({}),
+    loadTree: childHash => {
+      t.is(childHash, 'child-tree-hash');
+      return childTree;
+    },
+  });
+  const tree = snapshotTreeMethods(/** @type {any} */ (store), sampleHex);
+  t.is(await tree.subView('directory'), /** @type {any} */ (childTree));
+  await t.throwsAsync(() => tree.subView('file'), {
+    message: /not a tree/,
+  });
 });

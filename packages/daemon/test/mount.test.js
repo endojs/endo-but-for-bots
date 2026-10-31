@@ -489,8 +489,9 @@ test('writeText rejects a foreign (non-entry) object as path argument (documente
 test('makeFile with no content creates an empty file when absent', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await E(mount).makeFile('empty.txt');
+  const file = await E(mount).makeFile('empty.txt');
   t.is(fs.readFileSync(path.join(rootPath, 'empty.txt'), 'utf8'), '');
+  t.is(await E(file).text(), '');
 });
 
 test('makeFile with no content is a no-op when the file already exists', async t => {
@@ -505,8 +506,21 @@ test('makeFile with a string overwrites with that string', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).makeFile('s.txt', 'first');
-  await E(mount).makeFile('s.txt', 'second');
+  const file = await E(mount).makeFile('s.txt', 'second');
   t.is(fs.readFileSync(path.join(rootPath, 's.txt'), 'utf8'), 'second');
+  t.is(await E(file).text(), 'second');
+});
+
+test('makeFile streams a ReadableBlob and returns its file capability', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const blob = bytesReaderFromIterator([encodeUtf8('blob content')]);
+  const file = await E(mount).makeFile('blob.txt', blob);
+  t.is(
+    fs.readFileSync(path.join(rootPath, 'blob.txt'), 'utf8'),
+    'blob content',
+  );
+  t.is(await E(file).text(), 'blob content');
 });
 
 test('makeFile rejects mutable Uint8Array at the exo guard', async t => {

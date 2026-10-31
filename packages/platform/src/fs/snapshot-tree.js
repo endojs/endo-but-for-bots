@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { encodeBase64 } from '@endo/base64';
 import { decodeHex } from '@endo/hex';
 
@@ -43,6 +44,28 @@ export const snapshotTreeMethods = (store, sha256) => {
       return store.loadTree(childSha256);
     }
     throw new TypeError(`Unknown entry type: ${JSON.stringify(childType)}`);
+  };
+
+  /**
+   * @param {string | string[]} petNamePath
+   */
+  const lookup = async petNamePath => {
+    const namePath =
+      typeof petNamePath === 'string' ? [petNamePath] : petNamePath;
+    const entries = await getEntries();
+    const [head, ...tail] = namePath;
+    const entry = entries.find(([name]) => name === head);
+    if (!entry) {
+      throw new TypeError(`Unknown name: ${JSON.stringify(head)}`);
+    }
+    const child = resolveChild(entry[1], entry[2]);
+    if (tail.length === 0) {
+      return child;
+    }
+    return tail.reduce(
+      (hub, name) => E(hub).lookup(name),
+      /** @type {any} */ (child),
+    );
   };
 
   return harden({
@@ -89,31 +112,36 @@ export const snapshotTreeMethods = (store, sha256) => {
       const child = resolveChild(entry[1], entry[2]);
       return E(/** @type {SnapshotTree} */ (child)).list(...tail);
     },
+    lookup,
     /**
      * @param {string | string[]} petNamePath
      */
-    lookup: async petNamePath => {
+    subView: async petNamePath => {
       const namePath =
         typeof petNamePath === 'string' ? [petNamePath] : petNamePath;
+      if (namePath.length === 0) {
+        return store.loadTree(sha256);
+      }
       const entries = await getEntries();
       const [head, ...tail] = namePath;
       const entry = entries.find(([name]) => name === head);
       if (!entry) {
         throw new TypeError(`Unknown name: ${JSON.stringify(head)}`);
       }
-      const child = resolveChild(entry[1], entry[2]);
-      if (tail.length === 0) {
-        return child;
+      if (entry[1] !== 'tree') {
+        throw new TypeError('subView target is not a tree');
       }
-      return tail.reduce(
-        (hub, name) => E(hub).lookup(name),
-        /** @type {any} */ (child),
-      );
+      const child = store.loadTree(entry[2]);
+      return tail.length === 0 ? child : E(child).subView(tail);
     },
+    // D6 of the filesystem-interface reconciliation requires immutable CAS
+    // trees to expose a uniform observation surface. A closed reader states
+    // that no change can ever occur through this snapshot.
+    followNameChanges: () => readerFromIterator(harden([])),
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup).'
+        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup, subView, followNameChanges).'
         : `No documentation for method ${method}.`,
   });
 };

@@ -98,11 +98,13 @@ const PLATFORM_DIRECTORY_METHODS = [
   'has',
   'list',
   'lookup',
+  'subView',
   'write',
   'remove',
   'move',
   'copy',
   'makeDirectory',
+  'makeFile',
   'readOnly',
   'snapshot',
 ];
@@ -224,15 +226,13 @@ test('EndoMount exposes every method on PlatformDirectoryInterface', async t => 
 
 /**
  * Extensions beyond the minimal platform `Directory` contract.
- * `entry` / `stat` / `readText` / `maybeReadText` / `writeText` / `makeFile`
+ * `entry` / `stat` / `readText` / `maybeReadText` / `writeText`
  * are mount-specific shortcuts. `subView` is the catalog confined-sub-root
  * method (shared with the extended `Directory`, not strictly mount-specific);
- * it is listed here only because the minimal `lite` `Directory` vocabulary does
- * not yet carry it — see designs/fs-interface-consolidation.md (C2/C5) for
- * whether the vocabulary should grow to include it. `maybeLookup` is the
- * `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the lite
- * `Directory` vocabulary. (`help` is now part of the platform contract, so it
- * is not an extension.)
+ * it is now part of the minimal `lite` `Directory` vocabulary. `maybeLookup`
+ * is the `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the
+ * lite `Directory` vocabulary. (`help` is now part of the platform contract,
+ * so it is not an extension.)
  */
 const ENDOMOUNT_EXTENSIONS = [
   'entry',
@@ -241,8 +241,6 @@ const ENDOMOUNT_EXTENSIONS = [
   'readText',
   'maybeReadText',
   'writeText',
-  'makeFile',
-  'subView',
   'maybeLookup',
   // Recursive glob search, delegated to the @endo/platform search engine.
   'glob',

@@ -674,15 +674,15 @@ const makeMountExo = ctx => {
   };
 
   /**
-   * @param {string | string[] | object} pathArg
+   * @param {string | string[] | object} pathArgument
    * @returns {string[]}
    */
-  const segmentsFromPathArg = pathArg => {
-    if (Array.isArray(pathArg)) {
-      return normalizeSegments(currentSegments, pathArg, deniedSegments);
+  const segmentsFromPathArgument = pathArgument => {
+    if (Array.isArray(pathArgument)) {
+      return normalizeSegments(currentSegments, pathArgument, deniedSegments);
     }
-    if (typeof pathArg === 'object' && pathArg !== null) {
-      const record = mountEntryRecords.get(pathArg);
+    if (typeof pathArgument === 'object' && pathArgument !== null) {
+      const record = mountEntryRecords.get(pathArgument);
       if (record === undefined) {
         throw new Error('Path argument is not a daemon-minted mount entry');
       }
@@ -691,10 +691,10 @@ const makeMountExo = ctx => {
       }
       return record.segments;
     }
-    if (typeof pathArg !== 'string') {
+    if (typeof pathArgument !== 'string') {
       throw new Error(`Path must be a string, array, or mount entry`);
     }
-    return normalizeSegments(currentSegments, [pathArg], deniedSegments);
+    return normalizeSegments(currentSegments, [pathArgument], deniedSegments);
   };
 
   /**
@@ -716,10 +716,10 @@ const makeMountExo = ctx => {
    * `has(...segments)`.  The dispatch layers two contracts:
    *
    * 1. A single non-null object argument is treated as an entry value;
-   *    `segmentsFromPathArg` validates the entry's mount-root
+   *    `segmentsFromPathArgument` validates the entry's mount-root
    *    provenance (or rejects a non-entry object) and returns its
-   *    segments.  The `args[0] !== null` guard here keeps `null` from
-   *    falling into this branch — `segmentsFromPathArg` would reject
+   *    segments. The explicit non-null check keeps `null` from falling into
+   *    this branch — `segmentsFromPathArgument` would reject
    *    `null` on its own (`typeof null === 'object'`), but the explicit
    *    guard makes the dispatch read as "string-or-entry-not-null"
    *    rather than relying on the downstream throw for shape.
@@ -731,30 +731,34 @@ const makeMountExo = ctx => {
    * accidental call like `has(null)` reaches the loop's
    * `typeof arg !== 'string'` reject rather than the entry branch.
    *
-   * @param {Array<string | object>} args
+   * @param {Array<string | object>} pathArguments
    * @returns {string[]}
    */
-  const segmentsFromHasArgs = args => {
-    if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
-      return segmentsFromPathArg(args[0]);
+  const segmentsFromHasArguments = pathArguments => {
+    if (
+      pathArguments.length === 1 &&
+      typeof pathArguments[0] === 'object' &&
+      pathArguments[0] !== null
+    ) {
+      return segmentsFromPathArgument(pathArguments[0]);
     }
-    for (const arg of args) {
-      if (typeof arg !== 'string') {
+    for (const argument of pathArguments) {
+      if (typeof argument !== 'string') {
         throw new Error('has() path segments must be strings');
       }
     }
     return normalizeSegments(
       currentSegments,
-      /** @type {string[]} */ (args),
+      /** @type {string[]} */ (pathArguments),
       deniedSegments,
     );
   };
 
   /**
-   * @param {string | string[] | object} pathArg
+   * @param {string | string[] | object} pathArgument
    */
-  const resolvePathArg = pathArg =>
-    resolveFromRoot(segmentsFromPathArg(pathArg));
+  const resolvePathArgument = pathArgument =>
+    resolveFromRoot(segmentsFromPathArgument(pathArgument));
 
   /**
    * @param {string} target
@@ -810,10 +814,10 @@ const makeMountExo = ctx => {
   // one — `glorp` calling `glob`/`grep`, `copy` calling `write`, `write`
   // recursing — names it directly instead of reaching through `this`. The
   // exo is assembled from the resulting bag of functions.
-  const has = async (...args) => {
+  const has = async (...pathArguments) => {
     await null;
     assertLive();
-    const pathSegments = segmentsFromHasArgs(args);
+    const pathSegments = segmentsFromHasArguments(pathArguments);
     if (pathSegments.length === 0) {
       return true;
     }
@@ -999,13 +1003,13 @@ const makeMountExo = ctx => {
     return grep(grepPattern, paths, { maxResults });
   };
 
-  const lookup = async pathArg => {
+  const lookup = async pathArgument => {
     await null;
     let segments;
     try {
-      segments = segmentsFromPathArg(pathArg);
+      segments = segmentsFromPathArgument(pathArgument);
     } catch (error) {
-      if (typeof pathArg === 'string' && pathArg.includes('/')) {
+      if (typeof pathArgument === 'string' && pathArgument.includes('/')) {
         const cause = /** @type {Error} */ (error);
         throw new Error(
           `${cause.message}; use an array of path segments for a nested path`,
@@ -1017,16 +1021,16 @@ const makeMountExo = ctx => {
     return openExisting(resolveFromRoot(segments), segments);
   };
 
-  // The `ReadableNameHub` lookup-or-undefined primitive: resolve `pathArg`
+  // The `ReadableNameHub` lookup-or-undefined primitive: resolve the path
   // and return its handle, or `undefined` when the path is absent (or
   // escapes confinement). Mirrors `maybeReadText`'s broad catch — any
   // resolution failure yields `undefined` rather than throwing.
-  const maybeLookup = async pathArg => {
+  const maybeLookup = async pathArgument => {
     await null;
     // A revoked mount throws rather than masquerading the revocation as a
     // benign "absent" undefined; the gate runs before the swallowing try.
     assertLive();
-    const segments = segmentsFromPathArg(pathArg);
+    const segments = segmentsFromPathArgument(pathArgument);
     try {
       return await openExisting(resolveFromRoot(segments), segments);
     } catch {
@@ -1034,9 +1038,9 @@ const makeMountExo = ctx => {
     }
   };
 
-  const subView = async pathArg => {
+  const subView = async pathArgument => {
     await null;
-    const segments = segmentsFromPathArg(pathArg);
+    const segments = segmentsFromPathArgument(pathArgument);
     const target = resolveFromRoot(segments);
     await assertConfined(target, confinementRoot, filePowers);
     if (!(await filePowers.isDirectory(target))) {
@@ -1056,7 +1060,7 @@ const makeMountExo = ctx => {
     //
     // Mint a FRESH `rootId` so the sub-view is its own identity domain:
     // a `mountEntry` minted by the parent (whose `segments` are
-    // parent-root-relative) is rejected by `segmentsFromPathArg`'s
+    // parent-root-relative) is rejected by the path argument normalizer's
     // `record.rootId !== rootId` check rather than being silently
     // re-based against the sub-view root. Entries minted *by* the
     // sub-view capture this new id (via the new exo's closure) and keep
@@ -1076,10 +1080,10 @@ const makeMountExo = ctx => {
     return makeEntry(segmentsFromEntryPathArgument(pathArgument));
   };
 
-  const makeDirectory = async pathArg => {
+  const makeDirectory = async pathArgument => {
     await null;
     assertWritable();
-    const segments = segmentsFromPathArg(pathArg);
+    const segments = segmentsFromPathArgument(pathArgument);
     const target = resolveFromRoot(segments);
     await assertConfinedOrAncestor(target, confinementRoot, filePowers);
     await filePowers.makePath(target);
@@ -1090,10 +1094,11 @@ const makeMountExo = ctx => {
     return openExisting(target, segments);
   };
 
-  const makeFile = async (pathArg, content) => {
+  const makeFile = async (pathArgument, content) => {
     await null;
     assertWritable();
-    const target = resolvePathArg(pathArg);
+    const targetSegments = segmentsFromPathArgument(pathArgument);
+    const target = resolveFromRoot(targetSegments);
     await assertConfinedOrAncestor(target, confinementRoot, filePowers);
     const parent = filePowers.joinPath(target, '..');
     await filePowers.makePath(parent);
@@ -1104,25 +1109,22 @@ const makeMountExo = ctx => {
       if (!(await filePowers.exists(target))) {
         await filePowers.writeFileText(target, '');
       }
-      return;
+      return openExisting(target, targetSegments);
     }
     if (typeof content === 'string') {
       await filePowers.writeFileText(target, content);
-      return;
+      return openExisting(target, targetSegments);
     }
-    // Binary content is supplied via `write(path, readableBlob)` /
-    // `copy(from, to)` rather than `makeFile`: mutable typed arrays
-    // are rejected at the exo boundary, so a `Uint8Array` argument
-    // cannot reach this method through CapTP. Callers that hold raw
-    // bytes wrap them in a `ReadableBlob` and use `write()`.
-    throw new Error(
-      'makeFile content must be a string (use write() with a ReadableBlob for binary content)',
-    );
+    // The guard admits only a remotable here. `write` performs the semantic
+    // ReadableBlob check and streams the bytes through a scratch file before
+    // atomically replacing the target.
+    await write(pathArgument, content);
+    return openExisting(target, targetSegments);
   };
 
-  const stat = async pathArg => {
+  const stat = async pathArgument => {
     await null;
-    const target = resolvePathArg(pathArg);
+    const target = resolvePathArgument(pathArgument);
     try {
       await assertConfined(target, confinementRoot, filePowers);
       return filePowers.statPath(target);
@@ -1131,16 +1133,16 @@ const makeMountExo = ctx => {
     }
   };
 
-  const readText = async pathArg => {
+  const readText = async pathArgument => {
     await null;
-    const target = resolvePathArg(pathArg);
+    const target = resolvePathArgument(pathArgument);
     await assertConfined(target, confinementRoot, filePowers);
     return filePowers.readFileText(target);
   };
 
-  const maybeReadText = async pathArg => {
+  const maybeReadText = async pathArgument => {
     await null;
-    const target = resolvePathArg(pathArg);
+    const target = resolvePathArgument(pathArgument);
     try {
       await assertConfined(target, confinementRoot, filePowers);
       return await filePowers.readFileText(target);
@@ -1149,29 +1151,29 @@ const makeMountExo = ctx => {
     }
   };
 
-  const writeText = async (pathArg, content) => {
+  const writeText = async (pathArgument, content) => {
     await null;
     assertWritable();
-    const target = resolvePathArg(pathArg);
+    const target = resolvePathArgument(pathArgument);
     await assertConfinedOrAncestor(target, confinementRoot, filePowers);
     const parent = filePowers.joinPath(target, '..');
     await filePowers.makePath(parent);
     await filePowers.writeFileText(target, content);
   };
 
-  const remove = async pathArg => {
+  const remove = async pathArgument => {
     await null;
     assertWritable();
-    const target = resolvePathArg(pathArg);
+    const target = resolvePathArgument(pathArgument);
     await assertConfined(target, confinementRoot, filePowers);
     await filePowers.removePath(target);
   };
 
-  const move = async (fromArg, toArg) => {
+  const move = async (fromArgument, toArgument) => {
     await null;
     assertWritable();
-    const from = resolvePathArg(fromArg);
-    const to = resolvePathArg(toArg);
+    const from = resolvePathArgument(fromArgument);
+    const to = resolvePathArgument(toArgument);
     await assertConfined(from, confinementRoot, filePowers);
     await assertConfinedOrAncestor(to, confinementRoot, filePowers);
     await filePowers.renamePath(from, to);
@@ -1322,10 +1324,10 @@ const makeMountExo = ctx => {
     return snapshotTree(exo);
   };
 
-  const write = async (pathArg, value) => {
+  const write = async (pathArgument, value) => {
     await null;
     assertWritable();
-    const segments = segmentsFromPathArg(pathArg);
+    const segments = segmentsFromPathArgument(pathArgument);
     const target = resolveFromRoot(segments);
     await assertConfinedOrAncestor(target, confinementRoot, filePowers);
     const parent = filePowers.joinPath(target, '..');
@@ -1390,10 +1392,10 @@ const makeMountExo = ctx => {
     );
   };
 
-  const copy = async (fromArg, toArg) => {
+  const copy = async (fromArgument, toArgument) => {
     await null;
     assertWritable();
-    const fromSegments = segmentsFromPathArg(fromArg);
+    const fromSegments = segmentsFromPathArgument(fromArgument);
     const from = resolveFromRoot(fromSegments);
     await assertConfined(from, confinementRoot, filePowers);
     // Reject copying a tree into its own descendant.  `write()`
@@ -1404,7 +1406,7 @@ const makeMountExo = ctx => {
     // loop until the filesystem is exhausted.  The first check is a
     // segment-prefix test on the resolved paths: `to` is a descendant
     // of `from` when `from`'s segments are a strict prefix of `to`'s.
-    const toSegments = segmentsFromPathArg(toArg);
+    const toSegments = segmentsFromPathArgument(toArgument);
     const to = resolveFromRoot(toSegments);
     const rejectDescendant = () => {
       throw new Error(
@@ -1434,7 +1436,7 @@ const makeMountExo = ctx => {
     const source = await openExisting(from, fromSegments);
     await write(
       /** @type {string | string[] | import('./types.js').EndoMountEntry} */ (
-        toArg
+        toArgument
       ),
       source,
     );
@@ -1546,8 +1548,8 @@ const makeReadableTreeView = readOnlyMount => {
       await walk(start, []);
       return harden(entries);
     },
-    async lookup(pathArg) {
-      const result = await E(readOnlyMount).lookup(pathArg);
+    async lookup(pathArgument) {
+      const result = await E(readOnlyMount).lookup(pathArgument);
       // The underlying mount returns either a sub-mount (an
       // EndoMount) or a mount file.  Either way it is already
       // read-only because the parent mount is; we wrap it in the
