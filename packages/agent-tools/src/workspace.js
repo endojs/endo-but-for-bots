@@ -97,6 +97,7 @@ export const makeWorkspaceTools = ({
   remote,
   shell,
   readOnly = false,
+  gitFacet = 'writer',
   maxChars,
   shellOptions,
 } = {}) => {
@@ -112,7 +113,14 @@ export const makeWorkspaceTools = ({
     // The versioning layer: the JSON-safe git slice (staging / commit / log /
     // diff / branch navigation) plus status's agent-facing default, both over
     // the same granted `Git` whose formula-owned identity attributes commits.
-    groups.push({ group: 'git', records: makeGitTool(git) });
+    // `gitFacet` selects the catalog the granted facet can actually serve.
+    groups.push({
+      group: 'git',
+      records:
+        gitFacet === 'reader'
+          ? makeGitTool(git, { facet: 'reader' })
+          : makeGitTool(git),
+    });
     groups.push({ group: 'gitMount', records: makeGitMountTools(git) });
   }
   if (remote !== undefined) {
@@ -146,6 +154,7 @@ export const provisionWorkspaceTools = async ({
   shell,
   filesystem,
   readOnly = false,
+  gitFacet,
   maxChars,
   shellOptions,
 } = {}) => {
@@ -161,6 +170,7 @@ export const provisionWorkspaceTools = async ({
     remote,
     shell,
     readOnly,
+    gitFacet,
     maxChars,
     shellOptions,
   });

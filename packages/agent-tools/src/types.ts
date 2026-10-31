@@ -360,6 +360,12 @@ export interface WorkspaceGrants {
   shell?: ERef<ShellToolCapability>;
   /** Drop the file-tool write slice; forwarded to `makeMountFsTools`. */
   readOnly?: boolean;
+  /**
+   * The git-tool catalog to advertise; forwarded to `makeGitTool`. Defaults
+   * to `'writer'`. Pass `'reader'` for a read-only `Git`. History rewrite is
+   * a separate, elevated grant and is not selectable here.
+   */
+  gitFacet?: Exclude<GitToolFacet, 'rewriter'>;
   /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */
   maxChars?: number;
   /** Advisory shell-tool veto policy; forwarded to `makeShellTool`. */

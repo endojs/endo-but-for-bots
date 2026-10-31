@@ -59,6 +59,21 @@ test('a git grant composes versioning plus agent-facing status, and nothing else
   }
 });
 
+test('gitFacet selects the git catalog the granted facet can serve', t => {
+  const reader = nameSet(
+    makeWorkspaceTools({ git: grant('Git'), gitFacet: 'reader' }),
+  );
+  t.true(reader.has('log'));
+  t.true(reader.has('status'));
+  for (const absent of ['add', 'commit', 'createBranch', 'reword']) {
+    t.false(reader.has(absent), `"${absent}" absent from the reader catalog`);
+  }
+  t.false(
+    nameSet(makeWorkspaceTools({ git: grant('Git') })).has('reword'),
+    'the default catalog is the writer facet',
+  );
+});
+
 test('a filesystem grant composes the file tools; readOnly drops the write slice', t => {
   const readWrite = nameSet(
     makeWorkspaceTools({ filesystem: grant('Filesystem') }),
