@@ -267,3 +267,58 @@ test('an aborted request settles the base cancellation', async t => {
   t.true(baseSignals[0].aborted);
   release();
 });
+
+test('a null-body response settles the base cancellation', async t => {
+  /** @type {AbortSignal[]} */
+  const baseSignals = [];
+  /** @type {any} */
+  const transport = async (_url, options) => {
+    baseSignals.push(options.signal);
+    return { status: 204, headers: {}, body: null };
+  };
+  const fetchLike = makeTransportFromBase(makeFetch({ fetch: transport }));
+  const response = await fetchLike(ALLOWED_URL);
+  t.is(response.status, 204);
+  t.is(response.body, null);
+  await flush();
+  t.is(baseSignals.length, 1);
+  t.true(baseSignals[0].aborted);
+});
+
+test('a base stream that fails mid-read settles the base cancellation', async t => {
+  /** @type {AbortSignal[]} */
+  const baseSignals = [];
+  let reads = 0;
+  /** @type {any} */
+  const transport = async (_url, options) => {
+    baseSignals.push(options.signal);
+    return {
+      status: 200,
+      headers: {},
+      body: {
+        getReader: () => ({
+          read: async () => {
+            reads += 1;
+            if (reads === 1) {
+              return { done: false, value: encodeUtf8('partial') };
+            }
+            throw Error('connection reset');
+          },
+        }),
+      },
+    };
+  };
+  const fetchLike = makeTransportFromBase(makeFetch({ fetch: transport }));
+  const response = await fetchLike(ALLOWED_URL, {
+    redirect: 'manual',
+    method: 'GET',
+  });
+  const reader = /** @type {any} */ (response.body).getReader();
+  const first = await reader.read();
+  t.false(first.done);
+  await t.throwsAsync(async () => reader.read(), {
+    message: /connection reset/,
+  });
+  await flush();
+  t.true(baseSignals[0].aborted);
+});
