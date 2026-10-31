@@ -1817,6 +1817,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/confined-fetch@workspace:packages/confined-fetch":
+  version: 0.0.0-use.local
+  resolution: "@endo/confined-fetch@workspace:packages/confined-fetch"
+  dependencies:
+    "@endo/cancel": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-http-client": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/fetch": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/conversation-tree@workspace:^, @endo/conversation-tree@workspace:packages/conversation-tree":
   version: 0.0.0-use.local
   resolution: "@endo/conversation-tree@workspace:packages/conversation-tree"
@@ -2366,16 +2387,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/fetch@workspace:packages/fetch":
+"@endo/fetch@workspace:^, @endo/fetch@workspace:packages/fetch":
   version: 0.0.0-use.local
   resolution: "@endo/fetch@workspace:packages/fetch"
   dependencies:
+    "@endo/cancel": "workspace:^"
     "@endo/eventual-send": "workspace:^"
-    "@endo/exo-http-client": "workspace:^"
-    "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
-    "@endo/platform": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
