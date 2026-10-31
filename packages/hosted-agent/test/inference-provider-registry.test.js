@@ -7,6 +7,10 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
+import {
+  assertInferenceProviderOAuthAvailable,
+  INFERENCE_PROVIDER_OAUTH_MODES,
+} from '../src/inference-provider-auth.js';
 import { makeInferenceProviderRegistry } from '../src/inference-provider-registry.js';
 import {
   validateAnthropicInferenceRequest,
@@ -198,6 +202,17 @@ test('first release admits only Anthropic and shape-valid model ids', async t =>
   await Promise.all(
     /** @type {Array<[Record<string, unknown>, string]>} */ ([
       [{ kind: 'openai-compatible' }, 'invalid-kind'],
+      [{ authMode: 'subscription' }, 'invalid-auth-mode'],
+      [{ authMode: 'oauth' }, 'invalid-oauth-provider'],
+      [
+        { authMode: 'oauth', oauthProvider: 'unknown' },
+        'invalid-oauth-provider',
+      ],
+      [{ oauthProvider: 'claude-subscription' }, 'invalid-oauth-provider'],
+      [
+        { authMode: 'oauth', oauthProvider: 'claude-subscription' },
+        'invalid-account-ref',
+      ],
       [{ baseUrl: 'https://api.anthropic.com' }, 'invalid-base-url'],
       [{ defaultModel: 'Claude-Test' }, 'invalid-model'],
       [{ defaultModel: 'claude/test' }, 'invalid-model'],
@@ -223,6 +238,51 @@ test('first release admits only Anthropic and shape-valid model ids', async t =>
     }),
   );
   t.is(provider.defaultModel.length, 128);
+  await registry.close();
+});
+
+test('subscription OAuth modes are registered but fail closed', async t => {
+  t.deepEqual(
+    Object.fromEntries(
+      Object.entries(INFERENCE_PROVIDER_OAUTH_MODES).map(([name, entry]) => [
+        name,
+        entry.state,
+      ]),
+    ),
+    {
+      'claude-subscription': 'unavailable',
+      'chatgpt-subscription': 'unavailable',
+      'github-copilot-subscription': 'unavailable',
+    },
+  );
+  for (const [name, entry] of Object.entries(INFERENCE_PROVIDER_OAUTH_MODES)) {
+    const error = t.throws(() =>
+      assertInferenceProviderOAuthAvailable(name, entry.kind),
+    );
+    t.regex(error.message, /not enabled/);
+  }
+
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing);
+  const directory = registry.directoryFor('owner-alice');
+  const oauth = await E(directory).create(
+    providerRequest({
+      idempotencyKey: 'create-oauth-0001',
+      authMode: 'oauth',
+      oauthProvider: 'claude-subscription',
+      accountRef: 'account-one',
+    }),
+  );
+  t.like(oauth, {
+    authMode: 'oauth',
+    oauthProvider: 'claude-subscription',
+    accountRef: 'account-one',
+  });
+  t.like(registry.inspect().descriptors[oauth.providerId], {
+    authMode: 'oauth',
+    oauthProvider: 'claude-subscription',
+    accountRef: 'account-one',
+  });
   await registry.close();
 });
 

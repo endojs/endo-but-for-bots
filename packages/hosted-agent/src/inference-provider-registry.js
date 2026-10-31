@@ -13,6 +13,7 @@ import {
   inferenceAdmissionRefusal,
   inferenceUsageAt,
 } from './inference-provider-admission.js';
+import { INFERENCE_PROVIDER_OAUTH_MODES } from './inference-provider-auth.js';
 import {
   conservativeTokenReservation,
   DEFAULT_AGENT_LIMITS,
@@ -28,6 +29,7 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const GENERATED_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const DISPLAY_NAME_PATTERN = /^[\x20-\x7e]{1,80}$/;
 const MODEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ACCOUNT_REF_PATTERN = /^[\x20-\x7e]{1,256}$/;
 
 const fixedError = code =>
   makeError(X`Inference provider operation failed: ${q(code)}`);
@@ -116,6 +118,13 @@ const summarize = (descriptor, lifecycle) =>
     providerId: descriptor.providerId,
     displayName: descriptor.displayName,
     kind: descriptor.kind,
+    authMode: descriptor.authMode ?? 'api-key',
+    ...(descriptor.oauthProvider === undefined
+      ? {}
+      : { oauthProvider: descriptor.oauthProvider }),
+    ...(descriptor.accountRef === undefined
+      ? {}
+      : { accountRef: descriptor.accountRef }),
     ...(descriptor.baseUrl === undefined
       ? {}
       : { baseUrl: descriptor.baseUrl }),
@@ -354,13 +363,25 @@ export const makeInferenceProviderRegistry = async ({
    */
   const safeCreateRequest = async (ownerId, request, supersedes) => {
     await null;
-    const { idempotencyKey, displayName, kind, baseUrl, defaultModel, limits } =
-      request || {};
-    IDENTIFIER_PATTERN.test(idempotencyKey) ||
+    const {
+      idempotencyKey,
+      displayName,
+      kind,
+      authMode: requestedAuthMode,
+      oauthProvider,
+      accountRef,
+      baseUrl,
+      defaultModel,
+      limits,
+    } = request || {};
+    const authMode = requestedAuthMode ?? 'api-key';
+    (typeof idempotencyKey === 'string' &&
+      IDENTIFIER_PATTERN.test(idempotencyKey)) ||
       (() => {
         throw fixedError('invalid-idempotency-key');
       })();
-    DISPLAY_NAME_PATTERN.test(displayName) ||
+    (typeof displayName === 'string' &&
+      DISPLAY_NAME_PATTERN.test(displayName)) ||
       (() => {
         throw fixedError('invalid-display-name');
       })();
@@ -368,11 +389,30 @@ export const makeInferenceProviderRegistry = async ({
       (() => {
         throw fixedError('invalid-kind');
       })();
+    authMode === 'api-key' ||
+      authMode === 'oauth' ||
+      (() => {
+        throw fixedError('invalid-auth-mode');
+      })();
+    (authMode === 'oauth'
+      ? typeof oauthProvider === 'string' &&
+        Object.hasOwn(INFERENCE_PROVIDER_OAUTH_MODES, oauthProvider) &&
+        INFERENCE_PROVIDER_OAUTH_MODES[oauthProvider].kind === kind
+      : oauthProvider === undefined) ||
+      (() => {
+        throw fixedError('invalid-oauth-provider');
+      })();
+    (authMode === 'oauth'
+      ? typeof accountRef === 'string' && ACCOUNT_REF_PATTERN.test(accountRef)
+      : accountRef === undefined) ||
+      (() => {
+        throw fixedError('invalid-account-ref');
+      })();
     baseUrl === undefined ||
       (() => {
         throw fixedError('invalid-base-url');
       })();
-    MODEL_PATTERN.test(defaultModel) ||
+    (typeof defaultModel === 'string' && MODEL_PATTERN.test(defaultModel)) ||
       (() => {
         throw fixedError('invalid-model');
       })();
@@ -380,6 +420,9 @@ export const makeInferenceProviderRegistry = async ({
     return harden({
       displayName,
       kind,
+      ...(requestedAuthMode === undefined ? {} : { authMode }),
+      ...(oauthProvider === undefined ? {} : { oauthProvider }),
+      ...(accountRef === undefined ? {} : { accountRef }),
       defaultModel,
       limits: checkedLimits,
       ...(supersedes === undefined ? {} : { supersedes }),
@@ -488,6 +531,13 @@ export const makeInferenceProviderRegistry = async ({
           ownerId,
           displayName: operation.request.displayName,
           kind: operation.request.kind,
+          authMode: operation.request.authMode ?? 'api-key',
+          ...(operation.request.oauthProvider === undefined
+            ? {}
+            : { oauthProvider: operation.request.oauthProvider }),
+          ...(operation.request.accountRef === undefined
+            ? {}
+            : { accountRef: operation.request.accountRef }),
           ...(operation.request.baseUrl === undefined
             ? {}
             : { baseUrl: operation.request.baseUrl }),
@@ -1524,6 +1574,13 @@ export const makeInferenceProviderRegistry = async ({
               ownerId: operation.ownerId,
               displayName: operation.request.displayName,
               kind: operation.request.kind,
+              authMode: operation.request.authMode ?? 'api-key',
+              ...(operation.request.oauthProvider === undefined
+                ? {}
+                : { oauthProvider: operation.request.oauthProvider }),
+              ...(operation.request.accountRef === undefined
+                ? {}
+                : { accountRef: operation.request.accountRef }),
               ...(operation.request.baseUrl === undefined
                 ? {}
                 : { baseUrl: operation.request.baseUrl }),

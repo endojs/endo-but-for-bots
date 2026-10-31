@@ -187,6 +187,16 @@ Two subpaths support API-key providers:
 | `@endo/hosted-agent/anthropic-api-key-issuer.js` | `makeAnthropicApiKeyIssuerFactory` builds the registry's issuer factory for Anthropic API-key grants; `make` is its Endo module entry point |
 | `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`, the limits a consumer configures against |
 
+Provider records may also select `authMode: 'oauth'`, an `oauthProvider`, and
+an operator-printable `accountRef`. The registry carries those fields through
+to the named issuer factory without exposing credential material. The
+provider-specific modes are registered in `inference-provider-auth.js`, where
+Claude subscription, ChatGPT subscription, and GitHub Copilot subscription are
+all explicitly `unavailable` and fail closed with their evidence gap. A mode
+can only be enabled after its reviewed issuer adapter exists; changing that
+registry entry then requires no provider-record schema change. This does not
+add a second agent transport or stdio bridge.
+
 `INFERENCE_PROVIDER_MODEL_PRICES` supplies, per model, a
 `{ inputPerMillion, outputPerMillion, cacheReadPerMillion?, cacheWritePerMillion? }`
 record of integer micro-dollar prices per million tokens. A free price is zero; a non-zero price below 1,000 micro-dollars

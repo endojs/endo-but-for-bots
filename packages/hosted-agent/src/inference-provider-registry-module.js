@@ -15,6 +15,7 @@ import {
   makeEndoSecretParticipant,
   makeInferenceProviderRegistry,
 } from './inference-provider-registry.js';
+import { assertInferenceProviderOAuthAvailable } from './inference-provider-auth.js';
 import { parseInferenceProviderModelPrices } from './inference-provider-model-prices.js';
 import { makeSnapshotJournal } from './snapshot-journal.js';
 
@@ -48,6 +49,12 @@ export const make = async (powers, context, { env } = {}) => {
     }),
     secrets: makeEndoSecretParticipant(powers),
     makeIssuer: async ({ descriptor, secret }) => {
+      if (descriptor.authMode === 'oauth') {
+        assertInferenceProviderOAuthAvailable(
+          descriptor.oauthProvider,
+          descriptor.kind,
+        );
+      }
       const factory = await E(powers).lookup(issuerFactoryName);
       return harden({
         openEndpoint: spec =>
@@ -55,6 +62,13 @@ export const make = async (powers, context, { env } = {}) => {
             harden({
               providerId: descriptor.providerId,
               kind: descriptor.kind,
+              authMode: descriptor.authMode ?? 'api-key',
+              ...(descriptor.oauthProvider === undefined
+                ? {}
+                : { oauthProvider: descriptor.oauthProvider }),
+              ...(descriptor.accountRef === undefined
+                ? {}
+                : { accountRef: descriptor.accountRef }),
               defaultModel: descriptor.defaultModel,
             }),
             secret,
@@ -64,11 +78,25 @@ export const make = async (powers, context, { env } = {}) => {
       });
     },
     discoverModels: async ({ descriptor, secret }) => {
+      if (descriptor.authMode === 'oauth') {
+        assertInferenceProviderOAuthAvailable(
+          descriptor.oauthProvider,
+          descriptor.kind,
+        );
+      }
       const factory = await E(powers).lookup(issuerFactoryName);
       return E(factory).discoverModels(
         harden({
           providerId: descriptor.providerId,
           kind: descriptor.kind,
+          authMode: descriptor.authMode ?? 'api-key',
+          ...(descriptor.oauthProvider === undefined
+            ? {}
+            : { oauthProvider: descriptor.oauthProvider }),
+          ...(descriptor.accountRef === undefined
+            ? {}
+            : { accountRef: descriptor.accountRef }),
+          defaultModel: descriptor.defaultModel,
         }),
         secret,
       );
