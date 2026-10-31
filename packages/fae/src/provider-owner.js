@@ -102,7 +102,7 @@ export const makeProviderOwner = ({
     if (brokered) {
       cachedProvider ??= makeBrokeredMessagesProvider({
         inference: config.inference,
-        model: config.model || '',
+        model: /** @type {string} */ (config.model),
         ...(config.maxTokens === undefined
           ? {}
           : { maxTokens: config.maxTokens }),

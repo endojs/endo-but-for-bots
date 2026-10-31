@@ -49,7 +49,11 @@ const events = [
     index: 1,
     delta: { type: 'input_json_delta', partial_json: '{"name":"shell"}' },
   },
-  { type: 'message_delta', usage: { output_tokens: 3 } },
+  {
+    type: 'message_delta',
+    delta: { stop_reason: 'tool_use' },
+    usage: { output_tokens: 3 },
+  },
   { type: 'message_stop' },
 ];
 
@@ -521,6 +525,7 @@ const toolStart = {
   index: 0,
   content_block: { type: 'tool_use', id: 'call-1', name: 'lookup' },
 };
+const endTurn = { type: 'message_delta', delta: { stop_reason: 'end_turn' } };
 const stop = { type: 'message_stop' };
 
 /** @param {any} broker */
@@ -549,6 +554,7 @@ test('brokered Messages accepts carriage-return framed events', async t => {
               index: 0,
               delta: { type: 'text_delta', text: 'cr' },
             },
+            endTurn,
             stop,
           ],
           '\r',
@@ -678,6 +684,37 @@ for (const [
     /Invalid Anthropic tool input/,
   ],
   [
+    'a refusal stop reason',
+    {
+      chunks: textChunks(
+        sse([
+          textStart,
+          { type: 'message_delta', delta: { stop_reason: 'refusal' } },
+          stop,
+        ]),
+      ),
+    },
+    /Unsupported Anthropic stop reason/,
+  ],
+  [
+    'a stream with no stop reason',
+    { chunks: textChunks(sse([textStart, stop])) },
+    /Unsupported Anthropic stop reason/,
+  ],
+  [
+    'a tool_use stop with no tool call',
+    {
+      chunks: textChunks(
+        sse([
+          textStart,
+          { type: 'message_delta', delta: { stop_reason: 'tool_use' } },
+          stop,
+        ]),
+      ),
+    },
+    /stop reason does not match its content/,
+  ],
+  [
     'an upstream 500',
     { status: 500, chunks: textChunks('{"error":"secret detail"}') },
     /^Anthropic Messages inference failed$/,
@@ -692,6 +729,19 @@ for (const [
     await t.throwsAsync(chatWith(rawFixture(options)), { message });
   });
 }
+
+test('brokered Messages recipes require a string model', t => {
+  const { inference } = fixture();
+  for (const model of [undefined, ['claude-test'], { toString: () => 'x' }]) {
+    t.throws(
+      () =>
+        assertBrokeredMessagesRecipe(
+          harden({ kind: 'brokered-messages', inference, model }),
+        ),
+      { message: /Invalid brokered Messages recipe/ },
+    );
+  }
+});
 
 test('brokered Messages recipes reject an unsafe maxTokens', t => {
   const { inference } = fixture();
@@ -722,6 +772,7 @@ test('brokered Lal drives a turn through the broker with no API key', async t =>
           index: 0,
           delta: { type: 'text_delta', text: 'hello' },
         },
+        endTurn,
         stop,
       ]),
     ),
@@ -752,7 +803,7 @@ test('brokered Lal drives a turn through the broker with no API key', async t =>
 
 const brokeredTurn = async env => {
   const subject = rawFixture({
-    chunks: textChunks(sse([textStart, stop])),
+    chunks: textChunks(sse([textStart, endTurn, stop])),
   });
   const { powers } = makeMockPowers({
     initialMessage: {

@@ -7,6 +7,8 @@ import { mustMatch, M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
+import { anthropicToolContent } from '@endo/hosted-agent/image-result.js';
+
 import { toAnthropicMessages, toAnthropicTools } from './anthropic.js';
 import { sseData } from './sse-data.js';
 
@@ -29,12 +31,18 @@ const anthropicEvents = async function* anthropicEventIterator(bytes) {
   }
 };
 
-/** @param {any} recipe */
+/**
+ * `maxTokens` has no upper bound here; the broker's `maxOutputTokens` ceiling
+ * refuses an oversized value at the first turn.
+ *
+ * @param {any} recipe
+ */
 export const assertBrokeredMessagesRecipe = recipe => {
   const fields = harden(['kind', 'inference', 'model', 'maxTokens']);
   (recipe &&
     recipe.kind === 'brokered-messages' &&
     Reflect.ownKeys(recipe).every(key => fields.includes(String(key))) &&
+    typeof recipe.model === 'string' &&
     MODEL_PATTERN.test(recipe.model) &&
     (recipe.maxTokens === undefined ||
       (Number.isSafeInteger(recipe.maxTokens) &&
@@ -44,20 +52,34 @@ export const assertBrokeredMessagesRecipe = recipe => {
 };
 harden(assertBrokeredMessagesRecipe);
 
+// Provider stop reasons are mapped by allowlist so that a refusal, a pause, or
+// a context overflow never reads as a clean end of turn.
+const STOP_REASONS = harden({
+  end_turn: 'stop',
+  stop_sequence: 'stop',
+  tool_use: 'toolUse',
+  max_tokens: 'length',
+});
+
 /**
- * Anthropic Messages adapter over a bounded AgentInference capability. The
- * recipe contains no URL or credential; those remain in the host broker.
+ * @typedef {{ type: 'text', text: string } |
+ *   { type: 'toolCall', id: string, name: string, arguments: any }} TurnBlock
+ * @typedef {{ input: number, output: number, cacheRead: number,
+ *   cacheWrite: number }} TurnUsage
+ * @typedef {{ content: TurnBlock[], usage: TurnUsage,
+ *   stopReason: 'stop' | 'toolUse' | 'length' }} Turn
+ */
+
+/**
+ * One Anthropic Messages exchange over a bounded AgentInference capability.
+ * The recipe contains no URL or credential; those remain in the host broker.
  *
  * @param {object} options
  * @param {any} options.inference
  * @param {string} options.model
  * @param {number} [options.maxTokens]
  */
-export const makeBrokeredMessagesProvider = ({
-  inference,
-  model,
-  maxTokens = 4096,
-}) => {
+const makeMessagesTransport = ({ inference, model, maxTokens = 4096 }) => {
   assertBrokeredMessagesRecipe(
     harden({ kind: 'brokered-messages', inference, model, maxTokens }),
   );
@@ -66,45 +88,43 @@ export const makeBrokeredMessagesProvider = ({
   const cancellations = new Set();
 
   /**
-   * @param {any[]} messages
-   * @param {any[]} tools
-   * @param {(text: string) => void} [onToken]
+   * @param {{ system: string, messages: any[], tools: any[] }} request
    * @param {AbortSignal} [signal]
-   * @param {(usage: any) => void} [onUsage]
+   * @param {(text: string) => void} [onText]
+   * @returns {Promise<Turn>}
    */
-  const chatStream = async (messages, tools, onToken, signal, onUsage) => {
+  const exchange = async ({ system, messages, tools }, signal, onText) => {
     await null;
     !disposed || Fail`Brokered Messages provider disposed`;
     signal?.throwIfAborted();
-    const { system, messages: anthropicMessages } =
-      toAnthropicMessages(messages);
-    const request = harden({
-      method: 'POST',
-      path: '/v1/messages',
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        stream: true,
-        system,
-        messages: anthropicMessages,
-        ...(tools.length ? { tools: toAnthropicTools(tools) } : {}),
-      }),
-    });
     const cancelled = makePromiseKit();
     void cancelled.promise.catch(() => undefined);
     const wait = promise => Promise.race([promise, cancelled.promise]);
-    /** @type {AsyncIterableIterator<Uint8Array> | undefined} */
-    let iterator;
-    /** @param {unknown} reason */
-    const cancel = reason => {
-      cancelled.reject(reason);
-      void iterator?.return?.().catch(() => undefined);
-    };
-    cancellations.add(cancel);
+    cancellations.add(cancelled.reject);
     const abort = () =>
-      cancel(signal?.reason ?? Error('Brokered Messages inference cancelled'));
+      cancelled.reject(
+        signal?.reason ?? Error('Brokered Messages inference cancelled'),
+      );
     signal?.addEventListener('abort', abort, { once: true });
-    const requested = E(inference).requestByteStream(request);
+    const requested = E(inference).requestByteStream(
+      harden({
+        method: 'POST',
+        path: '/v1/messages',
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          stream: true,
+          system,
+          messages,
+          ...(tools.length ? { tools } : {}),
+        }),
+      }),
+    );
+    // The response's reader has exactly one owner, whenever it arrives.
+    const bytes = E.when(requested, response =>
+      iterateBytesReader(response.reader),
+    );
+    void bytes.catch(() => undefined);
     try {
       const response = await wait(requested);
       if (response.status === 401)
@@ -113,13 +133,9 @@ export const makeBrokeredMessagesProvider = ({
       (response.status === 200 &&
         /^text\/event-stream(?:;|$)/i.test(response.contentType ?? '')) ||
         Fail`Anthropic Messages inference failed`;
-      iterator = iterateBytesReader(response.reader);
-      const events = anthropicEvents(iterator);
+      const events = anthropicEvents(await bytes);
       const blocks = new Map();
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let cacheReadTokens = 0;
-      let cacheWriteTokens = 0;
+      const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       let stopped = false;
       let stopReason;
       for (;;) {
@@ -130,10 +146,10 @@ export const makeBrokeredMessagesProvider = ({
         if (event.type === 'error')
           throw Error('Anthropic Messages inference failed');
         if (event.type === 'message_start') {
-          inputTokens = Number(event.message?.usage?.input_tokens) || 0;
-          cacheReadTokens =
+          usage.input = Number(event.message?.usage?.input_tokens) || 0;
+          usage.cacheRead =
             Number(event.message?.usage?.cache_read_input_tokens) || 0;
-          cacheWriteTokens =
+          usage.cacheWrite =
             Number(event.message?.usage?.cache_creation_input_tokens) || 0;
         } else if (event.type === 'content_block_start') {
           const index = Number(event.index);
@@ -146,7 +162,7 @@ export const makeBrokeredMessagesProvider = ({
             });
           } else if (event.content_block?.type === 'tool_use') {
             blocks.set(index, {
-              type: 'tool_use',
+              type: 'toolCall',
               id: event.content_block.id,
               name: event.content_block.name,
               json: '',
@@ -159,76 +175,54 @@ export const makeBrokeredMessagesProvider = ({
           block !== undefined || Fail`Anthropic delta has no content block`;
           if (event.delta?.type === 'text_delta' && block.type === 'text') {
             block.text += event.delta.text;
-            onToken?.(event.delta.text);
+            onText?.(event.delta.text);
           } else if (
             event.delta?.type === 'input_json_delta' &&
-            block.type === 'tool_use'
+            block.type === 'toolCall'
           ) {
             block.json += event.delta.partial_json;
           } else {
             throw Error('Invalid Anthropic content delta');
           }
         } else if (event.type === 'message_delta') {
-          outputTokens = Number(event.usage?.output_tokens) || outputTokens;
+          usage.output = Number(event.usage?.output_tokens) || usage.output;
           stopReason = event.delta?.stop_reason ?? stopReason;
         } else if (event.type === 'message_stop') {
           stopped = true;
         }
       }
       stopped || Fail`Anthropic Messages stream ended without message_stop`;
-      const message = { role: 'assistant', content: '' };
-      const toolCalls = [];
-      for (const [, block] of [...blocks.entries()].sort(
-        ([left], [right]) => left - right,
-      )) {
-        if (block.type === 'text') {
-          message.content += block.text;
-        } else {
+      /** @type {TurnBlock[]} */
+      const content = [...blocks.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, block]) => {
+          if (block.type === 'text') return harden(block);
           let input;
           try {
             input = block.json === '' ? {} : JSON.parse(block.json);
           } catch {
             throw Error('Invalid Anthropic tool input');
           }
-          toolCalls.push({
-            id: block.id,
-            function: { name: block.name, arguments: JSON.stringify(input) },
-          });
-        }
-      }
-      if (toolCalls.length) message.tool_calls = toolCalls;
-      const usage = harden({
-        inputTokens,
-        outputTokens,
-        cachedInputTokens: cacheReadTokens,
-        cacheWriteInputTokens: cacheWriteTokens,
-        reasoningOutputTokens: 0,
-        context: {
-          usedTokens:
-            inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
-          windowTokens: 0,
-        },
-      });
-      onUsage?.(usage);
-      return harden({ message: harden(message), usage, stopReason });
+          const { id, name } = block;
+          return harden({ type: 'toolCall', id, name, arguments: input });
+        });
+      const mapped = Object.hasOwn(STOP_REASONS, String(stopReason))
+        ? STOP_REASONS[stopReason]
+        : Fail`Unsupported Anthropic stop reason`;
+      (mapped === 'toolUse') ===
+        content.some(block => block.type === 'toolCall') ||
+        mapped === 'length' ||
+        Fail`Anthropic stop reason does not match its content`;
+      return harden({ content, usage: harden(usage), stopReason: mapped });
     } finally {
       signal?.removeEventListener('abort', abort);
-      cancellations.delete(cancel);
-      if (iterator === undefined) {
-        // Cancelled before the response arrived: close its reader when it does.
-        void requested
-          .then(response => iterateBytesReader(response.reader).return?.())
-          .catch(() => undefined);
-      } else {
-        void iterator.return?.().catch(() => undefined);
-      }
+      cancellations.delete(cancelled.reject);
+      void bytes.then(iterator => iterator.return?.()).catch(() => undefined);
     }
   };
 
   return harden({
-    chat: (messages, tools, signal) =>
-      chatStream(messages, tools, undefined, signal, undefined),
-    chatStream,
+    exchange,
     async dispose() {
       disposed = true;
       for (const cancel of cancellations) {
@@ -237,82 +231,169 @@ export const makeBrokeredMessagesProvider = ({
     },
   });
 };
+
+/**
+ * Common chat-provider surface (Fae's provider owner) over the transport.
+ *
+ * @param {object} options
+ * @param {any} options.inference
+ * @param {string} options.model
+ * @param {number} [options.maxTokens]
+ */
+export const makeBrokeredMessagesProvider = options => {
+  const transport = makeMessagesTransport(options);
+
+  /**
+   * @param {any[]} messages
+   * @param {any[]} tools
+   * @param {(text: string) => void} [onToken]
+   * @param {AbortSignal} [signal]
+   * @param {(usage: any) => void} [onUsage]
+   */
+  const chatStream = async (messages, tools, onToken, signal, onUsage) => {
+    await null;
+    const turn = await transport.exchange(
+      harden({
+        ...toAnthropicMessages(messages),
+        tools: toAnthropicTools(tools),
+      }),
+      signal,
+      onToken,
+    );
+    const toolCalls = turn.content.flatMap(block =>
+      block.type === 'toolCall'
+        ? [
+            {
+              id: block.id,
+              function: {
+                name: block.name,
+                arguments: JSON.stringify(block.arguments),
+              },
+            },
+          ]
+        : [],
+    );
+    const message = harden({
+      role: 'assistant',
+      content: turn.content
+        .map(block => (block.type === 'text' ? block.text : ''))
+        .join(''),
+      ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+    });
+    const { input, output, cacheRead, cacheWrite } = turn.usage;
+    const usage = harden({
+      inputTokens: input,
+      outputTokens: output,
+      cachedInputTokens: cacheRead,
+      cacheWriteInputTokens: cacheWrite,
+      reasoningOutputTokens: 0,
+      context: {
+        usedTokens: input + output + cacheRead + cacheWrite,
+        windowTokens: 0,
+      },
+    });
+    onUsage?.(usage);
+    return harden({ message, usage, stopReason: turn.stopReason });
+  };
+
+  return harden({
+    chat: (messages, tools, signal) =>
+      chatStream(messages, tools, undefined, signal, undefined),
+    chatStream,
+    dispose: transport.dispose,
+  });
+};
 harden(makeBrokeredMessagesProvider);
 
-/** @param {any[]} messages */
-const commonMessages = messages =>
-  messages.map(message => {
-    if (message.role === 'system' || message.role === 'user') {
-      const content =
-        typeof message.content === 'string'
-          ? message.content
-          : message.content
-              .filter(part => part.type === 'text')
-              .map(part => part.text)
-              .join('\n');
-      return harden({ role: message.role, content });
-    }
-    if (message.role === 'assistant') {
-      const text = message.content
-        .filter(part => part.type === 'text')
-        .map(part => part.text)
-        .join('');
-      const calls = message.content
-        .filter(part => part.type === 'toolCall')
-        .map(part => ({
-          id: part.id,
-          function: {
-            name: part.name,
-            arguments: JSON.stringify(part.arguments),
-          },
-        }));
-      return harden({
-        role: 'assistant',
-        content: text,
-        ...(calls.length ? { tool_calls: calls } : {}),
-      });
-    }
-    if (message.role === 'toolResult') {
-      return harden({
-        role: 'tool',
-        tool_call_id: message.toolCallId,
-        content: message.content
-          .filter(part => part.type === 'text')
-          .map(part => part.text)
-          .join('\n'),
-      });
-    }
-    throw Error('Unsupported brokered Messages history');
-  });
+/**
+ * @param {any[]} parts
+ * @param {string} separator
+ */
+const joinText = (parts, separator) =>
+  parts
+    .filter(part => part.type === 'text')
+    .map(part => part.text)
+    .join(separator);
 
-/** @param {{ messages: any[], tools?: any[] }} context */
-const currentTools = context => {
-  const messages = context.messages;
+/**
+ * Translate a pi-ai context straight into an Anthropic Messages request.
+ *
+ * @param {{ systemPrompt?: string, messages: any[], tools?: any[] }} context
+ */
+const toMessagesRequest = context => {
+  let system = context.systemPrompt || '';
   const tools = new Map();
   // pi-ai carries the turn's tools in `context.tools`; the system-message
   // `toolsAdded`/`toolsRemoved` deltas are a legacy history shape.
   for (const tool of context.tools || []) tools.set(tool.name, tool);
-  for (const message of messages) {
+  const messages = [];
+  for (const message of context.messages) {
     if (message.role === 'system') {
+      system = message.content;
       for (const tool of message.toolsAdded || []) tools.set(tool.name, tool);
       for (const tool of message.toolsRemoved || []) tools.delete(tool.name);
+    } else if (message.role === 'user') {
+      messages.push({
+        role: 'user',
+        content:
+          typeof message.content === 'string'
+            ? message.content
+            : joinText(message.content, '\n'),
+      });
+    } else if (message.role === 'assistant') {
+      const text = joinText(message.content, '');
+      const content = [
+        ...(text ? [{ type: 'text', text }] : []),
+        ...message.content
+          .filter(part => part.type === 'toolCall')
+          .map(part => ({
+            type: 'tool_use',
+            id: part.id,
+            name: part.name,
+            input: part.arguments,
+          })),
+      ];
+      if (content.length) messages.push({ role: 'assistant', content });
+    } else if (message.role === 'toolResult') {
+      messages.push({
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: message.toolCallId,
+            content: anthropicToolContent(joinText(message.content, '\n')),
+          },
+        ],
+      });
+    } else {
+      throw Error('Unsupported brokered Messages history');
     }
   }
-  return [...tools.values()].map(tool =>
-    harden({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      },
-    }),
-  );
+  return harden({
+    system,
+    messages,
+    tools: [...tools.values()].map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
+    })),
+  });
 };
 
+/** @param {TurnUsage} usage */
+const piUsage = ({ input, output, cacheRead, cacheWrite }) =>
+  harden({
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+
 /**
- * Pi stream function over the brokered provider. It emits one completed event
- * after the broker stream is validated, and carries `dispose`.
+ * Pi stream function over the brokered transport. It emits one completed
+ * event after the broker stream is validated, and carries `dispose`.
  * pi-ai's native Anthropic stream adds fields the request policy refuses and
  * retries on its own, which would be a second admission.
  *
@@ -322,105 +403,52 @@ const currentTools = context => {
  * @param {number} [options.maxTokens]
  */
 export const makeBrokeredMessagesStream = options => {
-  const provider = makeBrokeredMessagesProvider(options);
+  const transport = makeMessagesTransport(options);
   /** @type {(model: any, context: any, streamOptions?: any) => any} */
   const streamMessages = (_model, context, streamOptions = {}) => {
     const stream = createAssistantMessageEventStream();
+    const base = {
+      role: 'assistant',
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: options.model,
+    };
     void (async () => {
+      await null;
       try {
-        const result = await provider.chat(
-          commonMessages([
-            ...(context.systemPrompt
-              ? [{ role: 'system', content: context.systemPrompt }]
-              : []),
-            ...context.messages,
-          ]),
-          currentTools(context),
+        const turn = await transport.exchange(
+          toMessagesRequest(context),
           streamOptions.signal,
         );
-        const content = [];
-        if (result.message.content) {
-          content.push({ type: 'text', text: result.message.content });
-        }
-        for (const call of result.message.tool_calls || []) {
-          content.push({
-            type: 'toolCall',
-            id: call.id,
-            name: call.function.name,
-            arguments: JSON.parse(call.function.arguments),
-          });
-        }
-        const usage = result.usage || {};
-        const piUsage = {
-          input: usage.inputTokens || 0,
-          output: usage.outputTokens || 0,
-          cacheRead: usage.cachedInputTokens || 0,
-          cacheWrite: usage.cacheWriteInputTokens || 0,
-          totalTokens:
-            (usage.inputTokens || 0) +
-            (usage.outputTokens || 0) +
-            (usage.cachedInputTokens || 0) +
-            (usage.cacheWriteInputTokens || 0),
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-        // A `max_tokens` stop is a truncation, not a clean end of turn.
-        const stopReason =
-          result.stopReason === 'max_tokens'
-            ? 'length'
-            : result.message.tool_calls?.length
-              ? 'toolUse'
-              : 'stop';
         /** @type {any} */
         const message = harden({
-          role: 'assistant',
-          content: harden(content),
-          api: 'anthropic-messages',
-          provider: 'anthropic',
-          model: options.model,
-          usage: harden(piUsage),
-          stopReason,
+          ...base,
+          content: turn.content,
+          usage: piUsage(turn.usage),
+          stopReason: turn.stopReason,
           timestamp: Date.now(),
         });
         stream.push({ type: 'start', partial: message });
-        stream.push({ type: 'done', reason: stopReason, message });
+        stream.push({ type: 'done', reason: turn.stopReason, message });
         stream.end(message);
       } catch (error) {
+        const reason = streamOptions.signal?.aborted ? 'aborted' : 'error';
         /** @type {any} */
         const message = harden({
-          role: 'assistant',
+          ...base,
           content: [],
-          api: 'anthropic-messages',
-          provider: 'anthropic',
-          model: options.model,
-          usage: harden({
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          }),
-          stopReason: streamOptions.signal?.aborted ? 'aborted' : 'error',
+          usage: piUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+          stopReason: reason,
           errorMessage:
             error instanceof Error ? error.message : 'Inference failed',
           timestamp: Date.now(),
         });
-        stream.push({
-          type: 'error',
-          reason: streamOptions.signal?.aborted ? 'aborted' : 'error',
-          error: message,
-        });
+        stream.push({ type: 'error', reason, error: message });
         stream.end(message);
       }
     })();
     return stream;
   };
-  return harden(Object.assign(streamMessages, { dispose: provider.dispose }));
+  return harden(Object.assign(streamMessages, { dispose: transport.dispose }));
 };
 harden(makeBrokeredMessagesStream);
