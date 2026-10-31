@@ -214,6 +214,17 @@ export type GitShow = {
   diff: GitDiff;
 };
 
+export type GitStash = {
+  /** Zero-based position in the stash stack, with the newest entry at 0. */
+  index: number;
+  /** The stash selector and the commit object it currently resolves to. */
+  ref: GitRef;
+  /** The reflog message Git associates with this stash entry. */
+  message: string;
+  /** The stash commit's identity and creation metadata. */
+  created: GitCommit;
+};
+
 export type GitConflict = {
   /** The authority-bearing worktree entry whose index stages conflict. */
   entry: PathEntry;
@@ -498,8 +509,12 @@ export type ReadOnlyEndoGit = {
   revParse: (ref: GitRef | string) => Promise<GitRef>;
   currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;
-  stashList: () => Promise<string[]>;
-  stashShow: (index?: number) => Promise<string>;
+  stashList: () => Promise<GitStash[]>;
+  /** The porcelain lines from `git stash list`, most recent first. */
+  stashListText: () => Promise<string[]>;
+  stashShow: (index?: number) => Promise<GitDiff>;
+  /** The porcelain patch from `git stash show`, for display. */
+  stashShowText: (index?: number) => Promise<string>;
   /** @see filesystemAt, the preferred historical-read method; `tree(ref)` is its `ReadableTree` projection. */
   tree: (ref: GitRef | string) => Promise<GitTree>;
   filesystemAt: (ref: GitRef | string) => Promise<Filesystem>;

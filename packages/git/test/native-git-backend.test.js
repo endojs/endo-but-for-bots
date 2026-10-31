@@ -1376,3 +1376,82 @@ test('NativeGitBackend.show reports a root commit in a SHA-256 repository', asyn
     [{ status: 'added', newPath: 'a.txt' }],
   );
 });
+
+test('NativeGitBackend reports structured stash entries and diffs', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  /** @param {string[]} commandArguments */
+  const git = commandArguments =>
+    execFileAsync('git', commandArguments, { cwd: repoRoot });
+  const identity = ['-c', 'user.email=t@t', '-c', 'user.name=T'];
+
+  await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'base\n');
+  await git(['add', 'tracked.txt']);
+  await git([...identity, 'commit', '-qm', 'base']);
+
+  t.deepEqual(await backend.stashList(), []);
+  t.deepEqual(await backend.stashListText(), []);
+
+  await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'first\n');
+  await backend.stashPush({ message: 'first saved state' });
+  await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'second\n');
+  await backend.stashPush({ message: 'second saved state' });
+
+  const stashes = await backend.stashList();
+  t.is(stashes.length, 2);
+  t.deepEqual(
+    stashes.map(({ index, ref, message, created }) => ({
+      index,
+      ref,
+      message,
+      created,
+    })),
+    stashes.map((stash, index) => ({
+      index,
+      ref: {
+        name: `stash@{${index}}`,
+        kind: 'commit',
+        oid: stash.created.oid,
+      },
+      message: `On main: ${index === 0 ? 'second' : 'first'} saved state`,
+      created: {
+        oid: stash.created.oid,
+        summary: `On main: ${index === 0 ? 'second' : 'first'} saved state`,
+        author: 'Endo',
+        committedAt: stash.created.committedAt,
+      },
+    })),
+  );
+  stashes.forEach(stash => {
+    t.regex(stash.created.oid, /^[0-9a-f]{40}$/u);
+    t.true(Number.isInteger(stash.created.committedAt));
+  });
+
+  const listText = await backend.stashListText();
+  t.is(listText.length, 2);
+  t.regex(listText[0], /^stash@\{0\}: On main: second saved state$/u);
+  t.regex(listText[1], /^stash@\{1\}: On main: first saved state$/u);
+
+  const newest = await backend.stashShow();
+  t.deepEqual(
+    newest.files.map(({ status, newPath }) => ({ status, newPath })),
+    [{ status: 'modified', newPath: 'tracked.txt' }],
+  );
+  t.deepEqual(newest.files[0].hunks[0].lines, [
+    { kind: 'remove', text: 'base' },
+    { kind: 'add', text: 'second' },
+  ]);
+
+  const older = await backend.stashShow(1);
+  t.deepEqual(older.files[0].hunks[0].lines, [
+    { kind: 'remove', text: 'base' },
+    { kind: 'add', text: 'first' },
+  ]);
+  t.regex(await backend.stashShowText(1), /\+first/u);
+
+  await t.throwsAsync(() => backend.stashShow(-1), {
+    message: /non-negative integer/u,
+  });
+  await t.throwsAsync(() => backend.stashShowText(0.5), {
+    message: /non-negative integer/u,
+  });
+});

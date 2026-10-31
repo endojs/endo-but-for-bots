@@ -84,7 +84,9 @@ export const GIT_READONLY_MEMBERS = harden([
   'tree',
   'filesystemAt',
   'stashList',
+  'stashListText',
   'stashShow',
+  'stashShowText',
   'readOnly',
   'scope',
 ]);

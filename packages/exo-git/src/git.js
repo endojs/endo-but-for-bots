@@ -60,6 +60,7 @@ import {
  *   ReadableTree,
  *   GitRestoreOptions,
  *   GitStashPushOptions,
+ *   GitStash,
  *   GitStatusOptions,
  *   GitStatusResult,
  *   GitTrackingStatus,
@@ -202,8 +203,10 @@ import {
  * @property {(input: GitRebaseInput) => Promise<GitBackendRebaseResult>} rebase
  * @property {(input: GitRebaseInput) => Promise<string>} rebaseText
  * @property {(opts?: GitBackendStashPushOptions) => Promise<string>} stashPush
- * @property {() => Promise<string[]>} stashList
- * @property {(index?: number) => Promise<string>} stashShow
+ * @property {() => Promise<GitStash[]>} stashList
+ * @property {() => Promise<string[]>} stashListText
+ * @property {(index?: number) => Promise<GitDiff>} stashShow
+ * @property {(index?: number) => Promise<string>} stashShowText
  * @property {(index?: number) => Promise<void>} stashApply
  * @property {(index?: number) => Promise<void>} stashPop
  * @property {(index?: number) => Promise<void>} stashDrop
@@ -1041,17 +1044,34 @@ async function stashPush(options = {}) {
   return state.backend.stashPush(resolved);
 }
 
-/** @this {GitMethodThis} */
+/**
+ * @this {GitMethodThis}
+ * @returns {Promise<GitStash[]>}
+ */
 async function stashList() {
   return this.state.backend.stashList();
+}
+
+/** @this {GitMethodThis} */
+async function stashListText() {
+  return this.state.backend.stashListText();
+}
+
+/**
+ * @param {number | undefined} index
+ * @this {GitMethodThis}
+ * @returns {Promise<GitDiff>}
+ */
+async function stashShow(index) {
+  return this.state.backend.stashShow(index);
 }
 
 /**
  * @param {number | undefined} index
  * @this {GitMethodThis}
  */
-async function stashShow(index) {
-  return this.state.backend.stashShow(index);
+async function stashShowText(index) {
+  return this.state.backend.stashShowText(index);
 }
 
 /**
@@ -1416,7 +1436,9 @@ const readerMethods = harden({
   currentBranch,
   branches,
   stashList,
+  stashListText,
   stashShow,
+  stashShowText,
   tree,
   filesystemAt,
   followLatestRoot,
@@ -1698,7 +1720,9 @@ export const makeNotYetImplementedBackend = () => {
     rebaseText: async () => fail('rebaseText'),
     stashPush: async () => fail('stashPush'),
     stashList: async () => fail('stashList'),
+    stashListText: async () => fail('stashListText'),
     stashShow: async () => fail('stashShow'),
+    stashShowText: async () => fail('stashShowText'),
     stashApply: async () => fail('stashApply'),
     stashPop: async () => fail('stashPop'),
     stashDrop: async () => fail('stashDrop'),
