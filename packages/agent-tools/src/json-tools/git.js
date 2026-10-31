@@ -242,7 +242,10 @@ const gitToolSchemas = harden({
     },
   },
   show: {
-    description: 'Show the contents of a git object (commit, tag, blob).',
+    description:
+      'Show one commit as a record: its oid, summary, author, and commit ' +
+      'time, its parent oids, and its per-file diff against the first ' +
+      'parent (status, old and new path, and hunks of lines).',
     parameters: {
       type: 'object',
       properties: { ref: REF_PROP },

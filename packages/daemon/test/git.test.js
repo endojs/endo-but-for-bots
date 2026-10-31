@@ -127,6 +127,7 @@ test('Git exo advertises the writer facet, cumulative up to the rewriter facet',
     'diffText',
     'log',
     'show',
+    'showText',
     'revParse',
   ]) {
     t.true(methods.includes(name), `Git writer should advertise ${name}`);
@@ -1995,10 +1996,18 @@ test('NativeGitBackend.log since / until use the flag form so dash-prefixed valu
   );
 });
 
-test('NativeGitBackend.show returns the commit text', async t => {
+test('NativeGitBackend.show returns the commit record', async t => {
   const repoRoot = await provisionGitWorktree(t);
   const backend = makeNativeGitBackend({ repoRoot });
-  const text = await backend.show('HEAD');
+  const shown = await backend.show('HEAD');
+  t.is(shown.commit.summary, 'init commit');
+  t.deepEqual(shown.parents, []);
+});
+
+test('NativeGitBackend.showText returns the commit text', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const backend = makeNativeGitBackend({ repoRoot });
+  const text = await backend.showText('HEAD');
   t.regex(text, /init commit/);
 });
 
@@ -3787,6 +3796,14 @@ test('Git accepts both string and structured GitRef arguments', async t => {
     ...makeNotYetImplementedBackend(),
     show: async ref => {
       showCalls.push(ref);
+      return harden({
+        commit: harden({ oid: ref, summary: '' }),
+        parents: harden([]),
+        diff: harden({ files: harden([]) }),
+      });
+    },
+    showText: async ref => {
+      showCalls.push(ref);
       return '';
     },
     revParse: async ref => {
@@ -3801,12 +3818,13 @@ test('Git accepts both string and structured GitRef arguments', async t => {
 
   await E(git).show('HEAD');
   await E(git).show({ name: 'main', kind: 'branch' });
+  await E(git).showText({ name: 'topic', kind: 'branch' });
   await E(git).revParse('v1.0');
   await E(git).revParse({ name: 'origin/main', kind: 'branch' });
 
   // Both string and { name } records normalize to the backend's single
   // string-named-ref input.
-  t.deepEqual(showCalls, ['HEAD', 'main']);
+  t.deepEqual(showCalls, ['HEAD', 'main', 'topic']);
   t.deepEqual(revParseCalls, ['v1.0', 'origin/main']);
 });
 
@@ -4928,6 +4946,12 @@ test('NativeGitBackend.diff and show never invoke a .gitattributes textconv driv
 
   await backend.show('HEAD');
   t.false(fs.existsSync(marker), 'show() must not invoke the textconv driver');
+
+  await backend.showText('HEAD');
+  t.false(
+    fs.existsSync(marker),
+    'showText() must not invoke the textconv driver',
+  );
 });
 
 test('NativeGitBackend stays usable when the first commit lands on an empty repo', async t => {

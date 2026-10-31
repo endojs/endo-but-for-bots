@@ -13,6 +13,7 @@ import type {
   GitDeleteBranchOptions,
   GitDiff,
   GitDiffOptions,
+  GitShow,
   GitDirection,
   GitIndexStatus,
   GitLogOptions,
@@ -96,6 +97,17 @@ expectTypeOf<ReadOnlyEndoGit['diff']>().toEqualTypeOf<
 expectTypeOf<ReadOnlyEndoGit['diffText']>().toEqualTypeOf<
   (options?: GitDiffOptions) => Promise<string>
 >();
+expectTypeOf<ReadOnlyEndoGit['show']>().toEqualTypeOf<
+  (ref: GitRef | string) => Promise<GitShow>
+>();
+expectTypeOf<ReadOnlyEndoGit['showText']>().toEqualTypeOf<
+  (ref: GitRef | string) => Promise<string>
+>();
+expectTypeOf<GitShow>().toEqualTypeOf<{
+  commit: GitCommit;
+  parents: string[];
+  diff: GitDiff;
+}>();
 expectTypeOf<GitDiff['files'][number]['status']>().toEqualTypeOf<
   'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'unmerged'
 >();
