@@ -36,20 +36,8 @@ import {
 
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
-import { lineageOf, makeMount as makeEndoMount } from '../src/mount.js';
+import { lineageOf, makeMount } from '../src/mount.js';
 import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
-
-/**
- * `EndoMount` is the git worktree authority at runtime, but its `makeFile`
- * resolves to an `EndoMountFile`, whose `snapshot()` yields a daemon readable
- * with an asynchronous `sha256()`. That is not the platform `File` shape, so
- * `EndoMount` is not statically a `WritableGitWorktree`. Git never creates
- * files through the worktree, so these tests view the mount through both types.
- *
- * @param {Parameters<typeof makeEndoMount>[0]} options
- * @returns {WritableGitWorktree & ReturnType<typeof makeEndoMount>}
- */
-const makeMount = options => /** @type {any} */ (makeEndoMount(options));
 
 const execFileAsync = nodePromisify(execFile);
 const exampleCredential = () =>
@@ -77,7 +65,6 @@ const makeFakeGitMount = () => {
     has: async () => false,
     list: async () => [],
     lookup: async () => undefined,
-    subView: async () => readOnlyMount,
     followNameChanges: () => readerFromIterator(harden([])),
     sha256: () => '',
     size: async () => 0n,
@@ -86,15 +73,11 @@ const makeFakeGitMount = () => {
     has: async () => false,
     list: async () => [],
     lookup: async () => undefined,
-    subView: async () => mount,
     write: async () => undefined,
     remove: async () => undefined,
     move: async () => undefined,
     copy: async () => undefined,
     makeDirectory: async () => mount,
-    makeFile: async () => {
-      throw new Error('Fake mount does not create files');
-    },
     readOnly: () => readOnlyMount,
     snapshot: async () => readOnlyMount,
     entry: () => entry,

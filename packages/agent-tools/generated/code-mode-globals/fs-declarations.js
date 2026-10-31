@@ -272,7 +272,6 @@ type MountReadableTreeView = {
     help: (method?: string) => string;
 };
 type MountSnapshotTree = MountReadableTree & {
-    subView: (petNamePath: string | readonly string[]) => Promise<MountSnapshotTree>;
     followNameChanges: () => MountPassableReader<never, undefined>;
     sha256: () => string;
     size: () => Promise<bigint>;

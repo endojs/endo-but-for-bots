@@ -1,7 +1,9 @@
 import { expectTypeOf } from 'expect-type';
 import type { PassableReader } from '@endo/exo-stream';
 import type { TypeFromInterfaceGuard } from '@endo/patterns';
+import type { WritableGitWorktree } from '@endo/exo-git';
 import type {
+  Directory,
   DirectoryWriteSource,
   PathEntry,
   PathEntryIssuer,
@@ -24,6 +26,12 @@ declare const mount: EndoMount;
 declare const file: EndoMountFile;
 declare const source: DirectoryWriteSource;
 const issuer: PathEntryIssuer = mount;
+
+// `EndoMount` is a structural `Directory` and is handed to git as its worktree
+// without a cast. Its mount-specific `makeFile` and `subView` stay outside the
+// portable contract, so they cannot break this assignability.
+expectTypeOf<EndoMount>().toExtend<Directory>();
+expectTypeOf<EndoMount>().toExtend<WritableGitWorktree>();
 const entry = issuer.entry(['src']);
 
 // `entry()` mints the same `PathEntry` the rest of `EndoMount`'s API

@@ -46,28 +46,6 @@ export const snapshotTreeMethods = (store, sha256) => {
     throw new TypeError(`Unknown entry type: ${JSON.stringify(childType)}`);
   };
 
-  /**
-   * @param {string | string[]} petNamePath
-   */
-  const lookup = async petNamePath => {
-    const namePath =
-      typeof petNamePath === 'string' ? [petNamePath] : petNamePath;
-    const entries = await getEntries();
-    const [head, ...tail] = namePath;
-    const entry = entries.find(([name]) => name === head);
-    if (!entry) {
-      throw new TypeError(`Unknown name: ${JSON.stringify(head)}`);
-    }
-    const child = resolveChild(entry[1], entry[2]);
-    if (tail.length === 0) {
-      return child;
-    }
-    return tail.reduce(
-      (hub, name) => E(hub).lookup(name),
-      /** @type {any} */ (child),
-    );
-  };
-
   return harden({
     // `sha256()` returns the digest as **base64** (the canonical public hash
     // encoding). The hex form is the internal content-store address (and the
@@ -112,27 +90,26 @@ export const snapshotTreeMethods = (store, sha256) => {
       const child = resolveChild(entry[1], entry[2]);
       return E(/** @type {SnapshotTree} */ (child)).list(...tail);
     },
-    lookup,
     /**
      * @param {string | string[]} petNamePath
      */
-    subView: async petNamePath => {
+    lookup: async petNamePath => {
       const namePath =
         typeof petNamePath === 'string' ? [petNamePath] : petNamePath;
-      if (namePath.length === 0) {
-        return store.loadTree(sha256);
-      }
       const entries = await getEntries();
       const [head, ...tail] = namePath;
       const entry = entries.find(([name]) => name === head);
       if (!entry) {
         throw new TypeError(`Unknown name: ${JSON.stringify(head)}`);
       }
-      if (entry[1] !== 'tree') {
-        throw new TypeError('subView target is not a tree');
+      const child = resolveChild(entry[1], entry[2]);
+      if (tail.length === 0) {
+        return child;
       }
-      const child = store.loadTree(entry[2]);
-      return tail.length === 0 ? child : E(child).subView(tail);
+      return tail.reduce(
+        (hub, name) => E(hub).lookup(name),
+        /** @type {any} */ (child),
+      );
     },
     // D6 of the filesystem-interface reconciliation requires immutable CAS
     // trees to expose a uniform observation surface. A closed reader states
@@ -141,7 +118,7 @@ export const snapshotTreeMethods = (store, sha256) => {
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup, subView, followNameChanges).'
+        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup, followNameChanges).'
         : `No documentation for method ${method}.`,
   });
 };

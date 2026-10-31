@@ -16,11 +16,13 @@ import { getInterfaceMethodKeys } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 import {
   DirectoryInterface as PlatformDirectoryInterface,
   FileInterface as PlatformFileInterface,
   ReadableTreeInterface,
+  SnapshotTreeInterface,
   checkinTree,
 } from '@endo/platform/fs/lite';
 
@@ -69,8 +71,8 @@ const makeTempRoot = t => {
 
 /**
  * Method names the platform `Directory` contract requires, read from the
- * guard itself so a change to `PlatformDirectoryInterface` (such as adding
- * `subView` / `makeFile`) is pinned here without a hand-maintained copy.
+ * guard itself so a change to `PlatformDirectoryInterface` is pinned here
+ * without a hand-maintained copy.
  */
 const PLATFORM_DIRECTORY_METHODS = harden(
   getInterfaceMethodKeys(PlatformDirectoryInterface).map(String),
@@ -189,10 +191,11 @@ test('EndoMount exposes every method on PlatformDirectoryInterface', async t => 
 
 /**
  * Extensions beyond the minimal platform `Directory` contract.
- * `entry` / `stat` / `readText` / `maybeReadText` / `writeText`
+ * `entry` / `stat` / `readText` / `maybeReadText` / `writeText` / `makeFile`
  * are mount-specific shortcuts. `subView` is the catalog confined-sub-root
  * method (shared with the extended `Directory`, not strictly mount-specific);
- * it is now part of the minimal `lite` `Directory` vocabulary. `maybeLookup`
+ * it stays out of the minimal `lite` `Directory` vocabulary until its public
+ * name is settled (designs/fs-interface-reconciliation.md). `maybeLookup`
  * is the `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the
  * lite `Directory` vocabulary. (`help` is now part of the platform contract,
  * so it is not an extension.)
@@ -204,6 +207,8 @@ const ENDOMOUNT_EXTENSIONS = [
   'readText',
   'maybeReadText',
   'writeText',
+  'makeFile',
+  'subView',
   'maybeLookup',
   // Recursive glob search, delegated to the @endo/platform search engine.
   'glob',
@@ -590,6 +595,24 @@ test('EndoMount.snapshot returns a SnapshotTree-shaped capability', async t => {
   t.true(methods.includes('lookup'));
   t.true(methods.includes('sha256'));
   t.true(methods.includes('size'));
+  // Every method the portable guard requires is reachable on the guarded Exo.
+  const missing = getInterfaceMethodKeys(SnapshotTreeInterface)
+    .map(String)
+    .filter(name => !methods.includes(name));
+  t.deepEqual(missing, []);
+});
+
+test('EndoMount.snapshot exposes an immediately-terminating followNameChanges', async t => {
+  const { mount } = makeConfiguredMount(t);
+  await E(mount).writeText(['s.txt'], 'snap');
+  const snapshot = await E(mount).snapshot();
+  const changes = [];
+  for await (const change of iterateReader(
+    await E(/** @type {any} */ (snapshot)).followNameChanges(),
+  )) {
+    changes.push(change);
+  }
+  t.deepEqual(changes, []);
 });
 
 // --- XS file-powers / Node file-powers contract conformance ---

@@ -772,8 +772,8 @@ const PathArgumentShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 // `write` accepts a remotable,
 // while the public type narrows that to the portable `DirectoryWriteSource`
 // semantic union.
-// `makeFile` additionally accepts a ReadableBlob source and returns the live
-// file capability, matching the platform Directory contract.
+// `makeFile` is a mount-specific constructor: it accepts UTF-8 text or a
+// ReadableBlob source and returns the live mount file capability.
 export const MountInterface = M.interface('EndoMount', {
   ...pathEntryIssuerMethodGuards,
   // A lookup result can be classified without probing its whole surface.
@@ -960,7 +960,6 @@ export {
 // (designs/fs-interface-consolidation.md § C3).
 export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
-  subView: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable('PassableReader')),
   sha256: M.call().returns(M.string()),
   size: M.call().returns(M.promise()),

@@ -1421,7 +1421,6 @@ export interface EndoReadableTree {
   lookup(
     path: string | readonly string[],
   ): Promise<EndoReadableTree | EndoReadable>;
-  subView(path: string | readonly string[]): Promise<EndoReadableTree>;
   followNameChanges(): import('@endo/exo-stream').PassableReader<
     never,
     undefined
@@ -1558,7 +1557,7 @@ export interface EndoMountFile {
  * `Directory` contract.  Overlapping methods (`has`, `list`, `lookup`,
  * `write`, `remove`, `move`, `copy`, `makeDirectory`, `snapshot`) match
  * the platform shapes; mount-specific extensions (`entry`, `stat`,
- * `displayPath`, `readText`, `maybeReadText`, `writeText`)
+ * `displayPath`, `readText`, `maybeReadText`, `writeText`, `makeFile`)
  * are additive; `readOnly()` narrows to a structural `ReadableTree`
  * view.
  */
