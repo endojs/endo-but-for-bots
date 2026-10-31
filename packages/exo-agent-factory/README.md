@@ -39,6 +39,9 @@ check its own values against the same rules:
 - `makeRootPolicy(policy)` validates and normalizes a root policy, and
   `intersectPolicy(issuer, requested)` computes the narrowed policy that
   `bind` and `attenuate` apply.
+- `MAX_POLICY_COUNT` (`2**32 - 1`) bounds both policy counts.
+  The package profiles quota and instruction bytes to four bytes, a choice
+  about the deployments it serves rather than a JavaScript limit.
 - `isOrdinaryName(name)` is the daemon's ordinary pet-name rule, which child,
   endowment, and derived-namespace names must satisfy.
 - `ChildAgentPolicyShape`, `CreateOptionsShape`, `ChildAgentSummaryShape`, and
@@ -79,6 +82,12 @@ value only after proving its formula type, because neither `provideGuest` nor
 `makeUnconfined` is a safe adopting primitive on its own.
 A derived name holding the wrong type fails closed: the record stays
 reserved, nothing is deleted, and `faults()` reports it.
+The fault is journaled, so a removal or revocation resumed by a later
+incarnation leaves the record reserved too.
+Values retained before the journal entry that records them (a namespace's
+registry entry and maker before the issuer's `Derived` entry, a child's
+endowments before its `Intended` entry) are reclaimed on revival, and
+revoking a bound namespace releases its maker.
 A responder a maker has just returned gets the same proof before the child
 commits; a responder that is not an unconfined caplet over its driver guest
 is cancelled and the child is rolled back.
