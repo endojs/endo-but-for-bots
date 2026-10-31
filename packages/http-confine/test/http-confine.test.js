@@ -589,3 +589,95 @@ test('request summarizes a native Response instead of hardening it', async t => 
   t.notThrows(() => [...nativeResponse.headers]);
   t.is(nativeResponse.headers.get('x-native-response'), 'yes');
 });
+
+test('makeHttpConfinement requires an injected delay', t => {
+  t.throws(
+    () =>
+      makeHttpConfinement(
+        { allowedOrigins: ['https://api.example.com'] },
+        // @ts-expect-error the delay seam is deliberately omitted
+        { fetch: async () => harden({}) },
+      ),
+    { message: /delay is required/ },
+  );
+});
+
+test('revoking mid-body cancels the in-flight read and rejects the request', async t => {
+  /** @type {(value?: unknown) => void} */
+  let markSecondRead = () => {};
+  const secondRead = new Promise(resolve => {
+    markSecondRead = resolve;
+  });
+  /** @type {unknown[]} */
+  const cancelReasons = [];
+  let reads = 0;
+  const body = harden({
+    getReader: () =>
+      harden({
+        read: async () => {
+          reads += 1;
+          if (reads === 1) {
+            return harden({ done: false, value: 'ab' });
+          }
+          markSecondRead();
+          return new Promise(() => {});
+        },
+        cancel: async reason => {
+          cancelReasons.push(reason);
+        },
+        releaseLock: () => {},
+      }),
+  });
+  /** @type {FetchLike} */
+  const fetch = url =>
+    harden({
+      status: 200,
+      statusText: 'OK',
+      ok: true,
+      headers: {},
+      url,
+      body,
+    });
+  const core = makeHttpConfinement(
+    { allowedOrigins: ['https://api.example.com'] },
+    { fetch, delay: neverDelay },
+  );
+
+  const requestP = core.request({ url: 'https://api.example.com/stream' });
+  await secondRead;
+  core.revoke();
+  await t.throwsAsync(() => requestP, { instanceOf: RevokedError });
+  t.is(cancelReasons.length, 1);
+  t.true(cancelReasons[0] instanceof RevokedError);
+});
+
+test('setMaxRequestsPerMinute rebuilds the limiter over the injected delay', async t => {
+  /** @type {number[]} */
+  const delays = [];
+  const delay = (milliseconds, cancelled) => {
+    delays.push(milliseconds);
+    return neverDelay(milliseconds, cancelled);
+  };
+  /** @type {FetchLike} */
+  const fetch = url =>
+    harden({
+      status: 200,
+      statusText: 'OK',
+      ok: true,
+      headers: {},
+      url,
+      body: makeBody(['ok']),
+    });
+  const core = makeHttpConfinement(
+    { allowedOrigins: ['https://api.example.com'], maxRequestsPerMinute: 10 },
+    { fetch, delay },
+  );
+
+  core.setMaxRequestsPerMinute(1);
+  await core.request({ url: 'https://api.example.com/one' });
+  await t.throwsAsync(
+    () => core.request({ url: 'https://api.example.com/two' }),
+    { instanceOf: RateLimitError },
+  );
+  t.true(delays.includes(60_000));
+});
