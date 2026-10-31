@@ -206,6 +206,28 @@ test('revokeDerived reclaims a derived namespace without its facet', async t => 
   await E(fresh).create('z');
 });
 
+test('a derived name reused after revocation survives restart', async t => {
+  const daemon = makeFakeDaemon();
+  const first = await boot(daemon);
+  const { maker } = daemon.makeMaker();
+  const bound = await E(first.rootFacet).bind(maker);
+  await E(bound).attenuate('sub', {});
+  await E(bound).revokeDerived('sub');
+  await E(bound).attenuate('sub', {});
+  daemon.forgetIncarnations();
+  const second = await boot(daemon);
+  const revived = second.boundFacet(1);
+  t.deepEqual(
+    (await E(revived).listDerived()).map(s => s.name),
+    ['sub'],
+  );
+  await t.throwsAsync(E(revived).attenuate('sub', {}), {
+    message: /already/,
+  });
+  await E(revived).revokeDerived('sub');
+  t.deepEqual(await E(revived).listDerived(), []);
+});
+
 test('the handle exposes none of the child powers', async t => {
   const { daemon, bound } = await setup();
   const { handle } = await E(bound).create('helper');
