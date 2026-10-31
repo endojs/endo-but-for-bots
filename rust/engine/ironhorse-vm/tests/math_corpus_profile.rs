@@ -1,5 +1,6 @@
 //! C7: exact, bounded divergence inventory for the 30 existing Math specimens.
 //! Preserve their platform assertions. No harness-wide skip or epsilon is added.
+//! 054.js and 055.js accept exactly two faithful roundings (DETERMINISM-METERING.md C7).
 use ironhorse_vm::{parse_symbols, Interp, MATH_PROVIDER};
 use std::{collections::BTreeMap, path::Path};
 

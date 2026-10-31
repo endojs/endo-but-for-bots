@@ -80,14 +80,34 @@ from this local artifact.
 The XS oracle will continue to use its platform provider; rebuilding XS against
 the Rust provider is not part of this work.
 The 30 `built-ins/stage3-math` corpus files containing provider-sensitive Math
-calls retain their existing platform-oracle expectations.
+calls retain their existing platform-oracle expectations, with two exceptions
+below.
 The oracle-free `math_corpus_profile` test executes the original assertions and
 checks all 30 files against an exact inventory.
-Only `055.js` (`acosh(2.3)`) and `057.js` (`exp(1)`) differ under libm.
-Their exact actual/expected bits are in `tests/fixtures/math-corpus-libm.tsv`.
+Only `057.js` (`exp(1)`) differs under libm.
+Its exact actual/expected bits are in `tests/fixtures/math-corpus-libm.tsv`.
 A local macOS XS run over all 72 stage3-math specimens with `--repeat 3` produced
-70 covered cases and exactly those two failures; the oracle lane stays platform.
+70 covered cases and exactly two failures (`055.js` and `057.js`); the oracle lane
+stays platform.
 No Math-wide skip or tolerance was introduced.
+
+`054.js` (`asinh(1.7)`) and `055.js` (`acosh(2.3)`) accept exactly two values each.
+On the `ubuntu-26.04` runner image (glibc 2.43), the XS oracle's host libm returns
+the correctly rounded result for both. Older glibc and Rust std return the other
+binary64 neighbor:
+
+| Case | Exact result | Accepted bits | Producers |
+| --- | --- | --- | --- |
+| `054.js` | 1.30082042684064683187… | `3ff4d0291473fd4a` | glibc ≤ 2.39, Rust std, libm |
+| | | `3ff4d0291473fd4b` | correctly rounded, glibc 2.43 |
+| `055.js` | 1.47504478124142499418… | `3ff799c88e79140d` | glibc ≤ 2.39, Rust std |
+| | | `3ff799c88e79140c` | correctly rounded, glibc 2.43, libm |
+
+Each pair contains the two faithful roundings that bracket the exact result.
+The cases assert membership in that pair, and any other value still fails.
+A platform-only pin would make the oracle gate depend on the runner's glibc
+version. Exact values were computed with Python Decimal at 60 digits, using the
+same formulas as the C3 references above.
 
 ## Deterministic provider
 

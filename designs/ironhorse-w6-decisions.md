@@ -344,10 +344,14 @@ correct behaviour and the reason to add it deliberately rather than discover it.
 #### C7. Oracle expectations under a swap
 
 The ordinary default stays platform and the XS oracle is not rebuilt.
-All 30 original provider-sensitive specimens retain their platform assertions.
+Of the 30 original provider-sensitive specimens, 28 retain their platform assertions.
+`054.js` (`asinh`) and `055.js` (`acosh`) accept exactly the two faithful roundings
+that bracket the exact result. The XS oracle's host libm became correctly rounded
+for these inputs on `ubuntu-26.04` (glibc 2.43), while Rust std and older glibc
+return the other binary64 neighbor.
 The oracle-free `math_corpus_profile` test checks their exact inventory under both
-providers, accepting only two pinned libm differences (`055.js` and `057.js`).
-The other 28 must still pass their original assertions.
+providers, accepting only one pinned libm difference (`057.js`).
+The other 29 must still pass their assertions.
 The cross-host pure-provider vector allows no Linux/macOS or debug/release differences.
 A local 72-file stage3-math XS run with `--repeat 3` confirms exactly those two failures.
 See [the C7 record](../rust/engine/DETERMINISM-METERING.md#c7-scope-before-any-default-change).
