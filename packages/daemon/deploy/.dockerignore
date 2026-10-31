@@ -1,0 +1,9 @@
+# Keep the build context lean and reproducible. The deploy script builds off a
+# fresh shallow clone (no node_modules), but exclude these defensively so a
+# stray local install or history never bloats or perturbs the context.
+**/node_modules
+.git
+**/.git
+**/tmp
+**/coverage
+**/.nyc_output
