@@ -1,10 +1,10 @@
-import type { GitRemoteProvisionOptions } from '@endo/daemon';
+import type { EndoHost } from '@endo/daemon';
+import type { RemoteCredentialHealth, RemoteSnapshot } from '@endo/exo-git';
 
 export type GitRemoteProfile = 'fetch-only' | 'agent';
 
-export type GitDirection = NonNullable<
-  GitRemoteProvisionOptions['allowedDirections']
->[number];
+/** The options `EndoHost.provideGitRemote` accepts. */
+type GitRemoteProvisionOptions = Parameters<EndoHost['provideGitRemote']>[2];
 
 /**
  * Turns each array-valued field into a readonly array, matching the hardened
@@ -36,42 +36,17 @@ export type GitRemoteProfileOptions = ReadonlyFields<
     Pick<GitRemoteProvisionOptions, 'pushRefspecs' | 'allowedBranches'>
 >;
 
-export type GitRemotePolicyView = Omit<
-  GitRemoteProfileOptions,
-  'pushRefspecs'
-> & {
-  readonly pushRefspecs: readonly string[];
-  readonly revoked: boolean;
-};
-
-export type GitCredentialHealth =
-  | { required: false }
-  | {
-      required: true;
-      kind: string;
-      audience: string;
-      available: boolean;
-      revoked: boolean;
-    };
+/** What `GitRemoteController.inspect()` reports. */
+export type GitRemotePolicyView = RemoteSnapshot & { revoked: boolean };
 
 /**
- * `credential` is absent for a revoked remote: revocation closes every
+ * A revoked remote carries no `credential`: revocation closes every
  * guest-facing method, including `credentialHealth()`, so only the
- * controller's policy view remains.
+ * controller's policy view remains. An active remote always carries one.
  */
-export type GitRemoteInspection = {
-  policy: GitRemotePolicyView;
-  credential?: GitCredentialHealth;
-};
-
-export type GitRemoteHost = {
-  getGitRemoteController(remote: unknown): Promise<unknown>;
-};
-
-export type GitRemoteController = {
-  inspect(): Promise<GitRemotePolicyView>;
-};
-
-export type GitRemoteCap = {
-  credentialHealth(): Promise<GitCredentialHealth>;
-};
+export type GitRemoteInspection =
+  | { policy: GitRemotePolicyView & { revoked: true } }
+  | {
+      policy: GitRemotePolicyView & { revoked: false };
+      credential: RemoteCredentialHealth;
+    };

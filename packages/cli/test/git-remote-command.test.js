@@ -3,12 +3,15 @@
 import path from 'path';
 import '@endo/init';
 import test from 'ava';
+import { fc } from '@fast-check/ava';
 import url from 'url';
 import { execa } from 'execa';
+import { Far } from '@endo/far';
 
 import {
   formatGitRemoteInspection,
   formatGitRemotePreview,
+  inspectRemote,
   makeGitRemoteProfile,
 } from '../src/commands/git-remote.js';
 
@@ -86,6 +89,7 @@ test('inspection spells out endpoint and granted push targets', t => {
       allowForcePush: false,
       allowTags: false,
       allowDelete: false,
+      allowLocalFileTransport: false,
     },
     credential: {
       required: true,
@@ -119,18 +123,19 @@ test('unknown profile names the bounded alternatives', t => {
   );
 });
 
-test('inspection reports revoked remotes, empty targets, and unavailable credentials', t => {
+test('inspection reports empty targets and unavailable credentials', t => {
   const output = formatGitRemoteInspection({
     policy: {
       name: 'upstream',
       url: 'https://github.com/endojs/endo.git',
-      revoked: true,
+      revoked: false,
       allowedDirections: ['fetch'],
       fetchRefspecs: [],
       pushRefspecs: [],
       allowForcePush: true,
       allowTags: false,
       allowDelete: false,
+      allowLocalFileTransport: false,
     },
     credential: {
       required: true,
@@ -140,7 +145,7 @@ test('inspection reports revoked remotes, empty targets, and unavailable credent
       revoked: true,
     },
   });
-  t.regex(output, /state: revoked/);
+  t.regex(output, /state: active/);
   t.regex(output, /fetch targets:\n {4}\(none\)/);
   t.regex(output, /push targets:\n {4}\(none\)/);
   t.regex(output, /force push: allowed/);
@@ -162,6 +167,7 @@ test('inspection notes when no credential is required', t => {
       allowForcePush: false,
       allowTags: false,
       allowDelete: false,
+      allowLocalFileTransport: false,
     },
     credential: { required: false },
   });
@@ -198,9 +204,9 @@ test('agent profile rejects branch selectors that widen the grant', t => {
     ['agent/foo.', /not a valid branch selector/],
     ['agent/.hidden/*', /not a valid branch selector/],
     ['agent.lock/*', /not a valid branch selector/],
-    ['agent/a\u0001b', /not a valid branch selector/],
-    ['agent/a\u007fb', /not a valid branch selector/],
-    ['agent/a\tb', /not a valid branch selector/],
+    ['agent/a\u0001b', /must not contain control/],
+    ['agent/a\u007fb', /must not contain control/],
+    ['agent/a\tb', /must not contain control/],
   ];
   for (const [branch, message] of cases) {
     t.throws(
@@ -279,14 +285,20 @@ test('remote name must be a single plain segment', t => {
 test('endpoint must be HTTPS without embedded credentials', t => {
   /** @type {Array<[string, RegExp]>} */
   const cases = [
-    ['', /is not a valid URL/],
+    ['', /must be a non-empty string/],
     ['github.com/endojs/endo', /is not a valid URL/],
     ['http://github.com/endojs/endo.git', /must use https:/],
     ['file:///tmp/repo', /must use https:/],
     ['ssh://git@github.com/endojs/endo.git', /must use https:/],
     ['git://github.com/endojs/endo.git', /must use https:/],
-    ['https://user:secret@github.com/endojs/endo.git', /must not embed/],
-    ['https://token@github.com/endojs/endo.git', /must not embed/],
+    [
+      'https://user:secret@github.com/endojs/endo.git',
+      /must not include embedded credentials/,
+    ],
+    [
+      'https://token@github.com/endojs/endo.git',
+      /must not include embedded credentials/,
+    ],
   ];
   for (const [candidate, message] of cases) {
     t.throws(
@@ -304,6 +316,7 @@ test('endpoint rejects terminal control and bidirectional-override characters', 
     'https://github.com/endojs/endo.git\r',
     'https://github.com/endojs/\u009bendo.git',
     'https://github.com/endojs/\u202eendo.git',
+    'https://github.com/endojs/\u061cendo.git',
   ]) {
     t.throws(
       () => makeGitRemoteProfile('origin', candidate, 'fetch-only'),
@@ -362,6 +375,7 @@ test('inspection reports a revoked-but-available credential as unavailable and e
       allowForcePush: false,
       allowTags: false,
       allowDelete: false,
+      allowLocalFileTransport: false,
     },
     credential: {
       required: true,
@@ -387,6 +401,7 @@ test('inspection of a revoked remote notes the unchecked credential', t => {
       allowForcePush: false,
       allowTags: false,
       allowDelete: false,
+      allowLocalFileTransport: false,
     },
   });
   t.regex(output, /state: revoked/);
@@ -394,23 +409,31 @@ test('inspection of a revoked remote notes the unchecked credential', t => {
 });
 
 test('provision rejects a credential name carrying terminal controls', async t => {
-  const result = await execa(
-    process.execPath,
-    [
-      endoBin,
-      'git-remote',
-      'provision',
-      'repo-git',
-      'origin',
-      '--url',
-      endpoint,
-      '--credential',
-      'github-token\u001b[2K',
-    ],
-    { reject: false, input: '' },
-  );
-  t.not(result.exitCode, 0);
-  t.regex(result.stderr, /must not contain control/);
+  await null;
+  for (const credentialName of [
+    'github-token\u001b[2K',
+    'github-token\u061c',
+    'github-token\u202e',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await execa(
+      process.execPath,
+      [
+        endoBin,
+        'git-remote',
+        'provision',
+        'repo-git',
+        'origin',
+        '--url',
+        endpoint,
+        '--credential',
+        credentialName,
+      ],
+      { reject: false, input: '' },
+    );
+    t.not(result.exitCode, 0, JSON.stringify(credentialName));
+    t.regex(result.stderr, /must not contain control/);
+  }
 });
 
 test('provision --yes without --url fails instead of prompting', async t => {
@@ -453,4 +476,176 @@ test('git-remote provision help names both bounded profiles', async t => {
   t.regex(stdout, /defaults to refs\/heads\/agent\/\*/);
   t.regex(stdout, /interactive approval prompt/);
   t.regex(stdout, /--credential <name>/);
+});
+
+test('agent profile rejects branch selectors carrying bidirectional or C1 controls', t => {
+  for (const branch of [
+    'review/\u202eevil',
+    'review/\u202dx',
+    'review/\u2066x\u2069',
+    'review/\u200fx',
+    'review/\u061cx',
+    'review/\u0085x',
+    'review/\u009bx/*',
+  ]) {
+    t.throws(
+      () => makeGitRemoteProfile('origin', endpoint, 'agent', [branch]),
+      { message: /must not contain control or bidirectional-override/ },
+      `branch ${JSON.stringify(branch)}`,
+    );
+  }
+});
+
+test('inspection escapes terminal controls the daemon reports', t => {
+  const output = formatGitRemoteInspection({
+    policy: {
+      name: 'origin\u202e',
+      url: endpoint,
+      revoked: false,
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/\u001b[2K*'],
+      pushRefspecs: [],
+      allowForcePush: false,
+      allowTags: false,
+      allowDelete: false,
+      allowLocalFileTransport: false,
+    },
+    credential: {
+      required: true,
+      kind: 'bearer',
+      audience: 'https://github.com\n  state: active\u061c',
+      available: true,
+      revoked: false,
+    },
+  });
+  t.notRegex(
+    output,
+    // eslint-disable-next-line no-control-regex
+    /[\u001b\u061c\u202e]/,
+  );
+  t.is(output.split('\n').filter(line => /^ {2}state:/.test(line)).length, 1);
+  t.regex(
+    output,
+    /credential: bearer for https:\/\/github\.com\\u000a {2}state: active\\u061c \(available\)/,
+  );
+  t.regex(output, /^origin\\u202e$/m);
+  t.regex(output, /refs\/remotes\/origin\/\\u001b\[2K\*/);
+});
+
+test('inspection renders the whole policy family', t => {
+  const output = formatGitRemoteInspection({
+    policy: {
+      name: 'mirror',
+      url: 'file:///srv/mirror.git',
+      revoked: false,
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['refs/heads/main:refs/remotes/mirror/main'],
+      pushRefspecs: [],
+      defaultPullRef: 'refs/heads/main',
+      allowForcePush: false,
+      allowTags: false,
+      allowDelete: false,
+      allowLocalFileTransport: true,
+    },
+    credential: { required: false },
+  });
+  t.regex(output, /default pull ref: refs\/heads\/main/);
+  t.regex(output, /local file transport: allowed/);
+});
+
+/** @param {Array<boolean>} revokedSequence */
+const makeRacingController = revokedSequence => {
+  let reads = 0;
+  return Far('GitRemoteController', {
+    inspect: async () => {
+      const revoked =
+        revokedSequence[Math.min(reads, revokedSequence.length - 1)];
+      reads += 1;
+      return harden({
+        name: 'origin',
+        url: endpoint,
+        revoked,
+        allowedDirections: ['fetch'],
+        fetchRefspecs: [],
+        pushRefspecs: [],
+        allowForcePush: false,
+        allowTags: false,
+        allowDelete: false,
+        allowLocalFileTransport: false,
+      });
+    },
+  });
+};
+
+const revokedRemote = Far('GitRemote', {
+  credentialHealth: async () => {
+    throw Error('GitRemote has been revoked');
+  },
+});
+
+test('inspection reports a remote revoked between the policy read and the credential check', async t => {
+  const inspection = await inspectRemote(
+    /** @type {any} */ (makeRacingController([false, true])),
+    revokedRemote,
+  );
+  t.true(inspection.policy.revoked);
+  t.false('credential' in inspection);
+});
+
+test('inspection rethrows a credential failure on a remote that is still active', async t => {
+  await t.throwsAsync(
+    inspectRemote(
+      /** @type {any} */ (makeRacingController([false, false])),
+      revokedRemote,
+    ),
+    { message: /has been revoked/ },
+  );
+});
+
+const selectorSegmentArb = fc
+  .stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,8}$/)
+  .filter(
+    segment =>
+      !segment.endsWith('.') &&
+      !segment.endsWith('.lock') &&
+      !segment.includes('..'),
+  );
+const selectorArb = fc
+  .tuple(
+    fc.array(selectorSegmentArb, { minLength: 1, maxLength: 4 }),
+    fc.boolean(),
+    fc.boolean(),
+  )
+  .map(
+    ([segments, wildcard, qualified]) =>
+      `${qualified ? 'refs/heads/' : ''}${segments.join('/')}${wildcard ? '/*' : ''}`,
+  );
+
+test('agent profile normalizes selectors under refs/heads/ without widening (property)', t => {
+  fc.assert(
+    fc.property(fc.array(selectorArb, { maxLength: 10 }), branches => {
+      const { allowedBranches = [] } = makeGitRemoteProfile(
+        'origin',
+        endpoint,
+        'agent',
+        branches,
+      );
+      const expected =
+        branches.length === 0
+          ? ['refs/heads/agent/*']
+          : [
+              ...new Set(
+                branches.map(branch =>
+                  branch.startsWith('refs/heads/')
+                    ? branch
+                    : `refs/heads/${branch}`,
+                ),
+              ),
+            ];
+      t.deepEqual([...allowedBranches], expected);
+      t.false(allowedBranches.includes('refs/heads/*'));
+      t.true(allowedBranches.every(ref => ref.startsWith('refs/heads/')));
+    }),
+    { numRuns: 500 },
+  );
 });

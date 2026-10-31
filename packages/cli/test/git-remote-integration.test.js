@@ -53,6 +53,19 @@ testSerial('provision, inspect, and revoke a Git remote', async t => {
     const provisioned =
       await execa`endo git-remote provision repo-git origin --url https://github.com/endojs/endo.git --profile agent --branch review/change --credential github-token --yes --json`;
     const inspection = JSON.parse(provisioned.stdout);
+    // `--yes` skips the prompt but still shows the grant it approves.
+    t.regex(
+      provisioned.stderr,
+      /endpoint: https:\/\/github\.com\/endojs\/endo\.git/,
+    );
+    t.regex(
+      provisioned.stderr,
+      /push targets:\n {4}refs\/heads\/review\/change:refs\/heads\/review\/change\n/,
+    );
+    t.regex(
+      provisioned.stderr,
+      /credential: github-token \(unverified; health is reported after provisioning\)/,
+    );
     t.deepEqual(inspection.policy.pushRefspecs, [
       'refs/heads/review/change:refs/heads/review/change',
     ]);
@@ -82,6 +95,20 @@ testSerial('provision, inspect, and revoke a Git remote', async t => {
     );
     t.deepEqual(interactiveInspection.policy.allowedDirections, ['fetch']);
     t.deepEqual(interactiveInspection.policy.pushRefspecs, []);
+    t.regex(
+      interactivelyProvisioned.stderr,
+      /endpoint: https:\/\/github\.com\/EndoJS\/Endo-Mixed\.git\n/,
+    );
+    t.regex(interactivelyProvisioned.stderr, /push targets:\n {4}\(none\)/);
+    t.regex(
+      interactivelyProvisioned.stderr,
+      /credential: github-token \(unverified; health is reported after provisioning\)\n/,
+    );
+    // The preview precedes the approval question.
+    t.true(
+      interactivelyProvisioned.stderr.indexOf('endpoint:') <
+        interactivelyProvisioned.stderr.indexOf('Provision this remote?'),
+    );
     t.regex(interactivelyProvisioned.stderr, /Provision this remote\?/);
     const reinspected = await execa`endo git-remote inspect upstream --json`;
     t.is(

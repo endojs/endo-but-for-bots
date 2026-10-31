@@ -36,6 +36,7 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-git": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
@@ -52,6 +53,7 @@
   },
   "devDependencies": {
     "@endo/stream": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "eslint": "catalog:dev",

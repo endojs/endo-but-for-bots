@@ -24,8 +24,11 @@ The endpoint must be an `https:` URL without embedded credentials.
 Each `--branch` must name a branch or a `refs/heads/<parent>/*` namespace;
 selectors under other ref namespaces, a bare `*` that would grant every
 branch, and names `git check-ref-format` refuses are rejected.
-The endpoint and credential name may not contain control characters, which
-could rewrite the approval preview on a terminal.
+The endpoint, credential name, and branch selectors may not contain control
+or Unicode bidirectional-control characters, which could rewrite the approval
+preview on a terminal.
+The preview's push targets are derived by the same `@endo/exo-git` policy
+normalizer the minted remote enforces.
 The approval preview names the credential but cannot vouch for its health;
 the inspection printed after provisioning reports it.
 Credential material is never accepted on the command line; `--credential`
@@ -46,10 +49,13 @@ Omit `--url` to enter the endpoint interactively; `--yes` requires `--url`.
 The preview and prompts are written to stderr, so `--json` output on stdout
 is a single JSON document.
 Inspection reports the fixed endpoint, effective fetch and push refspecs,
-revocation state, force/tag/delete policy, and credential health without
-revealing credential material.
+default pull ref, revocation state, force/tag/delete and local-file transport
+policy, and credential health without revealing credential material.
+Text output escapes any control characters the daemon reports, so a remote or
+credential minted elsewhere cannot forge inspection lines.
 A revoked remote no longer answers credential health, so its inspection
-reports the policy alone.
+reports the policy alone, including when revocation lands while inspection is
+in progress.
 
 ## In-flight design work
 
