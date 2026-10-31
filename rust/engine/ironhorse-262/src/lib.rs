@@ -205,7 +205,9 @@ pub struct DualRun {
     pub source: String,
     pub agreement: Agreement,
     /// Completion-value string agreement (only meaningful when both
-    /// completed).
+    /// completed). Number completions compare the IronHorse spelling with the
+    /// oracle's independently derived ECMA-262 spelling; `oracle_result` keeps
+    /// XS's raw diagnostic string and may therefore differ when this is true.
     pub result_agrees: bool,
     pub oracle_result: String,
     pub ironhorse_result: String,
@@ -589,8 +591,9 @@ fn build_dual_run(
     // coded the source. Captured before `oracle` is consumed below.
     let oracle_parsed = !oracle.bytecode.is_empty();
 
-    let result_agrees =
-        oracle.completed && ironhorse.completed && oracle.result == ironhorse.result;
+    let result_agrees = oracle.completed
+        && ironhorse.completed
+        && xs_oracle::completion_agrees(&oracle.result, oracle.result_number(), &ironhorse.result);
     let computrons_agree =
         oracle.completed && ironhorse.completed && oracle.computrons == ironhorse.computrons;
 
@@ -916,6 +919,8 @@ pub struct CompartmentDualRun {
     /// The oracle completed normally.
     pub oracle_completed: bool,
     pub oracle_result: String,
+    /// The oracle's exact Number bits, when its completion was a Number.
+    pub oracle_result_number_bits: Option<u64>,
     /// Both compartments completed normally.
     pub both_completed: bool,
     /// Compartment A's completion value string.
@@ -940,11 +945,12 @@ impl CompartmentDualRun {
     /// one machine. A completion mismatch or a cross-compartment
     /// disagreement is a divergence, never a silent pass.
     pub fn result_agrees(&self) -> bool {
+        let oracle_number = self.oracle_result_number_bits.map(f64::from_bits);
         self.oracle_completed
             && self.both_completed
             && self.shared_intrinsics
-            && self.a_result == self.oracle_result
-            && self.b_result == self.oracle_result
+            && xs_oracle::completion_agrees(&self.oracle_result, oracle_number, &self.a_result)
+            && xs_oracle::completion_agrees(&self.oracle_result, oracle_number, &self.b_result)
     }
 
     /// The same bytecode evaluated in a compartment reproduces the
@@ -985,6 +991,7 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
     Some(CompartmentDualRun {
         source: source.to_string(),
         oracle_completed: oracle.completed,
+        oracle_result_number_bits: oracle.result_number_bits,
         oracle_result: oracle.result,
         both_completed: ra.completed && rb.completed,
         a_result: ra.result,
@@ -1017,6 +1024,39 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dual_run_compares_number_completion_by_oracle_exact_double() {
+        // Finding 05264cccae42245a evaluates to the same double on both
+        // engines. XS renders a non-round-tripping tie while IronHorse emits
+        // the required shortest round-tripping decimal.
+        let source = "((((226492416 + 27.27) << (838860800 << 226492416)) * ((226492416 + 27.27) << (838860800 << 226492416))) + (((27.27 * 27.27) + (838860800 << 226492416)) << ((226492416 + 27.27) << (838860800 << 226492416))))";
+        let run = dual_run(source).expect("oracle machine runs");
+        assert_eq!(run.agreement, Agreement::BothComplete);
+        assert_eq!(run.oracle_result, "51298827675632340");
+        assert_eq!(run.ironhorse_result, "51298827675632344");
+        assert!(
+            run.result_agrees,
+            "the test262 runner must compare the exact Number, not XS's spelling"
+        );
+    }
+
+    #[test]
+    fn multi_crank_and_compartment_runs_share_exact_number_policy() {
+        let source = "((((226492416 + 27.27) << (838860800 << 226492416)) * ((226492416 + 27.27) << (838860800 << 226492416))) + (((27.27 * 27.27) + (838860800 << 226492416)) << ((226492416 + 27.27) << (838860800 << 226492416))))";
+
+        let cranks = dual_run_cranks(&["1 + 1", source]).expect("oracle machine runs");
+        let tie = cranks.last().expect("tie crank is present");
+        assert_eq!(tie.oracle_result, "51298827675632340");
+        assert_eq!(tie.ironhorse_result, "51298827675632344");
+        assert!(tie.result_agrees);
+
+        let compartments = compartment_dual_run(source).expect("oracle machine runs");
+        assert_eq!(compartments.oracle_result, "51298827675632340");
+        assert_eq!(compartments.a_result, "51298827675632344");
+        assert_eq!(compartments.b_result, "51298827675632344");
+        assert!(compartments.result_agrees());
+    }
 
     #[test]
     fn ironhorse_only_run_terminates_on_the_const_for_hang_source() {

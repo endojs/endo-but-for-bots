@@ -9,6 +9,9 @@
 //! `RegExpBudgetExceeded` ones, say) had to be repeated N times or silently
 //! diverge. New test files should use this rather than paste a fourteenth.
 
+pub mod fixtures;
+
+#[allow(dead_code)]
 pub struct TestCompiler;
 impl ironhorse_vm::SourceCompiler for TestCompiler {
     fn compile_source(

@@ -2615,67 +2615,12 @@ pub fn to_int32(n: f64) -> i32 {
 }
 
 /// The ECMAScript Number::toString(10) rendering (spec 6.1.6.1.20,
-/// `Number::toString`) — XS's `fxNumberToString` / dtoa. Reproduces the
-/// standard's exact fixed-vs-exponential threshold from the shortest
-/// round-tripping decimal: exponential when the point position `n ≤ -6` or
-/// `n > 21`, fixed otherwise, with the JS spellings for the non-finite and
-/// signed-zero corners. Rust's default `{}` diverges from this in the
-/// extremes (it never switches to `e` notation for small/large magnitudes,
-/// so `(1e-7)` prints as `0.0000001` instead of `1e-7`), which is why the
-/// shortest digits are re-formatted here.
+/// `Number::toString`) — XS's `fxNumberToString` / dtoa. Rust's default `{}`
+/// never switches to `e` notation for small/large magnitudes (`(1e-7)` would
+/// print as `0.0000001`), so the shortest digits from `{:e}` are placed by
+/// the spec's thresholds in [`ironhorse_text::number`].
 pub fn number_to_ecma_string(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".to_string();
-    }
-    if n.is_infinite() {
-        return if n < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
-    }
-    if n == 0.0 {
-        // Covers +0 and -0; JS String(-0) === "0".
-        return "0".to_string();
-    }
-    let sign = if n < 0.0 { "-" } else { "" };
-    let abs = n.abs();
-    // Rust's `{:e}` gives the shortest round-tripping mantissa (one digit
-    // before the point, trailing zeros stripped) and its base-10 exponent —
-    // the `(s, k, e)` the spec's algorithm needs.
-    let exp = format!("{:e}", abs);
-    let (mantissa, exp10) = match exp.split_once('e') {
-        Some((m, e)) => (m, e.parse::<i32>().unwrap_or(0)),
-        None => return format!("{}{}", sign, abs), // unreachable for finite non-zero
-    };
-    // `s` = the significant digits (k of them); `point` = the spec's `n`,
-    // the position of the decimal point relative to the first digit (so the
-    // value is `0.s × 10^point`).
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let s = digits.trim_end_matches('0');
-    let s = if s.is_empty() { "0" } else { s };
-    let k = s.len() as i32;
-    let point = exp10 + 1;
-    let body = if k <= point && point <= 21 {
-        // Digits followed by `point - k` trailing zeros (an integer).
-        let mut out = String::from(s);
-        out.push_str(&"0".repeat((point - k) as usize));
-        out
-    } else if 0 < point && point <= 21 {
-        // `point` digits, a decimal point, then the remaining `k - point`.
-        format!("{}.{}", &s[..point as usize], &s[point as usize..])
-    } else if -6 < point && point <= 0 {
-        // "0." then `-point` leading zeros then the digits.
-        format!("0.{}{}", "0".repeat((-point) as usize), s)
-    } else {
-        // Exponential: one leading digit, the rest after a point, then
-        // `e`, the sign of `point - 1`, and its magnitude.
-        let e = point - 1;
-        let esign = if e >= 0 { "+" } else { "-" };
-        let head = if k == 1 {
-            s.to_string()
-        } else {
-            format!("{}.{}", &s[..1], &s[1..])
-        };
-        format!("{}e{}{}", head, esign, e.abs())
-    };
-    format!("{}{}", sign, body)
+    ironhorse_text::number::number_to_ecma_string(n)
 }
 
 #[cfg(test)]

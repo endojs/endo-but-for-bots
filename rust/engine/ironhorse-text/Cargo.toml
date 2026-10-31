@@ -1,6 +1,6 @@
 [package]
 name = "ironhorse-text"
-description = "Lossless JavaScript symbol spellings in XS CESU-8."
+description = "Lossless JavaScript symbol spellings in XS CESU-8, and ECMA-262 Number spellings."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

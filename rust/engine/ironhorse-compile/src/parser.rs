@@ -34,6 +34,7 @@ use crate::token_flags::{
     EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION,
     RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
 };
+use ironhorse_text::number::number_to_ecma_string;
 use ironhorse_text::SymbolName;
 
 /// A parser error, classified and located as XS's `fxReportParserError`
@@ -2228,57 +2229,6 @@ fn number_to_index(number: f64) -> Option<u32> {
     } else {
         None
     }
-}
-
-/// The ECMAScript `Number::toString(10)` rendering (spec 6.1.6.1.20) —
-/// XS's `fxNumberToString` / dtoa. Mirrors
-/// `ironhorse_vm::value::number_to_ecma_string` (ironhorse-compile does not
-/// depend on ironhorse-vm), producing the canonical string a non-index
-/// numeric property key becomes (`fxNewParserSymbol(fxNumberToString…)`).
-fn number_to_ecma_string(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".to_string();
-    }
-    if n.is_infinite() {
-        return if n < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
-    }
-    if n == 0.0 {
-        // Covers +0 and -0; JS String(-0) === "0".
-        return "0".to_string();
-    }
-    let sign = if n < 0.0 { "-" } else { "" };
-    let abs = n.abs();
-    // Rust's `{:e}` gives the shortest round-tripping mantissa (one digit
-    // before the point, trailing zeros stripped) and its base-10 exponent.
-    let exp = format!("{:e}", abs);
-    let (mantissa, exp10) = match exp.split_once('e') {
-        Some((m, e)) => (m, e.parse::<i32>().unwrap_or(0)),
-        None => return format!("{}{}", sign, abs),
-    };
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let s = digits.trim_end_matches('0');
-    let s = if s.is_empty() { "0" } else { s };
-    let k = s.len() as i32;
-    let point = exp10 + 1;
-    let body = if k <= point && point <= 21 {
-        let mut out = String::from(s);
-        out.push_str(&"0".repeat((point - k) as usize));
-        out
-    } else if 0 < point && point <= 21 {
-        format!("{}.{}", &s[..point as usize], &s[point as usize..])
-    } else if -6 < point && point <= 0 {
-        format!("0.{}{}", "0".repeat((-point) as usize), s)
-    } else {
-        let e = point - 1;
-        let esign = if e >= 0 { "+" } else { "-" };
-        let head = if k == 1 {
-            s.to_string()
-        } else {
-            format!("{}.{}", &s[..1], &s[1..])
-        };
-        format!("{}e{}{}", head, esign, e.abs())
-    };
-    format!("{}{}", sign, body)
 }
 
 mod stmt;
