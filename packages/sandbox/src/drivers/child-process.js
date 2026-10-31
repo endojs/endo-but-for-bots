@@ -229,8 +229,8 @@ export const killProcessGroup = (child, signal) => {
   try {
     process.kill(-pid, signal);
   } catch (e) {
-    const err = /** @type {Error & { code?: string }} */ (e);
-    if (err.code !== 'ESRCH') throw err;
+    const error = /** @type {Error & { code?: string }} */ (e);
+    if (error.code !== 'ESRCH') throw error;
   }
 };
 harden(killProcessGroup);
@@ -284,9 +284,9 @@ export const sweepLeaderlessGroup = (
     try {
       kill(-pgid, signal);
     } catch (e) {
-      const err = /** @type {Error & { code?: string }} */ (e);
-      if (err.code === 'ESRCH') return false;
-      throw err;
+      const error = /** @type {Error & { code?: string }} */ (e);
+      if (error.code === 'ESRCH') return false;
+      throw error;
     }
   }
   return true;

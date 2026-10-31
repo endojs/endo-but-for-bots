@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: `numRuns` is fast-check's own option name.
 
 // The `'sandbox'` Shell engine against a real bwrap slice: the daemon's
 // slice construction (`makeSandboxShellEngine`), the sandbox spawner, and the
@@ -6,6 +7,7 @@
 // recorded, where bwrap cannot create a namespace.
 
 /** @import { ExecutionContext } from 'ava' */
+/** @import { AddressInfo } from 'node:net' */
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
@@ -176,9 +178,7 @@ test.serial('the sandbox has no network', async t => {
     server.listen(0, '127.0.0.1', () => resolve(undefined)),
   );
   t.teardown(() => server.close());
-  const { port } = /** @type {import('node:net').AddressInfo} */ (
-    server.address()
-  );
+  const { port } = /** @type {AddressInfo} */ (server.address());
   const probe = ['-c', `exec 3<>/dev/tcp/127.0.0.1/${port}`];
 
   const outside = makeTemporaryDirectory(t, 'shell-engine-network');

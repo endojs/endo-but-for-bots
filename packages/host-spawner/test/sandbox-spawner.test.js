@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: `numRuns` is fast-check's own option name.
 // prefer-endo-primitives-exempt: @endo/bytes has no UTF-8 codec; TextEncoder builds fixture bytes.
 
 // Establish a SES perimeter (provides the `harden` global).
