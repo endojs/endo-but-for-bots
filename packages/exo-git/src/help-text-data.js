@@ -66,7 +66,9 @@ export const helpTextEntries = harden([
       detach:
         'detach(ref) -> Promise<void>\nCheck out a revision with HEAD detached.',
       merge:
-        'merge(ref, options?) -> Promise<string>\nMerge a revision into the current branch.\n`fastForwardOnly: true` refuses anything but a fast-forward;\n`noFastForward: true` always records a merge commit.',
+        'merge(ref, options?) -> Promise<GitMergeResult>\nMerge a revision into the current branch.\nReturns `up-to-date`, `fast-forward`, `merged`, or structured `conflicts`.\nConflict entries carry index object ids and the worktree marker style.\n`fastForwardOnly: true` refuses anything but a fast-forward;\n`noFastForward: true` always records a merge commit.',
+      mergeText:
+        "mergeText(ref, options?) -> Promise<string>\nMerge a revision and return Git's porcelain output.\nThe options are the same as `merge`; a conflict rejects after leaving the\nworktree and index in their ordinary conflicted state.",
       stashPush:
         'stashPush(options?) -> Promise<string>\nStash worktree changes and return the resulting stash reference.\nOptions are `message`, `includeUntracked`, and either `entries` or\n`paths`.',
       stashApply:

@@ -836,12 +836,15 @@ export const makeGitRemote = ({
         /** @type {'merge' | 'rebase' | 'ff-only'} */
         const strategy = opts.strategy || 'ff-only';
         const headBefore = await E(git).revParse('HEAD');
+        let mergeResult;
         switch (strategy) {
           case 'ff-only':
-            await E(git).merge(branch, { fastForwardOnly: true });
+            mergeResult = await E(git).merge(branch, {
+              fastForwardOnly: true,
+            });
             break;
           case 'merge':
-            await E(git).merge(branch);
+            mergeResult = await E(git).merge(branch);
             break;
           case 'rebase':
             await E(git).rebase({ mode: 'start', upstream: branch });
@@ -850,6 +853,9 @@ export const makeGitRemote = ({
             throw new Error(
               'GitRemote.pull strategy must be merge, rebase, or ff-only',
             );
+        }
+        if (mergeResult?.status === 'conflicts') {
+          throw new Error(`GitRemote.pull ${strategy} has conflicts`);
         }
         const head = await E(git).revParse('HEAD');
         const headOidBefore =
