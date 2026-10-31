@@ -1,0 +1,12 @@
+---
+'@endo/hosted-agent': minor
+---
+
+Breaking (pre-1.0): the inference provider registry now enforces limits and a request policy, so calls that used to succeed can be refused. Migrate as follows.
+
+1. Default limits (`DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, `DEFAULT_OWNER_INFERENCE_LIMITS`) now apply to every provider, owner, and grant, including those restored from persisted state. To keep a higher limit, set it explicitly with `setLimits(limits, operationId, true)`, `setOwnerLimits(limits, operationId, true)`, or `setGrantLimits(grantId, limits, operationId, true)`.
+2. Raising a limit through any of those methods is refused with `limit-raise-unconfirmed` unless the final `confirmed` argument is `true`. Lowering one needs no confirmation.
+3. Requests to `/v1/messages` must name the granted `model`, give a positive integer `max_tokens` within the grant's `maxOutputTokens`, and use only allowlisted body fields and no credential headers. Anything else, including the bare `{}` body the registry used to forward, is refused with `inference-request-refused`.
+4. A model with no `INFERENCE_PROVIDER_MODEL_PRICES` entry is refused with `unpriced-model` by every scope that budgets in dollars. To use one, give both the provider and the owner a `dailyTokens` budget; an agent on that provider then inherits the provider's token budget. A limit record may carry only one of `dailyDollars` and `dailyTokens`, and a deployment ceiling on one kind refuses a budget of the other kind.
+
+An upstream 404 for the granted model is now reported as `model-not-available`.

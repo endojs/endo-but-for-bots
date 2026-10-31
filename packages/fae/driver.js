@@ -7,6 +7,31 @@ import { readFaeWorkloadConfig } from './src/workload-config.js';
 import { spawnWorkerLoop } from './agent.js';
 import { resolveAuthToken } from './src/credentials.js';
 
+/** @import { ERef } from '@endo/eventual-send' */
+
+/**
+ * A brokered recipe carries no credential because the registry grant holds it.
+ *
+ * @param {object} options
+ * @param {ERef<object>} options.powers
+ * @param {{ kind?: string }} options.storedConfig
+ * @param {string} [options.sessionId]
+ * @returns {{ sessionId?: string, provideAuthToken?: () => Promise<string> }}
+ */
+export const providerCredentialOptions = ({
+  powers,
+  storedConfig,
+  sessionId,
+}) => {
+  if (sessionId !== undefined) return harden({ sessionId });
+  if (storedConfig.kind === 'brokered-messages') return harden({});
+  return harden({
+    provideAuthToken: () =>
+      resolveAuthToken({ powers, config: /** @type {any} */ (storedConfig) }),
+  });
+};
+harden(providerCredentialOptions);
+
 /**
  * Fae agent driver caplet.
  *
@@ -49,7 +74,7 @@ export const make = async (powers, context, { env } = {}) => {
   const startLoop = async () => {
     const providerIdentity = await E(powers).locate('llm-provider');
     const storedConfig =
-      /** @type {{ host?: string, model: string, kind?: string, subscription?: object }} */ (
+      /** @type {{ host?: string, model: string, kind?: string, subscription?: object, inference?: object }} */ (
         await E(powers).lookupByLocator(providerIdentity)
       );
     const agentPowers = await E(powers).lookup('agent');
@@ -81,12 +106,7 @@ export const make = async (powers, context, { env } = {}) => {
         requestTimeoutMs,
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
-        ...(sessionId === undefined
-          ? {
-              provideAuthToken: () =>
-                resolveAuthToken({ powers, config: storedConfig }),
-            }
-          : { sessionId }),
+        ...providerCredentialOptions({ powers, storedConfig, sessionId }),
       }),
     );
   };

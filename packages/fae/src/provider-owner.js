@@ -7,6 +7,10 @@ import {
   makeSubscriptionResponsesProvider,
   assertSubscriptionResponsesRecipe,
 } from '@endo/lal/providers/index.js';
+import {
+  assertBrokeredMessagesRecipe,
+  makeBrokeredMessagesProvider,
+} from '@endo/lal/providers/brokered-messages.js';
 
 /**
  * Own the loop's local provider, not its credential or subscription broker.
@@ -24,7 +28,8 @@ import {
  *
  * @param {object} options
  * @param {{ provider?: any, host?: string, model?: string, authToken?: string,
- *   kind?: string, subscription?: any, reasoningEffort?: string, contextLength?: number }} options.config
+ *   kind?: string, subscription?: any, inference?: any, maxTokens?: number,
+ *   reasoningEffort?: string, contextLength?: number }} options.config
  * @param {string} [options.sessionId] Stable agent identity for pool affinity.
  * @param {() => Promise<string>} [options.provideAuthToken] - Secret resolver;
  *   absent only for tokenless or explicitly injected providers.
@@ -43,11 +48,17 @@ export const makeProviderOwner = ({
     Fail`Inline provider authToken is unsupported; use a Secrets resolver`;
   config.kind === undefined ||
     config.kind === 'subscription-responses' ||
+    config.kind === 'brokered-messages' ||
     Fail`Unsupported Fae provider kind`;
   const subscriptionBacked = config.kind === 'subscription-responses';
+  const brokered = config.kind === 'brokered-messages';
   if (subscriptionBacked) {
     assertSubscriptionResponsesRecipe(config);
     sessionId !== undefined || Fail`Stable inference session identity required`;
+  } else if (brokered) {
+    assertBrokeredMessagesRecipe(config);
+    provideAuthToken === undefined ||
+      Fail`Brokered Messages cannot receive a credential resolver`;
   } else {
     !Object.hasOwn(config, 'subscription') ||
       Fail`Subscription requires the subscription-responses provider kind`;
@@ -85,6 +96,16 @@ export const makeProviderOwner = ({
         ...(config.contextLength === undefined
           ? {}
           : { contextLength: config.contextLength }),
+      });
+      return cachedProvider;
+    }
+    if (brokered) {
+      cachedProvider ??= makeBrokeredMessagesProvider({
+        inference: config.inference,
+        model: /** @type {string} */ (config.model),
+        ...(config.maxTokens === undefined
+          ? {}
+          : { maxTokens: config.maxTokens }),
       });
       return cachedProvider;
     }

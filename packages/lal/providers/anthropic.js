@@ -27,7 +27,7 @@ import { anthropicToolContent } from '@endo/hosted-agent/image-result.js';
  * @param {CommonTool[]} tools
  * @returns {Anthropic.Tool[]}
  */
-const toAnthropicTools = tools =>
+export const toAnthropicTools = tools =>
   tools.map(t => ({
     name: t.function.name,
     description: t.function.description,
@@ -35,13 +35,14 @@ const toAnthropicTools = tools =>
       t.function.parameters
     ),
   }));
+harden(toAnthropicTools);
 
 /**
  * Convert common messages to Anthropic's (system string + messages array).
  * @param {CommonChatMessage[]} messages
  * @returns {{ system: string, messages: Anthropic.MessageParam[] }}
  */
-const toAnthropicMessages = messages => {
+export const toAnthropicMessages = messages => {
   let system = '';
   /** @type {Anthropic.MessageParam[]} */
   const anthropicMessages = [];
@@ -93,6 +94,7 @@ const toAnthropicMessages = messages => {
 
   return { system, messages: anthropicMessages };
 };
+harden(toAnthropicMessages);
 
 /**
  * Create an Anthropic-backed chat provider.

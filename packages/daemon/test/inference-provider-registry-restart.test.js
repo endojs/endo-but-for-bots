@@ -76,6 +76,13 @@ testNode(
     );
     let registry = await E(host).lookup('inference-provider-registry');
     const directory = await E(registry).directoryFor('owner-alice');
+    // The test model is unpriced, so the owner needs a token budget rather
+    // than the default dollar budget for admission to succeed.
+    await E(directory).setOwnerLimits(
+      harden({ dailyTokens: 1000 }),
+      'owner-token-budget-1',
+      true,
+    );
     const provider = await E(directory).create(
       harden({
         idempotencyKey: 'create-0000000001',
@@ -98,7 +105,7 @@ testNode(
     const request = harden({
       method: 'POST',
       path: '/v1/messages',
-      body: '{}',
+      body: '{"model":"claude-test","max_tokens":1,"messages":[]}',
     });
     const before = JSON.parse((await E(inference).request(request)).body);
     t.true(before.keyWasPresented);
