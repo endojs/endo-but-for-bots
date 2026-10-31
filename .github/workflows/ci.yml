@@ -130,10 +130,10 @@ jobs:
     # the runtime packaging on tag push.
     #
     # Without this job a regression in any module reachable from one of
-    # the bundle entry points (notably packages/daemon/src/manager-node.js
+    # the bundle entry points (notably packages/daemon/src/daemon-node.js
     # and packages/daemon/src/worker-node.js) is invisible until release
     # time. See the d0ce26b327 SQLite migration for an example: it added
-    # top-level await to manager-node.js, which esbuild's `cjs` output
+    # top-level await to daemon-node.js, which esbuild's `cjs` output
     # format rejects, and the bundle build silently broke for months.
 
     runs-on: ubuntu-latest
