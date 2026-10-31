@@ -574,7 +574,12 @@ export const prepareChildAgentCoordinator = async ({
       namespace.parent === undefined
         ? undefined
         : namespaces.get(namespace.parent);
-    if (parent && namespace.name !== undefined)
+    // The name may already designate a later namespace.
+    if (
+      parent &&
+      namespace.name !== undefined &&
+      parent.derived.get(namespace.name) === namespaceId
+    )
       parent.derived.delete(namespace.name);
   };
 
@@ -640,10 +645,19 @@ export const prepareChildAgentCoordinator = async ({
       );
     } else if (type === 'Revoking' || type === 'Revoked') {
       namespace.phase = type;
-      if (type === 'Revoked' && namespace.parent !== undefined) {
-        namespaces
-          .get(namespace.parent)
-          ?.derived.delete(/** @type {string} */ (namespace.name));
+      // The parent's journal replays first, so its `derived` map may already
+      // hold a later namespace that reused this name.
+      const parent =
+        namespace.parent === undefined
+          ? undefined
+          : namespaces.get(namespace.parent);
+      if (
+        type === 'Revoked' &&
+        parent &&
+        parent.derived.get(/** @type {string} */ (namespace.name)) ===
+          namespace.id
+      ) {
+        parent.derived.delete(/** @type {string} */ (namespace.name));
       }
     } else if (type === 'Intended') {
       /** @type {Operation} */
