@@ -46,9 +46,10 @@ const STATUS_PARAMETERS = harden({
  * Build the agent-facing `status` tool for a live `Git` capability.
  *
  * @param {ERef<GitMountToolCapability>} gitCap A live `Git` capability.
+ * @param {{ resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  * @returns {ToolRecord[]}
  */
-export const makeGitMountTools = gitCap => {
+export const makeGitMountTools = (gitCap, { resultPolicy } = {}) => {
   const statusTool = makeTool({
     name: 'status',
     description:
@@ -56,6 +57,7 @@ export const makeGitMountTools = gitCap => {
       'copy-data row per changed path. By default, untracked directories are ' +
       'collapsed to one row; pass options.untracked="all" for every file.',
     parameters: STATUS_PARAMETERS,
+    resultPolicy,
     argGuards: harden([
       M.splitRecord(
         {},

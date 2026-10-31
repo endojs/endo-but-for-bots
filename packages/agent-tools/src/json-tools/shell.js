@@ -151,7 +151,7 @@ const positionalArgGuards = method => {
  * Build agent-tool records for a live `Shell` capability.
  *
  * @param {ERef<ShellToolCapability>} shellCap
- * @param {ShellToolOptions} [options]
+ * @param {ShellToolOptions & { resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  *   Advisory reject entries ported from the prior agent framework's
  *   command-tool policy closures.
  *   They veto a command string *before* it reaches `Shell.exec`; they are not
@@ -162,7 +162,7 @@ const positionalArgGuards = method => {
  * @returns {ToolRecord[]}
  */
 export const makeShellTool = (shellCap, options = {}) => {
-  const { rejectPatterns = [], rejectFlags = [] } = options;
+  const { rejectPatterns = [], rejectFlags = [], resultPolicy } = options;
   const veto = makeAdvisoryVeto(
     harden([...rejectPatterns]),
     harden([...rejectFlags]),
@@ -180,6 +180,7 @@ export const makeShellTool = (shellCap, options = {}) => {
       name: method,
       description: schema.description,
       parameters: schema.parameters,
+      resultPolicy,
       argGuards,
       execute: async argsRecord => {
         if (method === 'exec') {
