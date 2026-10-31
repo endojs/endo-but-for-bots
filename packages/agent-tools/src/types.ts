@@ -360,6 +360,12 @@ export interface WorkspaceGrants {
   shell?: ERef<ShellToolCapability>;
   /** Drop the file-tool write slice; forwarded to `makeMountFsTools`. */
   readOnly?: boolean;
+  /**
+   * The git-tool catalog to advertise; forwarded to `makeGitTool`. Defaults
+   * to `'writer'`. Pass `'reader'` for a read-only `Git`. History rewrite is
+   * a separate, elevated grant and is not selectable here.
+   */
+  gitFacet?: Exclude<GitToolFacet, 'rewriter'>;
   /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */
   maxChars?: number;
   /** Advisory shell-tool veto policy; forwarded to `makeShellTool`. */
@@ -382,6 +388,21 @@ export interface ProvisionWorkspaceGrants extends Omit<WorkspaceGrants, 'git'> {
 
 export declare function provisionWorkspaceTools(
   grants?: ProvisionWorkspaceGrants,
+): Promise<ToolRecord[]>;
+
+/**
+ * A workspace grant whose Git posture is discovered at the capability
+ * boundary. A writable Git is attenuated to its writer facet before any tool
+ * closes over it; a read-only Git cannot be combined with a remote.
+ */
+export interface GitWorkspaceGrant {
+  git: ERef<object>;
+  remote?: ERef<GitRemoteToolCapability>;
+  maxChars?: number;
+}
+
+export declare function provisionGitWorkspaceTools(
+  grant: GitWorkspaceGrant,
 ): Promise<ToolRecord[]>;
 
 /**

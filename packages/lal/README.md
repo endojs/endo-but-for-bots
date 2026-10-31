@@ -75,3 +75,15 @@ The agent will:
 - On submission, create a guest profile and start monitoring its inbox
 - Respond to messages using LLM-driven tool calls
 - Send replies back to message senders
+
+### Giving a worker a git workspace
+
+The configuration form accepts optional pet names in the Lal manager's store
+for a `Git` and a `GitRemote`. A configured worker receives the confined file
+and git tools over that `Git`'s worktree. A writable Git is narrowed to its
+writer facet, so history-rewrite tools are absent. A read-only Git receives
+only read tools and cannot be combined with a remote.
+
+The capabilities are held by the worker loop's tool closures rather than stored
+in the worker guest's pet-name directory. The `evaluate` tool therefore cannot
+recover a broader Git facet than the registered workspace tools expose.

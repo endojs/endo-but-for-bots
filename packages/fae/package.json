@@ -35,7 +35,6 @@
     "setup-factory": "endo run --UNCONFINED fae-factory-setup.js --powers @agent -E PROVIDER_NAME=${PROVIDER_NAME:-default} -E FACTORY_NAME=${FACTORY_NAME:-fae-factory}",
     "setup-tools": "endo run --UNCONFINED setup-tools.js --powers @agent",
     "setup-with-tools": "endo run --UNCONFINED setup-with-tools.js --powers @agent -E PROVIDER_NAME=${PROVIDER_NAME:-default} -E FACTORY_NAME=${FACTORY_NAME:-fae-factory}",
-    "setup-fs-tools": "endo run --UNCONFINED setup-fs-tools.js --powers @agent",
     "debug:llm": "node scripts/debug-llm-logs.js",
     "debug:llm:tools": "node scripts/debug-llm-logs.js --state=tmp/smoke/state --tools",
     "smoke": "ava --serial --timeout=10m scripts/smoke.test.js",
@@ -53,6 +52,7 @@
     "timeout": "2m"
   },
   "dependencies": {
+    "@endo/agent-tools": "workspace:^",
     "@endo/agentry": "workspace:^",
     "@endo/base64": "workspace:^",
     "@endo/conversation-tree": "workspace:^",
@@ -75,6 +75,8 @@
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
+    "@endo/exo-git": "workspace:^",
+    "@endo/git": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

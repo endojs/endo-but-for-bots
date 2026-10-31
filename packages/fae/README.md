@@ -132,6 +132,38 @@ await E(factory).createAgent('poet', {
 });
 ```
 
+### Giving an agent a git workspace
+
+An agent can work in a git repository through capabilities rather than a host
+path. Store a `Git` (from `provideGit` or `provideGitClone`) and, optionally,
+a `GitRemote` for it in the factory's store, then name them when creating the
+agent:
+
+```js
+await E(factory).createAgent('builder', {
+  pin: true,
+  workspace: { git: 'project-git', remote: 'project-origin' },
+});
+```
+
+The agent gets the `@endo/agent-tools` file tools (`mountReadText`,
+`mountList`, `mountStat`, `mountWriteText`) over the `Git`'s worktree, the git
+tools (`status`, `diff`, `log`, `add`, `commit`, branch navigation and the
+rest of the writer catalog), and `fetch`, `pull` and `push` when a remote is
+given. Commits are attributed to the identity the `Git` formula was created
+with. A read-only `Git` gets only the read tools, and cannot be combined with
+a remote: `createAgent` succeeds, but the agent fails at start rather than
+offer `pull` or `push`. History rewrite is not offered. A subagent does not
+inherit the workspace.
+
+The remote is a separate grant with its own authority: its `pull` updates the
+`Git` it was created for, and its `push` writes to its endpoint. Nothing on a
+`GitRemote` names that `Git`, so give the agent a remote created for the same
+`Git` you grant.
+
+Workspace tools reach only what the granted `Git` reaches. The former
+`FAE_CWD` path-root tool caplets have been removed.
+
 ## Tools
 
 ### Built-in tools
@@ -159,15 +191,6 @@ Create example tools (greet, math, timestamp) in the host's inventory:
 
 ```bash
 yarn setup-tools
-```
-
-Create filesystem tools (read-file, write-file, edit, list-dir, glob,
-grep, run-command). The root directory defaults to `process.cwd()`:
-
-```bash
-yarn setup-fs-tools
-# Or with a specific root:
-FAE_CWD=/path/to/project yarn setup-fs-tools
 ```
 
 Send a tool to an agent via the chat UI:
@@ -224,7 +247,6 @@ packages/fae/
 ├── provider-setup.sh         # Step 2: source .env and submit provider
 ├── fae-factory-setup.js      # Step 3: create fae-factory + default agent
 ├── setup-tools.js            # Create example tools in host inventory
-├── setup-fs-tools.js         # Create filesystem tools (FAE_CWD)
 ├── setup-with-tools.js       # All-in-one: provider + factory + tools
 ├── src/
 │   ├── extract-tool-calls.js # XML tool call parser
@@ -236,14 +258,7 @@ packages/fae/
 └── tools/
     ├── greet.js              # Example: greeting generator
     ├── math.js               # Example: arithmetic
-    ├── timestamp.js          # Example: current time
-    ├── read-file.js          # FaeTool: read files under root
-    ├── write-file.js         # FaeTool: write files under root
-    ├── edit.js               # FaeTool: edit files by exact-text replacement
-    ├── list-dir.js           # FaeTool: list directory under root
-    ├── glob.js               # FaeTool: find paths by glob pattern under root
-    ├── grep.js               # FaeTool: search file contents by regexp under root
-    └── run-command.js        # FaeTool: run shell commands in root
+    └── timestamp.js          # Example: current time
 ```
 
 ## Subagents

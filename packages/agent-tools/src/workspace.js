@@ -9,6 +9,7 @@
  *   WorkspaceGrants,
  *   ProvisionWorkspaceGrants,
  *   HistoryToolsGrant,
+ *   GitWorkspaceGrant,
  * } from './types.js'
  */
 
@@ -97,6 +98,7 @@ export const makeWorkspaceTools = ({
   remote,
   shell,
   readOnly = false,
+  gitFacet = 'writer',
   maxChars,
   shellOptions,
 } = {}) => {
@@ -112,7 +114,13 @@ export const makeWorkspaceTools = ({
     // The versioning layer: the JSON-safe git slice (staging / commit / log /
     // diff / branch navigation) plus status's agent-facing default, both over
     // the same granted `Git` whose formula-owned identity attributes commits.
-    groups.push({ group: 'git', records: makeGitTool(git) });
+    groups.push({
+      group: 'git',
+      records:
+        gitFacet === 'reader'
+          ? makeGitTool(git, { facet: 'reader' })
+          : makeGitTool(git),
+    });
     groups.push({ group: 'gitMount', records: makeGitMountTools(git) });
   }
   if (remote !== undefined) {
@@ -146,6 +154,7 @@ export const provisionWorkspaceTools = async ({
   shell,
   filesystem,
   readOnly = false,
+  gitFacet,
   maxChars,
   shellOptions,
 } = {}) => {
@@ -161,11 +170,46 @@ export const provisionWorkspaceTools = async ({
     remote,
     shell,
     readOnly,
+    gitFacet,
     maxChars,
     shellOptions,
   });
 };
 harden(provisionWorkspaceTools);
+
+/**
+ * Provision a workspace from a granted Git after narrowing it to the catalog
+ * posture the model may use. A remote is incompatible with a read-only Git:
+ * pull mutates its bound worktree, while fetch and push mutate repository or
+ * remote state.
+ *
+ * @param {GitWorkspaceGrant} grant
+ * @returns {Promise<ToolRecord[]>}
+ */
+export const provisionGitWorkspaceTools = async ({ git, remote, maxChars }) => {
+  const eventualGit = /** @type {any} */ (E(git));
+  const methodNames = /** @type {string[]} */ (
+    // eslint-disable-next-line no-underscore-dangle
+    await eventualGit.__getMethodNames__()
+  );
+  const writable = ['add', 'commit'].every(method =>
+    methodNames.includes(method),
+  );
+  if (!writable && remote !== undefined) {
+    throw new Error(
+      'A read-only workspace Git cannot be granted with a GitRemote',
+    );
+  }
+  const workspaceGit = writable ? await eventualGit.scope('writer') : git;
+  return provisionWorkspaceTools({
+    git: /** @type {any} */ (workspaceGit),
+    remote,
+    readOnly: !writable,
+    gitFacet: writable ? 'writer' : 'reader',
+    maxChars,
+  });
+};
+harden(provisionGitWorkspaceTools);
 
 /**
  * Read-only file tools over a git ref's snapshot. `Git.filesystemAt(ref)` lifts

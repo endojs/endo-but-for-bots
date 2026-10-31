@@ -2,14 +2,17 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { formatLocator } from '@endo/daemon/locator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { spawnWorkerLoop } from '../agent.js';
+import { make as makeFactory, spawnWorkerLoop } from '../agent.js';
 import { make as makeDriver } from '../driver.js';
+import { git, makeWorkspaceGit } from './workspace-git-fixture.js';
 
 const NODE = 'a'.repeat(64);
 const SELF = 'b'.repeat(64);
@@ -1228,7 +1231,7 @@ test('the durable driver derives pool affinity from the retained agent locator w
       throw Error(`Unexpected driver lookup ${name}`);
     },
     has: name => {
-      t.is(name, 'subagent-spawner');
+      t.true(['subagent-spawner', 'workspace-git'].includes(name));
       return false;
     },
     locate: name => {
@@ -1883,4 +1886,298 @@ test('cancelling an image request checkpoints receipts before stop and recovers 
   );
   t.is(decodeImageResult(recovered.content), undefined);
   t.regex(recovered.content, /Not replayed after an incomplete turn/);
+});
+
+/**
+ * @param {string} id
+ * @param {string} name
+ * @param {object} toolArguments
+ */
+const toolCall = (id, name, toolArguments) =>
+  harden({
+    id,
+    type: 'function',
+    function: { name, arguments: JSON.stringify(toolArguments) },
+  });
+
+test('a workspace grant lets the agent edit and commit the granted worktree', async t => {
+  t.timeout(20_000);
+  const mailbox = makeLiveMailbox();
+  const { git: granted, root } = await makeWorkspaceGit(t);
+  /** @type {string[][]} */
+  const offered = [];
+  /** @type {string[]} */
+  const toolResults = [];
+  const rounds = [
+    () =>
+      harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            toolCall('w', 'mountWriteText', {
+              path: 'plan.md',
+              content: 'step one\n',
+            }),
+            toolCall('a', 'add', { paths: ['plan.md'] }),
+            toolCall('c', 'commit', { message: 'record the plan' }),
+          ],
+        },
+      }),
+    () => harden({ message: { role: 'assistant', content: 'committed' } }),
+  ];
+  let index = 0;
+  const provider = harden({
+    chat: async (
+      /** @type {any[]} */ messages,
+      /** @type {any[]} */ toolSchemas,
+    ) => {
+      offered.push(toolSchemas.map(schema => schema.function.name));
+      if (index > 0) {
+        for (const entry of messages) {
+          if (entry.role === 'tool') toolResults.push(`${entry.content}`);
+        }
+      }
+      const round = rounds[Math.min(index, rounds.length - 1)];
+      index += 1;
+      return round();
+    },
+  });
+
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ workspace: { git: granted }, timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['write the plan'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+    'the agent never replied',
+  );
+  mailbox.close();
+  await loop;
+
+  for (const name of ['mountWriteText', 'add', 'commit', 'status', 'list']) {
+    t.true(offered[0].includes(name), `${name} offered to the model`);
+  }
+  t.is(toolResults.length, 3);
+  t.false(
+    toolResults.some(result => result.includes('error')),
+    toolResults.join('\n'),
+  );
+  t.is(
+    (await git(root, ['log', '-1', '--format=%s|%an'])).trim(),
+    'record the plan|Fae Agent',
+  );
+});
+
+test('an agent without a workspace grant has no file or git tools', async t => {
+  t.timeout(15_000);
+  const mailbox = makeLiveMailbox();
+  /** @type {string[]} */
+  let offered = [];
+  const provider = harden({
+    chat: async (
+      /** @type {any[]} */ _messages,
+      /** @type {any[]} */ toolSchemas,
+    ) => {
+      offered = toolSchemas.map(schema => schema.function.name);
+      return harden({ message: { role: 'assistant', content: 'ok' } });
+    },
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['hi'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.true(offered.includes('reply'));
+  for (const name of ['mountWriteText', 'commit', 'status']) {
+    t.false(offered.includes(name), `${name} absent without a grant`);
+  }
+});
+
+/**
+ * @param {string} name
+ * @param {Record<string, (...args: any[]) => any>} methods
+ */
+const makeStub = (name, methods) =>
+  makeExo(name, M.interface(name, {}, { defaultGuards: 'raw' }), methods);
+
+/**
+ * A host directory just deep enough for `createAgent`: it records the
+ * locators each guest is given, so a test can stand up the driver the factory
+ * provisioned from exactly what the factory stored.
+ */
+const makeRecordingHost = () => {
+  /** @type {Map<string, Map<string, string>>} */
+  const storedByGuest = new Map();
+  const hostAgent = makeStub('RecordingHost', {
+    has: () => false,
+    provideGuest: (/** @type {string} */ name) => {
+      const stored = new Map();
+      storedByGuest.set(name, stored);
+      return makeStub('RecordingGuest', {
+        has: () => false,
+        storeValue: () => undefined,
+        storeLocator: (
+          /** @type {string} */ petName,
+          /** @type {string} */ locator,
+        ) => {
+          stored.set(petName, locator);
+        },
+      });
+    },
+    makeUnconfined: () => undefined,
+    locate: (/** @type {string} */ name) => `locator:${name}`,
+    copy: () => undefined,
+  });
+  return { hostAgent, storedByGuest };
+};
+
+/**
+ * @param {object} hostAgent
+ * @param {Record<string, string>} factoryNames pet name -> locator
+ */
+const makeFactoryPowers = (hostAgent, factoryNames) =>
+  makeStub('FactoryPowers', {
+    lookup: (/** @type {string} */ name) => {
+      if (name === 'host-agent') return hostAgent;
+      throw Error(`Unexpected factory lookup ${name}`);
+    },
+    has: () => false,
+    locate: (/** @type {string} */ name) =>
+      ({
+        'llm-provider': 'locator:llm-provider',
+        'host-agent': 'locator:host-agent',
+        ...factoryNames,
+      })[name],
+  });
+
+test('createAgent with a workspace hands the named Git to the driver, whose loop edits and commits through it', async t => {
+  t.timeout(20_000);
+  const { git: granted, root } = await makeWorkspaceGit(t);
+  const { hostAgent, storedByGuest } = makeRecordingHost();
+  const factory = await makeFactory(
+    makeFactoryPowers(hostAgent, { 'project-git': 'locator:project-git' }),
+    undefined,
+  );
+  await E(factory).createAgent(
+    'builder',
+    harden({ maxSubagentDepth: 0, workspace: { git: 'project-git' } }),
+  );
+
+  const holders = [...storedByGuest].filter(([, stored]) =>
+    stored.has('workspace-git'),
+  );
+  t.is(holders.length, 1);
+  const [[, driverStore]] = holders;
+  t.is(driverStore.get('workspace-git'), 'locator:project-git');
+  t.false(driverStore.has('workspace-remote'));
+
+  const mailbox = makeLiveMailbox();
+  /** @type {Record<string, unknown>} */
+  const formulas = { 'locator:project-git': granted };
+  /** @type {string[][]} */
+  const offered = [];
+  let index = 0;
+  const provider = harden({
+    chat: async (
+      /** @type {any[]} */ _messages,
+      /** @type {any[]} */ toolSchemas,
+    ) => {
+      offered.push(toolSchemas.map(schema => schema.function.name));
+      index += 1;
+      if (index === 1) {
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              toolCall('w', 'mountWriteText', {
+                path: 'plan.md',
+                content: 'from the factory\n',
+              }),
+              toolCall('a', 'add', { paths: ['plan.md'] }),
+              toolCall('c', 'commit', { message: 'factory workspace' }),
+            ],
+          },
+        });
+      }
+      return harden({ message: { role: 'assistant', content: 'done' } });
+    },
+  });
+  const driverPowers = makeStub('DriverPowers', {
+    has: (/** @type {string} */ name) => driverStore.has(name),
+    locate: (/** @type {string} */ name) => driverStore.get(name),
+    lookupByLocator: () => harden({ provider }),
+    lookup: (/** @type {string} */ name) => {
+      if (name === 'agent') return mailbox.powers;
+      const locator = driverStore.get(name);
+      if (locator !== undefined && locator in formulas) {
+        return formulas[locator];
+      }
+      throw Error(`Unexpected driver lookup ${name}`);
+    },
+  });
+  t.teardown(() => mailbox.close());
+  await makeDriver(driverPowers, undefined);
+
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['write the plan'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+    'the agent never replied',
+  );
+  for (const name of ['mountWriteText', 'add', 'commit']) {
+    t.true(offered[0].includes(name), `${name} offered to the model`);
+  }
+  t.is(
+    (await git(root, ['log', '-1', '--format=%s|%an'])).trim(),
+    'factory workspace|Fae Agent',
+  );
+});
+
+test('createAgent refuses a workspace name the factory store does not hold', async t => {
+  const { hostAgent, storedByGuest } = makeRecordingHost();
+  const factory = await makeFactory(
+    makeFactoryPowers(hostAgent, { 'project-git': 'locator:project-git' }),
+    undefined,
+  );
+  await t.throwsAsync(
+    E(factory).createAgent(
+      'builder',
+      harden({ workspace: { git: 'missing-git' } }),
+    ),
+    { message: /"missing-git" is not in the factory's store/ },
+  );
+  await t.throwsAsync(
+    E(factory).createAgent(
+      'builder',
+      harden({ workspace: { git: 'project-git', remote: 'missing-remote' } }),
+    ),
+    { message: /"missing-remote" is not in the factory's store/ },
+  );
+  t.is(storedByGuest.size, 0, 'nothing was provisioned');
 });

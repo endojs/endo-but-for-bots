@@ -120,6 +120,10 @@ const profileNameFor = handleName => `profile-for-${handleName}`;
  *   not be able to displace the instructions the deployment gave.
  * @param {boolean} [options.pin]
  * @param {import('./subagent.js').SubagentCapability[]} [options.capabilities]
+ * @param {string} [options.workspaceGitLocator] - A `Git` the agent works in.
+ *   Only the factory passes this.
+ * @param {string} [options.workspaceRemoteLocator] - A `GitRemote` for that
+ *   workspace.
  * @returns {Promise<{ name: string, profileName: string, locator: string }>}
  */
 export const provisionFaeAgent = async ({
@@ -138,8 +142,13 @@ export const provisionFaeAgent = async ({
   delegatedPrompt,
   pin = false,
   capabilities = [],
+  workspaceGitLocator,
+  workspaceRemoteLocator,
 }) => {
   assertSubagentCapabilities(capabilities);
+  workspaceRemoteLocator === undefined ||
+    workspaceGitLocator !== undefined ||
+    Fail`A workspace remote needs a workspace Git`;
   readFaeWorkloadConfig(workloadEnv);
   const profileName = profileNameFor(name);
   const driverResultName = `${name}${DRIVER_SUFFIX}`;
@@ -254,6 +263,15 @@ export const provisionFaeAgent = async ({
     }
     if (authSecretLocator !== undefined) {
       await E(driverGuest).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+    }
+    if (workspaceGitLocator !== undefined) {
+      await E(driverGuest).storeLocator('workspace-git', workspaceGitLocator);
+    }
+    if (workspaceRemoteLocator !== undefined) {
+      await E(driverGuest).storeLocator(
+        'workspace-remote',
+        workspaceRemoteLocator,
+      );
     }
 
     await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
