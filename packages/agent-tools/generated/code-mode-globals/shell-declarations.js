@@ -34,8 +34,9 @@ type ShellInspectResult = {
     allowedCommands: readonly string[];
     timeoutMs: number;
     maxOutputBytes: number;
-    engine: 'host' | 'sandbox';
-};`,
+    engine: ShellInspectEngine;
+};
+type ShellInspectEngine = ('host' | 'sandbox') | 'environment';`,
     body: `{
     exec: (command: string, args: readonly string[], options?: {
         timeoutMs?: number;

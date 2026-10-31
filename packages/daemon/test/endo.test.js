@@ -592,7 +592,7 @@ testNeedsNodeWorker(
       await E(host).remove('workspace');
       t.deepEqual(await E(kit.shell).inspect(), {
         ...recipe.policy,
-        engine: 'sandbox',
+        engine: 'environment',
       });
       t.is((await E(kit.admin).inspect()).phase, 'idle');
     }
@@ -604,7 +604,7 @@ testNeedsNodeWorker(
       const admin = await E(host).lookup('environment-admin');
       t.deepEqual(await E(shell).inspect(), {
         ...recipe.policy,
-        engine: 'sandbox',
+        engine: 'environment',
       });
       t.is((await E(admin).inspect()).phase, 'idle');
       t.is(await E(audit).readText('runner-revivals'), '1');
@@ -5528,7 +5528,7 @@ testNeedsNodeWorker.serial(
     );
     await E(local).storeLocator(['shell'], await E(remote).locate('shell'));
     const shell = await E(local).lookup('shell');
-    t.deepEqual(await E(shell).inspect(), { ...policy, engine: 'sandbox' });
+    t.deepEqual(await E(shell).inspect(), { ...policy, engine: 'environment' });
     t.is((await E(shell).exec('sh', harden([]))).stdout, 'remote-workspace');
     t.false(await E(local).has('environment-admin'));
     await E(kit.admin).stop();

@@ -56,16 +56,17 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
+    "@endo/host-spawner": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
     "@endo/exo-shell": "workspace:^",
-    "@endo/host-spawner": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

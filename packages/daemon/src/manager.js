@@ -130,7 +130,10 @@ import {
   ReadableTreeInterface,
   EndoInterface,
 } from './interfaces.js';
-import { makeSandboxShellEngine } from './shell-engine.js';
+import {
+  makeSandboxShellEngine,
+  resolveShellFormulaEngine,
+} from './shell-engine.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
@@ -3978,8 +3981,9 @@ const makeDaemonCore = async (
           X`Shell requires a writable mount; refusing to construct a shell over a read-only mount`,
         );
       }
-      // A formula persisted before `engine` existed is a host-engine shell.
-      const engine = policy.engine ?? 'host';
+      // A formula persisted before `engine` existed is a host-engine shell;
+      // an unknown engine fails closed.
+      const engine = resolveShellFormulaEngine(policy.engine);
       const shellPolicy = harden({
         allowedCommands: harden([...policy.allowedCommands]),
         timeoutMs: policy.timeoutMs,
@@ -4000,7 +4004,7 @@ const makeDaemonCore = async (
         const { cwd, spawner } = await makeSandboxShellEngine({
           factory,
           mount,
-          onCancel: hook => context.onCancel(hook),
+          context,
         });
         return makeShell({
           cwd,

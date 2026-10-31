@@ -1,12 +1,13 @@
 // @ts-check
 
 /**
- * Timeout and output-cap cases every Shell engine must agree on.  The host
- * engine runs them in `shell.test.js`; the sandbox engine runs the same table
- * in `@endo/sandbox`'s `shell-engine.test.js`.  Each case uses only coreutils,
+ * The Shell engine conformance table: timeout and output-cap cases every
+ * Shell engine must agree on.  It is test data, published so an engine's own
+ * package can run it: `@endo/exo-shell` runs it against the host engine and
+ * `@endo/sandbox` against the sandbox engine.  Each case uses only coreutils,
  * which both a host and a `host-bind` sandbox slice can reach.
  *
- * @import { ShellResult } from '../src/types.js'
+ * @import { ShellResult } from './types.js'
  */
 
 /**

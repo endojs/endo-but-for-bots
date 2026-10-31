@@ -18,7 +18,7 @@ import { makeHostSpawner } from '@endo/host-spawner';
 
 import { makeShell } from '../src/shell.js';
 import { ShellInterface } from '../src/interfaces.js';
-import { engineCases } from './engine-cases.js';
+import { engineCases } from '../src/engine-cases.js';
 
 /**
  * A fully controllable in-memory {@link Spawner}.  Each spawn records the argv
@@ -559,8 +559,6 @@ test('host engine: the child sees only the policy env, never the host process en
   const cwd = await shell.exec('pwd', []);
   t.is(cwd.stdout.trim(), fs.realpathSync(root));
 });
-
-// --- engine conformance: the cases the sandbox engine must match -----------
 
 for (const engineCase of engineCases) {
   test(`host engine conformance: ${engineCase.name}`, async t => {

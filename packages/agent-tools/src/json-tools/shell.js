@@ -116,7 +116,8 @@ const shellToolSchemas = harden({
   inspect: {
     description:
       'Report the command allowlist, default invocation timeout, output cap, ' +
-      "and the engine ('host' or 'sandbox') commands run under. " +
+      "and the engine ('host', 'sandbox', or 'environment') commands run " +
+      'under. ' +
       'Reveals no host path.',
     parameters: {
       type: 'object',

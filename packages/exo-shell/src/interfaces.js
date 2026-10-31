@@ -23,7 +23,7 @@ const ShellPolicyShape = M.splitRecord(
     allowedCommands: M.arrayOf(M.string()),
     timeoutMs: M.number(),
     maxOutputBytes: M.number(),
-    engine: M.or('host', 'sandbox'),
+    engine: M.or('host', 'sandbox', 'environment'),
   },
   undefined,
   harden({}),

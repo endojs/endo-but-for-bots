@@ -9,14 +9,16 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
+import { fc } from '@fast-check/ava';
 import { makeShell } from '@endo/exo-shell';
-import { engineCases } from '@endo/exo-shell/test/engine-cases.js';
+import { engineCases } from '@endo/exo-shell/engine-cases.js';
 import { makeHostSpawner } from '@endo/host-spawner';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 import { getMountBacking, makeMount } from '@endo/daemon/src/mount.js';
 import { makeSandboxShellEngine } from '@endo/daemon/src/shell-engine.js';
 
 import * as nodeFs from 'node:fs';
+import * as nodeNet from 'node:net';
 import * as nodeOs from 'node:os';
 import * as nodePath from 'node:path';
 
@@ -52,9 +54,9 @@ const makeMountPowers = t =>
         readOnly: false,
         filePowers,
       }),
-    /** @param {any} cap */
-    provideHostPath: async cap => {
-      const backing = getMountBacking(cap);
+    /** @param {any} capability */
+    provideHostPath: async capability => {
+      const backing = getMountBacking(capability);
       if (backing === undefined) throw Error('not a daemon mount');
       return backing.physicalRoot;
     },
@@ -65,6 +67,13 @@ const basePolicy = harden({
   timeoutMs: 20_000,
   maxOutputBytes: 65_536,
 });
+
+/**
+ * bwrap's diagnostics when the kernel or its policy refuses the namespaces a
+ * slice needs.
+ */
+const namespaceDenial =
+  /^bwrap: .*(namespace|uid map|gid map|Operation not permitted|Permission denied)/m;
 
 /**
  * Build a sandboxed Shell over a fresh mount, or record a skip and return
@@ -88,7 +97,7 @@ const makeSandboxedShell = async (t, policy = {}) => {
   const { cwd, spawner } = await makeSandboxShellEngine({
     factory: /** @type {any} */ (factory),
     mount,
-    onCancel: hook => t.teardown(hook),
+    context: { onCancel: hook => t.teardown(hook), assertActive: () => {} },
   });
   const shell = makeShell({
     cwd,
@@ -96,25 +105,33 @@ const makeSandboxedShell = async (t, policy = {}) => {
     spawner,
   });
   // A host can ship bwrap yet refuse unprivileged user namespaces; the first
-  // spawn is where that shows.
-  const smoke = await shell.exec('echo', ['ready']).catch(error => error);
-  if (smoke instanceof Error || smoke.exitCode !== 0) {
-    t.pass(
-      `SKIP: bwrap slice unavailable: ${smoke.message ?? smoke.stderr ?? ''}`,
-    );
+  // spawn is where that shows, as bwrap's own diagnostic on stderr.  Only that
+  // denial skips: any other smoke failure is a regression in the engine and
+  // fails the test.
+  const smoke = await shell.exec('echo', ['ready']);
+  if (smoke.exitCode !== 0 && namespaceDenial.test(smoke.stderr)) {
+    t.pass(`SKIP: bwrap cannot create a namespace here: ${smoke.stderr}`);
     return undefined;
   }
+  // A small cap truncates the smoke output, so only its prefix is checked.
+  t.true(
+    smoke.exitCode === 0 &&
+      smoke.stdout.length > 0 &&
+      'ready\n'.startsWith(smoke.stdout),
+    `sandbox smoke command failed: ${smoke.stderr}`,
+  );
   return { shell, mount, root };
 };
 
 /**
  * @param {string} cwd
+ * @param {Partial<{ timeoutMs: number, maxOutputBytes: number }>} [policy]
  */
-const makeHostShell = cwd => {
+const makeHostShell = (cwd, policy = {}) => {
   const searchPath = process.env.PATH || '/usr/bin:/bin';
   return makeShell({
     cwd,
-    policy: harden({ ...basePolicy, engine: 'host' }),
+    policy: harden({ ...basePolicy, ...policy, engine: 'host' }),
     spawner: makeHostSpawner({
       searchPath,
       defaultEnv: { PATH: searchPath, LC_ALL: 'C' },
@@ -151,12 +168,39 @@ test.serial('a write under /work is visible through the mount', async t => {
 });
 
 test.serial('the sandbox has no network', async t => {
+  // A listener this test owns, on the host's loopback: reachable from the
+  // host engine, so a failed connect from the slice proves isolation rather
+  // than an unreachable destination.
+  const server = nodeNet.createServer(socket => socket.end());
+  await new Promise(resolve =>
+    server.listen(0, '127.0.0.1', () => resolve(undefined)),
+  );
+  t.teardown(() => server.close());
+  const { port } = /** @type {import('node:net').AddressInfo} */ (
+    server.address()
+  );
+  const probe = ['-c', `exec 3<>/dev/tcp/127.0.0.1/${port}`];
+
+  const outside = makeTemporaryDirectory(t, 'shell-engine-network');
+  const hostShell = makeHostShell(outside);
+  const hasBash = await hostShell.exec('bash', ['-c', 'true']).then(
+    result => result.exitCode === 0,
+    () => false,
+  );
+  if (!hasBash) {
+    t.pass('SKIP: the probe needs bash, which this host lacks');
+    return;
+  }
+  const hostResult = await hostShell.exec('bash', probe);
+  t.is(
+    hostResult.exitCode,
+    0,
+    `the host engine connects: ${hostResult.stderr}`,
+  );
+
   const sandboxed = await makeSandboxedShell(t);
   if (sandboxed === undefined) return;
-  const result = await sandboxed.shell.exec('bash', [
-    '-c',
-    'exec 3<>/dev/tcp/1.1.1.1/53',
-  ]);
+  const result = await sandboxed.shell.exec('bash', probe);
   t.not(result.exitCode, 0, 'a TCP connect fails without a network');
 });
 
@@ -182,3 +226,40 @@ for (const engineCase of engineCases) {
     t.deepEqual(engineCase.observe?.(result), engineCase.expected);
   });
 }
+
+test.serial(
+  'sandbox engine conformance: any cap truncates exactly as the host engine does',
+  async t => {
+    t.timeout(120_000);
+    const sandboxed = await makeSandboxedShell(t);
+    if (sandboxed === undefined) return;
+    const outside = makeTemporaryDirectory(t, 'shell-engine-cap');
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 1, max: 8192 }),
+        fc.integer({ min: 1, max: 4000 }),
+        async (maxOutputBytes, count) => {
+          const policy = { maxOutputBytes };
+          const sandboxShell = await makeSandboxedShell(t, policy);
+          if (sandboxShell === undefined) return false;
+          const hostShell = makeHostShell(outside, policy);
+          const argv = harden(['1', String(count)]);
+          const [sandboxResult, hostResult] = await Promise.all([
+            sandboxShell.shell.exec('seq', argv),
+            hostShell.exec('seq', argv),
+          ]);
+          // stderr is left out: bwrap may add its own diagnostics there.
+          /** @param {import('@endo/exo-shell').ShellResult} result */
+          const project = ({ stdout, exitCode, signal, truncated }) =>
+            JSON.stringify({ stdout, exitCode, signal, truncated });
+          return (
+            sandboxResult.stdout.length <= maxOutputBytes &&
+            project(sandboxResult) === project(hostResult)
+          );
+        },
+      ),
+      { numRuns: 25 },
+    );
+    t.pass();
+  },
+);

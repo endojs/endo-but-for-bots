@@ -94,7 +94,7 @@ test('creation, inspect, and idle restoration remain passive', async t => {
   const f = await fixture();
   t.deepEqual(await E(f.owner.shell).inspect(), {
     ...recipe.policy,
-    engine: 'sandbox',
+    engine: 'environment',
   });
   t.is((await E(f.owner.admin).inspect()).phase, 'idle');
   const restored = await makeEnvironment({
@@ -105,7 +105,7 @@ test('creation, inspect, and idle restoration remain passive', async t => {
   });
   t.deepEqual(await E(restored.shell).inspect(), {
     ...recipe.policy,
-    engine: 'sandbox',
+    engine: 'environment',
   });
   t.deepEqual(f.calls, []);
 });
