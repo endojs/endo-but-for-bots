@@ -12,6 +12,7 @@ import { E } from '@endo/eventual-send';
 import { withEndoAgent } from '../context.js';
 import { parseOptionalPetNamePath } from '../pet-name.js';
 import { randomHex16 } from '../random.js';
+import { checkMountFlags, makeCapletFromMount } from '../mount-caplet.js';
 
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 
@@ -20,12 +21,44 @@ export const makeCommand = async ({
   importPath,
   resultName,
   archiveName,
+  mountName,
+  registryName,
+  offline,
   workerName,
   agentNames,
   powersName,
   env,
 }) => {
   await null;
+  const mountFlagError = checkMountFlags({
+    mountName,
+    registryName,
+    offline,
+    archiveName,
+    importPath,
+  });
+  if (mountFlagError !== undefined) {
+    console.error(mountFlagError);
+    process.exitCode = 1;
+    return;
+  }
+  if (mountName !== undefined) {
+    await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
+      await null;
+      const result = await makeCapletFromMount(agent, {
+        mountName,
+        entry: filePath,
+        registryName,
+        offline,
+        workerName,
+        powersName,
+        resultName,
+        env,
+      });
+      console.log(result);
+    });
+    return;
+  }
   if (filePath !== undefined && importPath !== undefined) {
     console.error('Specify only one of [file] or --UNCONFINED <file>');
     process.exitCode = 1;
@@ -37,7 +70,7 @@ export const makeCommand = async ({
     archiveName === undefined
   ) {
     console.error(
-      'Specify at least one of [file], --archive <name>, or --UNCONFINED <file>',
+      'Specify at least one of [file], --archive <name>, --mount <name>, or --UNCONFINED <file>',
     );
     process.exitCode = 1;
     return;
