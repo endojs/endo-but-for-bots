@@ -321,3 +321,39 @@ test('a corrupt config.json degrades to the env policy without bricking revival'
     message: /not in the allowed-origin list|Policy refuses/,
   });
 });
+
+test('the service refuses to start without both endowed time seams', async t => {
+  const { open } = await makeStoreFixture();
+  const store = await open();
+  const { fetch, calls } = makeFakeFetch();
+
+  await t.throwsAsync(
+    () =>
+      makeConfinedFetchServiceCore({
+        store,
+        fetch,
+        now: () => 1000,
+        allowedOrigins: [ALLOWED],
+      }),
+    {
+      message: /delay and now seams built from the endowed timer are required/,
+    },
+  );
+  await t.throwsAsync(
+    () =>
+      makeConfinedFetchServiceCore({
+        store,
+        fetch,
+        delay: async () => undefined,
+        allowedOrigins: [ALLOWED],
+      }),
+    {
+      message: /delay and now seams built from the endowed timer are required/,
+    },
+  );
+
+  // The guard fires before provisioning: nothing was seeded or fetched.
+  await flush();
+  t.is(await store.readConfig(), undefined);
+  t.is(calls.length, 0);
+});
