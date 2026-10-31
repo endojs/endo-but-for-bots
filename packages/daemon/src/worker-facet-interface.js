@@ -60,8 +60,8 @@ export const WorkerFacetForDaemonInterface = M.interface(
       M.promise(),
     ),
     // Args: (sourceP, resolution, powersP, contextP, { env, entry? }) —
-    // source is a ReadableTree or Mount whose root holds a package.json,
-    // and resolution is the daemon's eager RegistryResolution of it.
+    // source is an immutable ReadableTree snapshot whose root holds
+    // package.json, and resolution is the daemon's eager RegistryResolution.
     makeFromPackage: M.call(
       M.any(),
       M.record(),
