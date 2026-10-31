@@ -214,8 +214,7 @@ export const ReadableTreeInterface = M.interface('ReadableTree', {
 harden(ReadableTreeInterface);
 
 export const SnapshotTreeInterface = M.interface('SnapshotTree', {
-  ...enumerableTreeMethodGuards,
-  ...getInfoMethodGuard,
+  ...readableTreeMethodGuards,
   sha256: M.call().returns(M.string()),
   size: M.call().returns(M.promise()),
 });

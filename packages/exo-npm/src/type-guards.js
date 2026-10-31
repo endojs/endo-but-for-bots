@@ -23,10 +23,17 @@
 import { M } from '@endo/patterns';
 import {
   enumerableTreeMethodGuards,
-  getInfoMethodGuard,
   lookupTreeMethodGuards,
   readableTreeMethodGuards,
 } from '@endo/platform/fs/lite';
+
+// Registry nodes carry consistency and content-identity metadata that is
+// specific to the registry tree protocol. Keep this guard local: the platform
+// filesystem API exposes identity through sha256()/size() and deliberately no
+// longer has a general getInfo() surface.
+const getInfoMethodGuard = harden({
+  getInfo: M.call().returns(M.any()),
+});
 
 export const RegistryHubInterface = M.interface('RegistryHub', {
   ...lookupTreeMethodGuards,

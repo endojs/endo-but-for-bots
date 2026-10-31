@@ -2454,44 +2454,87 @@ const makeDaemonCore = async (
   /**
    * Project a Rust CAS blob into the daemon's ordinary readable-blob shape.
    * The host call returns the immutable bytes as base64; range reads are then
-   * served locally in XS.
+   * served locally in XS. Derived ranges retain the same guarded interface as
+   * the Node-backed blob implementation.
    *
    * @param {string} hash
    * @param {number | undefined} advertisedSize
+   * @param {{ start: number, end: number | undefined }} [interval]
    */
-  const makeEndorReadableBlob = (hash, advertisedSize) => {
-    const cached = endorBlobByHash.get(hash);
-    if (cached !== undefined) return cached;
-    const read = () => {
+  const makeEndorReadableBlob = (
+    hash,
+    advertisedSize,
+    interval = { start: 0, end: undefined },
+  ) => {
+    const { start, end } = interval;
+    const isFull = start === 0 && end === undefined;
+    if (isFull) {
+      const cached = endorBlobByHash.get(hash);
+      if (cached !== undefined) return cached;
+    }
+    const readFull = () => {
       const result = unwrapEndorTreeHost(endorRegistryPowers.readBlob(hash));
       if (!result.found)
         throw makeError(X`Endor CAS blob ${q(hash)} is absent`);
       return decodeBase64(/** @type {string} */ (result.value));
     };
+    const readSelected = () => {
+      const bytes = readFull();
+      const absEnd =
+        end === undefined ? bytes.length : Math.min(end, bytes.length);
+      const absStart = Math.min(start, absEnd);
+      return bytes.slice(absStart, absEnd);
+    };
     const blob = makeExo('EndorRegistryBlob', BlobInterface, {
       help: () => `Immutable Endor registry blob ${hash}`,
-      text: async () => decodeUtf8(read()),
-      json: async () => JSON.parse(decodeUtf8(read())),
+      text: async () => decodeUtf8(readSelected()),
+      json: async () => JSON.parse(decodeUtf8(readSelected())),
       streamBase64(synPromise) {
-        const pump = makeReaderPump([encodeBase64(read())]);
+        const pump = makeReaderPump([encodeBase64(readSelected())]);
         return pump(/** @type {any} */ (synPromise));
       },
-      async getInfo() {
-        const size = advertisedSize ?? read().byteLength;
-        return harden({
-          algorithm: 'sha256',
-          hash: encodeBase64(fromHex(hash)),
-          size: BigInt(size),
-        });
+      async sha256() {
+        if (isFull) return encodeBase64(fromHex(hash));
+        const digester = cryptoPowers.makeSha256();
+        digester.update(readSelected());
+        return encodeBase64(fromHex(digester.digestHex()));
       },
-      async fetch(offset, length) {
-        const bytes = read();
-        const start = toSafeNumber(offset, 'offset');
-        const count = toSafeNumber(length, 'length');
-        return bytesFromRange(bytes.slice(start, start + count));
+      async size() {
+        if (isFull && advertisedSize !== undefined) {
+          return BigInt(advertisedSize);
+        }
+        return BigInt(readSelected().byteLength);
+      },
+      async bytes() {
+        return bytesFromRange(readSelected());
+      },
+      byteRange(rangeStart, rangeEnd) {
+        const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+        const composed = composeByteInterval(start, end, s, e);
+        return makeEndorReadableBlob(hash, advertisedSize, composed);
+      },
+      async textRange(startLine, endLine) {
+        const { startLine: s, endLine: e } = assertLineRange(
+          startLine,
+          endLine,
+        );
+        if (e <= s) {
+          return makeEndorReadableBlob(hash, advertisedSize, {
+            start,
+            end: start,
+          });
+        }
+        const slice = lineRangeToByteSlice(readSelected(), s, e);
+        const composed = composeByteInterval(
+          start,
+          end,
+          slice.start,
+          slice.end,
+        );
+        return makeEndorReadableBlob(hash, advertisedSize, composed);
       },
     });
-    endorBlobByHash.set(hash, blob);
+    if (isFull) endorBlobByHash.set(hash, blob);
     return blob;
   };
 
@@ -2544,15 +2587,16 @@ const makeDaemonCore = async (
           const segments = typeof path === 'string' ? [path] : [...path];
           if (segments.length === 0) return tree;
           let current = tree;
+          /** @type {string | undefined} */
+          let currentTreeHash = hash;
           for (const segment of segments) {
-            // Once a segment has resolved to a blob (which has no `sha256`),
-            // a deeper path descends *through* a file. Return not-found rather
-            // than throwing a raw method-missing `TypeError`, matching the
-            // `!result.found` branch below and `has`'s no-throw contract.
-            if (typeof current.sha256 !== 'function') return undefined;
-            const currentHash = current.sha256();
+            // Once a segment has resolved to a blob, a deeper path descends
+            // *through* a file. Return not-found rather than throwing a raw
+            // method-missing `TypeError`, matching the `!result.found` branch
+            // below and `has`'s no-throw contract.
+            if (currentTreeHash === undefined) return undefined;
             const result = unwrapEndorTreeHost(
-              endorRegistryPowers.lookupTree(currentHash, segment),
+              endorRegistryPowers.lookupTree(currentTreeHash, segment),
             );
             if (!result.found) return undefined;
             const entry =
@@ -2563,12 +2607,21 @@ const makeDaemonCore = async (
               entry.kind === 'tree'
                 ? makeEndorReadableTree(entry.hash)
                 : makeEndorReadableBlob(entry.hash, entry.size);
+            currentTreeHash = entry.kind === 'tree' ? entry.hash : undefined;
           }
           return current;
         },
-        sha256: () => hash,
-        getInfo: async () =>
-          harden({ algorithm: 'sha256', hash: encodeBase64(fromHex(hash)) }),
+        sha256: () => encodeBase64(fromHex(hash)),
+        async size() {
+          const result = unwrapEndorTreeHost(
+            endorRegistryPowers.readBlob(hash),
+          );
+          if (!result.found)
+            throw makeError(X`Endor CAS tree ${q(hash)} is absent`);
+          return BigInt(
+            decodeBase64(/** @type {string} */ (result.value)).byteLength,
+          );
+        },
       }),
     );
     endorTreeByHash.set(hash, tree);
