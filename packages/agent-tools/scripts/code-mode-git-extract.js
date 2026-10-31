@@ -12,9 +12,9 @@
  * The divergence gate keeps them from drifting from the runtime `GitInterface`
  * guard.
  *
- * The read-only declaration is sourced from the separately published
- * `ReadOnlyEndoGit` alias, with the member list retained as a prompt-surface
- * divergence gate.
+ * The read-only declaration is the whole separately published
+ * `ReadOnlyEndoGit` alias: that alias is the reader facet's contract, so the
+ * prompt advertises every reader verb and nothing else.
  *
  * Guard-canonical DERIVATION for git (synthesizing the printed types from
  * `GitInterface` instead of the TS) was considered and is TABLED: it would
@@ -58,34 +58,6 @@ const withoutOptionalFinalArgument = signature => {
   return attenuated;
 };
 harden(withoutOptionalFinalArgument);
-
-/**
- * The read-only code-mode git prompt surface: the inspection verbs. Mutating
- * verbs (`add`, `restore`, `commit`, branch/stash mutations, `merge`, `rebase`,
- * checkout) are omitted so a read-only agent is not told about verbs that would
- * reject at the cap boundary.
- *
- * @type {string[]}
- */
-export const GIT_READONLY_MEMBERS = harden([
-  'worktree',
-  'worktreeList',
-  'status',
-  'trackingStatus',
-  'diff',
-  'log',
-  'show',
-  'revParse',
-  'currentBranch',
-  'branches',
-  'tree',
-  'filesystemAt',
-  'stashList',
-  'stashShow',
-  'readOnly',
-  'scope',
-]);
-harden(GIT_READONLY_MEMBERS);
 
 /**
  * Build the `git`, `gitHistory`, and `gitReadOnly` IRs from the checked Git
@@ -154,7 +126,6 @@ export const buildGitIRs = () =>
           fileName,
           text,
           rootType: GIT_READONLY_ROOT_TYPE,
-          memberFilter: GIT_READONLY_MEMBERS,
         }),
       };
     })(),
