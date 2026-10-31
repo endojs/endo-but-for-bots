@@ -2,6 +2,8 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { formatLocator } from '@endo/daemon/locator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -2016,6 +2018,15 @@ test('an agent without a workspace grant has no file or git tools', async t => {
 });
 
 /**
+ * An exo stand-in whose methods take and return whatever the test needs.
+ *
+ * @param {string} name
+ * @param {Record<string, (...args: any[]) => any>} methods
+ */
+const makeStub = (name, methods) =>
+  makeExo(name, M.interface(name, {}, { defaultGuards: 'raw' }), methods);
+
+/**
  * A host directory just deep enough for `createAgent`: it records the
  * locators each guest is given, so a test can stand up the driver the factory
  * provisioned from exactly what the factory stored.
@@ -2023,12 +2034,12 @@ test('an agent without a workspace grant has no file or git tools', async t => {
 const makeRecordingHost = () => {
   /** @type {Map<string, Map<string, string>>} */
   const storedByGuest = new Map();
-  const hostAgent = Far('RecordingHost', {
+  const hostAgent = makeStub('RecordingHost', {
     has: () => false,
     provideGuest: (/** @type {string} */ name) => {
       const stored = new Map();
       storedByGuest.set(name, stored);
-      return Far('RecordingGuest', {
+      return makeStub('RecordingGuest', {
         has: () => false,
         storeValue: () => undefined,
         storeLocator: (
@@ -2051,7 +2062,7 @@ const makeRecordingHost = () => {
  * @param {Record<string, string>} factoryNames pet name -> locator
  */
 const makeFactoryPowers = (hostAgent, factoryNames) =>
-  Far('FactoryPowers', {
+  makeStub('FactoryPowers', {
     lookup: (/** @type {string} */ name) => {
       if (name === 'host-agent') return hostAgent;
       throw Error(`Unexpected factory lookup ${name}`);
@@ -2119,7 +2130,7 @@ test('createAgent with a workspace hands the named Git to the driver, whose loop
       return harden({ message: { role: 'assistant', content: 'done' } });
     },
   });
-  const driverPowers = Far('DriverPowers', {
+  const driverPowers = makeStub('DriverPowers', {
     has: (/** @type {string} */ name) => driverStore.has(name),
     locate: (/** @type {string} */ name) => driverStore.get(name),
     lookupByLocator: () => harden({ provider }),

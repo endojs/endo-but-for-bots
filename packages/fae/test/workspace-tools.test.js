@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import { provisionFaeWorkspaceTools } from '../src/workspace-tools.js';
 import { git, makeWorkspaceGit } from './workspace-git-fixture.js';
@@ -72,24 +73,27 @@ test('a read-only Git yields only reader tools', async t => {
   }
 });
 
+const GitRemoteStubI = M.interface('GitRemote', {}, { defaultGuards: 'raw' });
+const RecordingGitI = M.interface('Git', {}, { defaultGuards: 'raw' });
+
 /**
  * A `GitRemote` stand-in that records which of its methods the tools reach.
  *
  * @param {string[]} calls
  */
 const makeRecordingRemote = calls =>
-  Far('GitRemote', {
+  makeExo('GitRemote', GitRemoteStubI, {
     fetch: async () => {
       calls.push('fetch');
-      return harden({ ok: true });
+      return harden({ success: true });
     },
     pull: async () => {
       calls.push('pull');
-      return harden({ ok: true });
+      return harden({ success: true });
     },
     push: async () => {
       calls.push('push');
-      return harden({ ok: true });
+      return harden({ success: true });
     },
     inspect: async () => harden({ name: 'origin' }),
     credentialHealth: async () => harden({ required: false }),
@@ -109,7 +113,7 @@ test('a granted GitRemote adds the push tier, and its tools reach that remote', 
   }
   const call = (/** @type {string} */ name) =>
     /** @type {any} */ (tools.get(name)).execute({});
-  t.deepEqual(await call('push'), { ok: true });
+  t.deepEqual(await call('push'), { success: true });
   await call('fetch');
   t.deepEqual(calls, ['push', 'fetch']);
 });
@@ -134,8 +138,13 @@ test('the tools of a writable Git hold its writer scope, not the rewriter', asyn
   const scopes = [];
   // Forward to the real Git, but record the scope the provisioner asks for
   // and expose every method the full Git carries, including `reword`.
-  const recordingGit = Far('Git', {
-    __getMethodNames__: () => ['add', 'commit', 'reword', 'scope'],
+  const unreached = () => {
+    throw Error('only scope is reached');
+  };
+  const recordingGit = makeExo('Git', RecordingGitI, {
+    add: unreached,
+    commit: unreached,
+    reword: unreached,
     scope: (/** @type {'writer'} */ level) => {
       scopes.push(level);
       return E(granted).scope(level);
