@@ -1,3 +1,89 @@
+export type CryptoPowers = {
+  randomBytes(byteLength: number): Uint8Array;
+  sha256(input: Uint8Array): Uint8Array;
+  verifyEd25519(details: {
+    publicKey: Uint8Array;
+    message: Uint8Array;
+    signature: Uint8Array;
+  }): boolean;
+};
+
+export type ClockPowers = { now(): number };
+
+export type ChallengeIssued = {
+  nonce: Uint8Array;
+  hashedNonce: Uint8Array;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type NonceRegistry = {
+  issue(): ChallengeIssued;
+  verifyAndConsume(details: {
+    publicKey: Uint8Array;
+    nonce: Uint8Array;
+    signature: Uint8Array;
+  }): void;
+  size(): number;
+};
+
+export type ChallengePayload = ChallengeIssued;
+
+export type WebletDescriptor = {
+  webletId: string;
+  contentTreeRoot: string;
+  hasWebSocket: boolean;
+};
+
+export type PublicKeyAddition = {
+  publicKey: Uint8Array;
+  nonce: Uint8Array;
+  signature: Uint8Array;
+};
+
+export type RegistrationArguments = PublicKeyAddition & {
+  daemon?: unknown;
+  cancelled?: Promise<unknown>;
+};
+
+export type RelayRegistrationArguments = PublicKeyAddition & {
+  relayTarget: unknown;
+};
+
+export type RegistrationEntry = {
+  publicKeys: ReadonlyArray<Uint8Array>;
+  daemon: unknown;
+  weblets: Map<string, WebletDescriptor>;
+  deregistered: boolean;
+};
+
+export type Registration = {
+  publishWeblet(descriptor: WebletDescriptor): Promise<void>;
+  unpublishWeblet(webletId: string): Promise<void>;
+  addPublicKey(addition: PublicKeyAddition): Promise<void>;
+  deregister(): Promise<void>;
+  listWeblets(): Promise<ReadonlyArray<WebletDescriptor>>;
+  listPublicKeys(): Promise<ReadonlyArray<Uint8Array>>;
+};
+
+export type GatewayBootstrap = {
+  challenge(): Promise<ChallengePayload>;
+  register(registrationArguments: RegistrationArguments): Promise<Registration>;
+  registerRelay(
+    registrationArguments: RelayRegistrationArguments,
+  ): Promise<Registration>;
+  getBindAddress(): Promise<string>;
+  getApps(): Promise<AppsNameHub>;
+};
+
+export type BootstrapDeps = {
+  crypto: CryptoPowers;
+  clock: ClockPowers;
+  apps: AppsNameHub;
+  getBindAddress(): string;
+  ttlMs?: number;
+};
+
 export type BindAddress = {
   /**
    * A non-empty hostname or IP literal, with no surrounding IPv6
@@ -19,7 +105,7 @@ export type FeatureToggles = {
   chatHosting: boolean;
   virtualHosting: boolean;
   gitHttp: boolean;
-  udsBootstrap: boolean;
+  sockBootstrap: boolean;
   captpRelay: boolean;
   adminDaemon: boolean;
   ocapnWebSocket: boolean;
@@ -70,9 +156,19 @@ export type AppsNameHub = {
 export type GatewayPowers = {
   /**
    * Environment-shaped map. The phase-1 skeleton uses only `env`;
-   * later phases add `net`, `fs`, `crypto`, and `time`.
+   * later phases add `net` and `fs`.
    */
   env?: { [name: string]: string | undefined };
+  /**
+   * Required when `sockBootstrap` is enabled. The bootstrap
+   * registrar needs `randomBytes`, `sha256`, and `verifyEd25519`.
+   */
+  crypto?: CryptoPowers;
+  /**
+   * Required when `sockBootstrap` is enabled. The nonce registry
+   * consumes `now()` for TTL.
+   */
+  clock?: ClockPowers;
 };
 
 export type Gateway = {
@@ -86,6 +182,14 @@ export type Gateway = {
   getBindAddress(): Promise<string>;
   getApps(): Promise<AppsNameHub>;
   getConfig(): Promise<GatewayConfig>;
+  /**
+   * Throws when `sockBootstrap` is disabled in the gateway's
+   * feature toggles. The returned exo is also the entry capability
+   * a sock listener serves to incoming CapTP connections; a
+   * process embedding the gateway in-realm calls `getBootstrap`
+   * directly.
+   */
+  getBootstrap(): Promise<GatewayBootstrap>;
 };
 
 export declare const DEFAULT_BIND_ADDRESS: string;
@@ -106,3 +210,65 @@ export declare function makeGateway(args?: {
   powers?: GatewayPowers;
   config?: Partial<GatewayConfig>;
 }): Gateway;
+
+/**
+ * An Ed25519 identity held by a per-user daemon. The private key
+ * stays behind `sign`; only signatures cross to the gateway.
+ */
+export type KeySigner = {
+  getPublicKey(): Uint8Array | Promise<Uint8Array>;
+  sign(message: Uint8Array): Uint8Array | Promise<Uint8Array>;
+};
+
+export type UserDaemonRequest = {
+  method: string;
+  path: string;
+  headers: ReadonlyArray<readonly [string, string]>;
+  body: Uint8Array;
+};
+
+export type UserDaemonResponse = {
+  status: number;
+  headers: ReadonlyArray<readonly [string, string]>;
+  body: Uint8Array;
+};
+
+/**
+ * Serves one weblet inside a per-user daemon. The gateway never holds
+ * this object; it reaches it only through the daemon's `UserDaemon`
+ * exo, which routes by `webletId`.
+ */
+export type WebletHandler = {
+  handleHttp(
+    request: UserDaemonRequest,
+  ): UserDaemonResponse | Promise<UserDaemonResponse>;
+  handleWebSocketUpgrade(request: UserDaemonRequest): unknown;
+  fetchContentTree(root: string): unknown;
+};
+
+export type UserDaemonPublication = WebletDescriptor & {
+  handler: WebletHandler;
+};
+
+/** The callback exo a per-user daemon hands the gateway at `register`. */
+export type UserDaemon = {
+  handleHttp(
+    webletId: string,
+    request: UserDaemonRequest,
+  ): Promise<UserDaemonResponse>;
+  handleWebSocketUpgrade(
+    webletId: string,
+    request: UserDaemonRequest,
+  ): Promise<unknown>;
+  fetchContentTree(root: string): Promise<unknown>;
+};
+
+/** The daemon-local handle returned by `registerUserDaemon`. */
+export type UserDaemonPublisher = {
+  publishWeblet(publication: UserDaemonPublication): Promise<void>;
+  unpublishWeblet(webletId: string): Promise<void>;
+  addPublicKey(signer: KeySigner): Promise<void>;
+  listWeblets(): Promise<ReadonlyArray<WebletDescriptor>>;
+  getRegistration(): Promise<Registration>;
+  deregister(): Promise<void>;
+};
