@@ -7,6 +7,7 @@
     "*.js",
     "bin/**/*.js",
     "src/**/*.js",
+    "src/**/*.ts",
     "test",
     "test/_types.d.ts",
     "!**/*.d.ts",
