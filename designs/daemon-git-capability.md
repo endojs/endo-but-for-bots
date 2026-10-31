@@ -357,7 +357,7 @@ The chosen shape (tree on `Git` plus `Git.readOnly()`) was picked for consistenc
 | Shape | Pros | Cons |
 |---|---|---|
 | **Chosen: `Git.tree(ref)` plus `Git.readOnly()`** | One-turn read on the common case (caller holds `Git`, wants `tree`).  Matches `EndoMount.readOnly()` idiom.  Read-only auditor is `await E(git).readOnly()` — no new cap shape. | No standalone "tree-only" grant shape: a caller who should only read historical trees still holds an attenuated `Git`, which advertises the read methods it does not care about. |
-| **Considered: split-only (`git.trees() -> GitTreeProvider.tree(ref)`)** | Cleanest decomposition: tree-only callers hold a different cap type, not an attenuated parent.  Matches decomplector's "different concerns -> different caps" lens. | Two-turn cost on every read (`await E(git).trees()` then `await E(provider).tree(ref)`), unless the holder caches the provider.  No in-place attenuation pattern for the rest of `Git`. |
+| **Considered: split-only (`git.trees() → GitTreeProvider.tree(ref)`)** | Cleanest decomposition: tree-only callers hold a different cap type, not an attenuated parent.  Matches decomplector's "different concerns → different caps" lens. | Two-turn cost on every read (`await E(git).trees()` then `await E(provider).tree(ref)`), unless the holder caches the provider.  No in-place attenuation pattern for the rest of `Git`. |
 | **Considered: both axes (`Git.tree(ref)` + `Git.readOnly()` + separately-grantable `GitTreeProvider` via host shortcut)** | Covers every use case: one-turn tree access for `Git` holders, read-only attenuation posture, and tree-only grants for build systems / archivers that should never see worktree state. | Widest public surface.  Two ways to obtain a tree-reading capability (via `Git.tree(ref)` and via the separately-granted provider) is the kind of accidental complexity creep an implementation later regrets. |
 
 If a real build-system or code-archiver use case surfaces that wants a genuinely tree-only grant (without worktree-method advertisement at all), the implementation can revisit and add the separately-grantable `GitTreeProvider` shape.
@@ -446,7 +446,7 @@ type GitRebaseResult =
   | { status: 'in-progress'; current: GitCommit };
 ```
 
-Phase 7 upgrades the `Git` interface in place; the first phase's text-returning methods move under `*Text()` siblings (`diffText`, `showText`, ...) so callers that still want the porcelain output for display can keep it.
+Phase 7 upgrades the `Git` interface in place; the first phase's text-returning methods move under `*Text()` siblings (`diffText`, `showText`, …) so callers that still want the porcelain output for display can keep it.
 The migration is named in `## Migration Strategy` as a discrete step rather than an ambient "we'll structurally-improve later"; consumers who write against the first phase can flip to the structured shapes by replacing one method call per site.
 
 `stashList`'s structured shape, in the same vein, becomes `Promise<Array<{ index: number; ref: GitRef; message: string; created: GitCommit }>>`.
@@ -885,7 +885,7 @@ No open questions remain on this document; revisit if real implementation surfac
    Adding the caching/throttling itself is **out of scope for this PR**; the optimization is licenced here so the future implementer and reviewers see the cadence concern was acknowledged at the surface that introduces the pin.
 8. **Read-only worktree mounts permit inspection + immutable trees + `worktree.snapshot()`; reject everything else.**
    A read-only `Git` can be obtained two ways and the two paths produce the same authority shape (see § Read-only construction paths):
-   - **Writable->readOnly path:** `await E(git).readOnly()` returns a read-only attenuation of a `Git` constructed from a writable mount.
+   - **Writable→readOnly path:** `await E(git).readOnly()` returns a read-only attenuation of a `Git` constructed from a writable mount.
    - **Read-only-mount-derived path:** `provideGit(readOnlyMount)` constructs a `Git` whose mutability flag is already false; the formula does not briefly mint a writable `Git` and wrap it.
 
    Allowed on a read-only `Git`: `status`, `diff`, `log`, `show`, `revParse`, `branches`, `currentBranch`, `tree(ref)`, `filesystemAt(ref)`, `readOnly()` (idempotent — see Design Decision 9), and `worktree.snapshot()`.
