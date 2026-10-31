@@ -27,7 +27,8 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * turns a set of already-granted daemon capabilities into the flat agent-tool
  * catalog a harness advertises to a model, replacing the path-root provisioning
  * sketch (`endo grant fae fs /home/user/project`, a git subprocess rooted at a
- * host path) with composition over the trio's capabilities.
+ * host path) with composition over the granted capabilities (the git-capability trio of
+ * filesystem, Git, and GitRemote, plus Shell and HttpClient).
  *
  * The composition realizes the two rules of daemon-agent-tools § Granting and
  * Provisioning:
