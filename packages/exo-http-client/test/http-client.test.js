@@ -1111,3 +1111,43 @@ test('inspect reports tofu-pinned origins, matching allowedOrigins()', async t =
   t.deepEqual(effective, [ALLOWED]);
   t.deepEqual((await E(control).inspect()).allowedOrigins, effective);
 });
+
+test('addAllowedOrigin re-admits a removed origin and clears its revocation', async t => {
+  const fake = makeFakeFetch();
+  const { client, control } = makeHttpClientAndControl({
+    fetch: fake.fetch,
+    allowedOrigins: [ALLOWED],
+  });
+
+  await E(control).removeAllowedOrigin(ALLOWED);
+  await t.throwsAsync(() => E(client).fetch(ALLOWED_URL), {
+    message: /not in the allowed-origin list|Policy refuses origin/,
+  });
+
+  await E(control).addAllowedOrigin(ALLOWED);
+  await E(control).addAllowedOrigin(ALLOWED);
+  t.deepEqual(await E(client).allowedOrigins(), [ALLOWED]);
+  t.deepEqual(await E(control).listBindings(), []);
+  await E(client).fetch(ALLOWED_URL);
+  t.is(fake.calls.length, 1);
+});
+
+test('pinAllowed admits an origin a strict adapter would refuse', async t => {
+  const policy = makeTrustOnFirstBindPolicyAdapter({
+    now: async () => 303,
+  });
+
+  await t.throwsAsync(() => policy.assertAllowed(ALLOWED), {
+    message: /not in the allowed-origin list/,
+  });
+
+  await policy.pinAllowed(ALLOWED, 'operator');
+  await policy.assertAllowed(ALLOWED);
+  t.like(policy.listBindings()[0], {
+    target: ALLOWED,
+    state: 'Pinned-Allow',
+    decidedAt: 303,
+    decidedBy: 'operator',
+    decisionMode: 'strict',
+  });
+});
