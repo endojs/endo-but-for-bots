@@ -582,7 +582,7 @@ export type MakeFromPackageFormula = {
   type: 'make-from-package';
   worker: FormulaIdentifier;
   powers: FormulaIdentifier;
-  /** ReadableTree or Mount whose root holds a `package.json`. */
+  /** Immutable ReadableTree snapshot whose root holds a `package.json`. */
   source: FormulaIdentifier;
   /** EndoRegistry that resolves the source's dependencies. */
   registry: FormulaIdentifier;
