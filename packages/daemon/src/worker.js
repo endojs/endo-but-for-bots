@@ -172,9 +172,9 @@ export const makeWorkerFacet = ({ cancel }) => {
       },
 
       /**
-       * @param {ERef<unknown>} sourceP - Readable tree (or Mount) whose
-       *   root holds a `package.json`.  Its dependencies are not in the
-       *   tree; they come from `resolution`.
+       * @param {ERef<unknown>} sourceP - Immutable readable-tree snapshot
+       *   whose root holds a `package.json`. Its dependencies are not in
+       *   the tree; they come from `resolution`.
        * @param {PackageResolution} resolution - The eager resolution of
        *   the source's `package.json`, computed by the daemon.
        * @param {Promise<unknown>} powersP

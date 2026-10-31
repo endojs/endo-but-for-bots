@@ -2315,37 +2315,74 @@ export const makeHostMaker = ({
         );
       }
 
-      const {
-        tasks,
-        workerId,
-        workerLabel: explicitLabel,
-        powersId,
-        env,
-        workerTrustedShims,
-      } = await prepareMakeCaplet(
-        /** @type {NameOrPath | undefined} */ (workerName),
-        capletOptions,
-      );
-      const workerLabel =
-        explicitLabel ??
-        (options.resultName !== undefined
-          ? `${options.resultName}`
-          : `package:${Array.isArray(sourceName) ? sourceName.join('/') : sourceName}`);
+      /** @type {FormulaIdentifier | undefined} */
+      let snapshotId;
+      try {
+        let packageSourceId = /** @type {FormulaIdentifier} */ (sourceId);
+        const source = await provide(packageSourceId);
+        // A live mount remains mutable after this call returns. Capture it as a
+        // content-addressed readable-tree before dependency resolution or worker
+        // import begins. A readable-tree has no snapshot method and is already
+        // immutable, so it keeps its existing formula identity.
+        // eslint-disable-next-line no-underscore-dangle
+        const sourceMethods = await E(
+          /** @type {any} */ (source),
+        ).__getMethodNames__();
+        if (sourceMethods.includes('snapshot')) {
+          const snapshot = await E(/** @type {any} */ (source)).snapshot();
+          /** @type {DeferredTasks<ReadableTreeDeferredTaskParams>} */
+          const snapshotTasks = makeDeferredTasks();
+          snapshotTasks.push(async identifiers => {
+            await null;
+            const { readableTreeId } = identifiers;
+            snapshotId = readableTreeId;
+            pinTransient(readableTreeId);
+          });
+          await checkinTree(snapshot, snapshotTasks);
+          if (snapshotId === undefined) {
+            throw new Error(
+              'Snapshot formulation did not produce an identifier',
+            );
+          }
+          packageSourceId = snapshotId;
+        }
 
-      const { value } = await formulateFromPackage(
-        hostId,
-        handleId,
-        /** @type {FormulaIdentifier} */ (sourceId),
-        /** @type {FormulaIdentifier} */ (packageRegistryId),
-        harden({ entry, offline }),
-        tasks,
-        workerId,
-        powersId,
-        env,
-        workerTrustedShims,
-        workerLabel,
-      );
-      return value;
+        const {
+          tasks,
+          workerId,
+          workerLabel: explicitLabel,
+          powersId,
+          env,
+          workerTrustedShims,
+        } = await prepareMakeCaplet(
+          /** @type {NameOrPath | undefined} */ (workerName),
+          capletOptions,
+        );
+        const workerLabel =
+          explicitLabel ??
+          (options.resultName !== undefined
+            ? `${options.resultName}`
+            : `package:${Array.isArray(sourceName) ? sourceName.join('/') : sourceName}`);
+
+        const { value } = await formulateFromPackage(
+          hostId,
+          handleId,
+          packageSourceId,
+          /** @type {FormulaIdentifier} */ (packageRegistryId),
+          harden({ entry, offline }),
+          tasks,
+          workerId,
+          powersId,
+          env,
+          workerTrustedShims,
+          workerLabel,
+        );
+        return value;
+      } finally {
+        if (snapshotId !== undefined) {
+          await unpinTransient(snapshotId);
+        }
+      }
     };
 
     /** @type {EndoHost['makeFromMount']} */
