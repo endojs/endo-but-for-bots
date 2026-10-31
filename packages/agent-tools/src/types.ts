@@ -358,6 +358,8 @@ export interface WorkspaceGrants {
   remote?: ERef<GitRemoteToolCapability>;
   /** Command layer: the granted `Shell`. */
   shell?: ERef<ShellToolCapability>;
+  /** Network layer: the granted, policy-bounded `HttpClient`. */
+  http?: ERef<HttpToolCapability>;
   /** Drop the file-tool write slice; forwarded to `makeMountFsTools`. */
   readOnly?: boolean;
   /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */

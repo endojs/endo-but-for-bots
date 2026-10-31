@@ -88,6 +88,11 @@ test('a shell grant composes the command tools', t => {
   t.true(names.has('inspect'));
 });
 
+test('an HTTP grant composes the confined network tools', t => {
+  const names = nameSet(makeWorkspaceTools({ http: grant('HttpClient') }));
+  t.deepEqual(names, new Set(['fetch', 'allowedOrigins']));
+});
+
 test('grants compose into one flat catalog with distinct names', t => {
   // filesystem + git + remote all coexist: every tool name across the three
   // groups is unique, so the catalog is a flat, unambiguous set.
@@ -114,6 +119,19 @@ test('a shell + remote catalog fails closed on the shared "inspect" name', t => 
   t.regex(error.message, /gitRemote/);
 });
 
+test('an HTTP + remote catalog fails closed on the shared "fetch" name', t => {
+  const error = t.throws(() =>
+    makeWorkspaceTools({
+      http: grant('HttpClient'),
+      remote: grant('GitRemote'),
+    }),
+  );
+  t.regex(error.message, /name collision/);
+  t.regex(error.message, /fetch/);
+  t.regex(error.message, /http/);
+  t.regex(error.message, /gitRemote/);
+});
+
 test('provisionWorkspaceTools passes an explicit filesystem straight through', async t => {
   // With an explicit `filesystem` and no `git`, the async provisioner performs
   // no derivation and returns the same catalog as the synchronous maker.
@@ -125,6 +143,12 @@ test('provisionWorkspaceTools passes an explicit filesystem straight through', a
     nameSet(catalog),
     new Set(['mountReadText', 'mountList', 'mountStat', 'mountWriteText']),
   );
+});
+
+test('provisionWorkspaceTools passes an HTTP grant into the catalog', async t => {
+  await null;
+  const catalog = await provisionWorkspaceTools({ http: grant('HttpClient') });
+  t.deepEqual(nameSet(catalog), new Set(['fetch', 'allowedOrigins']));
 });
 
 test('provisionWorkspaceTools with no grants derives nothing', async t => {

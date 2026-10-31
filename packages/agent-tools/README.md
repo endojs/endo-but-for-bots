@@ -204,6 +204,12 @@ The JSON wrappers remain available for hosts that need one call per action.
 They are provider-independent but are parked while code mode is the primary
 way to compose several capability operations.
 
+`makeWorkspaceTools` and `provisionWorkspaceTools` conditionally compose the
+filesystem, Git, GitRemote, Shell, and confined HTTP groups from capabilities
+the host already holds. Passing `http` adds `makeHttpTool`'s `fetch` and
+`allowedOrigins` records; omitting it leaves the network tools out of the
+catalog.
+
 ```js
 import { makeGitTool } from '@endo/agent-tools/json-tools/git.js';
 import { makeGitMountTools } from '@endo/agent-tools/json-tools/git-mount.js';
@@ -246,7 +252,8 @@ destination must be a concrete ref, the all-zeros ID is refused (git reads it as
 Each maker names its records after the capability's own methods, so names can
 collide across makers: `makeGitRemoteTool` emits `inspect` and `fetch`, which
 `makeShellTool` and `makeHttpTool` also emit. A host composing several makers
-into one flat tool list must disambiguate them itself; nothing in `makeTool`
+into one flat tool list must disambiguate them itself; the workspace helpers
+reject a collision rather than shadowing one record. Nothing in `makeTool`
 prefixes or dedupes.
 
 ## Git history tools
