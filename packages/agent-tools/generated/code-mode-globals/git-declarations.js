@@ -166,11 +166,13 @@ type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
     list: (...path: string[]) => Promise<string[]>;
     lookup: (path: string | string[]) => Promise<unknown>;
+    subView: (path: string | string[]) => Promise<GitLiteDirectory>;
     write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;
     remove: (path: string[]) => Promise<void>;
     move: (from: string[], to: string[]) => Promise<void>;
     copy: (from: string[], to: string[]) => Promise<void>;
     makeDirectory: (path: string[]) => Promise<GitLiteDirectory>;
+    makeFile: (path: string | string[], initial?: GitReadableBlobSource | string) => Promise<GitLiteFile>;
     readOnly: () => GitLiteReadableTree;
     snapshot: () => Promise<GitSnapshotTree>;
 };
@@ -337,7 +339,29 @@ type GitStatusEntry = {
 };
 type GitReadableTree = GitLiteReadableTree;
 type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;
+type GitLiteFile = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    writeText: (content: string) => Promise<void>;
+    writeBytes: (readable: unknown) => Promise<void>;
+    append: (content: string) => Promise<void>;
+    readOnly: () => GitLiteReadableBlob;
+    snapshot: () => Promise<GitSnapshotBlob>;
+};
 type GitSnapshotTree = GitLiteReadableTree & {
+    subView: (petNamePath: string | readonly string[]) => Promise<GitSnapshotTree>;
+    followNameChanges: () => GitPassableReader<never, undefined>;
+    sha256: () => string;
+    size: () => Promise<bigint>;
+};
+type GitLiteReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    help: (method?: string) => string;
+};
+type GitSnapshotBlob = GitLiteReadableBlob & {
     sha256: () => string;
     size: () => Promise<bigint>;
 };
