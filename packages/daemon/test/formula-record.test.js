@@ -254,3 +254,73 @@ test('makeFormulaRecord omits a scratch-mount path when unresolved', t => {
     readOnly: { kind: 'literal', value: false },
   });
 });
+
+test('makeFormulaRecord surfaces Git credential scope without material', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'git-credential',
+      kind: 'bearer',
+      audience: 'https://github.com',
+      token: 'must-not-leak',
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+
+  t.deepEqual(record.properties, {
+    kind: { kind: 'literal', value: 'bearer' },
+    audience: { kind: 'literal', value: 'https://github.com' },
+  });
+});
+
+test('makeFormulaRecord surfaces Git remote policy bounds', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'git-remote',
+      gitId: 'git-id',
+      credentialId: 'credential-id',
+      name: 'origin',
+      revoked: false,
+      policy: {
+        url: 'https://github.com/endojs/endo.git',
+        allowedDirections: ['fetch', 'push'],
+        fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+        pushRefspecs: [],
+        allowedBranches: ['refs/heads/agent/*'],
+        allowForcePush: false,
+        allowTags: false,
+        allowDelete: false,
+      },
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+
+  t.deepEqual(record.properties, {
+    git: { kind: 'reference', identifier: 'git-id' },
+    credential: { kind: 'reference', identifier: 'credential-id' },
+    name: { kind: 'literal', value: 'origin' },
+    url: {
+      kind: 'literal',
+      value: 'https://github.com/endojs/endo.git',
+    },
+    allowedDirections: { kind: 'literal', value: ['fetch', 'push'] },
+    fetchRefspecs: {
+      kind: 'literal',
+      value: ['+refs/heads/*:refs/remotes/origin/*'],
+    },
+    pushRefspecs: {
+      kind: 'literal',
+      value: [],
+    },
+    allowedBranches: {
+      kind: 'literal',
+      value: ['refs/heads/agent/*'],
+    },
+    allowForcePush: { kind: 'literal', value: false },
+    allowTags: { kind: 'literal', value: false },
+    allowDelete: { kind: 'literal', value: false },
+    allowLocalFileTransport: { kind: 'literal', value: false },
+    revoked: { kind: 'literal', value: false },
+  });
+});

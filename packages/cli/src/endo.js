@@ -66,6 +66,8 @@ const parseEnvOption = (optionValueString, obj) => {
   return obj;
 };
 
+const collectOption = (value, values) => [...values, value];
+
 export const main = async rawArgs => {
   const program = new Command();
 
@@ -483,6 +485,67 @@ export const main = async rawArgs => {
         asIdentifier: Boolean(asIdentifier),
         asJson: Boolean(asJson),
       });
+    });
+
+  const gitRemote = program
+    .command('git-remote')
+    .description('provision and inspect bounded Git remote profiles');
+
+  gitRemote
+    .command('provision <git-name> <remote-name>')
+    .description(
+      'provision a fixed HTTPS endpoint with a fetch-only or agent-branch profile',
+    )
+    .option('-u,--url <url>', 'fixed HTTPS remote URL (prompted when omitted)')
+    .option(
+      '-p,--profile <profile>',
+      'bounded profile: fetch-only or agent',
+      'fetch-only',
+    )
+    .option(
+      '-b,--branch <branch>',
+      'agent-profile branch or refs/heads/* pattern (repeatable; defaults to refs/heads/agent/*)',
+      collectOption,
+      [],
+    )
+    .requiredOption(
+      '-c,--credential <name>',
+      'existing daemon-minted Git credential pet name',
+    )
+    .option('-y,--yes', 'provision without the interactive approval prompt')
+    .option('--json', 'emit the resulting inspection as JSON')
+    .action(async (gitName, remoteName, options) => {
+      const {
+        url: endpointUrl,
+        profile,
+        branch: branches,
+        credential: credentialName,
+        yes: approve = false,
+        json: asJson = false,
+      } = options;
+      const { provisionGitRemote } = await import('./commands/git-remote.js');
+      return provisionGitRemote({
+        gitName,
+        remoteName,
+        url: endpointUrl,
+        profile,
+        branches,
+        credentialName,
+        approve,
+        asJson,
+      });
+    });
+
+  gitRemote
+    .command('inspect <remote-name>')
+    .description(
+      'show the fixed endpoint, granted targets, and credential health',
+    )
+    .option('--json', 'emit policy and credential health as JSON')
+    .action(async (remoteName, options) => {
+      const { json: asJson = false } = options;
+      const { inspectGitRemote } = await import('./commands/git-remote.js');
+      return inspectGitRemote({ remoteName, asJson });
     });
 
   program
@@ -1049,7 +1112,7 @@ export const main = async rawArgs => {
 
     {
       title: 'Configuration',
-      commands: ['where'],
+      commands: ['where', 'git-remote'],
     },
   );
 

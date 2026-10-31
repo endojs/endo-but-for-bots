@@ -14,3 +14,36 @@ formula-vs-mount axes across `endo store` and a new `endo write` /
 The implementation lands on a `master`-base PR; this entry is a tracking
 placeholder on the `llm` roadmap branch and will be removed when the
 implementation lands.
+
+## Bounded Git remotes
+
+`endo git-remote provision` binds an existing daemon-minted `Git` capability,
+credential capability, and fixed HTTPS endpoint into a named `GitRemote`.
+The command previews the complete grant and asks for approval unless `--yes`
+is given.
+It offers two closed profiles:
+
+- `fetch-only` fetches branches into the named remote-tracking namespace and
+  grants no push target.
+- `agent` adds push authority for `refs/heads/agent/*`, or for the narrower
+  branch patterns given with repeatable `--branch` options.
+
+Both profiles deny force pushes, tags, and deletion.
+Credential material is never accepted on the command line; `--credential`
+names an existing non-extractable credential capability.
+
+```sh
+endo git-remote provision repo-git origin \
+  --url https://github.com/endojs/endo.git \
+  --profile agent \
+  --branch review/my-change \
+  --credential github-token
+
+endo git-remote inspect origin
+endo git-remote inspect origin --json
+```
+
+Omit `--url` to enter the endpoint interactively.
+Inspection reports the fixed endpoint, effective fetch and push refspecs,
+revocation state, force/tag/delete policy, and credential health without
+revealing credential material.
