@@ -260,3 +260,35 @@ test('deprecated adapter preserves old lookup, scoped name, and list shapes', as
   t.is(await legacy.lookup('absent', '1.0.0'), undefined);
   t.deepEqual(await legacy.list(), []);
 });
+
+test('deprecated adapter fetch surfaces not-found instead of returning undefined', async t => {
+  const npm = makeNpmRegistryTree(makeOperations());
+  const root = makePackageRegistryTree({ npm });
+  const legacy = makeDeprecatedEndoRegistryAdapter(root);
+  t.truthy(await legacy.fetch('alpha', '1.0.0'));
+  const error = await t.throwsAsync(() => legacy.fetch('absent', '1.0.0'));
+  t.is(registryErrorName(error), 'RegistryNotFoundError');
+});
+
+test('deprecated adapter resolve delegates to the supplied resolver or refuses', async t => {
+  const npm = makeNpmRegistryTree(makeOperations());
+  const root = makePackageRegistryTree({ npm });
+  const bare = makeDeprecatedEndoRegistryAdapter(root);
+  await t.throwsAsync(() => bare.resolve(JSON.stringify({ name: 'app' })), {
+    message: /without a resolver/,
+  });
+
+  /** @type {unknown[][]} */
+  const calls = [];
+  /** @type {any} */
+  const resolved = harden({ lock: true });
+  const withResolver = makeDeprecatedEndoRegistryAdapter(root, {
+    resolve: async (packageJson, options) => {
+      calls.push([packageJson, options]);
+      return resolved;
+    },
+  });
+  const packageJson = JSON.stringify({ name: 'app' });
+  t.is(await withResolver.resolve(packageJson), resolved);
+  t.deepEqual(calls, [[packageJson, {}]]);
+});
