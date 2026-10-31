@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
-| **Updated** | 2026-05-05 |
+| **Updated** | 2026-10-31 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Implemented (PR #1594) |
 
 ## What is the Problem Being Solved?
 

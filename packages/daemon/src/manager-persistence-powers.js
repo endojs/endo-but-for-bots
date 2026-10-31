@@ -5,7 +5,7 @@
  * SQLite-backed ManagerPersistencePowers shared by every Endo
  * daemon flavour.  Formula records, agent keys, retention
  * tables and the per-node formula index all live in the
- * SQLite-backed `daemon-database.js` schema.  The content store
+ * SQLite-backed `manager-database.js` schema.  The content store
  * (large binary blobs addressed by SHA-256) still lives on the
  * filesystem, since SQLite isn't a great place for many-MB
  * payloads.
@@ -142,7 +142,7 @@ export const makeManagerPersistencePowers = (
   // See `designs/daemon-cas-management.md` Phase 5 for the destination
   // architecture (the Rust supervisor's `cas-*` envelope verbs will
   // later replace the CAS package's implementation without changing the
-  // call site at `daemon.js` line ~330).
+  // call site at `manager.js` line ~330).
   const makeSnapshotContentStore = () => {
     const storageDirectoryPath = filePowers.joinPath(
       config.statePath,

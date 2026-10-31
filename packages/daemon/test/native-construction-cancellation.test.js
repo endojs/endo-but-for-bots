@@ -17,10 +17,10 @@ import { parseId } from '../src/formula-identifier.js';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import { assertPetName } from '../src/pet-name.js';
 
 for (const failPersistence of [false, true]) {
@@ -39,7 +39,7 @@ for (const failPersistence of [false, true]) {
         release.resolve(undefined);
         cancelled.reject(Error('Test finished'));
       });
-      const powers = await makeDaemonicPowers({
+      const powers = await makeManagerPowers({
         config: {
           statePath: path.join(temporary, 'state'),
           ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -65,7 +65,7 @@ for (const failPersistence of [false, true]) {
       const acquisitions = [];
       const cancellations = [];
       let activations = 0;
-      const daemon = await makeDaemon(
+      const daemon = await makeManager(
         {
           ...powers,
           persistence: /** @type {any} */ ({
@@ -93,7 +93,7 @@ for (const failPersistence of [false, true]) {
                 cancellations.push(id);
               });
               return {
-                workerDaemonFacet: Far('Worker', {
+                workerManagerFacet: Far('Worker', {
                   terminate: () => {},
                   makeUnconfined: async () =>
                     Far('InertController', {

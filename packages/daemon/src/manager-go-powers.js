@@ -5,7 +5,7 @@
 /**
  * Manager powers for the Go (engo) platform.
  *
- * This module is a derivative of daemon-node-powers.js. It shares all powers
+ * This module is a derivative of manager-node-powers.js. It shares all powers
  * except for control powers (makeWorker), which requests worker spawns from
  * the engo supervisor via the envelope protocol instead of using
  * child_process.fork().

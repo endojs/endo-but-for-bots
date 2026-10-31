@@ -33,7 +33,7 @@ const fsp = { access: fs.promises.access };
 const args = process.argv.slice(2);
 if (args.length < 4) {
   throw new Error(
-    `daemon.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `manager-node.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );

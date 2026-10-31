@@ -20,10 +20,10 @@ const { raw } = String;
 // step between them.  They require the Rust binary to be available
 // so they can switch supervisors at run time.
 //
-// Until the XS daemon has SQLite parity with daemon-database.js,
+// Until the XS daemon has SQLite parity with manager-database.js,
 // pet-store entries written by the Node supervisor will not be
 // visible to the Rust supervisor (which reads/writes JSON via
-// daemon-persistence-powers.js), and vice versa.  The tests are
+// manager-persistence-powers.js), and vice versa.  The tests are
 // declared with test.serial.failing so they document the gap and
 // will start passing as soon as the gap is closed — at which
 // point an unexpected pass fails the suite, alerting us to flip

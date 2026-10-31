@@ -26,7 +26,7 @@ import { makePowers } from './daemon-webextension-powers.js';
 
 if (process.argv.length < 5) {
   throw new Error(
-    `daemon.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `manager-webextension.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );

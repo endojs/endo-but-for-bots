@@ -8,7 +8,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
 import { idFromLocator, parseLocator } from '../src/locator.js';
-import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { makeManagerDatabase } from '../src/manager-database-node.js';
 
 /**
  * A NetworkSpec describes the inputs needed to install one of the
@@ -75,7 +75,7 @@ const makeConfig = (...root) => {
 };
 
 const openTestDb = statePath => {
-  return makeDaemonDatabase({
+  return makeManagerDatabase({
     statePath,
     ephemeralStatePath: '',
     cachePath: '',

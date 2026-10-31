@@ -5,7 +5,7 @@
 
 /**
  * Shared primitives used by both XS bus bootstraps
- * (bus-worker-xs.js and bus-daemon-rust-xs.js).
+ * (bus-worker-xs.js and bus-manager-rust-xs.js).
  *
  * Intentionally tiny: only the bits that were duplicated verbatim in
  * both bootstraps.  The actual wire plumbing lives in bus-xs-core.js.

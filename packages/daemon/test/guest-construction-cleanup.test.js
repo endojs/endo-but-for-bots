@@ -14,10 +14,10 @@ import * as url from 'node:url';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import { parseId } from '../src/formula-identifier.js';
 
 for (const automatic of [false, true, 'directory']) {
@@ -58,7 +58,7 @@ for (const automatic of [false, true, 'directory']) {
           t.teardown(() => rm(temporary, { recursive: true, force: true }));
           const cancelled = makePromiseKit();
           t.teardown(() => cancelled.reject(Error('Test finished')));
-          const powers = await makeDaemonicPowers({
+          const powers = await makeManagerPowers({
             config: {
               statePath: path.join(temporary, 'state'),
               ephemeralStatePath: path.join(temporary, 'run'),
@@ -90,7 +90,7 @@ for (const automatic of [false, true, 'directory']) {
           const workers = new Set();
           const stoppedWorkers = new Set();
           let failedGuestWorker;
-          const daemon = await makeDaemon(
+          const daemon = await makeManager(
             {
               ...powers,
               control: /** @type {any} */ ({
@@ -103,7 +103,7 @@ for (const automatic of [false, true, 'directory']) {
                   void forceCancelled.catch(() => {});
                   workers.add(id);
                   return {
-                    workerDaemonFacet: Far('UnusedWorker', {
+                    workerManagerFacet: Far('UnusedWorker', {
                       terminate: () => {},
                     }),
                     workerTerminated: workerCancelled.catch(() => {

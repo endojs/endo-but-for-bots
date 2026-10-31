@@ -87,7 +87,7 @@ run any JavaScript.
 The **manager** is the privileged child process that bootstraps the
 pet-name store, the formula graph, the host agent, and the CapTP
 multiplexer. Historically this role was played exclusively by the
-Node.js daemon script (`bus-daemon-node.js`); today it can also be
+Node.js daemon script (`bus-manager-node.js`); today it can also be
 played by an XS-hosted bundle running inside `endor manager -e xs`.
 
 Previously, two separate Rust binaries collided on the `daemon` verb:
@@ -488,7 +488,7 @@ The test harness always sets:
 - `ENDO_EPHEMERAL_STATE_PATH`
 - `ENDO_SOCK_PATH`
 - `ENDO_CACHE_PATH`
-- `ENDO_DAEMON_PATH` (path to `bus-daemon-node.js`)
+- `ENDO_DAEMON_PATH` (path to `bus-manager-node.js`)
 
 ### 10.2 Socket Path Length
 

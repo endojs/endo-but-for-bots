@@ -42,7 +42,7 @@ import { installShutdownSignals } from './shutdown-signals.js';
 
 if (process.argv.length < 5) {
   throw new Error(
-    `bus-daemon-node.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `bus-manager-node.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );
@@ -195,7 +195,7 @@ const main = async () => {
     await sendEnvelope(0, 'ready');
     console.log('Endo daemon (bus) ready, signaled supervisor');
   } catch (error) {
-    // No IPC to parent like daemon-node.js; just log and throw.
+    // No IPC to parent like manager-node.js; just log and throw.
     console.error('Daemon startup failed:', error);
     throw error;
   }

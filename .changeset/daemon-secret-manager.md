@@ -50,7 +50,7 @@ exported from the package root: `SecretAdmin`, `SecretAuditEvent`,
 `SecretSummary`.
 
 `CryptoPowers` gains required `sealSecret` and `openSecret` (AES-256-GCM with
-the record identifier as associated data), and `DaemonicPersistencePowers`
+the record identifier as associated data), and `ManagerPersistencePowers`
 gains a required `provideSecretStoreKey` alongside the secret record, grant,
 and audit accessors. Supervisors implementing those power types must supply
 them. The Node supervisor seals blobs on disk and derives the store key from

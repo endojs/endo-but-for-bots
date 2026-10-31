@@ -14,7 +14,7 @@ export const section = async (execa, testLine) => {
   // The counter-example context has already established the pet
   // name `counter` (a make-archive formula per `endo make`, which
   // calls `E(agent).makeArchive(...)` and emits a formula of
-  // `type: 'make-archive'` per `packages/daemon/src/daemon.js`'s
+  // `type: 'make-archive'` per `packages/daemon/src/manager.js`'s
   // `formulateArchive`). The human-readable mode prints the
   // formula type and number (64 hex chars) on the first line and
   // one row per property.
