@@ -13,10 +13,10 @@ import * as url from 'node:url';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import { formatId } from '../src/formula-identifier.js';
 
 for (const mode of [
@@ -37,7 +37,7 @@ for (const mode of [
     const cancelled = makePromiseKit();
     void cancelled.promise.catch(() => {});
     t.teardown(() => cancelled.reject(Error('Test finished')));
-    const powers = await makeDaemonicPowers({
+    const powers = await makeManagerPowers({
       config: {
         statePath: path.join(temporary, 'state'),
         ephemeralStatePath: path.join(temporary, 'run'),
@@ -74,7 +74,7 @@ for (const mode of [
     let host;
     /** @type {any} */
     let retainedGuest;
-    const daemon = await makeDaemon(
+    const daemon = await makeManager(
       {
         ...powers,
         control: /** @type {any} */ ({
@@ -82,7 +82,7 @@ for (const mode of [
             void forceCancelled.catch(() => {});
             const failedGuestWorker = armed;
             return {
-              workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
+              workerManagerFacet: Far('UnusedWorker', { terminate: () => {} }),
               workerTerminated: workerCancelled.catch(() => {
                 if (failedGuestWorker && mode === 'cancellation-failure') {
                   cancellationRejected = true;

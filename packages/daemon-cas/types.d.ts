@@ -1,7 +1,7 @@
 // Public types for the @endo/daemon-cas package.
 //
 // The package is an intermediate seam carved out of the daemon's
-// `daemon-persistence-powers.js` so that the daemon-side CAS
+// `manager-persistence-powers.js` so that the daemon-side CAS
 // implementation can later be swapped for the Rust supervisor's
 // `cas-*` envelope verbs without disturbing the daemon's call site.
 // See `designs/daemon-cas-management.md` Phase 5 for the

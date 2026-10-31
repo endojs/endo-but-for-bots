@@ -22,7 +22,7 @@
  * XS daemon bootstrap — entry point for the Endo daemon running in the
  * XS JavaScript engine under the Rust supervisor.
  *
- * This is the XS equivalent of bus-daemon-node.js. Instead of Node.js
+ * This is the XS equivalent of bus-manager-node.js. Instead of Node.js
  * APIs, it uses Rust host functions for filesystem, crypto, and process
  * operations, and the envelope protocol for worker spawning and client
  * connections.
@@ -71,7 +71,7 @@ import { makeDebugger } from './debugger.js';
 /** @import { CapTpConnectionRegistrar, Config, ManagerWorkerFacet, WorkerManagerFacet } from './types.js' */
 
 // ---------------------------------------------------------------------------
-// Console polyfill for XS (daemon.js uses console.log/error extensively)
+// Console polyfill for XS (manager.js uses console.log/error extensively)
 // ---------------------------------------------------------------------------
 
 if (typeof globalThis.console === 'undefined') {
@@ -101,7 +101,7 @@ if (typeof globalThis.console === 'undefined') {
 // ---------------------------------------------------------------------------
 // setTimeout/clearTimeout polyfill for XS
 // ---------------------------------------------------------------------------
-// daemon.js uses setTimeout in delay() for grace period.
+// manager.js uses setTimeout in delay() for grace period.
 // In XS there is no timer API.  We provide a minimal shim that
 // fires the callback synchronously (zero delay) since the XS
 // daemon has no real event loop to defer to.
@@ -370,7 +370,7 @@ const pendingDebugAttach = new Map();
 
 let nextNonce = 1;
 
-// Minimal CBOR helpers for spawn payloads (same as bus-daemon-node-powers.js)
+// Minimal CBOR helpers for spawn payloads (same as bus-manager-node-powers.js)
 const CBOR_UINT = 0;
 const CBOR_TEXT = 3;
 const CBOR_ARRAY = 4;

@@ -24,7 +24,7 @@ const outDir = path.resolve(__dirname, '../../../rust/endo/xsnap/src');
 
 // Node.js-only packages that must be excluded from the XS daemon bundle.
 // These are declared in @endo/daemon's package.json but never imported
-// by bus-daemon-rust-xs.js or its transitive dependencies.
+// by bus-manager-rust-xs.js or its transitive dependencies.
 const EXCLUDED_PACKAGES = new Set([
   '@endo/stream-node',
   '@endo/compartment-mapper',
@@ -37,8 +37,8 @@ const EXCLUDED_PACKAGES = new Set([
   '@endo/relay-server',
   '@endo/where',
   // better-sqlite3 ships native bindings that won't load under
-  // XS.  bus-daemon-rust-xs.js passes its own Database constructor
-  // (./better-sqlite3-xs.js) to makeDaemonDatabase, so the import
+  // XS.  bus-manager-rust-xs.js passes its own Database constructor
+  // (./better-sqlite3-xs.js) to makeManagerDatabase, so the import
   // never executes at runtime — it only needs to be elided from
   // the bundle's compartment graph.
   'better-sqlite3',

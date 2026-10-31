@@ -68,7 +68,7 @@ test('makeFormulaRecord surfaces a scratch-mount path from mountHostPath', t => 
   );
 
   // A scratch-mount carries no path on disk; the host resolves it and
-  // passes it in. See `getMountHostPath` in `daemon.js`.
+  // passes it in. See `getMountHostPath` in `manager.js`.
   const record = makeFormulaRecord(formula, aNumber, {
     mountHostPath: '/state/mounts/abc123',
   });

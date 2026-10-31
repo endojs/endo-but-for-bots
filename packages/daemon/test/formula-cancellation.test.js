@@ -17,10 +17,10 @@ import { assertFormulaNumber, parseId } from '../src/formula-identifier.js';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 
 for (const [kind, gate] of [
   ['worker', 'load'],
@@ -44,7 +44,7 @@ for (const [kind, gate] of [
         exited.resolve(undefined);
         cancelled.reject(Error('Test finished'));
       });
-      const powers = await makeDaemonicPowers({
+      const powers = await makeManagerPowers({
         config: {
           statePath: path.join(temporary, 'state'),
           ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -73,7 +73,7 @@ for (const [kind, gate] of [
       let hold = false;
       const acquisitions = [];
       let constructions = 0;
-      const daemon = await makeDaemon(
+      const daemon = await makeManager(
         {
           ...powers,
           persistence: /** @type {any} */ ({
@@ -97,7 +97,7 @@ for (const [kind, gate] of [
                 await release.promise;
               }
               return {
-                workerDaemonFacet: Far('Worker', {
+                workerManagerFacet: Far('Worker', {
                   terminate: () => {},
                   makeUnconfined: async () => {
                     constructions += 1;

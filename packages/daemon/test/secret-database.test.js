@@ -6,12 +6,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { makeManagerDatabase } from '../src/manager-database-node.js';
 
 test('secret metadata survives updates without invalidating grants', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-db-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const database = makeDaemonDatabase(
+  const database = makeManagerDatabase(
     /** @type {import('../src/types.js').Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
@@ -49,7 +49,7 @@ test('secret metadata survives updates without invalidating grants', async t => 
 test('audit events never carry a redeemable grant identifier', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-audit-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const database = makeDaemonDatabase(
+  const database = makeManagerDatabase(
     /** @type {import('../src/types.js').Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
@@ -106,7 +106,7 @@ test('audit events never carry a redeemable grant identifier', async t => {
 test('audit events are ordered by insertion, not by timestamp', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-seq-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const database = makeDaemonDatabase(
+  const database = makeManagerDatabase(
     /** @type {import('../src/types.js').Config} */ ({
       statePath,
       ephemeralStatePath: statePath,

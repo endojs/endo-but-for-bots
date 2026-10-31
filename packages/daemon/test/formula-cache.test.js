@@ -17,10 +17,10 @@ import * as url from 'node:url';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import {
   assertFormulaNumber,
   assertNodeNumber,
@@ -37,7 +37,7 @@ test.serial(
     t.teardown(() => rm(temporary, { recursive: true, force: true }));
     const cancelled = makePromiseKit();
     const exited = makePromiseKit();
-    const powers = await makeDaemonicPowers({
+    const powers = await makeManagerPowers({
       config: {
         statePath: path.join(temporary, 'state'),
         ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -73,7 +73,7 @@ test.serial(
     const formulas = [];
     /** @type {WeakRef<object>[]} */
     const writtenFormulas = [];
-    const daemon = await makeDaemon(
+    const daemon = await makeManager(
       {
         ...powers,
         control: {
@@ -82,7 +82,7 @@ test.serial(
             void workerCancelled.catch(() => {});
             void forceCancelled.catch(() => {});
             return {
-              workerDaemonFacet: Far('Worker', {
+              workerManagerFacet: Far('Worker', {
                 terminate: async () => exited.resolve(undefined),
                 evaluate: async () => {
                   throw Error('Unexpected evaluation');

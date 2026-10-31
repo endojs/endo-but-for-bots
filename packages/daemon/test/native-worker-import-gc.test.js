@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { makeCollector } from './fixtures/worker-import-gc-collect.js';
 import {
-  makeDaemonicControlPowers,
+  makeManagerControlPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
 
@@ -37,14 +37,14 @@ test.serial(
     });
     /** @type {WeakRef<object>[]} */
     const produced = [];
-    const daemonFacet = Far('DaemonImportGcProbe', {
+    const managerFacet = Far('ManagerImportGcProbe', {
       read() {
         const result = harden({ payload: 'x'.repeat(8192) });
         produced.push(new WeakRef(result));
         return result;
       },
       fresh() {
-        const result = Far('TemporaryDaemonCapability', {
+        const result = Far('TemporaryManagerCapability', {
           ping: () => 'daemon',
         });
         produced.push(new WeakRef(result));
@@ -52,7 +52,7 @@ test.serial(
       },
       ping: () => 'still connected',
     });
-    const powers = makeDaemonicControlPowers(
+    const powers = makeManagerControlPowers(
       {
         statePath: path.join(temporary, 'state'),
         ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -66,7 +66,7 @@ test.serial(
     );
     const worker = await powers.makeWorker(
       'import-gc-probe',
-      /** @type {any} */ (daemonFacet),
+      /** @type {any} */ (managerFacet),
       /** @type {Promise<never>} */ (cancelled.promise),
       /** @type {Promise<never>} */ (forced.promise),
     );
@@ -74,9 +74,9 @@ test.serial(
     // The runtime facet's env argument is missing from the legacy declaration.
     // This known test module supplies the returned capability's interface.
     const probe = /** @type {Awaited<ReturnType<typeof makeGcProbe>>} */ (
-      await E(/** @type {any} */ (worker.workerDaemonFacet)).makeUnconfined(
+      await E(/** @type {any} */ (worker.workerManagerFacet)).makeUnconfined(
         new URL('./fixtures/worker-import-gc.js', import.meta.url).href,
-        daemonFacet,
+        managerFacet,
         undefined,
         harden({}),
       )

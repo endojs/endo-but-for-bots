@@ -156,7 +156,7 @@ const SCHEMA_SQL = `
  *
  * The Database constructor is injectable so the same schema and
  * statement layer can target either Node's `better-sqlite3` (the
- * default, supplied by `daemon-database-node.js`) or the XS
+ * default, supplied by `manager-database-node.js`) or the XS
  * Rust-supervisor shim (`./better-sqlite3-xs.js`), both of which
  * present the same synchronous prepared-statement surface.
  *
