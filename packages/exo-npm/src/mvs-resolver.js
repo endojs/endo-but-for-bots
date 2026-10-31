@@ -6,9 +6,17 @@
  *
  * The hook walks a transitive dependency graph rooted at a
  * `package.json`, fetches each transitively-required `package.json`
- * from a caller-supplied fetcher, and selects the greatest mentioned
- * minor (and patch) per major. The output is a `RegistryResolution`
- * shape the reference backend's `resolve()` method returns.
+ * from a caller-supplied fetcher, and selects, per compatibility slot,
+ * the least published version that satisfies every range requested in
+ * that slot. A compatibility slot is the major for `1.x` and above, the
+ * minor for `0.x`, and the patch for `0.0.x`, matching semver caret
+ * compatibility. The output is a `RegistryResolution` shape the
+ * reference backend's `resolve()` method returns.
+ *
+ * Raising a selection does not retract the ranges the superseded
+ * version requested of its own dependencies; as in Go's MVS, those
+ * requirements continue to constrain the graph. Packages reachable only
+ * through a superseded version are pruned from the final resolution.
  *
  * The fetcher is caller-supplied so the resolver does not bind to a
  * particular HTTP client. The shape matches the npm registry's own
@@ -87,18 +95,18 @@ harden(compareVersions);
  * specifier. Supports the common shapes that appear in published
  * `package.json` dependencies:
  *
- * - `^1.2.3` greatest compatible by major
- * - `~1.2.3` greatest compatible by minor
+ * - `^1.2.3` compatible by major
+ * - `~1.2.3` compatible by minor
  * - `>=1.2.3`, `>1.2.3`, `<1.2.3`, `<=1.2.3`
  * - `1.2.3` exact
  * - `1.2.x`, `1.x`, `*` shape
  * - `1.2.3 - 2.0.0` range (inclusive)
  * - `||` alternation
  *
- * Pre-release tags are stripped from the candidate for the comparison;
- * this matches MVS's "greatest mentioned minor per major" rule which
- * is concerned with the dewey-decimal ordering rather than with
- * pre-release precedence.
+ * Pre-release tags are stripped from the candidate for the comparison.
+ * Whether a pre-release is eligible at all is decided by the
+ * resolver's selection step, which admits one only when a range names
+ * a pre-release of the same version.
  *
  * @param {string} candidateRaw
  * @param {string} range
@@ -187,13 +195,17 @@ export const satisfiesRange = (candidateRaw, range) => {
 harden(satisfiesRange);
 
 /**
- * Extract the canonical major key from a range specifier, used to drive
- * MVS's per-major coexistence. For shapes that pin a major (`^1.2.3`,
- * `1.x`, `>=1.2.3 <2.0.0`), the major is the leftmost numeric segment.
- * For shapes without a major (`*`), returns 'any'.
+ * Extract the canonical compatibility-slot key from a range specifier,
+ * used to drive MVS's per-slot coexistence. The key comes from the
+ * range's lower bound, which is the leftmost version in its first
+ * alternative (`^1.2.3`, `1.x`, `>=1.2.3 <2.0.0`, `^1.0.0 || ^2.0.0`).
+ * Like a semver caret, the key is the major for `1.x` and above, `0.`
+ * plus the minor for `0.x`, and `0.0.` plus the patch for `0.0.x`, so
+ * `^0.1.0` and `^0.2.0` coexist instead of sharing one selection.
+ * Shapes with no lower bound (`*`, `<2.0.0`) return 'any'.
  *
  * The classification is permissive; if two ranges classify under the
- * same major they share a resolution slot, otherwise they get distinct
+ * same key they share a resolution slot, otherwise they get distinct
  * slots and the resolver emits both entries (the multi-major
  * coexistence case).
  *
@@ -201,12 +213,22 @@ harden(satisfiesRange);
  * @returns {string}
  */
 export const parseRangeMajor = range => {
-  const trimmed = range.trim();
-  if (trimmed === '' || trimmed === '*' || trimmed === 'x') {
+  const first = range.trim().split('||')[0].trim();
+  if (first === '' || first === '*' || first === 'x' || first[0] === '<') {
     return 'any';
   }
-  const numeric = /^[^\d]*(\d+)/.exec(trimmed);
-  return numeric ? numeric[1] : 'any';
+  const numeric = /^[^\d]*(\d+)(?:\.(\d+)(?:\.(\d+))?)?/.exec(first);
+  if (!numeric) {
+    return 'any';
+  }
+  const [, major, minor, patch] = numeric;
+  if (major !== '0' || minor === undefined) {
+    return major;
+  }
+  if (minor !== '0' || patch === undefined) {
+    return `0.${minor}`;
+  }
+  return `0.0.${patch}`;
 };
 harden(parseRangeMajor);
 
@@ -359,16 +381,37 @@ export const makeMvsResolveHook = options => {
    * the newest satisfying version would instead reproduce npm's eager-upgrade
    * behavior and could select a version that no package in the graph required.
    *
+   * As in npm, a pre-release is eligible only when some range names a
+   * pre-release of the same `major.minor.patch`. Versions that compare
+   * equal sort pre-releases first (semver precedence) and then by their
+   * raw string, so the choice does not depend on packument key order.
+   *
    * @param {Awaited<ReturnType<typeof fetcher.getPackument>>} document
    * @param {string} name
    * @param {readonly string[]} ranges
    * @returns {string}
    */
   const selectLeastSatisfying = (document, name, ranges) => {
+    const namedPrereleases = new Set(
+      ranges.flatMap(range =>
+        [...range.matchAll(/(\d+\.\d+\.\d+)-/g)].map(match => match[1]),
+      ),
+    );
+    const prereleaseOf = version => /^(\d+\.\d+\.\d+)-/.exec(version)?.[1];
     const candidates = Object.keys(document.versions)
+      .filter(version => {
+        const release = prereleaseOf(version);
+        return release === undefined || namedPrereleases.has(release);
+      })
       .filter(version => ranges.every(range => satisfiesRange(version, range)))
       .map(parseVersion)
-      .sort(compareVersions);
+      .sort(
+        (a, b) =>
+          compareVersions(a, b) ||
+          Number(prereleaseOf(b.raw) !== undefined) -
+            Number(prereleaseOf(a.raw) !== undefined) ||
+          (a.raw < b.raw ? -1 : Number(a.raw > b.raw)),
+      );
     if (candidates.length === 0) {
       const requirements = ranges.map(range => q(range)).join(', ');
       throw RegistryMissingPackageError(
@@ -406,7 +449,7 @@ export const makeMvsResolveHook = options => {
        * is the canonical major derived from the *requested* range, not
        * from the selected version, so two requesters that classify
        * under the same slot share a selection and the resolver picks
-       * the greater of the two.
+       * the least version satisfying both ranges.
        *
        * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string, ranges?: string[] }>>}
        */
@@ -703,6 +746,39 @@ export const makeMvsResolveHook = options => {
           );
         // eslint-disable-next-line no-await-in-loop
         await processEdge(edge);
+      }
+
+      // Raising a selection leaves behind entries that only the
+      // superseded version required. Keep only the selections reachable
+      // from the entry through the final selections' dependency tables.
+      /** @type {Set<string>} */
+      const reachable = new Set();
+      const pending = [];
+      enqueueAll(pending, entry, entry.name || '<entry>');
+      while (pending.length > 0) {
+        const { name, range } = pending.pop();
+        const slot = resolved.get(name);
+        const slotKey = slot?.has('workspace')
+          ? 'workspace'
+          : parseRangeMajor(range);
+        const selection = slot?.get(slotKey);
+        const reachKey = `${name}\0${slotKey}`;
+        if (selection !== undefined && !reachable.has(reachKey)) {
+          reachable.add(reachKey);
+          if (typeof selection.packageJson === 'string') {
+            enqueueAll(pending, decodePackageJson(selection.packageJson), name);
+          }
+        }
+      }
+      for (const [name, slot] of resolved) {
+        for (const slotKey of slot.keys()) {
+          if (!reachable.has(`${name}\0${slotKey}`)) {
+            slot.delete(slotKey);
+          }
+        }
+        if (slot.size === 0) {
+          resolved.delete(name);
+        }
       }
 
       // Peer-requirement check.

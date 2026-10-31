@@ -98,6 +98,16 @@ test('parseRangeMajor classifies ranges into major slots', t => {
   t.is(parseRangeMajor('>=2.0.0'), '2');
   t.is(parseRangeMajor('3.x'), '3');
   t.is(parseRangeMajor('*'), 'any');
+  // 0.x slots follow caret compatibility: minor for 0.x, patch for 0.0.x.
+  t.is(parseRangeMajor('^0.1.0'), '0.1');
+  t.is(parseRangeMajor('~0.2.3'), '0.2');
+  t.is(parseRangeMajor('0.x'), '0');
+  t.is(parseRangeMajor('^0.0.3'), '0.0.3');
+  // Unions key on their first alternative; upper bounds alone have no
+  // lower bound to key on.
+  t.is(parseRangeMajor('^1.0.0 || ^2.0.0'), '1');
+  t.is(parseRangeMajor('<2.0.0'), 'any');
+  t.is(parseRangeMajor('<=2.0.0'), 'any');
 });
 
 test('resolve does not upgrade beyond a graph requirement', async t => {
@@ -179,10 +189,9 @@ test('resolve admits multi-major coexistence', async t => {
   t.true(resolution.keys.includes('lib-b@1.0.0'));
 });
 
-test('resolve picks greatest mentioned minor across requesters', async t => {
+test('resolve picks least version satisfying all requesters', async t => {
   // Entry depends on pkg@^1.0.0; lib-c depends on pkg@^1.3.0. The
-  // result must be the greatest 1.x that satisfies both ranges (the
-  // 1.3.x line).
+  // result must be the least 1.x that satisfies both ranges.
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const fetcher = makeFakeFetcher({
     packuments: {
@@ -214,45 +223,206 @@ test('resolve picks greatest mentioned minor across requesters', async t => {
     dependencies: { pkg: '^1.0.0', 'lib-c': '^1.0.0' },
   });
   const resolution = await registry.resolve(entry, {});
-  // Only one pkg entry, the least published version that satisfies both
-  // ranges. The unrelated 1.9.0 release must not pull the graph forward.
+  // The unrelated 1.9.0 release must not pull the graph forward.
   const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
   t.deepEqual(pkgKeys, ['pkg@1.4.7']);
 });
 
-test('resolve rejects incompatible requirements in one major', async t => {
+/**
+ * Resolve an entry `package.json` against a packument fixture.
+ *
+ * @param {Record<string, object>} packuments
+ * @param {Record<string, unknown>} entryFields
+ */
+const resolveFixture = (packuments, entryFields) => {
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
-  const fetcher = makeFakeFetcher({
-    packuments: {
-      pkg: {
-        versions: {
-          '1.2.0': { dist: { integrity: 'sha512-a' } },
-          '1.3.0': { dist: { integrity: 'sha512-b' } },
-        },
-      },
-      consumer: {
-        versions: {
-          '1.0.0': {
-            dependencies: { pkg: '~1.3.0' },
-            dist: { integrity: 'sha512-consumer' },
-          },
-        },
-      },
-    },
-  });
   const resolveHook = makeMvsResolveHook({
-    fetcher,
+    fetcher: makeFakeFetcher({ packuments }),
     makeTreeRef: makeFakeTreeRef,
   });
   const registry = makeNpmReferenceRegistry({ cas, resolveHook });
-  const entry = JSON.stringify({
-    name: 'entry',
-    dependencies: { pkg: '~1.2.0', consumer: '^1.0.0' },
-  });
+  const entry = JSON.stringify({ name: 'entry', ...entryFields });
+  return /** @type {Promise<{ keys: string[], unmetOptionals: ReadonlyArray<{ name: string }> }>} */ (
+    registry.resolve(entry, {})
+  );
+};
 
-  const error = await t.throwsAsync(() => registry.resolve(entry, {}));
-  t.is(registryErrorName(error), 'RegistryMissingPackageError');
-  t.regex(error.message, /no version satisfies/);
+/**
+ * A packument fixture whose versions carry only an integrity string.
+ *
+ * @param {string[]} versions
+ */
+const plainPackument = versions => ({
+  versions: Object.fromEntries(
+    versions.map(v => [v, { dist: { integrity: `sha512-${v}` } }]),
+  ),
+});
+
+/**
+ * A single-version `consumer` packument that depends on `pkg@range`.
+ *
+ * @param {string} range
+ * @param {string} [source]
+ */
+const consumerOf = (range, source = 'dependencies') => ({
+  versions: {
+    '1.0.0': {
+      [source]: { pkg: range },
+      dist: { integrity: 'sha512-consumer' },
+    },
+  },
+});
+
+for (const [first, second] of [
+  ['~1.2.0', '~1.3.0'],
+  ['~1.3.0', '~1.2.0'],
+]) {
+  test(`resolve rejects incompatible requirements in one major (${first} then ${second})`, async t => {
+    const error = await t.throwsAsync(() =>
+      resolveFixture(
+        {
+          pkg: plainPackument(['1.2.0', '1.3.0']),
+          consumer: consumerOf(second),
+        },
+        { dependencies: { pkg: first, consumer: '^1.0.0' } },
+      ),
+    );
+    t.is(registryErrorName(error), 'RegistryMissingPackageError');
+    t.regex(error.message, /no version satisfies/);
+  });
+}
+
+test('resolve selection does not depend on requester order', async t => {
+  const packuments = {
+    pkg: plainPackument(['1.0.0', '1.2.0', '1.4.7', '1.9.0']),
+    consumer: consumerOf('^1.3.0'),
+  };
+  const direct = await resolveFixture(packuments, {
+    dependencies: { pkg: '^1.0.0', consumer: '^1.0.0' },
+  });
+  const swapped = await resolveFixture(packuments, {
+    dependencies: { consumer: '^1.0.0', pkg: '^1.0.0' },
+  });
+  t.deepEqual(direct.keys, swapped.keys);
+  t.true(direct.keys.includes('pkg@1.4.7'));
+});
+
+test('resolve gives incompatible 0.x minors separate slots', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['0.1.0', '0.1.5', '0.2.0', '0.2.4']),
+      consumer: consumerOf('^0.2.0'),
+    },
+    { dependencies: { pkg: '^0.1.0', consumer: '^1.0.0' } },
+  );
+  const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
+  t.deepEqual(pkgKeys, ['pkg@0.1.0', 'pkg@0.2.0']);
+});
+
+test('resolve skips pre-releases that no range names', async t => {
+  // Publish order puts the release candidate first.
+  const pkg = plainPackument(['1.0.0-rc.1', '1.0.0', '1.0.1']);
+  const plain = await resolveFixture(
+    { pkg },
+    { dependencies: { pkg: '^1.0.0' } },
+  );
+  t.deepEqual(plain.keys, ['pkg@1.0.0']);
+  const named = await resolveFixture(
+    { pkg },
+    { dependencies: { pkg: '^1.0.0-rc.1' } },
+  );
+  t.deepEqual(named.keys, ['pkg@1.0.0-rc.1']);
+});
+
+test('resolve intersects a union range with a narrower range', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['1.0.0', '1.3.0', '1.3.2', '2.0.0']),
+      consumer: consumerOf('~1.3.0'),
+    },
+    { dependencies: { pkg: '^1.0.0 || ^2.0.0', consumer: '^1.0.0' } },
+  );
+  const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
+  t.deepEqual(pkgKeys, ['pkg@1.3.0']);
+});
+
+test('resolve keeps an upper-bound-only range out of the major slot', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['1.0.0', '1.5.0', '2.0.0', '2.1.0']),
+      consumer: consumerOf('^2.1.0'),
+    },
+    { dependencies: { pkg: '<2.0.0', consumer: '^1.0.0' } },
+  );
+  const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
+  t.deepEqual(pkgKeys, ['pkg@1.0.0', 'pkg@2.1.0']);
+});
+
+test('resolve merges duplicate ranges from several importers', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['1.0.0', '1.2.0']),
+      consumer: consumerOf('^1.2.0'),
+    },
+    { dependencies: { pkg: '^1.2.0', consumer: '^1.0.0' } },
+  );
+  const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
+  t.deepEqual(pkgKeys, ['pkg@1.2.0']);
+});
+
+test('resolve lets an optional range narrow a shared selection', async t => {
+  // A satisfiable optional range constrains the slot like any other.
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['1.0.0', '1.3.0']),
+      consumer: consumerOf('^1.3.0', 'optionalDependencies'),
+    },
+    { dependencies: { pkg: '^1.0.0', consumer: '^1.0.0' } },
+  );
+  t.true(resolution.keys.includes('pkg@1.3.0'));
+  t.false(resolution.keys.includes('pkg@1.0.0'));
+});
+
+test('resolve leaves a selection unchanged by a conflicting optional', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['1.2.0', '1.3.0']),
+      consumer: consumerOf('~1.3.0', 'optionalDependencies'),
+    },
+    { dependencies: { pkg: '~1.2.0', consumer: '^1.0.0' } },
+  );
+  t.true(resolution.keys.includes('pkg@1.2.0'));
+  t.false(resolution.keys.includes('pkg@1.3.0'));
+  t.true(resolution.unmetOptionals.some(d => d.name === 'pkg'));
+});
+
+test('resolve prunes dependencies of a superseded selection', async t => {
+  // lib@1.0.0 needs orphan, but raiser forces lib up to 1.4.0, which
+  // does not. orphan must not survive in the resolution.
+  const resolution = await resolveFixture(
+    {
+      lib: {
+        versions: {
+          '1.0.0': {
+            dependencies: { orphan: '^1.0.0' },
+            dist: { integrity: 'sha512-lib-1.0.0' },
+          },
+          '1.4.0': { dist: { integrity: 'sha512-lib-1.4.0' } },
+        },
+      },
+      raiser: {
+        versions: {
+          '1.0.0': {
+            dependencies: { lib: '^1.4.0' },
+            dist: { integrity: 'sha512-raiser' },
+          },
+        },
+      },
+      orphan: plainPackument(['1.0.0']),
+    },
+    { dependencies: { lib: '^1.0.0', raiser: '^1.0.0' } },
+  );
+  t.deepEqual(resolution.keys, ['lib@1.4.0', 'raiser@1.0.0']);
 });
 
 test('resolve raises RegistryMissingPackageError for unmet peer', async t => {
