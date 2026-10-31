@@ -9,11 +9,14 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/eventual-send';
+import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
 
-import { prepareChildAgentCoordinator } from '../index.js';
-import { LIFECYCLE_NAME } from '../src/coordinator.js';
-import { AgentDriverMakerInterface } from '../src/interfaces.js';
+import {
+  AgentDriverMakerInterface,
+  LIFECYCLE_NAME,
+  prepareChildAgentCoordinator,
+} from '../index.js';
 import { makeFakeDaemon, makeToken } from './_fake-host.js';
 
 // A crash loses its class crossing an exo boundary, so match its message.
@@ -69,7 +72,7 @@ test('create commits a child with exactly its endowments', async t => {
   const guestEntries = await E(daemon.host).list(
     /** @type {string} */ (guestName),
   );
-  t.deepEqual(guestEntries, ['@self', 'notes']);
+  t.deepEqual(guestEntries, ['@pins', '@self', 'notes']);
   t.is(
     await E(daemon.host).lookup(/** @type {string} */ (guestName), 'notes'),
     notes,
@@ -90,6 +93,25 @@ test('policy refusal has no side effects', async t => {
   await t.throwsAsync(E(bound).create('@self'), { message: /ordinary/ });
   t.is(daemon.effects, before);
   t.deepEqual(await E(bound).list(), []);
+});
+
+test('child and namespace names must be ordinary', async t => {
+  const { daemon, bound } = await setup();
+  const before = daemon.effects;
+  for (const name of ['', 'x'.repeat(256), '.', '..', 'a/b', 'a\0b']) {
+    await t.throwsAsync(E(bound).create(name), { message: /ordinary/ });
+    await t.throwsAsync(E(bound).attenuate(name, {}), { message: /ordinary/ });
+  }
+  t.is(daemon.effects, before, 'refusals have no effects');
+  const { summary } = await E(bound).create('😀');
+  t.is(summary.name, '😀');
+  await E(bound).attenuate('x'.repeat(255), {});
+});
+
+test('a child created with no endowments holds only special names', async t => {
+  const { daemon, bound } = await setup();
+  await E(bound).create('helper');
+  t.deepEqual(await E(daemon.host).list('c1.0.guest'), ['@pins', '@self']);
 });
 
 test('bind and attenuate can only reduce policy and quota is nested', async t => {
@@ -166,7 +188,7 @@ test('maker failure during create rolls the child back', async t => {
 });
 
 test('revokeDerived reclaims a derived namespace without its facet', async t => {
-  const { bound, coordinator } = await setup();
+  const { bound, coordinator, daemon } = await setup();
   const derived = await E(bound).attenuate('sub', {});
   const nested = await E(derived).attenuate('deeper', {});
   await E(derived).create('a');
@@ -176,7 +198,7 @@ test('revokeDerived reclaims a derived namespace without its facet', async t => 
   await t.throwsAsync(E(derived).create('c'), { message: /revoked/ });
   await t.throwsAsync(E(nested).list(), { message: /revoked/ });
   t.deepEqual(await E(coordinator.rootFacet).listDerived(), []);
-  const { maker } = makeFakeDaemon().makeMaker();
+  const { maker } = daemon.makeMaker();
   const fresh = await E(coordinator.rootFacet).bind(maker);
   // Every quota slot came back.
   await E(fresh).create('x');
@@ -185,9 +207,27 @@ test('revokeDerived reclaims a derived namespace without its facet', async t => 
 });
 
 test('the handle exposes none of the child powers', async t => {
-  const { bound } = await setup();
+  const { daemon, bound } = await setup();
   const { handle } = await E(bound).create('helper');
-  t.deepEqual(Object.keys(handle), []);
+  const guest = await E(daemon.host).lookup('c1.0.guest');
+  // The fake guest answers directory verbs, so returning it, the private
+  // host, or the maker would show up in the handle's method names.
+  const powerful = ['lookup', 'provideGuest'];
+  // eslint-disable-next-line no-underscore-dangle
+  const guestMethods = await E(guest).__getMethodNames__();
+  t.true(powerful.every(name => guestMethods.includes(name)));
+  t.not(handle, guest);
+  t.not(handle, daemon.host);
+  // eslint-disable-next-line no-underscore-dangle
+  const handleMethods = await E(handle).__getMethodNames__();
+  const leaked = handleMethods.filter(
+    (/** @type {string | symbol} */ name) =>
+      typeof name !== 'string' || !name.startsWith('__'),
+  );
+  t.deepEqual(leaked, [], 'the handle answers only meta-methods');
+  await t.throwsAsync(() => E(handle).lookup('notes'));
+  await t.throwsAsync(() => E(handle).installDriver({}));
+  t.is(await E(bound).lookup('helper'), handle);
 });
 
 test('a committed child resumes after restart with no holder call', async t => {
@@ -213,10 +253,111 @@ test('a child that clears its own @pins still resumes', async t => {
   const guestName = /** @type {string} */ (
     [...daemon.names.keys()].find(name => name.endsWith('.guest'))
   );
-  daemon.guestWrite(guestName, 'pins-replacement', makeToken('Junk'));
+  t.true(await E(daemon.host).has(guestName, '@pins'));
+  daemon.guestDelete(guestName, '@pins');
+  t.false(await E(daemon.host).has(guestName, '@pins'));
   daemon.forgetIncarnations();
-  await boot(daemon);
+  const revived = await boot(daemon);
+  t.deepEqual(revived.faults(), {}, 'a missing special name is no fault');
   t.is(daemon.running().length, 1);
+  const [summary] = await E(revived.boundFacet(1)).list();
+  t.is(summary.phase, 'Committed');
+});
+
+test('a recovered coordinator rebinds the lifecycle its runner resolves', async t => {
+  const daemon = makeFakeDaemon();
+  const first = await boot(daemon);
+  const { maker, calls } = daemon.makeMaker();
+  await E(E(first.rootFacet).bind(maker)).create('helper');
+  const stale = await E(daemon.host).lookup('c1.0.driver', LIFECYCLE_NAME);
+  t.is(stale, calls[0].lifecycle);
+  daemon.forgetIncarnations();
+  const second = await boot(daemon);
+  // A revived runner resolves its lifecycle from the driver guest's powers.
+  const revived = await E(daemon.host).lookup('c1.0.driver', LIFECYCLE_NAME);
+  t.not(revived, stale, 'the prior incarnation is not adopted');
+  t.true(await E(revived).isActive());
+  await E(second.boundFacet(1)).remove('helper');
+  t.false(await E(revived).isActive());
+});
+
+test('a recovered coordinator rebinds the lifecycle before revocation', async t => {
+  const daemon = makeFakeDaemon();
+  const first = await boot(daemon);
+  const { maker } = daemon.makeMaker();
+  const bound = await E(first.rootFacet).bind(maker);
+  const derived = await E(bound).attenuate('sub', {});
+  await E(derived).create('helper');
+  daemon.forgetIncarnations();
+  const second = await boot(daemon);
+  const revived = await E(daemon.host).lookup('c2.0.driver', LIFECYCLE_NAME);
+  t.true(await E(revived).isActive());
+  await E(second.boundFacet(1)).revokeDerived('sub');
+  t.false(await E(revived).isActive());
+});
+
+test('a maker responder over other powers is refused without a crash', async t => {
+  const daemon = makeFakeDaemon();
+  const coordinator = await boot(daemon);
+  const { maker: honest } = daemon.makeMaker();
+  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
+    installDriver: (/** @type {any} */ context) =>
+      E(honest).installDriver({ ...context, driverGuest: context.agent }),
+  });
+  const bound = await E(coordinator.rootFacet).bind(maker);
+  await t.throwsAsync(E(bound).create('helper'), {
+    message: /not an unconfined caplet over its driver guest/,
+  });
+  t.deepEqual(await E(bound).list(), []);
+  const leftovers = [...daemon.names.keys()].filter(name =>
+    name.startsWith('c'),
+  );
+  t.deepEqual(leftovers, []);
+  const [rogue] = daemon.unconfined();
+  t.true(rogue.cancelled, 'the rogue responder was cancelled');
+  t.is(daemon.running().length, 0);
+  t.deepEqual(coordinator.faults(), {});
+});
+
+test('a maker returning a non-caplet responder is refused', async t => {
+  const daemon = makeFakeDaemon();
+  const coordinator = await boot(daemon);
+  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
+    async installDriver() {
+      return harden({ responder: makeToken('NotACaplet') });
+    },
+  });
+  const bound = await E(coordinator.rootFacet).bind(maker);
+  await t.throwsAsync(E(bound).create('helper'), {
+    message: /not an unconfined caplet/,
+  });
+  t.deepEqual(await E(bound).list(), []);
+});
+
+test('a failed rollback during recovery is not swallowed', async t => {
+  const daemon = makeFakeDaemon();
+  const coordinator = await boot(daemon);
+  const { maker: honest } = daemon.makeMaker();
+  let failing = true;
+  // Refuse, and crash the host's next effect, which is the rollback's first.
+  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
+    async installDriver(/** @type {any} */ context) {
+      if (failing) {
+        daemon.crashAfter(1);
+        throw Error('provider refused');
+      }
+      return E(honest).installDriver(context);
+    },
+  });
+  const bound = await E(coordinator.rootFacet).bind(maker);
+  await t.throwsAsync(E(bound).create('helper'), { message: crashPattern });
+  daemon.restart();
+  await t.throwsAsync(boot(daemon), { message: crashPattern });
+  daemon.restart();
+  failing = false;
+  const revived = await boot(daemon);
+  const [summary] = await E(revived.boundFacet(1)).list();
+  t.is(summary.phase, 'Committed');
 });
 
 test('a runner revived during removal sees an inactive lifecycle', async t => {
@@ -260,9 +401,9 @@ test('a wrong formula type at a derived name fails closed', async t => {
  * the state converged.
  *
  * @param {ExecutionContext} t
- * @param {(ctx: { bound: any, coordinator: any, daemon: any }) => Promise<void>} prepare
- * @param {(ctx: { bound: any, coordinator: any, daemon: any }) => Promise<void>} scenario
- * @param {(ctx: { daemon: any, revived: any, crashed: boolean }) => Promise<void>} check
+ * @param {(context: { bound: any, coordinator: any, daemon: any }) => Promise<void>} prepare
+ * @param {(context: { bound: any, coordinator: any, daemon: any }) => Promise<void>} scenario
+ * @param {(context: { daemon: any, revived: any, crashed: boolean }) => Promise<void>} check
  */
 const crashMatrix = async (t, prepare, scenario, check) => {
   await null;
@@ -314,7 +455,11 @@ test('recovery matrix: create converges to exactly one child or none', async t =
         t.is(responders.length, 1);
         t.is(daemon.running().length, 1, 'exactly one runner');
         const guestName = guests[0];
-        t.deepEqual(await E(daemon.host).list(guestName), ['@self', 'notes']);
+        t.deepEqual(await E(daemon.host).list(guestName), [
+          '@pins',
+          '@self',
+          'notes',
+        ]);
         const driverName = guestName.replace(/guest$/, 'driver');
         t.true(await E(daemon.host).has(driverName, LIFECYCLE_NAME));
         // Exactly one named unconfined formula, over the recorded driver.

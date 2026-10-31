@@ -5,24 +5,7 @@ import { Fail, q } from '@endo/errors';
 import { encodeUtf8 } from '@endo/utf8';
 
 /**
- * @typedef {object} ChildAgentPolicy
- * Policy data chosen by a factory's authority holder. Every field is
- * optional in a `bind` or `attenuate` argument, where an absent field
- * inherits the issuing facet's value.
- * @property {number} [maxChildren] - Children this namespace and every
- *   namespace derived from it may retain at once.
- * @property {number} [maxInstructionBytes] - UTF-8 size bound on `create`'s
- *   `instructions`.
- * @property {readonly string[]} [endowmentNames] - The endowment names
- *   `create` admits.
- */
-
-/**
- * @typedef {object} EffectivePolicy
- * A policy with every field present, as held by a namespace.
- * @property {number} maxChildren
- * @property {number} maxInstructionBytes
- * @property {string[]} endowmentNames - Sorted, without duplicates.
+ * @import { ChildAgentPolicy, EffectivePolicy, RootPolicy } from './types.js'
  */
 
 /**
@@ -70,7 +53,7 @@ const assertCount = (n, field) => {
  * `bind` argument, every field is required: the root bounds everything below
  * it, so it cannot inherit.
  *
- * @param {ChildAgentPolicy} policy
+ * @param {RootPolicy} policy
  * @returns {EffectivePolicy}
  */
 export const makeRootPolicy = policy => {

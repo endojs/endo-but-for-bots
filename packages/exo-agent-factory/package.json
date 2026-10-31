@@ -23,8 +23,12 @@
   },
   "type": "module",
   "main": "./index.js",
+  "types": "./types-index.types.d.ts",
   "exports": {
-    ".": "./index.js",
+    ".": {
+      "types": "./types-index.types.d.ts",
+      "default": "./index.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
