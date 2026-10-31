@@ -20,7 +20,7 @@ implements the same surface on disk.
   particular platform's crypto primitive.
 - A Web Crypto SHA-256 power (`sha256HexWebCrypto`) in
   `./store-web-powers.js` for browser, Node 19+, and SES-realm use,
-  mirroring the daemon's `daemon-node-powers.js` vs `daemon-go-powers.js`
+  mirroring the daemon's `manager-node-powers.js` vs `manager-go-powers.js`
   split. Node-only callers may supply a `node:crypto`-backed power
   directly.
 - A retention-link hook (`makeRetentionLinkSet`) for callers (typically

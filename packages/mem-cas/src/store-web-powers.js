@@ -21,8 +21,8 @@
  * its own equivalent without dragging Web Crypto into a context where
  * it is not available.
  *
- * This mirrors the daemon's `daemon-node-powers.js` vs
- * `daemon-go-powers.js` split: layer 1 stays platform-agnostic and a
+ * This mirrors the daemon's `manager-node-powers.js` vs
+ * `manager-go-powers.js` split: layer 1 stays platform-agnostic and a
  * companion "powers" module per platform binds the actual primitive.
  *
  * @import { Sha256Hex } from '../types.js';

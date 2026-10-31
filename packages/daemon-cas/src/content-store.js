@@ -8,11 +8,11 @@ import harden from '@endo/harden';
 
 /**
  * Filesystem-backed `ContentStore` extracted from
- * `packages/daemon/src/daemon-persistence-powers.js` so the daemon
+ * `packages/daemon/src/manager-persistence-powers.js` so the daemon
  * can later swap the implementation for the Rust supervisor's
  * `cas-*` envelope verbs (`designs/daemon-cas-management.md`
  * Phase 5) without disturbing the consumer at
- * `packages/daemon/src/daemon.js`.
+ * `packages/daemon/src/manager.js`.
  *
  * This store stands on `@endo/platform` for both halves of its model:
  * the CAS interface it produces (`ContentStore`, whose `fetch()` returns a

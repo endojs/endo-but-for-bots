@@ -17,7 +17,7 @@
  * CryptoPowers backed by Rust host functions instead of Node.js modules.
  *
  * These are the XS equivalents of makeFilePowers() and makeCryptoPowers()
- * from daemon-node-powers.js.
+ * from manager-node-powers.js.
  */
 
 /** @import { CryptoPowers, FilePowers } from './types.js' */

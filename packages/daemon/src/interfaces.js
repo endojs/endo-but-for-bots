@@ -783,7 +783,7 @@ export const MountInterface = M.interface('EndoMount', {
   // remotables consistently across CapTP.
   has: M.call().rest(M.any()).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
-  // Recursive glob search, delegated to the platform engine. Daemon-local
+  // Recursive glob search, delegated to the platform engine. Manager-local
   // extension beyond the ReadableTree surface. `options.followSymlinks` lets
   // `**` descend through directory symlinks (`rg -L`); the default is off,
   // because an unbounded pattern crossing links walks the link graph rather
@@ -985,8 +985,8 @@ export const RegistryInterface = M.interface('EndoRegistry', {
   list: M.call().optional(M.string()).returns(M.promise()),
 });
 
-export const DaemonFacetForWorkerInterface = M.interface(
-  'EndoDaemonFacetForWorker',
+export const ManagerFacetForWorkerInterface = M.interface(
+  'EndoManagerFacetForWorker',
   {
     // Push a single trace record to the daemon's aggregate.
     // The record's workerId field is overwritten by the daemon
@@ -1022,7 +1022,7 @@ export const TracesInterface = M.interface('EndoTraces', {
 // Defined in `./worker-facet-interface.js` so the XS worker bootstrap
 // can guard its facet with the same pattern without importing this
 // module (which reaches `@endo/platform`'s Node-only paths).
-export { WorkerFacetForDaemonInterface } from './worker-facet-interface.js';
+export { WorkerFacetForManagerInterface } from './worker-facet-interface.js';
 
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),

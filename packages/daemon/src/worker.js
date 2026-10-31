@@ -12,10 +12,10 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeNetstringCapTP } from './connection.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
-import { WorkerFacetForDaemonInterface } from './interfaces.js';
+import { WorkerFacetForManagerInterface } from './worker-facet-interface.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { EndoReadable, MignonicPowers } from './types.js' */
+/** @import { EndoReadable, WorkerPowers } from './types.js' */
 /** @import { TraceRecord } from './trace-aggregator.js' */
 
 const endowments = harden({
@@ -56,8 +56,8 @@ const normalizeFilePath = path => {
  */
 export const makeWorkerFacet = ({ cancel }) => {
   return makeExo(
-    'EndoWorkerFacetForDaemon',
-    WorkerFacetForDaemonInterface,
+    'EndoWorkerFacetForManager',
+    WorkerFacetForManagerInterface,
     /** @type {any} */ ({
       terminate: async () => {
         console.error('Endo worker received terminate request');
@@ -227,28 +227,28 @@ export const makeWorkerFacet = ({ cancel }) => {
 
 /**
  * Build a `marshalSaveError` callback that pushes a worker-side trace
- * record to the daemon for every outbound error this worker's CapTP
+ * record to the manager for every outbound error this worker's CapTP
  * marshal serializes.
  *
  * The push uses `E.sendOnly` so the worker never blocks an outbound
  * error on the success of a trace push.
  *
- * @param {() => unknown} getDaemonFacet returns the daemon's
- *   `EndoDaemonFacetForWorker` once CapTP has resolved the bootstrap.
+ * @param {() => unknown} getManagerFacet returns the manager's
+ *   `EndoManagerFacetForWorker` once CapTP has resolved the bootstrap.
  *   May return undefined before the bootstrap arrives, in which case
  *   the push is dropped.
  * @param {string} site label for the capture site, recorded with
  *   each trace.
  */
-const makeWorkerPushTrace = (getDaemonFacet, site) => {
+const makeWorkerPushTrace = (getManagerFacet, site) => {
   /**
    * @param {Error} err
    * @param {string} [errorId]
    */
   return (err, errorId) => {
     if (errorId === undefined) return;
-    const daemonFacet = getDaemonFacet();
-    if (daemonFacet === undefined) return;
+    const managerFacet = getManagerFacet();
+    if (managerFacet === undefined) return;
     // Use the privileged SES hook (the same hack `@endo/ses-ava` taps to
     // surface unredacted traces to AVA) so the operator running
     // `endo trace` sees the originating stack, the cause chain, and any
@@ -266,7 +266,7 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
     /** @type {TraceRecord} */
     const record = harden({
       errorId,
-      // The daemon overwrites this with the connection's authoritative
+      // The manager overwrites this with the connection's authoritative
       // workerId; we send a placeholder so the record is well-formed
       // for any local-only consumer.
       workerId: '',
@@ -279,11 +279,11 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
       site,
     });
     try {
-      // The daemon facet is the bootstrap returned by CapTP and is
+      // The manager facet is the bootstrap returned by CapTP and is
       // typed as opaque on the worker side; cast to access the trace
-      // method we know the daemon exposes.
+      // method we know the manager exposes.
       /** @type {{ reportTrace: (r: TraceRecord) => void }} */
-      const facet = /** @type {any} */ (daemonFacet);
+      const facet = /** @type {any} */ (managerFacet);
       E.sendOnly(facet).reportTrace(record);
     } catch (pushError) {
       console.error(
@@ -295,7 +295,7 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
 };
 
 /**
- * @param {MignonicPowers} powers
+ * @param {WorkerPowers} powers
  * @param {number | undefined} pid
  * @param {(error: Error) => void} cancel
  * @param {Promise<never>} cancelled
@@ -313,10 +313,10 @@ export const main = async (powers, pid, cancel, cancelled) => {
   });
 
   /** @type {unknown} */
-  let daemonFacet;
-  const getDaemonFacet = () => daemonFacet;
-  const pushTraceFromMarshal = makeWorkerPushTrace(getDaemonFacet, 'marshal');
-  const pushTraceFromCapTP = makeWorkerPushTrace(getDaemonFacet, 'captp');
+  let managerFacet;
+  const getManagerFacet = () => managerFacet;
+  const pushTraceFromMarshal = makeWorkerPushTrace(getManagerFacet, 'marshal');
+  const pushTraceFromCapTP = makeWorkerPushTrace(getManagerFacet, 'captp');
 
   const { closed, getBootstrap } = makeNetstringCapTP(
     'Endo',
@@ -336,7 +336,7 @@ export const main = async (powers, pid, cancel, cancelled) => {
     },
   );
 
-  daemonFacet = getBootstrap();
+  managerFacet = getBootstrap();
 
   // Capture top-level unhandled rejections as trace records so a
   // background failure inside an unconfined caplet still surfaces

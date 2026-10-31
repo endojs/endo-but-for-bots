@@ -1,4 +1,5 @@
 // @ts-nocheck
+// prefer-endo-primitives-exempt: Far facet stubs, not guarded exos.
 
 // Establish a perimeter:
 // eslint-disable-next-line import/order
@@ -19,11 +20,11 @@ import { decodeBase64 } from '@endo/base64';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
 
@@ -337,7 +338,7 @@ for (const retainSurvivor of [false, true]) {
       void cancelled.promise.catch(() => {});
       t.teardown(() => cancelled.reject(Error('Test finished')));
       const statePath = path.join(temporary, 'state');
-      const powers = await makeDaemonicPowers({
+      const powers = await makeManagerPowers({
         config: {
           statePath,
           ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -363,7 +364,7 @@ for (const retainSurvivor of [false, true]) {
       const attempts = new Map();
       let childHash;
       let failChild = true;
-      const daemon = await makeDaemon(
+      const daemon = await makeManager(
         {
           ...powers,
           control: {
@@ -375,7 +376,9 @@ for (const retainSurvivor of [false, true]) {
             ) => {
               void forceCancelled.catch(() => {});
               return {
-                workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
+                workerManagerFacet: Far('UnusedWorker', {
+                  terminate: () => {},
+                }),
                 workerTerminated: workerCancelled.catch(() => {}),
               };
             },

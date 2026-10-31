@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: Far facet stubs, not guarded exos.
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
@@ -13,10 +14,10 @@ import * as url from 'node:url';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import { formatId, parseId } from '../src/formula-identifier.js';
 
 for (const mode of [
@@ -76,7 +77,7 @@ for (const mode of [
     const deletionFailure = Error('Injected formula deletion failure');
     const reclamationFailure = Error('Injected reclamation failure');
     const files = makeFilePowers({ fs, path });
-    const powers = await makeDaemonicPowers({
+    const powers = await makeManagerPowers({
       config: {
         statePath: path.join(temporary, 'state'),
         ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -116,7 +117,7 @@ for (const mode of [
     });
     await powers.persistence.initializePersistence();
     let holdRead = false;
-    const daemon = await makeDaemon(
+    const daemon = await makeManager(
       {
         ...powers,
         petStore: harden({
@@ -136,7 +137,7 @@ for (const mode of [
           makeWorker: async (_id, _facet, workerCancelled, forceCancelled) => {
             void forceCancelled.catch(() => {});
             return {
-              workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
+              workerManagerFacet: Far('UnusedWorker', { terminate: () => {} }),
               workerTerminated: workerCancelled.catch(async () => {
                 if (mode === 'cancel-failure' && _id === heldNumber) {
                   cancellationAttempts += 1;

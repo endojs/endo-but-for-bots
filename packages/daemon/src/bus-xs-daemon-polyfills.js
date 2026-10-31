@@ -8,7 +8,7 @@
 /**
  * Polyfills that the daemon needs inside XS but the worker does not.
  *
- * `daemon.js` and its transitive dependencies use `console`,
+ * `manager.js` and its transitive dependencies use `console`,
  * `setTimeout`/`clearTimeout`, and `URL` — none of which XS provides
  * natively.  This module installs minimal shims on first evaluation
  * and is a no-op on subsequent re-evaluations.

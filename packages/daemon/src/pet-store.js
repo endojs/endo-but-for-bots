@@ -10,13 +10,13 @@ import { makeChangeTopic } from './pubsub.js';
 import { parseId, assertValidId } from './formula-identifier.js';
 import { makeBidirectionalMultimap } from './multimap.js';
 
-/** @import { BidirectionalMultimap, DaemonDatabase, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers } from './types.js' */
+/** @import { BidirectionalMultimap, ManagerDatabase, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers } from './types.js' */
 
 /**
- * @param {DaemonDatabase} daemonDb
+ * @param {ManagerDatabase} managerDatabase
  * @returns {PetStorePowers}
  */
-export const makePetStoreMaker = daemonDb => {
+export const makePetStoreMaker = managerDatabase => {
   /**
    * @param {string} storeNumber
    * @param {string} storeType
@@ -80,7 +80,7 @@ export const makePetStoreMaker = daemonDb => {
     };
 
     // Load entries from database into in-memory map.
-    const entries = daemonDb.listPetStoreEntries(storeNumber, storeType);
+    const entries = managerDatabase.listPetStoreEntries(storeNumber, storeType);
     for (const { name, formulaId } of entries) {
       assertValidName(name);
       assertValidId(formulaId, name);
@@ -110,7 +110,7 @@ export const makePetStoreMaker = daemonDb => {
       // Publish only after persistence succeeds. Otherwise a failed write
       // poisons the identical-ID fast path: a retry appears successful without
       // writing the edge, and session revision recovery may drop its intent.
-      daemonDb.writePetStoreEntry(
+      managerDatabase.writePetStoreEntry(
         storeNumber,
         storeType,
         petName,
@@ -187,7 +187,7 @@ export const makePetStoreMaker = daemonDb => {
       }
       assertValidId(formulaIdentifier, petName);
 
-      daemonDb.deletePetStoreEntry(storeNumber, storeType, petName);
+      managerDatabase.deletePetStoreEntry(storeNumber, storeType, petName);
       idsToPetNames.delete(formulaIdentifier, petName);
       publishNameRemoval(formulaIdentifier, petName);
       // TODO consider retaining a backlog of deleted names for recovery
@@ -209,7 +209,12 @@ export const makePetStoreMaker = daemonDb => {
       }
       assertValidId(formulaIdentifier, fromName);
 
-      daemonDb.renamePetStoreEntry(storeNumber, storeType, fromName, toName);
+      managerDatabase.renamePetStoreEntry(
+        storeNumber,
+        storeType,
+        fromName,
+        toName,
+      );
 
       // Delete the back-reference for the overwritten pet name if it existed.
       if (overwrittenId !== undefined) {
@@ -273,6 +278,6 @@ export const makePetStoreMaker = daemonDb => {
     deletePetStore: async (
       /** @type {string} */ formulaNumber,
       /** @type {string} */ formulaType,
-    ) => daemonDb.deletePetStore(formulaNumber, formulaType),
+    ) => managerDatabase.deletePetStore(formulaNumber, formulaType),
   };
 };

@@ -3,7 +3,7 @@
 Filesystem-backed content-addressed store (CAS) for the Endo daemon.
 
 This package is an intermediate seam carved out of
-`packages/daemon/src/daemon-persistence-powers.js` so the daemon's CAS
+`packages/daemon/src/manager-persistence-powers.js` so the daemon's CAS
 implementation can later be swapped for the Rust supervisor's `cas-*`
 envelope verbs without touching the daemon's call sites.
 See [`designs/daemon-cas-management.md`](../../designs/daemon-cas-management.md)
@@ -50,7 +50,7 @@ of contracts:
 ## What this package does **not** provide
 
 - The daemon-specific path opinion and `SnapshotStore` wrap.
-  `@endo/daemon`'s `daemon-persistence-powers.js` owns the
+  `@endo/daemon`'s `manager-persistence-powers.js` owns the
   `${statePath}/store-sha256/` directory layout, calls
   `makeContentStore`, and wraps the result in `makeSnapshotStore` from
   `@endo/platform/fs/lite`.
@@ -86,11 +86,11 @@ The four-method `ContentStore` contract this package implements
 ## Status
 
 This package was carved out of
-`packages/daemon/src/daemon-persistence-powers.js` so the daemon's
+`packages/daemon/src/manager-persistence-powers.js` so the daemon's
 content-store implementation can be swapped without churning call
 sites.
-The daemon's `daemon-persistence-powers.js` now calls
+The daemon's `manager-persistence-powers.js` now calls
 `makeContentStore` and wraps it in `makeSnapshotStore`, so the sole
-consumer in `daemon.js` reads through the package without change.
+consumer in `manager.js` reads through the package without change.
 The 4-method contract is unchanged; the daemon's GC sweep behaviour
 is unchanged.
