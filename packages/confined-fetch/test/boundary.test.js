@@ -320,7 +320,7 @@ test('a cancellation token aborts the endowed base request', async t => {
 });
 
 test('a null-body response passes through the transport', async t => {
-  /** @type {AbortSignal[]} */
+  /** @type {Array<AbortSignal | undefined>} */
   const baseSignals = [];
   /** @type {any} */
   const transport = async (_url, options) => {
@@ -337,7 +337,7 @@ test('a null-body response passes through the transport', async t => {
 });
 
 test('a base stream failure propagates through the transport', async t => {
-  /** @type {AbortSignal[]} */
+  /** @type {Array<AbortSignal | undefined>} */
   const baseSignals = [];
   let reads = 0;
   /** @type {any} */
