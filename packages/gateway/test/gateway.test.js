@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt -- ENDO_HTTP_ADDR is an external environment variable.
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -82,7 +83,9 @@ test('makeGateway env beats explicit config', async t => {
 });
 
 test('makeGateway with explicit config and no env honors config', async t => {
-  const gateway = makeTestGateway({ config: { bindAddress: '127.0.0.1:8920' } });
+  const gateway = makeTestGateway({
+    config: { bindAddress: '127.0.0.1:8920' },
+  });
   t.is(await E(gateway).getBindAddress(), '127.0.0.1:8920');
 });
 
