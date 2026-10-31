@@ -2585,12 +2585,14 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/host-spawner@workspace:packages/host-spawner"
   dependencies:
+    "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
@@ -3360,6 +3362,7 @@ __metadata:
     "@endo/patterns": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
