@@ -6,17 +6,19 @@
  *
  * The hook walks a transitive dependency graph rooted at a
  * `package.json`, fetches each transitively-required `package.json`
- * from a caller-supplied fetcher, and selects, per compatibility slot,
- * the least published version that satisfies every range requested in
- * that slot. A compatibility slot is the major for `1.x` and above, the
- * minor for `0.x`, and the patch for `0.0.x`, matching semver caret
- * compatibility. The output is a `RegistryResolution` shape the
- * reference backend's `resolve()` method returns.
+ * from a caller-supplied fetcher, and selects, per compatibility slot
+ * (see `parseRangeMajor`), the least published version that satisfies
+ * every range requested in that slot. When a range cannot share a
+ * version with the ranges already in its slot (`~1.2.0` and `~1.3.0`),
+ * it gets its own selection in a split slot, as npm would install both.
+ * The output is a `RegistryResolution` shape the reference backend's
+ * `resolve()` method returns.
  *
  * Raising a selection does not retract the ranges the superseded
  * version requested of its own dependencies; as in Go's MVS, those
- * requirements continue to constrain the graph. Packages reachable only
- * through a superseded version are pruned from the final resolution.
+ * ranges stay in their slots and continue to constrain later
+ * selections. Packages and diagnostics reachable only through a
+ * superseded version are nonetheless pruned from the final resolution.
  *
  * The fetcher is caller-supplied so the resolver does not bind to a
  * particular HTTP client. The shape matches the npm registry's own
@@ -55,29 +57,64 @@ const utf8Encoder = new TextEncoder();
 /**
  * Parse a semver-shaped version string into its numeric components.
  *
- * Permissive on prerelease and build-metadata tags; both are dropped
- * for comparison purposes. A non-conforming string sorts to the end
+ * Pre-release identifiers are kept for semver precedence; build
+ * metadata is dropped. A non-conforming string sorts to the end
  * (Infinity components).
  *
  * @param {string} version
- * @returns {{ major: number, minor: number, patch: number, raw: string }}
+ * @returns {{ major: number, minor: number, patch: number, prerelease: string[], raw: string }}
  */
 const parseVersion = version => {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(version);
   if (!match) {
-    return { major: Infinity, minor: Infinity, patch: Infinity, raw: version };
+    return {
+      major: Infinity,
+      minor: Infinity,
+      patch: Infinity,
+      prerelease: [],
+      raw: version,
+    };
   }
   return {
     major: Number(match[1]),
     minor: Number(match[2]),
     patch: Number(match[3]),
+    prerelease: match[4] === undefined ? [] : match[4].split('.'),
     raw: version,
   };
 };
 harden(parseVersion);
 
 /**
- * Compare two parsed versions in dewey-decimal order.
+ * Compare pre-release identifier lists by semver precedence: a release
+ * (no identifiers) outranks any pre-release, numeric identifiers compare
+ * numerically and rank below alphanumeric ones, and a longer list wins
+ * when one is a prefix of the other (`beta.2` < `beta.10` < `rc`).
+ *
+ * @param {readonly string[]} a
+ * @param {readonly string[]} b
+ * @returns {number}
+ */
+const comparePrerelease = (a, b) => {
+  if (a.length === 0 || b.length === 0) return b.length - a.length;
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x !== y) {
+      const xNumeric = /^\d+$/.test(x);
+      const yNumeric = /^\d+$/.test(y);
+      if (xNumeric && yNumeric) return Number(x) - Number(y);
+      if (xNumeric) return -1;
+      if (yNumeric) return 1;
+      return x < y ? -1 : 1;
+    }
+  }
+  return a.length - b.length;
+};
+harden(comparePrerelease);
+
+/**
+ * Compare two parsed versions by semver precedence.
  *
  * @param {ReturnType<typeof parseVersion>} a
  * @param {ReturnType<typeof parseVersion>} b
@@ -86,7 +123,8 @@ harden(parseVersion);
 const compareVersions = (a, b) => {
   if (a.major !== b.major) return a.major - b.major;
   if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
+  if (a.patch !== b.patch) return a.patch - b.patch;
+  return comparePrerelease(a.prerelease, b.prerelease);
 };
 harden(compareVersions);
 
@@ -103,10 +141,10 @@ harden(compareVersions);
  * - `1.2.3 - 2.0.0` range (inclusive)
  * - `||` alternation
  *
- * Pre-release tags are stripped from the candidate for the comparison.
- * Whether a pre-release is eligible at all is decided by the
- * resolver's selection step, which admits one only when a range names
- * a pre-release of the same version.
+ * Comparisons use full semver precedence, so `1.0.0-alpha.1` does not
+ * satisfy `^1.0.0-beta.2`. Whether a pre-release is eligible at all is
+ * decided by the resolver's selection step, which admits one only when
+ * every range names a pre-release of the same version.
  *
  * @param {string} candidateRaw
  * @param {string} range
@@ -195,8 +233,9 @@ export const satisfiesRange = (candidateRaw, range) => {
 harden(satisfiesRange);
 
 /**
- * Extract the canonical compatibility-slot key from a range specifier,
- * used to drive MVS's per-slot coexistence. The key comes from the
+ * Extract the compatibility-slot key from a range specifier, used to
+ * drive MVS's per-slot coexistence. The name predates `0.x` slotting and
+ * is kept for compatibility; the result is a slot key, not a major. The key comes from the
  * range's lower bound, which is the leftmost version in its first
  * alternative (`^1.2.3`, `1.x`, `>=1.2.3 <2.0.0`, `^1.0.0 || ^2.0.0`).
  * Like a semver caret, the key is the major for `1.x` and above, `0.`
@@ -207,10 +246,16 @@ harden(satisfiesRange);
  * The classification is permissive; if two ranges classify under the
  * same key they share a resolution slot, otherwise they get distinct
  * slots and the resolver emits both entries (the multi-major
- * coexistence case).
+ * coexistence case). Only the first `||` alternative is classified, so
+ * `^1.0.0 || ^2.0.0` and `^2.0.0` land in different slots and may
+ * resolve to two versions where one would do. Likewise an open lower
+ * bound (`>=0.1.0`) keys to its own bound's slot (`0.1`) even though it
+ * also admits later slots. Non-semver specifiers such as dist-tags
+ * (`latest`) return 'any'.
  *
  * @param {string} range
- * @returns {string}
+ * @returns {string} The slot key: `'any'`, a major (`'1'`), `'0.'` plus
+ *   a minor (`'0.1'`), or `'0.0.'` plus a patch (`'0.0.3'`).
  */
 export const parseRangeMajor = range => {
   const first = range.trim().split('||')[0].trim();
@@ -377,48 +422,46 @@ export const makeMvsResolveHook = options => {
   /**
    * Pick the least published version that satisfies every requirement.
    *
-   * MVS widens a selection only when another requirement demands it. Picking
-   * the newest satisfying version would instead reproduce npm's eager-upgrade
-   * behavior and could select a version that no package in the graph required.
+   * MVS widens a selection only when another requirement in the same slot
+   * demands it, where picking the newest satisfying version would
+   * reproduce npm's eager upgrades.
    *
-   * As in npm, a pre-release is eligible only when some range names a
-   * pre-release of the same `major.minor.patch`. Versions that compare
-   * equal sort pre-releases first (semver precedence) and then by their
-   * raw string, so the choice does not depend on packument key order.
+   * As in npm, a pre-release is eligible only when every range names a
+   * pre-release of the same `major.minor.patch`. Candidates sort by
+   * semver precedence and then by their raw string, so the choice does
+   * not depend on packument key order.
    *
    * @param {Awaited<ReturnType<typeof fetcher.getPackument>>} document
-   * @param {string} name
    * @param {readonly string[]} ranges
-   * @returns {string}
+   * @returns {string | undefined} undefined when no version satisfies
+   *   every range.
    */
-  const selectLeastSatisfying = (document, name, ranges) => {
-    const namedPrereleases = new Set(
-      ranges.flatMap(range =>
-        [...range.matchAll(/(\d+\.\d+\.\d+)-/g)].map(match => match[1]),
-      ),
-    );
-    const prereleaseOf = version => /^(\d+\.\d+\.\d+)-/.exec(version)?.[1];
+  const selectLeastSatisfying = (document, ranges) => {
+    /**
+     * @param {string} range
+     * @param {ReturnType<typeof parseVersion>} version
+     */
+    const namesPrereleaseOf = (range, version) => {
+      const release = `${version.major}.${version.minor}.${version.patch}`;
+      return [...range.matchAll(/(\d+\.\d+\.\d+)-/g)].some(
+        match => match[1] === release,
+      );
+    };
     const candidates = Object.keys(document.versions)
-      .filter(version => {
-        const release = prereleaseOf(version);
-        return release === undefined || namedPrereleases.has(release);
-      })
-      .filter(version => ranges.every(range => satisfiesRange(version, range)))
       .map(parseVersion)
+      .filter(version =>
+        ranges.every(
+          range =>
+            (version.prerelease.length === 0 ||
+              namesPrereleaseOf(range, version)) &&
+            satisfiesRange(version.raw, range),
+        ),
+      )
       .sort(
         (a, b) =>
-          compareVersions(a, b) ||
-          Number(prereleaseOf(b.raw) !== undefined) -
-            Number(prereleaseOf(a.raw) !== undefined) ||
-          (a.raw < b.raw ? -1 : Number(a.raw > b.raw)),
+          compareVersions(a, b) || (a.raw < b.raw ? -1 : Number(a.raw > b.raw)),
       );
-    if (candidates.length === 0) {
-      const requirements = ranges.map(range => q(range)).join(', ');
-      throw RegistryMissingPackageError(
-        `${name}: no version satisfies ${requirements}`,
-      );
-    }
-    return candidates[0].raw;
+    return candidates[0]?.raw;
   };
 
   return /** @type {ResolveHook} */ (
@@ -445,30 +488,51 @@ export const makeMvsResolveHook = options => {
       const packumentCache = new Map();
 
       /**
-       * Resolved selections, keyed by name and per-major slot. The slot
-       * is the canonical major derived from the *requested* range, not
-       * from the selected version, so two requesters that classify
-       * under the same slot share a selection and the resolver picks
-       * the least version satisfying both ranges.
+       * The selection that declared an edge, or undefined for the entry.
+       * Diagnostics carry it so those from a superseded or pruned
+       * selection can be dropped.
+       *
+       * @typedef {{ name: string, slotKey: string, version: string } | undefined} EdgeOrigin
+       */
+      /**
+       * @typedef {{ name: string, range: string, source: string, importer: string, from: EdgeOrigin }} Edge
+       */
+
+      /**
+       * Resolved selections, keyed by name and compatibility slot. The
+       * slot derives from the *requested* range, not from the selected
+       * version, so two requesters that classify under the same slot
+       * share a selection and the resolver picks the least version
+       * satisfying both ranges. `ranges` accumulates the requested
+       * ranges; workspace entries omit it because they ignore ranges.
        *
        * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string, ranges?: string[] }>>}
        */
       const resolved = new Map();
-      /** @type {Array<{ importer: string, name: string, range: string }>} */
+      /**
+       * The slot each requested range joined, per package name, so a
+       * repeated range and the final reachability walk find the same
+       * slot even after a split.
+       *
+       * @type {Map<string, Map<string, string>>}
+       */
+      const rangeSlots = new Map();
+      /** @type {Array<{ importer: string, name: string, range: string, from: EdgeOrigin }>} */
       const peerRequirements = [];
-      /** @type {Array<{ importer: string, name: string, range: string, reason: string }>} */
+      /** @type {Array<{ importer: string, name: string, range: string, reason: string, from: EdgeOrigin }>} */
       const unmetOptionals = [];
-      /** @type {Array<{ importer: string, name: string, range: string, version: string }>} */
+      /** @type {Array<{ importer: string, name: string, range: string, version: string, from: EdgeOrigin }>} */
       const workspaceMismatches = [];
 
       /**
        * Enqueue all dependency edges from one package descriptor.
        *
-       * @param {Array<{ name: string, range: string, source: string, importer: string }>} frontier
+       * @param {Edge[]} frontier
        * @param {Record<string, unknown>} pkg
        * @param {string} importer
+       * @param {EdgeOrigin} from
        */
-      const enqueueAll = (frontier, pkg, importer) => {
+      const enqueueAll = (frontier, pkg, importer, from) => {
         const sources = /** @type {const} */ ([
           'dependencies',
           'peerDependencies',
@@ -480,14 +544,15 @@ export const makeMvsResolveHook = options => {
             (pkg[source]);
           if (table) {
             for (const [name, range] of Object.entries(table)) {
-              frontier.push({ name, range, source, importer });
+              frontier.push({ name, range, source, importer, from });
             }
           }
         }
       };
 
+      /** @type {Edge[]} */
       const frontier = [];
-      enqueueAll(frontier, entry, entry.name || '<entry>');
+      enqueueAll(frontier, entry, entry.name || '<entry>', undefined);
 
       /**
        * Process a single frontier edge. Returns nothing; mutates the
@@ -495,11 +560,11 @@ export const makeMvsResolveHook = options => {
        * `frontier` accumulators. May throw; the caller's loop wraps the
        * dispatch.
        *
-       * @param {{ name: string, range: string, source: string, importer: string }} edge
+       * @param {Edge} edge
        */
       const processEdge = async edge => {
         await null;
-        const { name, range, source, importer } = edge;
+        const { name, range, source, importer, from } = edge;
 
         // Workspace specifier? Prefer workspace lookup over registry.
         if (isWorkspaceSpecifier(range)) {
@@ -520,15 +585,20 @@ export const makeMvsResolveHook = options => {
               ? member.packageJson
               : new TextDecoder().decode(member.packageJson);
           const wsSlot = resolved.get(name) ?? new Map();
+          const version = memberPkg.version || '0.0.0';
           wsSlot.set('workspace', {
-            version: memberPkg.version || '0.0.0',
+            version,
             integrity: 'workspace:',
             treeRef: member.treeRef,
             isWorkspace: true,
             packageJson: memberPjString,
           });
           resolved.set(name, wsSlot);
-          enqueueAll(frontier, memberPkg, name);
+          enqueueAll(frontier, memberPkg, name, {
+            name,
+            slotKey: 'workspace',
+            version,
+          });
           return;
         }
 
@@ -553,7 +623,11 @@ export const makeMvsResolveHook = options => {
                 isWorkspace: true,
                 packageJson: memberPjString,
               });
-              enqueueAll(frontier, memberPkg, name);
+              enqueueAll(frontier, memberPkg, name, {
+                name,
+                slotKey: 'workspace',
+                version: memberVersion,
+              });
             }
             // Diagnostic when the workspace member's version does not
             // satisfy the importer's range; we still resolve to the
@@ -570,19 +644,20 @@ export const makeMvsResolveHook = options => {
                 name,
                 range,
                 version: memberVersion,
+                from,
               });
             }
             if (source === 'peerDependencies') {
-              peerRequirements.push({ importer, name, range });
+              peerRequirements.push({ importer, name, range, from });
             }
             resolved.set(name, wsSlot);
             return;
           }
         }
 
-        const majorKey = parseRangeMajor(range);
         const slot = resolved.get(name) ?? new Map();
-        const existing = slot.get(majorKey);
+        const assigned = rangeSlots.get(name) ?? new Map();
+        rangeSlots.set(name, assigned);
 
         let document;
         try {
@@ -594,6 +669,7 @@ export const makeMvsResolveHook = options => {
               name,
               range,
               reason: /** @type {Error} */ (err).message,
+              from,
             });
             return;
           }
@@ -602,37 +678,55 @@ export const makeMvsResolveHook = options => {
             // raises `RegistryMissingPackageError` with a fully-formed
             // message describing the unmet peer. Logging the upstream
             // load failure here would lose the "unmet peer" framing.
-            peerRequirements.push({ importer, name, range });
+            peerRequirements.push({ importer, name, range, from });
             return;
           }
           throw err;
         }
 
-        const ranges = [...(existing?.ranges ?? [])];
-        if (!ranges.includes(range)) {
-          ranges.push(range);
-        }
-
+        // Join the first slot under this range's key whose ranges can
+        // share a version with it: the shared slot, then earlier splits.
+        // Failing that, split off a slot of its own.
+        const baseKey = parseRangeMajor(range);
+        const splitPrefix = `${baseKey} `;
+        const slotKeys = assigned.has(range)
+          ? [/** @type {string} */ (assigned.get(range))]
+          : [
+              baseKey,
+              ...[...slot.keys()].filter(key => key.startsWith(splitPrefix)),
+              `${splitPrefix}${range.trim()}`,
+            ];
+        let slotKey = baseKey;
+        /** @type {string[]} */
+        let ranges = [range];
+        /** @type {string | undefined} */
         let candidateVersion;
-        try {
-          candidateVersion = selectLeastSatisfying(document, name, ranges);
-        } catch (err) {
+        for (const key of slotKeys) {
+          slotKey = key;
+          ranges = [...(slot.get(key)?.ranges ?? [])];
+          if (!ranges.includes(range)) {
+            ranges.push(range);
+          }
+          candidateVersion = selectLeastSatisfying(document, ranges);
+          if (candidateVersion !== undefined || ranges.length === 1) {
+            break;
+          }
+        }
+        if (candidateVersion === undefined) {
+          const reason = `${name}: no version satisfies ${q(range)}`;
           if (source === 'optionalDependencies') {
-            unmetOptionals.push({
-              importer,
-              name,
-              range,
-              reason: /** @type {Error} */ (err).message,
-            });
+            unmetOptionals.push({ importer, name, range, reason, from });
             return;
           }
-          throw err;
+          throw RegistryMissingPackageError(reason);
         }
+        assigned.set(range, slotKey);
+        const existing = slot.get(slotKey);
 
         if (existing?.version === candidateVersion) {
           existing.ranges = ranges;
           if (source === 'peerDependencies') {
-            peerRequirements.push({ importer, name, range });
+            peerRequirements.push({ importer, name, range, from });
           }
           return;
         }
@@ -647,7 +741,7 @@ export const makeMvsResolveHook = options => {
               `offline: no cached entry for ${name}@${candidateVersion}`,
             );
           }
-          slot.set(majorKey, {
+          slot.set(slotKey, {
             version: candidateVersion,
             integrity: cached.integrity,
             treeRef: cached.treeRef,
@@ -663,17 +757,22 @@ export const makeMvsResolveHook = options => {
           // snapshot, surface the gap on the diagnostic side channel
           // rather than walking against an empty `{}`.
           if (typeof cached.packageJson === 'string') {
-            enqueueAll(frontier, decodePackageJson(cached.packageJson), name);
+            enqueueAll(frontier, decodePackageJson(cached.packageJson), name, {
+              name,
+              slotKey,
+              version: candidateVersion,
+            });
           } else {
             unmetOptionals.push({
               importer,
               name,
               range,
               reason: `offline: cached entry for ${name}@${candidateVersion} has no packageJson snapshot; transitive deps not walked`,
+              from,
             });
           }
           if (source === 'peerDependencies') {
-            peerRequirements.push({ importer, name, range });
+            peerRequirements.push({ importer, name, range, from });
           }
           return;
         }
@@ -688,6 +787,7 @@ export const makeMvsResolveHook = options => {
               name,
               range,
               reason: `tarball fetch failed: ${/** @type {Error} */ (err).message}`,
+              from,
             });
             return;
           }
@@ -719,7 +819,7 @@ export const makeMvsResolveHook = options => {
           peerDependencies: childMeta.peerDependencies || {},
           optionalDependencies: childMeta.optionalDependencies || {},
         });
-        slot.set(majorKey, {
+        slot.set(slotKey, {
           version: candidateVersion,
           integrity,
           treeRef,
@@ -729,44 +829,52 @@ export const makeMvsResolveHook = options => {
         resolved.set(name, slot);
 
         if (source === 'peerDependencies') {
-          peerRequirements.push({ importer, name, range });
+          peerRequirements.push({ importer, name, range, from });
         }
 
         enqueueAll(
           frontier,
           /** @type {Record<string, unknown>} */ (childMeta),
           name,
+          { name, slotKey, version: candidateVersion },
         );
       };
 
       while (frontier.length > 0) {
-        const edge =
-          /** @type {{ name: string, range: string, source: string, importer: string }} */ (
-            frontier.shift()
-          );
+        const edge = /** @type {Edge} */ (frontier.shift());
         // eslint-disable-next-line no-await-in-loop
         await processEdge(edge);
       }
 
       // Raising a selection leaves behind entries that only the
-      // superseded version required. Keep only the selections reachable
-      // from the entry through the final selections' dependency tables.
+      // superseded version required.
       /** @type {Set<string>} */
       const reachable = new Set();
+      /** @type {Edge[]} */
       const pending = [];
-      enqueueAll(pending, entry, entry.name || '<entry>');
-      while (pending.length > 0) {
-        const { name, range } = pending.pop();
+      enqueueAll(pending, entry, entry.name || '<entry>', undefined);
+      for (let edge = pending.pop(); edge !== undefined; edge = pending.pop()) {
+        const { name, range } = edge;
         const slot = resolved.get(name);
         const slotKey = slot?.has('workspace')
           ? 'workspace'
-          : parseRangeMajor(range);
-        const selection = slot?.get(slotKey);
+          : rangeSlots.get(name)?.get(range);
+        const selection =
+          slotKey === undefined ? undefined : slot?.get(slotKey);
         const reachKey = `${name}\0${slotKey}`;
         if (selection !== undefined && !reachable.has(reachKey)) {
           reachable.add(reachKey);
           if (typeof selection.packageJson === 'string') {
-            enqueueAll(pending, decodePackageJson(selection.packageJson), name);
+            enqueueAll(
+              pending,
+              decodePackageJson(selection.packageJson),
+              name,
+              {
+                name,
+                slotKey: /** @type {string} */ (slotKey),
+                version: selection.version,
+              },
+            );
           }
         }
       }
@@ -781,8 +889,29 @@ export const makeMvsResolveHook = options => {
         }
       }
 
+      /**
+       * Whether the selection that declared an edge survived pruning.
+       *
+       * @param {EdgeOrigin} from
+       */
+      const isLive = from =>
+        from === undefined ||
+        resolved.get(from.name)?.get(from.slotKey)?.version === from.version;
+      /**
+       * Drop diagnostics from pruned or superseded selections and strip
+       * their provenance.
+       *
+       * @template {{ from: EdgeOrigin }} T
+       * @param {T[]} diagnostics
+       * @returns {Omit<T, 'from'>[]}
+       */
+      const liveDiagnostics = diagnostics =>
+        diagnostics
+          .filter(diagnostic => isLive(diagnostic.from))
+          .map(({ from: _from, ...diagnostic }) => diagnostic);
+
       // Peer-requirement check.
-      for (const peer of peerRequirements) {
+      for (const peer of liveDiagnostics(peerRequirements)) {
         const slot = resolved.get(peer.name);
         if (slot === undefined) {
           throw RegistryMissingPackageError(
@@ -799,7 +928,7 @@ export const makeMvsResolveHook = options => {
         }
       }
 
-      // Flatten the (name, major-slot) -> selection map into the
+      // Flatten the (name, slot) -> selection map into the
       // canonical packagesByKey shape.
       /** @type {Record<string, RegistryResolutionEntry>} */
       const packagesByKey = {};
@@ -850,8 +979,8 @@ export const makeMvsResolveHook = options => {
         packagesByKey: harden(packagesByKey),
         keys: harden(keys),
         resolutionHash: resolutionHashBytes,
-        unmetOptionals: harden(unmetOptionals),
-        workspaceMismatches: harden(workspaceMismatches),
+        unmetOptionals: harden(liveDiagnostics(unmetOptionals)),
+        workspaceMismatches: harden(liveDiagnostics(workspaceMismatches)),
       });
       return resolution;
     }
