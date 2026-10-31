@@ -150,8 +150,8 @@ harden(discoverTools);
  *
  * @param {string} name
  * @param {Record<string, unknown>} args
- * @param {Map<string, FaeTool<unknown> | object>} toolMap
- * @returns {Promise<unknown>}
+ * @param {Map<string, FaeTool | object>} toolMap
+ * @returns {Promise<string>}
  */
 export const executeTool = async (name, args, toolMap) => {
   const tool = toolMap.get(name);
@@ -159,6 +159,7 @@ export const executeTool = async (name, args, toolMap) => {
     const available = [...toolMap.keys()].join(', ');
     throw new Error(`Unknown tool: "${name}". Available tools: ${available}`);
   }
-  return E(tool).execute(args);
+  const result = await E(tool).execute(args);
+  return /** @type {string} */ (result);
 };
 harden(executeTool);
