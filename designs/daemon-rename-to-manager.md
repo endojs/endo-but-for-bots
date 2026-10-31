@@ -172,7 +172,7 @@ the powers handed to the manager.
   `mainWorker`, `nodeWorker`, `WorkerDeferredTaskParams`: already
   correct.
 - The package directory `packages/daemon/` and the npm name
-  `@endo/daemon`: see [Open Questions](#open-questions).
+  `@endo/daemon`: see [Question of renaming the package itself](#question-of-renaming-the-package-itself).
 - The `endo` and `endod` CLI binaries and the literal word "daemon"
   in user-facing prose ("the Endo daemon") where it does mean the
   long-running process: out of scope.
