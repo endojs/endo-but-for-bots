@@ -562,6 +562,12 @@ export const HostInterface = M.interface('EndoHost', {
   makeFromPackage: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
     .optional(MakeFromPackageOptionsShape)
     .returns(M.promise()),
+  // Make a caplet from a ReadableTree or Mount, choosing makeFromTree when
+  // its root holds a compartment-map.json and makeFromPackage when it holds
+  // a package.json.
+  makeFromMount: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
+    .optional(MakeFromPackageOptionsShape)
+    .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
   stageTree: M.call(NameOrPathShape, NameOrPathShape).returns(M.promise()),
   // Stage a readable tree and run its entry module as an unconfined
