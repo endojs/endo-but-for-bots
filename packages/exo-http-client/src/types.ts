@@ -76,7 +76,7 @@ export type FetchOptions = {
 
 export type FetchLikeRequestOptions = FetchOptions & {
   redirect: 'manual';
-  signal?: AbortSignal;
+  cancelled?: Promise<never>;
 };
 
 export type FetchLikeBodyReader = {
@@ -130,16 +130,16 @@ export type HttpClientControl = {
     policyMode: string;
     revoked: boolean;
   };
-  setAllowedOrigins: (origins: string[]) => void;
-  addAllowedOrigin: (origin: string) => void;
-  removeAllowedOrigin: (origin: string) => void;
+  setAllowedOrigins: (origins: string[]) => Promise<void>;
+  addAllowedOrigin: (origin: string) => Promise<void>;
+  removeAllowedOrigin: (origin: string) => Promise<void>;
   setMaxRequestsPerMinute: (n: number) => void;
   setMaxResponseBytes: (n: number) => void;
   revoke: () => void;
   isRevoked: () => boolean;
   listBindings: () => Binding[];
-  revokeBinding: (origin: string) => void;
-  unpin: (origin: string) => void;
+  revokeBinding: (origin: string) => Promise<void>;
+  unpin: (origin: string) => Promise<void>;
   setPolicyMode: (mode: PolicyMode) => void;
   listAuditEntries: (options?: {
     since?: number;
@@ -147,3 +147,8 @@ export type HttpClientControl = {
   }) => AuditEntry[];
   help: () => string;
 };
+
+export type Delay = (
+  milliseconds: number,
+  cancelled: Promise<never>,
+) => Promise<undefined>;

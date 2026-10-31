@@ -49,16 +49,16 @@ interface HttpResponse {
 
 interface HttpClientControl {
   inspect(): HttpClientPolicy;
-  setAllowedOrigins(origins: string[]): void;
-  addAllowedOrigin(origin: string): void;
-  removeAllowedOrigin(origin: string): void;
+  setAllowedOrigins(origins: string[]): Promise<void>;
+  addAllowedOrigin(origin: string): Promise<void>;
+  removeAllowedOrigin(origin: string): Promise<void>;
   setMaxRequestsPerMinute(n: number): void;
   setMaxResponseBytes(n: number): void;
   revoke(): void;
   isRevoked(): boolean;
   listBindings(): Binding[];
-  revokeBinding(origin: string): void;
-  unpin(origin: string): void;
+  revokeBinding(origin: string): Promise<void>;
+  unpin(origin: string): Promise<void>;
   setPolicyMode(mode: PolicyMode): void;
   listAuditEntries(options?: { since?: number, limit?: number }): AuditEntry[];
   help(): string;
@@ -85,6 +85,12 @@ after any trust-on-first-bind decision. A denied origin, or a request still
 waiting for a prompt decision, does not consume the rate budget. Prompt floods
 are bounded by coalescing concurrent first requests for the same origin and by
 the configured binding limit.
+
+Request deadlines, rate-window expiry, and policy-prompt timeouts use the
+injected `delay(milliseconds, cancelled)` seam. Binding and audit stamps use
+the async-capable `now()` seam. Confined callers must supply both from an
+endowed timer; the standalone maker retains ambient defaults for unconfined
+callers.
 
 `HttpResponse.truncated()` reports whether the configured byte cap was reached.
 For an exact-fill response, `truncated()` is therefore `true` even if no

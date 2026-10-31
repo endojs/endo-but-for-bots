@@ -2,13 +2,12 @@
   "name": "@endo/fetch",
   "version": "0.0.0",
   "private": true,
-  "description": "Unconfined Endo plugin that provisions confined outbound HTTP. A fetch service hands a guest a bounded HttpClient (origin allowlist, rate and byte caps, trust-on-first-bind pins) and retains the HttpClientControl for the integration. Durable policy and pins live on the platform virtual file system, so the backing may be a real directory, a database, or memory. Provision it through the daemon's generic `make-unconfined` pathway and pin it into `@pins` for wake-on-restart.",
+  "description": "Unconfined Endo plugin that adapts the worker's ambient fetch into a passable, unfettered Fetch capability. Integrations retain it and endow it to @endo/confined-fetch, which attenuates it into a policy-bound HttpClient for guests.",
   "keywords": [
     "endo",
     "exo",
     "fetch",
     "http",
-    "confined-fetch",
     "plugin"
   ],
   "author": "Endo contributors",
@@ -25,8 +24,8 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./src/service.js": "./src/service.js",
-    "./src/store.js": "./src/store.js",
+    "./timer.js": "./src/timer.js",
+    "./src/types.js": "./src/types.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -39,19 +38,23 @@
   ],
   "scripts": {
     "build": "exit 0",
-    "test": "ava --serial",
+    "test": "ava",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'"
   },
   "dependencies": {
-    "@endo/eventual-send": "workspace:^",
-    "@endo/exo-http-client": "workspace:^",
-    "@endo/pass-style": "workspace:^"
+    "@endo/cancel": "workspace:^",
+    "@endo/errors": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
-    "@endo/platform": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"

@@ -20,7 +20,7 @@ export type FetchLikeRequestOptions = {
   method: string;
   headers?: Record<string, string>;
   body?: unknown;
-  signal?: AbortSignal;
+  cancelled?: Promise<never>;
 };
 
 export type FetchLike = (
@@ -58,3 +58,8 @@ export type ConfinedResponse = {
   truncated: boolean;
   maxResponseBytes: number;
 };
+
+export type Delay = (
+  milliseconds: number,
+  cancelled: Promise<never>,
+) => Promise<undefined>;

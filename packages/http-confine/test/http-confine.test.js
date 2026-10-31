@@ -1,6 +1,9 @@
 // @ts-check
+// spell-out-exempt: `ok` is the fetch Response field the transport fakes must carry.
 
 import test from '@endo/ses-ava/prepare-endo.js';
+
+import { makeCancelKit } from '@endo/cancel';
 
 import {
   HeaderRejectedError,
@@ -13,7 +16,7 @@ import {
   limitResponseBytes,
   makeHttpConfinement,
   makeRateLimiter,
-  makeRequestSignal,
+  makeRequestCancellation,
   normalizeMethod,
   parseAllowedOrigins,
   resolveRedirect,
@@ -22,6 +25,11 @@ import {
 } from '../src/http-confine.js';
 
 /** @import { FetchLike } from '../src/types.js' */
+
+const neverDelay = (_milliseconds, cancelled) =>
+  new Promise((_resolve, reject) => {
+    void cancelled.catch(reject);
+  });
 
 /**
  * @param {Array<string | Uint8Array>} chunks
@@ -88,15 +96,27 @@ test('assertHeadersSafe rejects CRLF and forbidden header names', t => {
   });
 });
 
-test('makeRateLimiter uses the injected clock', t => {
-  let clock = 1000;
-  const limiter = makeRateLimiter({ maxPerMinute: 2, now: () => clock });
+test('makeRateLimiter releases capacity after the injected delay', async t => {
+  /** @type {Array<() => void>} */
+  const releases = [];
+  const { cancelled } = makeCancelKit();
+  const delay = (_milliseconds, token) =>
+    new Promise((resolve, reject) => {
+      releases.push(() => resolve(undefined));
+      void token.catch(reject);
+    });
+  const limiter = makeRateLimiter({ maxPerMinute: 2, delay, cancelled });
   limiter.take();
   limiter.take();
   t.is(limiter.remaining(), 0);
   t.throws(() => limiter.take(), { instanceOf: RateLimitError });
-  clock += 60_001;
-  t.is(limiter.remaining(), 2);
+  await Promise.resolve();
+  releases.shift()?.();
+  for (let turn = 0; turn < 5; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.is(limiter.remaining(), 1);
 });
 
 test('limitResponseBytes truncates at read time and marks exact fills', async t => {
@@ -143,23 +163,43 @@ test('resolveRedirect only follows to allowlisted origins', t => {
   );
 });
 
-test('makeRequestSignal aborts for cancellation and disposes timeout', async t => {
-  /** @type {(reason?: never) => void} */
-  let cancel = () => {};
-  const cancellation = /** @type {Promise<never>} */ (
-    new Promise((_, reject) => {
-      cancel = reject;
-    })
-  );
-  const { signal, dispose } = makeRequestSignal({
+test('makeRequestCancellation propagates cancellation and stops delay', async t => {
+  const parent = makeCancelKit();
+  let timerStopped = false;
+  const delay = (_milliseconds, cancelled) =>
+    cancelled.catch(reason => {
+      timerStopped = true;
+      throw reason;
+    });
+  const { cancelled, dispose } = makeRequestCancellation({
     timeoutMs: 10_000,
-    cancellation,
+    cancellation: parent.cancelled,
+    delay,
   });
-  t.true(signal instanceof AbortSignal);
-  cancel();
+  const reason = Error('caller cancelled');
+  parent.cancel(reason);
+  await t.throwsAsync(() => cancelled, { is: reason });
   await Promise.resolve();
-  t.true(signal.aborted);
+  t.true(timerStopped);
   dispose();
+});
+
+test('makeRequestCancellation rejects when the injected deadline expires', async t => {
+  /** @type {() => void} */
+  let expire = () => {};
+  const delay = (_milliseconds, cancelled) =>
+    new Promise((resolve, reject) => {
+      expire = () => resolve(undefined);
+      void cancelled.catch(reject);
+    });
+  const { cancelled } = makeRequestCancellation({
+    timeoutMs: 25,
+    delay,
+  });
+
+  await Promise.resolve();
+  expire();
+  await t.throwsAsync(() => cancelled, { message: /timed out/ });
 });
 
 test('makeHttpConfinement rejects invalid falsy defense limits', t => {
@@ -171,7 +211,7 @@ test('makeHttpConfinement rejects invalid falsy defense limits', t => {
       headers: {},
       body: makeBody(['ok']),
     });
-  const seams = harden({ fetch, now: () => 1000 });
+  const seams = harden({ fetch, delay: neverDelay });
 
   t.throws(
     () =>
@@ -209,7 +249,15 @@ test('makeHttpConfinement rejects invalid falsy defense limits', t => {
 });
 
 test('makeHttpConfinement composes rate, origin, fetch, redirect, and byte cap', async t => {
-  let clock = 1000;
+  /** @type {Array<() => void>} */
+  const releaseRateSlot = [];
+  const delay = (milliseconds, cancelled) =>
+    new Promise((resolve, reject) => {
+      if (milliseconds === 60_000) {
+        releaseRateSlot.push(() => resolve(undefined));
+      }
+      void cancelled.catch(reject);
+    });
   /** @type {Array<{ url: string, options: Record<string, unknown> }>} */
   const calls = [];
   /** @type {FetchLike} */
@@ -234,7 +282,7 @@ test('makeHttpConfinement composes rate, origin, fetch, redirect, and byte cap',
       maxResponseBytes: 3,
       allowedMethods: new Set(['GET', 'POST']),
     },
-    { fetch, now: () => clock },
+    { fetch, delay },
   );
 
   const response = await core.request({
@@ -245,13 +293,17 @@ test('makeHttpConfinement composes rate, origin, fetch, redirect, and byte cap',
   t.is(new TextDecoder().decode(response.bytes), 'abc');
   t.is(calls[0].options.redirect, 'manual');
   t.is(calls[0].options.method, 'POST');
-  t.true(calls[0].options.signal instanceof AbortSignal);
+  t.true(calls[0].options.cancelled instanceof Promise);
 
   await t.throwsAsync(
     () => core.request({ url: 'https://api.example.com/again' }),
     { instanceOf: RateLimitError },
   );
-  clock += 60_001;
+  releaseRateSlot.shift()?.();
+  for (let turn = 0; turn < 5; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
   await t.throwsAsync(
     () => core.request({ url: 'https://evil.example.com/' }),
     { instanceOf: OriginNotAllowedError },
@@ -278,7 +330,7 @@ test('makeHttpConfinement array mode owns allowlist mutators', async t => {
       allowedOrigins: ['https://api.example.com'],
       maxRequestsPerMinute: 10,
     },
-    { fetch, now: () => 1000 },
+    { fetch, delay: neverDelay },
   );
 
   await t.throwsAsync(
@@ -319,7 +371,7 @@ test('makeHttpConfinement thunk mode consults live allowlist authority', async t
       allowedOrigins: () => [...authority],
       maxRequestsPerMinute: 10,
     },
-    { fetch, now: () => 1000 },
+    { fetch, delay: neverDelay },
   );
 
   await t.notThrowsAsync(() =>
@@ -358,7 +410,7 @@ test('makeHttpConfinement thunk mode resolves redirects against live allowlist',
       allowedOrigins: () => [...authority],
       maxRequestsPerMinute: 10,
     },
-    { fetch, now: () => 1000 },
+    { fetch, delay: neverDelay },
   );
 
   await t.notThrowsAsync(() =>
@@ -379,7 +431,7 @@ test('makeHttpConfinement thunk mode rejects origin mutators', t => {
           headers: {},
           body: makeBody([]),
         }),
-      now: () => 1000,
+      delay: neverDelay,
     },
   );
 
@@ -519,7 +571,7 @@ test('request summarizes a native Response instead of hardening it', async t => 
       fetch: /** @type {FetchLike} */ (
         async () => /** @type {unknown} */ (nativeResponse)
       ),
-      now: () => 1000,
+      delay: neverDelay,
     },
   );
 
@@ -537,4 +589,96 @@ test('request summarizes a native Response instead of hardening it', async t => 
   t.true(Object.isFrozen(result.response));
   t.notThrows(() => [...nativeResponse.headers]);
   t.is(nativeResponse.headers.get('x-native-response'), 'yes');
+});
+
+test('makeHttpConfinement requires an injected delay', t => {
+  t.throws(
+    () =>
+      makeHttpConfinement(
+        { allowedOrigins: ['https://api.example.com'] },
+        // @ts-expect-error the delay seam is deliberately omitted
+        { fetch: async () => harden({}) },
+      ),
+    { message: /delay is required/ },
+  );
+});
+
+test('revoking mid-body cancels the in-flight read and rejects the request', async t => {
+  /** @type {(value?: unknown) => void} */
+  let markSecondRead = () => {};
+  const secondRead = new Promise(resolve => {
+    markSecondRead = resolve;
+  });
+  /** @type {unknown[]} */
+  const cancelReasons = [];
+  let reads = 0;
+  const body = harden({
+    getReader: () =>
+      harden({
+        read: async () => {
+          reads += 1;
+          if (reads === 1) {
+            return harden({ done: false, value: 'ab' });
+          }
+          markSecondRead();
+          return new Promise(() => {});
+        },
+        cancel: async reason => {
+          cancelReasons.push(reason);
+        },
+        releaseLock: () => {},
+      }),
+  });
+  /** @type {FetchLike} */
+  const fetch = url =>
+    harden({
+      status: 200,
+      statusText: 'OK',
+      ok: true,
+      headers: {},
+      url,
+      body,
+    });
+  const core = makeHttpConfinement(
+    { allowedOrigins: ['https://api.example.com'] },
+    { fetch, delay: neverDelay },
+  );
+
+  const requestP = core.request({ url: 'https://api.example.com/stream' });
+  await secondRead;
+  core.revoke();
+  await t.throwsAsync(() => requestP, { instanceOf: RevokedError });
+  t.is(cancelReasons.length, 1);
+  t.true(cancelReasons[0] instanceof RevokedError);
+});
+
+test('setMaxRequestsPerMinute rebuilds the limiter over the injected delay', async t => {
+  /** @type {number[]} */
+  const delays = [];
+  const delay = (milliseconds, cancelled) => {
+    delays.push(milliseconds);
+    return neverDelay(milliseconds, cancelled);
+  };
+  /** @type {FetchLike} */
+  const fetch = url =>
+    harden({
+      status: 200,
+      statusText: 'OK',
+      ok: true,
+      headers: {},
+      url,
+      body: makeBody(['ok']),
+    });
+  const core = makeHttpConfinement(
+    { allowedOrigins: ['https://api.example.com'], maxRequestsPerMinute: 10 },
+    { fetch, delay },
+  );
+
+  core.setMaxRequestsPerMinute(1);
+  await core.request({ url: 'https://api.example.com/one' });
+  await t.throwsAsync(
+    () => core.request({ url: 'https://api.example.com/two' }),
+    { instanceOf: RateLimitError },
+  );
+  t.true(delays.includes(60_000));
 });

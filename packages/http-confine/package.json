@@ -46,6 +46,7 @@
     "test": "ses-ava"
   },
   "dependencies": {
+    "@endo/cancel": "workspace:^",
     "@endo/errors": "workspace:^"
   },
   "devDependencies": {
