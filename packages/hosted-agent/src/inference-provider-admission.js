@@ -127,18 +127,23 @@ harden(inferenceUsageAt);
  * remain until settlement, including across UTC midnight. Compaction is a
  * separate pure retention step, never a side effect of deciding admission.
  *
+ * The fold here is not limited to `asOfMilliseconds`: after a backward clock
+ * step a live reservation can look admitted in the future, and compaction
+ * keeps every turn it cannot prove settled and outside both windows.
+ *
  * @param {any[]} events
  * @param {number} asOfMilliseconds
  */
 export const compactInferenceTurnEvents = (events, asOfMilliseconds) => {
   const day = new Date(asOfMilliseconds).toISOString().slice(0, 10);
   const retainedTurnIds = new Set(
-    Object.values(foldInferenceTurnEvents(events, asOfMilliseconds))
+    Object.values(foldInferenceTurnEvents(events))
       .filter(
         turn =>
-          turn.state === 'reserved' ||
+          turn.state !== 'settled' ||
+          !(Number(turn.settledAtMs) <= asOfMilliseconds) ||
           turn.day === day ||
-          Number(turn.admittedAtMs) >= asOfMilliseconds - 60_000,
+          !(Number(turn.admittedAtMs) < asOfMilliseconds - 60_000),
       )
       .map(turn => turn.turnId),
   );

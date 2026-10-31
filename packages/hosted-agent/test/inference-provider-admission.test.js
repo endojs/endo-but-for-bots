@@ -127,3 +127,33 @@ test('admission is a pure decision over a usage snapshot', t => {
   t.is(refusal, 'owner-concurrency-exhausted');
   t.is(JSON.stringify(events), before);
 });
+
+test('compaction keeps a reservation admitted after a backward clock step', t => {
+  const admittedAtMs = Date.parse('2026-10-30T00:00:10.000Z');
+  const futureReservation = harden({
+    ...reservation,
+    turnId: 'turn-ahead',
+    day: '2026-10-30',
+    admittedAtMs,
+  });
+  const futureSettlement = harden({
+    ...settlement,
+    turnId: 'turn-ahead',
+    settledAtMs: admittedAtMs + 1,
+  });
+  // The clock stepped back a day; the reservation looks admitted tomorrow.
+  const asOf = admittedAtMs - 86_400_000;
+  t.deepEqual(
+    compactInferenceTurnEvents(harden([futureReservation]), asOf).map(
+      event => event.turnId,
+    ),
+    ['turn-ahead'],
+  );
+  t.deepEqual(
+    compactInferenceTurnEvents(
+      harden([futureReservation, futureSettlement]),
+      asOf,
+    ).map(event => event.turnId),
+    ['turn-ahead', 'turn-ahead'],
+  );
+});

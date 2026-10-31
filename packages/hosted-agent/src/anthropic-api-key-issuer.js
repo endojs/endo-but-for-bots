@@ -14,7 +14,11 @@ import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const ANTHROPIC_ORIGIN = 'https://api.anthropic.com';
-const ISSUER_IMAGE_DIGEST = `sha256:${'0'.repeat(64)}`;
+// This issuer has no target image: the factory only opens InferenceEndpoints,
+// which carry no attestation, so no grant ever reports this digest. The
+// all-zero value is a deliberate sentinel that satisfies the shared issuer's
+// digest shape; it is not an image binding.
+const NO_TARGET_IMAGE_DIGEST = `sha256:${'0'.repeat(64)}`;
 
 const AnthropicIssuerFactoryInterface = M.interface(
   'AnthropicApiKeyIssuerFactory',
@@ -76,7 +80,7 @@ export const makeAnthropicApiKeyIssuerFactory = ({
         maxRequestBytes: 8n * 1024n * 1024n,
         maxResponseBytes: 16n * 1024n * 1024n,
       }),
-      imageDigest: ISSUER_IMAGE_DIGEST,
+      imageDigest: NO_TARGET_IMAGE_DIGEST,
       accountRef: provider.providerId,
       audit,
       onReading,
