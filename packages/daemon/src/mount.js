@@ -1107,6 +1107,9 @@ const makeMountExo = ctx => {
       // eslint-disable-next-line no-underscore-dangle
       const methodNames = await E(content).__getMethodNames__();
       assertReadableBlobSource(content, methodNames);
+      // The source controls how long that probe takes, so the mount may have
+      // been revoked meanwhile. Recheck before the first filesystem mutation.
+      assertWritable();
     }
     const parent = filePowers.joinPath(target, '..');
     await filePowers.makePath(parent);

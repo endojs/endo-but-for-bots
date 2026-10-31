@@ -10,6 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { Far } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -19,7 +20,7 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
-import { makeMount } from '../src/mount.js';
+import { makeMount, makeRevocableMount } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
 /** @import { EndoMount, EndoMountFile, ReadableBlobView, ReadableTreeView } from '../src/types.js' */
@@ -498,8 +499,20 @@ test('makeFile with no content is a no-op when the file already exists', async t
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.writeFileSync(path.join(rootPath, 'keep.txt'), 'preserved');
-  await E(mount).makeFile('keep.txt');
+  const file = await E(mount).makeFile('keep.txt');
   t.is(fs.readFileSync(path.join(rootPath, 'keep.txt'), 'utf8'), 'preserved');
+  // The returned capability is live, not a snapshot of the existing bytes.
+  fs.writeFileSync(path.join(rootPath, 'keep.txt'), 'changed');
+  t.is(await E(file).text(), 'changed');
+});
+
+test('makeFile with empty-string content truncates an existing file', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.writeFileSync(path.join(rootPath, 'trunc.txt'), 'previous');
+  const file = await E(mount).makeFile('trunc.txt', '');
+  t.is(fs.readFileSync(path.join(rootPath, 'trunc.txt'), 'utf8'), '');
+  t.is(await E(file).text(), '');
 });
 
 test('makeFile with a string overwrites with that string', async t => {
@@ -521,6 +534,95 @@ test('makeFile streams a ReadableBlob and returns its file capability', async t 
     'blob content',
   );
   t.is(await E(file).text(), 'blob content');
+});
+
+test('makeFile materializes an empty ReadableBlob as an empty file', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.writeFileSync(path.join(rootPath, 'empty.bin'), 'previous');
+  const file = await E(mount).makeFile(
+    'empty.bin',
+    bytesReaderFromIterator([]),
+  );
+  t.is(fs.readFileSync(path.join(rootPath, 'empty.bin')).length, 0);
+  t.is(await E(file).text(), '');
+});
+
+test('makeFile writes every chunk of a multi-chunk ReadableBlob exactly', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const chunks = [
+    Uint8Array.of(0, 1, 2),
+    Uint8Array.of(),
+    Uint8Array.of(0xff, 0x00, 0x80),
+    encodeUtf8('tail'),
+  ];
+  const expected = Uint8Array.of(
+    0,
+    1,
+    2,
+    0xff,
+    0x00,
+    0x80,
+    ...encodeUtf8('tail'),
+  );
+  await E(mount).makeFile(
+    ['deep', 'multi.bin'],
+    bytesReaderFromIterator(chunks),
+  );
+  t.deepEqual(
+    new Uint8Array(fs.readFileSync(path.join(rootPath, 'deep', 'multi.bin'))),
+    expected,
+  );
+});
+
+test('makeFile preserves an existing target when the ReadableBlob fails mid-stream', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.writeFileSync(path.join(rootPath, 'kept.txt'), 'original');
+  function* failing() {
+    yield encodeUtf8('partial');
+    throw Error('source failed');
+  }
+  await t.throwsAsync(() =>
+    E(mount).makeFile('kept.txt', bytesReaderFromIterator(failing())),
+  );
+  t.is(fs.readFileSync(path.join(rootPath, 'kept.txt'), 'utf8'), 'original');
+});
+
+test('makeFile rechecks revocation after probing the content source', async t => {
+  // The source answers the interface probe; a slow answer must not let a
+  // revoked mount go on to create the parent directory or the file.
+  const rootPath = makeTemporaryRoot(t);
+  const { mount, control } = makeRevocableMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+  });
+  /** @type {(names: string[]) => void} */
+  let releaseProbe = () => {};
+  const probe = new Promise(resolve => {
+    releaseProbe = resolve;
+  });
+  let probed = () => {};
+  const probeStarted = new Promise(resolve => {
+    probed = () => resolve(undefined);
+  });
+  const gatedBlob = Far('GatedBlob', {
+    __getMethodNames__: () => {
+      probed();
+      return probe;
+    },
+    streamBase64: () => {
+      throw Error('must not be read');
+    },
+  });
+  const pending = E(mount).makeFile(['made', 'late.txt'], gatedBlob);
+  await probeStarted;
+  E(control).revoke();
+  releaseProbe(['streamBase64']);
+  await t.throwsAsync(() => pending, { message: /Mount has been revoked/ });
+  t.false(fs.existsSync(path.join(rootPath, 'made')));
 });
 
 test('makeFile rejects a ReadableTree source without creating anything', async t => {
