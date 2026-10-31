@@ -1,7 +1,9 @@
 import { expectTypeOf } from 'expect-type';
 import type { PassableReader } from '@endo/exo-stream';
 import type { TypeFromInterfaceGuard } from '@endo/patterns';
+import type { WritableGitWorktree } from '@endo/exo-git';
 import type {
+  Directory,
   DirectoryWriteSource,
   PathEntry,
   PathEntryIssuer,
@@ -24,6 +26,12 @@ declare const mount: EndoMount;
 declare const file: EndoMountFile;
 declare const source: DirectoryWriteSource;
 const issuer: PathEntryIssuer = mount;
+
+// `EndoMount` is a structural `Directory` and is handed to git as its worktree
+// without a cast. Its mount-specific `makeFile` and `subView` stay outside the
+// portable contract, so they cannot break this assignability.
+expectTypeOf<EndoMount>().toExtend<Directory>();
+expectTypeOf<EndoMount>().toExtend<WritableGitWorktree>();
 const entry = issuer.entry(['src']);
 
 // `entry()` mints the same `PathEntry` the rest of `EndoMount`'s API
@@ -54,16 +62,18 @@ expectTypeOf(mount.stat(entry)).resolves.toEqualTypeOf<
   EndoMountStat | undefined
 >();
 expectTypeOf(mount.write(entry, source)).resolves.toEqualTypeOf<void>();
-expectTypeOf(mount.makeFile(entry, 'contents')).resolves.toEqualTypeOf<void>();
+expectTypeOf(
+  mount.makeFile(entry, 'contents'),
+).resolves.toEqualTypeOf<EndoMountFile>();
 
 // The public `write`/`makeFile` payload types stay exactly what the daemon
 // promises callers: a `DirectoryWriteSource` for `write`, and an optional
-// `string` for `makeFile`'s content.
+// readable blob or string for `makeFile`'s content.
 expectTypeOf<
   Parameters<EndoMount['write']>[1]
 >().toEqualTypeOf<DirectoryWriteSource>();
 expectTypeOf<Parameters<EndoMount['makeFile']>[1]>().toEqualTypeOf<
-  string | undefined
+  import('@endo/platform/fs/lite/types').ReadableBlobSource | string | undefined
 >();
 
 // Runtime patterns cannot encode the semantic payload of a promise, but each
@@ -89,10 +99,10 @@ expectTypeOf<ReturnType<RuntimeMount['maybeLookup']>>().toExtend<
   PromiseLike<unknown>
 >();
 
-// The runtime guard's `makeFile` content parameter must track the same
-// optional-`string` contract as the static `EndoMount` method.
-expectTypeOf<Parameters<RuntimeMount['makeFile']>[1]>().toEqualTypeOf<
-  string | undefined
+// The runtime guard admits the static semantic payload. The guard's remotable
+// arm is intentionally broader than the ReadableBlobSource refinement.
+expectTypeOf<Parameters<EndoMount['makeFile']>[1]>().toExtend<
+  Parameters<RuntimeMount['makeFile']>[1]
 >();
 
 // The portable `EndoMountEntry` a caller constructs must be accepted

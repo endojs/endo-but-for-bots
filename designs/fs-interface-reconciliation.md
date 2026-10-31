@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-18 |
-| **Updated** | 2026-06-19 |
+| **Updated** | 2026-10-31 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
@@ -18,7 +18,7 @@ Adopted onto `claude/fs-object-interfaces-m9tcat` and checked against the
 live code (not just the prior designs).
 A first code audit folded in two corrections (below); a **second-round design
 review then found genuine holes in the catalog and the merge mechanism** —
-the catalog broke its own "same name ⇒ same signature" rule on `lookup` and
+the catalog broke its own "same name => same signature" rule on `lookup` and
 `write`, the `__getMethodNames__` viewer contract was unsound as a result, and
 the D4 "sloppy-extended tier" was not a realizable guard composition.
 Those are now resolved in
@@ -118,12 +118,54 @@ endo-fs's `lookup`/`move` calling conventions, now aligned (`lookup` is
 survives as the cross-cap `rename` primitive 9p-server needs). `subView` was
 added to the `Mount` as a genuinely-confined attenuator (F8). `copy(fromPath,
 toPath)` was added to the extended `Directory` (recursive, binary-safe),
-closing the last catalog-method gap. The `@endo/platform/fs` `Directory` guard
-itself remains an unimplemented minimal vocabulary.
+closing the last catalog-method gap. The minimal `@endo/platform/fs`
+`Directory` guard does not yet carry the catalog's `subView` or `makeFile`
+(next paragraph).
 
 **D4 / Phase 1.5 (done).** `@endo/endo-fs` has been retired into
 `@endo/platform/fs/extended`; all six consumers are re-homed. See the commit
 `refactor: retire @endo/endo-fs into @endo/platform/fs/extended`.
+
+**Remaining Phase 1 catalog work (partially landed).** Immutable
+`SnapshotTree` capabilities implement the D6 observation contract:
+`followNameChanges()` returns an immediately-terminating reader, and the
+portable `SnapshotTreeInterface` requires it. `EndoMount.makeFile` returns the
+live `EndoMountFile` and accepts UTF-8 text or a `ReadableBlob` source (a
+`ReadableTree` source is rejected before any mutation). Two catalog promotions
+are deliberately withheld from the minimal portable `Directory` and
+`SnapshotTree` contracts:
+
+- `subView` stays on `EndoMount` and the extended `Directory` until its public
+  name is settled (see the open question below). Promoting the name into every
+  third-party implementation would lock in a migration the maintainer may
+  reverse.
+- `makeFile` stays mount-specific. A portable `Directory.makeFile` returning a
+  platform `File` cannot be satisfied by `EndoMountFile`, whose `snapshot()`
+  yields a daemon readable with an asynchronous `sha256()` rather than a
+  `SnapshotBlob`. The composition `write(path, blob)` then `lookup(path)`
+  already expresses the job on every `Directory`.
+
+The earlier `streamRead` proposal was superseded by the shipped `bytes()`
+reader plus `byteRange()` / `textRange()` attenuation surface described in
+[readableblob-range-attenuation.md](readableblob-range-attenuation.md). Every
+later mention of `streamRead` in this document is historical.
+
+**Performance claims (not benchmarked).** The round-trip statements below
+(a depth-N path-array `lookup` is one message; a pipelined `lookupStep` chain
+collapses into one round trip) are message counts that follow from the call
+shapes under CapTP, not measured latencies. The `File.snapshot()` peer-CAS
+cache-hit short-circuit is pre-existing endo-fs behavior that this design
+retains unchanged. No benchmark accompanies this design: it changes method
+names and contracts, not the I/O paths those claims describe. Measuring them
+belongs to the peer-CAS work that relies on the short-circuit.
+
+**Open question: the attenuator's name.** The maintainer asked on
+[endojs/endo-but-for-bots#464](https://github.com/endojs/endo-but-for-bots/pull/464#discussion_r3434032260)
+for the re-root attenuator to be named `mount`. D5 records `subView`, which
+already ships on `EndoMount` and the extended `Directory`. Until the name is
+settled, `subView` is not promoted into the minimal portable `Directory` or
+`SnapshotTree` contracts, so a future rename touches only those existing
+surfaces.
 
 ## What is the Problem Being Solved?
 
@@ -141,7 +183,7 @@ The three were drafted independently to solve overlapping but not identical prob
 A method to do a particular job has different names in each.
 `Directory.lookup(['a', 'b'])` (platform-fs) is `E(dir).lookup('a').lookup('b')` (endo-fs) is `mount.lookup(['a', 'b'])` (daemon-mount).
 `Directory.write(path, blob)` (platform-fs) covers what `Directory.create(name).write(offset)` (endo-fs) covers what `mount.write(path, value)` (daemon-mount) covers.
-`File.snapshot() → SnapshotBlob` (platform-fs) overlaps with `File.snapshot() → BlobRef` (endo-fs).
+`File.snapshot() -> SnapshotBlob` (platform-fs) overlaps with `File.snapshot() -> BlobRef` (endo-fs).
 
 The maintainer's framing (recorded verbatim under [Prompt](#prompt)):
 
@@ -421,7 +463,7 @@ checked against them.
    `write(offset)`), `qid` identity, pageable `Cursor`, advisory `Lock`,
    `Xattrs`, `NodeWatcher` — the POSIX-adjacent primitives the bridge needs.
 3. **A backing seam (`FsBackend`), not per-backing reimplementation.** The
-   `wrapBackend(backend) → Filesystem` upper layer owns all the exo plumbing
+   `wrapBackend(backend) -> Filesystem` upper layer owns all the exo plumbing
    once; each backing (in-memory, node-fs, from-mount, CAS-cached, CoW layer)
    implements a small required-core-plus-optional protocol. This is the seam
    the retire/merge must carry across intact — it is *why* new backings are
@@ -450,32 +492,32 @@ No driver above is dropped; each is relocated, not deleted.
 | Job | platform/fs | daemon-mount | endo-fs |
 |---|---|---|---|
 | Test entry presence | `tree.has(...path)` | `mount.has(...path \| path[] \| entry)` | none directly; `Directory.lookup(name)` returns ENOENT-equivalent |
-| List directory | `tree.list(...path)` | `mount.list(...path)` | `Directory.list() → Cursor`; cursor reads pages |
-| Resolve child | `tree.lookup(...path) → Blob \| Tree` | `mount.lookup(path) → MountFile \| sub-Mount` | `Directory.lookup(name) → File \| Directory` (one segment) |
-| Read blob to text | `blob.text()` | `mount.readText(path)` (path) / `file.text()` (file exo) | `OpenFile.read(0, length)` → stream; no text shortcut |
-| Read blob to stream | `blob.streamBase64()` | `file.streamBase64()` | `OpenFile.read(offset, length) → PassableBytesReader`; `File.snapshot().fetch(...)` |
-| Write blob (whole) | `dir.write(path, blob)` | `mount.write(path, value)` (string or `ReadableBlob`); also `mount.writeText(path, string)` | `Directory.create(name).write(0)` → writer stream |
-| Write blob (range) | absent | absent | `OpenFile.write(offset)` → writer stream |
+| List directory | `tree.list(...path)` | `mount.list(...path)` | `Directory.list() -> Cursor`; cursor reads pages |
+| Resolve child | `tree.lookup(...path) -> Blob \| Tree` | `mount.lookup(path) -> MountFile \| sub-Mount` | `Directory.lookup(name) -> File \| Directory` (one segment) |
+| Read blob to text | `blob.text()` | `mount.readText(path)` (path) / `file.text()` (file exo) | `OpenFile.read(0, length)` -> stream; no text shortcut |
+| Read blob to stream | `blob.streamBase64()` | `file.streamBase64()` | `OpenFile.read(offset, length) -> PassableBytesReader`; `File.snapshot().fetch(...)` |
+| Write blob (whole) | `dir.write(path, blob)` | `mount.write(path, value)` (string or `ReadableBlob`); also `mount.writeText(path, string)` | `Directory.create(name).write(0)` -> writer stream |
+| Write blob (range) | absent | absent | `OpenFile.write(offset)` -> writer stream |
 | Remove | `dir.remove(path)` | `mount.remove(path)` | `Directory.unlink(name)` / `Directory.remove(name)` |
 | Rename / move | `dir.move(from, to)` | `mount.move(from, to)` | `Directory.rename(oldName, newParent, newName)` |
-| Create directory | `dir.makeDirectory(path) → Directory` | `mount.makeDirectory(path) → sub-Mount` | `Directory.makeDirectory(name) → Directory` (canonical) / `Directory.mkdir(name)` (legacy alias) |
-| Read-only attenuation | `mutable.readOnly() → Readable*` | `mount.readOnly() → ReadableTree` | `readOnly(fs)` (top-level composer, not a method) |
-| Snapshot to CAS | `dir.snapshot() → SnapshotTree`; `file.snapshot() → SnapshotBlob` | `mount.snapshot() → SnapshotTree` | `File.snapshot() → BlobRef \| null` |
+| Create directory | `dir.makeDirectory(path) -> Directory` | `mount.makeDirectory(path) -> sub-Mount` | `Directory.makeDirectory(name) -> Directory` (canonical) / `Directory.mkdir(name)` (legacy alias) |
+| Read-only attenuation | `mutable.readOnly() -> Readable*` | `mount.readOnly() -> ReadableTree` | `readOnly(fs)` (top-level composer, not a method) |
+| Snapshot to CAS | `dir.snapshot() -> SnapshotTree`; `file.snapshot() -> SnapshotBlob` | `mount.snapshot() -> SnapshotTree` | `File.snapshot() -> BlobRef \| null` |
 | Stat / metadata | absent on Readable; would live on Mutable | `mount.stat(path)` | `Node.getAttrs()` / `Node.getStat()` |
 | Sub-directory view | absent (deferred to "future VFS layer" per platform-fs Decision) | `mount.makeDirectory(path)` returns a sub-Mount (the same `MountInterface`) | `chroot(fs, [path])` (composer) |
-| Watch / observe | absent | `EndoMount.followNameChanges` (PR #277, open) | `Node.watch() → NodeWatcher`; `Directory.watchFrom() → { cursor, watcher }` |
-| Help / introspection | absent | `mount.help() → string` | `Filesystem.help()` / `Node.help()` / every cap's `help()` |
+| Watch / observe | absent | `EndoMount.followNameChanges` (PR #277, open) | `Node.watch() -> NodeWatcher`; `Directory.watchFrom() -> { cursor, watcher }` |
+| Help / introspection | absent | `mount.help() -> string` | `Filesystem.help()` / `Node.help()` / every cap's `help()` |
 
 The key divergences:
 
 1. **Path-array versus one-step-per-cap.**
    platform/fs and daemon-mount take `string[]` paths and walk in one call.
    endo-fs takes one `string` per `lookup` and relies on CapTP pipelining to collapse depth-N walk into one round-trip.
-   Both are intentional — but they **cannot share the name `lookup`** without breaking the catalog's own "same name ⇒ same signature" rule (a viewer calling `E(cap).lookup(['a','b'])` would fail the endo-fs guard, which accepts only one `string`).
-   **Resolution (review finding 1):** the catalog's `lookup` is the **path-array** form (`lookup(...path: string[])`), which is a single real round-trip for a depth-N walk on every backing that has it (the from-mount adapter already calls `E(rootMount).lookup(path)` with the whole array). The one-segment pipelining-optimized walk keeps endo-fs's behavior under a **distinct name, `lookupStep(name: string)`**. Same name ⇒ same signature is preserved; the two genuinely-different shapes get two names.
+   Both are intentional — but they **cannot share the name `lookup`** without breaking the catalog's own "same name => same signature" rule (a viewer calling `E(cap).lookup(['a','b'])` would fail the endo-fs guard, which accepts only one `string`).
+   **Resolution (review finding 1):** the catalog's `lookup` is the **path-array** form (`lookup(...path: string[])`), which is a single real round-trip for a depth-N walk on every backing that has it (the from-mount adapter already calls `E(rootMount).lookup(path)` with the whole array). The one-segment pipelining-optimized walk keeps endo-fs's behavior under a **distinct name, `lookupStep(name: string)`**. Same name => same signature is preserved; the two genuinely-different shapes get two names.
 2. **Stream-shaped read versus whole-blob read.**
    platform/fs has `text()` / `json()` / `streamBase64()` (whole) and no range read.
-   endo-fs has `OpenFile.read(offset, length) → reader` (range) and no whole-blob convenience.
+   endo-fs has `OpenFile.read(offset, length) -> reader` (range) and no whole-blob convenience.
    The catalog must name both, with the whole-blob form layered atop the range form for backings that have it.
 3. **Snapshot return type.**
    platform/fs returns a `SnapshotBlob` / `SnapshotTree` (cap with `sha256()`).
@@ -522,33 +564,33 @@ Every backing in §Backing-implementation conformance matrix implements a subset
 
 | Method | Signature | Returns |
 |---|---|---|
-| `has` | `has(...path: string[]) → Promise<boolean>` | True if a child exists at `path`. Empty path is "this node exists" (always true for a live cap). |
-| `list` | `list(...path: string[]) → Promise<string[]>` | Sorted entry names at `path`. Throws if `path` is not a directory. Names that resolve outside the cap's confinement are excluded silently per the daemon-mount precedent. |
-| `lookup` | `lookup(...path: string[]) → Promise<ReadableBlob \| ReadableTree>` (Readable surface) or `Promise<File \| Directory \| sub-Mount>` (Mutable surface) | Resolve a path to its cap in **one** signature on every backing — the **path-array** form, which is a single round-trip for a depth-N walk and always returns the deepest cap. This is the catalog's canonical `lookup`; endo-fs's one-segment variant is renamed to `lookupStep` (next row) so `lookup` never carries two signatures. (Per review finding 1.) |
-| `lookupStep` | `lookupStep(name: string) → Promise<File \| Directory>` (cap-FS backings that opt in) | Resolve a **single** path segment, the CapTP-pipelining-optimized walk (`E(d).lookupStep('a')` then `.lookupStep('b')` collapses depth-N into one round-trip via promise-chaining). endo-fs's existing `lookup(name)` is renamed here; backings without range-FS ambitions need not implement it (the viewer always has the path-array `lookup`). |
-| `stat` | `stat(...path: string[]) → Promise<Attrs>` | Size, mtime, atime, ctime, btime. POSIX-isms (mode, owner, nlink) live in a future `PosixFs` companion cap per endo-fs DESIGN.md §9. |
-| `streamBase64` | `streamBase64() → ReaderRef<string>` (Blob caps only) | Read entire blob as base64-encoded chunks. Falls back to the catalog's `read(offset, length)` form for backings that prefer range reads. |
-| `text` | `text() → Promise<string>` | Read entire blob as UTF-8 text. |
-| `json` | `json() → Promise<unknown>` | Read entire blob as parsed JSON. |
-| `streamRead` | `streamRead(offset?: bigint, length?: bigint) → ReaderRef<Uint8Array>` (Blob caps that opt in) | Range-shaped streaming read. Aliased to `OpenFile.read(offset, length)` for endo-fs backings. Not on Readable caps that have no range surface. |
+| `has` | `has(...path: string[]) -> Promise<boolean>` | True if a child exists at `path`. Empty path is "this node exists" (always true for a live cap). |
+| `list` | `list(...path: string[]) -> Promise<string[]>` | Sorted entry names at `path`. Throws if `path` is not a directory. Names that resolve outside the cap's confinement are excluded silently per the daemon-mount precedent. |
+| `lookup` | `lookup(...path: string[]) -> Promise<ReadableBlob \| ReadableTree>` (Readable surface) or `Promise<File \| Directory \| sub-Mount>` (Mutable surface) | Resolve a path to its cap in **one** signature on every backing — the **path-array** form, which is a single round-trip for a depth-N walk and always returns the deepest cap. This is the catalog's canonical `lookup`; endo-fs's one-segment variant is renamed to `lookupStep` (next row) so `lookup` never carries two signatures. (Per review finding 1.) |
+| `lookupStep` | `lookupStep(name: string) -> Promise<File \| Directory>` (cap-FS backings that opt in) | Resolve a **single** path segment, the CapTP-pipelining-optimized walk (`E(d).lookupStep('a')` then `.lookupStep('b')` collapses depth-N into one round-trip via promise-chaining). endo-fs's existing `lookup(name)` is renamed here; backings without range-FS ambitions need not implement it (the viewer always has the path-array `lookup`). |
+| `stat` | `stat(...path: string[]) -> Promise<Attrs>` | Size, mtime, atime, ctime, btime. POSIX-isms (mode, owner, nlink) live in a future `PosixFs` companion cap per endo-fs DESIGN.md §9. |
+| `streamBase64` | `streamBase64() -> ReaderRef<string>` (Blob caps only) | Read entire blob as base64-encoded chunks. Falls back to the catalog's `read(offset, length)` form for backings that prefer range reads. |
+| `text` | `text() -> Promise<string>` | Read entire blob as UTF-8 text. |
+| `json` | `json() -> Promise<unknown>` | Read entire blob as parsed JSON. |
+| `streamRead` | *Superseded* by `bytes()` plus `byteRange()` / `textRange()` attenuation ([readableblob-range-attenuation.md](readableblob-range-attenuation.md)); kept here as the original proposal. `streamRead(offset?: bigint, length?: bigint) -> ReaderRef<Uint8Array>` (Blob caps that opt in) | Range-shaped streaming read. Aliased to `OpenFile.read(offset, length)` for endo-fs backings. Not on Readable caps that have no range surface. |
 
 ### Mutation
 
 | Method | Signature | Returns |
 |---|---|---|
-| `write` | `write(path: string[], value: ReadableBlob \| string \| ReadableTree) → Promise<void>` | Write or overwrite an entry at `path`. String value means UTF-8 text; `ReadableBlob` streams. `ReadableTree` value triggers recursive copy. Creates parents as needed. |
-| `writeText` | `writeText(content: string) → Promise<void>` (Mutable Blob) | Whole-text convenience on a blob, peer of `writeBytes` / `append`. One signature only (per the same-name-implies-same-signature invariant, review finding 3). Writing text to a *named tree entry* is not a second `writeText`; it is `write(path, content)`, whose `string` value is UTF-8 text. |
-| `writeBytes` | `writeBytes(readable: AsyncIterable<Uint8Array>) → Promise<void>` (Mutable Blob) | Convenience for streaming bytes into a blob. |
-| `append` | `append(text: string) → Promise<void>` (Mutable Blob) | Append text to a blob. |
-| `remove` | `remove(path: string[]) → Promise<void>` | Remove a file or empty directory. Recursive remove is caller's responsibility per the daemon-mount precedent. |
-| `move` | `move(source: string[], target: string[]) → Promise<void>` | Move an entry from `source` to `target`. Semantics follow [daemon-move-transfer-negotiation](daemon-move-transfer-negotiation.md): same-mount POSIX `renameat` to cross-peer CapTP byte stream, negotiated. |
-| `copy` | `copy(source: string[], target: string[]) → Promise<void>` | Copy an entry (recursive for directories). **Observable equivalence:** on a mutable backing (mount, extended) the target is independent byte storage, so writing one handle does not affect the other; on a CAS-backed tree the copy is a refcount bump and the two handles share content-addressed bytes until one is rewritten (copy-on-write). Callers needing an independently writable duplicate must not assume independence on CAS without a subsequent write. Copying a tree into its own descendant is rejected. |
-| `makeDirectory` | `makeDirectory(path: string[]) → Promise<Directory \| sub-Mount>` | Create a directory at `path` (recursive). Return value is the live cap for the new subtree. |
-| `makeFile` | `makeFile(path: string[], initial?: ReadableBlob \| string) → Promise<File>` (Mutable Tree) | Create a file at `path` and return its cap. Convenience for "open a new file for editing" without going through `write` first. |
+| `write` | `write(path: string[], value: ReadableBlob \| string \| ReadableTree) -> Promise<void>` | Write or overwrite an entry at `path`. String value means UTF-8 text; `ReadableBlob` streams. `ReadableTree` value triggers recursive copy. Creates parents as needed. |
+| `writeText` | `writeText(content: string) -> Promise<void>` (Mutable Blob) | Whole-text convenience on a blob, peer of `writeBytes` / `append`. One signature only (per the same-name-implies-same-signature invariant, review finding 3). Writing text to a *named tree entry* is not a second `writeText`; it is `write(path, content)`, whose `string` value is UTF-8 text. |
+| `writeBytes` | `writeBytes(readable: AsyncIterable<Uint8Array>) -> Promise<void>` (Mutable Blob) | Convenience for streaming bytes into a blob. |
+| `append` | `append(text: string) -> Promise<void>` (Mutable Blob) | Append text to a blob. |
+| `remove` | `remove(path: string[]) -> Promise<void>` | Remove a file or empty directory. Recursive remove is caller's responsibility per the daemon-mount precedent. |
+| `move` | `move(source: string[], target: string[]) -> Promise<void>` | Move an entry from `source` to `target`. Semantics follow [daemon-move-transfer-negotiation](daemon-move-transfer-negotiation.md): same-mount POSIX `renameat` to cross-peer CapTP byte stream, negotiated. |
+| `copy` | `copy(source: string[], target: string[]) -> Promise<void>` | Copy an entry (recursive for directories). **Observable equivalence:** on a mutable backing (mount, extended) the target is independent byte storage, so writing one handle does not affect the other; on a CAS-backed tree the copy is a refcount bump and the two handles share content-addressed bytes until one is rewritten (copy-on-write). Callers needing an independently writable duplicate must not assume independence on CAS without a subsequent write. Copying a tree into its own descendant is rejected. |
+| `makeDirectory` | `makeDirectory(path: string[]) -> Promise<Directory \| sub-Mount>` | Create a directory at `path` (recursive). Return value is the live cap for the new subtree. |
+| `makeFile` | `makeFile(path: string[], initial?: ReadableBlob \| string) -> Promise<File>` (Mutable Tree) | Create a file at `path` and return its cap. Convenience for "open a new file for editing" without going through `write` first. |
 
 **`write` is not endo-fs's `create` (review finding 2).** The catalog's
-`write(path, value) → Promise<void>` is fire-and-forget whole-blob. endo-fs's
-`create(name) → OpenFile` returns a *writer the caller must drive* — a
+`write(path, value) -> Promise<void>` is fire-and-forget whole-blob. endo-fs's
+`create(name) -> OpenFile` returns a *writer the caller must drive* — a
 different name, arity, and return type, so it stays a **distinct** method on
 the extended `File` / `Directory` surface (it is range-I/O, not whole-blob).
 A backing whose only write primitive is a writer stream (endo-fs) implements
@@ -561,36 +603,36 @@ range I/O").
 
 | Method | Signature | Returns |
 |---|---|---|
-| `readOnly` | `readOnly() → ReadableBlob \| ReadableTree` | Structural attenuation (per platform-fs Decision 4). Returned cap has only the Readable methods; mutation methods are *absent*, not *throwing*. |
-| `subView` | `subView(path: string[]) → Promise<Directory \| sub-Mount \| ReadableTree>` | The future-VFS-layer method platform-fs defers (under the working name `subDir`) and daemon-capability-filesystem calls out. Re-roots the receiver at `path`. Returned cap cannot navigate above the new root (no parent reference); confinement is structural. For `mount`, identical to `lookup(path)` when `path` resolves to a directory plus a confinement-root shift; existing `provideSubMount` host method is the formula-bearing realization. Named `subView` (not `subDir`) per [Resolved decisions](#resolved-decisions-2026-06-18) D5. |
+| `readOnly` | `readOnly() -> ReadableBlob \| ReadableTree` | Structural attenuation (per platform-fs Decision 4). Returned cap has only the Readable methods; mutation methods are *absent*, not *throwing*. |
+| `subView` | `subView(path: string[]) -> Promise<Directory \| sub-Mount \| ReadableTree>` | The future-VFS-layer method platform-fs defers (under the working name `subDir`) and daemon-capability-filesystem calls out. Re-roots the receiver at `path`. Returned cap cannot navigate above the new root (no parent reference); confinement is structural. For `mount`, identical to `lookup(path)` when `path` resolves to a directory plus a confinement-root shift; existing `provideSubMount` host method is the formula-bearing realization. Named `subView` (not `subDir`) per [Resolved decisions](#resolved-decisions-2026-06-18) D5. |
 
 ### Snapshot
 
 | Method | Signature | Returns |
 |---|---|---|
-| `snapshot` | `snapshot() → Promise<SnapshotBlob \| SnapshotTree>` | Capture the cap's current state into the host's `SnapshotStore` and return the content-addressed cap. The catalog adopts platform-fs's `SnapshotBlob` / `SnapshotTree` shape (with `sha256()` method), **not** endo-fs's `BlobRef \| null` shape. See [Design Decisions](#design-decisions) Decision 3 for why. Backings that cannot cheaply produce a snapshot return a rejected promise with a structured error naming the gap (not `null`). **endo-fs's existing `File.snapshot() → BlobRef \| null` is a *different* method that stays on the extended surface** (it optimizes a peer-CAS cache-hit short-circuit and is allowed to return `null`); a backing satisfies the *catalog* `snapshot` only through the `BlobRef → SnapshotBlob` adapter (endo-fs ROADMAP F6, **not yet built**), so the matrix marks endo-fs `snapshot` as `I*` pending that adapter (review finding 7). |
+| `snapshot` | `snapshot() -> Promise<SnapshotBlob \| SnapshotTree>` | Capture the cap's current state into the host's `SnapshotStore` and return the content-addressed cap. The catalog adopts platform-fs's `SnapshotBlob` / `SnapshotTree` shape (with `sha256()` method), **not** endo-fs's `BlobRef \| null` shape. See [Design Decisions](#design-decisions) Decision 3 for why. Backings that cannot cheaply produce a snapshot return a rejected promise with a structured error naming the gap (not `null`). **endo-fs's existing `File.snapshot() -> BlobRef \| null` is a *different* method that stays on the extended surface** (it optimizes a peer-CAS cache-hit short-circuit and is allowed to return `null`); a backing satisfies the *catalog* `snapshot` only through the `BlobRef -> SnapshotBlob` adapter (endo-fs ROADMAP F6, **not yet built**), so the matrix marks endo-fs `snapshot` as `I*` pending that adapter (review finding 7). |
 
 ### Observation
 
 | Method | Signature | Returns |
 |---|---|---|
-| `followNameChanges` | `followNameChanges() → ReaderRef<NameChangeEvent>` | Returns a **remotable async-iterator reference** (a `ReaderRef`), matching the live `EndoDirectory.followNameChanges` shape (`M.call().returns(M.remotable())`, in the daemon's shared `nameHubMethodGuards` record) — **not** a `Promise<AsyncIterable>`. The catalog standardizes on the remotable-ref form for every backing; the other daemon hubs that currently declare `M.promise()` are brought to the `remotable()` form as part of [filesystem-watchers.md](filesystem-watchers.md) (review finding 6). Per [Resolved decisions](#resolved-decisions-2026-06-18) D6, implementations that cannot observe (CAS; immutable snapshots) return an **immediately-terminating empty** `ReaderRef` (not a rejected promise, not absent) so polymorphic consumers can call it without a presence check; memfs without a registered listener likewise returns an immediately-terminating `ReaderRef`. The viewer reads an immediately-closed stream as "snapshot / point-in-time." |
+| `followNameChanges` | `followNameChanges() -> ReaderRef<NameChangeEvent>` | Returns a **remotable async-iterator reference** (a `ReaderRef`), matching the live `EndoDirectory.followNameChanges` shape (`M.call().returns(M.remotable())`, in the daemon's shared `nameHubMethodGuards` record) — **not** a `Promise<AsyncIterable>`. The catalog standardizes on the remotable-ref form for every backing; the other daemon hubs that currently declare `M.promise()` are brought to the `remotable()` form as part of [filesystem-watchers.md](filesystem-watchers.md) (review finding 6). Per [Resolved decisions](#resolved-decisions-2026-06-18) D6, implementations that cannot observe (CAS; immutable snapshots) return an **immediately-terminating empty** `ReaderRef` (not a rejected promise, not absent) so polymorphic consumers can call it without a presence check; memfs without a registered listener likewise returns an immediately-terminating `ReaderRef`. The viewer reads an immediately-closed stream as "snapshot / point-in-time." |
 
 ### Discoverability
 
 | Method | Signature | Returns |
 |---|---|---|
-| `help` | `help() → string` (or `help(level?: string) → string`) | Helpdown-formatted description of the cap, its method set, and any backing-specific notes. |
-| `__getMethodNames__` | `__getMethodNames__() → string[]` | CapTP-introspection method automatically provided by `makeExo`. The filesystem viewer uses this to discover which catalog methods the backing exposes. Per [project/AGENTS.md](../AGENTS.md) § CapTP introspection. |
+| `help` | `help() -> string` (or `help(level?: string) -> string`) | Helpdown-formatted description of the cap, its method set, and any backing-specific notes. |
+| `__getMethodNames__` | `__getMethodNames__() -> string[]` | CapTP-introspection method automatically provided by `makeExo`. The filesystem viewer uses this to discover which catalog methods the backing exposes. Per [project/AGENTS.md](../AGENTS.md) § CapTP introspection. |
 
 ### Methods deliberately NOT in the catalog
 
 | Method | Why not |
 |---|---|
-| `OpenFile.read` / `OpenFile.write` (range I/O with explicit close) | endo-fs's surface; tuned for 9P / FUSE bridge. Not appropriate for the general filesystem viewer. Backings that expose it (endo-fs) keep the method on their own `File` cap. The catalog's `streamRead(offset, length)` exposes the same job without the open / close handshake. |
+| `OpenFile.read` / `OpenFile.write` (range I/O with explicit close) | endo-fs's surface; tuned for 9P / FUSE bridge. Not appropriate for the general filesystem viewer. Backings that expose it (endo-fs) keep the method on their own `File` cap. The catalog's range-read job (shipped as `bytes()` plus `byteRange()` attenuation, superseding `streamRead`) exposes the same job without the open / close handshake. |
 | `lock` / `getLock` | endo-fs surface for advisory locks. The viewer does not need this. |
 | `xattrs` | endo-fs surface for extended attributes. The viewer does not need this in v1; a `metadata` convenience could be layered later. |
-| `Cursor` (streaming directory iteration) | endo-fs surface for very large directories. The catalog's `list(path) → string[]` is the convenience; backings that need to stream very large directories expose `Cursor` separately. |
+| `Cursor` (streaming directory iteration) | endo-fs surface for very large directories. The catalog's `list(path) -> string[]` is the convenience; backings that need to stream very large directories expose `Cursor` separately. |
 | `identify` / `locate` / `followNameChanges`-on-formula-system-paths | Formula-system concepts (per platform-fs Decision: stops-at-filesystem-boundary). `followNameChanges` in the catalog is the *filesystem* sense, not the formula-system sense. |
 | `chmod` / `chown` / POSIX mode bits | POSIX-isms; live in a future `PosixFs` companion cap per endo-fs DESIGN.md §9. Host-not-mount-controlled per daemon-mount Decision. |
 
@@ -606,10 +648,10 @@ Cells are: **I** (implemented), **A** (absent on this backing's interface; viewe
 | `list` | I | I | I (`Cursor.toArray`) | I | I |
 | `lookup` | I (path-array) | I (path-array) | I (path-array walk; also `lookupStep`) | I (path-array) | I (path-array) |
 | `stat` | I | I | I (`getStat`) | A (no mtime; immutable) | A (no blob content) |
-| `streamBase64` | I (on `EndoMountFile`) | I | A (use `streamRead`) | I (on `EndoReadable`) | A |
-| `text` | I (on file exo); `readText(path)` on mount | I | A (use `streamRead` + decode) | I | A |
+| `streamBase64` | I (on `EndoMountFile`) | I | A (range reads via `OpenFile.read`) | I (on `EndoReadable`) | A |
+| `text` | I (on file exo); `readText(path)` on mount | I | A (range reads via `OpenFile.read` + decode) | I | A |
 | `json` | I (file exo) | I | A | I | A |
-| `streamRead` | A (no range I/O) | A | I (`OpenFile.read`) | A (whole blob only) | A |
+| `streamRead` (historical; superseded by `bytes()` + `byteRange()`) | A (no range I/O) | A | I (`OpenFile.read`) | A (whole blob only) | A |
 | `write` | I | I | I (whole-blob `write` wrapper over `create` + writer; `create` stays for range I/O) | A (immutable) | I (writes a name-binding, not blob content) |
 | `writeText` | I | I | A | A | A |
 | `writeBytes` | I (file exo) | I | I (`OpenFile.write`) | A | A |
@@ -618,10 +660,10 @@ Cells are: **I** (implemented), **A** (absent on this backing's interface; viewe
 | `move` | I (same-mount POSIX `renameat`) | I | I (`rename` cross-Directory) | D (refcount swap per move-transfer Tier 4) | I (rebind name) |
 | `copy` | I (filesystem `cp`) | I | I | D (refcount bump) | I (alias name) |
 | `makeDirectory` | I | I | I (`mkdir`) | A (CAS does not have a "create empty directory" verb) | I |
-| `makeFile` | I | I | I (`create`) | A | A (name hub does not have a blob-content concept) |
+| `makeFile` | I (mount-specific; not on the minimal portable `Directory`) | I | I (`create`) | A | A (name hub does not have a blob-content concept) |
 | `readOnly` | I | I | I (composer `readOnly(fs)`) | I (identity; CAS is already read-only) | I |
-| `subView` | I (confinement-shifting attenuator: `EndoMount.subView` returns a sub-mount whose own `confinementRoot` is the target, so `..` clamps at the sub-view root — see review finding 8; `provideSubMount` remains the persisted-formula form) | I (same) | I (`chroot(fs, path)`) | I (descend the tree manifest) | I (re-root the name hub) |
-| `snapshot` | I (writes a `readable-tree` to CAS) | I (same) | I\* (whole-tree checkin; the `BlobRef → SnapshotBlob` adapter that yields the catalog shape is endo-fs ROADMAP F6, **not yet built** — see review finding 7) | I (identity; already a snapshot) | A (name bindings have no content to snapshot; viewer surfaces gap) |
+| `subView` | I (confinement-shifting attenuator: `EndoMount.subView` returns a sub-mount whose own `confinementRoot` is the target, so `..` clamps at the sub-view root — see review finding 8; `provideSubMount` remains the persisted-formula form) | I (same) | I (`chroot(fs, path)`) | A (deferred until the attenuator's name is settled) | I (re-root the name hub) |
+| `snapshot` | I (writes a `readable-tree` to CAS) | I (same) | I\* (whole-tree checkin; the `BlobRef -> SnapshotBlob` adapter that yields the catalog shape is endo-fs ROADMAP F6, **not yet built** — see review finding 7) | I (identity; already a snapshot) | A (name bindings have no content to snapshot; viewer surfaces gap) |
 | `followNameChanges` | I (PR #277) | I (PR #277) | I (in-memory event emitter) | I (immediately-terminating empty stream; CAS is immutable — see D6) | I (existing EndoDirectory method) |
 | `help` | I | I | I | I | I |
 
@@ -631,7 +673,7 @@ the extended surface implements it). Mount and scratch-mount implement 21
 directly (all but `streamRead`, which is absent); `subView` is now a real
 confinement-shifting attenuator (`EndoMount.subView`). endo-fs in-memory
 implements 17 (`snapshot` via the as-yet-unbuilt
-`BlobRef → SnapshotBlob` adapter). CAS implements 11 directly plus 2 deferred
+`BlobRef -> SnapshotBlob` adapter). CAS implements 11 directly plus 2 deferred
 (`move` / `copy` as refcount operations per move-transfer Tier 4). Name hub
 implements 12 (no blob content surface).
 
@@ -652,7 +694,7 @@ one-segment walk split off as `lookupStep`) and `write` is whole-blob
 everywhere (with range I/O split off as `create`), a name in the set implies
 its catalog signature. The viewer must therefore call a discovered method
 **only with the catalog signature**, never a backing-specific one — and the
-catalog's same-name⇒same-signature rule (now actually enforced, per findings
+catalog's same-name=>same-signature rule (now actually enforced, per findings
 1–2) is what makes that guarantee hold. A backing that exposed a same-named,
 different-signature method would break this contract; the merge into the
 single coherent extended guard (D4 / [Phase 1.5](#phase-15-endo-fs-retires-into-endoplatformfs))
@@ -749,15 +791,21 @@ A backing whose state is in the local process (memfs) is free to resolve its ret
 Existing call sites are categorized by which divergent name they use.
 The migration introduces aliases (both names exist on the wire) for one minor release, then the legacy name is removed.
 
-### Phase 1: Catalog land (no behavior change)
+### Phase 1: Catalog land (additive behavior)
 
-- Land the catalog in `packages/platform/src/fs/interfaces.js` as the canonical guards. (Already there for the platform-fs subset.)
-- Land `subView` on `Directory` / `Mutable Tree` guards as a new method per the catalog (named `subView`, not `subDir`, per D5).
-- Land `followNameChanges` on `MountInterface` per [filesystem-watchers.md](filesystem-watchers.md) (PR #277).
-- Land `streamRead` on `Blob` guards as an opt-in method (backings that have range I/O implement it; others leave it absent).
-- Land `makeFile` on `Mutable Tree` per the catalog (already on `MountInterface`; add to `DirectoryInterface` in platform/fs).
+Phase 1 adds methods and widens `EndoMount.makeFile` (it now returns the
+created file and accepts a `ReadableBlob`); it renames and removes nothing.
 
-The platform-fs guard set after Phase 1 is the canonical catalog.
+- [x] Land the catalog in `packages/platform/src/fs/interfaces.js` as the canonical guards.
+- [x] Land `subView` on `EndoMount` and the extended `Directory` per the catalog (named `subView`, not `subDir`, per D5).
+- [x] Land `followNameChanges` on `MountInterface` per [filesystem-watchers.md](filesystem-watchers.md), and the immediately-terminating D6 form on immutable snapshot trees.
+- [x] Land the range-read job on Blob guards. The delivered surface is the `bytes()` reader plus composable `byteRange()` / `textRange()` attenuation, which supersedes the earlier `streamRead` spelling.
+- [x] Land `makeFile` on `EndoMount`: it accepts text or a readable blob and returns the live file cap. The minimal portable `DirectoryInterface` does not declare it, because `EndoMountFile` is not a platform `File`.
+
+The platform-fs guard set after Phase 1 is the canonical catalog. Promoting
+the attenuator into the minimal portable `Directory` and `SnapshotTree` guards
+is not a Phase 1 deliverable: it waits on the attenuator-name open question
+and lands, under whichever name is chosen, as its own change.
 
 **Migration style: big-bang, not gradual** (maintainer decision 2026-06-18;
 [Resolved decisions](#resolved-decisions-2026-06-18) D3).
@@ -810,7 +858,7 @@ contradictions gone, the extended surface is **one coherent guard per type** —
 `@endo/platform/fs/extended`'s `Directory` / `File` are a *superset*
 `M.interface` that declares the catalog methods (with catalog signatures)
 **plus** the cap-FS methods (`lookupStep`, `create`, `open`, `Cursor`-returning
-`list`, `xattrs`, `watch`, `snapshot → BlobRef`, …) as explicitly-declared
+`list`, `xattrs`, `watch`, `snapshot -> BlobRef`, ...) as explicitly-declared
 members. Not `sloppy`-slack: every method is declared and guarded, so
 `__getMethodNames__` stays a faithful catalog and the viewer contract
 (below) is sound. `sloppy: true` is retained only for *forward* evolution
@@ -828,7 +876,7 @@ The migration sequencing inside the big-bang cutover is ordered so it is
 
 1. Land the cap-FS surface as a new `@endo/platform/fs/extended` entry (move
    `packages/endo-fs/src/*` under `packages/platform/src/fs/extended/`),
-   applying the `lookup → lookupStep` / `write`-vs-`create` renames so the
+   applying the `lookup -> lookupStep` / `write`-vs-`create` renames so the
    extended guards are coherent supersets of the catalog guards. The
    cap-FS engine lives strictly behind this entry; the minimal vocabulary
    (`@endo/platform/fs/lite`) is **not** touched, preserving platform-fs
@@ -859,7 +907,7 @@ catalog's `write` (whole blob) are not equivalent. Each site is reviewed.
 
 | Call site | Old | New |
 |---|---|---|
-| `packages/endo-fs/src/*` → `packages/platform/src/fs/extended/*` | `create` / `unlink` / `rename` / `mkdir` | catalog (`write` where whole-blob; `create` kept on the extended `File` for range I/O; `remove` / `move` / `makeDirectory` canonical) |
+| `packages/endo-fs/src/*` -> `packages/platform/src/fs/extended/*` | `create` / `unlink` / `rename` / `mkdir` | catalog (`write` where whole-blob; `create` kept on the extended `File` for range I/O; `remove` / `move` / `makeDirectory` canonical) |
 | `packages/9p-server/*` | endo-fs names + `@endo/endo-fs` import | catalog names + `@endo/platform/fs/extended` import |
 | `packages/claude-container/*` (9P bridge consumer) | `@endo/endo-fs` import | `@endo/platform/fs/extended` import |
 | `packages/chat` filesystem-viewer (new) | — | catalog names from day one |
@@ -946,7 +994,7 @@ deferred — there is no surviving `@endo/endo-fs` package to keep them honest.
    For a `ReadableTree` (CAS), `subView` descends the tree manifest and
    returns a `ReadableTree` over the subtree's root sha256.
 
-6. **`streamRead` is opt-in.**
+6. **`streamRead` is opt-in.** *(Historical: superseded by `bytes()` plus range attenuation.)*
    Range I/O makes sense for endo-fs (9P / FUSE bridge) and possibly for a future block-storage backing.
    It does not make sense for a CAS-resident blob (whole-blob fetch is the substrate's natural unit) or a name hub (no content).
    Backings opt in by listing `streamRead` in their interface; the viewer surfaces it only when present.
@@ -1013,7 +1061,7 @@ the design's original keep-diverged pick.
   coherent superset guard** — the catalog methods (catalog signatures) plus the
   cap-FS methods, all explicitly declared. This is only possible *because* the
   signature contradictions are removed first (review findings 1–2:
-  `lookup → lookupStep`, `write` ≠ `create`). The earlier "base + sloppy-extended
+  `lookup -> lookupStep`, `write` != `create`). The earlier "base + sloppy-extended
   tier" idea is **rejected** (review finding 4): an exo carries one guard,
   `sloppy` removes enforcement rather than layering it, and the two guards
   contradict on `lookup`, so a tier would abandon enforcement on the divergent
@@ -1042,7 +1090,7 @@ empty stream.** Overrides the design's original *absent* pick.
   `followNameChanges` uniformly without a per-cap presence check; the empty
   stream is an honest "nothing will ever change here" rather than a missing
   capability.
-- *Cost to manage:* the conformance matrix CAS cell flips **A → I (empty
+- *Cost to manage:* the conformance matrix CAS cell flips **A -> I (empty
   stream)**, and the viewer's observe path must treat an immediately-closed
   stream as "snapshot / point-in-time," not as "live with no events yet."
   See the [conformance matrix](#backing-implementation-conformance-matrix) and
@@ -1084,21 +1132,21 @@ sections changed, so the fixes are traceable.
 
 **F1 — `lookup` carried two signatures under one name.** platform/mount
 `lookup(...path[])` vs endo-fs `lookup(string)` violates the catalog's own
-"same name ⇒ same signature" rule (the maintainer's quoted spec).
+"same name => same signature" rule (the maintainer's quoted spec).
 *Resolution:* catalog `lookup` is the path-array form everywhere; endo-fs's
 one-segment walk is renamed `lookupStep`. Changed: [Reading](#reading) table
 (two rows), key-divergence 1, [Design Decision 1](#design-decisions), matrix
 `lookup` row.
 
 **F2 — `write` named two non-substitutable jobs.** Catalog `write(path,
-value) → void` (whole-blob) vs endo-fs `create(name) → OpenFile` (range-I/O
+value) -> void` (whole-blob) vs endo-fs `create(name) -> OpenFile` (range-I/O
 writer). *Resolution:* they stay distinct methods; a writer-only backing
 implements `write` as a `create`+drive+`close` wrapper, never an alias.
 Changed: [Mutation](#mutation) note, matrix `write` cell.
 
 **F3 — the `__getMethodNames__` viewer contract was unsound.** Name-only
 discovery mis-dispatches if a name can carry two signatures. *Resolution:*
-fixing F1/F2 makes the catalog genuinely enforce same-name⇒same-signature;
+fixing F1/F2 makes the catalog genuinely enforce same-name=>same-signature;
 added an explicit soundness note that the viewer must call discovered methods
 with the *catalog* signature. Changed: [What the viewer reads](#what-the-viewer-reads).
 
@@ -1123,8 +1171,8 @@ matching `EndoDirectory`; the empty-stream case is an immediately-terminating
 
 **F7 — `snapshot` matrix `I` for endo-fs contradicted its live `BlobRef |
 null` contract** and depended on an unbuilt adapter. *Resolution:* endo-fs's
-`File.snapshot → BlobRef | null` is a *separate* extended method; the catalog
-`snapshot` is satisfied only via the (unbuilt) `BlobRef → SnapshotBlob`
+`File.snapshot -> BlobRef | null` is a *separate* extended method; the catalog
+`snapshot` is satisfied only via the (unbuilt) `BlobRef -> SnapshotBlob`
 adapter, so the cell is now `I*` (adapter-pending). Changed:
 [Snapshot](#snapshot) row, matrix.
 
@@ -1211,7 +1259,7 @@ Guards in `packages/platform/src/fs/interfaces.js` (post-consolidation):
 | `ReadableBlobRangeInterface` | `readableBlobMethodGuards` + `rangeReadMethodGuards` (the rich blob shape implementers adopt) |
 | `SnapshotBlobInterface` | `readableBlobMethodGuards` + `sha256` |
 | `ReadableTreeInterface` | `readableTreeMethodGuards` |
-| `SnapshotTreeInterface` | `readableTreeMethodGuards` + `sha256` |
+| `SnapshotTreeInterface` | `readableTreeMethodGuards` + immediately-terminating `followNameChanges` + `sha256` |
 | `TreeWriterInterface` | `help`, `writeBlob`, `makeDirectory` (minimal push interface) |
 | `FileInterface` (Mutable Blob) | `readableBlobMethodGuards` + `writeText`, `writeBytes`, `append`, `readOnly`, `snapshot` |
 | `DirectoryInterface` (Mutable Tree) | `readableTreeMethodGuards` + `write`, `remove`, `move`, `copy`, `makeDirectory`, `readOnly`, `snapshot` |
@@ -1221,9 +1269,12 @@ The former `ContentStoreInterface` / `SnapshotStoreInterface` guards were
 remotable cap, so it needs no `M.interface`).
 
 Note: the Mutable `FileInterface` / `DirectoryInterface` are **already
-landed** (platform-fs Phase 4 shipped). They lack the catalog's `makeFile`,
-`subView`, `stat`, `streamRead`, and `followNameChanges` — these are the
-[Phase 1](#phase-1-catalog-land-no-behavior-change) additions.
+landed** (platform-fs Phase 4 shipped). `DirectoryInterface` does not carry
+the catalog's `makeFile` or `subView`, for the reasons recorded under
+*Remaining Phase 1 catalog work*. `stat` remains a daemon / extended-surface
+operation with the aligned portable record described in
+[fs-interface-consolidation.md](fs-interface-consolidation.md); the earlier
+`streamRead` spelling was superseded by `bytes()` plus range attenuation.
 
 ### Surface 2 — `@endo/daemon` Mount family
 
@@ -1235,11 +1286,11 @@ omitted as stale — see the snapshot note above):
 
 | Interface | Methods |
 |---|---|
-| `EndoMount` | `has`, `list`, `lookup`, `maybeLookup`, `followNameChanges` (ENOSYS until a watcher lands), `subView`, `write`, `copy`, `entry`, `stat`, `readText`, `maybeReadText`, `writeText`, `makeDirectory`, `makeFile`, `remove`, `move`, `readOnly`, `snapshot`, `help` |
+| `EndoMount` | `has`, `list`, `lookup`, `maybeLookup`, `followNameChanges`, `subView`, `write`, `copy`, `entry`, `stat`, `readText`, `maybeReadText`, `writeText`, `makeDirectory`, `makeFile`, `remove`, `move`, `readOnly`, `snapshot`, `help` |
 | `EndoMountFile` | `text`, `streamBase64`, `json`, `getInfo`, `fetch`, `writeText`, `append`, `writeBytes`, `stat`, `snapshot`, `readOnly`, `help` |
 | `EndoMountEntry` | `segments`, `displayPath`, `child`, `help` (path descriptor; no I/O) |
 | `EndoBlob` (`EndoReadable`) | `streamBase64`, `text`, `json`, `getInfo`, `fetch`, `help` — exactly `ReadableBlobRangeInterface`; the former hex `sha256()` was removed (content hash served by `getInfo().hash`, base64) |
-| `EndoReadableTree` | `sha256` (base64), `has`, `list`, `lookup`, `help` (content-store tree) |
+| `EndoReadableTree` | `sha256` (base64), `has`, `list`, `lookup`, immediately-terminating `followNameChanges`, `help` (content-store tree) |
 
 `EndoMount` spreads the shared name-hub records on top of `DirectoryInterface`;
 `EndoMountFile` spreads `rangeReadMethodGuards` on top of platform's `File`
@@ -1275,7 +1326,7 @@ the narrow portable (`getStat` / `setStat`) and wide legacy
 
 | Interface | Location | Role |
 |---|---|---|
-| `FilePowers` | `packages/daemon/src/types.d.ts` (type, not an exo) | Host `fs`-module powers object (`readFile`, `writeFileText`, `readDirectory`, `makePath`, `statPath`, `realPath`, …). The seam between host filesystem authority and daemon-side caps. Node and XS implementations. |
+| `FilePowers` | `packages/daemon/src/types.d.ts` (type, not an exo) | Host `fs`-module powers object (`readFile`, `writeFileText`, `readDirectory`, `makePath`, `statPath`, `realPath`, ...). The seam between host filesystem authority and daemon-side caps. Node and XS implementations. |
 | `EndoReadable` | `packages/daemon/src/types.d.ts` | Daemon blob cap. As of the consolidation work (see [fs-interface-consolidation.md](fs-interface-consolidation.md) § C4): `streamBase64`, `text`, `json`, `getInfo`, `fetch` — exactly `ReadableBlobRangeInterface`. Content hash is `getInfo().hash` (base64); the former `sha256()` accessor was removed as redundant. |
 | `EndoGitTree` | `packages/daemon/src/types.d.ts` | Immutable git tree: `archiveTar`, `archiveLossless`, `has`, `list`, `lookup`. |
 | `FsBridge9p` | `packages/9p-server/src/fs-bridge.js:11` | 9P2000.L protocol bridge over an endo-fs `Filesystem` cap: `start`, `stop`. The canonical consumer of the cap-FS surface. |

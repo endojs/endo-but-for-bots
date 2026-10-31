@@ -180,6 +180,9 @@ harden(ReadableTreeInterface);
 
 export const SnapshotTreeInterface = M.interface('SnapshotTree', {
   ...readableTreeMethodGuards,
+  // Immutable snapshots cannot produce changes. They expose the observation
+  // method uniformly as an immediately-terminating reader.
+  followNameChanges: M.call().returns(M.remotable('PassableReader')),
   sha256: M.call().returns(M.string()),
   size: M.call().returns(M.promise()),
 });

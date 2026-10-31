@@ -11,6 +11,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { encodeBase64 } from '@endo/base64';
 import { decodeHex } from '@endo/hex';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { snapshotBlobMethods } from '../src/fs/snapshot-blob.js';
 import { snapshotTreeMethods } from '../src/fs/snapshot-tree.js';
@@ -89,4 +90,16 @@ test('SnapshotTree.size() returns the manifest size', async t => {
     sampleHex,
   );
   t.is(await tree.size(), 9n);
+});
+
+test('SnapshotTree.followNameChanges terminates immediately', async t => {
+  const tree = snapshotTreeMethods(
+    /** @type {any} */ (makeStubStore(new Uint8Array(2), true)),
+    sampleHex,
+  );
+  const changes = [];
+  for await (const change of iterateReader(tree.followNameChanges())) {
+    changes.push(change);
+  }
+  t.deepEqual(changes, []);
 });

@@ -14,6 +14,7 @@ import { execFile } from 'node:child_process';
 import { promisify as nodePromisify } from 'node:util';
 
 import { E } from '@endo/eventual-send';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { makeNativeGitBackend } from '@endo/git';
 import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
@@ -64,6 +65,7 @@ const makeFakeGitMount = () => {
     has: async () => false,
     list: async () => [],
     lookup: async () => undefined,
+    followNameChanges: () => readerFromIterator(harden([])),
     sha256: () => '',
     size: async () => 0n,
   });

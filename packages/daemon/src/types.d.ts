@@ -16,6 +16,7 @@ import type {
   DirectoryWriteSource,
   PathEntry,
   PathEntryIssuer,
+  ReadableBlobSource,
   ReadableTree,
   SnapshotTree,
   TreeEntry,
@@ -1420,6 +1421,10 @@ export interface EndoReadableTree {
   lookup(
     path: string | readonly string[],
   ): Promise<EndoReadableTree | EndoReadable>;
+  followNameChanges(): import('@endo/exo-stream').PassableReader<
+    never,
+    undefined
+  >;
   help(method?: string): string;
 }
 
@@ -1645,8 +1650,8 @@ export interface EndoMount extends PathEntryIssuer {
   makeDirectory(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
   makeFile(
     path: string | string[] | EndoMountEntry,
-    content?: string,
-  ): Promise<void>;
+    content?: ReadableBlobSource | string,
+  ): Promise<EndoMountFile>;
   remove(path: string | string[] | EndoMountEntry): Promise<void>;
   move(
     from: string | string[] | EndoMountEntry,

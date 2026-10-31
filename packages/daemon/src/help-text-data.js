@@ -250,6 +250,8 @@ export const helpTextEntries = harden([
       list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
         'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
+      followNameChanges:
+        'followNameChanges() -> PassableReader\nReturn a reader of entry-name changes. A snapshot never changes, so the reader\nends immediately without yielding any record.',
     },
   ],
   [
@@ -282,7 +284,7 @@ export const helpTextEntries = harden([
       followNameChanges:
         "followNameChanges(...pathSegments) -> AsyncIterator\nSubscribe to entry-name changes within the named subdirectory.\nFirst yields existing entries in alphabetical order as\n{ add: name, type: 'file' | 'directory' } records, then yields\n{ add, type } and { remove } diffs as entries appear or disappear.\nShallow (immediate children only) and confinement-filtered.\nReleases the underlying OS watcher when the iterator is dropped.",
       makeFile:
-        'makeFile(path, content?) -> Promise<void>\nCreate a file at the given path, with optional initial text content.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.\ncontent: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.',
+        "makeFile(path, content?) -> Promise<EndoMountFile>\nCreate a file at the given path and return its live file capability.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.\ncontent: string | ReadableBlob (optional) — Initial UTF-8 text or a ReadableBlob whose bytes become the file's content. An existing file is replaced when content is provided and left unchanged otherwise. A ReadableTree is rejected; use `write(path, tree)` to materialize a directory.",
       write:
         'write(path, value) -> Promise<void>\nMaterialize a ReadableBlob or ReadableTree at the given path.\npath: string | string[] | EndoMountEntry — One segment, an array of segments,\nor a mount entry; a string containing a slash is rejected.\nvalue: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.',
       copy: 'copy(from, to) -> Promise<void>\nCopy a node within the mount.\nfrom: string | string[] | EndoMountEntry — Source name, path segments, or mount entry.\nto: string | string[] | EndoMountEntry — Destination name, path segments, or mount entry.\nBoth endpoints are confinement-checked.',

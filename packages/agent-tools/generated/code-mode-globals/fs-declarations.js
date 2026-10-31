@@ -259,6 +259,9 @@ type MountEndoMountFile = {
     readOnly: () => MountReadableBlobView;
     help: (method?: string) => string;
 };
+type MountReadableBlobSource = {
+    streamBase64: (...streamArguments: any[]) => PromiseLike<unknown>;
+};
 type MountReadableTreeView = {
     has: (...pathSegments: string[]) => Promise<boolean>;
     list: (...pathSegments: string[]) => Promise<readonly string[]>;
@@ -269,6 +272,7 @@ type MountReadableTreeView = {
     help: (method?: string) => string;
 };
 type MountSnapshotTree = MountReadableTree & {
+    followNameChanges: () => MountPassableReader<never, undefined>;
     sha256: () => string;
     size: () => Promise<bigint>;
 };
@@ -279,9 +283,6 @@ type MountEndoMountStat = {
     atime: bigint;
 };
 type MountDirectoryWriteSource = MountReadableBlobSource | MountReadableTree;
-type MountReadableBlobSource = {
-    streamBase64: (...args: any[]) => PromiseLike<unknown>;
-};
 type MountReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
     list: (...petNamePath: string[]) => Promise<readonly string[]>;
@@ -349,7 +350,7 @@ type MountStreamYieldNode<Y = unknown, R = undefined> = {
     list: (...pathSegments: string[]) => Promise<string[]>;
     lookup: (path: string | readonly string[] | MountEndoMountEntry) => Promise<typeof workspace | MountEndoMountFile>;
     makeDirectory: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace>;
-    makeFile: (path: string | string[] | MountEndoMountEntry, content?: string) => Promise<void>;
+    makeFile: (path: string | string[] | MountEndoMountEntry, content?: MountReadableBlobSource | string) => Promise<MountEndoMountFile>;
     maybeLookup: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace | MountEndoMountFile | undefined>;
     maybeReadText: (path: string | string[] | MountEndoMountEntry) => Promise<string | undefined>;
     move: (from: string | string[] | MountEndoMountEntry, to: string | string[] | MountEndoMountEntry) => Promise<void>;
