@@ -22,11 +22,7 @@ import {
 
 /**
  * @import { ChildAgentPolicy, EffectivePolicy, PrivateHost, RootPolicy } from './types.js'
- */
-
-/**
- * @typedef {'Intended' | 'GuestCreated' | 'Endowed' | 'DriverCreated' |
- *   'Pinned' | 'Committed' | 'Removing' | 'Removed'} ChildPhase
+ * @import { ChildPhase, Namespace, Operation } from './internal-types.js'
  */
 
 /**
@@ -84,6 +80,7 @@ const isFault = error =>
   faultErrors.has(/** @type {Error} */ (error));
 
 const registryName = (/** @type {number} */ namespaceId) => `ns${namespaceId}`;
+const registryPattern = /^ns(\d+)$/;
 const makerName = (/** @type {number} */ namespaceId) => `maker${namespaceId}`;
 const journalName = (
   /** @type {number} */ namespaceId,
@@ -93,35 +90,7 @@ const childName = (
   /** @type {string} */ operationKey,
   /** @type {string} */ piece,
 ) => `c${operationKey}.${piece}`;
-
-/**
- * @typedef {object} Operation
- * @property {string} key - `<namespace>.<sequence>`, the durable operation id.
- * @property {number} namespaceId
- * @property {string} name - The user-visible child name.
- * @property {ChildPhase} phase
- * @property {string} instructions
- * @property {string[]} endowmentNames
- * @property {number} createdAt
- * @property {string} [fault] - Set when reconciliation failed closed.
- * @property {Promise<void>} [removal] - An in-flight removal to join.
- * @property {Set<() => void>} watchers
- */
-
-/**
- * @typedef {object} Namespace
- * @property {number} id
- * @property {number | undefined} parent
- * @property {string | undefined} name - Its name in the parent's derived index.
- * @property {EffectivePolicy} policy
- * @property {number | undefined} makerNamespaceId - Namespace whose `maker<n>` record
- *   holds this namespace's maker.
- * @property {'Active' | 'Revoking' | 'Revoked'} phase
- * @property {number} nextSequence
- * @property {Map<string, Operation>} children
- * @property {Map<string, number>} derived
- * @property {Promise<void>} [revocation]
- */
+const childPattern = /^c(\d+)\.(\d+)\./;
 
 /**
  * Create, or revive, the factory coordinator over its private host.
@@ -229,6 +198,45 @@ export const prepareChildAgentCoordinator = async ({
       }
     }
     return counts;
+  };
+
+  /** @type {Map<string, string>} */
+  const faults = new Map();
+
+  /**
+   * Journal a fault so the record stays reserved across restarts. Without the
+   * entry, a revocation resumed by a later incarnation would find no fault
+   * and delete the mismatched name.
+   *
+   * @param {Operation} operation
+   * @param {unknown} error
+   */
+  const recordFault = async (operation, error) => {
+    if (operation.fault !== undefined) return;
+    const fault = /** @type {Error} */ (error).message;
+    const namespace =
+      namespaces.get(operation.namespaceId) || Fail`Unknown namespace`;
+    await append(namespace, { type: 'Faulted', operation: operation.key, fault });
+    operation.fault = fault;
+    faults.set(operation.key, fault);
+  };
+
+  /**
+   * Remove every retained-endowment slot reserved for `key`. `create` retains
+   * endowments before it appends `Intended`, so a crash between the two
+   * leaves slots no journal entry names, and the next `create` in that
+   * namespace reuses the key with a possibly shorter endowment list.
+   *
+   * @param {string} key
+   */
+  const sweepRetained = async key => {
+    await null;
+    const prefix = childName(key, 'e');
+    for (const name of await E(host).list()) {
+      if (name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length))) {
+        await E(host).remove(name);
+      }
+    }
   };
 
   // ------------------------------------------------------------------
@@ -469,14 +477,25 @@ export const prepareChildAgentCoordinator = async ({
    */
   const runRemoval = async operation => {
     await null;
+    if (operation.phase === 'Removed') return;
     operation.fault === undefined ||
       Fail`Child ${q(operation.name)} is reserved by a fault and cannot be removed: ${q(operation.fault)}`;
-    if (operation.phase !== 'Removing') {
-      await advanceTo(operation, 'Removing');
-    }
     const responderName = childName(operation.key, 'responder');
     const driverName = childName(operation.key, 'driver');
     const guestName = childName(operation.key, 'guest');
+    // Prove the guests the coordinator formulated before deleting anything,
+    // so a removal resumed by a later incarnation fails closed on a
+    // mismatched name just as reconciliation does.
+    try {
+      await proveOrAbsent(guestName, 'guest');
+      await proveOrAbsent(driverName, 'guest');
+    } catch (error) {
+      if (isFault(error)) await recordFault(operation, error);
+      throw error;
+    }
+    if (operation.phase !== 'Removing') {
+      await advanceTo(operation, 'Removing');
+    }
     // The responder goes first so no later restart can revive the runner.
     if (await E(host).has(responderName)) {
       await E(host).remove(responderName);
@@ -498,6 +517,7 @@ export const prepareChildAgentCoordinator = async ({
     const namespace = namespaces.get(operation.namespaceId);
     if (namespace && namespace.children.get(operation.name) === operation)
       namespace.children.delete(operation.name);
+    operations.delete(operation.key);
     lifecycles.delete(operation.key);
   };
 
@@ -529,7 +549,20 @@ export const prepareChildAgentCoordinator = async ({
       }
     }
     for (const operation of [...namespace.children.values()]) {
-      await removeJoining(operation);
+      // A faulted record stays reserved, and `faults()` reports it.
+      if (operation.fault === undefined) {
+        await removeJoining(operation).catch(error => {
+          if (!isFault(error)) throw error;
+        });
+      }
+    }
+    // Only the namespace `bind` created owns its maker; attenuated
+    // namespaces share it and were revoked above.
+    if (
+      namespace.makerNamespaceId === namespaceId &&
+      (await E(host).has(makerName(namespaceId)))
+    ) {
+      await E(host).remove(makerName(namespaceId));
     }
     await append(namespace, { type: 'Revoked' });
     namespace.phase = 'Revoked';
@@ -622,13 +655,23 @@ export const prepareChildAgentCoordinator = async ({
       };
       operations.set(operation.key, operation);
       namespace.children.set(operation.name, operation);
+    } else if (type === 'Faulted') {
+      const operation =
+        operations.get(entry.operation) ||
+        Fail`Journal names unknown operation`;
+      operation.fault = entry.fault;
+      faults.set(operation.key, entry.fault);
     } else {
       const operation =
         operations.get(entry.operation) ||
         Fail`Journal names unknown operation`;
       operation.phase = type;
       if (type === 'Removed') {
-        namespace.children.delete(operation.name);
+        // A later operation may hold the same name, so delete by identity.
+        if (namespace.children.get(operation.name) === operation) {
+          namespace.children.delete(operation.name);
+        }
+        operations.delete(operation.key);
       }
     }
   };
@@ -636,7 +679,12 @@ export const prepareChildAgentCoordinator = async ({
   const replay = async () => {
     await null;
     const names = new Set(await E(host).list());
-    while (names.has(registryName(nextNamespaceId))) nextNamespaceId += 1;
+    // Allocate past every registry entry, including an orphan reclamation
+    // is about to remove, so no id is ever reissued within an incarnation.
+    for (const name of names) {
+      const match = registryPattern.exec(name);
+      if (match) nextNamespaceId = Math.max(nextNamespaceId, Number(match[1]) + 1);
+    }
     if (!names.has(registryName(ROOT))) {
       const policy = makeRootPolicy(rootPolicy);
       await E(host).storeValue(harden({ policy }), registryName(ROOT));
@@ -662,9 +710,6 @@ export const prepareChildAgentCoordinator = async ({
       }
     }
   };
-
-  /** @type {Map<string, string>} */
-  const faults = new Map();
 
   /**
    * Converge one nonterminal operation. Before `Committed` it rolls forward;
@@ -693,28 +738,62 @@ export const prepareChildAgentCoordinator = async ({
         }
       }
     } catch (error) {
-      if (isFault(error)) {
-        operation.fault = /** @type {Error} */ (error).message;
-        faults.set(operation.key, operation.fault);
-      }
+      if (isFault(error)) await recordFault(operation, error);
       throw error;
+    }
+  };
+
+  /**
+   * Remove durable names a crash left before the journal entry that would
+   * have recorded them: a namespace registry entry and maker stored before
+   * the issuer's `Derived` entry, and retained endowments stored before
+   * `Intended`. No journal reaches them, so nothing else ever would.
+   */
+  const reclaimOrphans = async () => {
+    await null;
+    for (const name of await E(host).list()) {
+      const registry = registryPattern.exec(name);
+      const child = childPattern.exec(name);
+      if (registry) {
+        const id = Number(registry[1]);
+        if (!namespaces.has(id)) {
+          if (await E(host).has(makerName(id))) {
+            await E(host).remove(makerName(id));
+          }
+          await E(host).remove(name);
+        }
+      } else if (child) {
+        const namespace = namespaces.get(Number(child[1]));
+        if (!namespace || Number(child[2]) >= namespace.nextSequence) {
+          await E(host).remove(name);
+        }
+      }
     }
   };
 
   const reconcile = async () => {
     await null;
+    await reclaimOrphans();
     for (const namespace of [...namespaces.values()]) {
       if (namespace.phase === 'Revoking') {
         await revokeJoining(namespace.id);
       }
     }
     for (const operation of [...operations.values()]) {
-      if (lifecyclePhases.includes(operation.phase)) {
+      if (
+        operation.fault === undefined &&
+        lifecyclePhases.includes(operation.phase)
+      ) {
         await bindLifecycle(operation);
       }
     }
     for (const operation of [...operations.values()]) {
-      if (operation.phase !== 'Committed' && operation.phase !== 'Removed') {
+      // A journaled fault is reported, never repaired automatically.
+      if (
+        operation.fault === undefined &&
+        operation.phase !== 'Committed' &&
+        operation.phase !== 'Removed'
+      ) {
         await converge(operation).catch(error => {
           // A fault stays reserved and is reported by `faults()`, and any
           // other creation failure was cleaned up by removal. A failure that
@@ -829,13 +908,12 @@ export const prepareChildAgentCoordinator = async ({
 
           const key = `${namespaceId}.${namespace.nextSequence}`;
           // Retain the endowment values before the operation starts, so
-          // recovery never depends on the caller's arguments. A stale value
-          // here belongs to an `Intended` entry a crash never appended.
+          // recovery never depends on the caller's arguments. Any value
+          // already reserved for this key belongs to an `Intended` entry
+          // that was never appended, possibly with more endowments.
+          await sweepRetained(key);
           for (let i = 0; i < endowmentNames.length; i += 1) {
             const retainedName = childName(key, `e${i}`);
-            if (await E(host).has(retainedName)) {
-              await E(host).remove(retainedName);
-            }
             await E(host).storeValue(
               endowments[endowmentNames[i]],
               retainedName,
@@ -894,9 +972,17 @@ export const prepareChildAgentCoordinator = async ({
         const operation = namespace.children.get(name);
         if (!operation) throw Fail`No child named ${q(name)}`;
         if (operation.removal) return operation.removal;
-        return serial(() => {
+        // Resolve the name again once serialized: an earlier queued removal
+        // and creation may have replaced the operation it named here.
+        return serial(async () => {
           assertLive(namespaceId);
-          return removeJoining(operation);
+          const current = namespace.children.get(name);
+          if (!current) {
+            // A removal of the same operation queued ahead of this one.
+            if (operation.phase === 'Removed') return undefined;
+            throw Fail`No child named ${q(name)}`;
+          }
+          return removeJoining(current);
         });
       },
       /**
