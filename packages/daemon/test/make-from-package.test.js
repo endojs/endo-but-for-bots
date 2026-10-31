@@ -382,3 +382,10 @@ test.serial('makeFromMount reports an unknown registry name', async t => {
     { message: /Unknown pet name for registry/ },
   );
 });
+
+test.serial('makeFromMount reports an unknown source name', async t => {
+  const { host } = await prepare();
+  await t.throwsAsync(E(host).makeFromMount(undefined, 'no-such-mount'), {
+    message: /Unknown pet name for source/,
+  });
+});
