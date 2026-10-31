@@ -2215,6 +2215,18 @@ export interface EndoHost extends EndoAgent {
     options?: MakeFromPackageOptions,
   ): Promise<unknown>;
   /**
+   * Run a caplet from a ReadableTree or Mount, inspecting its root once:
+   * a `compartment-map.json` goes to {@link makeFromTree}, a `package.json`
+   * to {@link makeFromPackage}, and a root with neither is refused.
+   * `entry`, `registryName`, and `offline` apply only to a `package.json`
+   * root.
+   */
+  makeFromMount(
+    workerPetName: string | string[] | undefined,
+    sourceName: string | string[],
+    options?: MakeFromPackageOptions,
+  ): Promise<unknown>;
+  /**
    * Materialise a ReadableTree or Mount into a new scratch mount
    * under `scratchPetName` and return that scratch mount.  The
    * scratch lives as long as its pet name; cancelling the pet name

@@ -1732,6 +1732,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/tar": "workspace:^"
     "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
     ava: "catalog:dev"
