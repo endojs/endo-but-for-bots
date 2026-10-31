@@ -231,7 +231,7 @@ export const makeInferenceProviderRegistry = async ({
       throw fixedError('unsupported-version');
     })();
   // A turn still reserved at restart lost its in-flight request with the
-  // prior incarnation. Charge its reservation and release its slot.
+  // prior incarnation.
   const orphaned = Object.values(
     foldInferenceTurnEvents(state.turnEvents || []),
   ).filter(turn => turn.state === 'reserved');

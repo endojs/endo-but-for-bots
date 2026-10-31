@@ -10,8 +10,7 @@ import { resolveAuthToken } from './src/credentials.js';
 /** @import { ERef } from '@endo/eventual-send' */
 
 /**
- * Choose how the provider owner authenticates. A brokered recipe carries no
- * credential because the registry grant holds it.
+ * A brokered recipe carries no credential because the registry grant holds it.
  *
  * @param {object} options
  * @param {ERef<object>} options.powers
