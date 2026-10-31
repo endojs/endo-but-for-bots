@@ -208,7 +208,7 @@ Implemented and verified:
   verb, exercised end to end by `tests/iroh_supervisor.rs` (gated behind
   `ENDO_IROH_INTEGRATION=1`): a real peer dials the bound endpoint and frames
   bridge both ways.
-- The XS manager wiring in `packages/daemon/src/bus-manager-rust-xs.js`
+- The XS manager wiring in `packages/daemon/src/bus-daemon-rust-xs.js`
   (the `listen-iroh` request and greeter-backed peer sessions), which passes
   `node --check` and eslint.
 
