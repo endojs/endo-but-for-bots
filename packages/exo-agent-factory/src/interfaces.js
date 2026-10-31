@@ -44,7 +44,11 @@ export const DerivedNamespaceSummaryShape = harden({
 export const AgentDriverMakerInterface = M.interface('AgentDriverMaker', {
   installDriver: M.callWhen(
     M.splitRecord(
-      { agent: M.remotable(), driverGuest: M.remotable(), lifecycle: M.any() },
+      {
+        agent: M.remotable(),
+        driverGuest: M.remotable(),
+        lifecycle: M.remotable('AgentLifecycle'),
+      },
       { instructions: M.string() },
     ),
   ).returns(M.splitRecord({ responder: M.any() })),

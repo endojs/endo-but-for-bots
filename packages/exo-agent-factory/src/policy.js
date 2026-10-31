@@ -39,13 +39,27 @@ export const assertOrdinaryName = (name, what) => {
 harden(assertOrdinaryName);
 
 /**
+ * The largest policy count. Both counts are natural numbers this package
+ * profiles to four bytes: a namespace retaining more than `2**32 - 1`
+ * children, or instructions beyond `2**32 - 1` UTF-8 bytes, is outside any
+ * deployment the factory serves. The bound is that profile choice, not a
+ * JavaScript limit, so `number` represents every admitted count exactly and
+ * `Math.min` over two of them is exact.
+ */
+export const MAX_POLICY_COUNT = 2 ** 32 - 1;
+harden(MAX_POLICY_COUNT);
+
+/**
  * @param {unknown} n
  * @param {string} field
  * @returns {asserts n is number}
  */
 const assertCount = (n, field) => {
-  (typeof n === 'number' && Number.isSafeInteger(n) && n >= 0) ||
-    Fail`Policy field ${q(field)} must be a non-negative safe integer`;
+  (typeof n === 'number' &&
+    Number.isInteger(n) &&
+    n >= 0 &&
+    n <= MAX_POLICY_COUNT) ||
+    Fail`Policy field ${q(field)} must be an integer from 0 to ${q(MAX_POLICY_COUNT)}`;
 };
 
 /**
