@@ -41,9 +41,13 @@ export { assertToolArguments } from './tool-arguments.js';
  */
 
 /**
+ * A tool the inbox loop dispatches. `execute` resolves to a passable; the loop
+ * renders a non-string result as Justin.
+ *
+ * @template [Result=string]
  * @typedef {object} FaeTool
  * @property {() => ToolSchema} schema
- * @property {(args: Record<string, unknown>) => Promise<string>} execute
+ * @property {(args: Record<string, unknown>) => Promise<Result>} execute
  * @property {() => string} help
  */
 

@@ -151,8 +151,15 @@ The agent gets the `@endo/agent-tools` file tools (`mountReadText`,
 tools (`status`, `diff`, `log`, `add`, `commit`, branch navigation and the
 rest of the writer catalog), and `fetch`, `pull` and `push` when a remote is
 given. Commits are attributed to the identity the `Git` formula was created
-with. A read-only `Git` gets only the read tools. History rewrite is not
-offered. A subagent does not inherit the workspace.
+with. A read-only `Git` gets only the read tools, and cannot be combined with
+a remote: `createAgent` succeeds, but the agent fails at start rather than
+offer `pull` or `push`. History rewrite is not offered. A subagent does not
+inherit the workspace.
+
+The remote is a separate grant with its own authority: its `pull` updates the
+`Git` it was created for, and its `push` writes to its endpoint. Nothing on a
+`GitRemote` names that `Git`, so give the agent a remote created for the same
+`Git` you grant.
 
 This replaces `setup-fs-tools` (below) for git work: those caplets run
 unconfined at a host directory, while a workspace reaches only what the

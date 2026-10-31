@@ -804,7 +804,9 @@ It is not part of the normative design.
 
 - **Fae workspace grant** — Phase 6's first adapter item.
   `createAgent(name, { workspace: { git, remote? } })` on the Fae factory stores the granted `Git` (and optional `GitRemote`) in the agent driver's namespace, and the inbox loop composes the `@endo/agent-tools` file, git and remote tools over them as built-in tools (`packages/fae/src/workspace-tools.js`).
-  The catalog follows the grant: a read-only `Git` (no `add` / `commit`) gets the reader git tools and read-only file tools; history rewrite is never offered.
+  The catalog follows the grant: a read-only `Git` (no `add` / `commit`) gets the reader git tools and read-only file tools, and is refused alongside a `GitRemote`, whose `fetch` / `pull` / `push` would mutate state; a writable `Git` is narrowed to `scope('writer')`, so history rewrite is never offered.
+  Composition goes through `@endo/agent-tools`'s `provisionWorkspaceTools` (with its `gitFacet` option); Fae keeps only the `ToolRecord` adapter.
+  Nothing on a `GitRemote` names the `Git` it is bound to, so the factory cannot verify that the two grants address the same repository; pairing them is the operator's choice, and a host-minted composite workspace capability would close that gap.
   Subagents do not inherit the workspace.
   The `setup-fs-tools` caplets rooted at `FAE_CWD` remain for non-git use; deprecating them, and the Lal / Genie registrations, are still open.
 

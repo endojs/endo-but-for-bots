@@ -22,10 +22,11 @@ const execFileAsync = promisify(execFile);
 export const git = async (cwd, gitArguments) => {
   const { stdout } = await execFileAsync('git', gitArguments, {
     cwd,
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull },
   });
   return stdout;
 };
+harden(git);
 
 /**
  * A `Git` composed over a fresh one-commit repository, as `provideGit` builds
@@ -56,5 +57,6 @@ export const makeWorkspaceGit = async t => {
     identity: { authorName: 'Fae Agent', authorEmail: 'fae@example.test' },
   });
   await backend.assertRepositoryRoot();
-  return { git: makeGit({ mount, backend, lineageOf }), root };
+  return harden({ git: makeGit({ mount, backend, lineageOf }), root });
 };
+harden(makeWorkspaceGit);

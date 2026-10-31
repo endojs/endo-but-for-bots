@@ -3,7 +3,7 @@
 
 /** @import { FaeWorkspaceGrant } from './src/workspace-tools.js' */
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -1243,6 +1243,20 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
 
   const hostAgent = await E(powers).lookup('host-agent');
 
+  /**
+   * A requested workspace grant that names nothing is an error, not an
+   * omitted grant.
+   *
+   * @param {string} petName
+   * @returns {Promise<string>}
+   */
+  const locateGrant = async petName => {
+    const locator = await E(powers).locate(petName);
+    typeof locator === 'string' ||
+      Fail`Workspace grant ${q(petName)} is not in the factory's store`;
+    return locator;
+  };
+
   return makeExo('FaeFactory', FaeFactoryInterface, {
     /**
      * Create a new agent instance with its own guest, driver caplet,
@@ -1321,15 +1335,11 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
         ...(workspace === undefined
           ? {}
           : {
-              workspaceGitLocator: /** @type {string} */ (
-                await E(powers).locate(workspace.git)
-              ),
+              workspaceGitLocator: await locateGrant(workspace.git),
               ...(workspace.remote === undefined
                 ? {}
                 : {
-                    workspaceRemoteLocator: /** @type {string} */ (
-                      await E(powers).locate(workspace.remote)
-                    ),
+                    workspaceRemoteLocator: await locateGrant(workspace.remote),
                   }),
             }),
       });
@@ -1344,7 +1354,7 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Fae factory: creates LLM agent instances bound to a configured LLM provider. Use createAgent(name, { systemPrompt, pin }) to create a new agent.';
+        return 'Fae factory: creates LLM agent instances bound to a configured LLM provider. Use createAgent(name, { systemPrompt?, pin?, maxSubagentDepth?, workspace? }) to create a new agent.';
       }
       if (methodName === 'createAgent') {
         return 'createAgent(name, { systemPrompt?, pin?, maxSubagentDepth?, workspace? }) — Create a new agent with its own guest, driver caplet, and inbox loop. Pass pin: true to survive daemon restarts. Pass workspace: { git, remote? }, pet names of a Git (and optionally a GitRemote) in the factory store, to give the agent file and git tools over that worktree. Returns the profile petname.';
