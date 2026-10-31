@@ -3858,7 +3858,7 @@ const makeDaemonCore = async (
       return mount;
     },
     git: async (
-      { mountId, allowHistoryRewrite = false, identity },
+      { mountId, allowHistoryRewrite = false, readOnly = false, identity },
       context,
     ) => {
       context.thisDiesIfThatDies(mountId);
@@ -3900,7 +3900,9 @@ const makeDaemonCore = async (
           backend,
           lineageOf,
         },
-        { readOnly: backing.readOnly, allowHistoryRewrite },
+        // Either a read-only mount or a formula-owned read-only declaration
+        // selects the reader facet; neither can be widened by the other.
+        { readOnly: backing.readOnly || readOnly, allowHistoryRewrite },
       );
       // A later `git-remote` formula for this same `gitId` needs the
       // backend authority explicitly (see `gitOperationsByCap` above);
@@ -5428,6 +5430,7 @@ const makeDaemonCore = async (
   const formulateGit = async (
     mountId,
     allowHistoryRewrite,
+    readOnly,
     identity,
     deferredTasks,
   ) => {
@@ -5449,7 +5452,9 @@ const makeDaemonCore = async (
         const formula = harden({
           type: 'git',
           mountId,
-          ...(allowHistoryRewrite && { allowHistoryRewrite: true }),
+          ...(readOnly
+            ? { readOnly: true }
+            : allowHistoryRewrite && { allowHistoryRewrite: true }),
           ...(identity && { identity }),
         });
 

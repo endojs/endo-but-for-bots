@@ -9,6 +9,7 @@ import type {
   EndoGit,
   GitRemote,
   HistoryRewriteEndoGit,
+  ReadOnlyEndoGit,
   ReadWriteEndoGit,
 } from '@endo/exo-git';
 import type { HttpClient, HttpClientControl } from '@endo/exo-http-client';
@@ -321,6 +322,12 @@ export type GitFormula = {
    */
   allowHistoryRewrite?: boolean;
   /**
+   * Formula-owned read-only posture: the formula reincarnates as the reader
+   * facet even over a writable mount, and it overrides `allowHistoryRewrite`.
+   * Absence derives the posture from the mount alone, as before.
+   */
+  readOnly?: boolean;
+  /**
    * Formula-owned commit-identity policy captured at `provideGit` /
    * `provideGitClone` construction and threaded into the native backend's
    * author/committer environment.  Guest-immutable, and it survives
@@ -357,7 +364,9 @@ export type GitProvisionOptions = {
    * Declares that the caller intends a read-only Git capability and accepts
    * a read-only backing mount.  Omitted or `false`, `provideGit` rejects a
    * read-only mount rather than silently returning a read-only-attenuated
-   * capability for a writable request.
+   * capability for a writable request.  `true` persists the read-only
+   * posture in the formula, so the result is the read-only facet over a
+   * writable mount too, and `allowHistoryRewrite` is ignored.
    */
   readOnly?: boolean;
 };
@@ -1987,23 +1996,37 @@ export interface EndoHost extends EndoAgent {
   provideGit(
     mountCap: EndoMount,
     petName: string | string[],
-    options: GitProvisionOptions & { allowHistoryRewrite: true },
+    options: GitProvisionOptions & { readOnly: true },
+  ): Promise<ReadOnlyEndoGit>;
+  provideGit(
+    mountCap: EndoMount,
+    petName: string | string[],
+    options: GitProvisionOptions & {
+      readOnly?: false;
+      allowHistoryRewrite: true;
+    },
   ): Promise<HistoryRewriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
     petName: string | string[],
-    options?: GitProvisionOptions & { allowHistoryRewrite?: false },
+    options?: GitProvisionOptions & {
+      readOnly?: false;
+      allowHistoryRewrite?: false;
+    },
   ): Promise<ReadWriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
     petName: string | string[],
-    options: GitProvisionOptions & { allowHistoryRewrite: boolean },
+    options: GitProvisionOptions & {
+      readOnly?: false;
+      allowHistoryRewrite: boolean;
+    },
   ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
     petName: string | string[],
     options?: GitProvisionOptions,
-  ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
+  ): Promise<EndoGit>;
   /**
    * Derive an allowlisted, argv-only command-execution `Shell` from a
    * **writable** mount.  The child working directory is resolved host-side
@@ -3155,6 +3178,7 @@ export interface DaemonCore {
   formulateGit: (
     mountId: FormulaIdentifier,
     allowHistoryRewrite: boolean,
+    readOnly: boolean,
     identity: GitCommitIdentity | undefined,
     deferredTasks: DeferredTasks<GitDeferredTaskParams>,
   ) => FormulateResult<EndoGit>;

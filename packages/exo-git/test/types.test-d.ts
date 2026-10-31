@@ -403,7 +403,10 @@ type Mutator =
   | 'detach'
   | 'switch'
   | 'merge'
+  | 'mergeText'
   | 'rebase'
+  | 'rebaseText'
+  | 'cherryPick'
   | 'stashPush'
   | 'stashApply'
   | 'stashPop'
@@ -411,6 +414,38 @@ type Mutator =
 expectTypeOf<
   Extract<keyof ReadOnlyEndoGit, Mutator | 'worktreeAdd'>
 >().toEqualTypeOf<never>();
+
+// The read-only posture is pinned to exactly the inspection surface, not just
+// "no known mutator": a new mutation method added to `ReadOnlyEndoGit` (rather
+// than to `ReadWriteEndoGit`) fails here even before anyone remembers to list
+// it in `Mutator` above.  The runtime counterpart is `GIT_READER_METHODS` in
+// `interfaces.js`, which `kit-conformance.test.js` pins against the reader
+// facet's `__getMethodNames__()`.
+type ReaderMethod =
+  | 'branches'
+  | 'currentBranch'
+  | 'diff'
+  | 'diffText'
+  | 'filesystemAt'
+  | 'followLatestRoot'
+  | 'followRootChanges'
+  | 'help'
+  | 'log'
+  | 'readOnly'
+  | 'revParse'
+  | 'scope'
+  | 'show'
+  | 'showText'
+  | 'stashList'
+  | 'stashListText'
+  | 'stashShow'
+  | 'stashShowText'
+  | 'status'
+  | 'trackingStatus'
+  | 'tree'
+  | 'worktree'
+  | 'worktreeList';
+expectTypeOf<keyof ReadOnlyEndoGit>().toEqualTypeOf<ReaderMethod>();
 
 // The history-rewrite operations are visible only on `HistoryRewriteEndoGit`:
 // `ReadWriteEndoGit` must omit them entirely (not merely reject their

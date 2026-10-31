@@ -158,6 +158,8 @@ commits and observes the skipped range as a revision jump. A rejected
 
 Attenuate to the read-only facet of this same repository.
 Every facet of one Git instance returns the identical reader reference.
+The reader carries only inspection methods; staging, commits, branch
+changes, merge, rebase, and stash mutation are absent from it.
 
 ## scope(name) -> Git
 

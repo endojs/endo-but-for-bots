@@ -49,7 +49,7 @@ export const helpTextEntries = harden([
       followLatestRoot:
         'followLatestRoot(options?) -> PassableReader<GitRootSnapshot>\nFollow the latest published repository root with bounded retention.\nThe first value is the current snapshot. A slow reader may skip intermediate\ncommits and observes the skipped range as a revision jump. A rejected\n`options.cancelled` promise closes only this follower.',
       readOnly:
-        'readOnly() -> Git\nAttenuate to the read-only facet of this same repository.\nEvery facet of one Git instance returns the identical reader reference.',
+        'readOnly() -> Git\nAttenuate to the read-only facet of this same repository.\nEvery facet of one Git instance returns the identical reader reference.\nThe reader carries only inspection methods; staging, commits, branch\nchanges, merge, rebase, and stash mutation are absent from it.',
       scope:
         'scope(name) -> Git\nDownscope to a sibling facet of this same Git instance.\nThe vocabulary is closed and never escalates: a reader accepts only\n"reader", a writer also "writer", and a rewriter also "rewriter".',
       add: 'add(entries) -> Promise<void>\nStage the given PathEntry capabilities.\nAn entry minted by a different mount lineage is rejected before any path\nreaches git.',

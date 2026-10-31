@@ -452,6 +452,7 @@ export const HostInterface = M.interface('EndoHost', {
         {},
         {
           allowHistoryRewrite: M.boolean(),
+          readOnly: M.boolean(),
           identity: M.splitRecord(
             { authorName: M.string(), authorEmail: M.string() },
             { committerName: M.string(), committerEmail: M.string() },
