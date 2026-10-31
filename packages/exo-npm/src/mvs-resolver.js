@@ -6,9 +6,19 @@
  *
  * The hook walks a transitive dependency graph rooted at a
  * `package.json`, fetches each transitively-required `package.json`
- * from a caller-supplied fetcher, and selects the greatest mentioned
- * minor (and patch) per major. The output is a `RegistryResolution`
+ * from a caller-supplied fetcher, and groups the ranges requested of
+ * each package: a range joins the first group whose ranges, together
+ * with it, some published version satisfies, and otherwise starts a
+ * group of its own (`~1.2.0` and `~1.3.0`, or `^1.0.0` and `^2.0.0`), as
+ * npm would install both. Each group selects the least published version
+ * that satisfies all of its ranges. The output is a `RegistryResolution`
  * shape the reference backend's `resolve()` method returns.
+ *
+ * Raising a selection does not retract the ranges the superseded
+ * version requested of its own dependencies; as in Go's MVS, those
+ * ranges stay in their groups and continue to constrain later
+ * selections. Packages and diagnostics reachable only through a
+ * superseded version are nonetheless pruned from the final resolution.
  *
  * The fetcher is caller-supplied so the resolver does not bind to a
  * particular HTTP client. The shape matches the npm registry's own
@@ -31,6 +41,10 @@
  * which mirrors the parent-directory walk the design names but keeps
  * the resolver platform-agnostic (no filesystem reads in this module).
  *
+ * The semver subset (version parsing, precedence, and range matching) is
+ * implemented here rather than imported, so the module depends on
+ * nothing beyond `@endo/errors` and runs unmodified under SES and XS.
+ *
  * @import { RegistryResolution, RegistryResolutionEntry, ResolveHook, ResolveHookContext, ResolveOptions, EndoReadableTree } from '../types.js';
  */
 
@@ -47,30 +61,63 @@ const utf8Encoder = new TextEncoder();
 /**
  * Parse a semver-shaped version string into its numeric components.
  *
- * Permissive on prerelease and build-metadata tags; both are dropped
- * for comparison purposes. A non-conforming string sorts to the end
+ * Pre-release identifiers are kept for semver precedence; build
+ * metadata is dropped. A non-conforming string sorts to the end
  * (Infinity components).
  *
  * @param {string} version
- * @returns {{ major: number, minor: number, patch: number, raw: string }}
+ * @returns {{ major: number, minor: number, patch: number, prerelease: string[], raw: string }}
  */
 const parseVersion = version => {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(version);
   if (!match) {
-    return { major: Infinity, minor: Infinity, patch: Infinity, raw: version };
+    return {
+      major: Infinity,
+      minor: Infinity,
+      patch: Infinity,
+      prerelease: [],
+      raw: version,
+    };
   }
   return {
     major: Number(match[1]),
     minor: Number(match[2]),
     patch: Number(match[3]),
+    prerelease: match[4] === undefined ? [] : match[4].split('.'),
     raw: version,
   };
 };
 harden(parseVersion);
 
 /**
- * Compare two parsed versions in dewey-decimal order.
+ * Compare pre-release identifier lists by semver precedence: a release
+ * (no identifiers) outranks any pre-release, numeric identifiers compare
+ * numerically and rank below alphanumeric ones, and a longer list wins
+ * when one is a prefix of the other (`beta.2` < `beta.10` < `rc`).
  *
+ * @param {readonly string[]} a
+ * @param {readonly string[]} b
+ * @returns {number}
+ */
+const comparePrerelease = (a, b) => {
+  if (a.length === 0 || b.length === 0) return b.length - a.length;
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x !== y) {
+      const xNumeric = /^\d+$/.test(x);
+      const yNumeric = /^\d+$/.test(y);
+      if (xNumeric && yNumeric) return Number(x) - Number(y);
+      if (xNumeric) return -1;
+      if (yNumeric) return 1;
+      return x < y ? -1 : 1;
+    }
+  }
+  return a.length - b.length;
+};
+harden(comparePrerelease);
+
+/**
  * @param {ReturnType<typeof parseVersion>} a
  * @param {ReturnType<typeof parseVersion>} b
  * @returns {number}
@@ -78,33 +125,32 @@ harden(parseVersion);
 const compareVersions = (a, b) => {
   if (a.major !== b.major) return a.major - b.major;
   if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
+  if (a.patch !== b.patch) return a.patch - b.patch;
+  return comparePrerelease(a.prerelease, b.prerelease);
 };
 harden(compareVersions);
 
 /**
- * Determine whether a candidate version satisfies an npm-style range
- * specifier. Supports the common shapes that appear in published
+ * Match a candidate version against an npm-style range specifier by
+ * semver precedence alone, ignoring pre-release eligibility. Supports the common shapes that appear in published
  * `package.json` dependencies:
  *
- * - `^1.2.3` greatest compatible by major
- * - `~1.2.3` greatest compatible by minor
+ * - `^1.2.3` compatible by major
+ * - `~1.2.3` compatible by minor
  * - `>=1.2.3`, `>1.2.3`, `<1.2.3`, `<=1.2.3`
  * - `1.2.3` exact
  * - `1.2.x`, `1.x`, `*` shape
  * - `1.2.3 - 2.0.0` range (inclusive)
  * - `||` alternation
  *
- * Pre-release tags are stripped from the candidate for the comparison;
- * this matches MVS's "greatest mentioned minor per major" rule which
- * is concerned with the dewey-decimal ordering rather than with
- * pre-release precedence.
+ * Comparisons use full semver precedence, so `1.0.0-alpha.1` does not
+ * match `^1.0.0-beta.2`.
  *
  * @param {string} candidateRaw
  * @param {string} range
  * @returns {boolean}
  */
-export const satisfiesRange = (candidateRaw, range) => {
+const matchesRange = (candidateRaw, range) => {
   const trimmed = range.trim();
   if (trimmed === '' || trimmed === '*' || trimmed === 'x') {
     return true;
@@ -113,21 +159,19 @@ export const satisfiesRange = (candidateRaw, range) => {
   if (trimmed.includes('||')) {
     return trimmed
       .split('||')
-      .some(part => satisfiesRange(candidateRaw, part.trim()));
+      .some(part => matchesRange(candidateRaw, part.trim()));
   }
   // Hyphen range: '1.2.3 - 2.0.0'.
   const hyphen = /^([^\s]+)\s+-\s+([^\s]+)$/.exec(trimmed);
   if (hyphen) {
     return (
-      satisfiesRange(candidateRaw, `>=${hyphen[1]}`) &&
-      satisfiesRange(candidateRaw, `<=${hyphen[2]}`)
+      matchesRange(candidateRaw, `>=${hyphen[1]}`) &&
+      matchesRange(candidateRaw, `<=${hyphen[2]}`)
     );
   }
   // Composite: '>=1.2.3 <2.0.0' (space-separated AND).
   if (/\s/.test(trimmed)) {
-    return trimmed
-      .split(/\s+/)
-      .every(part => satisfiesRange(candidateRaw, part));
+    return trimmed.split(/\s+/).every(part => matchesRange(candidateRaw, part));
   }
   const candidate = parseVersion(candidateRaw);
   // Caret: '^1.2.3'.
@@ -184,31 +228,30 @@ export const satisfiesRange = (candidateRaw, range) => {
   // Exact.
   return compareVersions(candidate, parseVersion(trimmed)) === 0;
 };
-harden(satisfiesRange);
+harden(matchesRange);
 
 /**
- * Extract the canonical major key from a range specifier, used to drive
- * MVS's per-major coexistence. For shapes that pin a major (`^1.2.3`,
- * `1.x`, `>=1.2.3 <2.0.0`), the major is the leftmost numeric segment.
- * For shapes without a major (`*`), returns 'any'.
+ * Determine whether a candidate version satisfies an npm-style range
+ * specifier. As in npm, a pre-release satisfies a range only when the
+ * range names a pre-release of the same `major.minor.patch`, so
+ * `1.0.0-rc.1` satisfies `^1.0.0-rc.0` but not `^1.0.0`.
  *
- * The classification is permissive; if two ranges classify under the
- * same major they share a resolution slot, otherwise they get distinct
- * slots and the resolver emits both entries (the multi-major
- * coexistence case).
- *
+ * @param {string} candidateRaw
  * @param {string} range
- * @returns {string}
+ * @returns {boolean}
  */
-export const parseRangeMajor = range => {
-  const trimmed = range.trim();
-  if (trimmed === '' || trimmed === '*' || trimmed === 'x') {
-    return 'any';
+export const satisfiesRange = (candidateRaw, range) => {
+  const candidate = parseVersion(candidateRaw);
+  if (candidate.prerelease.length > 0) {
+    const release = `${candidate.major}.${candidate.minor}.${candidate.patch}`;
+    const namesPrerelease = [...range.matchAll(/(\d+\.\d+\.\d+)-/g)].some(
+      match => match[1] === release,
+    );
+    if (!namesPrerelease) return false;
   }
-  const numeric = /^[^\d]*(\d+)/.exec(trimmed);
-  return numeric ? numeric[1] : 'any';
+  return matchesRange(candidateRaw, range);
 };
-harden(parseRangeMajor);
+harden(satisfiesRange);
 
 /**
  * Recognize the `workspace:` specifier shape.
@@ -353,24 +396,30 @@ export const makeMvsResolveHook = options => {
   };
 
   /**
-   * Pick the greatest version in the packument that satisfies `range`.
+   * Pick the least published version that satisfies every requirement.
+   *
+   * MVS widens a selection only when another requirement in the same group
+   * demands it, where picking the newest satisfying version would
+   * reproduce npm's eager upgrades. Candidates sort by semver precedence
+   * and then by their raw string, so the choice does not depend on
+   * packument key order.
    *
    * @param {Awaited<ReturnType<typeof fetcher.getPackument>>} document
-   * @param {string} name
-   * @param {string} range
-   * @returns {string}
+   * @param {readonly string[]} ranges
+   * @returns {string | undefined} undefined when no version satisfies
+   *   every range.
    */
-  const selectGreatestSatisfying = (document, name, range) => {
+  const selectLeastSatisfying = (document, ranges) => {
     const candidates = Object.keys(document.versions)
-      .filter(v => satisfiesRange(v, range))
       .map(parseVersion)
-      .sort(compareVersions);
-    if (candidates.length === 0) {
-      throw RegistryMissingPackageError(
-        `${name}: no version satisfies ${q(range)}`,
+      .filter(version =>
+        ranges.every(range => satisfiesRange(version.raw, range)),
+      )
+      .sort(
+        (a, b) =>
+          compareVersions(a, b) || (a.raw < b.raw ? -1 : Number(a.raw > b.raw)),
       );
-    }
-    return candidates[candidates.length - 1].raw;
+    return candidates[0]?.raw;
   };
 
   return /** @type {ResolveHook} */ (
@@ -397,30 +446,53 @@ export const makeMvsResolveHook = options => {
       const packumentCache = new Map();
 
       /**
-       * Resolved selections, keyed by name and per-major slot. The slot
-       * is the canonical major derived from the *requested* range, not
-       * from the selected version, so two requesters that classify
-       * under the same slot share a selection and the resolver picks
-       * the greater of the two.
+       * The selection that declared an edge, or undefined for the entry.
+       * Diagnostics carry it so those from a superseded or pruned
+       * selection can be dropped.
        *
-       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string }>>}
+       * @typedef {{ name: string, groupKey: string, version: string } | undefined} EdgeOrigin
+       */
+      /**
+       * @typedef {{ name: string, range: string, source: string, importer: string, from: EdgeOrigin }} Edge
+       */
+
+      /**
+       * Resolved selections, keyed by name and then by group, in group
+       * creation order. `ranges` accumulates the ranges that joined the
+       * group; workspace entries, keyed `'workspace'`, omit it because
+       * they ignore ranges.
+       *
+       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string, ranges?: string[] }>>}
        */
       const resolved = new Map();
-      /** @type {Array<{ importer: string, name: string, range: string }>} */
+
+      /**
+       * The group a range already joined, if any.
+       *
+       * @param {Map<string, { ranges?: string[] }> | undefined} groups
+       * @param {string} range
+       * @returns {string | undefined}
+       */
+      const groupOf = (groups, range) =>
+        [...(groups ?? [])].find(([, group]) =>
+          group.ranges?.includes(range),
+        )?.[0];
+      /** @type {Array<{ importer: string, name: string, range: string, from: EdgeOrigin }>} */
       const peerRequirements = [];
-      /** @type {Array<{ importer: string, name: string, range: string, reason: string }>} */
+      /** @type {Array<{ importer: string, name: string, range: string, reason: string, from: EdgeOrigin }>} */
       const unmetOptionals = [];
-      /** @type {Array<{ importer: string, name: string, range: string, version: string }>} */
+      /** @type {Array<{ importer: string, name: string, range: string, version: string, from: EdgeOrigin }>} */
       const workspaceMismatches = [];
 
       /**
        * Enqueue all dependency edges from one package descriptor.
        *
-       * @param {Array<{ name: string, range: string, source: string, importer: string }>} frontier
+       * @param {Edge[]} frontier
        * @param {Record<string, unknown>} pkg
        * @param {string} importer
+       * @param {EdgeOrigin} from
        */
-      const enqueueAll = (frontier, pkg, importer) => {
+      const enqueueAll = (frontier, pkg, importer, from) => {
         const sources = /** @type {const} */ ([
           'dependencies',
           'peerDependencies',
@@ -432,14 +504,15 @@ export const makeMvsResolveHook = options => {
             (pkg[source]);
           if (table) {
             for (const [name, range] of Object.entries(table)) {
-              frontier.push({ name, range, source, importer });
+              frontier.push({ name, range, source, importer, from });
             }
           }
         }
       };
 
+      /** @type {Edge[]} */
       const frontier = [];
-      enqueueAll(frontier, entry, entry.name || '<entry>');
+      enqueueAll(frontier, entry, entry.name || '<entry>', undefined);
 
       /**
        * Process a single frontier edge. Returns nothing; mutates the
@@ -447,11 +520,11 @@ export const makeMvsResolveHook = options => {
        * `frontier` accumulators. May throw; the caller's loop wraps the
        * dispatch.
        *
-       * @param {{ name: string, range: string, source: string, importer: string }} edge
+       * @param {Edge} edge
        */
       const processEdge = async edge => {
         await null;
-        const { name, range, source, importer } = edge;
+        const { name, range, source, importer, from } = edge;
 
         // Workspace specifier? Prefer workspace lookup over registry.
         if (isWorkspaceSpecifier(range)) {
@@ -472,15 +545,20 @@ export const makeMvsResolveHook = options => {
               ? member.packageJson
               : new TextDecoder().decode(member.packageJson);
           const wsSlot = resolved.get(name) ?? new Map();
+          const version = memberPkg.version || '0.0.0';
           wsSlot.set('workspace', {
-            version: memberPkg.version || '0.0.0',
+            version,
             integrity: 'workspace:',
             treeRef: member.treeRef,
             isWorkspace: true,
             packageJson: memberPjString,
           });
           resolved.set(name, wsSlot);
-          enqueueAll(frontier, memberPkg, name);
+          enqueueAll(frontier, memberPkg, name, {
+            name,
+            groupKey: 'workspace',
+            version,
+          });
           return;
         }
 
@@ -505,7 +583,11 @@ export const makeMvsResolveHook = options => {
                 isWorkspace: true,
                 packageJson: memberPjString,
               });
-              enqueueAll(frontier, memberPkg, name);
+              enqueueAll(frontier, memberPkg, name, {
+                name,
+                groupKey: 'workspace',
+                version: memberVersion,
+              });
             }
             // Diagnostic when the workspace member's version does not
             // satisfy the importer's range; we still resolve to the
@@ -522,19 +604,18 @@ export const makeMvsResolveHook = options => {
                 name,
                 range,
                 version: memberVersion,
+                from,
               });
             }
             if (source === 'peerDependencies') {
-              peerRequirements.push({ importer, name, range });
+              peerRequirements.push({ importer, name, range, from });
             }
             resolved.set(name, wsSlot);
             return;
           }
         }
 
-        const majorKey = parseRangeMajor(range);
-        const slot = resolved.get(name) ?? new Map();
-        const existing = slot.get(majorKey);
+        const groups = resolved.get(name) ?? new Map();
 
         let document;
         try {
@@ -546,6 +627,7 @@ export const makeMvsResolveHook = options => {
               name,
               range,
               reason: /** @type {Error} */ (err).message,
+              from,
             });
             return;
           }
@@ -554,37 +636,49 @@ export const makeMvsResolveHook = options => {
             // raises `RegistryMissingPackageError` with a fully-formed
             // message describing the unmet peer. Logging the upstream
             // load failure here would lose the "unmet peer" framing.
-            peerRequirements.push({ importer, name, range });
+            peerRequirements.push({ importer, name, range, from });
             return;
           }
           throw err;
         }
 
+        // First-fit: join the earliest group some version satisfies
+        // together with this range, else start a new group.
+        const joined = groupOf(groups, range);
+        const groupKeys =
+          joined === undefined
+            ? [...groups.keys(), String(groups.size)]
+            : [joined];
+        let groupKey = groupKeys[0];
+        /** @type {string[]} */
+        let ranges = [range];
+        /** @type {string | undefined} */
         let candidateVersion;
-        try {
-          candidateVersion = selectGreatestSatisfying(document, name, range);
-        } catch (err) {
+        for (const key of groupKeys) {
+          groupKey = key;
+          ranges = [...(groups.get(key)?.ranges ?? [])];
+          if (!ranges.includes(range)) {
+            ranges.push(range);
+          }
+          candidateVersion = selectLeastSatisfying(document, ranges);
+          if (candidateVersion !== undefined) {
+            break;
+          }
+        }
+        if (candidateVersion === undefined) {
+          const reason = `${name}: no version satisfies ${q(range)}`;
           if (source === 'optionalDependencies') {
-            unmetOptionals.push({
-              importer,
-              name,
-              range,
-              reason: /** @type {Error} */ (err).message,
-            });
+            unmetOptionals.push({ importer, name, range, reason, from });
             return;
           }
-          throw err;
+          throw RegistryMissingPackageError(reason);
         }
+        const existing = groups.get(groupKey);
 
-        if (
-          existing &&
-          compareVersions(
-            parseVersion(existing.version),
-            parseVersion(candidateVersion),
-          ) >= 0
-        ) {
+        if (existing?.version === candidateVersion) {
+          existing.ranges = ranges;
           if (source === 'peerDependencies') {
-            peerRequirements.push({ importer, name, range });
+            peerRequirements.push({ importer, name, range, from });
           }
           return;
         }
@@ -599,13 +693,14 @@ export const makeMvsResolveHook = options => {
               `offline: no cached entry for ${name}@${candidateVersion}`,
             );
           }
-          slot.set(majorKey, {
+          groups.set(groupKey, {
             version: candidateVersion,
             integrity: cached.integrity,
             treeRef: cached.treeRef,
             packageJson: cached.packageJson,
+            ranges,
           });
-          resolved.set(name, slot);
+          resolved.set(name, groups);
           // Walk the cached entry's transitive deps. The cache row's
           // `packageJson` snapshot carries the declared dependency
           // tables; without it the closure would be silently incomplete
@@ -614,17 +709,22 @@ export const makeMvsResolveHook = options => {
           // snapshot, surface the gap on the diagnostic side channel
           // rather than walking against an empty `{}`.
           if (typeof cached.packageJson === 'string') {
-            enqueueAll(frontier, decodePackageJson(cached.packageJson), name);
+            enqueueAll(frontier, decodePackageJson(cached.packageJson), name, {
+              name,
+              groupKey,
+              version: candidateVersion,
+            });
           } else {
             unmetOptionals.push({
               importer,
               name,
               range,
               reason: `offline: cached entry for ${name}@${candidateVersion} has no packageJson snapshot; transitive deps not walked`,
+              from,
             });
           }
           if (source === 'peerDependencies') {
-            peerRequirements.push({ importer, name, range });
+            peerRequirements.push({ importer, name, range, from });
           }
           return;
         }
@@ -639,6 +739,7 @@ export const makeMvsResolveHook = options => {
               name,
               range,
               reason: `tarball fetch failed: ${/** @type {Error} */ (err).message}`,
+              from,
             });
             return;
           }
@@ -670,43 +771,106 @@ export const makeMvsResolveHook = options => {
           peerDependencies: childMeta.peerDependencies || {},
           optionalDependencies: childMeta.optionalDependencies || {},
         });
-        slot.set(majorKey, {
+        groups.set(groupKey, {
           version: candidateVersion,
           integrity,
           treeRef,
           packageJson: packageJsonSnapshot,
+          ranges,
         });
-        resolved.set(name, slot);
+        resolved.set(name, groups);
 
         if (source === 'peerDependencies') {
-          peerRequirements.push({ importer, name, range });
+          peerRequirements.push({ importer, name, range, from });
         }
 
         enqueueAll(
           frontier,
           /** @type {Record<string, unknown>} */ (childMeta),
           name,
+          { name, groupKey, version: candidateVersion },
         );
       };
 
       while (frontier.length > 0) {
-        const edge =
-          /** @type {{ name: string, range: string, source: string, importer: string }} */ (
-            frontier.shift()
-          );
+        const edge = /** @type {Edge} */ (frontier.shift());
         // eslint-disable-next-line no-await-in-loop
         await processEdge(edge);
       }
 
+      // Raising a selection leaves behind entries that only the
+      // superseded version required.
+      /** @type {Set<string>} */
+      const reachable = new Set();
+      /** @type {Edge[]} */
+      const pending = [];
+      enqueueAll(pending, entry, entry.name || '<entry>', undefined);
+      for (let edge = pending.pop(); edge !== undefined; edge = pending.pop()) {
+        const { name, range } = edge;
+        const groups = resolved.get(name);
+        const groupKey = groups?.has('workspace')
+          ? 'workspace'
+          : groupOf(groups, range);
+        const selection =
+          groupKey === undefined ? undefined : groups?.get(groupKey);
+        const reachKey = `${name}\0${groupKey}`;
+        if (selection !== undefined && !reachable.has(reachKey)) {
+          reachable.add(reachKey);
+          if (typeof selection.packageJson === 'string') {
+            enqueueAll(
+              pending,
+              decodePackageJson(selection.packageJson),
+              name,
+              {
+                name,
+                groupKey: /** @type {string} */ (groupKey),
+                version: selection.version,
+              },
+            );
+          }
+        }
+      }
+      for (const [name, groups] of resolved) {
+        for (const groupKey of groups.keys()) {
+          if (!reachable.has(`${name}\0${groupKey}`)) {
+            groups.delete(groupKey);
+          }
+        }
+        if (groups.size === 0) {
+          resolved.delete(name);
+        }
+      }
+
+      /**
+       * Whether the selection that declared an edge survived pruning.
+       *
+       * @param {EdgeOrigin} from
+       */
+      const isLive = from =>
+        from === undefined ||
+        resolved.get(from.name)?.get(from.groupKey)?.version === from.version;
+      /**
+       * Drop diagnostics from pruned or superseded selections and strip
+       * their provenance.
+       *
+       * @template {{ from: EdgeOrigin }} T
+       * @param {T[]} diagnostics
+       * @returns {Omit<T, 'from'>[]}
+       */
+      const liveDiagnostics = diagnostics =>
+        diagnostics
+          .filter(diagnostic => isLive(diagnostic.from))
+          .map(({ from: _from, ...diagnostic }) => diagnostic);
+
       // Peer-requirement check.
-      for (const peer of peerRequirements) {
-        const slot = resolved.get(peer.name);
-        if (slot === undefined) {
+      for (const peer of liveDiagnostics(peerRequirements)) {
+        const groups = resolved.get(peer.name);
+        if (groups === undefined) {
           throw RegistryMissingPackageError(
             `${peer.importer} declares unmet peer dependency ${peer.name}@${peer.range}`,
           );
         }
-        const satisfied = [...slot.values()].some(candidate =>
+        const satisfied = [...groups.values()].some(candidate =>
           satisfiesRange(candidate.version, peer.range),
         );
         if (!satisfied) {
@@ -716,12 +880,10 @@ export const makeMvsResolveHook = options => {
         }
       }
 
-      // Flatten the (name, major-slot) -> selection map into the
-      // canonical packagesByKey shape.
       /** @type {Record<string, RegistryResolutionEntry>} */
       const packagesByKey = {};
-      for (const [name, slot] of resolved) {
-        for (const selection of slot.values()) {
+      for (const [name, groups] of resolved) {
+        for (const selection of groups.values()) {
           // Workspace members keep the bare name as their key, no
           // version segment. Per the Synthesized layout section of
           // snapshot-mapper.md, this is the encoding the mapper
@@ -767,8 +929,8 @@ export const makeMvsResolveHook = options => {
         packagesByKey: harden(packagesByKey),
         keys: harden(keys),
         resolutionHash: resolutionHashBytes,
-        unmetOptionals: harden(unmetOptionals),
-        workspaceMismatches: harden(workspaceMismatches),
+        unmetOptionals: harden(liveDiagnostics(unmetOptionals)),
+        workspaceMismatches: harden(liveDiagnostics(workspaceMismatches)),
       });
       return resolution;
     }
