@@ -54,6 +54,7 @@
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
+    "./inference-provider-auth.js": "./src/inference-provider-auth.js",
     "./inference-provider-registry.js": "./src/inference-provider-registry.js",
     "./inference-provider-policy.js": "./src/inference-provider-policy.js",
     "./inference-provider-registry-module.js": "./src/inference-provider-registry-module.js",

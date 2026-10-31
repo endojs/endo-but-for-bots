@@ -121,6 +121,36 @@ test('a provider keeps one issuer and refuses a changed secret', async t => {
   });
 });
 
+test('the API-key issuer keeps OAuth modes unavailable', async t => {
+  const secret = makeExo('IssuerTestSecret', SecretInterface, {
+    readBase64: async () => encodeBase64(encodeUtf8('unused')),
+  });
+  const made = makeAnthropicApiKeyIssuerFactory({
+    fetch: async () => {
+      throw Error('OAuth refusal must precede network use');
+    },
+  });
+  t.teardown(() => made.close());
+  const provider = harden({
+    providerId: 'provider-oauth',
+    kind: 'anthropic',
+    authMode: 'oauth',
+    oauthProvider: 'claude-subscription',
+    accountRef: 'account-one',
+    defaultModel: 'claude-test',
+  });
+  await t.throwsAsync(
+    () =>
+      made.factory.openEndpoint(provider, secret, {
+        sessionId: 'grant-oauth',
+      }),
+    { message: /Anthropic OAuth is not enabled/ },
+  );
+  await t.throwsAsync(() => made.factory.discoverModels(provider, secret), {
+    message: /Anthropic OAuth is not enabled/,
+  });
+});
+
 test('the module entry point disposes its issuers with the formula context', async t => {
   const hooks = [];
   const context = makeExo(

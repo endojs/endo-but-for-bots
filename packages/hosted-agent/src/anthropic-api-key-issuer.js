@@ -52,12 +52,20 @@ export const makeAnthropicApiKeyIssuerFactory = ({
   /** @type {Map<string, { secret: any, issuer: any }>} */
   const issuers = new Map();
 
-  /** @param {any} provider @param {any} secret */
-  const provideIssuer = (provider, secret) => {
+  /** @param {any} provider */
+  const assertProvider = provider => {
+    provider?.authMode === undefined ||
+      provider.authMode === 'api-key' ||
+      Fail`Anthropic OAuth is not enabled by the API-key issuer`;
     (provider?.kind === 'anthropic' &&
       typeof provider.providerId === 'string' &&
       typeof provider.defaultModel === 'string') ||
       Fail`Invalid Anthropic provider`;
+  };
+
+  /** @param {any} provider @param {any} secret */
+  const provideIssuer = (provider, secret) => {
+    assertProvider(provider);
     const prior = issuers.get(provider.providerId);
     if (prior !== undefined) {
       prior.secret === secret || Fail`Anthropic provider secret changed`;
@@ -107,7 +115,7 @@ export const makeAnthropicApiKeyIssuerFactory = ({
         await prior?.issuer.dispose();
       },
       async discoverModels(provider, secret) {
-        provider?.kind === 'anthropic' || Fail`Invalid Anthropic provider`;
+        assertProvider(provider);
         return makeAnthropicModelRead({
           fetch,
           readAuthorization: async () => {
