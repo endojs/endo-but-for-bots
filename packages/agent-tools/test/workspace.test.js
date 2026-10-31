@@ -167,6 +167,7 @@ test('filesystem + git + shell + http compose without collision', t => {
 
 test('provisionWorkspaceTools combines http with a git-derived filesystem', async t => {
   await null;
+  /** @type {any} a `Git` stand-in whose `worktree` derives the filesystem. */
   const git = Far('Git', { worktree: () => grant('Mount') });
   const catalog = await provisionWorkspaceTools({
     git,
