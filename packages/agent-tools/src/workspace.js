@@ -9,6 +9,7 @@
  *   WorkspaceGrants,
  *   ProvisionWorkspaceGrants,
  *   HistoryToolsGrant,
+ *   GitWorkspaceGrant,
  * } from './types.js'
  */
 
@@ -182,7 +183,7 @@ harden(provisionWorkspaceTools);
  * pull mutates its bound worktree, while fetch and push mutate repository or
  * remote state.
  *
- * @param {import('./types.js').GitWorkspaceGrant} grant
+ * @param {GitWorkspaceGrant} grant
  * @returns {Promise<ToolRecord[]>}
  */
 export const provisionGitWorkspaceTools = async ({ git, remote, maxChars }) => {

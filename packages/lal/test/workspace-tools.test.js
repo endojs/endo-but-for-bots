@@ -3,7 +3,6 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeExo } from '@endo/exo';
-import { Far } from '@endo/marshal';
 import { M } from '@endo/patterns';
 
 import {
@@ -13,13 +12,25 @@ import {
 
 const GitInterface = M.interface('Git', {}, { defaultGuards: 'raw' });
 
+const MountInterface = M.interface('Mount', {}, { defaultGuards: 'raw' });
+const StoreInterface = M.interface(
+  'ManagerStore',
+  {},
+  { defaultGuards: 'raw' },
+);
+const CapabilityInterface = M.interface(
+  'Capability',
+  {},
+  { defaultGuards: 'raw' },
+);
+
 /**
  * @param {string[]} calls
  * @param {boolean} writable
  */
 const makeRecordingGit = (calls, writable) => {
   const methods = {
-    worktree: async () => Far('Mount', {}),
+    worktree: async () => makeExo('Mount', MountInterface, {}),
     log: async () => {
       calls.push('log');
       return harden([{ subject: 'initial' }]);
@@ -96,10 +107,10 @@ test('Lal registers only reader tools over a read-only Git', async t => {
 test('Lal resolves workspace names once through its manager store', async t => {
   /** @type {string[]} */
   const calls = [];
-  const store = Far('ManagerStore', {
+  const store = makeExo('ManagerStore', StoreInterface, {
     lookup: async name => {
       calls.push(name);
-      return Far(`Capability ${name}`, {});
+      return makeExo(`Capability ${name}`, CapabilityInterface, {});
     },
   });
 
@@ -113,8 +124,8 @@ test('Lal resolves workspace names once through its manager store', async t => {
 });
 
 test('Lal rejects a remote that is not paired with a Git workspace', async t => {
-  const store = Far('UnusedManagerStore', {
-    lookup: async _name => Far('UnusedCapability', {}),
+  const store = makeExo('UnusedManagerStore', StoreInterface, {
+    lookup: async _name => makeExo('UnusedCapability', CapabilityInterface, {}),
   });
 
   await t.throwsAsync(resolveLalWorkspace(store, { remote: 'origin' }), {

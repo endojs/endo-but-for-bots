@@ -26,7 +26,14 @@ import {
 } from './workspace-tools.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { GuestPowers, LalContext, LalWorkspaceGrant } from './agent.types.js' */
+/**
+ * @import {
+ *   GuestPowers,
+ *   LalContext,
+ *   LalWorkspaceGrant,
+ *   WorkerConfig,
+ * } from './agent.types.js'
+ */
 
 // pi-ai's built-in API providers (anthropic, openai, google, openrouter,
 // mistral, deepseek, groq, xai, github-copilot, and ~20 others) are registered
@@ -268,10 +275,9 @@ export const make = (guestPowers, _context) => {
         // Only process value messages that reply to our form.
         try {
           // Resolve the submitted values from the value message.
-          const config =
-            /** @type {import('./agent.types.js').WorkerConfig} */ (
-              await E(powers).lookupById(msg.valueId)
-            );
+          const config = /** @type {WorkerConfig} */ (
+            await E(powers).lookupById(msg.valueId)
+          );
 
           const { name } = config;
 
