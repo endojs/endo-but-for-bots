@@ -324,6 +324,25 @@ test.serial(
   },
 );
 
+test.serial(
+  'makeFromPackage uses a readable-tree source without re-snapshotting',
+  async t => {
+    const { host } = await prepare();
+    const mount = await E(host).lookup('entry-mount');
+    await E(host).storeTree(await E(mount).snapshot(), 'entry-tree');
+    const caplet = await E(host).makeFromPackage(undefined, 'entry-tree', {
+      resultName: 'tree-caplet',
+    });
+    t.is(await E(caplet).marker(), 'original');
+
+    const treeId = await E(host).identify('entry-tree');
+    const capletId = await E(host).identify('tree-caplet');
+    const diagnostics = await E(host).diagnostics();
+    const capletFormula = await E(diagnostics).getFormula(capletId);
+    t.is(capletFormula.properties.source.identifier, treeId);
+  },
+);
+
 test.serial('makeFromPackage reincarnates after a restart', async t => {
   const { host, config, connect } = await prepare();
   await E(host).makeFromPackage(undefined, 'entry-mount', {
