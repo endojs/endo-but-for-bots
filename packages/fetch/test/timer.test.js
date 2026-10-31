@@ -37,3 +37,29 @@ test('Timer rejects delays that the host would clamp', async t => {
     message: /must be an integer between/,
   });
 });
+
+test('Timer rejects and clears the host timer when the cancellation token fulfills', async t => {
+  /** @type {unknown[]} */
+  const cleared = [];
+  const handle = harden({});
+  const timer = makeTimer({
+    setTimeout: () => handle,
+    clearTimeout: candidate => cleared.push(candidate),
+  });
+  await t.throwsAsync(() => timer.delay(10, Promise.resolve('done')), {
+    message: /must not fulfill/,
+  });
+  t.deepEqual(cleared, [handle]);
+});
+
+test('Timer over the ambient host powers resolves a delay and honors cancellation', async t => {
+  const timer = makeTimer();
+  const delayed = await timer.delay(0);
+  t.is(delayed, undefined);
+
+  const { cancelled, cancel } = makeCancelKit();
+  const pending = timer.delay(MAX_TIMER_DELAY_MILLISECONDS, cancelled);
+  cancel(Error('stop'));
+  await t.throwsAsync(() => pending, { message: 'stop' });
+  t.true(Math.abs((await timer.now()) - Date.now()) < 60_000);
+});
