@@ -798,12 +798,14 @@ created file and accepts a `ReadableBlob`); it renames and removes nothing.
 
 - [x] Land the catalog in `packages/platform/src/fs/interfaces.js` as the canonical guards.
 - [x] Land `subView` on `EndoMount` and the extended `Directory` per the catalog (named `subView`, not `subDir`, per D5).
-- [ ] Promote `subView` into the minimal portable `Directory` and `SnapshotTree` guards. Blocked on the attenuator-name open question.
 - [x] Land `followNameChanges` on `MountInterface` per [filesystem-watchers.md](filesystem-watchers.md), and the immediately-terminating D6 form on immutable snapshot trees.
 - [x] Land the range-read job on Blob guards. The delivered surface is the `bytes()` reader plus composable `byteRange()` / `textRange()` attenuation, which supersedes the earlier `streamRead` spelling.
 - [x] Land `makeFile` on `EndoMount`: it accepts text or a readable blob and returns the live file cap. The minimal portable `DirectoryInterface` does not declare it, because `EndoMountFile` is not a platform `File`.
 
-The platform-fs guard set after Phase 1 is the canonical catalog.
+The platform-fs guard set after Phase 1 is the canonical catalog. Promoting
+the attenuator into the minimal portable `Directory` and `SnapshotTree` guards
+is not a Phase 1 deliverable: it waits on the attenuator-name open question
+and lands, under whichever name is chosen, as its own change.
 
 **Migration style: big-bang, not gradual** (maintainer decision 2026-06-18;
 [Resolved decisions](#resolved-decisions-2026-06-18) D3).
