@@ -87,7 +87,7 @@ export interface ReadableTree {
  * such as `readReturnPattern` is not part of the materialization contract.
  */
 export type ReadableBlobSource = {
-  streamBase64: (...args: any[]) => PromiseLike<unknown>;
+  streamBase64: (...streamArguments: any[]) => PromiseLike<unknown>;
 };
 
 /** Portable semantic payload accepted by `Directory.write()`. */

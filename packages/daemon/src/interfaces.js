@@ -956,11 +956,8 @@ export {
   BearerCredentialInterface,
 } from '@endo/exo-git';
 
-// `EndoReadableTree` is the daemon's content-addressed immutable directory
-// snapshot. Its read surface is the shared `readableTreeMethodGuards` from
-// `@endo/platform/fs` (help / has / list / lookup); it adds the immutable-tree
-// catalog methods and `sha256`, making it the `SnapshotTree` shape. See
-// designs/fs-interface-consolidation.md § C3.
+// Content-addressed immutable directory snapshot: the `SnapshotTree` shape
+// (designs/fs-interface-consolidation.md § C3).
 export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
   subView: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(M.promise()),

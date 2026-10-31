@@ -260,7 +260,7 @@ type MountEndoMountFile = {
     help: (method?: string) => string;
 };
 type MountReadableBlobSource = {
-    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+    streamBase64: (...streamArguments: any[]) => PromiseLike<unknown>;
 };
 type MountFile = {
     streamBase64: (synPromise: unknown) => Promise<unknown>;
