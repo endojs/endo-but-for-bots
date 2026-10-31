@@ -119,7 +119,7 @@ survives as the cross-cap `rename` primitive 9p-server needs). `subView` was
 added to the `Mount` as a genuinely-confined attenuator (F8). `copy(fromPath,
 toPath)` was added to the extended `Directory` (recursive, binary-safe),
 closing the last catalog-method gap. The `@endo/platform/fs` `Directory` guard
-itself remains an unimplemented minimal vocabulary.
+now carries the catalog's `subView` and `makeFile` as well (next paragraph).
 
 **D4 / Phase 1.5 (done).** `@endo/endo-fs` has been retired into
 `@endo/platform/fs/extended`; all six consumers are re-homed. See the commit
@@ -129,12 +129,30 @@ itself remains an unimplemented minimal vocabulary.
 `DirectoryInterface` now includes `subView` and `makeFile`. `EndoMount` already
 implemented both operations; `makeFile` now completes the catalog contract by
 returning the live file capability and accepting either UTF-8 text or a
-`ReadableBlob` source. Immutable `SnapshotTree` capabilities now implement
+`ReadableBlob` source (a `ReadableTree` source is rejected before any
+mutation). The portable guard takes `subView` and `makeFile` paths as
+`string[]`, matching the catalog and the sibling `makeDirectory`; `EndoMount`
+additionally accepts a single name or a mount entry. Immutable `SnapshotTree` capabilities now implement
 `subView` and the D6 observation contract: `followNameChanges()` returns an
 immediately-terminating reader. The earlier `streamRead` proposal was
 superseded by the shipped `bytes()` reader plus `byteRange()` / `textRange()`
 attenuation surface described in
 [readableblob-range-attenuation.md](readableblob-range-attenuation.md).
+
+**Performance claims (not benchmarked).** The round-trip statements below
+(a depth-N path-array `lookup` is one message; a pipelined `lookupStep` chain
+collapses into one round trip) are message counts that follow from the call
+shapes under CapTP, not measured latencies. The `File.snapshot()` peer-CAS
+cache-hit short-circuit is pre-existing endo-fs behavior that this design
+retains unchanged. No benchmark accompanies this design: it changes method
+names and contracts, not the I/O paths those claims describe. Measuring them
+belongs to the peer-CAS work that relies on the short-circuit.
+
+**Open question: the attenuator's name.** The maintainer asked on
+[endojs/endo-but-for-bots#464](https://github.com/endojs/endo-but-for-bots/pull/464#discussion_r3434032260)
+for the re-root attenuator to be named `mount`. D5 records `subView`. The
+implementation keeps `subView` pending maintainer confirmation; a rename, if
+chosen, is a separate change across the platform and daemon surfaces.
 
 ## What is the Problem Being Solved?
 
