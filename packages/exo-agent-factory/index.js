@@ -12,3 +12,6 @@ export {
   isOrdinaryName,
 } from './src/policy.js';
 export * from './src/interfaces.js';
+
+// eslint-disable-next-line import/export
+export * from './types-index.js';

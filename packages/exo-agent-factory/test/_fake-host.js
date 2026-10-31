@@ -13,6 +13,7 @@ import { AgentDriverMakerInterface } from '../src/interfaces.js';
  * incarnation is dead: every later call throws too, as if the process exited.
  */
 export class Crash extends Error {}
+harden(Crash);
 
 /**
  * Make a method-less remotable that stands in for a daemon-held value.
@@ -20,6 +21,21 @@ export class Crash extends Error {}
  * @param {string} name
  */
 export const makeToken = name => makeExo(name, M.interface(name, {}), {});
+harden(makeToken);
+
+/**
+ * Guest powers in the fake carry real directory verbs, so a test can tell a
+ * leaked guest apart from its method-less `@self` handle.
+ */
+const makeGuestPowers = () =>
+  makeExo('Guest', M.interface('Guest', {}, { defaultGuards: 'passable' }), {
+    async lookup() {
+      return makeToken('GuestValue');
+    },
+    async provideGuest() {
+      return makeToken('Grandchild');
+    },
+  });
 
 /**
  * @typedef {object} Formula
@@ -120,9 +136,13 @@ export const makeFakeDaemon = () => {
   const makeGuestFormula = () => {
     const handle = makeToken('Handle');
     const handleFormula = formulate('handle', handle);
-    const guest = makeToken('Guest');
+    const pinsFormula = formulate('pins', makeToken('Pins'));
+    const guest = makeGuestPowers();
     const formula = formulate('guest', guest, {
-      names: new Map([['@self', handleFormula.id]]),
+      names: new Map([
+        ['@self', handleFormula.id],
+        ['@pins', pinsFormula.id],
+      ]),
     });
     return formula;
   };
@@ -312,6 +332,19 @@ export const makeFakeDaemon = () => {
       );
       if (!formula || !formula.names) throw Fail`not a guest`;
       formula.names.set(petName, idOfValue(value));
+    },
+    /**
+     * Delete a name from a guest's directory, as the guest itself could.
+     *
+     * @param {string} guestName
+     * @param {string} petName
+     */
+    guestDelete: (guestName, petName) => {
+      const formula = formulas.get(
+        /** @type {string} */ (names.get(guestName)),
+      );
+      if (!formula || !formula.names) throw Fail`not a guest`;
+      formula.names.delete(petName);
     },
     /** @param {string} name */
     plainAt: name => plain.get(/** @type {string} */ (names.get(name))),
