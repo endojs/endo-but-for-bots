@@ -80,7 +80,9 @@ network.
    the only transport used to construct `makeHttpClientAndControl`.
 2. `fetch-store`: a writable virtual-file-system directory, private to this
    confined service.
-3. `fetch-policy-authority` (optional): the referral target for
+3. `timer`: the `Timer` capability, the plugin's only source of time
+   (§ Time in a confined worker).
+4. `fetch-policy-authority` (optional): the referral target for
    trust-on-first-bind decisions. Without it, prompt modes are unavailable and
    unknown origins fail closed.
 
@@ -109,13 +111,93 @@ ephemeral. They are bounded operational state, not durable policy.
 `onPolicyChange(snapshot)` callback. The callback runs after every durable
 mutation, including a request-time trust-on-first-bind pin, so the confined
 plugin can persist a complete snapshot without putting VFS code in the pure
-capability package. `@endo/http-confine` remains untouched.
+capability package. `@endo/http-confine` changes only to stop reading ambient
+time, per § Time in a confined worker.
+
+### Time in a confined worker
+
+A confined-worker compartment (`makeBundle` / `makeArchive` in
+`packages/daemon/src/worker.js`) is endowed with no `setTimeout`, no
+`AbortController`, and a tamed `Date` whose `now()` throws. Today the
+confinement stack reads all three ambiently:
+
+| Use | Where | Ambient read |
+|---|---|---|
+| Per-request deadline | `makeRequestSignal` (`@endo/http-confine`) | `setTimeout`, `clearTimeout`, `AbortController` |
+| Revocation aborts in-flight requests | `makeHttpConfinement` controller set | `AbortController` |
+| Rate-limit window | `makeRateLimiter` (`now` seam) | `Date.now` via the `@endo/exo-http-client` default |
+| Policy-prompt timeout | `makeTrustOnFirstBindPolicyAdapter` | `setTimeout`, `clearTimeout` |
+| `decidedAt` and audit `at` stamps | `makeTrustOnFirstBindPolicyAdapter` | `Date.now` default |
+
+**Decision: inject time seams into the pure packages and endow a `Timer`
+capability to the confined plugin.** This follows the precedent set across the
+repository: `@endo/cancel`'s `makeDelay(setTimeout)` (`delay-lite`) binds the
+ambient timer at the edge, `@endo/reminder`'s scheduler and `@endo/workflow`'s
+service take `setTimeout` / `clearTimeout` / `now` seams, and thixotrope's
+`TimerPowers` do the same. In every case the pure code takes time as an
+argument and exactly one unconfined place holds the ambient source. Time is
+authority, so the confined plugin gets it the way it gets the network: as an
+endowment.
+
+1. **Cancellation becomes promise-based.** `@endo/http-confine` replaces its
+   `AbortController` use with `makeCancelKit` from `@endo/cancel`. A request
+   carries a `cancelled` token. Revocation cancels every in-flight kit, and
+   `limitResponseBytes` takes the same token. The `FetchLike` options carry
+   `cancelled`. Only the ambient-`fetch` edge (the `@endo/fetch` base, or an
+   unconfined caller of `@endo/exo-http-client`) converts it with
+   `toAbortSignal`. `@endo/confined-fetch`'s transport then forwards the token
+   to `E(base).fetch` directly and drops its `fromAbortSignal` bridge.
+2. **The only timer seam is `delay`.** `@endo/http-confine` and
+   `@endo/exo-http-client` take `delay: (ms, cancelled) => Promise<undefined>`,
+   the `makeDelay` return type. The request deadline is
+   `delay(timeoutMs, requestCancelled)`, and settling the request cancels it.
+   The prompt timeout races `delay(policyPromptTimeoutMs, promptCancelled)`.
+   The rate limiter holds one slot per request and releases it after
+   `delay(60_000, serviceCancelled)`. That is the same sliding window as
+   before, but it needs no clock.
+3. **Stamps await `now`.** The `@endo/exo-http-client` `now` seam may return a
+   promise. The adapter awaits it where it stamps a binding or an audit event.
+   Those paths are already asynchronous on the request side. The control
+   mutators that stamp (`revokeBinding`, `unpin`) become `M.callWhen`. That is
+   invisible to remote callers, who already use `E()`.
+4. **Ambient defaults live only at the unconfined edge.** `@endo/http-confine`
+   requires its seams and reads no globals. `@endo/exo-http-client` keeps
+   lazily resolved ambient defaults (`delay` from `@endo/cancel/delay`,
+   `Date.now`) for unconfined callers. `@endo/confined-fetch` always passes
+   seams built from its endowment.
+5. **A `Timer` capability is endowed.** The confined plugin resolves a
+   required `timer` power, an unconfined, stateless `Timer` with
+   `delay(ms, cancelled?)` and `now()`, both `M.callWhen`, plus `help()`. It
+   adapts that power into the local seams:
+   `delay = (ms, c) => E(timer).delay(ms, c)` and `now = () => E(timer).now()`.
+   Unlike `delay-lite`, the `Timer` must clear its host timer when `cancelled`
+   rejects. It must also reject any `ms` above `2 ** 31 - 1`, as thixotrope's
+   `MAX_TIMER_DELAY_MS` does, rather than let Node clamp it to roughly 1 ms. The
+   integration provisions it unconfined beside the base `Fetch`, retains it, and
+   re-endows it at revival. A guest never receives it.
+
+Considered and rejected:
+
+- **Enforce the deadline in the `@endo/fetch` base.** That covers only one of
+  the five uses. The rate window, prompt timeout, and stamps would still need
+  time, so it adds a second timing mechanism without removing the endowment.
+  The base already aborts its socket when `cancelled` rejects, so a
+  confined-side deadline reaches the socket through the same token.
+- **Add timers or a clock to the daemon's confined-worker `endowments`.** That
+  would give ambient time, and a timing channel, to every confined plugin
+  rather than only the one that is granted it.
+- **Reuse `@endo/reminder` or the daemon's `makeTimer` formula.** `@endo/reminder`
+  delivers scheduled messages to agent inboxes, and `makeTimer` is an interval
+  ticker. Neither is a passable `delay(ms, cancelled)` capability.
+- **Keep confined-fetch unconfined.** That is today's workaround. It gives the
+  stateful plugin the ambient `fetch` that the two-plugin split exists to
+  withhold.
 
 ### Revival and agent-tool binding
 
 The integration owns both retention and re-endowment. It pins the confined
-service under `@pins`, restores the base `Fetch` plus the same `fetch-store`
-at boot, and lets `revivePins()` re-incarnate the confined plugin. A revoked
+service under `@pins`, restores the base `Fetch`, the `Timer`, and the same
+`fetch-store` at boot, and lets `revivePins()` re-incarnate the confined plugin. A revoked
 service therefore revives revoked. The package README carries this recipe;
 Familiar and the online Gateway are candidate owners.
 
@@ -140,6 +222,7 @@ surface remain normative where referenced.
 | [endo-reminder](endo-reminder.md) | Precedent for VFS state and integration-owned revival |
 | [platform-fs](platform-fs.md), [fs-interface-reconciliation](fs-interface-reconciliation.md) | State-directory API and tree verbs |
 | [daemon-agent-tools](daemon-agent-tools.md) | `makeHttpTool` consumes the granted confined client |
+| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | `@endo/cancel` tokens and `delay` that replace `AbortController` and ambient timers |
 | [endoclaw-oauth](endoclaw-oauth.md) | Consumes a granted `HttpClient`, never the base `Fetch` |
 
 ## Implementation Phases
@@ -169,6 +252,17 @@ grants only its client facet. Exercise the restart path end to end on an
 in-memory filesystem. Implement `makeHttpTool` separately in
 `daemon-agent-tools` Phase 3.6 against the granted client.
 
+### Phase 4: Confined-worker time (S)
+
+Thread the `delay` / `now` seams and cancel-kit cancellation through
+`@endo/http-confine` and `@endo/exo-http-client`, and drop `AbortController`
+from both. Add the unconfined `Timer` and the required `timer` power to
+`@endo/confined-fetch`. Tests run the confined plugin in a `Compartment`
+endowed exactly like `packages/daemon/src/worker.js`'s `endowments` and drive a
+fake `Timer`. They prove the deadline, revocation abort, the rate window, the
+prompt timeout, and the stamps without any ambient time. They also prove that a
+cancelled `Timer.delay` clears its host timer.
+
 ## Design Decisions
 
 1. **Two plugins, not one.** The base unconfined plugin provides explicit
@@ -181,7 +275,11 @@ in-memory filesystem. Implement `makeHttpTool` separately in
 4. **Persist through an `@endo/exo-http-client` callback.** A control wrapper
    cannot observe request-time pins.
 5. **Revival is integration-owned.** The integration is responsible for
-   restoring both required endowments before reviving the confined service.
+   restoring the required endowments before reviving the confined service.
+6. **Time is an endowment.** The pure packages take `delay` / `now` seams and
+   promise-based cancellation. The confined plugin's only time source is an
+   endowed `Timer`. The deadline is not moved into the base, and the daemon's
+   worker endowments are not widened.
 
 ## Implementation status
 
@@ -192,10 +290,18 @@ earlier single-plugin shape and the `@endo/exo-http-client` persistence seams
 Phase 3 follow in a separate PR. `makeHttpTool` remains with
 [daemon-agent-tools](daemon-agent-tools.md) Phase 3.6.
 
-Open gap: `@endo/http-confine` reads ambient timers (`setTimeout`,
-`AbortController`, the clock) that the daemon's confined-worker compartments do
-not endow, so the confined plugin must be provisioned unconfined until a timer
-capability is endowed to it.
+Until Phase 4 lands, the confined plugin must be provisioned with
+`makeUnconfined`, because `@endo/http-confine` still reads ambient timers that
+confined-worker compartments do not endow (§ Time in a confined worker).
+
+## Open questions
+
+1. Which package should export the `Timer` maker? The recommendation is a
+   small unconfined entry beside the base (`@endo/fetch/timer.js`), because the
+   integration already provisions that package unconfined. A general-purpose
+   home such as `@endo/cancel` would serve other confined plugins that need
+   time, at the cost of adding `@endo/exo` to a package that does not depend on
+   it yet.
 
 ## Prompt
 
