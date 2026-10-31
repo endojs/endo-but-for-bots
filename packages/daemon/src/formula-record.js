@@ -355,7 +355,7 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       };
       properties.pushRefspecs = {
         kind: 'literal',
-        value: formula.policy.pushRefspecs,
+        value: formula.policy.pushRefspecs ?? [],
       };
       if (formula.policy.allowedBranches !== undefined) {
         properties.allowedBranches = {

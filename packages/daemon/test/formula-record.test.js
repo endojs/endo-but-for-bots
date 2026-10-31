@@ -364,3 +364,26 @@ test('makeFormulaRecord defaults omitted Git remote policy bounds', t => {
     revoked: { kind: 'literal', value: false },
   });
 });
+
+test('makeFormulaRecord reports a revoked Git remote with absent pushRefspecs', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'git-remote',
+      gitId: 'git-id',
+      name: 'origin',
+      revoked: true,
+      policy: {
+        url: 'https://github.com/endojs/endo.git',
+        allowedDirections: ['fetch', 'push'],
+        fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+        allowedBranches: ['refs/heads/agent/*'],
+      },
+    })
+  );
+
+  const { properties } = makeFormulaRecord(formula, aNumber);
+
+  t.false('credential' in properties);
+  t.deepEqual(properties.pushRefspecs, { kind: 'literal', value: [] });
+  t.deepEqual(properties.revoked, { kind: 'literal', value: true });
+});
