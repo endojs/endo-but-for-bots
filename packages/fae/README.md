@@ -132,6 +132,32 @@ await E(factory).createAgent('poet', {
 });
 ```
 
+### Giving an agent a git workspace
+
+An agent can work in a git repository through capabilities rather than a host
+path. Store a `Git` (from `provideGit` or `provideGitClone`) and, optionally,
+a `GitRemote` for it in the factory's store, then name them when creating the
+agent:
+
+```js
+await E(factory).createAgent('builder', {
+  pin: true,
+  workspace: { git: 'project-git', remote: 'project-origin' },
+});
+```
+
+The agent gets the `@endo/agent-tools` file tools (`mountReadText`,
+`mountList`, `mountStat`, `mountWriteText`) over the `Git`'s worktree, the git
+tools (`status`, `diff`, `log`, `add`, `commit`, branch navigation and the
+rest of the writer catalog), and `fetch`, `pull` and `push` when a remote is
+given. Commits are attributed to the identity the `Git` formula was created
+with. A read-only `Git` gets only the read tools. History rewrite is not
+offered. A subagent does not inherit the workspace.
+
+This replaces `setup-fs-tools` (below) for git work: those caplets run
+unconfined at a host directory, while a workspace reaches only what the
+granted `Git` reaches.
+
 ## Tools
 
 ### Built-in tools

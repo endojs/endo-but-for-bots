@@ -10,6 +10,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { spawnWorkerLoop } from '../agent.js';
 import { make as makeDriver } from '../driver.js';
+import { git, makeWorkspaceGit } from './workspace-git-fixture.js';
 
 const NODE = 'a'.repeat(64);
 const SELF = 'b'.repeat(64);
@@ -1228,7 +1229,7 @@ test('the durable driver derives pool affinity from the retained agent locator w
       throw Error(`Unexpected driver lookup ${name}`);
     },
     has: name => {
-      t.is(name, 'subagent-spawner');
+      t.true(['subagent-spawner', 'workspace-git'].includes(name));
       return false;
     },
     locate: name => {
@@ -1883,4 +1884,133 @@ test('cancelling an image request checkpoints receipts before stop and recovers 
   );
   t.is(decodeImageResult(recovered.content), undefined);
   t.regex(recovered.content, /Not replayed after an incomplete turn/);
+});
+
+/**
+ * @param {string} id
+ * @param {string} name
+ * @param {object} toolArguments
+ */
+const toolCall = (id, name, toolArguments) =>
+  harden({
+    id,
+    type: 'function',
+    function: { name, arguments: JSON.stringify(toolArguments) },
+  });
+
+test('a workspace grant lets the agent edit and commit the granted worktree', async t => {
+  t.timeout(20_000);
+  const mailbox = makeLiveMailbox();
+  const { git: granted, root } = await makeWorkspaceGit(t);
+  /** @type {string[][]} */
+  const offered = [];
+  /** @type {string[]} */
+  const toolResults = [];
+  const rounds = [
+    () =>
+      harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            toolCall('w', 'mountWriteText', {
+              path: 'plan.md',
+              content: 'step one\n',
+            }),
+            toolCall('a', 'add', { paths: ['plan.md'] }),
+            toolCall('c', 'commit', { message: 'record the plan' }),
+          ],
+        },
+      }),
+    () => harden({ message: { role: 'assistant', content: 'committed' } }),
+  ];
+  let index = 0;
+  const provider = harden({
+    chat: async (
+      /** @type {any[]} */ messages,
+      /** @type {any[]} */ toolSchemas,
+    ) => {
+      offered.push(toolSchemas.map(schema => schema.function.name));
+      if (index > 0) {
+        for (const entry of messages) {
+          if (entry.role === 'tool') toolResults.push(`${entry.content}`);
+        }
+      }
+      const round = rounds[Math.min(index, rounds.length - 1)];
+      index += 1;
+      return round();
+    },
+  });
+
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ workspace: { git: granted }, timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['write the plan'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+    'the agent never replied',
+  );
+  mailbox.close();
+  await loop;
+
+  for (const name of ['mountWriteText', 'add', 'commit', 'status', 'list']) {
+    t.true(offered[0].includes(name), `${name} offered to the model`);
+  }
+  t.is(toolResults.length, 3);
+  t.false(
+    toolResults.some(result => result.includes('error')),
+    toolResults.join('\n'),
+  );
+  t.is(
+    (await git(root, ['log', '-1', '--format=%s|%an'])).trim(),
+    'record the plan|Fae Agent',
+  );
+});
+
+test('an agent without a workspace grant has no file or git tools', async t => {
+  t.timeout(15_000);
+  const mailbox = makeLiveMailbox();
+  /** @type {string[]} */
+  let offered = [];
+  const provider = harden({
+    chat: async (
+      /** @type {any[]} */ _messages,
+      /** @type {any[]} */ toolSchemas,
+    ) => {
+      offered = toolSchemas.map(schema => schema.function.name);
+      return harden({ message: { role: 'assistant', content: 'ok' } });
+    },
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['hi'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.true(offered.includes('reply'));
+  for (const name of ['mountWriteText', 'commit', 'status']) {
+    t.false(offered.includes(name), `${name} absent without a grant`);
+  }
 });
