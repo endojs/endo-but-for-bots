@@ -10,6 +10,7 @@ export {
   intersectPolicy,
   makeRootPolicy,
   isOrdinaryName,
+  MAX_POLICY_COUNT,
 } from './src/policy.js';
 export * from './src/interfaces.js';
 

@@ -2,7 +2,12 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { intersectPolicy, isOrdinaryName, makeRootPolicy } from '../index.js';
+import {
+  MAX_POLICY_COUNT,
+  intersectPolicy,
+  isOrdinaryName,
+  makeRootPolicy,
+} from '../index.js';
 import { assertCreateAdmitted } from '../src/policy.js';
 
 const root = makeRootPolicy({
@@ -79,9 +84,10 @@ test('instruction bytes are measured in UTF-8 at the bound', t => {
   });
 });
 
-test('policy counts must be non-negative safe integers', t => {
+test('policy counts are integers from 0 to MAX_POLICY_COUNT', t => {
+  t.is(MAX_POLICY_COUNT, 2 ** 32 - 1);
   for (const field of ['maxChildren', 'maxInstructionBytes']) {
-    for (const value of [0, -0, Number.MAX_SAFE_INTEGER]) {
+    for (const value of [0, -0, MAX_POLICY_COUNT]) {
       t.notThrows(() => intersectPolicy(root, { [field]: value }), `${value}`);
       t.notThrows(() =>
         makeRootPolicy({
@@ -98,12 +104,12 @@ test('policy counts must be non-negative safe integers', t => {
       NaN,
       Infinity,
       -Infinity,
-      Number.MAX_SAFE_INTEGER + 1,
+      MAX_POLICY_COUNT + 1,
       '1',
     ]) {
       t.throws(
         () => intersectPolicy(root, /** @type {any} */ ({ [field]: value })),
-        { message: /non-negative safe integer/ },
+        { message: /must be an integer from 0 to 4294967295/ },
         `${String(value)}`,
       );
     }
@@ -112,10 +118,22 @@ test('policy counts must be non-negative safe integers', t => {
 });
 
 test('ordinary names exclude special, path, and oversized names', t => {
-  const ordinary = ['a', 'x'.repeat(255), '😀', '...', 'a.b'];
+  const ordinary = [
+    'a',
+    'x'.repeat(255),
+    '😀',
+    '...',
+    'a.b',
+    '__proto__',
+    'constructor',
+    // 127 supplementary code points are 254 UTF-16 code units.
+    '😀'.repeat(127),
+  ];
   const special = [
     '',
     'x'.repeat(256),
+    // 128 supplementary code points are 256 UTF-16 code units.
+    '😀'.repeat(128),
     '.',
     '..',
     'a/b',

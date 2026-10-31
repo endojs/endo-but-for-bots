@@ -6,10 +6,13 @@
 export interface ChildAgentPolicy {
   /**
    * Children this namespace and every namespace derived from it may retain
-   * at once.
+   * at once, from 0 to `MAX_POLICY_COUNT` (`2**32 - 1`).
    */
   maxChildren?: number;
-  /** UTF-8 size bound on `create`'s `instructions`. */
+  /**
+   * UTF-8 size bound on `create`'s `instructions`, from 0 to
+   * `MAX_POLICY_COUNT` (`2**32 - 1`).
+   */
   maxInstructionBytes?: number;
   /** The endowment names `create` admits. */
   endowmentNames?: readonly string[];
@@ -30,7 +33,7 @@ export interface EffectivePolicy {
   maxChildren: number;
   maxInstructionBytes: number;
   /** Sorted, without duplicates. */
-  endowmentNames: string[];
+  endowmentNames: readonly string[];
 }
 
 /**
