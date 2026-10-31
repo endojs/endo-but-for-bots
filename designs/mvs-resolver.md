@@ -362,9 +362,14 @@ Notes on the sketch:
   the table is cold.
   In `offline: true` mode, it consults only the table and rejects
   with `RegistryOfflineError` on a miss.
-- `parseRangeMajor` extracts the major-version key that drives
-  MVS's per-major coexistence; the resolver tracks one selection
-  per `(name, major)`, not one per `name`.
+- `parseRangeMajor` stands for the grouping that drives MVS's
+  coexistence; the resolver tracks one selection per group of
+  ranges, not one per `name`.
+  The implementation forms groups by intersection rather than by
+  a key: a range joins the first group that some published
+  version satisfies together with it, and otherwise starts its
+  own, so incompatible majors (and disjoint ranges within one
+  major) coexist.
 - `buildRegistryResolution` flattens the `(name, major) ->
   selection` map into the `packagesByKey` shape the capability
   returns, computes the canonical key list, and derives

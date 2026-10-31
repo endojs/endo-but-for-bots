@@ -12,11 +12,7 @@ import {
   makeMemoryPackageCacheTable,
   makeNpmReferenceRegistry,
 } from '../src/reference-backend.js';
-import {
-  makeMvsResolveHook,
-  satisfiesRange,
-  parseRangeMajor,
-} from '../src/mvs-resolver.js';
+import { makeMvsResolveHook, satisfiesRange } from '../src/mvs-resolver.js';
 import { registryErrorName } from '../src/errors.js';
 
 const utf8Encoder = new TextEncoder();
@@ -90,30 +86,11 @@ test('satisfiesRange handles common npm shapes', t => {
   // Hyphen.
   t.true(satisfiesRange('1.5.0', '1.0.0 - 2.0.0'));
   t.false(satisfiesRange('2.0.1', '1.0.0 - 2.0.0'));
-  // Pre-releases compare by full semver precedence.
   t.false(satisfiesRange('1.0.0-alpha.1', '^1.0.0-beta.2'));
   t.true(satisfiesRange('1.0.0-beta.10', '^1.0.0-beta.2'));
   t.false(satisfiesRange('1.0.0-rc.1', '1.0.0'));
-});
-
-test('parseRangeMajor classifies ranges into compatibility slots', t => {
-  t.is(parseRangeMajor('^1.0.0'), '1');
-  t.is(parseRangeMajor('~1.2.3'), '1');
-  t.is(parseRangeMajor('>=2.0.0'), '2');
-  t.is(parseRangeMajor('3.x'), '3');
-  t.is(parseRangeMajor('*'), 'any');
-  t.is(parseRangeMajor('^0.1.0'), '0.1');
-  t.is(parseRangeMajor('~0.2.3'), '0.2');
-  t.is(parseRangeMajor('0.x'), '0');
-  t.is(parseRangeMajor('^0.0.3'), '0.0.3');
-  // Unions key on their first alternative; upper bounds alone have no
-  // lower bound to key on.
-  t.is(parseRangeMajor('^1.0.0 || ^2.0.0'), '1');
-  t.is(parseRangeMajor('<2.0.0'), 'any');
-  t.is(parseRangeMajor('<=2.0.0'), 'any');
-  t.is(parseRangeMajor('^2.0.0 || ^1.0.0'), '2');
-  // Dist-tags are not semver ranges.
-  t.is(parseRangeMajor('latest'), 'any');
+  t.false(satisfiesRange('1.0.0-rc.1', '>=0.9.0'));
+  t.false(satisfiesRange('1.1.0-rc.1', '^1.0.0-rc.0'));
 });
 
 test('resolve does not upgrade beyond a graph requirement', async t => {
@@ -195,8 +172,7 @@ test('resolve admits multi-major coexistence', async t => {
 });
 
 test('resolve picks least version satisfying all requesters', async t => {
-  // Entry depends on pkg@^1.0.0; lib-c depends on pkg@^1.3.0. The
-  // result must be the least 1.x that satisfies both ranges.
+  // Entry depends on pkg@^1.0.0; lib-c depends on pkg@^1.3.0.
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const fetcher = makeFakeFetcher({
     packuments: {
@@ -295,7 +271,7 @@ for (const [first, second] of [
   });
 }
 
-test('resolve joins a later range to the split slot it fits', async t => {
+test('resolve joins a later range to the split group it fits', async t => {
   const resolution = await resolveFixture(
     {
       pkg: plainPackument(['1.2.0', '1.3.0', '1.3.4']),
@@ -313,6 +289,72 @@ test('resolve joins a later range to the split slot it fits', async t => {
   );
   const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
   t.deepEqual(pkgKeys, ['pkg@1.2.0', 'pkg@1.3.4']);
+});
+
+for (const { published, range, expected } of [
+  {
+    published: ['1.0.0-alpha', '1.0.0-1'],
+    range: '^1.0.0-0',
+    expected: 'pkg@1.0.0-1',
+  },
+  {
+    published: ['1.0.0-beta.1', '1.0.0-beta'],
+    range: '^1.0.0-beta',
+    expected: 'pkg@1.0.0-beta',
+  },
+  {
+    published: ['1.0.0-beta.b', '1.0.0-beta.a'],
+    range: '^1.0.0-beta',
+    expected: 'pkg@1.0.0-beta.a',
+  },
+]) {
+  test(`resolve orders pre-releases by identifier precedence (${published.join(', ')})`, async t => {
+    const resolution = await resolveFixture(
+      { pkg: plainPackument(published) },
+      { dependencies: { pkg: range } },
+    );
+    t.deepEqual(resolution.keys, [expected]);
+  });
+}
+
+test('resolve shares one version between a union and a later range', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument(['1.0.0', '2.0.0', '2.1.0']),
+      consumer: consumerOf('^2.0.0'),
+    },
+    { dependencies: { pkg: '^1.0.0 || ^2.0.0', consumer: '^1.0.0' } },
+  );
+  const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
+  t.deepEqual(pkgKeys, ['pkg@2.0.0']);
+});
+
+test('resolve records a failed optional tarball fetch', async t => {
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const resolveHook = makeMvsResolveHook({
+    fetcher: makeFakeFetcher({
+      packuments: { pkg: plainPackument(['1.0.0']) },
+      tarballFailures: { 'pkg@1.0.0': 'boom' },
+    }),
+    makeTreeRef: makeFakeTreeRef,
+  });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
+  const resolution = await registry.resolve(
+    JSON.stringify({
+      name: 'entry',
+      optionalDependencies: { pkg: '^1.0.0' },
+    }),
+    {},
+  );
+  t.deepEqual(resolution.keys, []);
+  t.deepEqual(resolution.unmetOptionals, [
+    {
+      importer: 'entry',
+      name: 'pkg',
+      range: '^1.0.0',
+      reason: 'tarball fetch failed: boom',
+    },
+  ]);
 });
 
 test('resolve rejects a range no published version satisfies', async t => {
@@ -341,7 +383,7 @@ test('resolve selection does not depend on requester order', async t => {
   t.true(direct.keys.includes('pkg@1.4.7'));
 });
 
-test('resolve gives incompatible 0.x minors separate slots', async t => {
+test('resolve gives incompatible 0.x minors separate groups', async t => {
   const resolution = await resolveFixture(
     {
       pkg: plainPackument(['0.1.0', '0.1.5', '0.2.0', '0.2.4']),
@@ -429,7 +471,7 @@ test('resolve intersects a union range with a narrower range', async t => {
   t.deepEqual(pkgKeys, ['pkg@1.3.0']);
 });
 
-test('resolve keeps an upper-bound-only range out of the major slot', async t => {
+test('resolve gives an upper-bound-only range its own group', async t => {
   const resolution = await resolveFixture(
     {
       pkg: plainPackument(['1.0.0', '1.5.0', '2.0.0', '2.1.0']),
@@ -454,7 +496,7 @@ test('resolve merges duplicate ranges from several importers', async t => {
 });
 
 test('resolve lets an optional range narrow a shared selection', async t => {
-  // A satisfiable optional range constrains the slot like any other.
+  // A satisfiable optional range constrains the group like any other.
   const resolution = await resolveFixture(
     {
       pkg: plainPackument(['1.0.0', '1.3.0']),
@@ -822,6 +864,14 @@ test('workspace member wins over a registry version', async t => {
   const resolution = await registry.resolve(entry, {});
   t.true(resolution.keys.includes('@endo/patterns'));
   t.false(resolution.keys.includes('@endo/patterns@1.0.0'));
+  t.deepEqual(resolution.workspaceMismatches, [
+    {
+      importer: 'entry',
+      name: '@endo/patterns',
+      range: '^1.0.0',
+      version: '0.5.0',
+    },
+  ]);
 });
 
 test('CAS stores tarball bytes and pins them via retention links', async t => {

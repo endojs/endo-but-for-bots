@@ -16,11 +16,7 @@ export {
   makeMemoryPackageCacheTable,
 } from './src/reference-backend.js';
 
-export {
-  makeMvsResolveHook,
-  satisfiesRange,
-  parseRangeMajor,
-} from './src/mvs-resolver.js';
+export { makeMvsResolveHook, satisfiesRange } from './src/mvs-resolver.js';
 
 export {
   mapSnapshot,
