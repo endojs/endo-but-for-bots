@@ -192,7 +192,9 @@ The catalog covers the formula types enumerated in [`packages/daemon/src/formula
 | `peer` | "Peer": remote node | `node` literal (hex), `addresses` literal (list of locator URLs) |
 | `mount` | "Mount": filesystem capability | `path` literal (filesystem path), per [`daemon-mount.md`](daemon-mount.md) (additional fields surface as the formula stabilizes) |
 | `scratch-mount` | "Scratch mount": daemon-managed scratch directory | (same as `mount`; the `path` is daemon-managed) |
-| `git` / `git-credential` / `git-remote` | "Git" / "Git credential" / "Git remote" | (per [`daemon-git-capability.md`](daemon-git-capability.md); enumerate after that design lands) |
+| `git` | "Git" | (per [`daemon-git-capability.md`](daemon-git-capability.md); enumerate after that design lands) |
+| `git-credential` | "Git credential" | `kind` literal (`bearer` / `basic`), `audience` literal (origin URL). Credential material is **not** displayed. |
+| `git-remote` | "Git remote" (per [`daemon-git-remotes.md`](daemon-git-remotes.md)) | `git` reference, optional `credential` reference, `name` literal, `url` literal, `allowedDirections` literal, `fetchRefspecs` literal, `pushRefspecs` literal (the refspecs the remote enforces, including those derived from `allowedBranches`), optional `allowedBranches` and `defaultPullRef` literals, and `allowForcePush`, `allowTags`, `allowDelete`, `allowLocalFileTransport`, `revoked` boolean literals (absent fields report `false`) |
 | `channel` | "Channel": thread substrate | (per [`daemon-message-streaming.md`](daemon-message-streaming.md); enumerate after that design lands) |
 | `readable-blob` | "Readable blob": immutable bytes | (empty state; the blob is content-addressed and has no retained references) |
 | `readable-tree` | "Readable tree": immutable snapshot | (empty state today; tree-side metadata can surface here when defined) |

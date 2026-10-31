@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-07-11 |
+| **Updated** | 2026-10-31 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538; Phases 6-7 open) |
+| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538; Phase 6 CLI provisioning and inspection via #1595, with trust-on-first-bind and form flows still open; Phase 7 open) |
 
 > **Read in order.**
 > This is doc 3 of 3.
@@ -737,9 +737,11 @@ The public `GitRemote` contract should survive those swaps.
 
 ### Phase 6: Interactive Provisioning
 
-- [ ] Add form / CLI flows for creating common remote profiles.
+- [x] Add CLI flows for creating common remote profiles (`endo git-remote provision`, #1595).
+- [ ] Add form flows for creating common remote profiles.
 - [ ] Optionally integrate trust-on-first-bind for interactive endpoint approval.
-- [ ] Add clear inspection surfaces so users can see which remotes and push targets are granted.
+  #1595 shows the fixed endpoint in an approval preview, but does not pin it on first use.
+- [x] Add clear inspection surfaces so users can see which remotes and push targets are granted (`endo git-remote inspect` and `git-remote` / `git-credential` formula inspection, #1595).
 
 ### Phase 7: Extended Transports
 
@@ -803,6 +805,8 @@ It is not part of the normative design.
   The anonymous-pipe transport has no socket to keep open, so the askpass-socket-lifetime narrowing is structurally satisfied; the OS-user-account boundary (`mkdtemp` 0o700 parent directory) remains the trust model.
 - **#538** (`feat(exo-git): add remote endpoint clone seam` and siblings) — the host-mediated repository bootstrap: `EndoHost.provideGitClone`, the `makeGitCloner` seam in `@endo/exo-git`, the native clone helper in `@endo/git`, read-only-destination rejection, and credential fencing across the cloner lifecycle.
   See § Repository Bootstrap and `clone` for how this resolves the bootstrap follow-up.
+- **#1595** (`feat(cli): provision bounded Git remote profiles`) — Phase 6 CLI provisioning and inspection: `endo git-remote provision` binds a `Git`, a named credential, and a fixed HTTPS endpoint into a closed `fetch-only` or `agent` profile after an approval preview whose push targets come from `normalizeGitRemotePolicy`; `endo git-remote inspect` reports the controller's policy and the remote's credential health; and formula inspection enumerates `git-remote` and `git-credential` properties.
+  Form flows and trust-on-first-bind remain open.
 
 Fix, test-coverage, and legibility follow-ups on the shipped trio code (issue #378) are tracked there, not here.
 
