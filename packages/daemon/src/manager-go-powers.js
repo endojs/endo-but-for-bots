@@ -3,7 +3,7 @@
 /* global process */
 
 /**
- * Daemonic powers for the Go (engo) platform.
+ * Manager powers for the Go (engo) platform.
  *
  * This module is a derivative of daemon-node-powers.js. It shares all powers
  * except for control powers (makeWorker), which requests worker spawns from
@@ -23,17 +23,17 @@ import { decodeEnvelope, readFrameFromStream } from './envelope.js';
 import {
   makeFilePowers,
   makeCryptoPowers,
-  makeDaemonicPersistencePowers,
+  makeManagerPersistencePowers,
 } from './manager-node-powers.js';
-import { makeDaemonDatabase } from './manager-database-node.js';
+import { makeManagerDatabase } from './manager-database-node.js';
 import { makeRegistryNodePowers } from './registry-node-powers.js';
 import { makeNodeHostToolPowers } from './host-tool-powers-node.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPowers, FilePowers, WorkerDaemonFacet } from './types.js' */
+/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, ManagerWorkerFacet, ManagerPowers, FilePowers, WorkerManagerFacet } from './types.js' */
 
 // Re-export shared powers from daemon-node-powers.
-export { makeFilePowers, makeCryptoPowers, makeDaemonicPersistencePowers };
+export { makeFilePowers, makeCryptoPowers, makeManagerPersistencePowers };
 
 /**
  * @typedef {object} EnvelopeChannel
@@ -57,7 +57,7 @@ export { makeFilePowers, makeCryptoPowers, makeDaemonicPersistencePowers };
  * @param {FilePowers} filePowers
  * @param {EnvelopeChannel} envelopeChannel
  */
-export const makeDaemonicGoControlPowers = (
+export const makeManagerGoControlPowers = (
   config,
   fileURLToPath,
   filePowers,
@@ -155,7 +155,7 @@ export const makeDaemonicGoControlPowers = (
    * Spawn a worker through engo.
    *
    * @param {string} workerId
-   * @param {DaemonWorkerFacet} daemonWorkerFacet
+   * @param {ManagerWorkerFacet} managerWorkerFacet
    * @param {Promise<never>} cancelled
    * @param {Promise<never>} _forceCancelled
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
@@ -169,7 +169,7 @@ export const makeDaemonicGoControlPowers = (
    */
   const makeWorker = async (
     workerId,
-    daemonWorkerFacet,
+    managerWorkerFacet,
     cancelled,
     _forceCancelled,
     capTpConnectionRegistrar = undefined,
@@ -273,7 +273,7 @@ export const makeDaemonicGoControlPowers = (
       envelopeCapTPWriter,
       captpReadFrom,
       cancelled,
-      daemonWorkerFacet,
+      managerWorkerFacet,
       { marshalLoadError },
       capTpConnectionRegistrar,
     );
@@ -287,10 +287,10 @@ export const makeDaemonicGoControlPowers = (
 
     const workerTerminated = Promise.race([workerClosed, capTpClosed]);
 
-    /** @type {ERef<WorkerDaemonFacet>} */
-    const workerDaemonFacet = getBootstrap();
+    /** @type {ERef<WorkerManagerFacet>} */
+    const workerManagerFacet = getBootstrap();
 
-    return { workerTerminated, workerDaemonFacet };
+    return { workerTerminated, workerManagerFacet };
   };
 
   return harden({
@@ -309,9 +309,9 @@ export const makeDaemonicGoControlPowers = (
  * @param {Parameters<typeof makeRegistryNodePowers>[0]} opts.registryPowers
  * @param {(handle: number, verb: string, payload?: Uint8Array, nonce?: number) => Promise<void>} opts.sendEnvelope
  * @param {import('stream').Readable} opts.envelopeReadStream
- * @returns {Promise<DaemonicPowers>}
+ * @returns {Promise<ManagerPowers>}
  */
-export const makeDaemonicGoPowers = async ({
+export const makeManagerGoPowers = async ({
   config,
   cancelled,
   url,
@@ -326,17 +326,17 @@ export const makeDaemonicGoPowers = async ({
   // Ensure state directory exists before opening database.
   await filePowers.makePath(config.statePath);
 
-  const daemonDb = makeDaemonDatabase(config);
-  cancelled.catch(() => daemonDb.close());
+  const managerDatabase = makeManagerDatabase(config);
+  cancelled.catch(() => managerDatabase.close());
 
-  const petStorePowers = makePetStoreMaker(daemonDb);
-  const daemonicPersistencePowers = makeDaemonicPersistencePowers(
-    daemonDb,
+  const petStorePowers = makePetStoreMaker(managerDatabase);
+  const managerPersistencePowers = makeManagerPersistencePowers(
+    managerDatabase,
     filePowers,
     cryptoPowers,
     config,
   );
-  const daemonicControlPowers = makeDaemonicGoControlPowers(
+  const managerControlPowers = makeManagerGoControlPowers(
     config,
     fileURLToPath,
     filePowers,
@@ -346,8 +346,8 @@ export const makeDaemonicGoPowers = async ({
   return harden({
     crypto: cryptoPowers,
     petStore: petStorePowers,
-    persistence: daemonicPersistencePowers,
-    control: daemonicControlPowers,
+    persistence: managerPersistencePowers,
+    control: managerControlPowers,
     filePowers,
     registry: makeRegistryNodePowers({
       ...registryPowers,

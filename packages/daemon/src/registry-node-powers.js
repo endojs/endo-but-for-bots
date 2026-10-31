@@ -2,7 +2,7 @@
 
 /**
  * Node powers for the `EndoRegistry` backend. Keeping Node modules and
- * ambient fetch at this perimeter lets the daemon core remain platform-neutral.
+ * ambient fetch at this perimeter lets the manager core remain platform-neutral.
  */
 
 import { q, X } from '@endo/errors';
