@@ -73,11 +73,18 @@ const makeFakeFetch = ({ body = 'ok', status = 200 } = {}) => {
  * @param {import('../src/types.js').HttpClientPolicy} policy
  * @param {import('@endo/exo-http-client').FetchLike} fetch
  * @param {() => number} [now]
+ * @param {(ms: number, cancelled?: Promise<never>) => Promise<unknown>} [delay]
  */
-const makeHttpClientLikeFormulaMaker = (policy, fetch, now = Date.now) =>
+const makeHttpClientLikeFormulaMaker = (
+  policy,
+  fetch,
+  now = Date.now,
+  delay = undefined,
+) =>
   makeHttpClientAndControl({
     fetch,
     now,
+    ...(delay && { delay }),
     allowedOrigins: harden([...policy.allowedOrigins]),
     maxRequestsPerMinute: policy.maxRequestsPerMinute,
     maxResponseBytes: policy.maxResponseBytes,
@@ -222,6 +229,14 @@ test('provideHttpClient composition: the response-byte cap truncates a large bod
 test('provideHttpClient composition: the rate limit is enforced per minute', async t => {
   let clock = 1_000_000;
   const now = () => clock;
+  // The limiter's window is driven by the `delay` seam, not `now`: model it
+  // with a manual scheduler so the test advances the window deterministically.
+  /** @type {Array<{ ms: number, resolve: () => void }>} */
+  const timers = [];
+  const delay = ms =>
+    new Promise(resolve => {
+      timers.push({ ms, resolve: () => resolve(undefined) });
+    });
   const throttledPolicy = normalizeHttpClientPolicy({
     allowedOrigins: ['https://api.example.com'],
     maxRequestsPerMinute: 1,
@@ -231,12 +246,17 @@ test('provideHttpClient composition: the rate limit is enforced per minute', asy
     throttledPolicy,
     fetch,
     now,
+    delay,
   );
 
   await E(client).fetch('https://api.example.com/a');
   await t.throwsAsync(() => E(client).fetch('https://api.example.com/b'));
   // Advance past the one-minute window; the budget refills.
   clock += 61_000;
+  for (const timer of timers.filter(({ ms }) => ms === 60_000)) {
+    timer.resolve();
+  }
+  await new Promise(resolve => setTimeout(resolve, 0));
   const refilled = await E(client).fetch('https://api.example.com/c');
   t.is(await E(refilled).status(), 200);
 });
