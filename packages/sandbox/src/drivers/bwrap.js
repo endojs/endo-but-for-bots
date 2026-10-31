@@ -21,6 +21,7 @@ import {
   killProcessGroup,
   readableToAsyncIterable,
   spawnAndCollect,
+  sweepLeaderlessGroup,
 } from './child-process.js';
 import {
   CANONICAL_BIN_PATHS,
@@ -904,14 +905,19 @@ export const makeBwrapDriver = ({
       // child, so a kill that lands before the child reaches prctl leaves
       // init orphaned with the sandboxed command still under it.  Sweep the
       // group with SIGKILL before reporting the exit; killing init tears
-      // down the whole pid namespace.  This runs in the same turn Node
-      // reaped the leader, and a pgid with a surviving member cannot be
-      // reallocated, so the signal only reaches this slice's processes.
+      // down the whole pid namespace.  Node has already reaped the leader,
+      // so `sweepLeaderlessGroup` first proves the pgid still names this
+      // slice's group rather than a reallocated one.
       if (child.pid !== undefined) {
         try {
-          process.kill(-child.pid, 'SIGKILL');
-        } catch {
-          // ESRCH: the group is already empty.
+          sweepLeaderlessGroup(child.pid);
+        } catch (e) {
+          rejectExit(
+            makeError(
+              X`bwrap could not sweep the process group after its leader exited: ${q(/** @type {Error} */ (e).message)}`,
+            ),
+          );
+          return;
         }
       }
       resolveExit({ code, signal });
