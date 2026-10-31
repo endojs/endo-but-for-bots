@@ -32,7 +32,7 @@ import harden from '@endo/harden';
  * `shell` flag that the host spawner honours via Node's built-in
  * shell-wrapping behaviour.
  *
- * @typedef {object} SpawnerOpts
+ * @typedef {object} SpawnerOptions
  * @property {string} [cwd]
  *   Working directory for the child process.  Resolved against the
  *   spawner's execution context (host fs for the host spawner; the
@@ -49,8 +49,8 @@ import harden from '@endo/harden';
  *   The host spawner ignores it (the caller owns the timeout); the
  *   sandbox spawner hands it to the slice.
  * @property {number} [maxOutputBytes]
- *   Per-stream byte budget the caller keeps.  The host spawner ignores
- *   it; the sandbox spawner derives the slice's byte limits from it.
+ *   Per-stream byte budget the caller keeps by truncating and draining.
+ *   Neither spawner terminates a process for writing past it.
  */
 
 /**
@@ -87,7 +87,7 @@ import harden from '@endo/harden';
  * @param {string[]} argv
  *   Full argv, including the program name as `argv[0]`.  Spawners
  *   resolve `argv[0]` against their own runtime PATH conventions.
- * @param {SpawnerOpts} [opts]
+ * @param {SpawnerOptions} [options]
  * @returns {Promise<ProcessLike>}
  */
 

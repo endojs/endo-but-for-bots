@@ -2,18 +2,22 @@
 
 /**
  * The sandbox engine for the {@link Spawner} seam: each spawn runs inside an
- * `@endo/sandbox` slice instead of on the host.  The slice's `ProcessHandle`
- * is adapted to {@link ProcessLike} so a caller (the `@endo/exo-shell` Shell)
- * drives either engine through one contract.
+ * already-granted `@endo/sandbox` slice instead of on the host.  The slice's
+ * `ProcessHandle` is adapted to {@link ProcessLike} so a caller (the
+ * `@endo/exo-shell` Shell) drives either engine through one contract.  This
+ * is the one implementation of that adapter; `@endo/sandbox/spawner.js`
+ * re-exports it.
  */
 
+import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
 /**
- * @import { ERef } from '@endo/eventual-send'
- * @import { ProcessLike, SandboxSlice, Spawner } from './types.js'
+ * @import { ERef, FarRef } from '@endo/eventual-send'
+ * @import { ProcessLike, SandboxSlice, SandboxTerminationSignal, Spawner } from './types.js'
  */
 
 const TERMINATION_SIGNALS = harden([
@@ -25,138 +29,115 @@ const TERMINATION_SIGNALS = harden([
 ]);
 
 /**
- * Count the bytes an async-iterable stream yields, so the adapter can tell an
- * output-limit termination from any other slice failure without parsing error
- * messages.  `drained` settles once the consumer's iteration ends, however it
- * ends.
- *
- * @param {AsyncIterable<Uint8Array>} stream
+ * Runaway output guard the slice enforces on each stream, independent of the
+ * caller's truncate-and-drain `maxOutputBytes`.
  */
-const makeCountedStream = stream => {
-  let byteCount = 0;
-  /** @type {() => void} */
-  let markDrained = () => {};
-  /** @type {Promise<void>} */
-  const drained = new Promise(resolve => {
-    markDrained = () => resolve(undefined);
-  });
-  const counted = harden({
-    async *[Symbol.asyncIterator]() {
-      try {
-        for await (const chunk of stream) {
-          byteCount += chunk.byteLength;
-          yield chunk;
-        }
-      } finally {
-        markDrained();
-      }
-    },
-  });
-  return harden({ counted, drained, byteCount: () => byteCount });
-};
+export const DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT = 1024n ** 3n;
+harden(DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT);
 
 /**
  * Build a {@link Spawner} whose children run inside `slice`.
  *
- * Per-spawn `timeoutMs` and `maxOutputBytes` become the slice's kernel-side
- * `timeoutMs` and `stdoutByteLimit` / `stderrByteLimit`, so the slice enforces
- * the same bounds the caller does.  The byte limit is one more than
- * `maxOutputBytes`: the slice terminates a process once a stream reaches its
- * limit, and the caller can only flag truncation if it observes a byte past
- * its own cap.
+ * Only argv and copy-data execution options cross the boundary.  Native
+ * process ownership, the runaway output guard, and cleanup remain with the
+ * slice's factory.  Commands receive EOF on stdin; stdout and stderr arrive
+ * as separate Endo byte readers.  The adapter neither discloses nor relies
+ * on a remote OS pid, so `pid` is always `0`.
  *
- * The slice reports every terminal cancellation (a kill, its own timeout, a
- * byte limit) as a rejected `wait()`.  The adapter turns the expected ones
- * into the `{ code: null, signal }` exit a host process killed the same way
- * reports.  Any other rejection, such as a containment failure, still rejects.
+ * A per-spawn `timeoutMs` goes to the slice unchanged, so the slice bounds
+ * the process tree even if the caller's own timer never fires.  A per-spawn
+ * `maxOutputBytes` does not become a slice limit: like a host process, a
+ * sandboxed one may write past the caller's cap, and the caller truncates
+ * and drains.  The slice's construction-time `outputByteLimit` is the only
+ * kernel-side byte bound.
  *
- * Shell mode is refused: argv runs as given, never through `/bin/sh -c`.
+ * The slice reports every terminal cancellation as a rejected `wait()`.  The
+ * adapter translates exactly one of them, the kill its own caller requested:
+ * once `kill()` has resolved, which the slice does only after it has reaped
+ * the process, `wait()` settles as the `{ code: null, signal }` exit a host
+ * process killed the same way reports.  Every other rejection, including the
+ * slice's own timeout or output guard and any containment failure, reaches
+ * the caller unchanged, as does a rejected `kill()`.
  *
- * @param {ERef<SandboxSlice>} slice
+ * @param {ERef<SandboxSlice> | FarRef<SandboxSlice>} slice  A local slice or
+ *   a remote reference to one.
+ * @param {{ outputByteLimit?: bigint }} [limits]  Trusted construction
+ *   setting: the slice's per-stream byte limit.
  * @returns {Spawner}
  */
-export const makeSandboxSpawner = slice => {
+export const makeSandboxSpawner = (
+  slice,
+  { outputByteLimit = DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } = {},
+) => {
+  (typeof outputByteLimit === 'bigint' && outputByteLimit > 0n) ||
+    Fail`Invalid sandbox output byte limit`;
   /** @type {Spawner} */
-  const spawn = async (argv, opts = {}) => {
-    if (!Array.isArray(argv) || argv.length === 0) {
-      throw Error('sandbox spawner: argv must be a non-empty string array');
-    }
-    if (opts.shell === true) {
-      throw Error(
-        'sandbox spawner: shell mode is not supported; pass an argv array',
-      );
-    }
-    const { cwd, env, timeoutMs, maxOutputBytes } = opts;
-    const byteLimit =
-      maxOutputBytes === undefined ? undefined : BigInt(maxOutputBytes) + 1n;
+  const spawn = async (argv, options = {}) => {
+    (Array.isArray(argv) && argv.length > 0) ||
+      Fail`Sandbox spawner: argv must be a non-empty string array`;
+    options.shell !== true || Fail`Sandbox spawner requires structured argv`;
+    const { cwd, env, timeoutMs } = options;
     const handle = await E(slice).spawn(
       harden([...argv]),
       harden({
-        ...(cwd !== undefined ? { cwd } : {}),
-        ...(env !== undefined ? { env } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(byteLimit !== undefined
-          ? { stdoutByteLimit: byteLimit, stderrByteLimit: byteLimit }
-          : {}),
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(env === undefined ? {} : { env: { ...env } }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        captureStdout: true,
+        captureStderr: true,
+        stdoutByteLimit: outputByteLimit,
+        stderrByteLimit: outputByteLimit,
       }),
     );
-    const startedAt = Date.now();
-    const pid = await E(handle).pid();
 
     /** @type {string | undefined} */
     let requestedSignal;
-    const stdout = makeCountedStream(iterateBytesReader(E(handle).stdout()));
-    const stderr = makeCountedStream(iterateBytesReader(E(handle).stderr()));
-    const overLimit = () =>
-      maxOutputBytes !== undefined &&
-      (stdout.byteCount() > maxOutputBytes ||
-        stderr.byteCount() > maxOutputBytes);
-    const pastDeadline = () =>
-      timeoutMs !== undefined && Date.now() - startedAt >= timeoutMs;
+    /** @type {Promise<void>[]} */
+    const kills = [];
 
     const exited = E(handle)
       .wait()
       .then(
         status => harden({ code: status.code, signal: status.signal }),
         async error => {
-          // The slice can reject before the caller has read the overflowing
-          // bytes, so the verdict waits for both drains.  As with a host
-          // child, whose `close` follows the end of its stdio, the caller is
-          // expected to drain stdout and stderr.
-          await Promise.all([stdout.drained, stderr.drained]);
-          if (requestedSignal !== undefined) {
-            return harden({ code: null, signal: requestedSignal });
-          }
-          // The slice terminates with its supervisor's SIGTERM-to-SIGKILL
-          // ladder; the process is reaped by the uncatchable signal.
-          if (overLimit() || pastDeadline()) {
-            return harden({ code: null, signal: 'SIGKILL' });
-          }
-          throw error;
+          if (requestedSignal === undefined) throw error;
+          // The slice resolves a kill only once it has reaped the process,
+          // and rejects it when cleanup cannot prove containment, so the
+          // kill outcome, not the wait rejection, says how the process
+          // ended.
+          await Promise.all(kills);
+          return harden({ code: null, signal: requestedSignal });
         },
       );
+    // Do not await remote EOF acknowledgement before publishing the controls.
+    // A stalled stdin close must not hide an already-admitted process from kill.
+    const completion = Promise.all([
+      iterateBytesWriter(E(handle).stdin()).return(),
+      exited,
+    ]).then(([, status]) => status);
+    void completion.catch(() => {});
 
     /** @type {ProcessLike} */
     const processLike = harden({
-      pid,
-      stdout: stdout.counted,
-      stderr: stderr.counted,
-      wait: () => exited,
+      pid: 0,
+      stdout: iterateBytesReader(E(handle).stdout()),
+      stderr: iterateBytesReader(E(handle).stderr()),
+      wait: () => completion,
       /** @param {string | number} [signal] */
-      kill: async (signal = 'SIGTERM') => {
-        const name = String(signal);
-        if (!TERMINATION_SIGNALS.includes(name)) {
-          throw Error(`sandbox spawner: unsupported signal ${name}`);
-        }
-        if (requestedSignal === undefined) {
-          requestedSignal = name;
-        }
-        // A second kill (the SIGKILL escalation) can race the first one's
-        // reaping, and the slice may reject it once the process is gone.
-        // `wait()` carries the outcome, so the kill itself never rejects.
-        await E(handle)
-          .kill(/** @type {any} */ (name))
-          .catch(() => {});
+      kill: (signal = 'SIGTERM') => {
+        TERMINATION_SIGNALS.includes(/** @type {string} */ (signal)) ||
+          Fail`Unsupported sandbox termination signal ${signal}`;
+        requestedSignal ??= /** @type {string} */ (signal);
+        // The slice's kill is idempotent: a second kill (the SIGKILL
+        // escalation) shares the first one's reap, so there is no
+        // already-reaped race to suppress and every rejection is a real
+        // cleanup failure.
+        const killed = E(handle).kill(
+          /** @type {SandboxTerminationSignal} */ (signal),
+        );
+        kills.push(killed);
+        void killed.catch(() => {});
+        return killed;
       },
     });
     return processLike;

@@ -50,6 +50,7 @@
     "lint:types": "tsc"
   },
   "dependencies": {
+    "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^"
@@ -58,6 +59,7 @@
     "@endo/exo": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"

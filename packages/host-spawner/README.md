@@ -9,7 +9,10 @@ that would depend on `@endo/daemon` in turn.
 A `Spawner` is a single-method contract:
 
 ```ts
-type Spawner = (argv: string[], opts?: SpawnerOpts) => Promise<ProcessLike>;
+type Spawner = (
+  argv: string[],
+  options?: SpawnerOptions,
+) => Promise<ProcessLike>;
 ```
 
 `ProcessLike` mirrors `DriverProcess` from `@endo/sandbox`, so a slice's process
@@ -23,15 +26,21 @@ logic stays uniform across engines.
 import { makeHostSpawner } from '@endo/host-spawner';
 
 const spawn = makeHostSpawner({ searchPath: '/usr/bin:/bin', defaultEnv: {} });
-const proc = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
+const child = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
 ```
 
-`makeSandboxSpawner(slice)` is the other engine. It runs each spawn inside an
-`@endo/sandbox` slice (a `SandboxHandle`) and adapts the slice's process handle
-to `ProcessLike`. It refuses `shell: true`, and it hands the caller's
-`timeoutMs` and `maxOutputBytes` to the slice as its kernel-side timeout and
-byte limits. A kill, or a termination by one of those limits, settles `wait()`
-with `{ code: null, signal }` as a killed host process would. The daemon's Shell
+`makeSandboxSpawner(slice, { outputByteLimit })` is the other engine, and the
+one implementation of the slice adapter (`@endo/sandbox/spawner.js`
+re-exports it). It runs each spawn inside an `@endo/sandbox` slice (a
+`SandboxHandle`) and adapts the slice's process handle to `ProcessLike`. It
+refuses `shell: true`, closes stdin, and discloses no remote pid (`pid` is
+`0`). The caller's `timeoutMs` becomes the slice's kernel-side timeout;
+`maxOutputBytes` does not become a slice limit, so, as on the host, the caller
+truncates and drains. The construction-time `outputByteLimit` is the slice's
+runaway-output guard. A kill the caller requested settles `wait()` with
+`{ code: null, signal }` as a killed host process would, once the slice has
+reaped it; every other slice termination, and any containment failure,
+rejects `wait()` (and `kill()`) with the slice's own error. The daemon's Shell
 formula uses it for `engine: 'sandbox'`.
 
 ```js
@@ -43,7 +52,7 @@ const slice = await E(sandboxFactory).make({
   network: 'none',
 });
 const spawn = makeSandboxSpawner(slice);
-const proc = await spawn(['make', 'test'], { cwd: '/work', timeoutMs: 60_000 });
+const child = await spawn(['make', 'test'], { cwd: '/work', timeoutMs: 60_000 });
 ```
 
 An agent host that already speaks the `Spawner` seam can re-export
