@@ -4,10 +4,11 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { setTimeout } from 'node:timers';
 
 import { E } from '@endo/eventual-send';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 
 import { makeFetchStore } from '../src/store.js';
-import { makeFetchService } from '../src/service.js';
+import { makeConfinedFetchService } from '../src/service.js';
 
 /** @import { FetchStoreDirectory } from '../src/types.js' */
 
@@ -30,11 +31,10 @@ const makeFakeFetch = (body = 'ok') => {
   const calls = [];
   const fetch = async (url, _options = {}) => {
     calls.push(String(url));
-    const bytes = new TextEncoder().encode(body);
+    const bytes = encodeUtf8(body);
     return harden({
       status: 200,
       statusText: 'OK',
-      ok: true,
       headers: {},
       url: String(url),
       body: harden({
@@ -85,7 +85,7 @@ test('client fetches an allowed origin, denies others, seeds the store', async t
   const store = await open();
   const { fetch } = makeFakeFetch('hello');
 
-  const { service, client, control } = await makeFetchService({
+  const { service, client, control } = await makeConfinedFetchService({
     store,
     fetch,
     now: () => 1000,
@@ -116,7 +116,7 @@ test('reconstitutes identical policy across a restart', async t => {
   const { open } = await makeStoreFixture();
   const { fetch } = makeFakeFetch();
 
-  const first = await makeFetchService({
+  const first = await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 1000,
@@ -129,7 +129,7 @@ test('reconstitutes identical policy across a restart', async t => {
   await flush();
 
   // Restart: a fresh service over the same store.
-  const second = await makeFetchService({ store: await open(), fetch });
+  const second = await makeConfinedFetchService({ store: await open(), fetch });
   const inspected = second.control.inspect();
   t.deepEqual([...inspected.allowedOrigins].sort(), [ALLOWED, OTHER].sort());
   t.is(inspected.maxResponseBytes, 2048);
@@ -143,7 +143,7 @@ test('a service revoked before restart revives revoked', async t => {
   const { open } = await makeStoreFixture();
   const { fetch } = makeFakeFetch();
 
-  const first = await makeFetchService({
+  const first = await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 1000,
@@ -152,7 +152,7 @@ test('a service revoked before restart revives revoked', async t => {
   first.control.revoke();
   await flush();
 
-  const second = await makeFetchService({ store: await open(), fetch });
+  const second = await makeConfinedFetchService({ store: await open(), fetch });
   t.true(second.control.isRevoked());
   await t.throwsAsync(() => second.client.fetch(ALLOWED_URL), {
     message: /revoked/,
@@ -163,7 +163,7 @@ test('a trust-on-first-bind pin survives a restart and stays revocable', async t
   const { open } = await makeStoreFixture();
   const { fetch } = makeFakeFetch();
 
-  const first = await makeFetchService({
+  const first = await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 1000,
@@ -179,7 +179,7 @@ test('a trust-on-first-bind pin survives a restart and stays revocable', async t
   await flush();
 
   // Restart: the pin is reconstituted from bindings.json.
-  const second = await makeFetchService({ store: await open(), fetch });
+  const second = await makeConfinedFetchService({ store: await open(), fetch });
   const revivedBindings = second.control.listBindings();
   t.is(revivedBindings.length, 1);
   t.is(revivedBindings[0].target, OTHER);
@@ -196,7 +196,7 @@ test('a trust-on-first-bind pin survives a restart and stays revocable', async t
   });
   await flush();
 
-  const third = await makeFetchService({ store: await open(), fetch });
+  const third = await makeConfinedFetchService({ store: await open(), fetch });
   const thirdBindings = third.control.listBindings();
   t.is(thirdBindings.length, 1);
   t.is(thirdBindings[0].state, 'Revoked');
@@ -210,7 +210,7 @@ test('the persisted store outranks a conflicting env on restart', async t => {
   const { fetch } = makeFakeFetch();
 
   // First provisioning: env seeds allowedOrigins=[ALLOWED], maxResponseBytes=1000.
-  await makeFetchService({
+  await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 1000,
@@ -225,7 +225,7 @@ test('the persisted store outranks a conflicting env on restart', async t => {
   // flipping the service's `pick` to env-first reddens exactly this assertion,
   // whereas the sibling reconstitution test (which restarts with no env) would
   // stay green.
-  const second = await makeFetchService({
+  const second = await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 2000,
@@ -249,7 +249,7 @@ test('a corrupt bindings.json degrades to no pins without bricking revival', asy
   const { fetch } = makeFakeFetch();
 
   // First provisioning pins a first-seen origin under tofu-auto.
-  const first = await makeFetchService({
+  const first = await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 1000,
@@ -264,8 +264,8 @@ test('a corrupt bindings.json degrades to no pins without bricking revival', asy
 
   // Revival must not brick: the read guard treats the corrupt document as absent
   // and the service comes up with no reconstituted pins (only its static
-  // allowlist, which fails closed) rather than throwing out of makeFetchService.
-  const second = await makeFetchService({ store: await open(), fetch });
+  // allowlist, which fails closed) rather than throwing out of makeConfinedFetchService.
+  const second = await makeConfinedFetchService({ store: await open(), fetch });
   t.deepEqual(second.control.listBindings(), []);
 });
 
@@ -274,7 +274,7 @@ test('a corrupt config.json degrades to the env policy without bricking revival'
   const { fetch } = makeFakeFetch();
 
   // First provisioning persists a tofu-auto policy with no static allowlist.
-  await makeFetchService({
+  await makeConfinedFetchService({
     store: await open(),
     fetch,
     now: () => 1000,
@@ -288,7 +288,7 @@ test('a corrupt config.json degrades to the env policy without bricking revival'
   // Revival adopts the env initials (the corrupt store is treated as absent)
   // rather than throwing: a strict policy with a static allowlist, fail-closed
   // for every other origin.
-  const second = await makeFetchService({
+  const second = await makeConfinedFetchService({
     store: await open(),
     fetch,
     allowedOrigins: [ALLOWED],

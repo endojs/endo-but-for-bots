@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-13 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-10-31 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 | **Supersedes** | [endoclaw-network-fetch](endoclaw-network-fetch.md) (provisioning; the capability shape is landed and carries over) |
 | **Parent** | [endoclaw](endoclaw.md) |
 
@@ -183,14 +183,19 @@ in-memory filesystem. Implement `makeHttpTool` separately in
 5. **Revival is integration-owned.** The integration is responsible for
    restoring both required endowments before reviving the confined service.
 
-## Alignment for Implementation PR #723
+## Implementation status
 
-PR [#723](https://github.com/endojs/endo-but-for-bots/pull/723) currently
-implements the earlier single-plugin shape. It must be revised in its own PR
-to split `@endo/fetch` into the unconfined base adapter and
-`@endo/confined-fetch` into the stateful confined plugin, with tests for the
-explicit base-plus-directory endowment boundary. This design change does not
-modify #723.
+PR [#723](https://github.com/endojs/endo-but-for-bots/pull/723) landed the
+earlier single-plugin shape and the `@endo/exo-http-client` persistence seams
+(Phase 2). The split into the unconfined `@endo/fetch` base and the stateful
+`@endo/confined-fetch` plugin (Phase 1) and the in-memory restart exercise of
+Phase 3 follow in a separate PR. `makeHttpTool` remains with
+[daemon-agent-tools](daemon-agent-tools.md) Phase 3.6.
+
+Open gap: `@endo/http-confine` reads ambient timers (`setTimeout`,
+`AbortController`, the clock) that the daemon's confined-worker compartments do
+not endow, so the confined plugin must be provisioned unconfined until a timer
+capability is endowed to it.
 
 ## Prompt
 

@@ -1,0 +1,78 @@
+{
+  "name": "@endo/confined-fetch",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Confined Endo plugin that attenuates an endowed @endo/fetch capability into a bounded HttpClient (origin allowlist, rate and byte caps, trust-on-first-bind pins) for a guest, retaining the HttpClientControl for the integration. Durable policy and pins live in an endowed virtual-file-system state directory, so the service revives with identical policy when the integration re-endows the same base and directory.",
+  "keywords": [
+    "endo",
+    "exo",
+    "fetch",
+    "http",
+    "confined-fetch",
+    "plugin"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/confined-fetch"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./src/service.js": "./src/service.js",
+    "./src/store.js": "./src/store.js",
+    "./src/transport.js": "./src/transport.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "./*.d.ts",
+    "./*.js",
+    "./*.map",
+    "LICENSE*",
+    "SECURITY*",
+    "src"
+  ],
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava --serial",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'"
+  },
+  "dependencies": {
+    "@endo/cancel": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-http-client": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/fetch": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/init": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "@endo/utf8": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "120s"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}
