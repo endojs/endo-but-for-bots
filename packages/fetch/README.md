@@ -6,7 +6,7 @@ cap, policy, persistence, or revival. Holding `Fetch` is holding direct network
 authority.
 
 `Fetch` is not for guests. An integration retains it and endows it, together
-with a private state directory, to
+with a `Timer` and private state directory, to
 [`@endo/confined-fetch`](../confined-fetch), which attenuates it into the
 policy-bound `HttpClient` a guest may hold
 ([design](../../designs/endo-fetch.md)).
@@ -14,7 +14,7 @@ policy-bound `HttpClient` a guest may hold
 ```mermaid
 flowchart LR
     U["@endo/fetch"] -->|unfettered Fetch| I[integration]
-    I -->|Fetch + fetch-store| C["@endo/confined-fetch"]
+    I -->|Fetch + Timer + fetch-store| C["@endo/confined-fetch"]
     C -->|HttpClient only| G[guest]
 ```
 
@@ -41,6 +41,13 @@ exposes is the worker's own `fetch`.
   [`@endo/cancel`](../cancel) token whose rejection aborts the request and its
   body.
 - `help()`.
+
+The `@endo/fetch/timer.js` subpath is a second unconfined caplet. Its `make()`
+returns a `Timer` with `delay(milliseconds, cancelled?)`, `now()`, and `help()`.
+The delay clears its host timeout when cancellation wins and rejects values
+above `2 ** 31 - 1` milliseconds instead of allowing host timer clamping.
+Integrations retain this capability and endow it to `@endo/confined-fetch`; it
+is not guest-facing.
 
 ## Bugs
 

@@ -2,16 +2,19 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { setTimeout } from 'node:timers';
+import { fileURLToPath } from 'node:url';
 
+import bundleSource from '@endo/bundle-source';
 import { E } from '@endo/eventual-send';
 import { getMethodNames } from '@endo/eventual-send/utils.js';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { Far } from '@endo/pass-style';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 import { makeFetch } from '@endo/fetch';
+import { makeTimer } from '@endo/fetch/timer.js';
 import { makeCancelKit } from '@endo/cancel';
-import { toAbortSignal } from '@endo/cancel/to-abort';
 
 import { make } from '../src/index.js';
 import { makeConfinedFetchService } from '../src/service.js';
@@ -32,6 +35,15 @@ const OTHER_URL = `${OTHER}/data`;
 
 /** Let the fire-and-forget persistence write-chain settle. */
 const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+
+const makeTestTimer = () =>
+  makeTimer({
+    setTimeout: (callback, milliseconds) => {
+      const handle = setTimeout(callback, milliseconds);
+      handle.unref();
+      return handle;
+    },
+  });
 
 /**
  * An `@endo/fetch` base over a scripted fake transport. `respond(url)` returns
@@ -75,9 +87,15 @@ const makeBase = (respond = () => ({ chunks: ['ok'] })) => {
  * the same `storeRoot` models a restart in which the integration re-endows the
  * same base and directory.
  *
- * @param {{ base?: any, storeRoot?: any, policyAuthority?: any }} options
+ * @param {{ base?: any, storeRoot?: any, policyAuthority?: any, timer?: any }} options
  */
-const makePowers = async ({ base, storeRoot, policyAuthority }) => {
+const makePowers = async ({
+  base,
+  storeRoot,
+  policyAuthority,
+  timer = makeTestTimer(),
+}) => {
+  await null;
   let directory = storeRoot;
   if (directory === undefined) {
     const root = await E(makeInMemoryFilesystem()).root();
@@ -87,6 +105,7 @@ const makePowers = async ({ base, storeRoot, policyAuthority }) => {
     /** @param {string} name */
     lookup(name) {
       if (name === 'fetch' && base) return base;
+      if (name === 'timer') return timer;
       if (name === 'fetch-store') return directory;
       if (name === 'fetch-policy-authority' && policyAuthority) {
         return policyAuthority;
@@ -115,7 +134,12 @@ test('the service core never falls back to an ambient fetch', async t => {
   await t.throwsAsync(
     () =>
       makeConfinedFetchService(
-        /** @type {any} */ ({ store, allowedOrigins: [ALLOWED] }),
+        /** @type {any} */ ({
+          store,
+          allowedOrigins: [ALLOWED],
+          delay: () => Promise.resolve(undefined),
+          now: () => 0,
+        }),
       ),
     { message: /fetch transport built from the endowed base is required/ },
   );
@@ -136,6 +160,33 @@ test('a guest holding client() holds only the HttpClient surface', async t => {
   const client = await E(service).client();
   t.deepEqual(publicMethodNames(client), ['allowedOrigins', 'fetch', 'help']);
   t.deepEqual(publicMethodNames(service), ['client', 'control', 'help']);
+});
+
+test('the bundled plugin runs with only daemon worker endowments', async t => {
+  const entryPath = fileURLToPath(new URL('../src/index.js', import.meta.url));
+  const bundle = await bundleSource(entryPath, { format: 'endoScript' });
+  const namespace = new Compartment(
+    harden({
+      assert: globalThis.assert,
+      console,
+      E,
+      Far,
+      makeExo,
+      M,
+      TextEncoder,
+      TextDecoder,
+      URL,
+    }),
+  ).evaluate(bundle.source);
+  const { base } = makeBase();
+  const { powers } = await makePowers({ base });
+
+  const service = await namespace.make(powers, undefined, {
+    env: { allowedOrigins: ALLOWED },
+  });
+  const response = await E(E(service).client()).fetch(ALLOWED_URL);
+
+  t.is(await E(response).text(), 'ok');
 });
 
 test('a disallowed origin never reaches the base', async t => {
@@ -238,7 +289,7 @@ test('a request-time pin survives a re-endowed restart', async t => {
   );
 });
 
-test('an aborted request settles the base cancellation', async t => {
+test('a cancellation token aborts the endowed base request', async t => {
   /** @type {(value?: unknown) => void} */
   let release = () => {};
   const held = new Promise(resolve => {
@@ -257,7 +308,7 @@ test('an aborted request settles the base cancellation', async t => {
   const responseP = fetchLike(ALLOWED_URL, {
     redirect: 'manual',
     method: 'GET',
-    signal: toAbortSignal(cancelled),
+    cancelled,
   });
   await flush();
   t.is(baseSignals.length, 1);
@@ -268,7 +319,7 @@ test('an aborted request settles the base cancellation', async t => {
   release();
 });
 
-test('a null-body response settles the base cancellation', async t => {
+test('a null-body response passes through the transport', async t => {
   /** @type {AbortSignal[]} */
   const baseSignals = [];
   /** @type {any} */
@@ -282,10 +333,10 @@ test('a null-body response settles the base cancellation', async t => {
   t.is(response.body, null);
   await flush();
   t.is(baseSignals.length, 1);
-  t.true(baseSignals[0].aborted);
+  t.is(baseSignals[0], undefined);
 });
 
-test('a base stream that fails mid-read settles the base cancellation', async t => {
+test('a base stream failure propagates through the transport', async t => {
   /** @type {AbortSignal[]} */
   const baseSignals = [];
   let reads = 0;
@@ -319,6 +370,5 @@ test('a base stream that fails mid-read settles the base cancellation', async t 
   await t.throwsAsync(async () => reader.read(), {
     message: /connection reset/,
   });
-  await flush();
-  t.true(baseSignals[0].aborted);
+  t.is(baseSignals[0], undefined);
 });

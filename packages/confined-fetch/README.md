@@ -13,7 +13,7 @@ integration. The capability itself is
 ```mermaid
 flowchart LR
     U["@endo/fetch"] -->|unfettered Fetch| I[integration]
-    I -->|Fetch + fetch-store| C["@endo/confined-fetch"]
+    I -->|Fetch + Timer + fetch-store| C["@endo/confined-fetch"]
     C -->|HttpClient only| G[guest]
     I -->|retains HttpClientControl| H[policy operator]
 ```
@@ -41,6 +41,9 @@ flowchart LR
 - `E(powers).lookup('fetch')` -> the base `Fetch` from `@endo/fetch`.
 - `E(powers).lookup('fetch-store')` -> a writable virtual-file-system
   **directory**, private to this service.
+- `E(powers).lookup('timer')` -> the unconfined `Timer` from
+  `@endo/fetch/timer.js`. It supplies cancellable delays and wall-clock stamps
+  without adding ambient time to the confined worker.
 - `E(powers).lookup('fetch-policy-authority')` (**optional**) -> the referral
   target for trust-on-first-bind decisions (`tofu-prompt` / `tofu-attenuator`
   modes). Without it, those modes are unavailable and unknown origins fail
@@ -57,12 +60,12 @@ per guest with a fresh directory, keeps `control()`, and grants the guest only
 
 ## Runtime requirement
 
-`@endo/http-confine` reads the ambient `setTimeout`, `AbortController`, and
-clock for request timeouts and revocation. The daemon's confined-worker
-compartments (`makeBundle` / `makeArchive`) do not endow those globals, so
-until a timer capability is endowed, provision this package through
-`makeUnconfined`. Its authority still comes only from its endowments: it never
-reads `globalThis.fetch`.
+Provision the package as a confined plugin with three required powers: the
+base `Fetch`, its private `fetch-store`, and a `Timer` made unconfined through
+`@endo/fetch/timer.js`. The timer rejects host-clamped delays above
+`2 ** 31 - 1` milliseconds and clears its host timeout when cancellation wins.
+The plugin runs in the daemon's ordinary confined-worker compartment without
+ambient `fetch`, timers, `AbortController`, or wall-clock access.
 
 ## The `@pins` recipe (wake-on-restart)
 
@@ -73,7 +76,7 @@ revives lazily on demand. So retention is integration-owned and, for now,
 user-driven:
 
 1. **Pin the confined service** when you provision it (for example
-   `resultName: ['@pins', 'fetch']`), and retain the base `Fetch` and the
+   `resultName: ['@pins', 'fetch']`), and retain the base `Fetch`, `Timer`, and
    service's `fetch-store` directory so the same endowments are restored at
    boot.
 2. On the next boot, `revivePins()` provides the identifier, the worker

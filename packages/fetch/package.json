@@ -24,6 +24,7 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./timer.js": "./src/timer.js",
     "./src/types.js": "./src/types.js",
     "./package.json": "./package.json"
   },
@@ -44,6 +45,7 @@
   },
   "dependencies": {
     "@endo/cancel": "workspace:^",
+    "@endo/errors": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/patterns": "workspace:^",

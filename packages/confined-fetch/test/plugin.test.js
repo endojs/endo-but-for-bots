@@ -1,6 +1,8 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { setTimeout } from 'node:timers';
+
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -8,6 +10,7 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 
 import { makeFetch } from '@endo/fetch';
+import { makeTimer } from '@endo/fetch/timer.js';
 
 import { make } from '../src/index.js';
 
@@ -22,6 +25,15 @@ const ALLOWED = 'https://api.example.com';
 const ALLOWED_URL = `${ALLOWED}/data`;
 const OTHER = 'https://other.example.com';
 const OTHER_URL = `${OTHER}/data`;
+
+const makeTestTimer = () =>
+  makeTimer({
+    setTimeout: (callback, milliseconds) => {
+      const handle = setTimeout(callback, milliseconds);
+      handle.unref();
+      return handle;
+    },
+  });
 
 /**
  * An `@endo/fetch` base over a fake transport that records every request it
@@ -60,9 +72,13 @@ const makeBase = (body = 'ok') => {
  * directory, and an optional policy authority. A name the map omits throws, so
  * the plugin's optional lookup degrades gracefully.
  *
- * @param {{ base?: any, policyAuthority?: any }} [options]
+ * @param {{ base?: any, policyAuthority?: any, timer?: any }} [options]
  */
-const makePowers = async ({ base, policyAuthority } = {}) => {
+const makePowers = async ({
+  base,
+  policyAuthority,
+  timer = makeTestTimer(),
+} = {}) => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   const storeRoot = await E(root).makeDirectory('fetch-store');
@@ -71,6 +87,7 @@ const makePowers = async ({ base, policyAuthority } = {}) => {
     /** @param {string} name */
     lookup(name) {
       if (name === 'fetch' && base) return base;
+      if (name === 'timer') return timer;
       if (name === 'fetch-store') return storeRoot;
       if (name === 'fetch-policy-authority') {
         if (policyAuthority) return policyAuthority;
