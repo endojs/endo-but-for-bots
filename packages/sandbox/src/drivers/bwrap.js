@@ -897,7 +897,25 @@ export const makeBwrapDriver = ({
     child.once('error', err => {
       rejectExit(err);
     });
-    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    child.once('exit', (code, signal) => {
+      // The bwrap leader can exit while the pid-namespace init it forked
+      // survives: init ignores a host SIGTERM (it installs no handler), and
+      // `--die-with-parent` arms its parent-death signal from inside the
+      // child, so a kill that lands before the child reaches prctl leaves
+      // init orphaned with the sandboxed command still under it.  Sweep the
+      // group with SIGKILL before reporting the exit; killing init tears
+      // down the whole pid namespace.  This runs in the same turn Node
+      // reaped the leader, and a pgid with a surviving member cannot be
+      // reallocated, so the signal only reaches this slice's processes.
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          // ESRCH: the group is already empty.
+        }
+      }
+      resolveExit({ code, signal });
+    });
     exited.catch(() => undefined);
 
     // The DriverProcess surface exposes async-iterables for stdout
