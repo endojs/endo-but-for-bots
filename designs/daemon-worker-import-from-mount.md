@@ -669,6 +669,23 @@ one.
      *Mount snapshot vs live read* is enforced, not just
      documented.
 
+**Implementation status (2026-10-31).**
+Phase 4 is built.
+`EndoHost.makeFromPackage` snapshots a source capability that exposes the
+`EndoMount.snapshot()` method and checks that immutable tree into a transient
+`readable-tree` formula before formulating the caplet. The caplet formula's
+existing `source` dependency is therefore the snapshot rather than the live
+mount: `thisDiesIfThatDies(source)` retains the snapshot and its CAS tree while
+the caplet lives, then releases both for collection when the caplet ends.
+An already immutable `readable-tree` has no `snapshot` method and keeps its
+existing identity.
+
+The daemon integration tests defer a dynamic import until after the mounted
+file changes, proving the worker still reads the original snapshot. A separate
+GC-enabled test observes the transient snapshot formula and CAS root survive
+after a temporary alias is removed, then become collectible after the caplet is
+cancelled and its result name is removed.
+
 ### Phase 5: Rust-backed `EndoRegistry` (drop-in)
 
 Land [registry-capability](registry-capability.md) § Phase 5:
