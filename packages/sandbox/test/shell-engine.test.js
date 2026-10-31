@@ -120,7 +120,7 @@ const makeSandboxedShell = async (t, policy = {}) => {
       'ready\n'.startsWith(smoke.stdout),
     `sandbox smoke command failed: ${smoke.stderr}`,
   );
-  return { shell, mount, root };
+  return { shell, mount, root, cwd, spawner };
 };
 
 /**
@@ -239,23 +239,38 @@ test.serial(
         fc.integer({ min: 1, max: 8192 }),
         fc.integer({ min: 1, max: 4000 }),
         async (maxOutputBytes, count) => {
-          const policy = { maxOutputBytes };
-          const sandboxShell = await makeSandboxedShell(t, policy);
-          if (sandboxShell === undefined) return false;
-          const hostShell = makeHostShell(outside, policy);
+          // One slice serves every run: the cap is the Shell's policy, not
+          // the slice's, so each run only needs a fresh Shell over it.
+          const sandboxShell = makeShell({
+            cwd: sandboxed.cwd,
+            policy: harden({
+              ...basePolicy,
+              maxOutputBytes,
+              engine: 'sandbox',
+            }),
+            spawner: sandboxed.spawner,
+          });
+          const hostShell = makeHostShell(outside, { maxOutputBytes });
           const argv = harden(['1', String(count)]);
           const [sandboxResult, hostResult] = await Promise.all([
-            sandboxShell.shell.exec('seq', argv),
+            sandboxShell.exec('seq', argv),
             hostShell.exec('seq', argv),
           ]);
-          // stderr is left out: bwrap may add its own diagnostics there.
+          // stderr is left out, and `truncated` is compared one way: bwrap
+          // may write its own diagnostics to stderr, which count toward the
+          // cap and can set `truncated` when stdout fits.
           /** @param {import('@endo/exo-shell').ShellResult} result */
-          const project = ({ stdout, exitCode, signal, truncated }) =>
-            JSON.stringify({ stdout, exitCode, signal, truncated });
-          return (
-            sandboxResult.stdout.length <= maxOutputBytes &&
-            project(sandboxResult) === project(hostResult)
-          );
+          const project = ({ stdout, exitCode, signal }) =>
+            JSON.stringify({ stdout, exitCode, signal });
+          if (
+            sandboxResult.stdout.length > maxOutputBytes ||
+            project(sandboxResult) !== project(hostResult) ||
+            (hostResult.truncated && !sandboxResult.truncated)
+          ) {
+            throw Error(
+              `engines diverge: ${JSON.stringify({ sandboxResult, hostResult })}`,
+            );
+          }
         },
       ),
       { numRuns: 25 },
