@@ -73,7 +73,7 @@ const makeFakeFetch = ({ body = 'ok', status = 200 } = {}) => {
  * @param {import('../src/types.js').HttpClientPolicy} policy
  * @param {import('@endo/exo-http-client').FetchLike} fetch
  * @param {() => number} [now]
- * @param {(ms: number, cancelled?: Promise<never>) => Promise<unknown>} [delay]
+ * @param {(ms: number, cancelled?: Promise<never>) => Promise<undefined>} [delay]
  */
 const makeHttpClientLikeFormulaMaker = (
   policy,
