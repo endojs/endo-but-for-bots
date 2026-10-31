@@ -166,13 +166,13 @@ type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
     list: (...path: string[]) => Promise<string[]>;
     lookup: (path: string | string[]) => Promise<unknown>;
-    subView: (path: string | string[]) => Promise<GitLiteDirectory>;
+    subView: (path: string[]) => Promise<GitLiteDirectory>;
     write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;
     remove: (path: string[]) => Promise<void>;
     move: (from: string[], to: string[]) => Promise<void>;
     copy: (from: string[], to: string[]) => Promise<void>;
     makeDirectory: (path: string[]) => Promise<GitLiteDirectory>;
-    makeFile: (path: string | string[], initial?: GitReadableBlobSource | string) => Promise<GitLiteFile>;
+    makeFile: (path: string[], initial?: GitReadableBlobSource | string) => Promise<GitLiteFile>;
     readOnly: () => GitLiteReadableTree;
     snapshot: () => Promise<GitSnapshotTree>;
 };

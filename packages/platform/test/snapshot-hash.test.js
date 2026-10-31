@@ -128,3 +128,43 @@ test('SnapshotTree.subView returns only tree children', async t => {
     message: /not a tree/,
   });
 });
+
+test('SnapshotTree.subView handles the empty path and nested array paths', async t => {
+  const rootHash = 'a'.repeat(64);
+  const middleHash = 'b'.repeat(64);
+  const leafTreeHash = 'c'.repeat(64);
+  /** @type {Record<string, Array<[string, string, string]>>} */
+  const manifests = {
+    [rootHash]: [['middle', 'tree', middleHash]],
+    [middleHash]: [
+      ['inner', 'tree', leafTreeHash],
+      ['file', 'blob', 'd'.repeat(64)],
+    ],
+    [leafTreeHash]: [['deep.txt', 'blob', 'e'.repeat(64)]],
+  };
+  /** @type {any} */
+  const store = harden({
+    fetch: hash =>
+      harden({
+        json: async () => harden(manifests[hash]),
+        makeFileReader: makeBytesReader(new Uint8Array()),
+      }),
+    loadBlob: () => harden({}),
+    loadTree: hash => snapshotTreeMethods(store, hash),
+  });
+  const tree = snapshotTreeMethods(store, rootHash);
+
+  const self = await tree.subView([]);
+  t.is(self.sha256(), tree.sha256(), 'empty path names the tree itself');
+
+  const inner = await tree.subView(['middle', 'inner']);
+  t.is(inner.sha256(), encodeBase64(decodeHex(leafTreeHash)));
+  t.deepEqual(await inner.list(), ['deep.txt']);
+
+  await t.throwsAsync(() => tree.subView(['middle', 'file']), {
+    message: /not a tree/,
+  });
+  await t.throwsAsync(() => tree.subView(['middle', 'missing']), {
+    message: /Unknown name/,
+  });
+});

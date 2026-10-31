@@ -225,8 +225,10 @@ harden(FileInterface);
 export const DirectoryInterface = M.interface('Directory', {
   ...readableTreeMethodGuards,
   // Confined, transient subtree view. Unlike `lookup`, the returned
-  // Directory establishes the selected path as its own root.
-  subView: M.call(NameOrPathShape).returns(M.promise()),
+  // Directory establishes the selected path as its own root. Like the other
+  // mutable-tree methods, the portable form takes path segments; backings
+  // may additionally accept a single name.
+  subView: M.call(M.arrayOf(M.string())).returns(M.promise()),
   write: M.call(M.arrayOf(M.string()), M.remotable()).returns(M.promise()),
   remove: M.call(M.arrayOf(M.string())).returns(M.promise()),
   move: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(
@@ -238,7 +240,7 @@ export const DirectoryInterface = M.interface('Directory', {
   makeDirectory: M.call(M.arrayOf(M.string())).returns(M.promise()),
   // Construct a mutable file and return its live File capability. The
   // optional initial value is either UTF-8 text or a ReadableBlob source.
-  makeFile: M.call(NameOrPathShape)
+  makeFile: M.call(M.arrayOf(M.string()))
     .optional(M.or(M.string(), M.remotable()))
     .returns(M.promise()),
   readOnly: M.call().returns(M.remotable('ReadableTree')),
