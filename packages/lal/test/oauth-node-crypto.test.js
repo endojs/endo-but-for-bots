@@ -1,7 +1,5 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import {
   deriveKeyFromPassphrase,
   getRandomValues,
@@ -10,9 +8,11 @@ import {
   sha256,
 } from '../providers/oauth/node-crypto.js';
 
+const textEncoder = new TextEncoder();
+
 const key32 = deriveKeyFromPassphrase(
   'correct horse battery staple',
-  bytesFromText('salt-value'),
+  textEncoder.encode('salt-value'),
 );
 
 test('makeNodeOAuthCryptoPowers exposes sha256 and getRandomValues', t => {
@@ -24,14 +24,14 @@ test('makeNodeOAuthCryptoPowers exposes sha256 and getRandomValues', t => {
 
 test('AES-256-GCM cipher round-trips a message', t => {
   const cipher = makeAesGcmCipher(key32);
-  const plaintext = bytesFromText('the quick brown fox');
+  const plaintext = textEncoder.encode('the quick brown fox');
   const sealed = cipher.encrypt(plaintext);
   t.deepEqual(cipher.decrypt(sealed), plaintext);
 });
 
 test('AES-256-GCM uses a fresh IV per encryption (distinct ciphertexts)', t => {
   const cipher = makeAesGcmCipher(key32);
-  const plaintext = bytesFromText('same message');
+  const plaintext = textEncoder.encode('same message');
   const a = cipher.encrypt(plaintext);
   const b = cipher.encrypt(plaintext);
   t.notDeepEqual(a, b);
@@ -42,7 +42,7 @@ test('AES-256-GCM uses a fresh IV per encryption (distinct ciphertexts)', t => {
 
 test('AES-256-GCM rejects a tampered ciphertext (auth tag)', t => {
   const cipher = makeAesGcmCipher(key32);
-  const sealed = cipher.encrypt(bytesFromText('authentic'));
+  const sealed = cipher.encrypt(textEncoder.encode('authentic'));
   const tampered = new Uint8Array(sealed);
   const last = tampered.length - 1;
   tampered[last] = (tampered[last] + 1) % 256;
@@ -51,10 +51,10 @@ test('AES-256-GCM rejects a tampered ciphertext (auth tag)', t => {
 
 test('AES-256-GCM rejects decryption under the wrong key', t => {
   const cipher = makeAesGcmCipher(key32);
-  const sealed = cipher.encrypt(bytesFromText('secret'));
+  const sealed = cipher.encrypt(textEncoder.encode('secret'));
   const otherKey = deriveKeyFromPassphrase(
     'a different passphrase',
-    bytesFromText('salt-value'),
+    textEncoder.encode('salt-value'),
   );
   const otherCipher = makeAesGcmCipher(otherKey);
   t.throws(() => otherCipher.decrypt(sealed));
@@ -67,7 +67,7 @@ test('makeAesGcmCipher requires a 32-byte key', t => {
 });
 
 test('deriveKeyFromPassphrase is deterministic and 32 bytes', t => {
-  const salt = bytesFromText('salt-value');
+  const salt = textEncoder.encode('salt-value');
   const a = deriveKeyFromPassphrase('pw', salt);
   const b = deriveKeyFromPassphrase('pw', salt);
   t.is(a.length, 32);
@@ -75,10 +75,13 @@ test('deriveKeyFromPassphrase is deterministic and 32 bytes', t => {
 });
 
 test('deriveKeyFromPassphrase diverges on passphrase or salt', t => {
-  const salt = bytesFromText('salt-value');
+  const salt = textEncoder.encode('salt-value');
   const base = deriveKeyFromPassphrase('pw', salt);
   t.notDeepEqual(base, deriveKeyFromPassphrase('pw2', salt));
-  t.notDeepEqual(base, deriveKeyFromPassphrase('pw', bytesFromText('other')));
+  t.notDeepEqual(
+    base,
+    deriveKeyFromPassphrase('pw', textEncoder.encode('other')),
+  );
 });
 
 test('getRandomValues fills the buffer it is given', t => {
@@ -91,11 +94,9 @@ test('getRandomValues fills the buffer it is given', t => {
 
 test('sha256 of a known input has the expected digest', t => {
   // SHA-256("abc") well-known vector.
-  const digest = sha256(bytesFromText('abc'));
+  const digest = sha256(textEncoder.encode('abc'));
   const hex = [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
   t.is(hex, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
-  // bytesToText is exercised indirectly to keep the import load-bearing.
-  t.is(typeof bytesToText, 'function');
 });
 
 test('AES-256-GCM rejects a sealed blob too short to hold an IV and tag', t => {

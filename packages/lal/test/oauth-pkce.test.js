@@ -1,12 +1,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
 import {
   computeCodeChallenge,
   generateCodeVerifier,
   generatePkcePair,
 } from '../providers/oauth/pkce.js';
 import { sha256, getRandomValues } from '../providers/oauth/node-crypto.js';
+
+const textEncoder = new TextEncoder();
 
 // RFC 7636 Appendix B golden vector: this verifier hashes to this challenge.
 // If the S256 derivation (SHA-256 then base64url-no-pad) ever regresses, this
@@ -42,5 +43,5 @@ test('generatePkcePair pairs a verifier with its own S256 challenge', t => {
 });
 
 test('SHA-256 digest length is 32 bytes', t => {
-  t.is(sha256(bytesFromText('abc')).length, 32);
+  t.is(sha256(textEncoder.encode('abc')).length, 32);
 });

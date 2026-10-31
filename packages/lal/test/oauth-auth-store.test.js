@@ -1,9 +1,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import { makeOAuthAuthStore } from '../providers/oauth/auth-store.js';
 import { makeAesGcmCipher } from '../providers/oauth/node-crypto.js';
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 const KEY = new Uint8Array(32);
 for (let i = 0; i < 32; i += 1) {
@@ -51,12 +52,12 @@ test('credentials are sealed at rest, not stored as plaintext', t => {
 
   t.is(sealedOutputs.length, 1);
   const sealed = sealedOutputs[0];
-  const plaintext = bytesFromText(JSON.stringify(sampleCredentials));
+  const plaintext = textEncoder.encode(JSON.stringify(sampleCredentials));
   // The sealed blob differs from the plaintext serialization...
   t.notDeepEqual(sealed, plaintext);
   // ...and the secret token text does not survive into the sealed bytes.
-  t.false(bytesToText(sealed).includes('access-secret-token'));
-  t.true(bytesToText(plaintext).includes('access-secret-token'));
+  t.false(textDecoder.decode(sealed).includes('access-secret-token'));
+  t.true(textDecoder.decode(plaintext).includes('access-secret-token'));
 });
 
 test('get returns undefined for an unknown provider or account', t => {

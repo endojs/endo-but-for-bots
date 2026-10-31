@@ -14,8 +14,11 @@
 
 /** @import { OAuthCryptoPowers, PkcePair } from './oauth.types.js' */
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
 import { encodeBase64Url } from './base64url.js';
+
+// Captured once at module load so post-lockdown mutation of the global cannot
+// redirect the call; `TextEncoder` only emits UTF-8 and is stateless.
+const textEncoder = new TextEncoder();
 
 // 32 random bytes base64url-encode to a 43-character verifier, within the
 // RFC 7636 §4.1 range of 43 to 128 characters.
@@ -43,7 +46,7 @@ harden(generateCodeVerifier);
  * @returns {string}
  */
 export const computeCodeChallenge = (codeVerifier, sha256) => {
-  const digest = sha256(bytesFromText(codeVerifier));
+  const digest = sha256(textEncoder.encode(codeVerifier));
   return encodeBase64Url(digest);
 };
 harden(computeCodeChallenge);

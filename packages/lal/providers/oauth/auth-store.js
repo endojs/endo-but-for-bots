@@ -18,8 +18,11 @@
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+
+// Captured once at module load so post-lockdown mutation of the globals cannot
+// redirect the calls; both are UTF-8 and stateless.
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 const OAuthCredentialsShape = M.splitRecord(
   { accessToken: M.string() },
@@ -92,7 +95,7 @@ export const makeOAuthAuthStore = ({ cipher }) => {
      * @param {OAuthCredentials} credentials
      */
     store(provider, accountId, credentials) {
-      const plaintext = bytesFromText(JSON.stringify(credentials));
+      const plaintext = textEncoder.encode(JSON.stringify(credentials));
       const sealed = cipher.encrypt(plaintext);
       sealedByKey.set(compositeKey(provider, accountId), sealed);
       let accounts = accountsByProvider.get(provider);
@@ -114,7 +117,7 @@ export const makeOAuthAuthStore = ({ cipher }) => {
         return undefined;
       }
       const plaintext = cipher.decrypt(sealed);
-      return harden(JSON.parse(bytesToText(plaintext)));
+      return harden(JSON.parse(textDecoder.decode(plaintext)));
     },
 
     /**
