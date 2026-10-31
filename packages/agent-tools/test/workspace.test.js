@@ -5,7 +5,8 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
-import { Far } from '@endo/pass-style';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import {
   makeWorkspaceTools,
@@ -15,15 +16,19 @@ import {
 /**
  * The provisioning adapter composes its catalog purely from the tool makers'
  * static schemas and interface guards — a maker never calls the granted cap at
- * construction time — so an inert `Far` remotable is a sufficient stand-in for
+ * construction time — so an inert exo is a sufficient stand-in for
  * every grant these composition-semantics tests exercise. The live-capability
  * behavior is proved end to end in `git-worked-loop.test.js`.
  *
  * @param {string} label
  * @returns {any} an inert stand-in for any workspace grant; typed `any` so a
- *   single `Far` remotable satisfies every distinct capability parameter.
+ *   single inert exo satisfies every distinct capability parameter.
  */
-const grant = label => Far(label, {});
+const grant = label => makeExo(label, M.interface(label, {}), {});
+
+const GitFixtureInterface = M.interface('GitFixture', {
+  worktree: M.callWhen().returns(M.remotable('Mount')),
+});
 
 /** @param {{ name: string }[]} records */
 const nameSet = records => new Set(records.map(record => record.name));
@@ -168,7 +173,9 @@ test('filesystem + git + shell + http compose without collision', t => {
 test('provisionWorkspaceTools combines http with a git-derived filesystem', async t => {
   await null;
   /** @type {any} a `Git` stand-in whose `worktree` derives the filesystem. */
-  const git = Far('Git', { worktree: () => grant('Mount') });
+  const git = makeExo('GitFixture', GitFixtureInterface, {
+    worktree: () => grant('Mount'),
+  });
   const catalog = await provisionWorkspaceTools({
     git,
     http: grant('HttpClient'),
