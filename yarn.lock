@@ -1822,6 +1822,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/confined-fetch@workspace:packages/confined-fetch"
   dependencies:
+    "@endo/bundle-source": "workspace:^"
     "@endo/cancel": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -1830,6 +1831,7 @@ __metadata:
     "@endo/fetch": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/ses-ava": "workspace:^"
@@ -2130,6 +2132,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/exo-http-client@workspace:packages/exo-http-client"
   dependencies:
+    "@endo/cancel": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -2393,6 +2396,7 @@ __metadata:
   resolution: "@endo/fetch@workspace:packages/fetch"
   dependencies:
     "@endo/cancel": "workspace:^"
+    "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
@@ -2649,6 +2653,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/http-confine@workspace:packages/http-confine"
   dependencies:
+    "@endo/cancel": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/ses-ava": "workspace:^"
