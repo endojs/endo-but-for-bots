@@ -98,7 +98,12 @@ const provisionGit = async (t, rootPath) => {
   const filePowers = makeFilePowers({ fs, path });
   const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
   const backend = makeNativeGitBackend({ repoRoot });
-  const git = makeGit({ mount, backend, lineageOf });
+  // `EndoMount.makeFile` yields an `EndoMountFile`, not a platform `File`, so
+  // the mount is a git worktree only by this cast (as in the daemon manager).
+  const worktree = /** @type {Parameters<typeof makeGit>[0]['mount']} */ (
+    /** @type {unknown} */ (mount)
+  );
+  const git = makeGit({ mount: worktree, backend, lineageOf });
   return { repoRoot, mount, git };
 };
 
@@ -115,8 +120,13 @@ const provisionRewriterGit = async (t, rootPath) => {
   const filePowers = makeFilePowers({ fs, path });
   const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
   const backend = makeNativeGitBackend({ repoRoot });
+  // `EndoMount.makeFile` yields an `EndoMountFile`, not a platform `File`, so
+  // the mount is a git worktree only by this cast (as in the daemon manager).
+  const worktree = /** @type {Parameters<typeof makeGit>[0]['mount']} */ (
+    /** @type {unknown} */ (mount)
+  );
   const git = makeGit(
-    { mount, backend, lineageOf },
+    { mount: worktree, backend, lineageOf },
     { allowHistoryRewrite: true },
   );
   return { repoRoot, mount, git };
