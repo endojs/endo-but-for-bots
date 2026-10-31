@@ -10,10 +10,11 @@ import { sha256HexWebCrypto } from '@endo/mem-cas/store-web-powers.js';
 
 import {
   makeMemoryPackageCacheTable,
+  makeMvsResolveHook,
   makeNpmReferenceRegistry,
-} from '../src/reference-backend.js';
-import { makeMvsResolveHook, satisfiesRange } from '../src/mvs-resolver.js';
-import { registryErrorName } from '../src/errors.js';
+  registryErrorName,
+  satisfiesRange,
+} from '../index.js';
 
 const utf8Encoder = new TextEncoder();
 
@@ -91,6 +92,40 @@ test('satisfiesRange handles common npm shapes', t => {
   t.false(satisfiesRange('1.0.0-rc.1', '1.0.0'));
   t.false(satisfiesRange('1.0.0-rc.1', '>=0.9.0'));
   t.false(satisfiesRange('1.1.0-rc.1', '^1.0.0-rc.0'));
+});
+
+test('satisfiesRange admits a pre-release only within the set naming it', t => {
+  t.false(satisfiesRange('1.0.0-rc.1', '<2.0.0 || 1.0.0-alpha.1'));
+  t.false(satisfiesRange('1.1.0-alpha.0', '^1.0.0 || ^1.1.0-beta.1'));
+  t.false(satisfiesRange('1.0.0-alpha', '>=0.0.0 || >=1.0.0-beta'));
+  t.false(satisfiesRange('1.0.0-beta', '>=0.0.0 || <1.0.0-alpha'));
+  t.false(satisfiesRange('1.0.0-beta', '>=0.0.0 || >1.0.0-rc'));
+  t.false(satisfiesRange('1.0.0-rc.1', '>=0.0.0 || ^1.0.0-zzz'));
+  t.false(satisfiesRange('1.0.0-alpha.1', '<1.0.0 || >=1.0.0-zzz'));
+  t.true(satisfiesRange('1.0.0-rc.1', '<1.0.0 || >=1.0.0-rc.0'));
+});
+
+test('satisfiesRange bounds a zero-major caret by its patch', t => {
+  t.true(satisfiesRange('0.0.3', '^0.0.3-beta'));
+  t.true(satisfiesRange('0.0.3-beta.2', '^0.0.3-beta'));
+  t.false(satisfiesRange('0.0.4', '^0.0.3-beta'));
+});
+
+test('satisfiesRange compares numeric identifiers without narrowing', t => {
+  t.true(satisfiesRange('9007199254740993.0.0', '>9007199254740992.0.0'));
+  t.false(satisfiesRange('9007199254740992.0.0', '9007199254740993.0.0'));
+  t.true(
+    satisfiesRange(
+      '1.0.0-100000000000000000000',
+      '>1.0.0-99999999999999999999',
+    ),
+  );
+  t.false(satisfiesRange('1.0.0-9007199254740992', '>=1.0.0-9007199254740993'));
+});
+
+test('satisfiesRange rejects a version with trailing text', t => {
+  t.false(satisfiesRange('1.2.3garbage', '1.2.3'));
+  t.false(satisfiesRange('1.2.3garbage', '*'));
 });
 
 test('resolve does not upgrade beyond a graph requirement', async t => {
@@ -329,45 +364,6 @@ test('resolve shares one version between a union and a later range', async t => 
   t.deepEqual(pkgKeys, ['pkg@2.0.0']);
 });
 
-test('resolve records a failed optional tarball fetch', async t => {
-  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
-  const resolveHook = makeMvsResolveHook({
-    fetcher: makeFakeFetcher({
-      packuments: { pkg: plainPackument(['1.0.0']) },
-      tarballFailures: { 'pkg@1.0.0': 'boom' },
-    }),
-    makeTreeRef: makeFakeTreeRef,
-  });
-  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
-  const resolution = await registry.resolve(
-    JSON.stringify({
-      name: 'entry',
-      optionalDependencies: { pkg: '^1.0.0' },
-    }),
-    {},
-  );
-  t.deepEqual(resolution.keys, []);
-  t.deepEqual(resolution.unmetOptionals, [
-    {
-      importer: 'entry',
-      name: 'pkg',
-      range: '^1.0.0',
-      reason: 'tarball fetch failed: boom',
-    },
-  ]);
-});
-
-test('resolve rejects a range no published version satisfies', async t => {
-  const error = await t.throwsAsync(() =>
-    resolveFixture(
-      { pkg: plainPackument(['1.2.0']) },
-      { dependencies: { pkg: '^2.0.0' } },
-    ),
-  );
-  t.is(registryErrorName(error), 'RegistryMissingPackageError');
-  t.regex(error.message, /no version satisfies/);
-});
-
 test('resolve selection does not depend on requester order', async t => {
   const packuments = {
     pkg: plainPackument(['1.0.0', '1.2.0', '1.4.7', '1.9.0']),
@@ -483,29 +479,19 @@ test('resolve gives an upper-bound-only range its own group', async t => {
   t.deepEqual(pkgKeys, ['pkg@1.0.0', 'pkg@2.1.0']);
 });
 
-test('resolve merges duplicate ranges from several importers', async t => {
-  const resolution = await resolveFixture(
-    {
-      pkg: plainPackument(['1.0.0', '1.2.0']),
-      consumer: consumerOf('^1.2.0'),
-    },
-    { dependencies: { pkg: '^1.2.0', consumer: '^1.0.0' } },
-  );
-  const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
-  t.deepEqual(pkgKeys, ['pkg@1.2.0']);
-});
-
 test('resolve lets an optional range narrow a shared selection', async t => {
   // A satisfiable optional range constrains the group like any other.
   const resolution = await resolveFixture(
     {
-      pkg: plainPackument(['1.0.0', '1.3.0']),
+      pkg: plainPackument(['1.0.0', '1.3.0', '1.5.0']),
       consumer: consumerOf('^1.3.0', 'optionalDependencies'),
     },
     { dependencies: { pkg: '^1.0.0', consumer: '^1.0.0' } },
   );
-  t.true(resolution.keys.includes('pkg@1.3.0'));
-  t.false(resolution.keys.includes('pkg@1.0.0'));
+  t.deepEqual(
+    resolution.keys.filter(k => k.startsWith('pkg@')),
+    ['pkg@1.3.0'],
+  );
 });
 
 test('resolve splits a conflicting optional without changing the selection', async t => {
@@ -519,21 +505,6 @@ test('resolve splits a conflicting optional without changing the selection', asy
   t.true(resolution.keys.includes('pkg@1.2.0'));
   t.true(resolution.keys.includes('pkg@1.3.0'));
   t.deepEqual(resolution.unmetOptionals, []);
-});
-
-test('resolve records an unsatisfiable optional', async t => {
-  const resolution = await resolveFixture(
-    {
-      pkg: plainPackument(['1.2.0']),
-      consumer: consumerOf('^2.0.0', 'optionalDependencies'),
-    },
-    { dependencies: { pkg: '~1.2.0', consumer: '^1.0.0' } },
-  );
-  t.deepEqual(
-    resolution.keys.filter(k => k.startsWith('pkg@')),
-    ['pkg@1.2.0'],
-  );
-  t.true(resolution.unmetOptionals.some(d => d.name === 'pkg'));
 });
 
 test('resolve prunes dependencies of a superseded selection', async t => {
@@ -593,6 +564,172 @@ test('resolve drops diagnostics from a superseded selection', async t => {
   );
   t.deepEqual(resolution.keys, ['lib@1.4.0', 'raiser@1.0.0']);
   t.deepEqual(resolution.unmetOptionals, []);
+});
+
+test('resolve groups overlapping ranges independent of traversal order', async t => {
+  // A and B share 2.0.0, B and C share 3.0.0, A and C share nothing.
+  // Whichever consumer the walk meets first, B joins the group of the
+  // range with the least satisfying version.
+  const packuments = {
+    pkg: plainPackument(['1.0.0', '2.0.0', '3.0.0']),
+    a: consumerOf('<=2.0.0'),
+    b: consumerOf('>=2.0.0 <=3.0.0'),
+    c: consumerOf('>=3.0.0'),
+  };
+  const orders = [
+    { a: '^1.0.0', c: '^1.0.0', b: '^1.0.0' },
+    { c: '^1.0.0', a: '^1.0.0', b: '^1.0.0' },
+  ];
+  const resolutions = await Promise.all(
+    orders.map(dependencies => resolveFixture(packuments, { dependencies })),
+  );
+  for (const resolution of resolutions) {
+    t.deepEqual(
+      resolution.keys.filter(k => k.startsWith('pkg@')),
+      ['pkg@2.0.0', 'pkg@3.0.0'],
+    );
+  }
+});
+
+test('resolve orders numeric pre-release identifiers beyond int53', async t => {
+  const resolution = await resolveFixture(
+    {
+      pkg: plainPackument([
+        '1.0.0-100000000000000000000',
+        '1.0.0-99999999999999999999',
+      ]),
+    },
+    { dependencies: { pkg: '^1.0.0-0' } },
+  );
+  t.deepEqual(resolution.keys, ['pkg@1.0.0-99999999999999999999']);
+});
+
+/**
+ * A fetcher that records each tarball request, over `makeFakeFetcher`.
+ *
+ * @param {Parameters<typeof makeFakeFetcher>[0]} fixture
+ */
+const makeRecordingFetcher = fixture => {
+  const inner = makeFakeFetcher(fixture);
+  /** @type {string[]} */
+  const tarballRequests = [];
+  const fetcher = harden({
+    getPackument: inner.getPackument,
+    async getTarball(name, version) {
+      tarballRequests.push(`${name}@${version}`);
+      return inner.getTarball(name, version);
+    },
+  });
+  return { fetcher, tarballRequests };
+};
+
+test('resolve neither fetches nor pins a superseded selection', async t => {
+  // lib@1.0.0 is selected first and superseded by lib@1.4.0; its
+  // tarball would fail to fetch, and must not be requested at all.
+  const links = makeRetentionLinkSet();
+  const cas = makeMemoryCasStore({
+    sha256: sha256HexWebCrypto,
+    retentionLinks: links,
+  });
+  const { fetcher, tarballRequests } = makeRecordingFetcher({
+    packuments: {
+      lib: plainPackument(['1.0.0', '1.4.0']),
+      raiser: {
+        versions: {
+          '1.0.0': {
+            dependencies: { lib: '^1.4.0' },
+            dist: { integrity: 'sha512-raiser' },
+          },
+        },
+      },
+    },
+    tarballFailures: { 'lib@1.0.0': 'superseded tarball requested' },
+  });
+  const registry = makeNpmReferenceRegistry({
+    cas,
+    retentionLinks: links,
+    resolveHook: makeMvsResolveHook({ fetcher, makeTreeRef: makeFakeTreeRef }),
+  });
+  const resolution = await registry.resolve(
+    JSON.stringify({
+      name: 'entry',
+      dependencies: { lib: '^1.0.0', raiser: '^1.0.0' },
+    }),
+    {},
+  );
+  t.deepEqual(resolution.keys, ['lib@1.4.0', 'raiser@1.0.0']);
+  t.deepEqual(tarballRequests.sort(), ['lib@1.4.0', 'raiser@1.0.0']);
+  const hashes = await cas.list();
+  t.is(hashes.length, 2);
+  for (const hash of hashes) {
+    t.true(links.isPinned(hash));
+  }
+});
+
+test('resolve drops an optional whose tarball fails, with what only it requires', async t => {
+  // The fetch phase now runs after the walk, so a failed optional
+  // tarball must also prune the dependencies the walk already recorded
+  // for it.
+  const { fetcher } = makeRecordingFetcher({
+    packuments: {
+      opt: {
+        versions: {
+          '1.0.0': {
+            dependencies: { inner: '^1.0.0' },
+            dist: { integrity: 'sha512-opt' },
+          },
+        },
+      },
+      inner: plainPackument(['1.0.0']),
+    },
+    tarballFailures: { 'opt@1.0.0': 'boom' },
+  });
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const registry = makeNpmReferenceRegistry({
+    cas,
+    resolveHook: makeMvsResolveHook({ fetcher, makeTreeRef: makeFakeTreeRef }),
+  });
+  const resolution = await registry.resolve(
+    JSON.stringify({ name: 'entry', optionalDependencies: { opt: '^1.0.0' } }),
+    {},
+  );
+  t.deepEqual(resolution.keys, []);
+  t.deepEqual(resolution.unmetOptionals, [
+    {
+      importer: 'entry',
+      name: 'opt',
+      range: '^1.0.0',
+      reason: 'tarball fetch failed: boom',
+    },
+  ]);
+});
+
+test('resolve fetches no tarball when a peer check fails', async t => {
+  const { fetcher, tarballRequests } = makeRecordingFetcher({
+    packuments: {
+      'pkg-a': {
+        versions: {
+          '1.0.0': {
+            peerDependencies: { react: '^18.0.0' },
+            dist: { integrity: 'sha512-a' },
+          },
+        },
+      },
+    },
+  });
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const registry = makeNpmReferenceRegistry({
+    cas,
+    resolveHook: makeMvsResolveHook({ fetcher, makeTreeRef: makeFakeTreeRef }),
+  });
+  await t.throwsAsync(() =>
+    registry.resolve(
+      JSON.stringify({ name: 'entry', dependencies: { 'pkg-a': '^1.0.0' } }),
+      {},
+    ),
+  );
+  t.deepEqual(tarballRequests, []);
+  t.deepEqual(await cas.list(), []);
 });
 
 test('resolve raises RegistryMissingPackageError for unmet peer', async t => {

@@ -274,6 +274,23 @@ export interface ResolveHookContext {
 }
 
 /**
+ * The selection that declared an MVS dependency edge, as its resolution
+ * key (`name@version`, or the bare name of a workspace member), or
+ * undefined for the entry. Diagnostics carry it so that those declared
+ * by a superseded or pruned selection can be dropped.
+ */
+export type MvsEdgeOrigin = string | undefined;
+
+/** One dependency edge the MVS resolve hook walks. */
+export interface MvsEdge {
+  name: string;
+  range: string;
+  source: 'dependencies' | 'peerDependencies' | 'optionalDependencies';
+  importer: string;
+  from: MvsEdgeOrigin;
+}
+
+/**
  * Tags for the registry's failure surface.
  *
  * Used as `errorName` on the structured errors so callers branch on
