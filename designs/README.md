@@ -440,7 +440,7 @@ LLM-agent stack).*
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-10-26 | In Progress |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-10-31 | In Progress |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
 | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | In Progress |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | In Progress (consolidated into [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)) |
