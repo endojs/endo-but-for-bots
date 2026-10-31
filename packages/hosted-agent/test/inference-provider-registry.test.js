@@ -213,6 +213,27 @@ test('first release admits only Anthropic and shape-valid model ids', async t =>
         { authMode: 'oauth', oauthProvider: 'claude-subscription' },
         'invalid-account-ref',
       ],
+      [
+        { authMode: 'oauth', oauthProvider: 'chatgpt-subscription' },
+        'invalid-oauth-provider',
+      ],
+      [
+        {
+          authMode: 'oauth',
+          oauthProvider: 'claude-subscription',
+          accountRef: '',
+        },
+        'invalid-account-ref',
+      ],
+      [
+        {
+          authMode: 'oauth',
+          oauthProvider: 'claude-subscription',
+          accountRef: 'account\none',
+        },
+        'invalid-account-ref',
+      ],
+      [{ accountRef: 'account-one' }, 'invalid-account-ref'],
       [{ baseUrl: 'https://api.anthropic.com' }, 'invalid-base-url'],
       [{ defaultModel: 'Claude-Test' }, 'invalid-model'],
       [{ defaultModel: 'claude/test' }, 'invalid-model'],
@@ -261,6 +282,18 @@ test('subscription OAuth modes are registered but fail closed', async t => {
     );
     t.regex(error.message, /not enabled/);
   }
+  t.throws(
+    () => assertInferenceProviderOAuthAvailable('unknown', 'anthropic'),
+    { message: /Unknown inference OAuth provider "unknown"/ },
+  );
+  t.throws(
+    () =>
+      assertInferenceProviderOAuthAvailable(
+        'chatgpt-subscription',
+        'anthropic',
+      ),
+    { message: /does not serve "anthropic"/ },
+  );
 
   const backing = makeBacking();
   const registry = await makeRegistry(backing);
