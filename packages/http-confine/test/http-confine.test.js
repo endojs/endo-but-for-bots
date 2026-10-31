@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: `ok` is the fetch Response field the transport fakes must carry.
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
