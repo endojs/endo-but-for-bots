@@ -1019,10 +1019,10 @@ export const TracesInterface = M.interface('EndoTraces', {
   stats: M.call().returns(M.promise()),
 });
 
-// Defined in `./worker-facet-interface.js` so the XS worker bootstrap
-// can guard its facet with the same pattern without importing this
-// module (which reaches `@endo/platform`'s Node-only paths).
-export { WorkerFacetForManagerInterface } from './worker-facet-interface.js';
+// `WorkerFacetForManagerInterface` lives in `./worker-facet-interface.js`
+// so the XS worker bootstrap can guard its facet with the same pattern
+// without importing this module (which reaches `@endo/platform`'s
+// Node-only paths).
 
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),
