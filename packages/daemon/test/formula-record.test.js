@@ -324,3 +324,43 @@ test('makeFormulaRecord surfaces Git remote policy bounds', t => {
     revoked: { kind: 'literal', value: false },
   });
 });
+
+test('makeFormulaRecord defaults omitted Git remote policy bounds', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'git-remote',
+      gitId: 'git-id',
+      name: 'upstream',
+      policy: {
+        url: 'https://github.com/endojs/endo.git',
+        allowedDirections: ['fetch'],
+        fetchRefspecs: ['+refs/heads/*:refs/remotes/upstream/*'],
+        pushRefspecs: [],
+        defaultPullRef: 'refs/heads/main',
+      },
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+
+  t.deepEqual(record.properties, {
+    git: { kind: 'reference', identifier: 'git-id' },
+    name: { kind: 'literal', value: 'upstream' },
+    url: {
+      kind: 'literal',
+      value: 'https://github.com/endojs/endo.git',
+    },
+    allowedDirections: { kind: 'literal', value: ['fetch'] },
+    fetchRefspecs: {
+      kind: 'literal',
+      value: ['+refs/heads/*:refs/remotes/upstream/*'],
+    },
+    pushRefspecs: { kind: 'literal', value: [] },
+    defaultPullRef: { kind: 'literal', value: 'refs/heads/main' },
+    allowForcePush: { kind: 'literal', value: false },
+    allowTags: { kind: 'literal', value: false },
+    allowDelete: { kind: 'literal', value: false },
+    allowLocalFileTransport: { kind: 'literal', value: false },
+    revoked: { kind: 'literal', value: false },
+  });
+});

@@ -103,6 +103,71 @@ test('inspection spells out endpoint and granted push targets', t => {
   t.regex(output, /credential: bearer for https:\/\/github\.com \(available\)/);
 });
 
+test('unknown profile names the bounded alternatives', t => {
+  t.throws(
+    () =>
+      makeGitRemoteProfile(
+        'origin',
+        'https://github.com/endojs/endo.git',
+        'admin',
+      ),
+    {
+      message:
+        'Unknown Git remote profile "admin"; expected fetch-only or agent',
+    },
+  );
+});
+
+test('inspection reports revoked remotes, empty targets, and unavailable credentials', t => {
+  const output = formatGitRemoteInspection({
+    policy: {
+      name: 'upstream',
+      url: 'https://github.com/endojs/endo.git',
+      revoked: true,
+      allowedDirections: ['fetch'],
+      fetchRefspecs: [],
+      pushRefspecs: [],
+      allowForcePush: true,
+      allowTags: false,
+      allowDelete: false,
+    },
+    credential: {
+      required: true,
+      kind: 'bearer',
+      audience: 'https://github.com',
+      available: true,
+      revoked: true,
+    },
+  });
+  t.regex(output, /state: revoked/);
+  t.regex(output, /fetch targets:\n {4}\(none\)/);
+  t.regex(output, /push targets:\n {4}\(none\)/);
+  t.regex(output, /force push: allowed/);
+  t.regex(
+    output,
+    /credential: bearer for https:\/\/github\.com \(unavailable\)/,
+  );
+});
+
+test('inspection notes when no credential is required', t => {
+  const output = formatGitRemoteInspection({
+    policy: {
+      name: 'upstream',
+      url: 'https://github.com/endojs/endo.git',
+      revoked: false,
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/upstream/*'],
+      pushRefspecs: [],
+      allowForcePush: false,
+      allowTags: false,
+      allowDelete: false,
+    },
+    credential: { required: false },
+  });
+  t.regex(output, /state: active/);
+  t.regex(output, /credential: not required/);
+});
+
 test('git-remote help advertises provisioning and inspection', async t => {
   const { stdout } = await execa(process.execPath, [
     endoBin,
