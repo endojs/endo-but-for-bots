@@ -66,6 +66,13 @@ const parseEnvOption = (optionValueString, obj) => {
   return obj;
 };
 
+/**
+ * Accumulates a repeatable string option.
+ *
+ * @param {string} value
+ * @param {string[]} values
+ * @returns {string[]}
+ */
 const collectOption = (value, values) => [...values, value];
 
 export const main = async rawArgs => {
@@ -504,7 +511,7 @@ export const main = async rawArgs => {
     )
     .option(
       '-b,--branch <branch>',
-      'agent-profile branch or refs/heads/* pattern (repeatable; defaults to refs/heads/agent/*)',
+      'agent-profile branch or refs/heads/<parent>/* pattern (repeatable; defaults to refs/heads/agent/*)',
       collectOption,
       [],
     )
