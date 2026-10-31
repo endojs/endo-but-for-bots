@@ -500,14 +500,14 @@ const advance = (element, tokens, positions) => {
     }
     case 'rest': {
       for (const i of positions) {
-        let ok = true;
+        let matched = true;
         for (let j = i; j < tokens.length; j += 1) {
           if (!valueMatchesType(element.type, tokens[j])) {
-            ok = false;
+            matched = false;
             break;
           }
         }
-        if (ok) {
+        if (matched) {
           next.add(tokens.length);
         }
       }

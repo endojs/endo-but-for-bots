@@ -266,13 +266,13 @@ export const makeShell = ({
     }, effectiveTimeoutMs);
 
     /** @type {{ text: string, truncated: boolean }} */
-    let outRes;
+    let stdoutResult;
     /** @type {{ text: string, truncated: boolean }} */
-    let errRes;
+    let stderrResult;
     /** @type {{ code: number | null, signal: string | null }} */
     let status;
     try {
-      [outRes, errRes, status] = await Promise.all([
+      [stdoutResult, stderrResult, status] = await Promise.all([
         drainBounded(proc.stdout, maxOutputBytes),
         drainBounded(proc.stderr, maxOutputBytes),
         proc.wait(),
@@ -293,11 +293,11 @@ export const makeShell = ({
     }
 
     return harden({
-      stdout: outRes.text,
-      stderr: errRes.text,
+      stdout: stdoutResult.text,
+      stderr: stderrResult.text,
       exitCode: code,
       signal,
-      truncated: outRes.truncated || errRes.truncated,
+      truncated: stdoutResult.truncated || stderrResult.truncated,
     });
   };
 

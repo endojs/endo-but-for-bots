@@ -182,21 +182,36 @@ test('matchShellCommand accepts and rejects per element kind', t => {
       ],
     },
   ])[0];
-  const ok = argumentVector =>
+  const matchesGrammar = argumentVector =>
     matchShellCommand(grammar, 'git', harden(argumentVector));
-  t.true(ok(['log']));
-  t.true(ok(['log', '--oneline']));
-  t.true(ok(['log', '--max-count=5', '--oneline']));
-  t.true(ok(['log', '--', 'src/index.js']));
-  t.true(ok(['log', '--oneline', '--', 'src/index.js']));
-  t.false(ok([]), 'the literal subcommand is required');
-  t.false(ok(['status']), 'a different literal is rejected');
-  t.false(ok(['log', '--force']), 'an option outside the union is rejected');
-  t.false(ok(['log', '--']), 'a group matches only as a whole');
-  t.false(ok(['log', '--', '/etc/passwd']), 'absolute path rejected');
-  t.false(ok(['log', '--', '../secret']), 'parent traversal rejected');
-  t.false(ok(['log', '--', 'a/../b']), 'embedded .. segment rejected');
-  t.false(ok(['log', 'extra']), 'trailing unmatched tokens are rejected');
+  t.true(matchesGrammar(['log']));
+  t.true(matchesGrammar(['log', '--oneline']));
+  t.true(matchesGrammar(['log', '--max-count=5', '--oneline']));
+  t.true(matchesGrammar(['log', '--', 'src/index.js']));
+  t.true(matchesGrammar(['log', '--oneline', '--', 'src/index.js']));
+  t.false(matchesGrammar([]), 'the literal subcommand is required');
+  t.false(matchesGrammar(['status']), 'a different literal is rejected');
+  t.false(
+    matchesGrammar(['log', '--force']),
+    'an option outside the union is rejected',
+  );
+  t.false(matchesGrammar(['log', '--']), 'a group matches only as a whole');
+  t.false(
+    matchesGrammar(['log', '--', '/etc/passwd']),
+    'absolute path rejected',
+  );
+  t.false(
+    matchesGrammar(['log', '--', '../secret']),
+    'parent traversal rejected',
+  );
+  t.false(
+    matchesGrammar(['log', '--', 'a/../b']),
+    'embedded .. segment rejected',
+  );
+  t.false(
+    matchesGrammar(['log', 'extra']),
+    'trailing unmatched tokens are rejected',
+  );
   t.false(
     matchShellCommand(grammar, 'gitx', harden(['log'])),
     'the program name must match exactly',
@@ -222,12 +237,20 @@ test('a repeated group matches flag-value pairs and requires progress', t => {
       ],
     },
   ])[0];
-  const ok = argumentVector =>
+  const matchesGrammar = argumentVector =>
     matchShellCommand(grammar, 'tar', harden(argumentVector));
-  t.true(ok(['-tf', 'out.tar']));
-  t.true(ok(['-tf', 'out.tar', '--exclude', 'a', '--exclude', 'b']));
-  t.false(ok(['-tf', 'out.tar', '--exclude']), 'a dangling flag is rejected');
-  t.false(ok(['-tf', 'out.tar', 'a']), 'a bare value without its flag');
+  t.true(matchesGrammar(['-tf', 'out.tar']));
+  t.true(
+    matchesGrammar(['-tf', 'out.tar', '--exclude', 'a', '--exclude', 'b']),
+  );
+  t.false(
+    matchesGrammar(['-tf', 'out.tar', '--exclude']),
+    'a dangling flag is rejected',
+  );
+  t.false(
+    matchesGrammar(['-tf', 'out.tar', 'a']),
+    'a bare value without its flag',
+  );
 });
 
 test('string slots cannot be occupied by option tokens or NUL-bearing strings', t => {
@@ -427,8 +450,8 @@ test('find without -exec in its grammar cannot be asked to exec (adversarial)', 
     }),
     spawner,
   });
-  const ok = await shell.exec('find', ['docs', '-name', '*.md']);
-  t.is(ok.exitCode, 0);
+  const result = await shell.exec('find', ['docs', '-name', '*.md']);
+  t.is(result.exitCode, 0);
   await t.throwsAsync(
     () =>
       shell.exec('find', [
