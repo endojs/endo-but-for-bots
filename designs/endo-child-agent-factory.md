@@ -594,8 +594,15 @@ without stacking on an open pull request or waiting for a live provider secret.
 
 ## Implementation plan
 
-One implementation pull request against `llm` should contain independently
-reviewable commits:
+Two implementation pull requests against `llm` carry these steps, each as
+independently reviewable commits.
+The first lands step 1 and the coordinator logic of step 3 (precheck and
+proof, the `Endowed` phase, lifecycle-gated reconciliation, idempotent
+removal, and `revokeDerived`) against a narrow private-host port, so the
+recovery state machine is reviewed apart from any daemon wiring.
+The second lands step 2, the daemon side of step 3 (the pinned coordinator
+formula and durable facet formulas over a real `agent-factory` host), and
+steps 4 through 6.
 
 1. Add `@endo/exo-agent-factory` guards, the policy intersection, the private
    factory directory, the append-only operation journal, and fake host/maker
