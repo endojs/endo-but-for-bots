@@ -353,24 +353,29 @@ export const makeMvsResolveHook = options => {
   };
 
   /**
-   * Pick the greatest version in the packument that satisfies `range`.
+   * Pick the least published version that satisfies every requirement.
+   *
+   * MVS widens a selection only when another requirement demands it. Picking
+   * the newest satisfying version would instead reproduce npm's eager-upgrade
+   * behavior and could select a version that no package in the graph required.
    *
    * @param {Awaited<ReturnType<typeof fetcher.getPackument>>} document
    * @param {string} name
-   * @param {string} range
+   * @param {readonly string[]} ranges
    * @returns {string}
    */
-  const selectGreatestSatisfying = (document, name, range) => {
+  const selectLeastSatisfying = (document, name, ranges) => {
     const candidates = Object.keys(document.versions)
-      .filter(v => satisfiesRange(v, range))
+      .filter(version => ranges.every(range => satisfiesRange(version, range)))
       .map(parseVersion)
       .sort(compareVersions);
     if (candidates.length === 0) {
+      const requirements = ranges.map(range => q(range)).join(', ');
       throw RegistryMissingPackageError(
-        `${name}: no version satisfies ${q(range)}`,
+        `${name}: no version satisfies ${requirements}`,
       );
     }
-    return candidates[candidates.length - 1].raw;
+    return candidates[0].raw;
   };
 
   return /** @type {ResolveHook} */ (
@@ -403,7 +408,7 @@ export const makeMvsResolveHook = options => {
        * under the same slot share a selection and the resolver picks
        * the greater of the two.
        *
-       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string }>>}
+       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string, ranges?: string[] }>>}
        */
       const resolved = new Map();
       /** @type {Array<{ importer: string, name: string, range: string }>} */
@@ -560,9 +565,14 @@ export const makeMvsResolveHook = options => {
           throw err;
         }
 
+        const ranges = [...(existing?.ranges ?? [])];
+        if (!ranges.includes(range)) {
+          ranges.push(range);
+        }
+
         let candidateVersion;
         try {
-          candidateVersion = selectGreatestSatisfying(document, name, range);
+          candidateVersion = selectLeastSatisfying(document, name, ranges);
         } catch (err) {
           if (source === 'optionalDependencies') {
             unmetOptionals.push({
@@ -576,13 +586,8 @@ export const makeMvsResolveHook = options => {
           throw err;
         }
 
-        if (
-          existing &&
-          compareVersions(
-            parseVersion(existing.version),
-            parseVersion(candidateVersion),
-          ) >= 0
-        ) {
+        if (existing?.version === candidateVersion) {
+          existing.ranges = ranges;
           if (source === 'peerDependencies') {
             peerRequirements.push({ importer, name, range });
           }
@@ -604,6 +609,7 @@ export const makeMvsResolveHook = options => {
             integrity: cached.integrity,
             treeRef: cached.treeRef,
             packageJson: cached.packageJson,
+            ranges,
           });
           resolved.set(name, slot);
           // Walk the cached entry's transitive deps. The cache row's
@@ -675,6 +681,7 @@ export const makeMvsResolveHook = options => {
           integrity,
           treeRef,
           packageJson: packageJsonSnapshot,
+          ranges,
         });
         resolved.set(name, slot);
 

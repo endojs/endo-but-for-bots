@@ -100,10 +100,10 @@ test('parseRangeMajor classifies ranges into major slots', t => {
   t.is(parseRangeMajor('*'), 'any');
 });
 
-test('resolve walks a transitive dependency graph (MVS pick)', async t => {
+test('resolve does not upgrade beyond a graph requirement', async t => {
   // Entry depends on `lib-a@^1.0.0`; lib-a depends on
-  // `helper@^1.0.0`. The fixture exposes helper@1.0.0 and helper@1.2.5;
-  // MVS picks the greatest minor satisfying `^1.0.0`.
+  // `helper@^1.0.0`. Newer compatible releases exist, but MVS starts
+  // at the least published version that satisfies the stated range.
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const fetcher = makeFakeFetcher({
     packuments: {
@@ -119,6 +119,7 @@ test('resolve walks a transitive dependency graph (MVS pick)', async t => {
         versions: {
           '1.0.0': { dist: { integrity: 'sha512-h0' } },
           '1.2.5': { dist: { integrity: 'sha512-h25' } },
+          '1.9.0': { dist: { integrity: 'sha512-h90' } },
           '2.0.0': { dist: { integrity: 'sha512-h2' } },
         },
       },
@@ -135,8 +136,8 @@ test('resolve walks a transitive dependency graph (MVS pick)', async t => {
     dependencies: { 'lib-a': '^1.0.0' },
   });
   const resolution = await registry.resolve(entry, {});
-  t.deepEqual([...resolution.keys].sort(), ['helper@1.2.5', 'lib-a@1.0.0']);
-  t.is(resolution.packagesByKey['helper@1.2.5'].integrity, 'sha512-h25');
+  t.deepEqual([...resolution.keys].sort(), ['helper@1.0.0', 'lib-a@1.0.0']);
+  t.is(resolution.packagesByKey['helper@1.0.0'].integrity, 'sha512-h0');
 });
 
 test('resolve admits multi-major coexistence', async t => {
@@ -173,7 +174,7 @@ test('resolve admits multi-major coexistence', async t => {
     dependencies: { pkg: '^1.0.0', 'lib-b': '^1.0.0' },
   });
   const resolution = await registry.resolve(entry, {});
-  t.true(resolution.keys.includes('pkg@1.5.0'));
+  t.true(resolution.keys.includes('pkg@1.0.0'));
   t.true(resolution.keys.includes('pkg@2.3.4'));
   t.true(resolution.keys.includes('lib-b@1.0.0'));
 });
@@ -190,6 +191,7 @@ test('resolve picks greatest mentioned minor across requesters', async t => {
           '1.0.0': { dist: { integrity: 'sha512-a' } },
           '1.2.0': { dist: { integrity: 'sha512-b' } },
           '1.4.7': { dist: { integrity: 'sha512-c' } },
+          '1.9.0': { dist: { integrity: 'sha512-d' } },
         },
       },
       'lib-c': {
@@ -212,9 +214,45 @@ test('resolve picks greatest mentioned minor across requesters', async t => {
     dependencies: { pkg: '^1.0.0', 'lib-c': '^1.0.0' },
   });
   const resolution = await registry.resolve(entry, {});
-  // Only one pkg entry, the one that satisfies both ranges.
+  // Only one pkg entry, the least published version that satisfies both
+  // ranges. The unrelated 1.9.0 release must not pull the graph forward.
   const pkgKeys = resolution.keys.filter(k => k.startsWith('pkg@'));
   t.deepEqual(pkgKeys, ['pkg@1.4.7']);
+});
+
+test('resolve rejects incompatible requirements in one major', async t => {
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const fetcher = makeFakeFetcher({
+    packuments: {
+      pkg: {
+        versions: {
+          '1.2.0': { dist: { integrity: 'sha512-a' } },
+          '1.3.0': { dist: { integrity: 'sha512-b' } },
+        },
+      },
+      consumer: {
+        versions: {
+          '1.0.0': {
+            dependencies: { pkg: '~1.3.0' },
+            dist: { integrity: 'sha512-consumer' },
+          },
+        },
+      },
+    },
+  });
+  const resolveHook = makeMvsResolveHook({
+    fetcher,
+    makeTreeRef: makeFakeTreeRef,
+  });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
+  const entry = JSON.stringify({
+    name: 'entry',
+    dependencies: { pkg: '~1.2.0', consumer: '^1.0.0' },
+  });
+
+  const error = await t.throwsAsync(() => registry.resolve(entry, {}));
+  t.is(registryErrorName(error), 'RegistryMissingPackageError');
+  t.regex(error.message, /no version satisfies/);
 });
 
 test('resolve raises RegistryMissingPackageError for unmet peer', async t => {
