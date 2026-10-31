@@ -1,4 +1,6 @@
 // @ts-check
+// prefer-endo-primitives-exempt: these Far worker/manager facet stubs predate
+// this rename-only change; converting them to guarded exos is out of scope.
 /** @import {EndoDirectory, FormulaNumber} from '../src/types.js'; */
 /** @import {Passable} from '@endo/pass-style'; */
 import test from '@endo/ses-ava/prepare-endo.js';
