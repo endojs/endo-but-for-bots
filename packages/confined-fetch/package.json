@@ -56,7 +56,9 @@
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/bundle-source": "workspace:^",
     "@endo/init": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/ses-ava": "workspace:^",

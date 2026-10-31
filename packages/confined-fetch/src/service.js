@@ -57,6 +57,7 @@ export const makeConfinedFetchService = async powers => {
   const {
     store,
     fetch,
+    delay,
     now,
     allowedOrigins: envAllowedOrigins,
     maxRequestsPerMinute: envMaxRequestsPerMinute,
@@ -67,6 +68,11 @@ export const makeConfinedFetchService = async powers => {
   if (typeof fetch !== 'function') {
     throw TypeError(
       '@endo/confined-fetch: a fetch transport built from the endowed base is required',
+    );
+  }
+  if (typeof delay !== 'function' || typeof now !== 'function') {
+    throw TypeError(
+      '@endo/confined-fetch: delay and now seams built from the endowed timer are required',
     );
   }
 
@@ -119,7 +125,8 @@ export const makeConfinedFetchService = async powers => {
 
   const { client, control } = makeHttpClientAndControl({
     fetch,
-    ...(now !== undefined ? { now } : {}),
+    delay,
+    now,
     allowedOrigins,
     ...(maxRequestsPerMinute !== undefined ? { maxRequestsPerMinute } : {}),
     ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),

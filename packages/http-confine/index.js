@@ -22,7 +22,7 @@ export {
   limitResponseBytes,
   makeHttpConfinement,
   makeRateLimiter,
-  makeRequestSignal,
+  makeRequestCancellation,
   normalizeMethod,
   parseAllowedOrigins,
   resolveRedirect,

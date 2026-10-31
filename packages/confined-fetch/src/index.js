@@ -14,6 +14,8 @@
  * - `E(powers).lookup('fetch-store')` -> a writable virtual-file-system
  *   directory private to this service, backing the durable policy store
  *   (`./store.js`).
+ * - `E(powers).lookup('timer')` -> an unconfined `Timer` capability, the only
+ *   source of delays and wall-clock time.
  * - `E(powers).lookup('fetch-policy-authority')` (optional) -> the referral
  *   target for trust-on-first-bind decisions. Without it, the prompt modes are
  *   unavailable and unknown origins fail closed.
@@ -97,15 +99,15 @@ const lookupOptional = async (powers, name) => {
  * returns the `ConfinedFetchService` exo.
  *
  * @param {any} powers - agent-shaped powers granted at provisioning.
- * @param {any} [_context] - caplet lifecycle context. Unused: the client is a
- *   stateless request/response capability with no live timers.
- * @param {{ env?: Record<string, string>, now?: () => number }} [options] -
- *   `env` carries first-run policy initials; `now` is a test seam.
+ * @param {any} [_context] - caplet lifecycle context.
+ * @param {{ env?: Record<string, string> }} [options] - `env` carries
+ *   first-run policy initials.
  * @returns {Promise<ConfinedFetchServiceExo>}
  */
-export const make = async (powers, _context, { env = {}, now } = {}) => {
+export const make = async (powers, _context, { env = {} } = {}) => {
   const base = await E(powers).lookup('fetch');
   const storeDirectory = await E(powers).lookup('fetch-store');
+  const timer = await E(powers).lookup('timer');
   const policyAuthority = await lookupOptional(
     powers,
     'fetch-policy-authority',
@@ -140,7 +142,11 @@ export const make = async (powers, _context, { env = {}, now } = {}) => {
   const makeOptions = {
     store,
     fetch: makeTransportFromBase(base),
-    ...(now !== undefined ? { now } : {}),
+    delay: (milliseconds, cancelled) =>
+      E(timer)
+        .delay(milliseconds, cancelled)
+        .then(() => undefined),
+    now: () => E(timer).now(),
     ...(allowedOrigins !== undefined ? { allowedOrigins } : {}),
     ...(maxRequestsPerMinute !== undefined ? { maxRequestsPerMinute } : {}),
     ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),

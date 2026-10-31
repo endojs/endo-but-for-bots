@@ -123,7 +123,7 @@ confinement stack reads all three ambiently:
 
 | Use | Where | Ambient read |
 |---|---|---|
-| Per-request deadline | `makeRequestSignal` (`@endo/http-confine`) | `setTimeout`, `clearTimeout`, `AbortController` |
+| Per-request deadline | request cancellation (`@endo/http-confine`) | `setTimeout`, `clearTimeout`, `AbortController` |
 | Revocation aborts in-flight requests | `makeHttpConfinement` controller set | `AbortController` |
 | Rate-limit window | `makeRateLimiter` (`now` seam) | `Date.now` via the `@endo/exo-http-client` default |
 | Policy-prompt timeout | `makeTrustOnFirstBindPolicyAdapter` | `setTimeout`, `clearTimeout` |
@@ -284,24 +284,12 @@ cancelled `Timer.delay` clears its host timer.
 ## Implementation status
 
 PR [#723](https://github.com/endojs/endo-but-for-bots/pull/723) landed the
-earlier single-plugin shape and the `@endo/exo-http-client` persistence seams
-(Phase 2). The split into the unconfined `@endo/fetch` base and the stateful
-`@endo/confined-fetch` plugin (Phase 1) and the in-memory restart exercise of
-Phase 3 follow in a separate PR. `makeHttpTool` remains with
-[daemon-agent-tools](daemon-agent-tools.md) Phase 3.6.
-
-Until Phase 4 lands, the confined plugin must be provisioned with
-`makeUnconfined`, because `@endo/http-confine` still reads ambient timers that
-confined-worker compartments do not endow (§ Time in a confined worker).
-
-## Open questions
-
-1. Which package should export the `Timer` maker? The recommendation is a
-   small unconfined entry beside the base (`@endo/fetch/timer.js`), because the
-   integration already provisions that package unconfined. A general-purpose
-   home such as `@endo/cancel` would serve other confined plugins that need
-   time, at the cost of adding `@endo/exo` to a package that does not depend on
-   it yet.
+earlier single-plugin shape and the `@endo/exo-http-client` persistence seams.
+PR [#1588](https://github.com/endojs/endo-but-for-bots/pull/1588) implements
+Phases 1 through 4: the two-plugin attenuation boundary, durable restart path,
+promise-based cancellation and time seams, and the `@endo/fetch/timer.js`
+unconfined Timer selected for confined-worker provisioning. `makeHttpTool`
+remains with [daemon-agent-tools](daemon-agent-tools.md) Phase 3.6.
 
 ## Prompt
 

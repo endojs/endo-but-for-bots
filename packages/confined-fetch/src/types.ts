@@ -43,7 +43,11 @@ export type ConfinedFetchServicePowers = {
   store: FetchStore;
   /** Built from the endowed `@endo/fetch` base; never the ambient `fetch`. */
   fetch: FetchLike;
-  now?: () => number;
+  delay: (
+    milliseconds: number,
+    cancelled: Promise<never>,
+  ) => Promise<undefined>;
+  now: () => number | Promise<number>;
   allowedOrigins?: string[];
   maxRequestsPerMinute?: number;
   maxResponseBytes?: number;

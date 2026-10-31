@@ -16,6 +16,7 @@
  * @typedef {import('./src/types.js').FetchLikeRequestOptions} FetchLikeRequestOptions
  * @typedef {import('./src/types.js').FetchLikeResponse} FetchLikeResponse
  * @typedef {import('./src/types.js').FetchLikeBodyReader} FetchLikeBodyReader
+ * @typedef {import('./src/types.js').Delay} Delay
  */
 
 export {

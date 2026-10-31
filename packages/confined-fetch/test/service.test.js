@@ -6,15 +6,32 @@ import { setTimeout } from 'node:timers';
 import { E } from '@endo/eventual-send';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
+import { makeTimer } from '@endo/fetch/timer.js';
 
 import { makeFetchStore } from '../src/store.js';
-import { makeConfinedFetchService } from '../src/service.js';
+import { makeConfinedFetchService as makeConfinedFetchServiceCore } from '../src/service.js';
 
 /** @import { FetchStoreDirectory } from '../src/types.js' */
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 /** Let the fire-and-forget persistence write-chain settle. */
 const flush = () => delay(10);
+
+/** @param {any} powers */
+const makeConfinedFetchService = powers => {
+  const timer = makeTimer({
+    setTimeout: (callback, milliseconds) => {
+      const handle = setTimeout(callback, milliseconds);
+      handle.unref();
+      return handle;
+    },
+  });
+  return makeConfinedFetchServiceCore({
+    delay: (milliseconds, cancelled) => timer.delay(milliseconds, cancelled),
+    now: () => timer.now(),
+    ...powers,
+  });
+};
 
 const ALLOWED = 'https://api.example.com';
 const ALLOWED_URL = `${ALLOWED}/data`;
@@ -124,7 +141,7 @@ test('reconstitutes identical policy across a restart', async t => {
     maxResponseBytes: 1000,
   });
   // A control change becomes the authoritative state the store persists.
-  first.control.addAllowedOrigin(OTHER);
+  await first.control.addAllowedOrigin(OTHER);
   first.control.setMaxResponseBytes(2048);
   await flush();
 
@@ -190,7 +207,7 @@ test('a trust-on-first-bind pin survives a restart and stays revocable', async t
 
   // It remains revocable through the control facet, and the revocation is
   // durable across a further restart.
-  second.control.revokeBinding(OTHER);
+  await second.control.revokeBinding(OTHER);
   await t.throwsAsync(() => second.client.fetch(OTHER_URL), {
     message: /Policy refuses|not in the allowed-origin/,
   });

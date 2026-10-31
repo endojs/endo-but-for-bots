@@ -50,3 +50,12 @@ export type Transport = (
   url: string,
   options: Omit<FetchRequestOptions, 'cancelled'> & { signal?: AbortSignal },
 ) => Promise<TransportResponse>;
+
+export type Timer = {
+  delay: (
+    milliseconds: number,
+    cancelled?: PromiseLike<never>,
+  ) => Promise<void>;
+  now: () => Promise<number>;
+  help: () => string;
+};

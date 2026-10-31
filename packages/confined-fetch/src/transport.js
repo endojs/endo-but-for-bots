@@ -5,15 +5,12 @@
  * into the local `FetchLike` transport `makeHttpClientAndControl` consumes.
  * This is the confined plugin's only route to the network.
  *
- * `AbortSignal` cannot cross a vat boundary, so the adapter forwards it as the
- * base's `cancelled` token and also races it locally, so a timeout or a
- * revocation does not wait on the remote request. The token is cancelled when
- * the body ends too, so the base can release its abort signal.
+ * The promise-based cancellation token crosses the vat boundary unchanged.
+ * The adapter also races it locally, so a timeout or revocation does not wait
+ * on a remote request that has not yet observed cancellation.
  */
 
 import { E } from '@endo/eventual-send';
-import { makeCancelKit } from '@endo/cancel';
-import { fromAbortSignal } from '@endo/cancel/from-abort';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { thawedBytes } from '@endo/immutable-arraybuffer';
 
@@ -33,35 +30,27 @@ export const makeTransportFromBase = base => {
    */
   const transport = async (url, options) => {
     const {
-      signal,
+      cancelled,
       body: requestBody,
       ...requestOptions
     } = options || {
       redirect: 'manual',
     };
-    const parent = signal === undefined ? undefined : fromAbortSignal(signal);
-    const { cancelled, cancel } = makeCancelKit(
-      parent?.cancelled,
-      parent?.isCancelled,
+    const response = E(base).fetch(
+      url,
+      harden({
+        ...requestOptions,
+        ...(requestBody === undefined
+          ? {}
+          : { body: /** @type {string} */ (requestBody) }),
+        ...(cancelled === undefined ? {} : { cancelled }),
+      }),
     );
-    const release = () => cancel(Error('request settled'));
-
-    const { body, ...summary } = await Promise.race([
-      E(base).fetch(
-        url,
-        harden({
-          ...requestOptions,
-          ...(requestBody === undefined
-            ? {}
-            : { body: /** @type {string} */ (requestBody) }),
-          cancelled,
-        }),
-      ),
-      cancelled,
-    ]);
+    const { body, ...summary } = await (cancelled === undefined
+      ? response
+      : Promise.race([response, cancelled]));
 
     if (body === null) {
-      release();
       return { ...summary, body: null };
     }
     // `iterateReader` consumes the byte stream a `bytesReaderFromIterator` serves.
@@ -72,25 +61,16 @@ export const makeTransportFromBase = base => {
         getReader: () => ({
           read: async () => {
             await null;
-            try {
-              const result = await iterator.next();
-              if (result.done) {
-                release();
-                return result;
-              }
-              // A passable byte array may sit over an emulated immutable
-              // buffer that typed-array reads cannot see through.
-              return {
-                done: false,
-                value: thawedBytes(/** @type {Uint8Array} */ (result.value)),
-              };
-            } catch (error) {
-              release();
-              throw error;
-            }
+            const result = await iterator.next();
+            if (result.done) return result;
+            // A passable byte array may sit over an emulated immutable
+            // buffer that typed-array reads cannot see through.
+            return {
+              done: false,
+              value: thawedBytes(/** @type {Uint8Array} */ (result.value)),
+            };
           },
           cancel: async () => {
-            release();
             await iterator.return(undefined);
           },
         }),
