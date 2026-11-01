@@ -2283,6 +2283,9 @@ impl Interp {
             | NativeMethod::TypedArrayFilter
             | NativeMethod::TypedArraySort
             | NativeMethod::TypedArrayToLocaleString
+            | NativeMethod::TypedArrayToReversed
+            | NativeMethod::TypedArrayToSorted
+            | NativeMethod::TypedArrayWith
             | NativeMethod::TypedArrayLengthGetter
             | NativeMethod::TypedArrayByteLengthGetter
             | NativeMethod::TypedArrayByteOffsetGetter
@@ -3944,6 +3947,11 @@ impl Interp {
                 self.typed_array_map_filter(m, this, base, code)?
             }
             NativeMethod::TypedArraySort => self.typed_array_sort(this, base, argc, code)?,
+            NativeMethod::TypedArrayToReversed
+            | NativeMethod::TypedArrayToSorted
+            | NativeMethod::TypedArrayWith => {
+                self.typed_array_change_by_copy(m, this, base, argc, code)?
+            }
             NativeMethod::TypedArrayToLocaleString => {
                 self.typed_array_to_locale_string(this, base, argc, code)?
             }
