@@ -1148,7 +1148,15 @@ impl Interp {
         kind: ReactionKind,
     ) -> Result<(), Step> {
         if let Payload::Reference(r) = value.value {
-            if self.promises.contains_key(&r) {
+            let fast = if self.promises.contains_key(&r) {
+                match self.async_generator_await_route(code, r, value, kind)? {
+                    Some(fast) => fast,
+                    None => return Ok(()),
+                }
+            } else {
+                false
+            };
+            if fast {
                 // XS's fast path is `mxGetID(_constructor)` + `fxIsSameValue` +
                 // `fxPromiseThen` (null capability, 5 slots) — no capability, no
                 // resolve call. It is *cheaper* than the general path: registering
@@ -1166,6 +1174,73 @@ impl Interp {
         let (derived, resolve, _reject) = self.new_promise_capability();
         self.promise_then_native(derived, kind);
         self.settle_via_function(code, resolve, value)
+    }
+
+    /// `PromiseResolve(%Promise%, value)`'s `Get(value, "constructor")` for an
+    /// async generator's awaits (XS's `fx_Promise_resolveAux` under
+    /// `fxAsyncGeneratorStep`). A native promise that still inherits the
+    /// untouched `%Promise.prototype%.constructor` and has no own
+    /// `constructor` takes the calibrated fast path with no observable read.
+    /// Otherwise the read is real: a getter runs, and a constructor other
+    /// than `%Promise%` sends `value` down the general path. A throw from the
+    /// read reaches the generator as XS's `mxCatch` delivers it, through a
+    /// fresh `%Promise%` capability rejected with the exception that carries
+    /// the same reaction: a `return` request rejects, and an `await` (or the
+    /// `await` a `return` at a `yield` performs) throws into the body.
+    /// Other await kinds keep the fast path unconditionally. Returns whether
+    /// the fast path applies, or `None` once the rejection is scheduled.
+    fn async_generator_await_route(
+        &mut self,
+        code: &[u8],
+        promise: crate::value::SlotIndex,
+        value: Slot,
+        kind: ReactionKind,
+    ) -> Result<Option<bool>, Step> {
+        if !matches!(
+            kind,
+            ReactionKind::AsyncGeneratorAwait(_)
+                | ReactionKind::AsyncGeneratorYield(_)
+                | ReactionKind::AsyncGeneratorReturn(_)
+        ) {
+            return Ok(Some(true));
+        }
+        let Some(intrinsic) = self.intrinsics.get("Promise").copied() else {
+            return Ok(Some(true));
+        };
+        // A program that never names `constructor` has no key for it, and
+        // a `%Promise.prototype%` linked without the member answers the read
+        // the way the unlinked intrinsic would; neither can observe it.
+        let Some(&constructor_id) = self
+            .symbol_ids
+            .get(crate::interp::SymbolName::from("constructor"))
+        else {
+            return Ok(Some(true));
+        };
+        let proto = self.instance_prototype(promise);
+        let inherited_default = self.find_property(promise, constructor_id).is_none()
+            && proto == self.promise_proto
+            && self
+                .find_property(proto, constructor_id)
+                .map(|slot| self.slots.get(slot))
+                .is_none_or(|slot| {
+                    slot.kind == Kind::Reference
+                        && matches!(slot.value, Payload::Reference(c) if c == intrinsic)
+                });
+        if inherited_default {
+            return Ok(Some(true));
+        }
+        match self.native_try(|machine| machine.mop_get(code, promise, constructor_id, value))? {
+            Ok(observed) => Ok(Some(self.same_value(
+                observed,
+                Slot::of(Kind::Reference, Payload::Reference(intrinsic)),
+            ))),
+            Err(reason) => {
+                let (derived, _resolve, reject) = self.new_promise_capability();
+                self.promise_then_native(derived, kind);
+                self.reject_via_function(reject, reason)?;
+                Ok(None)
+            }
+        }
     }
 }
 
