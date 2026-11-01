@@ -84,6 +84,19 @@ impl Interp {
         ) {
             let resource = arg(0);
             if matches!(resource.kind, Kind::Null | Kind::Undefined) {
+                // AddDisposableResource: an async-dispose hint still records
+                // a method-less resource so DisposeResources awaits once.
+                if is_async {
+                    let data = self
+                        .disposable_stacks
+                        .get_mut(&inst)
+                        .expect("brand checked");
+                    data.records.push(DisposalRecord {
+                        resource: Slot::undefined(),
+                        method: Slot::undefined(),
+                        pass_resource: false,
+                    });
+                }
                 return Ok(resource);
             }
             let resource_object = self.array_to_object(resource)?;
@@ -225,7 +238,20 @@ impl Interp {
         data.disposed = true;
         let mut records = std::mem::take(&mut data.records);
         let mut pending_error: Option<Slot> = None;
+        // DisposeResources' needsAwait / hasAwaited: a method-less (null or
+        // undefined) async resource owes one Await(undefined) unless a later
+        // disposer call already awaited.
+        let mut needs_await = false;
+        let mut has_awaited = false;
         while let Some(record) = records.pop() {
+            if matches!(record.method.kind, Kind::Undefined) {
+                needs_await = true;
+                continue;
+            }
+            if is_async {
+                needs_await = false;
+                has_awaited = true;
+            }
             let args = if record.pass_resource {
                 vec![record.resource]
             } else {
@@ -253,12 +279,12 @@ impl Interp {
         }
         if is_async {
             let promise = self.new_promise_instance();
-            self.settle_promise(
-                code,
-                promise,
-                pending_error.unwrap_or_else(Slot::undefined),
-                pending_error.is_some(),
-            )?;
+            let value = pending_error.unwrap_or_else(Slot::undefined);
+            if needs_await && !has_awaited {
+                self.settle_promise_after_await(promise, value, pending_error.is_some())?;
+            } else {
+                self.settle_promise(code, promise, value, pending_error.is_some())?;
+            }
             Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
         } else if let Some(error) = pending_error {
             Err(self.raise_js(error))

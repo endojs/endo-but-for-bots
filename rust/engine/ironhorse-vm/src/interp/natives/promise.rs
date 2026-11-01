@@ -749,6 +749,34 @@ impl Interp {
         self.finish_promise_settlement(promise, value, reject)
     }
 
+    /// Settle `promise` with `value` one job turn later, as an
+    /// `Await(undefined)` ahead of the completion would: settle a fresh
+    /// intrinsic promise and forward it through a pass-through native
+    /// reaction, so no user-visible `.then` lookup runs. Used by
+    /// `AsyncDisposableStack.prototype.disposeAsync`'s DisposeResources step
+    /// for a `null`/`undefined` resource (`needsAwait` without `hasAwaited`).
+    pub(in crate::interp) fn settle_promise_after_await(
+        &mut self,
+        promise: crate::value::SlotIndex,
+        value: Slot,
+        reject: bool,
+    ) -> Result<(), Step> {
+        let awaited = self.new_promise_instance();
+        let (resolve, reject_fn) = self.make_resolving_functions(promise);
+        // Register before settling so a rejection is already handled.
+        self.register_native_reaction(
+            awaited,
+            PromiseReaction {
+                on_fulfilled: Slot::undefined(),
+                on_rejected: Slot::undefined(),
+                resolve,
+                reject: reject_fn,
+                kind: ReactionKind::User,
+            },
+        );
+        self.finish_promise_settlement(awaited, value, reject)
+    }
+
     /// Commit a promise's final state and enqueue its pending reactions after
     /// every resolving-algorithm branch that can inspect a fulfillment value
     /// has completed. A direct rejection enters here without a bytecode buffer
