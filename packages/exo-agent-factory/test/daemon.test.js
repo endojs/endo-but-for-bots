@@ -3,8 +3,9 @@
 // The coordinator against a real Endo daemon, for the recovery-matrix rows
 // that only a daemon restart can exercise: revival through the pinned
 // coordinator with no holder call and no mail, a child that clears its own
-// `@pins`, durable facets, a revoked facet after restart, and the turn-ledger
-// crash cut inside `infer` after a tool effect.
+// `@pins`, durable facets, a revoked facet after restart, removal and
+// revocation interrupted by a crash, and the turn-ledger crash cut inside
+// `infer` after a tool effect.
 //
 // Daemon tests are serial because each one forks a full daemon process.
 
@@ -426,5 +427,125 @@ test.serial(
     );
     t.deepEqual(effectsIn(effectsPath), ['act', 'act', 'again']);
     t.deepEqual(await repliesFrom(host3, 'act'), ['done: act']);
+  },
+);
+
+// A crash between two journal appends leaves the private directory exactly as
+// if the record were appended and the daemon then stopped. Write that record
+// at the namespace's next sequence number, then restart: the revived
+// coordinator must converge from it with no holder call.
+const crashAfterAppending = async (host, config, nsId, entry) => {
+  await null;
+  const sequences = (await E(host).list('agent-factory'))
+    .map(name => /^j(\d+)\.(\d+)$/.exec(name))
+    .filter(match => match && Number(match[1]) === nsId)
+    .map(match => Number(match[2]));
+  const next = Math.max(-1, ...sequences) + 1;
+  await E(host).storeValue(harden(entry), [
+    'agent-factory',
+    `j${nsId}.${next}`,
+  ]);
+  await restart(config);
+};
+
+const namespaceOf = operationId => Number(operationId.split('.')[0]);
+
+test.serial(
+  'a crash after Removing is journaled converges to Removed, and the revived lifecycle is inactive',
+  async t => {
+    const { config, host, forUi } = await prepare(t);
+    const { summary, handle } = await E(forUi).create('helper');
+    await E(host).storeValue(handle, 'helper');
+    t.is(await roundTrip(host, 'helper', 'one'), 'echo: one');
+    const { operationId } = summary;
+
+    await crashAfterAppending(host, config, namespaceOf(operationId), {
+      type: 'Removing',
+      op: operationId,
+    });
+    const host2 = await connect(t, config);
+    const forUi2 = await E(host2).lookup('child-agents');
+
+    // Reconciliation finishes the removal by itself: the name stays
+    // reserved until then and is released after, with every piece gone.
+    await eventually(async () => {
+      const children = await E(forUi2).list();
+      return children.length === 0 ? true : undefined;
+    }, 'the interrupted removal to converge');
+    t.deepEqual(await piecesOf(host2, '.guest'), []);
+    t.deepEqual(await piecesOf(host2, '.driver'), []);
+    t.deepEqual(await piecesOf(host2, '.responder'), []);
+    await t.throwsAsync(E(forUi2).lookup('helper'));
+
+    // The lifecycle a stale formula would re-derive from the live
+    // coordinator is inactive, so a runner revived from it never opens its
+    // follower.
+    const coordinator = await E(host2).lookup(['agent-factory', 'coordinator']);
+    const lifecycle = await E(coordinator).lifecycleFor(operationId);
+    t.false(await E(lifecycle).isActive());
+    t.deepEqual(await E(coordinator).faults(), {});
+
+    // The name and its quota slot are free again.
+    const { handle: again } = await E(forUi2).create('helper');
+    await E(host2).storeValue(again, 'helper-again');
+    t.is(await roundTrip(host2, 'helper-again', 'two'), 'echo: two');
+  },
+);
+
+test.serial(
+  'a crash after Revoking is journaled converges to Revoked across nested namespaces and releases quota',
+  async t => {
+    const { config, host, forUi } = await prepare(t);
+    const derived = await E(forUi).attenuate('sub', { maxChildren: 3 });
+    await E(host).storeValue(derived, 'sub-agents');
+    const deeper = await E(derived).attenuate('deeper', { maxChildren: 1 });
+    await E(host).storeValue(deeper, 'deeper-agents');
+    const { summary: subChild } = await E(derived).create('a');
+    await E(derived).create('b');
+    const { summary: deeperChild } = await E(deeper).create('c');
+    t.is((await piecesOf(host, '.guest')).length, 3);
+    // The root's quota of four already counts all three descendants.
+    await E(forUi).create('top');
+    await t.throwsAsync(E(forUi).create('over'), { message: /quota/ });
+
+    await crashAfterAppending(host, config, namespaceOf(subChild.operationId), {
+      type: 'Revoking',
+    });
+    const host2 = await connect(t, config);
+    const forUi2 = await E(host2).lookup('child-agents');
+
+    await eventually(async () => {
+      const derivedList = await E(forUi2).listDerived();
+      return derivedList.length === 0 ? true : undefined;
+    }, 'the interrupted revocation to converge');
+    const derived2 = await E(host2).lookup('sub-agents');
+    const deeper2 = await E(host2).lookup('deeper-agents');
+    for (const facet of [derived2, deeper2]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(E(facet).list(), { message: /revoked/ });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(E(facet).create('x'), { message: /revoked/ });
+    }
+
+    // Only the root's own child survives, and every descendant's lifecycle
+    // is inactive.
+    t.is((await piecesOf(host2, '.guest')).length, 1);
+    t.deepEqual(
+      (await E(forUi2).list()).map(({ name }) => name),
+      ['top'],
+    );
+    const coordinator = await E(host2).lookup(['agent-factory', 'coordinator']);
+    for (const operationId of [subChild.operationId, deeperChild.operationId]) {
+      // eslint-disable-next-line no-await-in-loop
+      const lifecycle = await E(coordinator).lifecycleFor(operationId);
+      // eslint-disable-next-line no-await-in-loop
+      t.false(await E(lifecycle).isActive());
+    }
+
+    // Every ancestor quota slot is released.
+    await E(forUi2).create('one');
+    await E(forUi2).create('two');
+    await E(forUi2).create('three');
+    await t.throwsAsync(E(forUi2).create('four'), { message: /quota/ });
   },
 );
