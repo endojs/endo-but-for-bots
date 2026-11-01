@@ -1149,7 +1149,7 @@ impl Interp {
     ) -> Result<(), Step> {
         if let Payload::Reference(r) = value.value {
             let fast = if self.promises.contains_key(&r) {
-                match self.async_generator_await_route(code, r, value, kind)? {
+                match self.await_promise_resolve_route(code, r, value, kind)? {
                     Some(fast) => fast,
                     None => return Ok(()),
                 }
@@ -1176,9 +1176,10 @@ impl Interp {
         self.settle_via_function(code, resolve, value)
     }
 
-    /// `PromiseResolve(%Promise%, value)`'s `Get(value, "constructor")` for an
-    /// async generator's awaits (XS's `fx_Promise_resolveAux` under
-    /// `fxAsyncGeneratorStep`). A native promise that still inherits the
+    /// `PromiseResolve(%Promise%, value)`'s `Get(value, "constructor")` for
+    /// every native await: an async function's `await` and `for await` step
+    /// (XS's `fxStepAsync`) as well as an async generator's awaits (XS's
+    /// `fx_Promise_resolveAux` under `fxAsyncGeneratorStep`). A native promise that still inherits the
     /// untouched `%Promise.prototype%.constructor` and has no own
     /// `constructor` takes the calibrated fast path with no observable read.
     /// Otherwise the read is real: a getter runs, and a constructor other
@@ -1186,24 +1187,15 @@ impl Interp {
     /// read reaches the generator as XS's `mxCatch` delivers it, through a
     /// fresh `%Promise%` capability rejected with the exception that carries
     /// the same reaction: a `return` request rejects, and an `await` (or the
-    /// `await` a `return` at a `yield` performs) throws into the body.
-    /// Other await kinds keep the fast path unconditionally. Returns whether
+    /// `await` a `return` at a `yield` performs) throws into the body. Returns whether
     /// the fast path applies, or `None` once the rejection is scheduled.
-    fn async_generator_await_route(
+    fn await_promise_resolve_route(
         &mut self,
         code: &[u8],
         promise: crate::value::SlotIndex,
         value: Slot,
         kind: ReactionKind,
     ) -> Result<Option<bool>, Step> {
-        if !matches!(
-            kind,
-            ReactionKind::AsyncGeneratorAwait(_)
-                | ReactionKind::AsyncGeneratorYield(_)
-                | ReactionKind::AsyncGeneratorReturn(_)
-        ) {
-            return Ok(Some(true));
-        }
         let Some(intrinsic) = self.intrinsics.get("Promise").copied() else {
             return Ok(Some(true));
         };
