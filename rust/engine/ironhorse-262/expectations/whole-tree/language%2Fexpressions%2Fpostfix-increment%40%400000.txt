@@ -52,7 +52,7 @@ language/expressions/postfix-increment/line-terminator-line-separator.js strict 
 language/expressions/postfix-increment/line-terminator-paragraph-separator.js sloppy pass
 language/expressions/postfix-increment/line-terminator-paragraph-separator.js strict pass
 language/expressions/postfix-increment/operator-x-postfix-increment-calls-putvalue-lhs-newvalue--1.js sloppy pass
-language/expressions/postfix-increment/operator-x-postfix-increment-calls-putvalue-lhs-newvalue-.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/postfix-increment/operator-x-postfix-increment-calls-putvalue-lhs-newvalue-.js sloppy pass
 language/expressions/postfix-increment/target-cover-id.js sloppy pass
 language/expressions/postfix-increment/target-cover-id.js strict pass
 language/expressions/postfix-increment/target-cover-newtarget.js sloppy pass
