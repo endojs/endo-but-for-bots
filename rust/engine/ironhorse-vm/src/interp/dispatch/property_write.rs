@@ -167,6 +167,19 @@ impl Interp {
                     && self.scalar_key_text(id).as_deref() == Some("length")
                 {
                     false
+                } else if self
+                    .wrapper_data
+                    .get(&inst)
+                    .is_some_and(|value| value.kind == Kind::String)
+                    && self.find_property(inst, id).is_none()
+                    && self.exotic_own_descriptor(inst, id).is_some()
+                {
+                    // A String wrapper's `length` (and its units) are
+                    // non-configurable String-exotic properties (ECMA-262
+                    // 10.4.3), so `delete s.length` refuses, as XS's
+                    // `fxStringDeleteProperty` and this engine's own
+                    // `mop_delete` (`Reflect.deleteProperty`) already do.
+                    false
                 } else {
                     self.delete_own_property(inst, id)
                 };
@@ -192,12 +205,24 @@ impl Interp {
             _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
                 return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)))
             }
-            // ToObject succeeds for every other primitive. Such a
-            // temporary wrapper has no configurable own property
-            // with this identifier, so deletion succeeds.
+            // ToObject succeeds for every other primitive. A string's
+            // temporary wrapper owns a non-configurable `length` and
+            // units (`string_owns_key`), which refuse; no other
+            // primitive's wrapper has an own property to delete.
             _ => {
+                let deleted = !self.string_owns_key(obj, id);
+                if !deleted && self.strict {
+                    let error = self.internal_error(
+                        "TypeError",
+                        format!(
+                            "delete {}: no permission (strict mode)",
+                            self.property_debug_name(id)
+                        ),
+                    );
+                    return Err(self.raise_js(error));
+                }
                 if let Some(s) = self.stack.last_mut() {
-                    *s = Slot::boolean(true);
+                    *s = Slot::boolean(deleted);
                 }
             }
         }

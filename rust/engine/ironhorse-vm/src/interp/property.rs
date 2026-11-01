@@ -629,7 +629,10 @@ impl Interp {
                 }
                 self.meter.tick_builtin();
             } else {
-                let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                let accepted = self.ordinary_set(code, inst, id, value, obj)?;
+                if !accepted && self.strict {
+                    return Err(self.failed_set_error(inst, id, "set"));
+                }
             }
             return Ok(());
         }
@@ -798,7 +801,14 @@ impl Interp {
                 }
                 self.meter.tick_builtin();
             } else {
-                let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                // PutValue step 3.e (ECMA-262 6.2.5.6): a strict `o[k] = v`
+                // whose [[Set]] returns false throws, exactly as the named
+                // `o.k = v` arm of `dispatch_set_property` does and as XS's
+                // `fxSetAt` / `mxBehaviorSetProperty` failure does.
+                let accepted = self.ordinary_set(code, inst, id, value, obj)?;
+                if !accepted && self.strict {
+                    return Err(self.failed_set_error(inst, id, "set"));
+                }
             }
             Ok(())
         }
