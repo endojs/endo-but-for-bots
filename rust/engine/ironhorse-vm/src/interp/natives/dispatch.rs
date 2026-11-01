@@ -1503,6 +1503,12 @@ impl Interp {
                         // coercion the spec allows (`SymbolDescriptiveString`):
                         // `Symbol(<description>)`. (Implicit coercion still
                         // throws — that path stays in [`Self::run`].)
+                        // `new String(sym)` runs ToString, which throws.
+                        Kind::Symbol if has_target => {
+                            return Err(self.catchable_type_error_msg(
+                                "cannot coerce symbol to string".into(),
+                            ));
+                        }
                         Kind::Symbol => {
                             let units = self.symbol_descriptive_units(a);
                             let off = self.chunks.alloc(&units_to_be16(&units));

@@ -635,7 +635,16 @@ impl Interp {
                 if !full && self.find_property(proto, mid).is_some() {
                     continue;
                 }
-                let flag = if mname == "prototype" && proto == self.generator_function_proto {
+                // `%GeneratorFunction.prototype%` and
+                // `%AsyncGeneratorFunction.prototype%` carry their
+                // `prototype` and `constructor` links non-writable,
+                // non-enumerable, and configurable (ES2024 27.3.3.1-2,
+                // 27.4.3.1-2).
+                let generator_function_proto = proto == self.generator_function_proto
+                    || proto == self.async_generator_function_proto;
+                let flag = if generator_function_proto
+                    && (mname == "prototype" || mname == "constructor")
+                {
                     XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG
                 } else if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
