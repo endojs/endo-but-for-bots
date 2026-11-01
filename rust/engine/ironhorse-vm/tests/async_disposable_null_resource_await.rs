@@ -72,3 +72,17 @@ fn moved_stack_keeps_the_null_record() {
         "job 1,dispose:undefined,job 2"
     );
 }
+
+#[test]
+fn null_record_beside_a_throwing_disposer_still_rejects() {
+    assert_eq!(
+        run("var trace = [];
+             var stack = new AsyncDisposableStack();
+             stack.defer(function () { throw 'boom'; });
+             stack.use(null);
+             stack.disposeAsync().then(
+               function () { trace.push('fulfilled'); },
+               function (e) { trace.push('rejected:' + e); });"),
+        "rejected:boom"
+    );
+}
