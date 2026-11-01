@@ -264,6 +264,22 @@ enum Kind {
 /// The XS `0x7FFFFFFF` open-max sentinel (`*`, `+`, `{n,}`).
 const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 
+/// One bound of a `{m,n}` quantifier: the value the program uses and, for a
+/// written bound, the byte range of its digits in the pattern.
+#[derive(Clone, Copy)]
+struct QuantifierDigits {
+    clamped: i32,
+    digits: Option<(usize, usize)>,
+}
+
+impl QuantifierDigits {
+    /// The open maximum of `{n,}`.
+    const UNBOUNDED: Self = Self {
+        clamped: MAX_QUANTIFIER,
+        digits: None,
+    };
+}
+
 /// The deepest nesting of groups (`(`, `(?:`, `(?=`, `(?<name>`, …) and
 /// `v`-mode nested classes (`[[…]]`) a pattern may have.
 ///
@@ -2144,10 +2160,10 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             }
             c if c == b'{' as i64 => {
                 if let Some((min, max)) = self.quantifier_parse_brace()? {
-                    if min > max {
+                    if self.digits_exceed(min, max) {
                         return Err(self.error("invalid quantifier"));
                     }
-                    (min, max)
+                    (min.clamped, max.clamped)
                 } else {
                     return Ok(term);
                 }
@@ -2175,7 +2191,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
     }
 
     /// `fxQuantifierParseBrace`: `{n}` / `{n,}` / `{n,m}` with backtrack.
-    fn quantifier_parse_brace(&mut self) -> PResult<Option<(i32, i32)>> {
+    fn quantifier_parse_brace(&mut self) -> PResult<Option<(QuantifierDigits, QuantifierDigits)>> {
         let saved_offset = self.offset;
         self.next()?;
         let min = match self.quantifier_parse_digits()? {
@@ -2186,7 +2202,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         if self.character == b',' as i64 {
             self.next()?;
             if self.character == b'}' as i64 {
-                max = MAX_QUANTIFIER;
+                max = QuantifierDigits::UNBOUNDED;
             } else {
                 match self.quantifier_parse_digits()? {
                     Some(v) => max = v,
@@ -2203,26 +2219,49 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         Ok(Some((min, max)))
     }
 
-    fn brace_backtrack(&mut self, saved_offset: usize) -> Option<(i32, i32)> {
+    fn brace_backtrack<T>(&mut self, saved_offset: usize) -> Option<T> {
         self.character = b'{' as i64;
         self.offset = saved_offset;
         None
     }
 
-    fn quantifier_parse_digits(&mut self) -> PResult<Option<i32>> {
-        let mut value: u32 = 0;
-        if self.decimal(&mut value) {
-            self.next()?;
-            while self.decimal(&mut value) {
-                self.next()?;
-            }
-        } else {
+    /// A `DecimalDigits` bound, clamped to [`MAX_QUANTIFIER`] as XS's
+    /// `fxPatternParserDecimal` saturates. ECMA-262 accepts any bound, and
+    /// no subject can hold 2^31-1 code units, so the clamp is unobservable.
+    fn quantifier_parse_digits(&mut self) -> PResult<Option<QuantifierDigits>> {
+        if !(b'0' as i64..=b'9' as i64).contains(&self.character) {
             return Ok(None);
         }
-        if value > 0x7FFF_FFFF {
-            return Err(CompileError::ResourceLimit);
+        // The current digit is ASCII, so it is the one byte before `offset`.
+        let start = self.offset - 1;
+        let mut value: u32 = 0;
+        let mut length = 0;
+        while self.decimal(&mut value) {
+            length += 1;
+            self.next()?;
         }
-        Ok(Some(value as i32))
+        Ok(Some(QuantifierDigits {
+            clamped: value.min(MAX_QUANTIFIER as u32) as i32,
+            digits: Some((start, start + length)),
+        }))
+    }
+
+    /// The early error of ECMA-262 §22.2.1.1: is `min` greater than `max`?
+    /// Compared on the unclamped digits, since two bounds above
+    /// [`MAX_QUANTIFIER`] clamp to the same value.
+    fn digits_exceed(&self, min: QuantifierDigits, max: QuantifierDigits) -> bool {
+        let significant = |range: (usize, usize)| {
+            let digits = &self.pattern[range.0..range.1];
+            let zeros = digits.iter().take_while(|&&d| d == b'0').count();
+            &digits[zeros..]
+        };
+        match (min.digits, max.digits) {
+            (Some(min), Some(max)) => {
+                let (min, max) = (significant(min), significant(max));
+                (min.len(), min) > (max.len(), max)
+            }
+            _ => false,
+        }
     }
 
     // ---- the grammar (fxDisjunctionParse etc.) ----

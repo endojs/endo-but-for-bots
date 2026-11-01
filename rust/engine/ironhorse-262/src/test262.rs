@@ -28,6 +28,7 @@
 //! land the built-ins, with **zero divergence** on what it does reach.
 
 use crate::{dual_run, Agreement, DualRun};
+use ironhorse_vm::halt_labels::is_regexp_limit_error;
 use ironhorse_vm::Halt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -175,6 +176,9 @@ pub(crate) fn classify_run(r: DualRun) -> Class {
         Agreement::BothAbort => {
             if r.observables_agree() {
                 Class::Covered
+            } else if matches!(&r.ironhorse_halt, Halt::Throw { rendered, .. } if is_regexp_limit_error(rendered))
+            {
+                Class::Skipped("ironhorse-aborted-limit".into())
             } else {
                 Class::Skipped("abort-value-differs".into())
             }
@@ -189,6 +193,9 @@ pub(crate) fn classify_run(r: DualRun) -> Class {
         // landed, which names itself; only the engine's own limits (stack
         // geometry, meter, step ceiling) are the other honest skip.
         Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
+            Halt::Throw {
+                rendered: thrown, ..
+            } if is_regexp_limit_error(thrown) => Class::Skipped("ironhorse-aborted-limit".into()),
             Halt::Throw {
                 rendered: thrown, ..
             } => match crate::xst::classify_missing_global(&r.source, thrown) {

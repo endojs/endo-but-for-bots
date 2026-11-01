@@ -23,7 +23,9 @@ use crate::expectations::{Mode, Outcome};
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
 use crate::{Agreement, AsyncDualRun, DualRun, IronhorseCompile};
-use ironhorse_vm::halt_labels::{is_not_implemented_label, is_refused_label};
+use ironhorse_vm::halt_labels::{
+    is_not_implemented_label, is_refused_label, is_regexp_limit_error,
+};
 use ironhorse_vm::{Halt, RunOutcome};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
@@ -697,6 +699,13 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         }
         Agreement::BothAbort => {
             match &run.ironhorse_halt {
+                // The RegExp storage-limit `RangeError` replaced a `HeapExhausted`
+                // halt: still the engine's limit, not a wrong answer.
+                Halt::Throw {
+                    rendered: thrown, ..
+                } if is_regexp_limit_error(thrown) => {
+                    Verdict::RunSkip("ironhorse-aborted-limit".into())
+                }
                 Halt::Throw {
                     rendered: thrown, ..
                 } => {
@@ -826,6 +835,13 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         // ran to completion is the dominant wrong-answer shape of a
         // conformance run, not a limitation.
         Agreement::OracleOnlyComplete => match &run.ironhorse_halt {
+            // The RegExp storage-limit `RangeError` replaced a `HeapExhausted`
+            // halt: still the engine's limit, not a wrong answer.
+            Halt::Throw {
+                rendered: thrown, ..
+            } if is_regexp_limit_error(thrown) => {
+                Verdict::RunSkip("ironhorse-aborted-limit".into())
+            }
             Halt::Throw {
                 rendered: thrown, ..
             } if constructor_name(thrown) == "Test262Error" => {
@@ -4921,6 +4937,29 @@ mod tests {
             found, pinned,
             "harness-constructed declined labels drifted from the allowlist"
         );
+    }
+
+    #[test]
+    fn a_regexp_limit_range_error_stays_the_engine_limit_skip() {
+        let rendered = format!(
+            "RangeError: {}",
+            ironhorse_vm::halt_labels::REGEXP_MATCH_LIMIT_MESSAGE
+        );
+        let oracle_only = synthetic_oracle_only(Halt::synthetic_throw(&rendered));
+        let mut both_abort = synthetic_abort(Halt::synthetic_throw(&rendered), &rendered);
+        both_abort.oracle_error = "Error: memory full".into();
+        for run in [oracle_only, both_abort] {
+            assert_eq!(
+                evaluate_positive(&Config::default(), &run, false),
+                Verdict::RunSkip("ironhorse-aborted-limit".into())
+            );
+        }
+        // Any other RangeError where the oracle completed is a wrong answer.
+        let run = synthetic_oracle_only(Halt::synthetic_throw("RangeError: invalid array length"));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
     }
 
     #[test]
