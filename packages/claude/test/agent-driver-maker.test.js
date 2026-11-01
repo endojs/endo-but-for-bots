@@ -63,7 +63,7 @@ test('Claude CLI maker composes the generic inference driver', async t => {
     specifier: 'file:///claude-cli-driver.js',
     env: { MODEL: 'claude-test' },
   });
-  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference']);
+  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference-source']);
 });
 
 test('Claude SDK maker defaults to the generic inference driver module', async t => {
@@ -82,5 +82,5 @@ test('Claude SDK maker defaults to the generic inference driver module', async t
     /exo-agent-factory\/src\/inference-driver\.js$/,
   );
   t.false('env' in descriptor);
-  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference']);
+  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference-source']);
 });

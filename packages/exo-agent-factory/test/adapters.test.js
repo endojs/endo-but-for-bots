@@ -77,8 +77,10 @@ test('inference adapter derives the child projection for every turn and hides cr
     }),
   );
   t.deepEqual(descriptor, { specifier: 'file:///driver.js' });
-  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference']);
+  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference-source']);
+  t.is(stored.get('inference-source'), maker);
   t.false([...stored.values()].includes(credentialSource));
+  const inference = E(maker).childInference(agent);
 
   const request = harden({
     prompt: 'hello',
@@ -89,8 +91,8 @@ test('inference adapter derives the child projection for every turn and hides cr
     }),
     cancelled: neverCancelled,
   });
-  await E(stored.get('inference')).infer(request);
-  await E(stored.get('inference')).infer(request);
+  await E(inference).infer(request);
+  await E(inference).infer(request);
   t.is(acquisitions, 2);
   t.deepEqual(releases, [1, 2]);
   t.deepEqual(

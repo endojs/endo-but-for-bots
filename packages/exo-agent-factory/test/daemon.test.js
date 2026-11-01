@@ -277,3 +277,87 @@ test.serial(
     t.is((await piecesOf(host2, '.guest')).length, 1);
   },
 );
+
+const inferenceMakerSpecifier = new URL(
+  './_daemon-inference-maker.js',
+  import.meta.url,
+).href;
+
+// The parent's view of the replies its child published, by answered message.
+const repliesFrom = async (host, sentText) => {
+  const messages = await E(host).listMessages();
+  const asked = messages.find(
+    message =>
+      message.type === 'package' && message.strings.join('') === sentText,
+  );
+  if (!asked) return [];
+  return messages
+    .filter(
+      message =>
+        message.type === 'package' && message.replyTo === asked.messageId,
+    )
+    .map(message => message.strings.join(''));
+};
+
+test.serial(
+  'an inference-backed child journals its turns and does not re-infer after restart',
+  async t => {
+    const { config, host, root } = await prepare(t);
+    await E(host).makeUnconfined(undefined, inferenceMakerSpecifier, {
+      powersName: '@none',
+      resultName: 'inference-maker',
+    });
+    const forInference = await E(root).bind(
+      await E(host).lookup('inference-maker'),
+    );
+    await E(host).storeValue(forInference, 'inference-agents');
+    const { handle } = await E(forInference).create('thinker', {
+      instructions: 'Answer.',
+    });
+    await E(host).storeValue(handle, 'thinker');
+
+    await E(host).send('thinker', ['first'], [], []);
+    const first = await eventually(
+      () => repliesFrom(host, 'first').then(replies => replies[0]),
+      'a reply to the first message',
+    );
+    t.regex(first, /^answer 1 from .* to Answer\.\n\nfirst$/);
+
+    // The runner journals the answered turn in its driver guest.
+    const [driverName] = await piecesOf(host, '.driver');
+    const ledger = (await E(host).list('agent-factory', driverName)).filter(
+      name => name.startsWith('turn-'),
+    );
+    const [resultName] = ledger.filter(name => name.endsWith('-result'));
+    const stem = resultName.slice(0, -'-result'.length);
+    t.deepEqual(
+      ledger.sort(),
+      [
+        `${stem}-published`,
+        `${stem}-result`,
+        `${stem}-started`,
+        'turn-cursor',
+      ].sort(),
+    );
+    const result = await E(host).lookup([
+      'agent-factory',
+      driverName,
+      resultName,
+    ]);
+    t.is(result.type, 'TurnResult');
+    t.is(result.result.text, first);
+
+    await restart(config);
+    const host2 = await connect(t, config);
+    await E(host2).send('thinker', ['second'], [], []);
+    const second = await eventually(
+      () => repliesFrom(host2, 'second').then(replies => replies[0]),
+      'a reply to the second message',
+    );
+    // A fresh backend incarnation answers the new turn as its first call; the
+    // published turn was neither re-inferred nor republished.
+    t.regex(second, /^answer 1 from .* to Answer\.\n\nsecond$/);
+    t.not(second.split(' ')[3], first.split(' ')[3]);
+    t.deepEqual(await repliesFrom(host2, 'first'), [first]);
+  },
+);

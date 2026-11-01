@@ -17,7 +17,7 @@ maker, a credential, the root host, or the coordinator's private directory.
   factory in a deploying host and returns its root facet.
   It creates the dedicated `agent-factory` child host, formulates the
   coordinator with `makeUnconfined('@main', specifier, { powersName:
-  'agent-factory' })`, pins it in the deploying host's `@pins`, and
+'agent-factory' })`, pins it in the deploying host's `@pins`, and
   formulates the root facet as an `evaluate` over the coordinator.
   Every step checks its name first, so re-running it converges.
 - The root facet (`ChildAgentFactory`) offers `bind(maker, policy?)`,
@@ -58,11 +58,17 @@ const { handle } = await E(forUi).create('helper', {
 
 `makeInferenceAgentDriverMaker` closes over an `InferenceBackend` and a
 function that derives a `GuestToolProjection` from the child guest.
-It installs a narrower `ChildInference` capability in the private driver
-guest.
+Its runner gets a narrower `ChildInference` capability, never the backend.
+A daemon can store only values it can name by formula, so the maker stores
+itself, the deployer's durable caplet, in the private driver guest, and each
+runner incarnation asks it for its own child's `ChildInference`.
 Every `infer` call derives a new projection, which pins the tool catalog for
 that turn, while the backend retains its `CredentialSource` and releases each
 grant at its own boundary.
+The runner waits for the coordinator to commit its child before it opens the
+child's mailbox, prefixes the child's instructions to each turn, and journals
+every turn through `makeTurnLedgerDriver` in the driver guest, so a restart
+neither re-infers nor republishes a published turn.
 
 `makeChildAgentSpawner` maps each logical child to a fresh derived namespace.
 The namespace contains one child named `agent` and may receive a recursively
@@ -90,8 +96,8 @@ That operation addresses the original sender and carries the answered
 message's id in the existing wire `replyTo` field, without adding metadata or
 requiring the sender to be named in the child directory.
 If a crash lands after the reply but before `Published`, replay may emit a
-byte-identical duplicate with the same `replyTo`; conversation views collapse
-that pair in the next implementation slice.
+byte-identical duplicate with the same `replyTo`; the Fae and Lal
+conversation views collapse that pair (`reply-collapse.js`).
 
 ## Provider-backed deployment
 
@@ -142,3 +148,6 @@ with crash injection at every effect, and the restart rows of the design's
 recovery matrix are tested against a real daemon.
 The child topology and the `@endo/inference`, Fae, Lal, Claude CLI, and Claude
 Agent SDK maker adapters are present.
+An inference-backed child is tested end to end against a real daemon: it
+answers mail through the factory, journals the turn, and after a restart
+neither re-infers nor republishes it.

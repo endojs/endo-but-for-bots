@@ -395,6 +395,13 @@ passes the child-derived `GuestToolProjection` to `infer`. Credentials are
 acquired and released inside the backend boundary. They are not fields of
 `create`, records in the child directory, or values in an inference request.
 
+The driver guest cannot retain a grant the adapter mints on the fly: daemon
+`storeValue` names every slot of a stored value by formula, and an ephemeral
+exo has none. The adapter therefore stores itself, the deployer's durable
+maker caplet, in the driver guest, and each runner incarnation asks it for its
+own child's grant. That confers nothing `installDriver` does not: either one,
+given a guest, yields a grant scoped to that guest.
+
 ## Durable lifecycle
 
 Provisioning is a recorded state machine, not a sequence remembered only by its
