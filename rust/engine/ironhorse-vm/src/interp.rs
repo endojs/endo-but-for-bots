@@ -476,6 +476,11 @@ pub const XS_DONT_MARSHALL_FLAG: u8 = 64;
 /// `fxNewEnvironmentInstance` stamps it so the instance is never mistaken for an
 /// ordinary object; ironhorse's `with`-environment head carries it for fidelity.
 pub const XS_EXOTIC_FLAG: u8 = 1;
+/// XS instance-slot flag bit (`xsAll.h` `XS_CAN_CALL_FLAG = 2`): the instance
+/// has `[[Call]]`. Ironhorse knows a function by its `functions` entry, so the
+/// bit is stamped only on a proxy whose target is callable, where it outlives
+/// revocation (see `slot_typeof_is_function`).
+pub const XS_CAN_CALL_FLAG: u8 = 2;
 /// XS property-slot flag bit (`xsAll.h` `XS_INTERNAL_FLAG = 1`): an instance's
 /// internal (non-JS-visible) slot. The environment behavior slot carries it.
 pub const XS_INTERNAL_FLAG: u8 = 1;
@@ -3212,11 +3217,8 @@ impl Interp {
         } else if completion.kind == Kind::Symbol {
             Some("TypeError: cannot coerce symbol to string".to_string())
         } else if let Payload::Reference(object) = completion.value {
-            (completion.kind == Kind::Reference
-                && self.instance_prototype(object).is_null()
-                && !self.arrays.contains_key(&object)
-                && self.native_of(object).is_none())
-            .then(|| "TypeError: cannot coerce object to string".to_string())
+            (completion.kind == Kind::Reference && self.completion_coercion_fails(object))
+                .then(|| "TypeError: cannot coerce object to string".to_string())
         } else {
             None
         };
@@ -3729,3 +3731,24 @@ mod string_decode_instrumentation {
 }
 
 mod reused_boot_native_tests;
+
+impl Interp {
+    /// Whether the oracle shim's post-run `String(result)` of the object
+    /// completion `object` throws, decided without running guest code: a bare
+    /// ordinary object with a null prototype has neither `toString` nor
+    /// `valueOf`. A Proxy instance carries no prototype of its own, so it is
+    /// judged by the object its live targets lead to (a trap-less proxy over
+    /// `{}` renders `[object Object]`); a revoked layer makes `[[Get]]` throw.
+    fn completion_coercion_fails(&self, object: crate::value::SlotIndex) -> bool {
+        let mut object = object;
+        while let Some(data) = self.proxies.get(&object) {
+            if data.revoked {
+                return true;
+            }
+            object = data.target;
+        }
+        self.instance_prototype(object).is_null()
+            && !self.arrays.contains_key(&object)
+            && self.native_of(object).is_none()
+    }
+}
