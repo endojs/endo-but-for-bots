@@ -262,12 +262,12 @@ test('each qualified inspect name reaches its own capability', async t => {
     // Partial stand-ins: only the `inspect` method these calls reach.
     remote: /** @type {any} */ (
       makeExo('GitRemote', InspectInterface, {
-        inspect: () => harden({ from: 'remote' }),
+        inspect: async () => harden({ from: 'remote' }),
       })
     ),
     shell: /** @type {any} */ (
       makeExo('Shell', InspectInterface, {
-        inspect: () => harden({ from: 'shell' }),
+        inspect: async () => harden({ from: 'shell' }),
       })
     ),
   });
