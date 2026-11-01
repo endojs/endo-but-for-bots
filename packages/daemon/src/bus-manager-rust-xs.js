@@ -101,36 +101,58 @@ if (typeof globalThis.console === 'undefined') {
 // ---------------------------------------------------------------------------
 // setTimeout/clearTimeout polyfill for XS
 // ---------------------------------------------------------------------------
-// daemon.js uses setTimeout in delay() for grace period.
-// In XS there is no timer API.  We provide a minimal shim that
-// fires the callback synchronously (zero delay) since the XS
-// daemon has no real event loop to defer to.
+// XS has no timer API.  This shim keeps a table of due times and lets the
+// Rust main loop drive it: between cranks the loop reads
+// `__endoTimerDelay()` and waits for the next envelope only that long, then
+// calls `__endoRunDueTimers()` (`guest_timer_delay` in
+// rust/endo/xsnap/src/lib.rs).  Firing a timer on the microtask queue
+// instead would turn every `while (true) await delay(...)` loop, such as a
+// timer formula's, into an endless microtask chain that starves the manager.
 
 if (typeof globalThis.setTimeout === 'undefined') {
   let nextTimerId = 1;
-  /** @type {Set<number>} */
-  const activeTimers = new Set();
+  /** @type {Map<number, { due: number, fn: Function, args: unknown[] }>} */
+  const timers = new Map();
 
   globalThis.setTimeout = (
     /** @type {Function} */ fn,
-    /** @type {number} */ _ms,
+    /** @type {number} */ ms = 0,
+    /** @type {unknown[]} */ ...args
   ) => {
     const id = nextTimerId;
     nextTimerId += 1;
-    activeTimers.add(id);
-    // Execute immediately — XS has no event loop.
-    // Use Promise.resolve to defer to microtask queue.
-    void Promise.resolve().then(() => {
-      if (activeTimers.has(id)) {
-        activeTimers.delete(id);
-        fn();
-      }
+    timers.set(id, {
+      due: Date.now() + Math.max(0, Number(ms) || 0),
+      fn,
+      args,
     });
     return id;
   };
 
   globalThis.clearTimeout = (/** @type {number} */ id) => {
-    activeTimers.delete(id);
+    timers.delete(id);
+  };
+
+  // Milliseconds until the earliest timer falls due, or -1 for none.
+  globalThis.__endoTimerDelay = () => {
+    let earliest = Infinity;
+    for (const { due } of timers.values()) {
+      if (due < earliest) earliest = due;
+    }
+    return earliest === Infinity ? -1 : Math.max(0, earliest - Date.now());
+  };
+
+  // Queue every due callback as a promise job, in due order, so the Rust
+  // loop's metered pump runs it.
+  globalThis.__endoRunDueTimers = () => {
+    const now = Date.now();
+    const due = [...timers.entries()]
+      .filter(([_id, timer]) => timer.due <= now)
+      .sort(([_a, x], [_b, y]) => x.due - y.due);
+    for (const [id, timer] of due) {
+      timers.delete(id);
+      void Promise.resolve().then(() => timer.fn(...timer.args));
+    }
   };
 }
 
