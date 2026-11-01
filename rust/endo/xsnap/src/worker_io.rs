@@ -1587,4 +1587,47 @@ mod tests {
             "worker A's panic must not poison the sibling worker B"
         );
     }
+
+    #[test]
+    fn channel_timed_recv_reports_envelope_timeout_and_close() {
+        let (in_tx, in_rx) = std_mpsc::channel();
+        let (out_tx, _out_rx) = std_mpsc::channel();
+        let mut t = ChannelTransport::new(in_rx, out_tx);
+
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_millis(1)).unwrap(),
+            TimedRecv::TimedOut
+        ));
+
+        in_tx.send(vec![1, 2, 3]).unwrap();
+        match t.recv_raw_envelope_timeout(Duration::from_secs(5)).unwrap() {
+            TimedRecv::Envelope(data) => assert_eq!(data, vec![1, 2, 3]),
+            _ => panic!("expected the queued envelope"),
+        }
+
+        drop(in_tx);
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_secs(5)).unwrap(),
+            TimedRecv::Closed
+        ));
+    }
+
+    #[test]
+    fn default_timed_recv_blocks_like_recv_raw_envelope() {
+        let env = Envelope {
+            handle: 5,
+            verb: "deliver".to_string(),
+            payload: vec![],
+            nonce: 0,
+        };
+        let mut t = make_test_pipe(&[env]);
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_millis(1)).unwrap(),
+            TimedRecv::Envelope(_)
+        ));
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_millis(1)).unwrap(),
+            TimedRecv::Closed
+        ));
+    }
 }
