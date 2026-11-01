@@ -815,6 +815,43 @@ test('revoking a provisioning import cleans up a lost backend response', async t
   t.is(harness.records.get(stableIds.secretId).state, 'revoked');
 });
 
+test('a provisioning import refuses admin mutations with PROVISIONING', async t => {
+  const harness = makeHarness();
+  const backend = harden({
+    ...harness.backend,
+    create: async () => {
+      throw Error('backend unavailable');
+    },
+  });
+  const stableIds = harden({
+    secretId: 'secret-stable-0071',
+    grantId: 'grant-stable-00071',
+    operationId: 'operation-stable-71',
+  });
+  const directory = harness.makeDirectory(harness.makeManager(backend));
+  const importer = await E(directory).lookup('create');
+  await t.throwsAsync(
+    () =>
+      E(importer).provideBase64(
+        'stable-pending',
+        'Stable pending',
+        encodeBase64(encodeUtf8('original')),
+        stableIds,
+      ),
+    { message: /CREATE_FAILED/ },
+  );
+
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  await t.throwsAsync(() => E(entry.admin).setDescription('Renamed'), {
+    message: /PROVISIONING/,
+  });
+  await t.throwsAsync(
+    () => E(entry.admin).replaceBase64(encodeBase64(encodeUtf8('next'))),
+    { message: /PROVISIONING/ },
+  );
+  t.is(harness.records.get(stableIds.secretId).description, 'Stable pending');
+});
+
 test('deleting a provisioning import whose revoke cleanup failed recovers the orphaned bytes', async t => {
   const harness = makeHarness();
   let recoverAttempts = 0;

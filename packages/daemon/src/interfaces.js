@@ -192,6 +192,13 @@ export const SecretAdminInterface = M.interface('SecretAdmin', {
   delete: M.call().returns(M.promise()),
 });
 
+// The daemon also checks each id against its stable-id syntax.
+const StableIdsShape = M.splitRecord({
+  secretId: M.string(),
+  grantId: M.string(),
+  operationId: M.string(),
+});
+
 export const SecretImporterInterface = M.interface('SecretImporter', {
   createBase64: M.call(M.string(), M.string(), SecretBase64Shape).returns(
     M.promise(),
@@ -200,15 +207,7 @@ export const SecretImporterInterface = M.interface('SecretImporter', {
     M.string(),
     M.string(),
     M.or(SecretBase64Shape, M.undefined()),
-    M.splitRecord(
-      {
-        secretId: M.string(),
-        grantId: M.string(),
-        operationId: M.string(),
-      },
-      {},
-      harden({}),
-    ),
+    StableIdsShape,
   ).returns(M.promise()),
 });
 

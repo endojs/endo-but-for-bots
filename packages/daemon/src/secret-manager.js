@@ -27,6 +27,22 @@ harden(secretBlobHelp);
 const fixedError = code => makeError(X`Secret operation failed: ${q(code)}`);
 
 /**
+ * @param {boolean} condition
+ * @param {string} code
+ */
+const assertOrFixed = (condition, code) => {
+  if (!condition) throw fixedError(code);
+};
+
+/**
+ * The fixed code for a record that is not `'active'`.
+ *
+ * @param {SecretRecord['state']} state
+ */
+const inactiveCode = state =>
+  state === 'provisioning' ? 'PROVISIONING' : 'REVOKED';
+
+/**
  * @param {string} description
  */
 const assertDescription = description => {
@@ -269,9 +285,10 @@ export const makeSecretManager = ({
       let reasonCode = 'READ_FAILED';
       try {
         // This state check is intentionally adjacent to the backend call.
-        if (requireRecord(secretId).state !== 'active') {
-          reasonCode = 'REVOKED';
-          throw fixedError('REVOKED');
+        const { state } = requireRecord(secretId);
+        if (state !== 'active') {
+          reasonCode = inactiveCode(state);
+          throw fixedError(reasonCode);
         }
         bytes = await backend.read(before.backendRef);
         const after = requireRecord(secretId);
@@ -337,7 +354,9 @@ export const makeSecretManager = ({
           // rejected replacement never leaves a decoded plaintext buffer
           // outside the zeroing scope below.
           const before = requireRecord(secretId);
-          if (before.state !== 'active') throw fixedError('REVOKED');
+          if (before.state !== 'active') {
+            throw fixedError(inactiveCode(before.state));
+          }
           // A caller writing a value it derived from bytes it read pins the
           // generation those bytes came from, so a replacement that landed in
           // between is refused here rather than silently overwritten. Checked
@@ -429,7 +448,11 @@ export const makeSecretManager = ({
         serializeMutation(secretId, async () => {
           assertDescription(description);
           const before = requireRecord(secretId);
-          if (before.state === 'revoked') throw fixedError('REVOKED');
+          // A provisioning record's description is part of its retry
+          // identity, so it changes only once the import completes.
+          if (before.state !== 'active') {
+            throw fixedError(inactiveCode(before.state));
+          }
           const operationId = await randomHex256();
           await audit(
             secretId,
@@ -679,12 +702,12 @@ export const makeSecretManager = ({
         assertPetName(name);
         assertDescription(description);
         const { secretId, grantId, operationId } = stableIds;
-        [secretId, grantId, operationId].every(
-          value => typeof value === 'string' && STABLE_ID_PATTERN.test(value),
-        ) ||
-          (() => {
-            throw fixedError('INVALID_STABLE_ID');
-          })();
+        assertOrFixed(
+          [secretId, grantId, operationId].every(
+            value => typeof value === 'string' && STABLE_ID_PATTERN.test(value),
+          ),
+          'INVALID_STABLE_ID',
+        );
         // The name and grant checks span secrets, so stable imports share one
         // queue; the inner per-secret queue orders them against revoke and
         // delete. The key cannot collide with a secret ID: `STABLE_ID_PATTERN`
@@ -700,18 +723,17 @@ export const makeSecretManager = ({
               throw fixedError('NAME_CONFLICT');
             }
             // A retry may finish binding its own name, never add a second one.
-            knownPaths.every(
-              entry => entry.grantId !== grantId || entry === existing,
-            ) ||
-              (() => {
-                throw fixedError('IDEMPOTENCY_CONFLICT');
-              })();
+            assertOrFixed(
+              knownPaths.every(
+                entry => entry.grantId !== grantId || entry === existing,
+              ),
+              'IDEMPOTENCY_CONFLICT',
+            );
             const recordedSecretId = persistence.getSecretIdForGrant(grantId);
-            recordedSecretId === undefined ||
-              recordedSecretId === secretId ||
-              (() => {
-                throw fixedError('IDEMPOTENCY_CONFLICT');
-              })();
+            assertOrFixed(
+              recordedSecretId === undefined || recordedSecretId === secretId,
+              'IDEMPOTENCY_CONFLICT',
+            );
             let record = persistence.getSecretRecord(secretId);
             let changed = false;
             if (record !== undefined) {
@@ -719,15 +741,12 @@ export const makeSecretManager = ({
               // record, so holding that grant is what identifies the creator.
               // The caller chooses `secretId`, so knowing it must not be enough
               // to resume someone else's secret.
-              (record.description === description &&
-                recordedSecretId === secretId) ||
-                (() => {
-                  throw fixedError('IDEMPOTENCY_CONFLICT');
-                })();
-              record.state !== 'revoked' ||
-                (() => {
-                  throw fixedError('REVOKED');
-                })();
+              assertOrFixed(
+                record.description === description &&
+                  recordedSecretId === secretId,
+                'IDEMPOTENCY_CONFLICT',
+              );
+              assertOrFixed(record.state !== 'revoked', 'REVOKED');
             } else {
               await audit(secretId, 'create', 'attempted', 1n, operationId);
               const createdAt = now();
