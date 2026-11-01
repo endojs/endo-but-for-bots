@@ -962,6 +962,26 @@ mod tests {
     }
 
     #[test]
+    fn compressed_offsets_are_charged_against_the_byte_ceiling() {
+        let captures = [(-1, -1)];
+        // One record plus its one (i32, i32) capture pair.
+        let record = STATE_CHARGE + 8;
+        let base_bytes = MAX_MATCH_BYTES - record - OFFSET_CHARGE;
+        let mut stack = StateStack::default();
+        assert!(stack.push(1, 0, 0, &captures, base_bytes).is_ok());
+        assert!(stack.push(1, 1, 0, &captures, base_bytes).is_ok());
+        assert!(matches!(
+            stack.push(1, 2, 0, &captures, base_bytes),
+            Err(SaveStop::Limit)
+        ));
+        assert!(matches!(
+            stack.push(2, 2, 0, &captures, base_bytes),
+            Err(SaveStop::Limit)
+        ));
+        assert_eq!(stack.len(), 2);
+    }
+
+    #[test]
     fn a_greedy_run_compresses_past_the_state_count_ceiling() {
         let program = compile("^a*$", "").unwrap();
         let subject = vec![b'a'; 4 * MAX_MATCH_STATES];
