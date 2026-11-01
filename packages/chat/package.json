@@ -78,7 +78,7 @@
     "@endo/where": "workspace:^",
     "marked": "^18.1.1",
     "monaco-editor": "^0.57.0",
-    "preact": "^10.29.8",
+    "preact": "^11.0.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "ses": "workspace:^"
