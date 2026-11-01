@@ -346,7 +346,9 @@ impl Interp {
                 return Err(Step::Host(Halt::MeterAbort))
             }
             Err(ironhorse_regexp::CompileError::ResourceLimit) => {
-                return Err(Step::Host(Halt::HeapExhausted))
+                return Err(self.catchable_range_error_msg(
+                    crate::halt_labels::REGEXP_COMPILE_LIMIT_MESSAGE.into(),
+                ))
             }
             Err(ironhorse_regexp::CompileError::HostAllocationFailed) => {
                 return Err(Step::Host(Halt::HostAllocationFailed))
@@ -554,7 +556,10 @@ impl Interp {
             return Err(Step::Host(Halt::HostAllocationFailed));
         }
         if outcome.resource_limit {
-            return Err(Step::Host(Halt::HeapExhausted));
+            // The matcher's scratch is dropped and the heap is untouched, so
+            // the limit is the guest's to catch, not a machine halt.
+            return Err(self
+                .catchable_range_error_msg(crate::halt_labels::REGEXP_MATCH_LIMIT_MESSAGE.into()));
         }
         if outcome.aborted {
             return Err(Step::Host(Halt::MeterAbort));

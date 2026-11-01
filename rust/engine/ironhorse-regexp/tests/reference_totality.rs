@@ -43,18 +43,48 @@ fn ordinary_and_unset_references_still_match() {
 }
 
 #[test]
-fn oversized_quantifiers_are_refused_without_wrapping_or_losing_order() {
+fn oversized_quantifiers_clamp_without_wrapping_or_losing_order() {
     for bounds in [
+        "2147483648",
         "4294967296",
         "4294967297",
+        "9007199254740991",
         "18446744073709551616",
+        "9007199254740991,",
+        "9007199254740991,9007199254740991",
+        "4294967296,4294967297",
+        "0004294967297,4294967297",
+        "2147483647,2147483648",
+    ] {
+        for flags in ["", "u", "v"] {
+            let pattern = format!("b{{{bounds}}}");
+            let program = compile(&pattern, flags)
+                .unwrap_or_else(|error| panic!("{pattern:?} / {flags}: {error:?}"));
+            for subject in ["", "a", "b", "bbbb"] {
+                let out = match_regexp(&program, subject.as_bytes(), 0);
+                assert!(
+                    !out.matched && !out.aborted && !out.resource_limit,
+                    "{pattern:?} / {flags} on {subject:?}: {out:?}"
+                );
+            }
+        }
+    }
+    for bounds in [
         "4294967297,4294967296",
         "2147483649,2147483648",
+        "2147483648,2147483647",
+        "18446744073709551616,9007199254740991",
+        "10,09",
     ] {
-        assert_eq!(
-            compile(&format!("a{{{bounds}}}"), "u").unwrap_err(),
-            CompileError::ResourceLimit
-        );
+        for flags in ["", "u", "v"] {
+            assert!(
+                matches!(
+                    compile(&format!("a{{{bounds}}}"), flags),
+                    Err(CompileError::Syntax(_))
+                ),
+                "{bounds} / {flags}"
+            );
+        }
     }
 }
 

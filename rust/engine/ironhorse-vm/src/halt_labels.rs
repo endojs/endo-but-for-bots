@@ -344,6 +344,26 @@ pub fn is_engine_invariant_label(label: &str) -> bool {
     ENGINE_INVARIANT_LABELS.binary_search(&label).is_ok()
 }
 
+/// The message of the catchable `RangeError` a RegExp compile throws when the
+/// compiler's private storage bound is exceeded.
+pub const REGEXP_COMPILE_LIMIT_MESSAGE: &str = "regular expression exceeds implementation limit";
+
+/// The message of the catchable `RangeError` a RegExp match throws when the
+/// matcher's private scratch bound (`MAX_MATCH_STATES`, `MAX_MATCH_BYTES`) is
+/// exceeded. The heap is untouched, so the guest may catch it.
+pub const REGEXP_MATCH_LIMIT_MESSAGE: &str =
+    "regular expression match exceeds implementation limit";
+
+/// Is `rendered` (`"<constructor>: <message>"`) one of the RegExp
+/// implementation-limit `RangeError`s? A differential instrument names such a
+/// throw as the engine's limit, as it does a `HeapExhausted` halt, rather than
+/// as a wrong answer.
+pub fn is_regexp_limit_error(rendered: &str) -> bool {
+    [REGEXP_COMPILE_LIMIT_MESSAGE, REGEXP_MATCH_LIMIT_MESSAGE]
+        .iter()
+        .any(|message| rendered.strip_prefix("RangeError: ") == Some(message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +425,19 @@ mod tests {
         assert!(!is_declined_label("XS_CODE_FOO"));
         assert!(is_engine_invariant_label("add:stack-underflow"));
         assert!(!is_engine_invariant_label("eval:no-compiler"));
+    }
+
+    #[test]
+    fn regexp_limit_errors_match_only_the_fixed_range_errors() {
+        assert!(is_regexp_limit_error(&format!(
+            "RangeError: {REGEXP_MATCH_LIMIT_MESSAGE}"
+        )));
+        assert!(is_regexp_limit_error(&format!(
+            "RangeError: {REGEXP_COMPILE_LIMIT_MESSAGE}"
+        )));
+        assert!(!is_regexp_limit_error(&format!(
+            "Test262Error: {REGEXP_MATCH_LIMIT_MESSAGE}"
+        )));
+        assert!(!is_regexp_limit_error("RangeError: invalid array length"));
     }
 }
