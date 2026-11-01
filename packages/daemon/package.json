@@ -110,6 +110,7 @@
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "@types/ws": "^8.18.2",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

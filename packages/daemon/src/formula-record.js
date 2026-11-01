@@ -1,5 +1,7 @@
 // @ts-check
 
+import { normalizeGitRemotePolicy } from '@endo/exo-git';
+
 /** @import { Formula, FormulaIdentifier, FormulaNumber, FormulaProperty, FormulaRecord } from './types.js' */
 
 /**
@@ -327,6 +329,76 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       properties.policyMode = {
         kind: 'literal',
         value: formula.policy.policyMode,
+      };
+      break;
+    }
+    case 'git-credential': {
+      properties.kind = { kind: 'literal', value: formula.kind };
+      properties.audience = { kind: 'literal', value: formula.audience };
+      break;
+    }
+    case 'git-remote': {
+      properties.git = { kind: 'reference', identifier: formula.gitId };
+      if (formula.credentialId !== undefined) {
+        properties.credential = {
+          kind: 'reference',
+          identifier: formula.credentialId,
+        };
+      }
+      properties.name = { kind: 'literal', value: formula.name };
+      properties.url = { kind: 'literal', value: formula.policy.url };
+      properties.allowedDirections = {
+        kind: 'literal',
+        value: formula.policy.allowedDirections,
+      };
+      properties.fetchRefspecs = {
+        kind: 'literal',
+        value: formula.policy.fetchRefspecs,
+      };
+      // A profile granted through `allowedBranches` stores no
+      // `pushRefspecs`; report the refspecs the remote actually enforces,
+      // derived by the same normalizer, so inspection never understates the
+      // push authority. Only the push-relevant fields are normalized, so a
+      // fetch-side setting cannot make inspection throw.
+      const { defaultPullRef: _defaultPullRef, ...pushPolicy } = formula.policy;
+      properties.pushRefspecs = {
+        kind: 'literal',
+        value: normalizeGitRemotePolicy({
+          name: formula.name,
+          policy: { ...pushPolicy, fetchRefspecs: [] },
+        }).pushRefspecs,
+      };
+      if (formula.policy.allowedBranches !== undefined) {
+        properties.allowedBranches = {
+          kind: 'literal',
+          value: formula.policy.allowedBranches,
+        };
+      }
+      if (formula.policy.defaultPullRef !== undefined) {
+        properties.defaultPullRef = {
+          kind: 'literal',
+          value: formula.policy.defaultPullRef,
+        };
+      }
+      properties.allowForcePush = {
+        kind: 'literal',
+        value: formula.policy.allowForcePush ?? false,
+      };
+      properties.allowTags = {
+        kind: 'literal',
+        value: formula.policy.allowTags ?? false,
+      };
+      properties.allowDelete = {
+        kind: 'literal',
+        value: formula.policy.allowDelete ?? false,
+      };
+      properties.allowLocalFileTransport = {
+        kind: 'literal',
+        value: formula.policy.allowLocalFileTransport ?? false,
+      };
+      properties.revoked = {
+        kind: 'literal',
+        value: formula.revoked ?? false,
       };
       break;
     }
