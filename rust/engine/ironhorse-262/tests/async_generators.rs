@@ -159,3 +159,28 @@ fn async_generator_return_observes_a_patched_constructor() {
         "1:5:true",
     );
 }
+
+/// A `yield` awaits its operand through the same read: a throwing getter is
+/// thrown into the body at the `yield`.
+#[test]
+fn async_generator_yield_reads_the_promise_constructor() {
+    assert_async_signal(
+        "var g=''; var p = Promise.resolve(42); \
+         Object.defineProperty(p, 'constructor', { get: function () { throw new Error('broken'); } }); \
+         async function* f(){ try { yield p; } catch (e) { g+='caught:'+e.message+','; } } \
+         f().next().then(function(r){g+=r.value+':'+r.done;}); undefined",
+        "caught:broken,undefined:true",
+    );
+}
+
+/// A getter that answers `%Promise%` is observed once and keeps the
+/// promise on the fast path.
+#[test]
+fn async_generator_return_observes_a_getter_answering_promise() {
+    assert_async_signal(
+        "var g=''; var n=0; var p = Promise.resolve(9); \
+         Object.defineProperty(p, 'constructor', { get: function () { n++; return Promise; } }); \
+         async function* f(){} f().return(p).then(function(r){g=n+':'+r.value+':'+r.done;}); undefined",
+        "1:9:true",
+    );
+}
