@@ -3,7 +3,8 @@
 // The coordinator against a real Endo daemon, for the recovery-matrix rows
 // that only a daemon restart can exercise: revival through the pinned
 // coordinator with no holder call and no mail, a child that clears its own
-// `@pins`, durable facets, and a revoked facet after restart.
+// `@pins`, durable facets, a revoked facet after restart, and the turn-ledger
+// crash cut inside `infer` after a tool effect.
 //
 // Daemon tests are serial because each one forks a full daemon process.
 
@@ -359,5 +360,71 @@ test.serial(
     t.regex(second, /^answer 1 from .* to Answer\.\n\nsecond$/);
     t.not(second.split(' ')[3], first.split(' ')[3]);
     t.deepEqual(await repliesFrom(host2, 'first'), [first]);
+  },
+);
+
+const crashMakerSpecifier = new URL('./_daemon-crash-maker.js', import.meta.url)
+  .href;
+
+// The prompts the crash maker's fake backend has acted on, one per effect.
+const effectsIn = effectsPath =>
+  fs.existsSync(effectsPath)
+    ? fs.readFileSync(effectsPath, 'utf8').split('\n').filter(Boolean)
+    : [];
+
+test.serial(
+  'a crash inside infer after a tool effect re-runs the turn once and publishes one reply',
+  async t => {
+    const { config, host, root } = await prepare(t);
+    const effectsPath = path.join(config.base, 'effects');
+    const holdPath = path.join(config.base, 'hold');
+    fs.writeFileSync(holdPath, '');
+    await E(host).makeUnconfined(undefined, crashMakerSpecifier, {
+      powersName: '@none',
+      resultName: 'crash-maker',
+      env: { EFFECTS_PATH: effectsPath, HOLD_PATH: holdPath },
+    });
+    const forCrash = await E(root).bind(await E(host).lookup('crash-maker'));
+    const { handle } = await E(forCrash).create('worker');
+    await E(host).storeValue(handle, 'worker');
+    const [driverName] = await piecesOf(host, '.driver');
+
+    await E(host).send('worker', ['act'], [], []);
+    await eventually(
+      async () => (effectsIn(effectsPath).length === 1 ? true : undefined),
+      'the tool effect of the held turn',
+    );
+    // The turn started and its effect happened, but `infer` has not
+    // returned, so the ledger holds no result and nothing was published.
+    const heldLedger = (await E(host).list('agent-factory', driverName)).filter(
+      name => name.startsWith('turn-'),
+    );
+    t.is(heldLedger.length, 1);
+    t.regex(heldLedger[0], /-started$/);
+    t.deepEqual(await repliesFrom(host, 'act'), []);
+
+    fs.rmSync(holdPath);
+    await restart(config);
+    const host2 = await connect(t, config);
+    const reply = await eventually(
+      () => repliesFrom(host2, 'act').then(replies => replies[0]),
+      'the reply to the held turn',
+    );
+    t.is(reply, 'done: act');
+    // No result was recorded before the crash, so the revived runner called
+    // `infer` again and the tool effect happened twice.
+    t.deepEqual(effectsIn(effectsPath), ['act', 'act']);
+
+    // Once the result is recorded the turn is never inferred again: another
+    // restart and a new message add one effect, for the new message only.
+    await restart(config);
+    const host3 = await connect(t, config);
+    await E(host3).send('worker', ['again'], [], []);
+    await eventually(
+      () => repliesFrom(host3, 'again').then(replies => replies[0]),
+      'the reply to the second message',
+    );
+    t.deepEqual(effectsIn(effectsPath), ['act', 'act', 'again']);
+    t.deepEqual(await repliesFrom(host3, 'act'), ['done: act']);
   },
 );
