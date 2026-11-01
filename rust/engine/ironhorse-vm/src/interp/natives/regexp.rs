@@ -1071,6 +1071,13 @@ impl Interp {
             REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
         )?;
         let match_start = captures[0].0;
+        // `RegExpBuiltinExec` always creates `index`, `input` and `groups`, and
+        // `indices` under the `d` flag, whether or not guest source spells
+        // those names. The cached ids are seeded only from names a program
+        // mentions, so a probe by string key (`hasOwnProperty('groups')`)
+        // would otherwise find no property at all. All four are boot keys, so
+        // interning them mints no metered slot.
+        self.seed_regexp_result_ids(has_indices);
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
         let mut items: Vec<(u32, Slot)> = self.reserve_scratch(captures.len())?;
@@ -1158,6 +1165,24 @@ impl Interp {
             Slot::of(Kind::Reference, Payload::Reference(result)),
             Some(match_start),
         ))
+    }
+
+    /// Fill any still-unknown id for the standard exec-result properties
+    /// (`index`, `input`, `groups`, and `indices` when `has_indices`). A cache
+    /// that is already set is left alone.
+    fn seed_regexp_result_ids(&mut self, has_indices: bool) {
+        if self.regexp_result_ids.index.is_none() {
+            self.regexp_result_ids.index = Some(self.intern_static_key("index"));
+        }
+        if self.regexp_result_ids.input.is_none() {
+            self.regexp_result_ids.input = Some(self.intern_static_key("input"));
+        }
+        if self.regexp_result_ids.groups.is_none() {
+            self.regexp_result_ids.groups = Some(self.intern_static_key("groups"));
+        }
+        if has_indices && self.regexp_result_ids.indices.is_none() {
+            self.regexp_result_ids.indices = Some(self.intern_static_key("indices"));
+        }
     }
 
     /// Build the `d`-flag `.indices` array + its `.groups` object, mirroring the
