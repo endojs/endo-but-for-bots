@@ -8,9 +8,10 @@
 //!
 //! The C engine keeps its backtrack states as a linked list threaded
 //! through the machine stack or `c_malloc`; the safe port keeps them in a
-//! `Vec<State>` and records an assertion's saved point as a **length
-//! marker** into that vector, which `fxPopStates(from, to)` becomes a
-//! `truncate`. This is behaviorally identical and needs no `unsafe`.
+//! run-length compressed `StateStack` and records an assertion's saved point
+//! as a **length marker** into that stack, which `fxPopStates(from, to)`
+//! becomes a `truncate`. This is behaviorally identical and needs no
+//! `unsafe`.
 
 use crate::compile::Program;
 use crate::encoding::{find_character, get_character};
@@ -78,15 +79,19 @@ impl MatchOutcome {
 #[derive(Clone)]
 struct State {
     step: i32,
+    /// The latest offset this record saved; see [`StateStack`].
     offset: i32,
     flags: i32,
+    /// How many earlier offsets this record saved, held in
+    /// [`StateStack::earlier_offsets`].
+    earlier: u32,
     captures: Vec<(i32, i32)>,
 }
 
 #[derive(Clone, Copy)]
 struct AssertionData {
     offset: i32,
-    first_state: usize, // marker: states.len() at entry
+    first_state: usize, // marker: states.len() (logical) at entry
 }
 
 #[derive(Clone, Copy)]
@@ -123,7 +128,8 @@ fn match_character(chars: &[i32], base_at: usize, count: i32, character: i64) ->
 /// decides only *where* an armed crank can be interrupted inside a match,
 /// never what the match meters, so it is not part of the cost table.
 pub const MATCH_CHECK_STRIDE: u64 = 1024;
-/// Independent of metering: bounds retained states and their capture snapshots.
+/// Independent of metering: bounds retained state records (see [`StateStack`])
+/// and their capture snapshots.
 pub const MAX_MATCH_STATES: usize = 65_536;
 pub const MAX_MATCH_BYTES: usize = 64 << 20;
 
@@ -134,6 +140,8 @@ pub const MAX_MATCH_BYTES: usize = 64 << 20;
 const STATE_CHARGE: usize = 40;
 const ASSERTION_CHARGE: usize = 16;
 const QUANTIFIER_CHARGE: usize = 12;
+/// The bytes one compressed backtrack offset is charged.
+const OFFSET_CHARGE: usize = 4;
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(
     std::mem::size_of::<State>() == STATE_CHARGE
@@ -141,7 +149,7 @@ const _: () = assert!(
         && std::mem::size_of::<QuantifierData>() == QUANTIFIER_CHARGE
 );
 
-/// Why [`save_captures`] could not save a backtracking state.
+/// Why [`StateStack::push`] could not save a backtracking state.
 enum SaveStop {
     /// [`MAX_MATCH_STATES`] or [`MAX_MATCH_BYTES`] refused it.
     Limit,
@@ -149,28 +157,139 @@ enum SaveStop {
     Host,
 }
 
-fn save_captures(
-    states: &mut Vec<State>,
-    captures: &[(i32, i32)],
-    base_bytes: usize,
-) -> Result<Vec<(i32, i32)>, SaveStop> {
-    let admitted = (|| {
-        let state_bytes = STATE_CHARGE.checked_add(std::mem::size_of_val(captures))?;
-        let count = states.len().checked_add(1)?;
-        (count <= MAX_MATCH_STATES
-            && base_bytes.checked_add(count.checked_mul(state_bytes)?)? <= MAX_MATCH_BYTES)
-            .then_some(())
-    })();
-    if admitted.is_none() {
-        return Err(SaveStop::Limit);
+/// The backtrack stack, run-length compressed.
+///
+/// A greedy loop over one character saves a state per matched position, and
+/// those states differ only in their offset: the step, the flags, and the
+/// capture snapshot are the same. A long run of them would otherwise exhaust
+/// [`MAX_MATCH_STATES`] on a benign subject (`/^\p{L}+$/u` over a long
+/// string), a limit the pinned XS engine does not have. So a push whose step,
+/// flags, and captures equal the top record's only adds its offset to that
+/// record. The earlier offsets of every record live in one shared stack, in
+/// push order, since only the top record ever grows.
+///
+/// Popping a compressed record returns exactly the states the plain stack
+/// would, in the same order, so the step stream, the meter, and the outcome
+/// do not change. Lengths and truncation are in logical (uncompressed)
+/// states, which is what an assertion marker records.
+#[derive(Default)]
+struct StateStack {
+    records: Vec<State>,
+    /// The offsets each record saved before its latest one, oldest first:
+    /// record `r` owns the `records[r].earlier` entries above the earlier
+    /// records' entries.
+    earlier_offsets: Vec<i32>,
+}
+
+impl StateStack {
+    /// The number of logical (uncompressed) states.
+    fn len(&self) -> usize {
+        self.records.len() + self.earlier_offsets.len()
     }
-    states.try_reserve(1).map_err(|_| SaveStop::Host)?;
-    let mut saved = Vec::new();
-    saved
-        .try_reserve_exact(captures.len())
-        .map_err(|_| SaveStop::Host)?;
-    saved.extend_from_slice(captures);
-    Ok(saved)
+
+    /// The retained bytes charged against [`MAX_MATCH_BYTES`], with
+    /// `records` records and `offsets` compressed offsets.
+    fn admits(records: usize, offsets: usize, captures: &[(i32, i32)], base_bytes: usize) -> bool {
+        (|| {
+            let state_bytes = STATE_CHARGE.checked_add(std::mem::size_of_val(captures))?;
+            let bytes = base_bytes
+                .checked_add(records.checked_mul(state_bytes)?)?
+                .checked_add(offsets.checked_mul(OFFSET_CHARGE)?)?;
+            (records <= MAX_MATCH_STATES && bytes <= MAX_MATCH_BYTES).then_some(())
+        })()
+        .is_some()
+    }
+
+    /// `fxPushState`: save the state to resume at `step`.
+    fn push(
+        &mut self,
+        step: i32,
+        offset: i32,
+        flags: i32,
+        captures: &[(i32, i32)],
+        base_bytes: usize,
+    ) -> Result<(), SaveStop> {
+        let records = self.records.len();
+        let offsets = self.earlier_offsets.len();
+        if let Some(top) = self.records.last_mut() {
+            if top.step == step && top.flags == flags && top.captures == captures {
+                let Some(more) = offsets.checked_add(1) else {
+                    return Err(SaveStop::Limit);
+                };
+                if !Self::admits(records, more, captures, base_bytes) {
+                    return Err(SaveStop::Limit);
+                }
+                self.earlier_offsets
+                    .try_reserve(1)
+                    .map_err(|_| SaveStop::Host)?;
+                self.earlier_offsets.push(top.offset);
+                top.offset = offset;
+                top.earlier += 1;
+                return Ok(());
+            }
+        }
+        let Some(more) = records.checked_add(1) else {
+            return Err(SaveStop::Limit);
+        };
+        if !Self::admits(more, offsets, captures, base_bytes) {
+            return Err(SaveStop::Limit);
+        }
+        self.records.try_reserve(1).map_err(|_| SaveStop::Host)?;
+        let mut saved = Vec::new();
+        saved
+            .try_reserve_exact(captures.len())
+            .map_err(|_| SaveStop::Host)?;
+        saved.extend_from_slice(captures);
+        self.records.push(State {
+            step,
+            offset,
+            flags,
+            earlier: 0,
+            captures: saved,
+        });
+        Ok(())
+    }
+
+    /// `mxPopState`: restore the most recent state's captures into
+    /// `captures` and return its step, offset, and flags.
+    fn pop(&mut self, captures: &mut [(i32, i32)]) -> Option<(i32, i32, i32)> {
+        let top = self.records.last_mut()?;
+        let popped = (top.step, top.offset, top.flags);
+        captures.copy_from_slice(&top.captures);
+        if top.earlier > 0 {
+            top.earlier -= 1;
+            top.offset = self
+                .earlier_offsets
+                .pop()
+                .expect("a compressed record owns its earlier offsets");
+        } else {
+            self.records.pop();
+        }
+        Some(popped)
+    }
+
+    /// `fxPopStates(from, to)`: drop states until `len` logical ones remain.
+    fn truncate(&mut self, len: usize) {
+        while self.len() > len {
+            let excess = self.len() - len;
+            let shared = self.earlier_offsets.len();
+            let top = self.records.last_mut().expect("len counts the records");
+            let earlier = top.earlier as usize;
+            if excess > earlier {
+                self.earlier_offsets.truncate(shared - earlier);
+                self.records.pop();
+            } else {
+                top.offset = self.earlier_offsets[shared - excess];
+                top.earlier = (earlier - excess) as u32;
+                self.earlier_offsets.truncate(shared - excess);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.records.clear();
+        self.earlier_offsets.clear();
+    }
 }
 
 /// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
@@ -256,7 +375,7 @@ pub fn match_regexp_budgeted(
         };
         program.quantifier_count
     ];
-    let mut states: Vec<State> = Vec::new();
+    let mut states = StateStack::default();
 
     let mut meter: u64 = 0;
     // Steps until the next consultation of `check` (unused unchecked).
@@ -333,24 +452,14 @@ pub fn match_regexp_budgeted(
                         assertions[ai].offset = offset;
                         assertions[ai].first_state = states.len();
                         let sequel = code[p];
-                        let saved_captures = match save_captures(&mut states, &captures, base_bytes)
+                        if let Err(stop) = states.push(sequel, offset, flags, &captures, base_bytes)
                         {
-                            Ok(saved) => saved,
-                            Err(SaveStop::Limit) => {
-                                resource_limit = true;
-                                break 'scan;
+                            match stop {
+                                SaveStop::Limit => resource_limit = true,
+                                SaveStop::Host => host_allocation_failed = true,
                             }
-                            Err(SaveStop::Host) => {
-                                host_allocation_failed = true;
-                                break 'scan;
-                            }
-                        };
-                        states.push(State {
-                            step: sequel,
-                            offset,
-                            flags,
-                            captures: saved_captures,
-                        });
+                            break 'scan;
+                        }
                     }
                     CX_ASSERTION_NOT_COMPLETION => {
                         let ai = code[p] as usize;
@@ -557,24 +666,14 @@ pub fn match_regexp_budgeted(
                         step = code[p];
                         p += 1;
                         let sequel = code[p];
-                        let saved_captures = match save_captures(&mut states, &captures, base_bytes)
+                        if let Err(stop) = states.push(sequel, offset, flags, &captures, base_bytes)
                         {
-                            Ok(saved) => saved,
-                            Err(SaveStop::Limit) => {
-                                resource_limit = true;
-                                break 'scan;
+                            match stop {
+                                SaveStop::Limit => resource_limit = true,
+                                SaveStop::Host => host_allocation_failed = true,
                             }
-                            Err(SaveStop::Host) => {
-                                host_allocation_failed = true;
-                                break 'scan;
-                            }
-                        };
-                        states.push(State {
-                            step: sequel,
-                            offset,
-                            flags,
-                            captures: saved_captures,
-                        });
+                            break 'scan;
+                        }
                     }
                     CX_EMPTY_STEP => {
                         step = code[p];
@@ -641,24 +740,15 @@ pub fn match_regexp_budgeted(
                             step = sequel;
                         } else {
                             if quantifiers[qi].min == 0 {
-                                let saved_captures =
-                                    match save_captures(&mut states, &captures, base_bytes) {
-                                        Ok(saved) => saved,
-                                        Err(SaveStop::Limit) => {
-                                            resource_limit = true;
-                                            break 'scan;
-                                        }
-                                        Err(SaveStop::Host) => {
-                                            host_allocation_failed = true;
-                                            break 'scan;
-                                        }
-                                    };
-                                states.push(State {
-                                    step: sequel,
-                                    offset,
-                                    flags,
-                                    captures: saved_captures,
-                                });
+                                if let Err(stop) =
+                                    states.push(sequel, offset, flags, &captures, base_bytes)
+                                {
+                                    match stop {
+                                        SaveStop::Limit => resource_limit = true,
+                                        SaveStop::Host => host_allocation_failed = true,
+                                    }
+                                    break 'scan;
+                                }
                             }
                             if from <= to {
                                 for i in from..=to {
@@ -680,24 +770,15 @@ pub fn match_regexp_budgeted(
                         if quantifiers[qi].max == 0 {
                             step = sequel;
                         } else if quantifiers[qi].min == 0 {
-                            let saved_captures =
-                                match save_captures(&mut states, &captures, base_bytes) {
-                                    Ok(saved) => saved,
-                                    Err(SaveStop::Limit) => {
-                                        resource_limit = true;
-                                        break 'scan;
-                                    }
-                                    Err(SaveStop::Host) => {
-                                        host_allocation_failed = true;
-                                        break 'scan;
-                                    }
-                                };
-                            states.push(State {
-                                step,
-                                offset,
-                                flags,
-                                captures: saved_captures,
-                            });
+                            if let Err(stop) =
+                                states.push(step, offset, flags, &captures, base_bytes)
+                            {
+                                match stop {
+                                    SaveStop::Limit => resource_limit = true,
+                                    SaveStop::Host => host_allocation_failed = true,
+                                }
+                                break 'scan;
+                            }
                             step = sequel;
                         } else if from <= to {
                             for i in from..=to {
@@ -768,16 +849,15 @@ pub fn match_regexp_budgeted(
 
                 if pop {
                     // mxPopState.
-                    match states.pop() {
+                    match states.pop(&mut captures) {
                         None => {
                             step = 0;
                             flags = base_flags;
                         }
-                        Some(st) => {
-                            step = st.step;
-                            offset = st.offset;
-                            flags = st.flags;
-                            captures.copy_from_slice(&st.captures);
+                        Some((st_step, st_offset, st_flags)) => {
+                            step = st_step;
+                            offset = st_offset;
+                            flags = st_flags;
                         }
                     }
                 }
@@ -833,6 +913,66 @@ fn word_at(subject: &[u8], offset: i32, boundary: i32, flags: i32) -> bool {
 mod tests {
     use super::*;
     use crate::compile::compile;
+
+    /// Drive a [`StateStack`] and a plain `Vec` of states with the same
+    /// pushes, pops, and truncations: every observation must agree.
+    #[test]
+    fn the_compressed_state_stack_behaves_as_a_plain_stack() {
+        let mut stack = StateStack::default();
+        let mut plain: Vec<(i32, i32, i32, Vec<(i32, i32)>)> = Vec::new();
+        let mut seed: u32 = 0x9e37_79b9;
+        let mut next = |n: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed % n
+        };
+        let mut offset = 0;
+        for _ in 0..20_000 {
+            match next(8) {
+                0..=3 => {
+                    // Few distinct steps and captures, so runs form.
+                    let step = next(2) as i32;
+                    let flags = (next(8) == 0) as i32;
+                    let captures = vec![(next(2) as i32 - 1, -1)];
+                    offset += 1;
+                    stack.push(step, offset, flags, &captures, 0).ok().unwrap();
+                    plain.push((step, offset, flags, captures));
+                }
+                4..=5 => {
+                    let mut captures = vec![(7, 7)];
+                    let popped = stack.pop(&mut captures);
+                    let expected = plain.pop();
+                    assert_eq!(popped, expected.as_ref().map(|s| (s.0, s.1, s.2)));
+                    if let Some(s) = expected {
+                        assert_eq!(captures, s.3);
+                    }
+                }
+                6 => {
+                    let len = plain.len().saturating_sub(next(40) as usize);
+                    stack.truncate(len);
+                    plain.truncate(len);
+                }
+                _ => {}
+            }
+            assert_eq!(stack.len(), plain.len());
+        }
+        stack.clear();
+        assert_eq!(stack.len(), 0);
+    }
+
+    #[test]
+    fn a_greedy_run_compresses_past_the_state_count_ceiling() {
+        let program = compile("^a*$", "").unwrap();
+        let subject = vec![b'a'; 4 * MAX_MATCH_STATES];
+        let out = match_regexp(&program, &subject, 0);
+        assert!(out.matched && !out.resource_limit, "{out:?}");
+        assert_eq!(out.captures[0], (0, subject.len() as i32));
+        let program = compile("^(a*)aa$", "").unwrap();
+        let out = match_regexp(&program, &subject, 0);
+        assert!(out.matched, "{out:?}");
+        assert_eq!(out.captures[1], (0, subject.len() as i32 - 2));
+    }
 
     #[test]
     fn invalid_reference_operands_abort_in_both_directions() {
