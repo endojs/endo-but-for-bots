@@ -1493,6 +1493,38 @@ impl Interp {
                 }
             }
         }
+        for (native, getter_method) in [
+            (
+                Native::DisposableStack,
+                NativeMethod::DisposableStackDisposedGetter,
+            ),
+            (
+                Native::AsyncDisposableStack,
+                NativeMethod::AsyncDisposableStackDisposedGetter,
+            ),
+        ] {
+            let proto = self.intrinsic_prototype(native.display_name());
+            if !proto.is_null() {
+                let getter = self.alloc_named_method(getter_method, "get disposed", 0);
+                self.proto_accessors.push((
+                    proto,
+                    ProtoAccessorKey::String("disposed"),
+                    getter,
+                    None,
+                    native.display_name(),
+                ));
+            }
+        }
+        // `%Iterator.prototype%[@@dispose]` and
+        // `%AsyncIteratorPrototype%[@@asyncDispose]`. Installed under their
+        // well-known symbol keys by the full intrinsic-link pass, once those
+        // realm-local key ids exist.
+        let _ = self.alloc_named_method(NativeMethod::IteratorDispose, "[Symbol.dispose]", 0);
+        let _ = self.alloc_named_method(
+            NativeMethod::AsyncIteratorAsyncDispose,
+            "[Symbol.asyncDispose]",
+            0,
+        );
         // Native prototype methods (bound to their prototype at link time,
         // only when the program references the method name). %Object.prototype%
         // carries toString/valueOf/hasOwnProperty/isPrototypeOf; each Error

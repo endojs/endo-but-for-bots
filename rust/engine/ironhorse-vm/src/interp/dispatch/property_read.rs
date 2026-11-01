@@ -195,13 +195,6 @@ impl Interp {
                 }
             }
             Payload::Reference(inst)
-                if self.symbol_ids.get("disposed") == Some(&id)
-                    && (obj.kind == Kind::Reference
-                        && self.disposable_stacks.contains_key(&inst)) =>
-            {
-                Slot::boolean(self.disposable_stacks[&inst].disposed)
-            }
-            Payload::Reference(inst)
                 if (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
                     || (obj.kind == Kind::Reference && self.typed_arrays.contains_key(&inst))
                     || (obj.kind == Kind::Reference && self.data_views.contains_key(&inst)) =>

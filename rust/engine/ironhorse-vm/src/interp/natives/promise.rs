@@ -1212,7 +1212,7 @@ impl Interp {
     /// A branded promise whose observable constructor is `C` is returned
     /// unchanged; every other value is resolved through a fresh capability so
     /// custom constructors and resolving callbacks remain observable.
-    fn promise_resolve_with_constructor(
+    pub(in crate::interp) fn promise_resolve_with_constructor(
         &mut self,
         code: &[u8],
         constructor: Slot,

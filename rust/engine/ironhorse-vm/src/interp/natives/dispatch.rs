@@ -2506,6 +2506,10 @@ impl Interp {
             | NativeMethod::AsyncDisposableStackDefer
             | NativeMethod::AsyncDisposableStackMove
             | NativeMethod::AsyncDisposableStackDisposeAsync
+            | NativeMethod::DisposableStackDisposedGetter
+            | NativeMethod::AsyncDisposableStackDisposedGetter
+            | NativeMethod::IteratorDispose
+            | NativeMethod::AsyncIteratorAsyncDispose
             | NativeMethod::ProxyRevocable
             | NativeMethod::ProxyRevoke
             | NativeMethod::ObjectGetPrototypeOf
@@ -6353,6 +6357,14 @@ impl Interp {
             | NativeMethod::AsyncDisposableStackMove
             | NativeMethod::AsyncDisposableStackDisposeAsync => {
                 self.explicit_resource_method(m, this, base, argc, code)?
+            }
+            NativeMethod::DisposableStackDisposedGetter
+            | NativeMethod::AsyncDisposableStackDisposedGetter => {
+                self.disposable_stack_disposed(m, this)?
+            }
+            NativeMethod::IteratorDispose => self.iterator_dispose(code, this)?,
+            NativeMethod::AsyncIteratorAsyncDispose => {
+                self.async_iterator_async_dispose(code, this)?
             }
             // `Proxy.revocable(target, handler)` (`fx_Proxy_revocable`): a fresh
             // proxy plus a `revoke` function tied to it, returned as

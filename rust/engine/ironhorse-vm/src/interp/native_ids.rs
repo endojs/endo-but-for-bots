@@ -307,6 +307,17 @@ pub enum NativeMethod {
     AsyncDisposableStackDefer,
     AsyncDisposableStackMove,
     AsyncDisposableStackDisposeAsync,
+    /// `get DisposableStack.prototype.disposed` and
+    /// `get AsyncDisposableStack.prototype.disposed`
+    /// (`fx_DisposableStack_prototype_get_disposed`,
+    /// `fx_AsyncDisposableStack_prototype_get_disposed`).
+    DisposableStackDisposedGetter,
+    AsyncDisposableStackDisposedGetter,
+    /// `%Iterator.prototype%[@@dispose]` (`fx_Iterator_prototype_dispose`).
+    IteratorDispose,
+    /// `%AsyncIteratorPrototype%[@@asyncDispose]`
+    /// (`fx_AsyncIterator_prototype_asyncDispose`).
+    AsyncIteratorAsyncDispose,
     /// `Boolean.prototype.valueOf`/`toString`, `Number.prototype.valueOf`
     /// and `String.prototype.valueOf`/`toString`: the receiver's primitive,
     /// which a primitive of the type is itself and a wrapper of the type

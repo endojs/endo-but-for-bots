@@ -63,6 +63,8 @@ macro_rules! gc_root {
                         | NativeMethod::PromiseSpeciesGetter
                         | NativeMethod::RegExpSpeciesGetter
                         | NativeMethod::ArrayBufferSpeciesGetter
+                        | NativeMethod::IteratorDispose
+                        | NativeMethod::AsyncIteratorAsyncDispose
                 )
             )
             .then_some(*owner)

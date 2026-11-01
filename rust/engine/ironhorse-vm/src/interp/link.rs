@@ -1192,6 +1192,39 @@ impl Interp {
                 XS_DONT_ENUM_FLAG,
             );
         }
+        let async_iterator_proto = self.instance_prototype(self.async_generator_proto);
+        for (holder, method, symbol_name) in [
+            (
+                self.iterator_proto,
+                NativeMethod::IteratorDispose,
+                "dispose",
+            ),
+            (
+                async_iterator_proto,
+                NativeMethod::AsyncIteratorAsyncDispose,
+                "asyncDispose",
+            ),
+        ] {
+            let Some(symbol_id) = self.well_known_symbol_property_id(symbol_name) else {
+                continue;
+            };
+            let Some(function) = self
+                .functions
+                .iter()
+                .find_map(|(&function, info)| (info.method == Some(method)).then_some(function))
+            else {
+                continue;
+            };
+            if holder.is_null() {
+                continue;
+            }
+            self.set_own_unmetered_with_flag(
+                holder,
+                symbol_id,
+                Slot::of(Kind::Reference, Payload::Reference(function)),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
         self.installing_intrinsics = was_installing;
     }
 

@@ -266,4 +266,102 @@ impl Interp {
             Ok(Slot::undefined())
         }
     }
+
+    /// `get disposed` of `%DisposableStack.prototype%` and
+    /// `%AsyncDisposableStack.prototype%`. Each getter accepts only its own
+    /// brand, as `fxCheckDisposableStackInstance` and its async twin do.
+    pub(in crate::interp) fn disposable_stack_disposed(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let is_async = method == NativeMethod::AsyncDisposableStackDisposedGetter;
+        match (this.kind, this.value) {
+            (Kind::Reference, Payload::Reference(inst)) => {
+                match self.disposable_stacks.get(&inst) {
+                    Some(data) if data.asynchronous == is_async => Ok(Slot::boolean(data.disposed)),
+                    _ => Err(self.disposable_stack_brand_error(is_async)),
+                }
+            }
+            _ => Err(self.disposable_stack_brand_error(is_async)),
+        }
+    }
+
+    fn disposable_stack_brand_error(&mut self, is_async: bool) -> Step {
+        self.catchable_type_error_msg(
+            if is_async {
+                "this: not an AsyncDisposableStack instance"
+            } else {
+                "this: not a DisposableStack instance"
+            }
+            .into(),
+        )
+    }
+
+    /// `%Iterator.prototype%[@@dispose]()`. The pinned XS runs
+    /// `fxIteratorReturn(the, mxThis, 1)`, the abrupt-completion close: it
+    /// calls a non-nullish `return` with no arguments and discards anything
+    /// that step throws, including the non-object-result TypeError, so the
+    /// method always returns `undefined`.
+    pub(in crate::interp) fn iterator_dispose(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let _ = self.native_try(|machine| {
+            let return_method = machine.get_return_method(code, this)?;
+            if !matches!(return_method.kind, Kind::Undefined | Kind::Null) {
+                machine.call_any(code, return_method, this, &[])?;
+            }
+            Ok(())
+        })?;
+        Ok(Slot::undefined())
+    }
+
+    /// `%AsyncIteratorPrototype%[@@asyncDispose]()`, following
+    /// `fx_AsyncIterator_prototype_asyncDispose`: read `return`; when it is
+    /// `undefined` the result is `PromiseResolve(%Promise%, undefined)`,
+    /// otherwise `return` is called with no arguments and its result passes
+    /// through `PromiseResolve(%Promise%, result)`. Anything thrown on the
+    /// way, including a `null` or non-callable `return`, rejects a fresh
+    /// `%Promise%` instead.
+    pub(in crate::interp) fn async_iterator_async_dispose(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let promise_constructor = self
+            .intrinsics
+            .get("Promise")
+            .map(|&constructor| Slot::of(Kind::Reference, Payload::Reference(constructor)))
+            .unwrap_or_else(Slot::undefined);
+        let outcome = self.native_try(|machine| {
+            let return_method = machine.get_return_method(code, this)?;
+            let result = if return_method.kind == Kind::Undefined {
+                Slot::undefined()
+            } else {
+                machine.call_any(code, return_method, this, &[])?
+            };
+            machine.promise_resolve_with_constructor(code, promise_constructor, result)
+        })?;
+        match outcome {
+            Ok(promise) => Ok(promise),
+            Err(thrown) => {
+                let promise = self.new_promise_instance();
+                self.settle_promise(code, promise, thrown, true)?;
+                Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+            }
+        }
+    }
+
+    /// `GetV(value, "return")`: a primitive receiver reads through its
+    /// wrapper, and `undefined`/`null` throw.
+    fn get_return_method(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
+        let object = self.array_to_object(value)?;
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let return_id = self.intern_static_key("return");
+        self.mop_get(code, inst, return_id, value)
+    }
 }
