@@ -302,17 +302,23 @@ impl Interp {
     }
 
     /// `Object.prototype.hasOwnProperty(V)` (ECMA-262 20.1.3.2). Matches XS's
-    /// `fx_Object_prototype_hasOwnProperty`: coerce the receiver first (so a
-    /// `null`/`undefined` `this` throws a TypeError before the key is
-    /// stringified), then `? ToPropertyKey(V)`, then whether the resulting
-    /// object has `P` as an OWN property — `O.[[GetOwnProperty]](P) is not
-    /// undefined`, never consulting the prototype chain.
+    /// `fx_Object_prototype_hasOwnProperty`: `? ToPropertyKey(V)` first (so a
+    /// throwing key coercion wins over a `null`/`undefined` `this`), then
+    /// `? ToObject(this)`, then whether the resulting object has `P` as an
+    /// OWN property — `O.[[GetOwnProperty]](P) is not undefined`, never
+    /// consulting the prototype chain.
     pub(in crate::interp) fn object_has_own_property(
         &mut self,
         code: &[u8],
         this: Slot,
         arg0: Slot,
     ) -> Result<Slot, Step> {
+        // `? ToPropertyKey(V)` (XS's `fxAt`): a symbol resolves to its stable
+        // key id; a non-index string interns as a name; any other primitive
+        // coerces through ToPrimitive → ToString first (a number key renders
+        // and meters its result chunk). A canonical index stays an index and
+        // mints nothing — an own-property PROBE creates no property.
+        let key = self.to_read_key(code, arg0)?;
         // `? ToObject(this)`: `null`/`undefined` throw (XS's `fxToInstance`); a
         // primitive boxes to its wrapper, whose own-property set is computed
         // directly below without materializing the wrapper.
@@ -326,12 +332,6 @@ impl Interp {
                 .into(),
             ));
         }
-        // `? ToPropertyKey(V)` (XS's `fxAt`): a symbol resolves to its stable
-        // key id; a non-index string interns as a name; any other primitive
-        // coerces through ToPrimitive → ToString first (a number key renders
-        // and meters its result chunk). A canonical index stays an index and
-        // mints nothing — an own-property PROBE creates no property.
-        let key = self.to_read_key(code, arg0)?;
         // The `mxBehaviorGetOwnProperty` probe native-body residual, metered
         // once per call exactly as the pre-existing string-key path did.
         self.meter.tick_raw(METHOD_HAS_OWN_PROPERTY_METERING);
