@@ -111,34 +111,25 @@ impl Interp {
                 Payload::Reference(self.environment.global_obj),
             );
             Some((self.mop_get(code, self.environment.global_obj, name, global))?)
-        } else if self.mop_has(code, self.object_proto, name)? {
-            // `global_props` is the OWN-property index of the
-            // global object, but a bare name resolves through
-            // `HasProperty`, which walks the prototype chain: every
-            // `%Object.prototype%` member (`toString`, `valueOf`,
-            // `hasOwnProperty`, …) is a resolvable global name, so
-            // reading one answers its inherited VALUE rather than
-            // faulting — XS answers `typeof toString` with
-            // `"function"`. This is the read-side twin of the
-            // `SET_VARIABLE` unresolvable guard below, asked and
-            // answered the same way: ironhorse's global object
-            // carries a NULL prototype (a separate, pre-existing
-            // divergence: `Object.getPrototypeOf(globalThis)` is
-            // `null` here and `%Object.prototype%` in XS), so the
-            // inherited half of the question is put to
-            // `%Object.prototype%` directly. The `instance_has`
-            // probe is read-only and unmetered — XS's own chain
-            // walk is already folded into this arm's measured cost
-            // — and the value comes back through the same full
-            // `[[Get]]` the own-global read uses, receiver still
-            // the global object, so an inherited accessor runs
-            // with the `this` XS gives it and its abrupt
-            // completion is observed.
+        } else if self.mop_has(code, self.environment.global_obj, name)? {
+            // `global_props` is the OWN-property index of the global
+            // object, but a bare name resolves through `HasProperty`,
+            // which walks the prototype chain: every `%Object.prototype%`
+            // member (`toString`, `valueOf`, `hasOwnProperty`, …) is a
+            // resolvable global name, so reading one answers its
+            // inherited VALUE rather than faulting — XS answers
+            // `typeof toString` with `"function"`. The probe is the
+            // global object's own [[HasProperty]], so name resolution and
+            // `name in globalThis` agree. It is read-only and unmetered —
+            // XS's own chain walk is already folded into this arm's
+            // measured cost — and the value comes back through the full
+            // `[[Get]]`, so an inherited accessor runs with the global
+            // object as `this` and its abrupt completion is observed.
             let global = Slot::of(
                 Kind::Reference,
                 Payload::Reference(self.environment.global_obj),
             );
-            Some((self.mop_get(code, self.object_proto, name, global))?)
+            Some((self.mop_get(code, self.environment.global_obj, name, global))?)
         } else {
             None
         };
@@ -306,15 +297,10 @@ impl Interp {
             // `%Object.prototype%` member (`toString`, `valueOf`,
             // `hasOwnProperty`, …) is a resolvable global name, so a
             // strict assignment to one must NOT throw — XS answers
-            // `toString = 1` with no error. ironhorse's global object
-            // carries a NULL prototype (a separate, pre-existing
-            // divergence: `Object.getPrototypeOf(globalThis)` is
-            // `null` here and `%Object.prototype%` in XS), so the
-            // inherited half of the question is asked of
-            // `%Object.prototype%` directly. Read-only and
+            // `toString = 1` with no error. The inherited half is the
+            // global object's own [[HasProperty]], read-only and
             // unmetered: XS's own chain walk is already folded into
-            // this arm's measured cost, and both forms stay
-            // bit-exact against the pin.
+            // this arm's measured cost.
             if let Some(&cell) = self.environment.global_lexicals.get(&name) {
                 // The write-side twin of the lexical arm in
                 // `dispatch_get_variable`: assignment reaches the cell, never
@@ -351,7 +337,7 @@ impl Interp {
                 return Ok(());
             }
             let own_global = self.environment.global_props.contains_key(&name);
-            let resolvable = own_global || self.mop_has(code, self.object_proto, name)?;
+            let resolvable = own_global || self.mop_has(code, self.environment.global_obj, name)?;
             if !resolvable && self.strict {
                 // XS's `SET_VARIABLE` strict arm:
                 // `mxRunDebugID(XS_REFERENCE_ERROR, "set %s:

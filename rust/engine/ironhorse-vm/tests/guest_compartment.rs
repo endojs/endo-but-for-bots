@@ -53,6 +53,24 @@ fn the_constructor_is_a_guest_global() {
 }
 
 #[test]
+fn a_compartment_global_inherits_from_object_prototype() {
+    // CORE-4: a Compartment global chains to the shared %Object.prototype%,
+    // so bare-name resolution and `in` agree on an inherited name.
+    assert_eq!(
+        result(
+            "new Compartment().evaluate('Object.getPrototypeOf(globalThis) === Object.prototype')"
+        ),
+        "true"
+    );
+    assert_eq!(
+        result(
+            "new Compartment().evaluate(\"typeof toString + ',' + ('toString' in globalThis)\")"
+        ),
+        "function,true"
+    );
+}
+
+#[test]
 fn a_compartment_stringifies_by_its_to_string_tag() {
     assert_eq!(result("String(new Compartment())"), "[object Compartment]");
 }
