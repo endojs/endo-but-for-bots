@@ -1,9 +1,7 @@
 // Types for the durable inference provider registry
-// (`inference-provider-registry.js`). Key bytes never enter these records or
-// the registry journal; they stay in `@secrets` and reach only the issuer
-// factory. The records do hold secret-adjacent identifiers: `StableIds.grantId`
-// is redeemable read authority over the key, so treat registry state (including
-// `inspect()` output) as confidential.
+// (`inference-provider-registry.js`). `StableIds.grantId` is redeemable read
+// authority over the key, so registry state (including `inspect()` output) is
+// confidential.
 
 /** Caller-preallocated identifiers for one idempotent `@secrets` import. */
 export type StableIds = {
