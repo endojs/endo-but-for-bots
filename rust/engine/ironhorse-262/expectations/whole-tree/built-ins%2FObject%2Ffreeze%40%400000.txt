@@ -90,7 +90,7 @@ built-ins/Object/freeze/15.2.3.9-4-3.js strict pass
 built-ins/Object/freeze/abrupt-completion.js sloppy pass
 built-ins/Object/freeze/abrupt-completion.js strict pass
 built-ins/Object/freeze/frozen-object-contains-symbol-properties-non-strict.js sloppy pass
-built-ins/Object/freeze/frozen-object-contains-symbol-properties-strict.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/freeze/frozen-object-contains-symbol-properties-strict.js strict pass
 built-ins/Object/freeze/name.js sloppy pass
 built-ins/Object/freeze/name.js strict pass
 built-ins/Object/freeze/not-a-constructor.js sloppy pass

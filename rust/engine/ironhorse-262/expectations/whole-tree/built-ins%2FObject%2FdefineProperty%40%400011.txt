@@ -54,7 +54,7 @@ built-ins/Object/defineProperty/redefine-length-with-various-values-and-configur
 built-ins/Object/defineProperty/symbol-data-property-configurable.js sloppy pass
 built-ins/Object/defineProperty/symbol-data-property-configurable.js strict pass
 built-ins/Object/defineProperty/symbol-data-property-default-non-strict.js sloppy pass
-built-ins/Object/defineProperty/symbol-data-property-default-strict.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Object/defineProperty/symbol-data-property-default-strict.js strict pass
 built-ins/Object/defineProperty/symbol-data-property-writable.js sloppy pass
 built-ins/Object/defineProperty/symbol-data-property-writable.js strict pass
 built-ins/Object/defineProperty/typedarray-backed-by-resizable-buffer.js sloppy skip:shared-positive-test-failure

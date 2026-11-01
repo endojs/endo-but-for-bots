@@ -635,7 +635,19 @@ impl Interp {
                 if !full && self.find_property(proto, mid).is_some() {
                     continue;
                 }
-                let flag = if mname == "prototype" && proto == self.generator_function_proto {
+                // `%GeneratorFunction.prototype%` and
+                // `%AsyncGeneratorFunction.prototype%` carry a configurable,
+                // non-writable `prototype` (ECMA-262 27.3.3.2, 27.4.3.2), and
+                // those two plus `%AsyncFunction.prototype%` a configurable,
+                // non-writable `constructor` (27.3.3.1, 27.4.3.1, 27.7.3.1),
+                // matching XS's `fxBuildGenerator` / `fxBuildFunction`
+                // (`slot->flag |= XS_DONT_SET_FLAG`).
+                let dynamic_function_proto = proto == self.generator_function_proto
+                    || proto == self.async_generator_function_proto;
+                let flag = if mname == "prototype" && dynamic_function_proto
+                    || mname == "constructor"
+                        && (dynamic_function_proto || proto == self.async_function_proto)
+                {
                     XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG
                 } else if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
