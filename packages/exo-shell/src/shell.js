@@ -117,6 +117,7 @@ export const makeShell = ({
     timeoutMs: defaultTimeoutMs,
     maxOutputBytes,
     env = {},
+    engine = 'host',
   } = policy;
   if (
     !Array.isArray(allowedCommands) ||
@@ -137,6 +138,11 @@ export const makeShell = ({
   if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw makeError(
       X`makeShell: policy.maxOutputBytes must be a positive integer`,
+    );
+  }
+  if (engine !== 'host' && engine !== 'sandbox') {
+    throw makeError(
+      X`makeShell: policy.engine must be 'host' or 'sandbox', got ${q(engine)}`,
     );
   }
   if (
@@ -163,6 +169,7 @@ export const makeShell = ({
         allowedCommands: allowedList,
         timeoutMs: defaultTimeoutMs,
         maxOutputBytes,
+        engine,
       });
     },
 
@@ -196,12 +203,16 @@ export const makeShell = ({
       const argv = harden([command, ...args]);
       // Start the budget before admission. A late process stays observed and
       // receives any queued termination even after the caller has timed out.
+      // The timeout and cap are this exo's to enforce.  They also go to the
+      // spawner unchanged so an engine with its own limits (a sandbox slice)
+      // can back them.
       const procPromise = Promise.resolve().then(() =>
         spawner(argv, {
           cwd,
           env: childEnv,
           shell: false,
           timeoutMs: effectiveTimeoutMs,
+          maxOutputBytes,
         }),
       );
       /** @type {Error | undefined} */

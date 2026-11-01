@@ -229,8 +229,59 @@ export const killProcessGroup = (child, signal) => {
   try {
     process.kill(-pid, signal);
   } catch (e) {
-    const err = /** @type {Error & { code?: string }} */ (e);
-    if (err.code !== 'ESRCH') throw err;
+    const error = /** @type {Error & { code?: string }} */ (e);
+    if (error.code !== 'ESRCH') throw error;
   }
 };
 harden(killProcessGroup);
+
+/**
+ * SIGKILL what is left of a detached process group whose leader Node has
+ * already reaped, without signalling a group the kernel may have handed to
+ * somebody else.
+ *
+ * Once the leader is reaped its pid is free, but the pgid is not: a pgid
+ * whose group still has a member cannot be adopted by a new session or
+ * group (`setsid` and `setpgid` both refuse it).  So the sweep signals the
+ * group only when no live process holds the pgid as its pid and a
+ * null-signal probe finds a member.  The residual window is the
+ * microseconds between the probe and the signal, during which every
+ * remaining member would have to die and a fresh process would have to
+ * take the pid and call `setsid`.  `ESRCH` from the signal itself means the
+ * group emptied in that window; any other error (such as `EPERM`) is
+ * thrown, because the caller cannot prove the group is gone.
+ *
+ * @param {number} pgid
+ * @param {object} [powers]
+ * @param {(pid: number, signal: NodeJS.Signals | 0) => void} [powers.kill]
+ * @param {(pid: number) => boolean} [powers.isLive]  Whether a process
+ *   currently holds `pid`.
+ * @returns {boolean} Whether SIGKILL was delivered to the group.
+ */
+export const sweepLeaderlessGroup = (
+  pgid,
+  {
+    kill = (pid, signal) => process.kill(pid, signal),
+    isLive = pid => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (e) {
+        return /** @type {{ code?: string }} */ (e).code === 'EPERM';
+      }
+    },
+  } = {},
+) => {
+  if (isLive(pgid)) return false;
+  for (const signal of /** @type {const} */ ([0, 'SIGKILL'])) {
+    try {
+      kill(-pgid, signal);
+    } catch (e) {
+      const error = /** @type {Error & { code?: string }} */ (e);
+      if (error.code === 'ESRCH') return false;
+      throw error;
+    }
+  }
+  return true;
+};
+harden(sweepLeaderlessGroup);

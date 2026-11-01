@@ -7,13 +7,13 @@ import { M } from '@endo/patterns';
 
 /**
  * The policy surface `inspect()` reveals to a holder of the Shell cap.
- * Deliberately a *closed* record of exactly the three fields the design's
- * `ShellPolicy` names — so the sanitized-env passlist, the baked `searchPath`,
+ * Deliberately a *closed* record of exactly the four fields the design's
+ * `ShellPolicy` names (the three bounds plus the engine) — so the sanitized-env passlist, the baked `searchPath`,
  * and the host working directory (all host-path-bearing) can never leak through
  * `inspect()`.  `M.splitRecord` is *open* by default (its rest pattern defaults
  * to `M.any()`, admitting any extra field), so closing the record takes an
  * explicit empty rest pattern: the leftover, collected as a record, must match
- * `{}`, so any field beyond the three named ones is rejected.  With the record
+ * `{}`, so any field beyond the four named ones is rejected.  With the record
  * genuinely closed the returns-guard is a real defense-in-depth net: if a future
  * `inspect()` regressed to include `cwd` / `env` / `searchPath`, the guard would
  * reject the value rather than let a host path escape.
@@ -23,6 +23,7 @@ const ShellPolicyShape = M.splitRecord(
     allowedCommands: M.arrayOf(M.string()),
     timeoutMs: M.number(),
     maxOutputBytes: M.number(),
+    engine: M.or('host', 'sandbox', 'environment'),
   },
   undefined,
   harden({}),

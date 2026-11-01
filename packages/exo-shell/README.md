@@ -36,7 +36,8 @@ per-stream output cap with a `truncated` flag, and a default timeout that a per-
 The Floot development preset defaults to ten minutes (600,000 ms).
 Overrides must be positive integers up to 2**31 - 1 ms, the native timer range;
 zero does not disable the deadline.
-`inspect().timeoutMs` reveals the default, not a maximum, and never the host
+`inspect()` reveals the allowlist, the default timeout (`timeoutMs`, a default
+rather than a maximum), the output cap, and the `engine`, and never the host
 working directory, env passlist, or search path.
 
 Ordinary nonzero exits return `exitCode`; spawn, stream, stdin-close, transport,
@@ -47,21 +48,29 @@ wait for an unresponsive engine.
 A bounded rejection is not proof of native cleanup: the engine must retain
 ownership of late admission and failed termination.
 
-`@endo/sandbox/spawner.js` supplies `makeSandboxSpawner(slice)` for an already-granted
-local or remote sandbox slice.
+`makeSandboxSpawner(slice)` from `@endo/host-spawner/src/sandbox-spawner.js`
+(re-exported as `@endo/sandbox/spawner.js`) adapts an already-granted local or
+remote sandbox slice.
 It closes stdin, adapts separate Endo byte readers, and forwards termination through
 eventual sends; native process ownership remains with the sandbox factory.
 Shell's output bound truncates capture while continuing to drain.
 A separate native safety ceiling may terminate the operation and reject `exec`.
 This adapter does not by itself provision a durable environment or restore live processes.
 
+`@endo/exo-shell/engine-cases.js` publishes the engine conformance table: test
+data, not runtime code, that an engine's own package runs to show its Shell
+results match the host engine's.
+
 ## The honest boundary
 
 Under the host spawner, a `Shell` bounds *which* commands start and *with what*
 env, cwd, timeout, and output budget. A started child is still an ordinary host
 process (an allowlisted `grep` can read `~/.ssh` if the OS user can). Kernel-level
-confinement comes from running the same capability over a sandbox spawner; the
-engine is chosen host-side and is invisible on this surface.
+confinement comes from running the same capability over a sandbox spawner.
+The engine is chosen host-side, and `inspect().engine` reports it: `'host'`,
+`'sandbox'` (an `@endo/sandbox` slice), or `'environment'` (execution
+delegated to an environment runner, whose confinement this surface does not
+attest).
 
 Command-name attenuation is void if a delegating command is allowlisted. An
 interpreter (`node -e`, `python -c`, `bash -c`, `sh`), an exec-forwarder (`env`,

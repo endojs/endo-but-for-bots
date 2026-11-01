@@ -80,7 +80,13 @@ const fixture = async (t, plan = {}) => {
   if (!plan.hang && !plan.readerFailure)
     exit.resolve({ code: plan.code ?? 0, signal: null });
   const spawner = makeSandboxSpawner(
-    plan.remote ? await makeLoopback('sandbox-spawner').makeFar(slice) : slice,
+    // The loopback's far reference erases method types; the adapter only
+    // sends to it.
+    plan.remote
+      ? /** @type {any} */ (
+          await makeLoopback('sandbox-spawner').makeFar(slice)
+        )
+      : slice,
     { outputByteLimit: plan.outputByteLimit },
   );
   const shell = makeShell({
@@ -129,15 +135,20 @@ test('Sandbox spawner refuses shell wrapping before admitting a command', async 
   t.is(f.calls.length, 0);
 });
 
-test('Shell truncates and drains output beyond the old native 16 MiB guard', async t => {
-  t.timeout(10_000);
-  const f = await fixture(t, { outputChunks: 272 });
-  const result = await E(f.shell).exec('echo', []);
-  t.is(result.stdout.length, 1024);
-  t.true(result.truncated);
-  t.is(result.exitCode, 0);
-  t.deepEqual(f.signals, []);
-});
+// Serial: draining 16 MiB monopolizes the event loop for seconds, which would
+// otherwise consume the timeout budgets of the concurrent tests.
+test.serial(
+  'Shell truncates and drains output beyond the old native 16 MiB guard',
+  async t => {
+    t.timeout(10_000);
+    const f = await fixture(t, { outputChunks: 272 });
+    const result = await E(f.shell).exec('echo', []);
+    t.is(result.stdout.length, 1024);
+    t.true(result.truncated);
+    t.is(result.exitCode, 0);
+    t.deepEqual(f.signals, []);
+  },
+);
 
 test('native output guard remains independently configurable', async t => {
   const f = await fixture(t, { outputByteLimit: 4n });
@@ -211,11 +222,15 @@ test('Stalled stdin closure does not hide an admitted process from cancellation'
     hang: true,
     remote: true,
   });
+  const t0 = Date.now();
+  console.log('DBG start');
   await t.throwsAsync(E(f.shell).exec('echo', [], { timeoutMs: 10 }), {
     message: /timed out/,
   });
+  console.log('DBG exec rejected', Date.now() - t0);
   t.true(f.stdinClosed());
   t.true(f.signals.includes('SIGTERM'));
+  console.log('DBG body done', f.signals);
 });
 
 test('Rejected stdin closure remains an execution failure with controls available', async t => {
