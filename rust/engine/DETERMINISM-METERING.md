@@ -87,6 +87,11 @@ Only `055.js` (`acosh(2.3)`) and `057.js` (`exp(1)`) differ under libm.
 Their exact actual/expected bits are in `tests/fixtures/math-corpus-libm.tsv`.
 A local macOS XS run over all 72 stage3-math specimens with `--repeat 3` produced
 70 covered cases and exactly those two failures; the oracle lane stays platform.
+Because the oracle lane uses the host libm, its expectations are tied to a host.
+The Linux oracle lanes run on Ubuntu 24.04: Ubuntu 26.04 glibc correctly rounds
+`asinh` and `acosh`, so there the XS oracle rejects the pinned `054.js`
+(`asinh(1.7)`) and `055.js` (`acosh(2.3)`) values by one ULP while Iron Horse
+still produces them.
 No Math-wide skip or tolerance was introduced.
 
 ## Deterministic provider
