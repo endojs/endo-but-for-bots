@@ -1198,6 +1198,9 @@ mod tests {
             "1 + 2 * 3",
             "if (1) { 2 } else { 3 }",
             "(function(a){ return a + 1 })(4)",
+            // Each static block is its own BODY scope, as in XS.
+            "class A { static { let y = 1; } static { let y = 2; } } 0",
+            "var r = []; class B { static { var x = 1; r.push(x); } static { const x = 2; r.push(x); } } r.join()",
         ];
         for src in programs {
             let oracle = dual_run_with(src, Compiler::Oracle).expect("oracle runs");
@@ -1223,12 +1226,10 @@ mod tests {
     fn compiler_seam_endor_fold_is_a_clean_abort_not_a_panic() {
         // A construct the coder folds on must, through the `Ironhorse` seam,
         // produce empty bytecode that ironhorse-vm treats as an abort — never a
-        // harness panic. Private member *reads/writes* and the `#x in o`
-        // brand check now code byte-identically (this child), so this uses a
-        // still-deferred class-tail construct: a `static { … }` block with
-        // its own lexical declarations, whose field-function frame
-        // reservation is the remaining fold.
-        let src = "class C { static { let x = 1; } } new C()";
+        // harness panic. Static blocks no longer fold (each is its own BODY
+        // scope), so this uses the coder's own early-error report, which takes
+        // the same empty-bytecode path.
+        let src = "({ a = 1 });";
         let ironhorse = dual_run_with(src, Compiler::Ironhorse).expect("oracle reference runs");
         assert!(
             ironhorse.bytecode.is_empty(),
@@ -1242,12 +1243,16 @@ mod tests {
     }
 
     #[test]
-    fn compiler_seam_constructs_unsupported_for_valid_unported_syntax() {
+    fn compiler_seam_accepts_static_blocks_with_lexical_declarations() {
+        // This used to be the seam's `Unsupported` fixture: a static block's
+        // lexical declarations were a deferred coder fold. Each block is now
+        // its own BODY scope, so the seam must report an acceptance, not a
+        // refusal to parse an unported construct.
         let source = "class A { static { let y = 1; } }";
         let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle reference runs");
         assert!(
-            matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message) if message.contains("static block with lexical declarations")),
-            "the production compiler seam must distinguish valid unported syntax: {:?}",
+            matches!(run.ironhorse_compile, IronhorseCompile::Accepted),
+            "the production compiler seam must accept a static block: {:?}",
             run.ironhorse_compile
         );
     }

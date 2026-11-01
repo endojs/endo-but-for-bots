@@ -1201,11 +1201,26 @@ impl Interp {
             let source_buffer = self.array_buffers[&source.buffer];
             let source_start = source.offset as usize + begin as usize * size;
             let byte_count = count as usize * size;
+            let target_start = target.offset as usize;
+            if source.buffer == target.buffer {
+                // A species constructor may return a view over the source's
+                // own buffer. The spec copies one byte at a time in
+                // ascending order (and XS's `fx_TypedArray_prototype_slice`
+                // matches), so an overlapping forward copy re-reads bytes
+                // it already wrote rather than behaving like `memmove`.
+                let out = self.chunks.slice_mut(
+                    source_buffer.data,
+                    (source_start + byte_count).max(target_start + byte_count),
+                );
+                for offset in 0..byte_count {
+                    out[target_start + offset] = out[source_start + offset];
+                }
+                return Ok(result);
+            }
             let bytes = self.chunks.payload(source_buffer.data)
                 [source_start..source_start + byte_count]
                 .to_vec();
             let target_buffer = self.array_buffers[&target.buffer];
-            let target_start = target.offset as usize;
             let out = self
                 .chunks
                 .slice_mut(target_buffer.data, target_start + byte_count);
@@ -1298,11 +1313,10 @@ impl Interp {
     }
 
     /// `%TypedArray%.prototype.sort`: stable numeric/BigInt ordering, with an
-    /// optional guest comparator whose result is ToNumber-coerced. A comparator
-    /// that detaches the receiver triggers the required TypeError immediately
-    /// after its result is ToNumber-coerced, before another comparison or any
-    /// write-back. One that shrinks it leaves the write-back to the indices
-    /// still inside the view.
+    /// optional guest comparator whose result is ToNumber-coerced. As in the
+    /// current spec and XS, a comparator that detaches or shrinks the receiver does not
+    /// throw: sorting continues over the captured values, and the write-back
+    /// only touches the indices still inside the view (none once detached).
     pub(in crate::interp) fn typed_array_sort(
         &mut self,
         this: Slot,
@@ -1341,9 +1355,6 @@ impl Interp {
                     let result =
                         self.run_callback(code, compare, Slot::undefined(), &[value, previous])?;
                     let number = self.to_number_f64(code, result)?;
-                    if self.detached_buffers.contains(&typed_array.buffer) {
-                        return Err(self.catchable_type_error_msg("detached buffer".into()));
-                    }
                     if number < 0.0 {
                         std::cmp::Ordering::Less
                     } else if number > 0.0 {

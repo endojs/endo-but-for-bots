@@ -97,8 +97,8 @@ built-ins/TypedArray/prototype/slice/speciesctor-get-species.js sloppy pass
 built-ins/TypedArray/prototype/slice/speciesctor-get-species.js strict pass
 built-ins/TypedArray/prototype/slice/speciesctor-resize.js sloppy skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/slice/speciesctor-resize.js strict skip:shared-positive-test-failure
-built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [20, 30, 40, 60] and expected [20, 20, 20, 60] should have the same contents.  (Testing with Float64Array and makePassthrough.)"
-built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [20, 30, 40, 60] and expected [20, 20, 20, 60] should have the same contents.  (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js sloppy pass
+built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js strict pass
 built-ins/TypedArray/prototype/slice/this-is-not-object.js sloppy pass
 built-ins/TypedArray/prototype/slice/this-is-not-object.js strict pass
 built-ins/TypedArray/prototype/slice/this-is-not-typedarray-instance.js sloppy pass

@@ -79,20 +79,20 @@ language/statements/class/static-init-invalid-undefined-continue-target.js slopp
 language/statements/class/static-init-invalid-undefined-continue-target.js strict pass
 language/statements/class/static-init-invalid-yield.js sloppy pass
 language/statements/class/static-init-invalid-yield.js strict pass
-language/statements/class/static-init-scope-lex-close.js sloppy skip:parse-or-decode
-language/statements/class/static-init-scope-lex-close.js strict skip:parse-or-decode
+language/statements/class/static-init-scope-lex-close.js sloppy pass
+language/statements/class/static-init-scope-lex-close.js strict pass
 language/statements/class/static-init-scope-lex-derived.js sloppy pass
 language/statements/class/static-init-scope-lex-derived.js strict pass
-language/statements/class/static-init-scope-lex-open.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: duplicate variable test262"
-language/statements/class/static-init-scope-lex-open.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: duplicate variable test262"
+language/statements/class/static-init-scope-lex-open.js sloppy pass
+language/statements/class/static-init-scope-lex-open.js strict pass
 language/statements/class/static-init-scope-private.js sloppy pass
 language/statements/class/static-init-scope-private.js strict pass
-language/statements/class/static-init-scope-var-close.js sloppy skip:parse-or-decode
-language/statements/class/static-init-scope-var-close.js strict skip:parse-or-decode
+language/statements/class/static-init-scope-var-close.js sloppy pass
+language/statements/class/static-init-scope-var-close.js strict pass
 language/statements/class/static-init-scope-var-derived.js sloppy pass
 language/statements/class/static-init-scope-var-derived.js strict pass
-language/statements/class/static-init-scope-var-open.js sloppy skip:parse-or-decode
-language/statements/class/static-init-scope-var-open.js strict skip:parse-or-decode
+language/statements/class/static-init-scope-var-open.js sloppy pass
+language/statements/class/static-init-scope-var-open.js strict pass
 language/statements/class/static-init-sequence.js sloppy pass
 language/statements/class/static-init-sequence.js strict pass
 language/statements/class/static-init-statement-list-optional.js sloppy pass

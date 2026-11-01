@@ -60,7 +60,7 @@ fn outcome(source: &str) -> Result<&'static str, String> {
 #[test]
 fn the_findings_probes_return_rather_than_panic() {
     for (source, expected) in [
-        ("class C { static { let x = 1; } }", "unsupported"),
+        ("class C { static { let x = 1; } }", "compiled"),
         ("({a = 1});", "syntax"),
         ("({a: {b = 1}});", "syntax"),
     ] {

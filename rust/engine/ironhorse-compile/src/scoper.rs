@@ -818,10 +818,9 @@ impl Scoper<'_> {
         self.body_scope = Some(fi);
         for m in members {
             if is_static && m.token == Token::Body {
-                // A static block: hoist its statements (child 0) directly.
-                if let Some(body) = m.children.first() {
-                    self.hoist_item(body)?;
-                }
+                // A static block is a BODY node (`fxBodyNodeHoist`): its own
+                // block scope, so sibling blocks' declarations stay apart.
+                self.hoist_dispatch(m)?;
             } else if let Some(v) = m.children.get(1) {
                 self.hoist_item(v)?;
             }
@@ -2005,12 +2004,10 @@ impl Scoper<'_> {
         self.scope_maximum = 0;
         self.fx_scope_binding(fi);
         for m in ordered {
-            // A `static { … }` block runs its body (child 0) directly inside
-            // the field function — no member access, no value install.
+            // A `static { … }` block binds as its own BODY scope inside the
+            // field function — no member access, no value install.
             if m.token == Token::Body {
-                if let Some(body) = m.children.first() {
-                    self.bind_item(body)?;
-                }
+                self.bind_dispatch(m)?;
                 continue;
             }
             let access = self
