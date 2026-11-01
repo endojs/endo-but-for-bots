@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: `numRuns` is fast-check's run-count option name.
 import test from '@endo/ses-ava/prepare-endo.js';
 import { fc } from '@fast-check/ava';
 import { normalizeGitRemotePolicy } from '@endo/exo-git';

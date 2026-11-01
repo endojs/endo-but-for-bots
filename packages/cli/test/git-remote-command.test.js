@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: `numRuns` is fast-check's run-count option name.
 
 import path from 'path';
 import '@endo/init';
@@ -6,7 +7,8 @@ import test from 'ava';
 import { fc } from '@fast-check/ava';
 import url from 'url';
 import { execa } from 'execa';
-import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import {
   formatGitRemoteInspection,
@@ -521,12 +523,13 @@ test('inspection escapes terminal controls the daemon reports', t => {
   t.notRegex(
     output,
     // eslint-disable-next-line no-control-regex
-    /[\u001b\u061c\u202e]/,
+    new RegExp('[\u001b\u061c\u202e]'),
   );
   t.is(output.split('\n').filter(line => /^ {2}state:/.test(line)).length, 1);
-  t.regex(
-    output,
-    /credential: bearer for https:\/\/github\.com\\u000a {2}state: active\\u061c \(available\)/,
+  t.true(
+    output.includes(
+      'credential: bearer for https://github.com\\u000a  state: active\\u061c (available)',
+    ),
   );
   t.regex(output, /^origin\\u202e$/m);
   t.regex(output, /refs\/remotes\/origin\/\\u001b\[2K\*/);
@@ -553,10 +556,14 @@ test('inspection renders the whole policy family', t => {
   t.regex(output, /local file transport: allowed/);
 });
 
+const GitRemoteControllerTestInterface = M.interface('GitRemoteController', {
+  inspect: M.call().returns(M.promise()),
+});
+
 /** @param {Array<boolean>} revokedSequence */
 const makeRacingController = revokedSequence => {
   let reads = 0;
-  return Far('GitRemoteController', {
+  return makeExo('GitRemoteController', GitRemoteControllerTestInterface, {
     inspect: async () => {
       const revoked =
         revokedSequence[Math.min(reads, revokedSequence.length - 1)];
@@ -577,7 +584,11 @@ const makeRacingController = revokedSequence => {
   });
 };
 
-const revokedRemote = Far('GitRemote', {
+const GitRemoteTestInterface = M.interface('GitRemote', {
+  credentialHealth: M.call().returns(M.promise()),
+});
+
+const revokedRemote = makeExo('GitRemote', GitRemoteTestInterface, {
   credentialHealth: async () => {
     throw Error('GitRemote has been revoked');
   },
