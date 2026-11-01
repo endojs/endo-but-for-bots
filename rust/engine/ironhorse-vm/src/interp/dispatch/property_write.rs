@@ -167,6 +167,18 @@ impl Interp {
                     && self.scalar_key_text(id).as_deref() == Some("length")
                 {
                     false
+                } else if self
+                    .wrapper_data
+                    .get(&inst)
+                    .is_some_and(|value| value.kind == Kind::String)
+                    && self.find_property(inst, id).is_none()
+                    && self.exotic_own_descriptor(inst, id).is_some()
+                {
+                    // A String wrapper's `length` and unit indices are
+                    // non-configurable (XS's `fxStringDeleteProperty`),
+                    // as `mop_delete` already reports for
+                    // `Reflect.deleteProperty`.
+                    false
                 } else {
                     self.delete_own_property(inst, id)
                 };
