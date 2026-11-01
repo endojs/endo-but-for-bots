@@ -1674,11 +1674,10 @@ impl Interp {
         self.ordinary_get_walk(code, inst, id, receiver)
     }
 
-    /// Whether a RegExp property lookup reaches the VM's implicit intrinsic
-    /// accessor without encountering an observable own/inherited override.
-    /// The default `source` and `flags` accessors are represented by the
-    /// RegExp side table rather than ordinary property slots, so constructor
-    /// copy semantics use this gate before reading that side table directly.
+    /// Whether a RegExp property lookup reaches the intrinsic accessor on
+    /// `%RegExp.prototype%` without encountering an observable own/inherited
+    /// override or a Proxy. While it does, a caller may read the RegExp side
+    /// table directly instead of calling the getter.
     pub(super) fn regexp_getter_uses_default(
         &self,
         inst: crate::value::SlotIndex,
@@ -1686,15 +1685,53 @@ impl Interp {
     ) -> bool {
         let mut current = inst;
         while !current.is_null() {
-            if self.proxies.contains_key(&current) || self.find_property(current, id).is_some() {
+            if self.proxies.contains_key(&current) {
                 return false;
             }
             if current == self.regexp_proto {
-                return true;
+                return self.regexp_proto_accessor_is_intrinsic(id);
+            }
+            if self.find_property(current, id).is_some() {
+                return false;
             }
             current = self.instance_prototype(current);
         }
         false
+    }
+
+    /// Whether `%RegExp.prototype%`'s `id` property is still the intrinsic
+    /// `source`, `flags` or flag getter for that name. The accessors are
+    /// installed only for a program that can name them, so an absent property
+    /// that was never deleted also counts as intrinsic.
+    pub(super) fn regexp_proto_accessor_is_intrinsic(&self, id: u16) -> bool {
+        let proto = self.regexp_proto;
+        let Some(property) = self.find_property(proto, id) else {
+            return true;
+        };
+        if self.slots.get(property).flag & XS_GETTER_FLAG == 0 {
+            return false;
+        }
+        let ids = self.regexp_getter_ids;
+        let expected = if Some(id) == ids.source {
+            NativeMethod::RegExpSourceGetter
+        } else if Some(id) == ids.flags {
+            NativeMethod::RegExpFlagsGetter
+        } else if let Some(bit) = regexp_flag_bit_for(ids, id) {
+            NativeMethod::RegExpFlagGetter(bit)
+        } else {
+            return false;
+        };
+        match self.accessors.get(&(proto, id)) {
+            Some(AccessorData {
+                get:
+                    Some(Slot {
+                        value: Payload::Reference(getter),
+                        ..
+                    }),
+                set: None,
+            }) => self.method_of(*getter) == Some(expected),
+            _ => false,
+        }
     }
 
     /// The exotic own descriptor for an array (`length` / index) or function

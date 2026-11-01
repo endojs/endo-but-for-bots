@@ -55,20 +55,20 @@ built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-27.js sloppy 
 built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-27.js strict pass
 built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-28.js sloppy pass
 built-ins/RegExp/prototype/unicodeSets/breaking-change-from-u-to-v-28.js strict pass
-built-ins/RegExp/prototype/unicodeSets/cross-realm.js sloppy fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
-built-ins/RegExp/prototype/unicodeSets/cross-realm.js strict fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
-built-ins/RegExp/prototype/unicodeSets/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/this-val-invalid-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/this-val-invalid-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/this-val-non-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/this-val-non-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/this-val-regexp-prototype.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/RegExp/prototype/unicodeSets/this-val-regexp-prototype.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/unicodeSets/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/RegExp/prototype/unicodeSets/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/RegExp/prototype/unicodeSets/length.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/length.js strict pass
+built-ins/RegExp/prototype/unicodeSets/name.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/name.js strict pass
+built-ins/RegExp/prototype/unicodeSets/prop-desc.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/prop-desc.js strict pass
+built-ins/RegExp/prototype/unicodeSets/this-val-invalid-obj.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/this-val-invalid-obj.js strict pass
+built-ins/RegExp/prototype/unicodeSets/this-val-non-obj.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/this-val-non-obj.js strict pass
+built-ins/RegExp/prototype/unicodeSets/this-val-regexp-prototype.js sloppy pass
+built-ins/RegExp/prototype/unicodeSets/this-val-regexp-prototype.js strict pass
 built-ins/RegExp/prototype/unicodeSets/this-val-regexp.js sloppy pass
 built-ins/RegExp/prototype/unicodeSets/this-val-regexp.js strict pass
 built-ins/RegExp/prototype/unicodeSets/uv-flags-constructor.js sloppy pass
