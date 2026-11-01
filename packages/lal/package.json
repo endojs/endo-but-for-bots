@@ -20,6 +20,7 @@
     "./agent-driver-maker.js": "./agent-driver-maker.js",
     "./model-detect.js": "./model-detect.js",
     "./providers/index.js": "./providers/index.js",
+    "./tool-dispatch.js": "./tool-dispatch.js",
     "./tools/mock-powers.js": "./tools/mock-powers.js",
     "./package.json": "./package.json"
   },

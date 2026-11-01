@@ -16,6 +16,7 @@
  */
 
 import { E } from '@endo/eventual-send';
+import { makeReplyCollapseFilter } from '@endo/exo-agent-factory/reply-collapse.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 /** @import { InboxMessage } from './agent.types.js' */
@@ -80,6 +81,7 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
   // if it needs to reason about the change.
   /** @type {Set<bigint>} */
   const seenInboundNumbers = new Set();
+  const showReply = makeReplyCollapseFilter();
 
   const messageIterator = iterateReader(E(powers).followMessages());
   while (true) {
@@ -112,6 +114,14 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
       type,
       done: messageDone = true,
     } = inboxMessage;
+
+    if (!showReply(inboxMessage)) {
+      console.log(
+        `[mail] Message #${number} republishes an already visible reply`,
+      );
+      // eslint-disable-next-line no-continue
+      continue;
+    }
 
     // Skip our own outbound messages; only act on inbound mail.
     // eslint-disable-next-line @endo/restrict-comparison-operands

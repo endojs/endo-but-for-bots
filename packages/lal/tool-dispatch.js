@@ -17,6 +17,7 @@
 
 import { mustMatch } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
+import { collapseRepublishedReplies } from '@endo/exo-agent-factory/reply-collapse.js';
 import {
   toolResultToSmallcaps,
   smallcapsMarshal,
@@ -230,8 +231,9 @@ export const makeExecuteTool = powers => {
       // Mail operations
       case 'listMessages': {
         const rawMessages = await E(powers).listMessages();
+        const messages = collapseRepublishedReplies(rawMessages);
         return harden(
-          rawMessages.map(
+          messages.map(
             (
               /** @type {InboxMessage & {messageId?: string, replyTo?: string}} */ msg,
             ) => ({

@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { E } from '@endo/eventual-send';
+import { collapseRepublishedReplies } from '@endo/exo-agent-factory/reply-collapse.js';
 import { applyEdits, normalizeEdits } from '@endo/agentry/edit-text';
 import { defaultDeniedSegments } from '@endo/daemon/src/mount.js';
 import {
@@ -1276,7 +1277,8 @@ export const makeListMessagesTool = powers => {
     },
     // eslint-disable-next-line no-underscore-dangle
     async execute(_args) {
-      return E(powers).listMessages();
+      const messages = await E(powers).listMessages();
+      return /** @type {any} */ (collapseRepublishedReplies(messages));
     },
     help() {
       return 'List messages in your inbox.';
