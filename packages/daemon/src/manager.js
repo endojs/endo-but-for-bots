@@ -2013,10 +2013,14 @@ const makeDaemonCore = async (
 
       // Follow retention set changes in the background.
       const consumeRetention = async () => {
-        const iter = await E(remoteGateway).followRetentionSet(localNodeNumber);
         // Resolve the local agent formula ID for this peer so
         // retention edges land in the right place in the graph.
         const agentKeyRecord = persistencePowers.getAgentKey(remoteNodeId);
+        // Ephemeral peers (including browser tabs) have no registered agent
+        // root. Their retention rows cannot create GC edges, and persisting
+        // them would leave a new orphan set behind on every page reload.
+        if (agentKeyRecord === undefined) return;
+        const iter = await E(remoteGateway).followRetentionSet(localNodeNumber);
         const agentIdStr = agentKeyRecord
           ? /** @type {FormulaIdentifier} */ (agentKeyRecord.agentId)
           : undefined;
@@ -7473,8 +7477,12 @@ const makeDaemonCore = async (
     (async () => {
       try {
         const gateway = await currentGatewayP;
-        const iter = await E(gateway).followRetentionSet(localNodeNumber);
         const peerAgentKeyRecord = persistencePowers.getAgentKey(nodeId);
+        // Match inbound retention admission: only registered agent roots
+        // have durable retention ownership. Outbound browser peers are also
+        // ephemeral and must not leave persistent orphan rows.
+        if (peerAgentKeyRecord === undefined) return;
+        const iter = await E(gateway).followRetentionSet(localNodeNumber);
         const peerAgentIdStr = peerAgentKeyRecord
           ? /** @type {FormulaIdentifier} */ (peerAgentKeyRecord.agentId)
           : undefined;

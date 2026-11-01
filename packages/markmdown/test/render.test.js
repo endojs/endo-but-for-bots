@@ -61,3 +61,14 @@ for (const mdFile of mdFiles) {
     t.is(actual, expected);
   });
 }
+
+test('fence parsing distinguishes complete source from an interrupted stream', t => {
+  t.like(parseBlocks('```endowidget\n() => 1\n```')[0], {
+    type: 'code-fence',
+    closed: true,
+    language: 'endowidget',
+  });
+  t.like(parseBlocks('```endowidget\n() => 1')[0], { closed: false });
+  t.like(parseBlocks('````endowidget\n() => 1\n```')[0], { closed: false });
+  t.like(parseBlocks('~~~endowidget\n() => 1\n~~~')[0], { closed: true });
+});

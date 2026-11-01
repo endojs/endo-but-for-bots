@@ -22,7 +22,7 @@ import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
 
 import { makeAccountStatusTool } from './account-tool.js';
-import { makeWorkflowTools } from './workflow-tools.js';
+import { makeWorkflowTools, REVIEW_TOOL_NAMES } from './workflow-tools.js';
 
 const TOOL_POLICY_VERSION = 'floot-endo-tools-v1';
 const MAX_SCHEMA_DEPTH = 32;
@@ -312,10 +312,21 @@ export const makeFlootToolRegistry = (
   }
 
   const snapshot = async () => {
-    const { schemas, toolMap, storedTools } = await discoverTools(
-      powers,
-      builtins,
+    const reviewAvailable = await E(powers).has('dev-review');
+    // Discover with every reserved built-in name, even when it is unavailable.
+    // Otherwise an adopted tool could impersonate the missing workflow.
+    const {
+      schemas: discoveredSchemas,
+      toolMap,
+      storedTools,
+    } = await discoverTools(powers, builtins);
+    const schemas = discoveredSchemas.filter(
+      schema =>
+        reviewAvailable || !REVIEW_TOOL_NAMES.includes(schema.function.name),
     );
+    if (!reviewAvailable) {
+      for (const name of REVIEW_TOOL_NAMES) toolMap.delete(name);
+    }
     const builtinSchemas = new Map();
     const providerSchemas = schemas.map(schema => {
       const projected = projectToolSchema(schema);

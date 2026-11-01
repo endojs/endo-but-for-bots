@@ -351,3 +351,28 @@ test('a configured default speed outside the advertised range is refused at stan
     { message: /FLOOT_TTS_SPEED must be a number between 0.25 and 4, got "5"/ },
   );
 });
+
+test('streamed widget source never reaches the synthesizer', async t => {
+  t.timeout(20_000);
+  const { server } = await makeTtsServer(t);
+  const { push, reader } = makeBufferedReader();
+  const audio = server.synthesize(reader);
+  for (const text of [
+    'Try this counter.\n`',
+    '``endo',
+    'widget\n({h}) => h("button",null,"DO NOT SPEAK");\n``',
+    '`\nHave fun.',
+  ]) {
+    push({ type: 'delta', text });
+  }
+  push({ type: 'end' });
+  const events = await collect(audio);
+  const spoken = events
+    .filter(e => e.type === 'bytes')
+    .map(e => atob(e.b64))
+    .join('');
+  t.true(spoken.includes('Try this counter.'));
+  t.true(spoken.includes('Have fun.'));
+  t.false(spoken.includes('DO NOT SPEAK'));
+  t.false(spoken.includes('endowidget'));
+});

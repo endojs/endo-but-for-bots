@@ -86,6 +86,7 @@ export const parseBlocks = text => {
         const fenceLen = fenceMatch[1].length;
         const language = fenceMatch[2] || '';
         const codeLines = [];
+        let closed = false;
         i += 1;
         while (i < lines.length) {
           const closingMatch = lines[i].match(
@@ -94,6 +95,7 @@ export const parseBlocks = text => {
           if (closingMatch) {
             const closeLen = closingMatch[0].trim().length;
             if (closeLen >= fenceLen) {
+              closed = true;
               i += 1;
               break;
             }
@@ -103,6 +105,7 @@ export const parseBlocks = text => {
         }
         blocks.push({
           type: 'code-fence',
+          closed,
           language,
           content: codeLines.join('\n'),
         });

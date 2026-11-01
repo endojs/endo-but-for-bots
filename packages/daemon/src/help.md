@@ -35,11 +35,14 @@ Locators include the formula type and can be used for reverse lookups.
 Find all pet names that refer to a given locator.
 Returns an array of names (may be empty if no names exist).
 
-## followLocatorNameChanges(locator) -> AsyncIterator
+## followLocatorNameChanges(locator) -> CloseablePassableReader
 
-Subscribe to name changes for a specific locator.
-Yields events when names are added or removed for the locator.
-Use with for-await-of to receive updates.
+Subscribe to name changes for a specific locator through exo-stream.
+The result is a remote reader, not a direct JavaScript AsyncIterator.
+Use iterateReader from @endo/exo-stream/iterate-reader.js in module code,
+or an explicitly endowed adapter in confined evaluation, to consume events.
+Retain the reader and call E(reader).close() on cancellation, even during a pending read.
+Removing its name does not close the subscription.
 
 ## list(...petNamePath?) -> Promise<string[]>
 
@@ -52,11 +55,14 @@ List all pet names in this directory or a subdirectory.
 List all unique formula identifiers in this directory.
 Multiple names may refer to the same identifier.
 
-## followNameChanges() -> AsyncIterator
+## followNameChanges() -> CloseablePassableReader
 
-Subscribe to all name changes in this directory.
-First yields existing names, then yields diffs as names change.
-Use with for-await-of to receive updates.
+Subscribe to existing names and subsequent additions/removals through exo-stream.
+The result is a remote reader, not a direct JavaScript AsyncIterator.
+Use iterateReader from @endo/exo-stream/iterate-reader.js in module code,
+or an explicitly endowed adapter in confined evaluation, to consume events.
+Retain the reader and call E(reader).close() on cancellation, even during a pending read.
+Use list() for a finite snapshot; do not collect this live subscription to completion.
 
 ## lookup(petNameOrPath) -> Promise<any>
 
@@ -203,7 +209,7 @@ Floot's automatic mail handler replies and dismisses after the agent finishes;
 do not wait for or dismiss its active task message yourself.
 Dismissal removes the entry needed by reply(number); do not use it to unblock inspection.
 
-## followMessages() -> AsyncIterator<Message>
+## followMessages() -> Promise<CloseablePassableReader>
 
 Subscribe to incoming messages.
 First yields existing messages, then yields new ones as they arrive.
@@ -212,8 +218,13 @@ Use listMessages() for a snapshot. Yielded entries carry the same dismissed and
 request settled lifecycle promises documented by help("listMessages").
 Do not await those promises in the handler responsible for replying or settling
 that message; Floot dismisses its task only after the agent finishes.
-Use with for-await-of:
-  for await (const message of E(guest).followMessages()) { ... }
+The result is a remote exo-stream reader, not a JavaScript AsyncIterator.
+In module code import iterateReader from @endo/exo-stream/iterate-reader.js;
+confined evaluation needs that adapter explicitly endowed.
+Retain reader = await E(guest).followMessages(), then use
+for-await-of on iterateReader(reader).
+Always call E(reader).close() on cancellation, including while next() is pending.
+Do not dismiss a message merely to close the subscription.
 
 ## resolve(messageNumber, petNameOrPath) -> Promise<void>
 
@@ -304,7 +315,13 @@ A guest can:
 Special names available:
 - @self: This guest's own handle
 - @host: The host that created this guest
-- @agent: This guest's formula identifier
+- @agent: This guest's own agent capability
+
+Handles offer mailbox operations, not the agent's directory or evaluation methods.
+Use method discovery and help on the actual capability; do not guess signatures.
+A locator is authority to a value, not a browser transport endpoint.
+Keep locators private and only export the specific capability the user intends.
+Static publication does not grant a browser access to this guest or its daemon.
 
 Use help("methodName") for details on specific methods.
 
@@ -314,6 +331,62 @@ Get documentation for this interface or a specific method.
 - help() returns an overview of the guest capabilities
 - help("request") returns documentation for the request method
 - help("send") returns documentation for send method
+
+## followNameChanges() -> Promise<CloseablePassableReader>
+
+Subscribe to existing names and subsequent additions/removals through exo-stream.
+This returns a remote reader, not a JavaScript AsyncIterator.
+In module code import iterateReader from @endo/exo-stream/iterate-reader.js;
+in confined evaluation use an explicitly endowed adapter rather than assuming imports.
+Use list() for a finite snapshot; do not collect this live subscription to completion.
+With E, iterateReader and guest in scope, this example consumes one event and closes:
+
+```js
+const reader = await E(guest).followNameChanges();
+const changes = iterateReader(reader);
+try {
+  return await changes.next();
+} finally {
+  await E(reader).close();
+}
+```
+
+For a continuing subscription consume changes with for-await-of.
+On cancellation call E(reader).close() even when next() is pending, then finish the loop.
+Removing the reader's name does not close its subscription.
+
+## followLocatorNameChanges(locator) -> Promise<CloseablePassableReader>
+
+Subscribe to names for an already-held locator through exo-stream.
+Use iterateReader(await E(guest).followLocatorNameChanges(locator)), as in
+help("followNameChanges"), retaining the reader so E(reader).close() can cancel it.
+This is a long-lived remote reader, not a direct JavaScript AsyncIterator.
+Do not expose the locator in public pages or diagnostic output.
+
+## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
+
+Evaluate confined JavaScript with explicitly named endowments from this guest.
+Use undefined for a fresh worker; a worker name reuses or creates a named worker.
+codeNames and petNames are parallel arrays: each code name receives the value
+looked up by its corresponding pet name or path.
+resultName optionally retains the evaluated result in this guest's directory.
+Example: evaluate(undefined, "E(counter).getValue()", ["counter"], ["counter"])
+This does not create a public server or grant Node.js, networking, or host powers.
+A retained result does not make a shell child persistent.
+Use explicit lifecycle methods to stop resources before removing their names;
+remove forgets a binding and is not a substitute for cancellation.
+
+## lookupByLocator(locator) -> Promise<any>
+
+Resolve a supplied Endo locator to its value.
+Use this for an explicitly provided reference, not guessed or enumerated locators.
+A browser still needs a separately provisioned compatible transport and bootstrap.
+
+## lookupById(formulaId) -> Promise<any>
+
+Resolve an already-held formula identifier to its value.
+Prefer lookup by pet name for inventory discovery; do not enumerate identifiers
+or locators just to learn which methods an object provides.
 
 ## reverseIdentify(formulaId) -> string[]
 
@@ -498,6 +571,37 @@ The client method returns a forwarding facet for one session incarnation.
 Re-provide the owner after a daemon restart.
 Cancelling its host or original directory fences the owner and its client facets,
 but does not prove that native resources have been cleaned up.
+
+## followNameChanges() -> Promise<CloseablePassableReader>
+
+Subscribe to existing names and subsequent additions/removals through exo-stream.
+This returns a remote reader, not a JavaScript AsyncIterator.
+In module code import iterateReader from @endo/exo-stream/iterate-reader.js;
+in confined evaluation use an explicitly endowed adapter rather than assuming imports.
+Use list() for a finite snapshot; do not collect this live subscription to completion.
+With E, iterateReader and guest in scope, this example consumes one event and closes:
+
+```js
+const reader = await E(guest).followNameChanges();
+const changes = iterateReader(reader);
+try {
+  return await changes.next();
+} finally {
+  await E(reader).close();
+}
+```
+
+For a continuing subscription consume changes with for-await-of.
+On cancellation call E(reader).close() even when next() is pending, then finish the loop.
+Removing the reader's name does not close its subscription.
+
+## followLocatorNameChanges(locator) -> Promise<CloseablePassableReader>
+
+Subscribe to names for an already-held locator through exo-stream.
+Use iterateReader(await E(guest).followLocatorNameChanges(locator)), as in
+help("followNameChanges"), retaining the reader so E(reader).close() can cancel it.
+This is a long-lived remote reader, not a direct JavaScript AsyncIterator.
+Do not expose the locator in public pages or diagnostic output.
 
 ## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
 

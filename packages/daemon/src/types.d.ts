@@ -397,6 +397,7 @@ export type ShellFormula = {
  * never the host working directory, env passlist, or search path.
  */
 export interface EndoShell {
+  help(method?: string): string;
   inspect(): Promise<{
     allowedCommands: string[];
     timeoutMs: number;

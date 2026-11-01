@@ -408,6 +408,7 @@ test('public thinking persists after failure and restart but is absent from mode
 
 test('extra tools join the session catalog beside the built-ins', async t => {
   const powers = Far('SessionPowers', {
+    has: () => false,
     list: async () => harden([]),
     lookup: async () => {
       throw Error('no stored tools');

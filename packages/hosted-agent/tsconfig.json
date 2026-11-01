@@ -8,5 +8,5 @@
     "useUnknownInCatchVariables": false,
     "skipLibCheck": false
   },
-  "include": ["src"]
+  "include": ["src", "oci/dev/browser-smoke.mjs"]
 }

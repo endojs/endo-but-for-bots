@@ -59,6 +59,8 @@ import { provisionFaeAgent } from './src/subagent-host.js';
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 import { readFaeWorkloadConfig } from './src/workload-config.js';
 
+import { widgetPrompt } from './src/widget-prompt.js';
+
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
 
@@ -114,6 +116,8 @@ reasoning, steps, logs, or recaps to a channel.
 - **send** — Send unsolicited inbox message to a named agent.
 - **adoptTool** — Install a FaeTool capability from a message.
 - **dismiss** — Dismiss a handled message.
+
+${widgetPrompt}
 
 ## Images and visual verification
 

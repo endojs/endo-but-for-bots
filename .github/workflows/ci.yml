@@ -229,12 +229,13 @@ jobs:
       # strict env mode withholds PLAYWRIGHT_BROWSERS_PATH and XDG_CACHE_HOME
       # from its tasks; unset them so this install lands where the tasks look.
       - name: Install Playwright Chromium
-        if: contains(env.CI_PACKAGES, '@endo/preact-')
+        if: contains(env.CI_PACKAGES, '@endo/preact-') || contains(env.CI_PACKAGES, '@endo/browser-endo')
         working-directory: ${{ env.WORKDIR }}
         run: |
           unset PLAYWRIGHT_BROWSERS_PATH XDG_CACHE_HOME
           yarn workspace @endo/preact-container playwright install chromium
           yarn workspace @endo/preact-social playwright install chromium
+          yarn workspace @endo/browser-endo playwright install chromium
 
       # The detector selects changed workspaces and recursive dependents.
       # Turbo builds their prerequisites and runs only these exact names.

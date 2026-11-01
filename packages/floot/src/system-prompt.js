@@ -25,6 +25,7 @@
  * permission to replace the captured prompt during restoration.
  */
 
+import { widgetPrompt } from '@endo/fae/src/widget-prompt.js';
 import { assertPromptEnvironment } from '@endo/hosted-agent';
 
 /** @import { PromptEnvironment } from '@endo/hosted-agent' */
@@ -230,12 +231,32 @@ ${paragraphs.join('\n')}
 
 const toolsSection = () => `
 Design and review:
-- Discuss the design and acceptance criteria with the user before handoff.
-- When the user asks to implement it, use handoffDesign with the complete agreed
-  design, base revision, and review budget. The installed dev-review capability
-  binds the developer, reviewers, project, and originating notification inbox.
-- Use reviewStatus to inspect progress. A ready notification is a reviewed
-  candidate; it is not permission to merge or deploy.
+- Start an actionable implementation request directly. Briefly state the design
+  and acceptance criteria; ask only for missing decisions that affect the work.
+- If handoffDesign is in your current tool list, use the configured review
+  workflow for an agreed implementation. Its capability binds the developer,
+  reviewers, project, and notification inbox. If the tool is absent or reports
+  unavailable, continue authorized implementation directly and disclose that
+  automated review is unavailable. Do not repeatedly try a missing workflow.
+- Use reviewStatus only for a handoff that actually started. A ready notification
+  is a reviewed candidate; it is not permission to merge or deploy.
+- Prove the smallest complete user-visible path before adding polish: enter a
+  minimal VR scene, or connect a page to a real counter. Component tests do not
+  prove a deployed transport. State what was built, published, and exercised
+  separately, and give progress updates when a blocker changes.
+
+Environment discovery:
+- Inspect the live inventory and describeCapability/help before calling methods.
+  A handle is a mailbox endpoint, not an agent with lookup/evaluate authority.
+  Missing help is a documentation gap, not permission to guess method signatures.
+  Use readSources if the capability supports it. Public upstream code may differ
+  from this daemon; do not treat it as proof of installed capabilities.
+- Bound discovery to the missing prerequisite. After an unavailable capability,
+  authentication failure, or repeated empty search, report that prerequisite
+  instead of trying alternate spellings, dumping interface guards, or scanning
+  locators. Do not mint peer invitations as discovery probes. When an authorized
+  experiment creates resources, retain its cleanup handles, stop/cancel them,
+  then remove temporary names. Forgetting a name does not stop a live resource.
 
 Petstore tools:
 - list — see the petnames currently in your petstore.
@@ -344,11 +365,26 @@ states. ${
       : 'Summarize what you did briefly and plainly.'
   }
 
-To share your work, call the publishWorkspace tool when it is available. It
-serves the current workspace as a static website and returns an unguessable
-capability URL that opens in a new browser tab (great for an index.html). Re-run
-publishWorkspace after you change files to refresh what it serves, and give the
-user the URL it returns.
+To share your work, call publishWorkspace when it is available. It serves the
+current workspace as static files beneath an unguessable capability URL.
+Put index.html at the workspace root. Use relative asset paths such as
+./styles.css and ./app.js; origin-root paths escape the publication prefix.
+Edits to the live workspace appear on reload at the same URL. Publication proves
+that files are served, not that the application or its backend works.
+The static publisher provides no WebSocket/CapTP endpoint or daemon bootstrap.
+For a page that calls daemon objects, first discover an explicitly provisioned
+browser transport and narrowly endowed bootstrap and prove a real round trip.
+Do not invent an endpoint on the asset origin, embed the agent/host authority,
+or substitute a shell server plus file-polling bridge for missing connectivity.
+If no supported connection is available, say exactly what needs provisioning.
+A live subscription requires a real update stream, reconnection and disposal;
+reading once or refreshing after a local button click is not a subscription.
+Test from a non-root publication prefix, inspect screenshots and console errors,
+and distinguish a network proxy denial from an application failure. If published
+origin verification is blocked, report that limitation with local test results.
+Give the user the URL returned by the tool; keep capability URLs out of searches
+and third-party services.
+
 `;
 };
 
@@ -739,11 +775,32 @@ The inventory contains a Shell capability named "shell" over this same workspace
 Use runCommand({command:"sh",args:["-lc","..."]}) for POSIX commands. The tool uses
 structured argv and returns stdout, stderr, exitCode, signal and truncated; inspectShell
 reports its execution bounds. Floot's exec tool runs JavaScript, not Bash.
+Shell commands are bounded executions, not persistent service hosting. Background
+children and listeners have no lifetime guarantee across invocations or turns.
+For local browser tests, start the server, wait for readiness, run the browser,
+and stop the server in the same command with cleanup on exit. A health check
+inside that command does not prove that a later command can reach the listener.
+A retained daemon controller or a larger timeout does not change this contract.
+Inspect exitCode, stderr and truncated; a pipeline can hide an earlier failure.
+Save verbose logs to HOME and return a bounded excerpt. A timeout or interrupted
+command may already have made changes: inspect state before retrying, never replay
+an increment or other mutation blindly. Only clear a lock after proving its owner
+has exited. If execution remains stopped, report cleanup/recovery is required.
+The shared development image supplies Chromium and fonts. Check chromium --version
+with sh; use it as Playwright's executablePath (/usr/bin/chromium), or use the
+Chromium headless CLI. For the packaged browser's software rendering use launch args
+--no-sandbox --disable-dev-shm-usage --use-angle=swiftshader --enable-unsafe-swiftshader
+inside the confined development container. CLI also needs --headless; Playwright uses
+headless:true. Run node /opt/endo-browser-smoke.mjs for the offline browser self-check.
+Keep test dependencies in HOME. Inspect text and screenshots, not just an empty
+console error list.
+Browser networking still follows the session policy.
 HOME=/home/node is persistent native disk; install toolchains and binaries there.
 CARGO_HOME, RUSTUP_HOME and CARGO_TARGET_DIR already point into that home. The workspace
 is a 9P projection: keep executable dependencies and build output in HOME, not on 9P.
 Public network access, when enabled, uses HTTP_PROXY/HTTPS_PROXY and managed DNS.
-Use getSandboxNetworkPolicy/requestSandboxNetworkPolicy for policy status/change requests.
+Use getSandboxNetworkPolicy/requestNetworkPolicyChange for policy status/change requests.
+Changes apply on the next turn; inspect the policy again before using the network.
 You hold Shell only, not environment administration, Podman, host paths or credentials.`,
   ],
   // Every hosted session is handed the mount tools, whatever its preset, so
@@ -852,6 +909,7 @@ export const composePresetPrompt = ({ presetId, context, objects }) => {
     guestSection(normalized),
     environmentSection(normalized),
     toolsSection(),
+    widgetPrompt,
     ...sections.map(section => section(normalized)),
   ]
     .join('')

@@ -20,6 +20,23 @@ export const makeRemoteControlProvider = localNodeId => {
     let stateName = 'start';
     const tag = `${short(localNodeId)}→${short(remoteNodeId)}`;
 
+    /**
+     * Only the current state may retire this controller. Old transport
+     * cancellations must not evict a replacement connection for the same peer.
+     * @param {RemoteControlState} observedState
+     * @param {Promise<never>} cancelled
+     */
+    const observeDisconnect = (observedState, cancelled) => {
+      cancelled.catch(() => {
+        if (state !== observedState) return;
+        stateName = 'start';
+        state = start();
+        if (remoteControls.get(remoteNodeId) === control) {
+          remoteControls.delete(remoteNodeId);
+        }
+      });
+    };
+
     // In this state, we have received a remoteGateway from an ingress
     // connection (and provided our local gateway to them.)
     // We do not have a pending outbound connection attempt.
@@ -82,15 +99,7 @@ export const makeRemoteControlProvider = localNodeId => {
         },
       };
 
-      currentCancelled.catch(() => {
-        if (state === acceptedState) {
-          console.log(
-            `Endo remote-control ${tag}: accepted→start (connection lost)`,
-          );
-          stateName = 'start';
-          state = start();
-        }
-      });
+      observeDisconnect(acceptedState, currentCancelled);
 
       stateName = 'accepted';
       return acceptedState;
@@ -108,7 +117,8 @@ export const makeRemoteControlProvider = localNodeId => {
       localNodeId > remoteNodeId
         ? (remoteGateway, cancelCurrent, currentCancelled) => {
             // We are biased toward preserving our own outbound connection.
-            return {
+            /** @type {RemoteControlState} */
+            const connectedState = {
               accept(
                 _proposedRemoteGateway,
                 proposedCancel,
@@ -158,6 +168,8 @@ export const makeRemoteControlProvider = localNodeId => {
                 };
               },
             };
+            observeDisconnect(connectedState, currentCancelled);
+            return connectedState;
           }
         : (remoteGateway, cancelCurrent, currentCancelled) => {
             // We are biased toward preserving inbound connections.
@@ -179,21 +191,7 @@ export const makeRemoteControlProvider = localNodeId => {
                     'Connection abandoned: accepted new connection (crossed hellos, accept bias)',
                   ),
                 );
-                // Arrange to return to the initial state if we lose this new
-                // connection.
-                proposedCancelled
-                  .catch(() => {
-                    if (state === connectedState) {
-                      console.log(
-                        `Endo remote-control ${tag}: connected→start (connection lost, accept bias)`,
-                      );
-                      stateName = 'start';
-                      // I would gladly declare you Tuesday for a call today.
-                      // eslint-disable-next-line no-use-before-define
-                      state = start();
-                    }
-                  })
-                  .then(proposedDispose);
+                proposedCancelled.catch(() => {}).then(proposedDispose);
                 return accepted(
                   proposedRemoteGateway,
                   proposedCancel,
@@ -224,6 +222,7 @@ export const makeRemoteControlProvider = localNodeId => {
                 };
               },
             };
+            observeDisconnect(connectedState, currentCancelled);
             return connectedState;
           };
 
@@ -237,13 +236,7 @@ export const makeRemoteControlProvider = localNodeId => {
           currentCancelled,
           currentDispose,
         ) {
-          currentCancelled
-            .catch(() => {
-              if (state === startState) {
-                state = start();
-              }
-            })
-            .then(currentDispose);
+          currentCancelled.catch(() => {}).then(currentDispose);
           return accepted(
             proposedRemoteGateway,
             cancelCurrent,
@@ -263,20 +256,7 @@ export const makeRemoteControlProvider = localNodeId => {
             currentCancelled,
           );
           stateName = 'connected';
-          currentCancelled
-            .then(
-              () => {},
-              () => {
-                if (state === connectedState) {
-                  console.log(
-                    `Endo remote-control ${tag}: connected→start (connection lost)`,
-                  );
-                  stateName = 'start';
-                  state = start();
-                }
-              },
-            )
-            .then(currentDispose);
+          currentCancelled.catch(() => {}).then(currentDispose);
           return {
             state: connectedState,
             remoteGateway,
@@ -333,11 +313,12 @@ export const makeRemoteControlProvider = localNodeId => {
 
     const getStateName = () => stateName;
 
-    return { accept, connect, getStateName };
+    const control = harden({ accept, connect, getStateName });
+    return control;
   };
 
   /** @param {string} remoteNodeId */
-  const provideRemoteControl = remoteNodeId => {
+  const provideActiveControl = remoteNodeId => {
     let remoteControl = remoteControls.get(remoteNodeId);
     if (remoteControl === undefined) {
       remoteControl = makeRemoteControl(remoteNodeId);
@@ -345,6 +326,36 @@ export const makeRemoteControlProvider = localNodeId => {
     }
     return remoteControl;
   };
+
+  /**
+   * Handles do not own a controller or occupy a permanent cache entry. Every
+   * operation resolves the currently active controller, so a retained old
+   * handle remains coherent with new handles after disconnection and eviction.
+   * @param {string} remoteNodeId
+   * @returns {RemoteControl}
+   */
+  const provideRemoteControl = remoteNodeId =>
+    harden({
+      accept(...args) {
+        return provideActiveControl(remoteNodeId).accept(...args);
+      },
+      connect(...args) {
+        const control = provideActiveControl(remoteNodeId);
+        try {
+          return control.connect(...args);
+        } finally {
+          // A synchronous dial failure never leaves an idle controller cached.
+          if (
+            control.getStateName() === 'start' &&
+            remoteControls.get(remoteNodeId) === control
+          ) {
+            remoteControls.delete(remoteNodeId);
+          }
+        }
+      },
+      getStateName: () =>
+        remoteControls.get(remoteNodeId)?.getStateName() || 'start',
+    });
 
   /**
    * @returns {Record<string, string>} Map of nodeId to state name
@@ -360,5 +371,6 @@ export const makeRemoteControlProvider = localNodeId => {
 
   provideRemoteControl.getConnectionStates = getConnectionStates;
 
-  return provideRemoteControl;
+  return harden(provideRemoteControl);
 };
+harden(makeRemoteControlProvider);

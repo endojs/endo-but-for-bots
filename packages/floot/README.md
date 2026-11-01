@@ -536,3 +536,30 @@ as receipts, so a rejected image does not keep every later request failing.
 The agent may explicitly read a corrected image again with `viewImage`.
 Original journal bytes remain available as evidence, including after restart.
 Opaque hosted backend checkpoints retain their native recovery policy.
+
+## Interrupted turns and session details
+
+An interrupted turn is not evidence of journal corruption.
+Historical unknown outcomes stay available in **Details**, without a persistent
+attention badge or session error indicator.
+A current cleanup failure still quarantines the running agent and reports a
+current failure; changing presentation does not bypass that execution fence.
+Recovery context instructs the backend to inspect available evidence quietly and
+ask the user only for a concrete decision or missing access needed for the task.
+It must not ask a user to repair a journal or claim that later success proves
+an earlier effect did not happen.
+
+Before a writable agent starts its inbox or backend, it closes interrupted turns
+whose durable records prove they were never dispatched.
+That repair records a cancellation or resolution without repeating effects.
+Possibly dispatched turns, including ones with settled observed calls, retain
+uncertainty until evidence supports an explicit resolution.
+Read-only record access does not repair or mutate history.
+Failed repair writes propagate and prevent startup; storage corruption is never
+silently rewritten.
+
+## Interactive replies
+
+Floot and Fae can return local interactive widgets using an `endowidget` fence.
+See [the widget protocol](../spaces-util/INTERACTIVE-WIDGETS.md) for examples,
+confinement, lifecycle, and tests.

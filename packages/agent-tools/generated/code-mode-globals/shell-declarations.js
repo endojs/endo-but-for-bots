@@ -34,6 +34,7 @@ export const shellDeclarations = harden({
     exec: (command: string, args: readonly string[], options?: {
         timeoutMs?: number;
     }) => Promise<ShellResult>;
+    help: (method?: string) => string;
     inspect: () => Promise<{
         allowedCommands: readonly string[];
         timeoutMs: number;

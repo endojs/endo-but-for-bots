@@ -3,6 +3,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import { makeShell } from '@endo/exo-shell';
 import { makePromiseKit } from '@endo/promise-kit';
 import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { makeEnvironment } from '../src/environment.js';
@@ -16,8 +17,14 @@ const recipe = harden({
 const flush = async () => {
   for (let i = 0; i < 20; i += 1) await null; // eslint-disable-line no-await-in-loop
 };
-/** @param {{ stored?: string, provide?: () => any, remove?: () => any, write?: (text: string, name: string) => any }} [options] */
-const fixture = async ({ stored, provide, remove, write } = {}) => {
+/** @param {{ stored?: string, provide?: () => any, remove?: () => any, write?: (text: string, name: string) => any, policy?: typeof recipe.policy }} [options] */
+const fixture = async ({
+  stored,
+  provide,
+  remove,
+  write,
+  policy = recipe.policy,
+} = {}) => {
   let text = stored;
   const otherTexts = new Map();
   const calls = [];
@@ -72,7 +79,7 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
   };
   const owner = await makeEnvironment({
     id: 'exact-id',
-    recipe,
+    recipe: harden({ ...recipe, policy }),
     directory,
     resolve,
   });
@@ -459,4 +466,55 @@ test('external cleanup publication failure preserves the fence and permits expli
   await E(f.owner.admin).acknowledgeExternalCleanup('operator evidence');
   await E(f.owner.shell).exec('sh', harden([]));
   await f.owner.shutdown();
+});
+
+test('large command output does not retire an environment or replay its effects', async t => {
+  const policy = harden({ ...recipe.policy, maxOutputBytes: 16 * 1024 * 1024 });
+  let invocations = 0;
+  let allocations = 0;
+  let stops = 0;
+  const shell = makeShell({
+    cwd: '/workspace',
+    policy,
+    spawner: async () => {
+      invocations += 1;
+      const text = invocations === 1 ? 'x'.repeat(200_000) : 'next command';
+      return harden({
+        pid: 0,
+        stdout: {
+          async *[Symbol.asyncIterator]() {
+            yield new TextEncoder().encode(text);
+          },
+        },
+        stderr: null,
+        wait: async () => ({ code: 0, signal: null }),
+        kill: async () => {
+          t.fail('successful truncation must not kill');
+        },
+      });
+    },
+  });
+  const f = await fixture({
+    policy,
+    provide: () => {
+      allocations += 1;
+      return Far('Controller', {
+        open: () => shell,
+        stop: () => {
+          stops += 1;
+        },
+      });
+    },
+  });
+  t.teardown(() => f.owner.shutdown());
+  t.is((await E(f.owner.shell).inspect()).maxOutputBytes, 65_536);
+  t.regex(await E(f.owner.shell).help('exec'), /need not survive/);
+  t.is(allocations, 0, 'help and inspection do not activate native execution');
+  const output = await E(f.owner.shell).exec('sh', harden([]));
+  t.true(output.truncated);
+  t.is(output.stdout.length, 65_536);
+  t.is((await E(f.owner.shell).exec('sh', harden([]))).stdout, 'next command');
+  t.is(allocations, 1);
+  t.is(invocations, 2);
+  t.is(stops, 0);
 });

@@ -3235,7 +3235,9 @@ export const makeHostMaker = ({
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {
           const iterator = host.followLocatorNameChanges(locator);
-          return readerFromIterator(iterator);
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followMessages: async () => {
           const iterator = host.followMessages();

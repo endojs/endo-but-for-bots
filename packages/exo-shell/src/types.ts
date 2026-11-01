@@ -45,6 +45,7 @@ export type Spawner = (
 }>;
 
 export type EndoShell = {
+  help: (method?: string) => string;
   inspect: () => Promise<ShellInspectResult>;
   exec: (
     command: string,
