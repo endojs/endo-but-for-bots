@@ -21,7 +21,7 @@ built-ins/Function/15.3.5-2gs.js strict pass
 built-ins/Function/15.3.5.4_2-10gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-11gs.js strict pass
 built-ins/Function/15.3.5.4_2-12gs.js sloppy pass
-built-ins/Function/15.3.5.4_2-13gs.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Function/15.3.5.4_2-13gs.js strict skip:oracle-xs-script-decl-eval-framing
 built-ins/Function/15.3.5.4_2-14gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-15gs.js strict pass
 built-ins/Function/15.3.5.4_2-16gs.js sloppy pass
@@ -94,7 +94,7 @@ built-ins/Function/15.3.5.4_2-76gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-77gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-78gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-79gs.js sloppy pass
-built-ins/Function/15.3.5.4_2-7gs.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Function/15.3.5.4_2-7gs.js strict skip:oracle-xs-script-decl-eval-framing
 built-ins/Function/15.3.5.4_2-80gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-81gs.js sloppy pass
 built-ins/Function/15.3.5.4_2-82gs.js sloppy pass

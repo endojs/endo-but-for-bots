@@ -1225,7 +1225,7 @@ fn oracle_eval_frames_script_declarations(run: &DualRun) -> bool {
     run.oracle_parsed
         && !run.oracle_error.is_empty()
         && ironhorse_compile::declares_top_level_var_or_function(&run.source)
-        && crate::ironhorse_eval_goal_error(&run.source)
+        && crate::ironhorse_eval_goal_error_after(&run.setup, &run.source)
             .is_some_and(|thrown| reframed_abort_matches(&run.oracle_error, &thrown))
 }
 
@@ -1983,6 +1983,7 @@ fn module_dual_run(
     };
     DualRun {
         source: source.into(),
+        setup: Vec::new(),
         agreement,
         result_agrees: oracle.completed && ironhorse.completed && oracle.result == ironhorse.result,
         oracle_result: oracle.result,
@@ -3478,6 +3479,54 @@ mod tests {
     }
 
     #[test]
+    fn oracle_script_declaration_eval_framing_replays_the_harness_setup() {
+        // A test262 case runs its harness as a separate setup script before
+        // the body, so the body alone references an `assert` it does not
+        // define. Re-framing only the body would fail on that missing name
+        // and never reproduce the oracle's abort; the replay must run the
+        // setup first. This is the `language/eval-code/indirect/global-env-rec`
+        // shape: the strict eval-framed oracle loses the top-level `var`, so
+        // the indirect eval cannot see it.
+        let setup = "function Test262Error(m) { this.message = m; } \
+            Test262Error.prototype.toString = function () { return 'Test262Error: ' + this.message; }; \
+            function assert(v, m) { if (v !== true) { throw new Test262Error(m); } }";
+        let body = "\"use strict\";\nvar seen = 'str'; assert((0, eval)('seen') === 'str', '#1');";
+        let runs = crate::dual_run_scripts(&[setup, body], None).expect("oracle machine");
+        let run = &runs.last().expect("the body ran").run;
+        assert_eq!(run.setup, vec![setup.to_string()]);
+        assert_eq!(
+            run.agreement,
+            Agreement::IronhorseOnlyComplete,
+            "{:?}",
+            run.oracle_error
+        );
+        // Without the setup the replay dies on the harness, not the binding.
+        assert_eq!(
+            crate::ironhorse_eval_goal_error(&run.source).as_deref(),
+            Some("ReferenceError: get assert: undefined variable")
+        );
+        assert_eq!(
+            crate::ironhorse_eval_goal_error_after(&run.setup, &run.source).as_deref(),
+            Some(run.oracle_error.as_str())
+        );
+        assert!(oracle_eval_frames_script_declarations(run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), run, false),
+            Verdict::RunSkip("oracle-xs-script-decl-eval-framing".into())
+        );
+
+        // The replay still has to reproduce the oracle's exact abort: a body
+        // whose eval-framed failure differs from the oracle's stays gating.
+        let mut mismatched = run.clone();
+        mismatched.oracle_error = "Test262Error: #2".into();
+        assert!(!oracle_eval_frames_script_declarations(&mismatched));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &mismatched, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
     fn oracle_script_declaration_eval_framing_is_a_precise_exclusion() {
         // The strict variant of `language/statements/variable/S12.2_A11.js`
         // in miniature: a strict Script's `var` must be a global-object
@@ -4217,6 +4266,7 @@ mod tests {
     fn synthetic_abort(ironhorse_halt: Halt, ironhorse_error: &str) -> DualRun {
         DualRun {
             source: String::new(),
+            setup: Vec::new(),
             agreement: Agreement::BothAbort,
             result_agrees: false,
             oracle_result: String::new(),

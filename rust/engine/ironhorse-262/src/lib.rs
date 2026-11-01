@@ -299,6 +299,12 @@ pub struct DualRun {
     pub oracle_parsed: bool,
     /// Original XS abort status; zero for an ordinary guest throw.
     pub oracle_exit_status: i32,
+    /// The scripts (the harness setup) that ran before `source` in the same
+    /// realm on both engines, in order; empty for a standalone run. A
+    /// re-framed replay of `source` ([`ironhorse_eval_goal_error_after`]) must
+    /// run them first, or it fails on the missing harness instead of on the
+    /// divergence it is meant to reproduce.
+    pub setup: Vec<String>,
 }
 
 impl DualRun {
@@ -625,11 +631,13 @@ pub(crate) fn dual_run_scripts_checkpoint(
         run.dispatched = run.dispatched_this_run;
         let stop = !oracle.completed || !run.completed;
         let oracle_signal = signal_name.and(oracle.async_signal.clone());
+        let mut run = build_dual_run(source, oracle, run, compile, bytecode, symbols);
+        run.setup = sources[..i].iter().map(|setup| setup.to_string()).collect();
         result.push(AsyncDualRun {
             ironhorse_signal: signal_name.and_then(|name| interp.global_string(name)),
             ironhorse_unhandled_rejection: interp.has_unhandled_rejection(),
             oracle_signal,
-            run: build_dual_run(source, oracle, run, compile, bytecode, symbols),
+            run,
         });
         if stop {
             break;
@@ -776,6 +784,7 @@ fn build_dual_run(
 
     DualRun {
         source: source.to_string(),
+        setup: Vec::new(),
         agreement,
         result_agrees,
         oracle_result: oracle.result,
@@ -905,6 +914,16 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
 /// the source's shape. The caller decides how closely the two aborts must
 /// agree (`xst::reframed_abort_matches`).
 pub fn ironhorse_eval_goal_error(source: &str) -> Option<String> {
+    ironhorse_eval_goal_error_after(&[], source)
+}
+
+/// [`ironhorse_eval_goal_error`] for a `source` that ran after `setup` (the
+/// harness scripts) in one realm, as [`dual_run_scripts`] runs a test262
+/// case. The setup runs first under its ordinary Script framing, exactly as
+/// the differential ran it; only `source` is re-framed. The thrown value is
+/// rendered through the guest's `toString`, as the oracle renders its abort,
+/// so a harness `Test262Error` compares by its message.
+pub fn ironhorse_eval_goal_error_after(setup: &[String], source: &str) -> Option<String> {
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ironhorse_compile::compile_atoms_with(source, false)
     }));
@@ -913,10 +932,27 @@ pub fn ironhorse_eval_goal_error(source: &str) -> Option<String> {
         _ => return None,
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
-    let mut interp = interp_with_source_bridge(&names);
+    if setup.is_empty() {
+        let mut interp = interp_with_source_bridge(&names);
+        interp.set_eval_program_framing(true);
+        return match interp.run(&bytecode).halt {
+            Halt::Throw { rendered, .. } => Some(rendered),
+            _ => None,
+        };
+    }
+    let mut interp = interp_with_source_bridge(&[]);
+    for script in setup {
+        if !run_setup(&mut interp, script).completed {
+            return None;
+        }
+    }
     interp.set_eval_program_framing(true);
-    match interp.run(&bytecode).halt {
-        Halt::Throw { rendered, .. } => Some(rendered),
+    let code = interp.relink_crank(&bytecode, &names).ok()?;
+    match interp.run_rendering_throws_in_guest(&code).host_coerced() {
+        RunOutcome {
+            halt: Halt::Throw { rendered, .. },
+            ..
+        } => Some(rendered),
         _ => None,
     }
 }
@@ -1404,6 +1440,7 @@ mod tests {
         let error_agrees = matches!(ironhorse_halt, Halt::Throw { .. });
         DualRun {
             source: String::new(),
+            setup: Vec::new(),
             agreement,
             result_agrees: false,
             oracle_result: String::new(),
