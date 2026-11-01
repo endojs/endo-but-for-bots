@@ -197,9 +197,9 @@ fn an_inherited_only_name_is_resolvable_for_both_the_read_and_the_store() {
     // chain, so every `%Object.prototype%` member is a resolvable global name:
     // a strict assignment to one must NOT raise step 6, and a *read* of one
     // must answer its inherited value rather than the unresolvable
-    // `ReferenceError`. ironhorse's global object carries a null prototype, so
-    // both halves ask `%Object.prototype%` directly — the case that separates
-    // that walk from an own-property test.
+    // `ReferenceError`. The global object chains to `%Object.prototype%`, so
+    // both halves ask the global's own `HasProperty` — the case that
+    // separates that walk from an own-property test.
     assert_eq!(
         run("'use strict'; Object.prototype.pp = 1; pp = 2; globalThis.pp")
             .expect("an inherited-only name must not raise the unresolvable error"),
