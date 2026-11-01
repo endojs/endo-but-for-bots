@@ -14,7 +14,7 @@
 //! Every case is differential: both engines must complete with the same
 //! rendered result.
 
-use ironhorse_262::{dual_run, Agreement};
+use ironhorse_262::{dual_run, dual_run_scripts, Agreement};
 
 fn assert_oracle_result(source: &str, expected: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
@@ -71,4 +71,45 @@ fn a_function_declaration_keeps_a_non_configurable_globals_attributes() {
          var d = Object.getOwnPropertyDescriptor(globalThis, 'g'); \
          [d.writable, d.enumerable, d.configurable, g()].join()";
     assert_oracle_result(source, "true,true,false,4");
+}
+
+/// The Script counterpart of the eval redefinition: GlobalDeclarationInstantiation
+/// step 16.b calls `CreateGlobalFunctionBinding(fn, fo, false)`, so a top-level
+/// function declaration over an existing configurable global redefines it as a
+/// writable, enumerable, **non**-configurable data property, while a top-level
+/// `var` over the same global leaves its attributes untouched.
+///
+/// The pinned XS oracle departs from the specification here: it redefines the
+/// property but leaves it configurable. Ironhorse follows the specification, so
+/// this case pins both results; if a future XS pin starts to agree, the oracle
+/// assertion fails and the case can become a plain differential one.
+#[test]
+fn a_script_function_declaration_redefines_a_configurable_global_as_non_configurable() {
+    let setup = "Object.defineProperty(globalThis, 'sf', \
+           { value: 1, enumerable: false, writable: false, configurable: true }); \
+         Object.defineProperty(globalThis, 'sv', \
+           { value: 2, enumerable: false, writable: false, configurable: true }); \
+         'setup';";
+    let body = "function sf() { return 7; } var sv; \
+         var df = Object.getOwnPropertyDescriptor(globalThis, 'sf'); \
+         var dv = Object.getOwnPropertyDescriptor(globalThis, 'sv'); \
+         [df.writable, df.enumerable, df.configurable, sf(), \
+          dv.writable, dv.enumerable, dv.configurable, sv].join()";
+    let runs = dual_run_scripts(&[setup, body], None).expect("pinned XS oracle is available");
+    let run = &runs.last().expect("the body ran").run;
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "oracle {:?} ironhorse {:?}",
+        run.oracle_error,
+        run.ironhorse_error
+    );
+    assert_eq!(
+        run.ironhorse_result, "true,true,false,7,false,false,true,2",
+        "ironhorse result (per ECMA-262)"
+    );
+    assert_eq!(
+        run.oracle_result, "true,true,true,7,false,false,true,2",
+        "oracle result (XS keeps the redefined global configurable)"
+    );
 }
