@@ -481,13 +481,28 @@ const prepareConfig = async (
 };
 
 // Some tests require an unconfined Node.js worker to load native
-// plugins via makeUnconfined.  The Rust supervisor (ENDO_BIN) only
+// plugins via makeUnconfined, or a Node.js worker to run makeArchive,
+// which the XS worker does not implement yet (designs/worker-rust-xs.md
+// § Known Gaps).  The Rust supervisor (ENDO_BIN) only
 // spawns Node workers when ENDO_NODE_WORKER_BIN is also set, and
 // the default `yarn test:rust` invocation deliberately omits it.
 // Skip such tests on the bare-rust path so the suite can run
 // against test:rust as a smoke test for XS-only paths.
-const testNeedsNodeWorker =
-  process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN ? test.skip : test;
+// `test.skip` has no `.serial`, so serial tests use the sibling binding.
+const lacksNodeWorker =
+  process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN;
+const testNeedsNodeWorker = lacksNodeWorker ? test.skip : test;
+const testNeedsNodeWorkerSerial = lacksNodeWorker
+  ? test.serial.skip
+  : test.serial;
+
+// Powers the XS manager (src/bus-manager-rust-xs.js) does not supply yet:
+// host tool powers for git-backed formulas (src/host-tool-powers.js), the
+// HTTP gateway that writes `<statePath>/gateway`, log reading, and mount
+// change notification. `ENDO_MANAGER_NODE=1` (yarn test:rust-node-manager)
+// puts the manager back in Node, where these work.
+const testNeedsNodeManagerPowers =
+  process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE ? test.skip : test;
 
 // A leaked rejection (typically a daemon's graceful-disconnect reason,
 // "Termination requested", arriving on a promise nobody observes) is reported
@@ -870,7 +885,7 @@ test.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'daemon-local session owner removes one session while sibling workers survive',
   async t => {
     t.timeout(30_000);
@@ -1174,7 +1189,7 @@ test.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'native session owner activates exact dependencies after inert construction and restart',
   async t => {
     t.timeout(60_000);
@@ -1340,7 +1355,7 @@ test.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'native sandbox service mints over slot-free null powers and refuses stale revival after restart',
   async t => {
     t.timeout(60_000);
@@ -1409,7 +1424,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'native session stop closes a worker with a pending inert constructor',
   async t => {
     t.timeout(30_000);
@@ -1465,7 +1480,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'native session tools are transient across daemon restart',
   async t => {
     t.timeout(30_000);
@@ -1513,7 +1528,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'static dependency bundles retain exact capabilities across rebinding and restart',
   async t => {
     t.timeout(30_000);
@@ -4688,7 +4703,7 @@ testNeedsNodeWorker('cancel because of requested capability', async t => {
   );
 });
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'pool identity capability journal survives real daemon reconstruction',
   async t => {
     t.timeout(30_000);
@@ -4758,7 +4773,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'pooled retirement drains renewal before real formula replacement',
   async t => {
     t.timeout(30_000);
@@ -4871,7 +4886,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'catalog formula reconstruction drains admitted renewal before replacement',
   async t => {
     t.timeout(30_000);
@@ -5452,7 +5467,7 @@ test('read unknown node id', async t => {
   });
 });
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'an adopted remote capability is endowable by name, unlike a bare presence',
   async t => {
     t.timeout(120_000);
@@ -5486,7 +5501,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'portable environment Shell crosses two daemon peers without private admin',
   async t => {
     t.timeout(60_000);
@@ -6635,39 +6650,42 @@ testNeedsNodeWorker(
   },
 );
 
-test('makeArchive runs a source-only ZIP and passes env to caplet', async t => {
-  const { host } = await prepareHost(t);
+testNeedsNodeWorker(
+  'makeArchive runs a source-only ZIP and passes env to caplet',
+  async t => {
+    const { host } = await prepareHost(t);
 
-  await E(host).provideWorker(['worker']);
+    await E(host).provideWorker(['worker']);
 
-  const archivePath = path.join(
-    dirname,
-    'test',
-    'fixtures',
-    'archive-env-echo',
-  );
-  const envEcho = await doMakeArchive(host, archivePath, archiveName =>
-    E(host).makeArchive('worker', archiveName, {
-      powersName: '@none',
-      resultName: 'env-echo-from-archive',
-      env: {
-        CONFIG_PATH: '/etc/app/config.json',
-        LOG_LEVEL: 'verbose',
-      },
-    }),
-  );
+    const archivePath = path.join(
+      dirname,
+      'test',
+      'fixtures',
+      'archive-env-echo',
+    );
+    const envEcho = await doMakeArchive(host, archivePath, archiveName =>
+      E(host).makeArchive('worker', archiveName, {
+        powersName: '@none',
+        resultName: 'env-echo-from-archive',
+        env: {
+          CONFIG_PATH: '/etc/app/config.json',
+          LOG_LEVEL: 'verbose',
+        },
+      }),
+    );
 
-  const allEnv = await E(envEcho).getEnv();
-  t.deepEqual(allEnv, {
-    CONFIG_PATH: '/etc/app/config.json',
-    LOG_LEVEL: 'verbose',
-  });
-  t.is(await E(envEcho).getEnvVar('CONFIG_PATH'), '/etc/app/config.json');
-  t.true(await E(envEcho).hasEnvVar('LOG_LEVEL'));
-  t.false(await E(envEcho).hasEnvVar('NOT_SET'));
-});
+    const allEnv = await E(envEcho).getEnv();
+    t.deepEqual(allEnv, {
+      CONFIG_PATH: '/etc/app/config.json',
+      LOG_LEVEL: 'verbose',
+    });
+    t.is(await E(envEcho).getEnvVar('CONFIG_PATH'), '/etc/app/config.json');
+    t.true(await E(envEcho).hasEnvVar('LOG_LEVEL'));
+    t.false(await E(envEcho).hasEnvVar('NOT_SET'));
+  },
+);
 
-test('makeArchive with empty env object', async t => {
+testNeedsNodeWorker('makeArchive with empty env object', async t => {
   const { host } = await prepareHost(t);
   await E(host).provideWorker(['worker']);
   const archivePath = path.join(
@@ -6686,23 +6704,26 @@ test('makeArchive with empty env object', async t => {
   t.deepEqual(await E(envEcho).getEnv(), {});
 });
 
-test('makeArchive without env option defaults to empty env', async t => {
-  const { host } = await prepareHost(t);
-  await E(host).provideWorker(['worker']);
-  const archivePath = path.join(
-    dirname,
-    'test',
-    'fixtures',
-    'archive-env-echo',
-  );
-  const envEcho = await doMakeArchive(host, archivePath, archiveName =>
-    E(host).makeArchive('worker', archiveName, {
-      powersName: '@none',
-      resultName: 'env-echo-default',
-    }),
-  );
-  t.deepEqual(await E(envEcho).getEnv(), {});
-});
+testNeedsNodeWorker(
+  'makeArchive without env option defaults to empty env',
+  async t => {
+    const { host } = await prepareHost(t);
+    await E(host).provideWorker(['worker']);
+    const archivePath = path.join(
+      dirname,
+      'test',
+      'fixtures',
+      'archive-env-echo',
+    );
+    const envEcho = await doMakeArchive(host, archivePath, archiveName =>
+      E(host).makeArchive('worker', archiveName, {
+        powersName: '@none',
+        resultName: 'env-echo-default',
+      }),
+    );
+    t.deepEqual(await E(envEcho).getEnv(), {});
+  },
+);
 
 test('makeArchive rejects an unknown archive pet name', async t => {
   const { host } = await prepareHost(t);
@@ -7074,10 +7095,11 @@ test('a restored form still enforces its patterns', async t => {
     // Surviving the round-trip must not mean the pattern went slack. Pin the
     // message, because rejection alone proves nothing: a flattened pattern
     // rejects a string too, saying `Must be: {"payload":"boolean"}`. Only a
-    // real `M.boolean()` says this.
+    // real `M.boolean()` says this. The XS manager runs without SES, where
+    // `bare` details still render quoted, so it says `Must be a "boolean"`.
     await t.throwsAsync(
       () => E(host).submit(formNumber, harden({ approved: 'yes' })),
-      { message: /field "approved".*Must be a boolean/ },
+      { message: /field "approved".*Must be a "?boolean"?/ },
       'a string is still refused for a boolean field',
     );
   }
@@ -7495,81 +7517,90 @@ test('a guest carries the content-locate family', async t => {
   t.regex(contentLocator, /^magnet:\?xt=urn:endo-blob:[0-9a-f]{64}$/);
 });
 
-test('HTTP web-seed loads and verifies a readable blob', async t => {
-  const { host, config } = await prepareHost(t);
-  const originalBytes = encodeUtf8('web-seed payload\n');
-  await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), 'original');
-  const originalLocator = await E(host).locateContent('original');
-  const { hash } = parseContentLocator(originalLocator);
-  const gatewayAddress = fs
-    .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
-    .trim();
+testNeedsNodeManagerPowers(
+  'HTTP web-seed loads and verifies a readable blob',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const originalBytes = encodeUtf8('web-seed payload\n');
+    await E(host).storeBlob(
+      bytesReaderFromIterator([originalBytes]),
+      'original',
+    );
+    const originalLocator = await E(host).locateContent('original');
+    const { hash } = parseContentLocator(originalLocator);
+    const gatewayAddress = fs
+      .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
+      .trim();
 
-  // The first source deliberately serves another valid blob. `loadContent`
-  // must reject it on the xt mismatch and continue to the second web seed.
-  await E(host).storeBlob(
-    bytesReaderFromIterator([encodeUtf8('wrong payload\n')]),
-    'wrong',
-  );
-  const wrongLocator = await E(host).locateContent('wrong');
-  const { hash: wrongHash } = parseContentLocator(wrongLocator);
-  const shareLocation = url.pathToFileURL(
-    path.join(dirname, 'test', 'http-content-share.js'),
-  ).href;
-  await E(host).makeUnconfined('@main', shareLocation, {
-    powersName: '@none',
-    resultName: 'http-share',
-    env: {
-      GATEWAY_ADDRESS: gatewayAddress,
-      WRONG_HASH: wrongHash,
-    },
-  });
-  await E(host).move(['http-share'], ['@planes', 'http']);
+    // The first source deliberately serves another valid blob. `loadContent`
+    // must reject it on the xt mismatch and continue to the second web seed.
+    await E(host).storeBlob(
+      bytesReaderFromIterator([encodeUtf8('wrong payload\n')]),
+      'wrong',
+    );
+    const wrongLocator = await E(host).locateContent('wrong');
+    const { hash: wrongHash } = parseContentLocator(wrongLocator);
+    const shareLocation = url.pathToFileURL(
+      path.join(dirname, 'test', 'http-content-share.js'),
+    ).href;
+    await E(host).makeUnconfined('@main', shareLocation, {
+      powersName: '@none',
+      resultName: 'http-share',
+      env: {
+        GATEWAY_ADDRESS: gatewayAddress,
+        WRONG_HASH: wrongHash,
+      },
+    });
+    await E(host).move(['http-share'], ['@planes', 'http']);
 
-  const sharedLocator = await E(host).storeContent('original');
-  const shared = parseContentLocator(sharedLocator);
-  t.is(shared.hash, hash);
-  t.is(shared.sources.length, 2);
+    const sharedLocator = await E(host).storeContent('original');
+    const shared = parseContentLocator(sharedLocator);
+    t.is(shared.hash, hash);
+    t.is(shared.sources.length, 2);
 
-  const loaded = await E(host).loadContent(sharedLocator);
-  t.is(await E(loaded).text(), 'web-seed payload\n');
-  t.deepEqual(await E(host).reverseLookup(loaded), []);
+    const loaded = await E(host).loadContent(sharedLocator);
+    t.is(await E(loaded).text(), 'web-seed payload\n');
+    t.deepEqual(await E(host).reverseLookup(loaded), []);
 
-  const original = await E(host).lookup('original');
-  const copiedInBand = await E(host).loadContent(originalLocator, original);
-  t.is(await E(copiedInBand).text(), 'web-seed payload\n');
-  t.deepEqual(await E(host).reverseLookup(copiedInBand), []);
-});
+    const original = await E(host).lookup('original');
+    const copiedInBand = await E(host).loadContent(originalLocator, original);
+    t.is(await E(copiedInBand).text(), 'web-seed payload\n');
+    t.deepEqual(await E(host).reverseLookup(copiedInBand), []);
+  },
+);
 
-test('HTTP web-seed loads a tar tree only after its assembled hash matches xt', async t => {
-  const { host, config } = await prepareHost(t);
-  await E(host).storeTree(
-    makeFarTree({
-      'alpha.txt': makeFarBlob('alpha'),
-      nested: makeFarTree({ 'beta.txt': makeFarBlob('beta') }),
-    }),
-    'tree',
-  );
-  const gatewayAddress = fs
-    .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
-    .trim();
-  const shareLocation = url.pathToFileURL(
-    path.join(dirname, 'test', 'http-content-share.js'),
-  ).href;
-  await E(host).makeUnconfined('@main', shareLocation, {
-    powersName: '@none',
-    resultName: 'http-share',
-    env: { GATEWAY_ADDRESS: gatewayAddress },
-  });
-  await E(host).move(['http-share'], ['@planes', 'http']);
+testNeedsNodeManagerPowers(
+  'HTTP web-seed loads a tar tree only after its assembled hash matches xt',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    await E(host).storeTree(
+      makeFarTree({
+        'alpha.txt': makeFarBlob('alpha'),
+        nested: makeFarTree({ 'beta.txt': makeFarBlob('beta') }),
+      }),
+      'tree',
+    );
+    const gatewayAddress = fs
+      .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
+      .trim();
+    const shareLocation = url.pathToFileURL(
+      path.join(dirname, 'test', 'http-content-share.js'),
+    ).href;
+    await E(host).makeUnconfined('@main', shareLocation, {
+      powersName: '@none',
+      resultName: 'http-share',
+      env: { GATEWAY_ADDRESS: gatewayAddress },
+    });
+    await E(host).move(['http-share'], ['@planes', 'http']);
 
-  const locator = await E(host).storeContent('tree');
-  const tree = await E(host).loadContent(locator);
-  t.deepEqual(await E(tree).list(), ['alpha.txt', 'nested']);
-  const nested = await E(tree).lookup('nested');
-  const beta = await E(nested).lookup('beta.txt');
-  t.is(await E(beta).text(), 'beta');
-});
+    const locator = await E(host).storeContent('tree');
+    const tree = await E(host).loadContent(locator);
+    t.deepEqual(await E(tree).list(), ['alpha.txt', 'nested']);
+    const nested = await E(tree).lookup('nested');
+    const beta = await E(nested).lookup('beta.txt');
+    t.is(await E(beta).text(), 'beta');
+  },
+);
 
 test('store readable tree with blobs', async t => {
   const { host } = await prepareHost(t);
@@ -8025,83 +8056,89 @@ test('provideGit rejects a malformed commit identity at the host boundary', asyn
   );
 });
 
-test('provideGit tree exposes immutable commit contents', async t => {
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'provideGit tree exposes immutable commit contents',
+  async t => {
+    const { host, config } = await prepareHost(t);
 
-  const repoPath = path.join(config.statePath, '..', 'git-tree-repo');
-  await createGitFixture(repoPath);
-  await fs.promises.mkdir(path.join(repoPath, 'src'));
-  await fs.promises.writeFile(
-    path.join(repoPath, 'src', 'main.js'),
-    'export default 1;\n',
-    'utf-8',
-  );
-  // Symlink exercises the tar `typeFlag === '2'` branch in
-  // `checkinTarTree`; `git archive` emits symlinks as type-`l`
-  // entries whose linkname is the target path.
-  await fs.promises.symlink('main.js', path.join(repoPath, 'src', 'alias.js'));
-  await git(repoPath, ['add', 'src/main.js', 'src/alias.js']);
-  await git(repoPath, [
-    '-c',
-    'user.email=t@t',
-    '-c',
-    'user.name=T',
-    'commit',
-    '-m',
-    'add source',
-  ]);
+    const repoPath = path.join(config.statePath, '..', 'git-tree-repo');
+    await createGitFixture(repoPath);
+    await fs.promises.mkdir(path.join(repoPath, 'src'));
+    await fs.promises.writeFile(
+      path.join(repoPath, 'src', 'main.js'),
+      'export default 1;\n',
+      'utf-8',
+    );
+    // Symlink exercises the tar `typeFlag === '2'` branch in
+    // `checkinTarTree`; `git archive` emits symlinks as type-`l`
+    // entries whose linkname is the target path.
+    await fs.promises.symlink(
+      'main.js',
+      path.join(repoPath, 'src', 'alias.js'),
+    );
+    await git(repoPath, ['add', 'src/main.js', 'src/alias.js']);
+    await git(repoPath, [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'add source',
+    ]);
 
-  const mount = await E(host).provideMount(repoPath, 'git-tree-worktree');
-  const gitCap = await E(host).provideGit(mount, 'git-tree-cap');
-  const tree = await E(gitCap).tree('HEAD');
-  // eslint-disable-next-line no-underscore-dangle
-  const treeMethods = await E(tree).__getMethodNames__();
-  t.true(treeMethods.includes('archiveTar'));
+    const mount = await E(host).provideMount(repoPath, 'git-tree-worktree');
+    const gitCap = await E(host).provideGit(mount, 'git-tree-cap');
+    const tree = await E(gitCap).tree('HEAD');
+    // eslint-disable-next-line no-underscore-dangle
+    const treeMethods = await E(tree).__getMethodNames__();
+    t.true(treeMethods.includes('archiveTar'));
 
-  const names = await E(tree).list();
-  t.deepEqual(names, ['README.md', 'src']);
-  const src = await E(tree).lookup('src');
-  t.deepEqual(await E(src).list(), ['alias.js', 'main.js']);
+    const names = await E(tree).list();
+    t.deepEqual(names, ['README.md', 'src']);
+    const src = await E(tree).lookup('src');
+    t.deepEqual(await E(src).list(), ['alias.js', 'main.js']);
 
-  const main = await E(tree).lookup(['src', 'main.js']);
-  t.is(await E(main).text(), 'export default 1;\n');
+    const main = await E(tree).lookup(['src', 'main.js']);
+    t.is(await E(main).text(), 'export default 1;\n');
 
-  // GitBlob exposes the rich BlobRef named-read surface.
-  t.is(await E(main).size(), 18n); // 'export default 1;\n'
-  /** @param {any} reader */
-  const collectText = async reader => {
-    const chunks = [];
-    for await (const chunk of iterateBytesReader(reader)) {
-      chunks.push(chunk);
-    }
-    const total = chunks.reduce((n, c) => n + c.length, 0);
-    const out = new Uint8Array(total);
-    let off = 0;
-    for (const c of chunks) {
-      out.set(c, off);
-      off += c.length;
-    }
-    return decodeUtf8(out);
-  };
-  t.is(await E(await E(main).byteRange(0n, 6n)).text(), 'export');
-  t.is(await collectText(await E(main).bytes()), 'export default 1;\n');
+    // GitBlob exposes the rich BlobRef named-read surface.
+    t.is(await E(main).size(), 18n); // 'export default 1;\n'
+    /** @param {any} reader */
+    const collectText = async reader => {
+      const chunks = [];
+      for await (const chunk of iterateBytesReader(reader)) {
+        chunks.push(chunk);
+      }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const out = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) {
+        out.set(c, off);
+        off += c.length;
+      }
+      return decodeUtf8(out);
+    };
+    t.is(await E(await E(main).byteRange(0n, 6n)).text(), 'export');
+    t.is(await collectText(await E(main).bytes()), 'export default 1;\n');
 
-  await fs.promises.writeFile(
-    path.join(repoPath, 'src', 'main.js'),
-    'export default 2;\n',
-    'utf-8',
-  );
-  t.is(await E(main).text(), 'export default 1;\n');
+    await fs.promises.writeFile(
+      path.join(repoPath, 'src', 'main.js'),
+      'export default 2;\n',
+      'utf-8',
+    );
+    t.is(await E(main).text(), 'export default 1;\n');
 
-  await E(host).storeTree(tree, 'git-tree-snapshot');
-  const storedTree = await E(host).lookup('git-tree-snapshot');
-  const storedMain = await E(storedTree).lookup(['src', 'main.js']);
-  t.is(await E(storedMain).text(), 'export default 1;\n');
-  // The symlink is checked in as a blob whose contents are the link
-  // target text, anchored to the immutable commit tree.
-  const storedAlias = await E(storedTree).lookup(['src', 'alias.js']);
-  t.is(await E(storedAlias).text(), 'main.js');
-});
+    await E(host).storeTree(tree, 'git-tree-snapshot');
+    const storedTree = await E(host).lookup('git-tree-snapshot');
+    const storedMain = await E(storedTree).lookup(['src', 'main.js']);
+    t.is(await E(storedMain).text(), 'export default 1;\n');
+    // The symlink is checked in as a blob whose contents are the link
+    // target text, anchored to the immutable commit tree.
+    const storedAlias = await E(storedTree).lookup(['src', 'alias.js']);
+    t.is(await E(storedAlias).text(), 'main.js');
+  },
+);
 
 test('storeTree honors pax extended headers for long paths', async t => {
   const { host } = await prepareHost(t);
@@ -8151,161 +8188,180 @@ test('storeTree honors pax linkpath for long symlink targets', async t => {
   t.is(await E(storedLink).text(), longTarget);
 });
 
-test('storeTree falls back for export-ignore trees the archive would drop', async t => {
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'storeTree falls back for export-ignore trees the archive would drop',
+  async t => {
+    const { host, config } = await prepareHost(t);
 
-  const repoPath = path.join(config.statePath, '..', 'git-export-ignore-repo');
-  await createGitFixture(repoPath);
-  // `git archive --format=tar` honors a committed `.gitattributes`
-  // `export-ignore`, OMITTING `secret.txt` from the tar. The committed
-  // tree still contains it, so the immutable snapshot must include it.
-  await fs.promises.writeFile(
-    path.join(repoPath, 'secret.txt'),
-    'keep me\n',
-    'utf-8',
-  );
-  await fs.promises.writeFile(
-    path.join(repoPath, '.gitattributes'),
-    'secret.txt export-ignore\n',
-    'utf-8',
-  );
-  await git(repoPath, ['add', 'secret.txt', '.gitattributes']);
-  await git(repoPath, [
-    '-c',
-    'user.email=t@t',
-    '-c',
-    'user.name=T',
-    'commit',
-    '-m',
-    'add export-ignored file',
-  ]);
+    const repoPath = path.join(
+      config.statePath,
+      '..',
+      'git-export-ignore-repo',
+    );
+    await createGitFixture(repoPath);
+    // `git archive --format=tar` honors a committed `.gitattributes`
+    // `export-ignore`, OMITTING `secret.txt` from the tar. The committed
+    // tree still contains it, so the immutable snapshot must include it.
+    await fs.promises.writeFile(
+      path.join(repoPath, 'secret.txt'),
+      'keep me\n',
+      'utf-8',
+    );
+    await fs.promises.writeFile(
+      path.join(repoPath, '.gitattributes'),
+      'secret.txt export-ignore\n',
+      'utf-8',
+    );
+    await git(repoPath, ['add', 'secret.txt', '.gitattributes']);
+    await git(repoPath, [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'add export-ignored file',
+    ]);
 
-  const mount = await E(host).provideMount(repoPath, 'export-ignore-worktree');
-  const gitCap = await E(host).provideGit(mount, 'export-ignore-cap');
-  const tree = await E(gitCap).tree('HEAD');
+    const mount = await E(host).provideMount(
+      repoPath,
+      'export-ignore-worktree',
+    );
+    const gitCap = await E(host).provideGit(mount, 'export-ignore-cap');
+    const tree = await E(gitCap).tree('HEAD');
 
-  // The tree reports itself NOT archive-lossless, so checkinTree routes
-  // to the per-entry walk instead of the lossy fast path.
-  t.is(await E(tree).archiveLossless(), false);
+    // The tree reports itself NOT archive-lossless, so checkinTree routes
+    // to the per-entry walk instead of the lossy fast path.
+    t.is(await E(tree).archiveLossless(), false);
 
-  await E(host).storeTree(tree, 'export-ignore-snapshot');
-  const storedTree = await E(host).lookup('export-ignore-snapshot');
-  // Fail-closed: the unfixed fast path takes `git archive`, which drops
-  // `secret.txt`, so this lookup would reject. The fallback preserves it.
-  const storedSecret = await E(storedTree).lookup('secret.txt');
-  t.is(await E(storedSecret).text(), 'keep me\n');
-});
+    await E(host).storeTree(tree, 'export-ignore-snapshot');
+    const storedTree = await E(host).lookup('export-ignore-snapshot');
+    // Fail-closed: the unfixed fast path takes `git archive`, which drops
+    // `secret.txt`, so this lookup would reject. The fallback preserves it.
+    const storedSecret = await E(storedTree).lookup('secret.txt');
+    t.is(await E(storedSecret).text(), 'keep me\n');
+  },
+);
 
-test('storeTree falls back for export-subst trees the archive would rewrite', async t => {
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'storeTree falls back for export-subst trees the archive would rewrite',
+  async t => {
+    const { host, config } = await prepareHost(t);
 
-  const repoPath = path.join(config.statePath, '..', 'git-export-subst-repo');
-  await createGitFixture(repoPath);
-  await fs.promises.writeFile(
-    path.join(repoPath, 'template.txt'),
-    '$Format:%H$\n',
-    'utf-8',
-  );
-  await fs.promises.writeFile(
-    path.join(repoPath, '.gitattributes'),
-    'template.txt export-subst\n',
-    'utf-8',
-  );
-  await git(repoPath, ['add', 'template.txt', '.gitattributes']);
-  await git(repoPath, [
-    '-c',
-    'user.email=t@t',
-    '-c',
-    'user.name=T',
-    'commit',
-    '-m',
-    'add export-subst file',
-  ]);
+    const repoPath = path.join(config.statePath, '..', 'git-export-subst-repo');
+    await createGitFixture(repoPath);
+    await fs.promises.writeFile(
+      path.join(repoPath, 'template.txt'),
+      '$Format:%H$\n',
+      'utf-8',
+    );
+    await fs.promises.writeFile(
+      path.join(repoPath, '.gitattributes'),
+      'template.txt export-subst\n',
+      'utf-8',
+    );
+    await git(repoPath, ['add', 'template.txt', '.gitattributes']);
+    await git(repoPath, [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'add export-subst file',
+    ]);
 
-  const mount = await E(host).provideMount(repoPath, 'export-subst-worktree');
-  const gitCap = await E(host).provideGit(mount, 'export-subst-cap');
-  const tree = await E(gitCap).tree('HEAD');
+    const mount = await E(host).provideMount(repoPath, 'export-subst-worktree');
+    const gitCap = await E(host).provideGit(mount, 'export-subst-cap');
+    const tree = await E(gitCap).tree('HEAD');
 
-  t.is(await E(tree).archiveLossless(), false);
+    t.is(await E(tree).archiveLossless(), false);
 
-  await E(host).storeTree(tree, 'export-subst-snapshot');
-  const storedTree = await E(host).lookup('export-subst-snapshot');
-  const storedTemplate = await E(storedTree).lookup('template.txt');
-  t.is(await E(storedTemplate).text(), '$Format:%H$\n');
-});
+    await E(host).storeTree(tree, 'export-subst-snapshot');
+    const storedTree = await E(host).lookup('export-subst-snapshot');
+    const storedTemplate = await E(storedTree).lookup('template.txt');
+    t.is(await E(storedTemplate).text(), '$Format:%H$\n');
+  },
+);
 
-test('storeTree falls back for info attributes the archive would honor', async t => {
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'storeTree falls back for info attributes the archive would honor',
+  async t => {
+    const { host, config } = await prepareHost(t);
 
-  const repoPath = path.join(config.statePath, '..', 'git-info-attrs-repo');
-  await createGitFixture(repoPath);
-  await fs.promises.writeFile(
-    path.join(repoPath, 'secret.txt'),
-    'keep me\n',
-    'utf-8',
-  );
-  await git(repoPath, ['add', 'secret.txt']);
-  await git(repoPath, [
-    '-c',
-    'user.email=t@t',
-    '-c',
-    'user.name=T',
-    'commit',
-    '-m',
-    'add secret file',
-  ]);
-  await fs.promises.writeFile(
-    path.join(repoPath, '.git', 'info', 'attributes'),
-    'secret.txt export-ignore\n',
-    'utf-8',
-  );
+    const repoPath = path.join(config.statePath, '..', 'git-info-attrs-repo');
+    await createGitFixture(repoPath);
+    await fs.promises.writeFile(
+      path.join(repoPath, 'secret.txt'),
+      'keep me\n',
+      'utf-8',
+    );
+    await git(repoPath, ['add', 'secret.txt']);
+    await git(repoPath, [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'add secret file',
+    ]);
+    await fs.promises.writeFile(
+      path.join(repoPath, '.git', 'info', 'attributes'),
+      'secret.txt export-ignore\n',
+      'utf-8',
+    );
 
-  const mount = await E(host).provideMount(repoPath, 'info-attrs-worktree');
-  const gitCap = await E(host).provideGit(mount, 'info-attrs-cap');
-  const tree = await E(gitCap).tree('HEAD');
+    const mount = await E(host).provideMount(repoPath, 'info-attrs-worktree');
+    const gitCap = await E(host).provideGit(mount, 'info-attrs-cap');
+    const tree = await E(gitCap).tree('HEAD');
 
-  t.is(await E(tree).archiveLossless(), false);
+    t.is(await E(tree).archiveLossless(), false);
 
-  await E(host).storeTree(tree, 'info-attrs-snapshot');
-  const storedTree = await E(host).lookup('info-attrs-snapshot');
-  const storedSecret = await E(storedTree).lookup('secret.txt');
-  t.is(await E(storedSecret).text(), 'keep me\n');
-});
+    await E(host).storeTree(tree, 'info-attrs-snapshot');
+    const storedTree = await E(host).lookup('info-attrs-snapshot');
+    const storedSecret = await E(storedTree).lookup('secret.txt');
+    t.is(await E(storedSecret).text(), 'keep me\n');
+  },
+);
 
-test('git tree reports a gitlink as not archive-lossless', async t => {
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'git tree reports a gitlink as not archive-lossless',
+  async t => {
+    const { host, config } = await prepareHost(t);
 
-  const repoPath = path.join(config.statePath, '..', 'git-gitlink-repo');
-  await createGitFixture(repoPath);
-  // Stage a gitlink (submodule commit, mode 160000) directly via the
-  // index. `git archive` would flatten it to an empty directory; the
-  // tree must report itself NOT archive-lossless so checkinTree takes
-  // the per-entry walk, which fails loudly on the submodule commit
-  // rather than silently dropping the reference.
-  await git(repoPath, [
-    'update-index',
-    '--add',
-    '--cacheinfo',
-    `160000,${'0'.repeat(39)}1,vendor/sub`,
-  ]);
-  await git(repoPath, [
-    '-c',
-    'user.email=t@t',
-    '-c',
-    'user.name=T',
-    'commit',
-    '-m',
-    'add gitlink',
-  ]);
+    const repoPath = path.join(config.statePath, '..', 'git-gitlink-repo');
+    await createGitFixture(repoPath);
+    // Stage a gitlink (submodule commit, mode 160000) directly via the
+    // index. `git archive` would flatten it to an empty directory; the
+    // tree must report itself NOT archive-lossless so checkinTree takes
+    // the per-entry walk, which fails loudly on the submodule commit
+    // rather than silently dropping the reference.
+    await git(repoPath, [
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${'0'.repeat(39)}1,vendor/sub`,
+    ]);
+    await git(repoPath, [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'add gitlink',
+    ]);
 
-  const mount = await E(host).provideMount(repoPath, 'gitlink-worktree');
-  const gitCap = await E(host).provideGit(mount, 'gitlink-cap');
-  const tree = await E(gitCap).tree('HEAD');
+    const mount = await E(host).provideMount(repoPath, 'gitlink-worktree');
+    const gitCap = await E(host).provideGit(mount, 'gitlink-cap');
+    const tree = await E(gitCap).tree('HEAD');
 
-  // Fail-closed: the unfixed flow lacks this signal and would archive
-  // the tree, snapshotting the gitlink as an empty directory.
-  t.is(await E(tree).archiveLossless(), false);
-});
+    // Fail-closed: the unfixed flow lacks this signal and would archive
+    // the tree, snapshotting the gitlink as an empty directory.
+    t.is(await E(tree).archiveLossless(), false);
+  },
+);
 
 test('storeTree rejects malformed archiveTar streams', async t => {
   const { host } = await prepareHost(t);
@@ -9105,86 +9161,92 @@ test('mount followNameChanges reports a live file addition', async t => {
   await E(iter).return();
 });
 
-test('mount followNameChanges reports a live file removal', async t => {
-  t.timeout(30_000);
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'mount followNameChanges reports a live file removal',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t);
 
-  const mountPath = path.join(config.statePath, '..', 'mount-follow-rm');
-  await createMountFixture(mountPath, { 'doomed.txt': 'goodbye' });
+    const mountPath = path.join(config.statePath, '..', 'mount-follow-rm');
+    await createMountFixture(mountPath, { 'doomed.txt': 'goodbye' });
 
-  await E(host).provideMount(mountPath, 'follow-rm-mount');
-  const mount = await E(host).lookup(['follow-rm-mount']);
+    await E(host).provideMount(mountPath, 'follow-rm-mount');
+    const mount = await E(host).lookup(['follow-rm-mount']);
 
-  const iter = iterateReader(await E(mount).followNameChanges());
+    const iter = iterateReader(await E(mount).followNameChanges());
 
-  // Drain the snapshot (one entry).
-  await takeCount(iter, 1);
+    // Drain the snapshot (one entry).
+    await takeCount(iter, 1);
 
-  await new Promise(resolve => setTimeout(resolve, 100));
-  await fs.promises.unlink(path.join(mountPath, 'doomed.txt'));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await fs.promises.unlink(path.join(mountPath, 'doomed.txt'));
 
-  const event = await awaitMountChange(
-    iter,
-    record => record.remove === 'doomed.txt',
-  );
-  t.truthy(event, 'removal event should arrive');
-  t.is(event.remove, 'doomed.txt');
+    const event = await awaitMountChange(
+      iter,
+      record => record.remove === 'doomed.txt',
+    );
+    t.truthy(event, 'removal event should arrive');
+    t.is(event.remove, 'doomed.txt');
 
-  await E(iter).return();
-});
+    await E(iter).return();
+  },
+);
 
-test('mount followNameChanges on a subdirectory does not see siblings', async t => {
-  t.timeout(30_000);
-  const { host, config } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'mount followNameChanges on a subdirectory does not see siblings',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t);
 
-  const mountPath = path.join(config.statePath, '..', 'mount-follow-subdir');
-  await createMountFixture(mountPath, {
-    'top.txt': 'top-level',
-    'sub/inner.txt': 'inner',
-  });
+    const mountPath = path.join(config.statePath, '..', 'mount-follow-subdir');
+    await createMountFixture(mountPath, {
+      'top.txt': 'top-level',
+      'sub/inner.txt': 'inner',
+    });
 
-  await E(host).provideMount(mountPath, 'follow-subdir-mount');
-  const mount = await E(host).lookup(['follow-subdir-mount']);
+    await E(host).provideMount(mountPath, 'follow-subdir-mount');
+    const mount = await E(host).lookup(['follow-subdir-mount']);
 
-  const subIter = iterateReader(await E(mount).followNameChanges('sub'));
-  const subSnapshot = await takeCount(subIter, 1);
-  t.deepEqual(
-    subSnapshot.map(record => record.add),
-    ['inner.txt'],
-    'subdirectory subscription sees only subdirectory contents',
-  );
+    const subIter = iterateReader(await E(mount).followNameChanges('sub'));
+    const subSnapshot = await takeCount(subIter, 1);
+    t.deepEqual(
+      subSnapshot.map(record => record.add),
+      ['inner.txt'],
+      'subdirectory subscription sees only subdirectory contents',
+    );
 
-  await new Promise(resolve => setTimeout(resolve, 100));
-  await fs.promises.writeFile(
-    path.join(mountPath, 'sub', 'fresh.txt'),
-    'fresh',
-  );
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await fs.promises.writeFile(
+      path.join(mountPath, 'sub', 'fresh.txt'),
+      'fresh',
+    );
 
-  const subEvent = await awaitMountChange(
-    subIter,
-    record => record.add === 'fresh.txt',
-  );
-  t.truthy(subEvent, 'subdirectory addition should arrive on sub iterator');
+    const subEvent = await awaitMountChange(
+      subIter,
+      record => record.add === 'fresh.txt',
+    );
+    t.truthy(subEvent, 'subdirectory addition should arrive on sub iterator');
 
-  // A parallel addition at the root must NOT be visible on the
-  // subdirectory subscription.  We confirm by writing a sibling at
-  // the mount root and observing that no event with that name
-  // arrives on the subdirectory iterator within the polling window.
-  // (Returning the iterator after this assertion would race the
-  // unresolved next() against teardown; we let the dispatch's daemon
-  // shutdown release the watcher instead.)
-  await fs.promises.writeFile(path.join(mountPath, 'top2.txt'), 'top2');
-  const spurious = await awaitMountChange(
-    subIter,
-    record => record.add === 'top2.txt' || record.remove === 'top2.txt',
-    600,
-  );
-  t.is(
-    spurious,
-    undefined,
-    'sibling root addition is not visible to sub iterator',
-  );
-});
+    // A parallel addition at the root must NOT be visible on the
+    // subdirectory subscription.  We confirm by writing a sibling at
+    // the mount root and observing that no event with that name
+    // arrives on the subdirectory iterator within the polling window.
+    // (Returning the iterator after this assertion would race the
+    // unresolved next() against teardown; we let the dispatch's daemon
+    // shutdown release the watcher instead.)
+    await fs.promises.writeFile(path.join(mountPath, 'top2.txt'), 'top2');
+    const spurious = await awaitMountChange(
+      subIter,
+      record => record.add === 'top2.txt' || record.remove === 'top2.txt',
+      600,
+    );
+    t.is(
+      spurious,
+      undefined,
+      'sibling root addition is not visible to sub iterator',
+    );
+  },
+);
 
 test('mount followNameChanges filters confinement-escaping symlinks from snapshot', async t => {
   t.timeout(30_000);
@@ -9212,31 +9274,34 @@ test('mount followNameChanges filters confinement-escaping symlinks from snapsho
   await E(iter).return();
 });
 
-test('mount followNameChanges scratch-mount parity: snapshot + live add', async t => {
-  t.timeout(30_000);
-  const { host } = await prepareHost(t);
+testNeedsNodeManagerPowers(
+  'mount followNameChanges scratch-mount parity: snapshot + live add',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
 
-  await E(host).provideScratchMount('follow-scratch');
-  const scratch = await E(host).lookup(['follow-scratch']);
-  await E(scratch).writeText(['seed.txt'], 'seeded');
+    await E(host).provideScratchMount('follow-scratch');
+    const scratch = await E(host).lookup(['follow-scratch']);
+    await E(scratch).writeText(['seed.txt'], 'seeded');
 
-  const iter = iterateReader(await E(scratch).followNameChanges());
-  const snapshot = await takeCount(iter, 1);
-  t.is(snapshot[0].add, 'seed.txt');
-  t.is(snapshot[0].type, 'file');
+    const iter = iterateReader(await E(scratch).followNameChanges());
+    const snapshot = await takeCount(iter, 1);
+    t.is(snapshot[0].add, 'seed.txt');
+    t.is(snapshot[0].type, 'file');
 
-  await new Promise(resolve => setTimeout(resolve, 100));
-  await E(scratch).writeText(['arrival.txt'], 'arrived');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await E(scratch).writeText(['arrival.txt'], 'arrived');
 
-  const event = await awaitMountChange(
-    iter,
-    record => record.add === 'arrival.txt',
-  );
-  t.truthy(event, 'scratch mount surfaces live additions');
-  t.is(event.type, 'file');
+    const event = await awaitMountChange(
+      iter,
+      record => record.add === 'arrival.txt',
+    );
+    t.truthy(event, 'scratch mount surfaces live additions');
+    t.is(event.type, 'file');
 
-  await E(iter).return();
-});
+    await E(iter).return();
+  },
+);
 
 test('mount followNameChanges releases watcher when iterator is returned', async t => {
   t.timeout(30_000);
@@ -9771,53 +9836,64 @@ test('mount symlink - escaping relative file symlink hidden and rejected', async
   });
 });
 
-test('Phase 7: makeFromTree runs a caplet from a mounted source tree', async t => {
-  const { host, config } = await prepareHost(t);
+testNeedsNodeWorker(
+  'Phase 7: makeFromTree runs a caplet from a mounted source tree',
+  async t => {
+    const { host, config } = await prepareHost(t);
 
-  const packageDir = path.join(dirname, 'test', 'fixtures', 'archive-env-echo');
-  const result = await doMakeFromTreeViaMount(
-    host,
-    config,
-    packageDir,
-    async treeName =>
-      E(host).makeFromTree(undefined, treeName, {
-        powersName: '@none',
-        env: { HELLO: 'from-tree' },
-      }),
-  );
-  // @ts-expect-error narrowed at runtime
-  t.is(await E(result).getEnvVar('HELLO'), 'from-tree');
-});
-
-test('Phase 7: makeFromTree persists and reincarnates the caplet', async t => {
-  const { cancelled, config } = await prepareConfig(t);
-
-  {
-    const { host } = await makeHost(config, cancelled);
     const packageDir = path.join(
       dirname,
       'test',
       'fixtures',
       'archive-env-echo',
     );
-    await doMakeFromTreeViaMount(host, config, packageDir, async treeName =>
-      E(host).makeFromTree(undefined, treeName, {
-        powersName: '@none',
-        resultName: 'tree-caplet',
-        env: { HELLO: 'persist' },
-      }),
+    const result = await doMakeFromTreeViaMount(
+      host,
+      config,
+      packageDir,
+      async treeName =>
+        E(host).makeFromTree(undefined, treeName, {
+          powersName: '@none',
+          env: { HELLO: 'from-tree' },
+        }),
     );
-  }
-
-  await restart(config);
-
-  {
-    const { host } = await makeHost(config, cancelled);
-    const caplet = await E(host).lookup('tree-caplet');
     // @ts-expect-error narrowed at runtime
-    t.is(await E(caplet).getEnvVar('HELLO'), 'persist');
-  }
-});
+    t.is(await E(result).getEnvVar('HELLO'), 'from-tree');
+  },
+);
+
+testNeedsNodeWorker(
+  'Phase 7: makeFromTree persists and reincarnates the caplet',
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const packageDir = path.join(
+        dirname,
+        'test',
+        'fixtures',
+        'archive-env-echo',
+      );
+      await doMakeFromTreeViaMount(host, config, packageDir, async treeName =>
+        E(host).makeFromTree(undefined, treeName, {
+          powersName: '@none',
+          resultName: 'tree-caplet',
+          env: { HELLO: 'persist' },
+        }),
+      );
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const caplet = await E(host).lookup('tree-caplet');
+      // @ts-expect-error narrowed at runtime
+      t.is(await E(caplet).getEnvVar('HELLO'), 'persist');
+    }
+  },
+);
 
 test('Phase 8: stageTree materialises a ReadableTree into a scratch mount', async t => {
   const { host, config } = await prepareHost(t);
@@ -10012,7 +10088,7 @@ testNeedsNodeWorker(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'failed caplet publication does not formulate its fresh native worker',
   async t => {
     t.timeout(30_000);
@@ -10052,7 +10128,7 @@ testNeedsNodeWorker.serial(
   },
 );
 
-testNeedsNodeWorker.serial(
+testNeedsNodeWorkerSerial(
   'failed caplet publication releases automatic powers construction pins',
   async t => {
     const { host, config } = await prepareHost(t, 'pins');
@@ -10173,7 +10249,7 @@ test('cancelling the mount formula revokes live mount and file handles', async t
   await t.throwsAsync(() => E(file).text(), { message: /revoked/ });
 });
 
-test('readLog streams daemon logs', async t => {
+testNeedsNodeManagerPowers('readLog streams daemon logs', async t => {
   const { cancel, cancelled, config } = await prepareConfig(t);
   const { getBootstrap, closed } = await makeEndoClient(
     'log-reader-client',
@@ -10241,220 +10317,229 @@ test('readLog streams daemon logs', async t => {
   cancel(Error('readLog test done'));
 });
 
-test('readLog filters lines by regexp over CapTP', async t => {
-  const { cancel, cancelled, config } = await prepareConfig(t);
-  const { getBootstrap, closed } = await makeEndoClient(
-    'log-regexp-client',
-    config.sockPath,
-    cancelled,
-  );
-  closed.catch(() => {});
-  // The bootstrap is a remote reference: every readLog() call and the
-  // reader it returns are driven across the CapTP connection.
-  const bootstrap = getBootstrap();
+testNeedsNodeManagerPowers(
+  'readLog filters lines by regexp over CapTP',
+  async t => {
+    const { cancel, cancelled, config } = await prepareConfig(t);
+    const { getBootstrap, closed } = await makeEndoClient(
+      'log-regexp-client',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    // The bootstrap is a remote reference: every readLog() call and the
+    // reader it returns are driven across the CapTP connection.
+    const bootstrap = getBootstrap();
 
-  /** @param {any} reader */
-  const drain = async reader => {
-    const entries = [];
-    for await (const entry of iterateReader(reader)) {
-      entries.push(entry);
+    /** @param {any} reader */
+    const drain = async reader => {
+      const entries = [];
+      for await (const entry of iterateReader(reader)) {
+        entries.push(entry);
+      }
+      return entries;
+    };
+    /** @param {any} reader */
+    const textOf = async reader =>
+      (await drain(reader)).map(entry => entry.chunk).join('');
+
+    await fsp.writeFile(
+      path.join(config.statePath, 'fruit.log'),
+      'apple 1\nbanana 2\ncherry 3\nAPPLE 4\n',
+    );
+
+    // Alternation selects multiple lines, preserved in file order.
+    t.is(
+      await textOf(
+        await E(bootstrap).readLog({
+          name: 'fruit.log',
+          pattern: 'apple|cherry',
+        }),
+      ),
+      'apple 1\ncherry 3\n',
+    );
+
+    // Character classes and anchors work; here, lines ending in 2 or 4.
+    t.is(
+      await textOf(
+        await E(bootstrap).readLog({ name: 'fruit.log', pattern: '[24]$' }),
+      ),
+      'banana 2\nAPPLE 4\n',
+    );
+
+    // Matching is case-sensitive (no flags are applied to the source).
+    t.is(
+      await textOf(
+        await E(bootstrap).readLog({ name: 'fruit.log', pattern: '^apple' }),
+      ),
+      'apple 1\n',
+    );
+
+    // A pattern that matches nothing yields an empty stream.
+    t.is(
+      await textOf(
+        await E(bootstrap).readLog({ name: 'fruit.log', pattern: 'durian' }),
+      ),
+      '',
+    );
+
+    // Without `name`, the regexp filters lines across every log, and each
+    // surviving line is tagged with its source. Use a token unlikely to
+    // occur in the daemon's own logs so the assertion is deterministic.
+    await fsp.writeFile(
+      path.join(config.statePath, 'a.log'),
+      'keep ZZTOKENZZ one\ndrop this\n',
+    );
+    await fsp.writeFile(
+      path.join(config.statePath, 'b.log'),
+      'drop that\nkeep ZZTOKENZZ two\n',
+    );
+    const tagged = await drain(
+      await E(bootstrap).readLog({ pattern: 'ZZTOKENZZ' }),
+    );
+    t.deepEqual(tagged.map(entry => `${entry.source}:${entry.chunk}`).sort(), [
+      'a.log:keep ZZTOKENZZ one\n',
+      'b.log:keep ZZTOKENZZ two\n',
+    ]);
+
+    cancel(Error('readLog regexp test done'));
+  },
+);
+
+testNeedsNodeManagerPowers(
+  'readLog discovers worker logs and disambiguates colliding ids',
+  async t => {
+    const { cancel, cancelled, config } = await prepareConfig(t);
+    const { getBootstrap, closed } = await makeEndoClient(
+      'log-worker-client',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    const bootstrap = getBootstrap();
+
+    /** @param {any} reader */
+    const drain = async reader => {
+      const entries = [];
+      for await (const entry of iterateReader(reader)) {
+        entries.push(entry);
+      }
+      return entries;
+    };
+
+    // Synthesize worker logs directly under <state>/worker/<id>/worker.log.
+    // Two ids share an 8-char prefix; one is unique.
+    const workerDir = path.join(config.statePath, 'worker');
+    const writeWorkerLog = async (id, text) => {
+      await fsp.mkdir(path.join(workerDir, id), { recursive: true });
+      await fsp.writeFile(path.join(workerDir, id, 'worker.log'), text);
+    };
+    await writeWorkerLog('abc12345aaa', 'from aaa\n');
+    await writeWorkerLog('abc12345bbb', 'from bbb\n');
+    await writeWorkerLog('unique99zzz', 'from zzz\n');
+
+    const entries = await drain(await E(bootstrap).readLog());
+    /** @type {Map<string, string>} */
+    const bySource = new Map();
+    for (const { source, chunk } of entries) {
+      bySource.set(source, (bySource.get(source) ?? '') + chunk);
     }
-    return entries;
-  };
-  /** @param {any} reader */
-  const textOf = async reader =>
-    (await drain(reader)).map(entry => entry.chunk).join('');
+    // Unique prefix collapses to the short display name.
+    t.is(bySource.get('worker/unique99'), 'from zzz\n');
+    // Colliding prefix falls back to full ids; logs are NOT merged.
+    t.is(bySource.get('worker/abc12345aaa'), 'from aaa\n');
+    t.is(bySource.get('worker/abc12345bbb'), 'from bbb\n');
+    t.false(bySource.has('worker/abc12345'));
 
-  await fsp.writeFile(
-    path.join(config.statePath, 'fruit.log'),
-    'apple 1\nbanana 2\ncherry 3\nAPPLE 4\n',
-  );
+    // The short display name selects exactly that worker's log.
+    const one = await drain(
+      await E(bootstrap).readLog({ name: 'worker/unique99' }),
+    );
+    t.deepEqual(
+      one.map(entry => `${entry.source}:${entry.chunk}`),
+      ['worker/unique99:from zzz\n'],
+    );
 
-  // Alternation selects multiple lines, preserved in file order.
-  t.is(
-    await textOf(
-      await E(bootstrap).readLog({
-        name: 'fruit.log',
-        pattern: 'apple|cherry',
-      }),
-    ),
-    'apple 1\ncherry 3\n',
-  );
+    cancel(Error('readLog worker test done'));
+  },
+);
 
-  // Character classes and anchors work; here, lines ending in 2 or 4.
-  t.is(
-    await textOf(
-      await E(bootstrap).readLog({ name: 'fruit.log', pattern: '[24]$' }),
-    ),
-    'banana 2\nAPPLE 4\n',
-  );
+testNeedsNodeManagerPowers(
+  'readLog handles empty, unterminated, CRLF, and invalid-pattern logs',
+  async t => {
+    const { cancel, cancelled, config } = await prepareConfig(t);
+    const { getBootstrap, closed } = await makeEndoClient(
+      'log-edge-client',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    const bootstrap = getBootstrap();
 
-  // Matching is case-sensitive (no flags are applied to the source).
-  t.is(
-    await textOf(
-      await E(bootstrap).readLog({ name: 'fruit.log', pattern: '^apple' }),
-    ),
-    'apple 1\n',
-  );
+    /** @param {any} reader */
+    const drain = async reader => {
+      const entries = [];
+      for await (const entry of iterateReader(reader)) {
+        entries.push(entry);
+      }
+      return entries;
+    };
+    /** @param {any} reader */
+    const textOf = async reader =>
+      (await drain(reader)).map(entry => entry.chunk).join('');
 
-  // A pattern that matches nothing yields an empty stream.
-  t.is(
-    await textOf(
-      await E(bootstrap).readLog({ name: 'fruit.log', pattern: 'durian' }),
-    ),
-    '',
-  );
+    // An empty log yields no records at all.
+    await fsp.writeFile(path.join(config.statePath, 'empty.log'), '');
+    t.deepEqual(
+      await drain(await E(bootstrap).readLog({ name: 'empty.log' })),
+      [],
+    );
 
-  // Without `name`, the regexp filters lines across every log, and each
-  // surviving line is tagged with its source. Use a token unlikely to
-  // occur in the daemon's own logs so the assertion is deterministic.
-  await fsp.writeFile(
-    path.join(config.statePath, 'a.log'),
-    'keep ZZTOKENZZ one\ndrop this\n',
-  );
-  await fsp.writeFile(
-    path.join(config.statePath, 'b.log'),
-    'drop that\nkeep ZZTOKENZZ two\n',
-  );
-  const tagged = await drain(
-    await E(bootstrap).readLog({ pattern: 'ZZTOKENZZ' }),
-  );
-  t.deepEqual(tagged.map(entry => `${entry.source}:${entry.chunk}`).sort(), [
-    'a.log:keep ZZTOKENZZ one\n',
-    'b.log:keep ZZTOKENZZ two\n',
-  ]);
+    // A final line with no trailing newline: unfiltered returns it verbatim,
+    // and the filtered flush emits it without inventing a newline.
+    await fsp.writeFile(
+      path.join(config.statePath, 'tail.log'),
+      'first\nlast line no newline',
+    );
+    t.is(
+      await textOf(await E(bootstrap).readLog({ name: 'tail.log' })),
+      'first\nlast line no newline',
+    );
+    t.is(
+      await textOf(
+        await E(bootstrap).readLog({ name: 'tail.log', pattern: 'last' }),
+      ),
+      'last line no newline',
+    );
 
-  cancel(Error('readLog regexp test done'));
-});
+    // CRLF: the terminator is excluded when matching, so `$` anchors work,
+    // and the original CRLF is preserved in the emitted chunk.
+    await fsp.writeFile(
+      path.join(config.statePath, 'crlf.log'),
+      'alpha\r\nbeta\r\n',
+    );
+    t.is(
+      await textOf(
+        await E(bootstrap).readLog({ name: 'crlf.log', pattern: 'alpha$' }),
+      ),
+      'alpha\r\n',
+    );
 
-test('readLog discovers worker logs and disambiguates colliding ids', async t => {
-  const { cancel, cancelled, config } = await prepareConfig(t);
-  const { getBootstrap, closed } = await makeEndoClient(
-    'log-worker-client',
-    config.sockPath,
-    cancelled,
-  );
-  closed.catch(() => {});
-  const bootstrap = getBootstrap();
+    // An invalid RegExp source surfaces as a stream error when consumed.
+    await t.throwsAsync(
+      async () => {
+        const reader = await E(bootstrap).readLog({
+          name: 'crlf.log',
+          pattern: '[',
+        });
+        await drain(reader);
+      },
+      { message: /Invalid regular expression|character class|unterminated/ },
+    );
 
-  /** @param {any} reader */
-  const drain = async reader => {
-    const entries = [];
-    for await (const entry of iterateReader(reader)) {
-      entries.push(entry);
-    }
-    return entries;
-  };
-
-  // Synthesize worker logs directly under <state>/worker/<id>/worker.log.
-  // Two ids share an 8-char prefix; one is unique.
-  const workerDir = path.join(config.statePath, 'worker');
-  const writeWorkerLog = async (id, text) => {
-    await fsp.mkdir(path.join(workerDir, id), { recursive: true });
-    await fsp.writeFile(path.join(workerDir, id, 'worker.log'), text);
-  };
-  await writeWorkerLog('abc12345aaa', 'from aaa\n');
-  await writeWorkerLog('abc12345bbb', 'from bbb\n');
-  await writeWorkerLog('unique99zzz', 'from zzz\n');
-
-  const entries = await drain(await E(bootstrap).readLog());
-  /** @type {Map<string, string>} */
-  const bySource = new Map();
-  for (const { source, chunk } of entries) {
-    bySource.set(source, (bySource.get(source) ?? '') + chunk);
-  }
-  // Unique prefix collapses to the short display name.
-  t.is(bySource.get('worker/unique99'), 'from zzz\n');
-  // Colliding prefix falls back to full ids; logs are NOT merged.
-  t.is(bySource.get('worker/abc12345aaa'), 'from aaa\n');
-  t.is(bySource.get('worker/abc12345bbb'), 'from bbb\n');
-  t.false(bySource.has('worker/abc12345'));
-
-  // The short display name selects exactly that worker's log.
-  const one = await drain(
-    await E(bootstrap).readLog({ name: 'worker/unique99' }),
-  );
-  t.deepEqual(
-    one.map(entry => `${entry.source}:${entry.chunk}`),
-    ['worker/unique99:from zzz\n'],
-  );
-
-  cancel(Error('readLog worker test done'));
-});
-
-test('readLog handles empty, unterminated, CRLF, and invalid-pattern logs', async t => {
-  const { cancel, cancelled, config } = await prepareConfig(t);
-  const { getBootstrap, closed } = await makeEndoClient(
-    'log-edge-client',
-    config.sockPath,
-    cancelled,
-  );
-  closed.catch(() => {});
-  const bootstrap = getBootstrap();
-
-  /** @param {any} reader */
-  const drain = async reader => {
-    const entries = [];
-    for await (const entry of iterateReader(reader)) {
-      entries.push(entry);
-    }
-    return entries;
-  };
-  /** @param {any} reader */
-  const textOf = async reader =>
-    (await drain(reader)).map(entry => entry.chunk).join('');
-
-  // An empty log yields no records at all.
-  await fsp.writeFile(path.join(config.statePath, 'empty.log'), '');
-  t.deepEqual(
-    await drain(await E(bootstrap).readLog({ name: 'empty.log' })),
-    [],
-  );
-
-  // A final line with no trailing newline: unfiltered returns it verbatim,
-  // and the filtered flush emits it without inventing a newline.
-  await fsp.writeFile(
-    path.join(config.statePath, 'tail.log'),
-    'first\nlast line no newline',
-  );
-  t.is(
-    await textOf(await E(bootstrap).readLog({ name: 'tail.log' })),
-    'first\nlast line no newline',
-  );
-  t.is(
-    await textOf(
-      await E(bootstrap).readLog({ name: 'tail.log', pattern: 'last' }),
-    ),
-    'last line no newline',
-  );
-
-  // CRLF: the terminator is excluded when matching, so `$` anchors work,
-  // and the original CRLF is preserved in the emitted chunk.
-  await fsp.writeFile(
-    path.join(config.statePath, 'crlf.log'),
-    'alpha\r\nbeta\r\n',
-  );
-  t.is(
-    await textOf(
-      await E(bootstrap).readLog({ name: 'crlf.log', pattern: 'alpha$' }),
-    ),
-    'alpha\r\n',
-  );
-
-  // An invalid RegExp source surfaces as a stream error when consumed.
-  await t.throwsAsync(
-    async () => {
-      const reader = await E(bootstrap).readLog({
-        name: 'crlf.log',
-        pattern: '[',
-      });
-      await drain(reader);
-    },
-    { message: /Invalid regular expression|character class|unterminated/ },
-  );
-
-  cancel(Error('readLog edge-case test done'));
-});
+    cancel(Error('readLog edge-case test done'));
+  },
+);
 
 test('readLog follow streams appended content until the reader is closed', async t => {
   // Guard the deadlock regression: a follow stream that fails to honor an
