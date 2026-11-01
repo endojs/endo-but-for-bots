@@ -54,8 +54,29 @@ impl Interp {
                 value: Payload::Reference(prototype),
                 ..
             } => prototype,
-            _ => fallback,
+            _ => {
+                self.function_realm_check(constructor)?;
+                fallback
+            }
         })
+    }
+
+    /// The abrupt half of `GetFunctionRealm(constructor)` (ECMA-262 7.3.24),
+    /// which `GetPrototypeFromConstructor` consults for the fallback
+    /// prototype: Ironhorse has one realm, so the only observable outcome is
+    /// the `TypeError` for a revoked Proxy. Like XS's
+    /// `fxGetPrototypeFromConstructor` (xsFunction.c), only the constructor's
+    /// own layer is checked, with XS's message.
+    pub(super) fn function_realm_check(
+        &mut self,
+        constructor: crate::value::SlotIndex,
+    ) -> Result<(), Step> {
+        match self.proxies.get(&constructor) {
+            Some(data) if data.revoked => {
+                Err(self.catchable_type_error_msg("(proxy).prototype: no handler".into()))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// The `[[Prototype]]` of a derived class's prototype object
@@ -637,7 +658,9 @@ impl Interp {
         loop {
             if let Some(data) = self.proxies.get(&r) {
                 if data.revoked {
-                    return false;
+                    // A revoked Proxy keeps the `[[Construct]]` it was
+                    // created with (ProxyCreate step 7).
+                    return self.slots.get(r).flag & XS_CAN_CONSTRUCT_FLAG != 0;
                 }
                 r = data.target;
                 continue;
@@ -671,6 +694,26 @@ impl Interp {
             match self.proxies.get(&r) {
                 Some(data) if !data.revoked => r = data.target,
                 _ => return false,
+            }
+        }
+    }
+
+    /// Whether a heap instance has `[[Call]]` for `typeof` and ProxyCreate:
+    /// [`Self::slot_is_callable`], except that a revoked Proxy keeps the
+    /// `[[Call]]` it was created with (ECMA-262 10.5.14 step 6), read from its
+    /// `XS_CAN_CALL_FLAG` as XS's `typeof` does. The `call`/`apply`/`bind`
+    /// checks keep [`Self::slot_is_callable`], which, like XS's
+    /// `fxIsFunction`, follows the Proxy's target and so refuses a revoked one.
+    pub(super) fn slot_has_call(&self, r: crate::value::SlotIndex) -> bool {
+        let mut r = r;
+        loop {
+            if self.functions.contains_key(&r) {
+                return true;
+            }
+            match self.proxies.get(&r) {
+                Some(data) if !data.revoked => r = data.target,
+                Some(_) => return self.slots.get(r).flag & XS_CAN_CALL_FLAG != 0,
+                None => return false,
             }
         }
     }
