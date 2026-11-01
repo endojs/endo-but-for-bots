@@ -59,10 +59,12 @@ mod tests;
 impl Interp {
     pub fn new() -> Interp {
         let mut slots = SlotArena::new();
-        // The global object is a real arena instance with a null
-        // prototype (the intrinsic %Object.prototype% wiring lands with
-        // the intrinsics seam); its allocation predates metering, so it
-        // is not metered.
+        // The global object is a real arena instance. It is allocated before
+        // %Object.prototype% exists, so it starts with a null prototype;
+        // `create_intrinsics` links it to %Object.prototype% as soon as that
+        // object is allocated (SetRealmGlobalObject's
+        // `OrdinaryObjectCreate(%Object.prototype%)`, XS's `fxCreateMachine`).
+        // Its allocation predates metering, so it is not metered.
         let global_obj = slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
         // Intern the `typeof` result strings (XS's `mxUndefinedString`
         // &co. — preexisting `XS_STRING_X_KIND` slots), allocated into the
@@ -340,6 +342,12 @@ impl Interp {
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         self.object_proto = object_proto;
+        // The default global inherits from %Object.prototype%, as ECMA-262
+        // SetRealmGlobalObject and XS's `fxCreateMachine` both create it:
+        // `globalThis.hasOwnProperty`, `String(globalThis)` and
+        // `globalThis instanceof Object` depend on it.
+        let global = self.environment.global_obj;
+        self.slots.get_mut(global).value = Payload::Reference(object_proto);
         self.template_cache = self.slots.alloc(Slot::instance(object_proto));
         let func_proto = self.slots.alloc(Slot::instance(object_proto));
         self.function_proto = func_proto;

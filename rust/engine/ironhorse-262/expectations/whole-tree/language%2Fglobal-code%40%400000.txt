@@ -13,8 +13,8 @@ language/global-code/decl-lex-configurable-global.js strict pass
 language/global-code/decl-lex-deletion.js sloppy pass
 language/global-code/decl-lex-restricted-global.js sloppy skip:negative-oracle-unexpected
 language/global-code/decl-lex-restricted-global.js strict skip:negative-oracle-unexpected
-language/global-code/decl-lex.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-language/global-code/decl-lex.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/global-code/decl-lex.js sloppy pass
+language/global-code/decl-lex.js strict pass
 language/global-code/decl-var.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: brandNew descriptor should not be configurable"
 language/global-code/decl-var.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: brandNew should be an own property"
 language/global-code/export.js sloppy pass
