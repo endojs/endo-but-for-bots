@@ -3651,34 +3651,30 @@ mod tests {
     }
 
     #[test]
-    fn assembled_typed_array_oracle_failures_remain_baselinable_failures() {
+    fn assembled_stale_typed_array_sort_detach_cases_are_shared_failures() {
         let Some((test_root, harness)) = crate::test262::locate_test262() else {
             eprintln!("test262 subset absent; skipping assembled oracle-exclusion regression");
             return;
         };
-        // The vendored `set/array-arg-targetbuffer-detached-on-get-src-value-
-        // throws.js` predates ES2022's `TypedArraySetElement`; Ironhorse now
-        // fails it with XS (upstream test262 replaced it with the `-no-throw`
-        // case both pass), so it is no longer an oracle-only failure.
-        for (relative, _former_skip) in [
-            (
-                "built-ins/TypedArray/prototype/sort/detached-buffer-comparefn.js",
-                "oracle-xs-typedarray-sort-detach",
-            ),
-            (
-                "built-ins/TypedArray/prototype/sort/BigInt/detached-buffer-comparefn.js",
-                "oracle-xs-typedarray-sort-detach",
-            ),
-            (
-                "built-ins/TypedArray/prototype/sort/sort-tonumber.js",
-                "oracle-xs-typedarray-sort-post-coercion-detach",
-            ),
+        // The vendored subset's copies of these cases predate ES2023, which
+        // stopped `%TypedArray%.prototype.sort` throwing when the comparator
+        // detaches the buffer; they still expect a TypeError. Ironhorse now
+        // follows the current spec with XS (upstream test262 rewrote
+        // `sort-tonumber.js` to expect no throw, and both pass it), so these
+        // stale copies are failures both engines share, not oracle-only
+        // failures. The vendored `set/array-arg-targetbuffer-detached-on-get-
+        // src-value-throws.js` went the same way with ES2022's
+        // `TypedArraySetElement`.
+        for relative in [
+            "built-ins/TypedArray/prototype/sort/detached-buffer-comparefn.js",
+            "built-ins/TypedArray/prototype/sort/BigInt/detached-buffer-comparefn.js",
+            "built-ins/TypedArray/prototype/sort/sort-tonumber.js",
         ] {
             let source = std::fs::read_to_string(test_root.join(relative))
                 .unwrap_or_else(|error| panic!("read {relative}: {error}"));
             let result = run_case(&Config::default(), &harness, &source);
             assert!(
-                matches!(result.verdict, Verdict::Fail(ref reason) if reason.contains("Test262Error:")),
+                matches!(result.verdict, Verdict::RunSkip(ref reason) if reason == "shared-test262-failure"),
                 "assembled official case {relative}: {:?}",
                 result.verdict
             );

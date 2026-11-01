@@ -993,23 +993,18 @@ fn cover_initialized_name_as_expression_is_error() {
     }
 }
 
-/// A construct this compiler has not ported reports as `Unsupported`, which
-/// is a different thing from a spec early error and must stay different.
+/// Each `static { … }` block is a BODY with its own block scope
+/// (`fxBodyNodeHoist`), so sibling blocks may declare the same lexical name
+/// and neither leaks into the class's field-init function scope.
 #[test]
-fn a_deferred_static_block_fold_reports_unsupported() {
-    let err = crate::coder::compile("class C { static { let x = 1; } }")
-        .expect_err("the fold is not compiled");
-    assert_eq!(
-        err.kind,
-        crate::parser::ParseErrorKind::Unsupported,
-        "a deferred fold is a coverage gap, not an early error"
-    );
-    assert!(
-        err.message
-            .contains("static block with lexical declarations"),
-        "{}",
-        err.message
-    );
+fn static_blocks_own_their_lexical_scope() {
+    for source in [
+        "class C { static { let x = 1; } }",
+        "class C { static { let x = 1; } static { let x = 2; } }",
+        "let x; class C { static { const x = 1; } static { class x {} } }",
+    ] {
+        assert!(crate::coder::compile(source).is_ok(), "{source}");
+    }
 }
 
 /// The neighbours must keep compiling: a fold that swallowed valid input
