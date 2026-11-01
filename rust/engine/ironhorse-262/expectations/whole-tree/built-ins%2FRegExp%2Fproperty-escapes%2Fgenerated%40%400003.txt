@@ -13,8 +13,8 @@ built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gurmukhi.js slop
 built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gurmukhi.js strict skip:ironhorse-aborted-limit
 built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gurung_Khema.js sloppy skip:ironhorse-aborted-limit
 built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gurung_Khema.js strict skip:ironhorse-aborted-limit
-built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Han.js sloppy skip:ironhorse-aborted-limit
-built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Han.js strict skip:ironhorse-aborted-limit
+built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Han.js sloppy pass
+built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Han.js strict pass
 built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hangul.js sloppy skip:ironhorse-aborted-limit
 built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hangul.js strict skip:ironhorse-aborted-limit
 built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hanifi_Rohingya.js sloppy skip:ironhorse-aborted-limit
