@@ -1596,6 +1596,8 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("string_iterator_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("async_iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
+    ("iterator_dispose_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
+    ("async_iterator_dispose_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("segments_iterator_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("segment_iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("error_stack_accessor", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),

@@ -205,6 +205,14 @@ impl Interp {
             .as_bytes(),
         );
         term(format!("iterator_identity={:?}", self.iterator_identity).as_bytes());
+        term(format!("iterator_dispose_method={:?}", self.iterator_dispose_method).as_bytes());
+        term(
+            format!(
+                "async_iterator_dispose_method={:?}",
+                self.async_iterator_dispose_method
+            )
+            .as_bytes(),
+        );
         term(
             format!(
                 "segments_iterator_method={:?}",
@@ -1310,6 +1318,13 @@ impl Interp {
         );
         self.iterator_identity =
             self.alloc_named_method(NativeMethod::AsyncIteratorIdentity, "[Symbol.iterator]", 0);
+        self.iterator_dispose_method =
+            self.alloc_named_method(NativeMethod::IteratorDispose, "[Symbol.dispose]", 0);
+        self.async_iterator_dispose_method = self.alloc_named_method(
+            NativeMethod::AsyncIteratorAsyncDispose,
+            "[Symbol.asyncDispose]",
+            0,
+        );
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         // `%AsyncGenerator%` (the common prototype of async-generator
         // functions) exposes `%AsyncGeneratorPrototype%` through its own
@@ -1486,6 +1501,22 @@ impl Interp {
         ] {
             if let Some(&ctor) = self.intrinsics.get(native.display_name()) {
                 if let Some(proto) = self.prototype_of(ctor) {
+                    let getter = self.alloc_named_method(
+                        if native == Native::DisposableStack {
+                            NativeMethod::DisposableStackDisposedGetter
+                        } else {
+                            NativeMethod::AsyncDisposableStackDisposedGetter
+                        },
+                        "get disposed",
+                        0,
+                    );
+                    self.proto_accessors.push((
+                        proto,
+                        ProtoAccessorKey::String("disposed"),
+                        getter,
+                        None,
+                        native.display_name(),
+                    ));
                     for &(name, arity, method) in methods {
                         let function = self.alloc_named_method(method, name, arity);
                         self.proto_methods.push((proto, name, function));

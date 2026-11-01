@@ -1377,6 +1377,64 @@ impl Interp {
         outcome
     }
 
+    /// `%AsyncIteratorPrototype%[@@asyncDispose]()`, as XS's
+    /// `fx_AsyncIterator_prototype_asyncDispose`: get the receiver's `return`,
+    /// call it with no arguments unless it is `undefined`, and answer
+    /// `PromiseResolve(%Promise%, result)` (the result promise itself when it
+    /// is already an intrinsic promise). Any throw along the way rejects a
+    /// fresh `%Promise%` capability instead.
+    pub(in crate::interp) fn async_iterator_async_dispose(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let constructor = match self.intrinsics.get("Promise") {
+            Some(&ctor) => Slot::of(Kind::Reference, Payload::Reference(ctor)),
+            None => Slot::undefined(),
+        };
+        let root_sp = self.stack.len();
+        self.stack.extend([constructor, this, Slot::undefined()]);
+        let outcome = (|| {
+            let resolved = self.array_from_try(|vm| {
+                let receiver = vm.stack[root_sp + 1];
+                let object = vm.array_to_object(receiver)?;
+                let Payload::Reference(inst) = object.value else {
+                    unreachable!("ToObject result")
+                };
+                let return_id = vm.intern_static_key("return");
+                let return_method = vm.mop_get(code, inst, return_id, receiver)?;
+                let result = if return_method.kind == Kind::Undefined {
+                    Slot::undefined()
+                } else if vm.is_callable_value(return_method) {
+                    vm.call_any(code, return_method, receiver, &[])?
+                } else {
+                    return Err(vm.catchable_type_error_msg("call: not a function".into()));
+                };
+                vm.promise_resolve_with_constructor(code, vm.stack[root_sp], result)
+            })?;
+            match resolved {
+                Ok(promise) => Ok(promise),
+                Err(error) => {
+                    self.stack[root_sp + 2] = error;
+                    let capability = self.new_promise_capability_for(code, self.stack[root_sp])?;
+                    let error = self.stack[root_sp + 2];
+                    self.settle_capability(
+                        code,
+                        capability.resolve,
+                        capability.reject,
+                        error,
+                        true,
+                    )?;
+                    Ok(capability.promise)
+                }
+            }
+        })();
+        if outcome.is_ok() {
+            self.stack.truncate(root_sp);
+        }
+        outcome
+    }
+
     /// Perform the default-native `PromiseResolve(C, result)` and
     /// `resultPromise.then(valueThunk, thrower)` portion of `finally` without
     /// allocating non-persisted closure state. Native promises use a
