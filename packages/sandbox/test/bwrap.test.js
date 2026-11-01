@@ -17,6 +17,17 @@ import { assembleSliceArgv, makeBwrapDriver } from '../src/drivers/bwrap.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
 
+/**
+ * Resource limits for live bwrap slices whose test is not about the
+ * process cap.  RLIMIT_NPROC counts every task the host uid owns, not
+ * just the slice's, so the 512-process default makes bwrap's own
+ * namespace clone fail with EAGAIN ("Creating new namespace failed:
+ * Resource temporarily unavailable") whenever the test runner's uid is
+ * busy, as it is on CI while turbo runs other packages' suites.  The
+ * nproc cap test sets its own cap and keeps asserting enforcement.
+ */
+const SHARED_UID_LIMITS = harden({ nproc: 65_536 });
+
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
   hostPath: M.call().returns(M.string()),
@@ -479,6 +490,7 @@ test.serial('host-bind slice spawns /bin/echo hello', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'none',
     }),
   );
@@ -529,6 +541,7 @@ test.serial('read-only mount rejects writes from inside the slice', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       mounts: [{ cap: roMountCap, innerPath: '/ro', mode: 'ro' }],
       network: 'none',
     }),
@@ -588,6 +601,7 @@ test.serial('network: none blocks loopback reach', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'none',
     }),
   );
@@ -665,6 +679,7 @@ test.serial(
     const handle = await E(factory).make(
       harden({
         rootfs: { kind: 'host-bind' },
+        limits: SHARED_UID_LIMITS,
         network: 'private',
       }),
     );
@@ -698,6 +713,7 @@ test.serial(
     const handle = await E(factory).make(
       harden({
         rootfs: { kind: 'host-bind' },
+        limits: SHARED_UID_LIMITS,
         network: 'host-net',
       }),
     );
@@ -759,6 +775,7 @@ test.serial('host-loopback profile is accepted', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'host-loopback',
     }),
   );
@@ -799,6 +816,7 @@ test.serial('host-lan profile is accepted', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'host-lan',
     }),
   );
@@ -837,6 +855,7 @@ test.serial(
     const handle = await E(factory).make(
       harden({
         rootfs: { kind: 'host-bind' },
+        limits: SHARED_UID_LIMITS,
         network: 'none',
       }),
     );
@@ -951,6 +970,7 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'none',
     }),
   );
@@ -985,7 +1005,11 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
   });
 
   const spawnFirst = await E(factory).make(
-    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    harden({
+      rootfs: { kind: 'host-bind' },
+      network: 'none',
+      limits: SHARED_UID_LIMITS,
+    }),
   );
   const spawned = E(spawnFirst).spawn(
     harden(['/bin/sleep', '300']),
@@ -1014,7 +1038,11 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
   await E(spawnFirst).dispose();
 
   const disposeFirst = await E(factory).make(
-    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    harden({
+      rootfs: { kind: 'host-bind' },
+      network: 'none',
+      limits: SHARED_UID_LIMITS,
+    }),
   );
   await E(disposeFirst).dispose();
   await t.throwsAsync(() => E(disposeFirst).spawn(harden(['/bin/true'])), {
@@ -1033,7 +1061,11 @@ test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
     scratchProvider: powers,
   });
   const handle = await E(factory).make(
-    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    harden({
+      rootfs: { kind: 'host-bind' },
+      network: 'none',
+      limits: SHARED_UID_LIMITS,
+    }),
   );
   t.teardown(async () => {
     await E(handle).dispose();
@@ -1071,7 +1103,11 @@ test.serial(
       scratchProvider: powers,
     });
     const handle = await E(factory).make(
-      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+      harden({
+        rootfs: { kind: 'host-bind' },
+        network: 'none',
+        limits: SHARED_UID_LIMITS,
+      }),
     );
     t.teardown(async () => {
       await E(handle).dispose();
@@ -1109,7 +1145,11 @@ test.serial(
       scratchProvider: powers,
     });
     const handle = await E(factory).make(
-      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+      harden({
+        rootfs: { kind: 'host-bind' },
+        network: 'none',
+        limits: SHARED_UID_LIMITS,
+      }),
     );
     t.teardown(async () => {
       await E(handle).dispose();
