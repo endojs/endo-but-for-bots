@@ -3532,6 +3532,19 @@ fn native_unsupported_name(native: Native) -> &'static str {
 /// Map a property id to the `XS_REGEXP_*` bit its boolean per-flag getter
 /// reads (`fx_RegExp_prototype_get_{global,ignoreCase,…}`), or `None` when
 /// the id is not one of the per-flag getters.
+/// `%RegExp.prototype%`'s eight flag accessors, with each one's flag bit and
+/// letter, in the order `get RegExp.prototype.flags` reads them.
+const REGEXP_FLAG_PROPERTIES: [(&str, u32, u16); 8] = [
+    ("hasIndices", ironhorse_regexp::XS_REGEXP_D, b'd' as u16),
+    ("global", ironhorse_regexp::XS_REGEXP_G, b'g' as u16),
+    ("ignoreCase", ironhorse_regexp::XS_REGEXP_I, b'i' as u16),
+    ("multiline", ironhorse_regexp::XS_REGEXP_M, b'm' as u16),
+    ("dotAll", ironhorse_regexp::XS_REGEXP_S, b's' as u16),
+    ("unicode", ironhorse_regexp::XS_REGEXP_U, b'u' as u16),
+    ("unicodeSets", ironhorse_regexp::XS_REGEXP_V, b'v' as u16),
+    ("sticky", ironhorse_regexp::XS_REGEXP_Y, b'y' as u16),
+];
+
 fn regexp_flag_bit_for(g: RegExpGetterIds, id: u16) -> Option<u32> {
     use ironhorse_regexp::{
         XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_S, XS_REGEXP_U, XS_REGEXP_V,
