@@ -52,6 +52,6 @@ built-ins/global/S15.1_A1_T2.js strict pass
 built-ins/global/S15.1_A2_T1.js sloppy pass
 built-ins/global/S15.1_A2_T1.js strict pass
 built-ins/global/global-object.js sloppy pass
-built-ins/global/global-object.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected SameValue(«[object Object]», «undefined») to be true"
+built-ins/global/global-object.js strict skip:oracle-xs-script-decl-eval-framing
 built-ins/global/property-descriptor.js sloppy pass
 built-ins/global/property-descriptor.js strict pass
