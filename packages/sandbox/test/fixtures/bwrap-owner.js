@@ -3,6 +3,7 @@
 import '@endo/init';
 
 import { makeBwrapDriver } from '../../src/drivers/bwrap.js';
+import { SHARED_UID_LIMITS } from './shared-uid-limits.js';
 
 const scratchHostPath = process.argv[2];
 if (scratchHostPath === undefined) {
@@ -18,10 +19,8 @@ const slice = await driver.prepareSlice(
     network: 'none',
     seccomp: 'default',
     env: {},
-    // RLIMIT_NPROC counts every task the host uid owns, so the 512
-    // default makes bwrap's namespace clone fail with EAGAIN on a busy
-    // CI runner.  This fixture tests parent death, not the process cap.
-    limits: { nproc: 65_536 },
+    // This fixture tests parent death, not the process cap.
+    limits: SHARED_UID_LIMITS,
   }),
 );
 const child = await driver.spawn(

@@ -16,17 +16,7 @@ import { setTimeout } from 'node:timers';
 import { assembleSliceArgv, makeBwrapDriver } from '../src/drivers/bwrap.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
-
-/**
- * Resource limits for live bwrap slices whose test is not about the
- * process cap.  RLIMIT_NPROC counts every task the host uid owns, not
- * just the slice's, so the 512-process default makes bwrap's own
- * namespace clone fail with EAGAIN ("Creating new namespace failed:
- * Resource temporarily unavailable") whenever the test runner's uid is
- * busy, as it is on CI while turbo runs other packages' suites.  The
- * nproc cap test sets its own cap and keeps asserting enforcement.
- */
-const SHARED_UID_LIMITS = harden({ nproc: 65_536 });
+import { SHARED_UID_LIMITS } from './fixtures/shared-uid-limits.js';
 
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
