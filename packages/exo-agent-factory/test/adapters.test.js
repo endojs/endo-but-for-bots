@@ -135,10 +135,11 @@ test('inference adapter stores the child instructions and passes the environment
     specifier: 'file:///driver.js',
     env: { MODEL: 'test-model' },
   });
-  t.deepEqual(
-    [...stored.keys()].sort(),
-    ['agent', 'inference-source', 'instructions'],
-  );
+  t.deepEqual([...stored.keys()].sort(), [
+    'agent',
+    'inference-source',
+    'instructions',
+  ]);
   t.is(stored.get('instructions'), 'Be brief.');
 });
 
