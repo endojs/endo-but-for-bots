@@ -5,11 +5,11 @@
  * End-to-end smoke test (manual; not in CI) for the `@endo/fae`
  * agent's tool-calling pipeline.  One shared Endo daemon per test
  * file, one factory (and provider record) per model under test,
- * per-test fae agent, per-test `FAE_CWD`, no provider-error cascade,
+ * per-test fae agent, no provider-error cascade,
  * and a postmortem emitted from `test.afterEach.always`.
  *
- * The five test bodies (basic-chat, reply-tool, timestamp, math,
- * read-file) are each registered as a `test.macro` and replayed once
+ * The four test bodies (basic-chat, reply-tool, timestamp, math) are each
+ * registered as a `test.macro` and replayed once
  * per entry in `LAL_MODELS` (default: `[LAL_MODEL]`), so a
  * multi-model run yields one AVA row per `(test, model)` pair.
  *
@@ -64,7 +64,6 @@ import { provideAuthSecret } from '../src/credentials.js';
  * @typedef {{
  *   agentName: string,
  *   fromId: string,
- *   cwd: string,
  *   workerLog: string,
  *   postmortem: null | { logPath: string, baseline: number, logTail: string },
  * }} TestCtx
@@ -74,8 +73,6 @@ const test = /** @type {import('ava').TestFn<TestCtx>} */ (anyTest);
 
 const dirname = url.fileURLToPath(new URL('..', import.meta.url));
 const factorySpecifier = new URL('../agent.js', import.meta.url).href;
-const readFileSpecifier = new URL('../tools/read-file.js', import.meta.url)
-  .href;
 const greetSpecifier = new URL('../tools/greet.js', import.meta.url).href;
 const mathSpecifier = new URL('../tools/math.js', import.meta.url).href;
 const timestampSpecifier = new URL('../tools/timestamp.js', import.meta.url)
@@ -116,8 +113,8 @@ const POLL_INTERVAL_MS = 500;
 // Env preflight
 // ---------------------------------------------------------------------------
 //
-// Mirror `provider-setup.sh`'s `set -a; source .env` so any shared config
-// (FAE_CWD, etc.) is visible to this process.  Read synchronously at module
+// Mirror `provider-setup.sh`'s `set -a; source .env` so shared configuration
+// is visible to this process. Read synchronously at module
 // load so the skip decision below can use the result.
 
 const loadEnvSync = () => {
@@ -182,7 +179,7 @@ const modelSlug = modelName =>
 
 // Tests within an AVA file run concurrently by default; this file
 // relies on per-test agent isolation (`createAgent` + per-test
-// `fromId` filter + per-test `FAE_CWD`) and on the retry helper
+// `fromId` filter) and on the retry helper
 // below to absorb provider rate-limit hits without serialising.
 // `test.skip` registers the test as skipped at module load when no
 // LLM credentials are configured (CI gate).  Hooks below also bail
@@ -559,9 +556,8 @@ const setupDaemon = async () => {
     console.log(`[smoke] factory ready for model "${modelName}"`);
   }
 
-  // Shared tools — every per-test agent reaches them via `@tool-name`
-  // adoption, so we only register them once.  The filesystem-rooted
-  // `read-file` tool is created per-test (it needs a per-test FAE_CWD).
+  // Shared tools: every per-test agent reaches them through `@tool-name`
+  // adoption, so register them once.
   await E(host).makeUnconfined('@main', greetSpecifier, {
     resultName: 'greet-tool',
   });
@@ -603,27 +599,15 @@ test.after.always(async () => {
 });
 
 /**
- * Per-test setup: mkdtemp a scratch FAE_CWD and initialise the test's
- * `t.context` shell.  Agent creation is deferred to `provisionAgent`,
- * which the macro body calls once it knows which model to bind to.
- *
- * The temp dir is created here (not in `provisionAgent`) so that
- * `test.afterEach.always` can rm it even if a macro throws before
- * provisioning.
+ * Per-test setup. Agent creation is deferred to `provisionAgent`, which the
+ * macro body calls once it knows which model to bind to.
  */
 test.beforeEach(async t => {
   if (!HAS_LLM_CONFIG) return;
 
-  const slug = t.title
-    .replace(/[^a-z0-9]+/gi, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase()
-    .slice(0, 60);
-  const cwd = await fs.mkdtemp(path.join(SMOKE_TMP, `cwd-${slug}-`));
   t.context = {
     agentName: '',
     fromId: '',
-    cwd,
     workerLog: '',
     postmortem: null,
   };
@@ -720,10 +704,7 @@ const runWithFreshAgentRetries = async (t, modelName, run) => {
 
 test.afterEach.always(async t => {
   if (!HAS_LLM_CONFIG) return;
-  const { cwd, postmortem, agentName } = t.context;
-  if (cwd) {
-    await fs.rm(cwd, { recursive: true, force: true });
-  }
+  const { postmortem, agentName } = t.context;
   if (!postmortem) return;
   const { logPath, logTail } = postmortem;
 
@@ -1061,69 +1042,6 @@ const mathMacro = test.macro({
   title: (provided, modelName) => `math [${modelName}]`,
 });
 
-const readFileMacro = test.macro({
-  /**
-   * @param {import('ava').ExecutionContext<TestCtx>} t
-   * @param {string} modelName
-   */
-  exec: async (t, modelName) => {
-    await runWithFreshAgentRetries(t, modelName, async () => {
-      if (!shared) throw new Error('shared daemon ctx not initialised');
-      // The read-file tool's root is fixed at creation, so for per-test
-      // isolation we create one rooted at this test's mkdtemp FAE_CWD.
-      // The tool's petname is unique per test so adoption picks it up by
-      // name rather than colliding with siblings.
-      const toolName = `read-file-${t.context.agentName}`;
-      await E(shared.host).makeUnconfined('@main', readFileSpecifier, {
-        resultName: toolName,
-        env: harden({ FAE_CWD: t.context.cwd }),
-      });
-
-      const sentinelName = 'fae-smoke-sentinel.json';
-      const sentinelToken = `FAE_SMOKE_${Date.now().toString(36)}`;
-      await fs.writeFile(
-        path.join(t.context.cwd, sentinelName),
-        JSON.stringify({ token: sentinelToken }, null, 2),
-      );
-
-      const adoption = await sendAndAwaitReply(
-        t,
-        `Here is a read-file tool @${toolName}. ` +
-          `Adopt it, then reply with the single word "adopted".`,
-      );
-      t.log(`adoption reply: ${adoption.text.slice(0, 200)}`);
-      failOnProviderError(t, adoption.text);
-      t.regex(
-        adoption.logTail,
-        /\[tool\] adoptTool\(/,
-        'worker.log should show `[tool] adoptTool(...)`',
-      );
-
-      const reply = await sendAndAwaitReply(
-        t,
-        `Read "${sentinelName}" and tell me the value of ` +
-          `the "token" field exactly as it appears.`,
-      );
-      t.log(`reply: ${reply.text.slice(0, 200)}`);
-      failOnProviderError(t, reply.text);
-      const usedReadFileCapability =
-        /\[tool\] readFile\S*\(/.test(reply.logTail) ||
-        new RegExp(String.raw`\[tool\] exec\(\{code:".*${toolName}`, 's').test(
-          reply.logTail,
-        );
-      t.true(
-        usedReadFileCapability,
-        'worker.log should show read-file capability use',
-      );
-      t.true(
-        reply.text.includes(sentinelToken),
-        `reply should contain the sentinel token "${sentinelToken}"`,
-      );
-    });
-  },
-  title: (provided, modelName) => `read-file [${modelName}]`,
-});
-
 // ---------------------------------------------------------------------------
 // Macro registration
 // ---------------------------------------------------------------------------
@@ -1139,5 +1057,4 @@ for (const modelName of MODELS) {
   smokeTest(replyToolMacro, modelName);
   smokeTest(timestampMacro, modelName);
   smokeTest(mathMacro, modelName);
-  smokeTest(readFileMacro, modelName);
 }

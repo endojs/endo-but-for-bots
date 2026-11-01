@@ -23,6 +23,11 @@ import { resolveAuthToken } from './src/credentials.js';
  *     beneath this one.  Absent for an agent at the delegation bound, which is
  *     what withholds the subagent tools from it.
  *
+ * and, when the operator gave the agent a workspace:
+ *
+ *   - `workspace-git`    – the `Git` the agent edits and commits through
+ *   - `workspace-remote` – optionally, a `GitRemote` it fetches and pushes with
+ *
  * When this formula is pinned (`PINS`), `revivePins()` re-provides it on
  * daemon restart, which re-imports this module and calls `make()` again,
  * restarting the inbox loop automatically.
@@ -56,6 +61,14 @@ export const make = async (powers, context, { env } = {}) => {
     const spawner = (await E(powers).has('subagent-spawner'))
       ? await E(powers).lookup('subagent-spawner')
       : undefined;
+    const workspace = (await E(powers).has('workspace-git'))
+      ? harden({
+          git: await E(powers).lookup('workspace-git'),
+          ...((await E(powers).has('workspace-remote'))
+            ? { remote: await E(powers).lookup('workspace-remote') }
+            : {}),
+        })
+      : undefined;
     // The agent, not the driver incarnation or a mutable pet name, identifies
     // the inference session. Preserve both fixed-width components without a
     // delimiter to fit the subscription endpoint's 128-character identity.
@@ -80,6 +93,7 @@ export const make = async (powers, context, { env } = {}) => {
         maxToolRounds,
         requestTimeoutMs,
         ...(spawner ? { spawner } : {}),
+        ...(workspace ? { workspace } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
         ...(sessionId === undefined
           ? {

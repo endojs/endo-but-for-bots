@@ -85,6 +85,7 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
       'makeShellTool',
       'makeTool',
       'makeWorkspaceTools',
+      'provisionGitWorkspaceTools',
       'provisionHistoryTools',
       'provisionWorkspaceTools',
     ],
@@ -106,7 +107,12 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
 
   t.deepEqual(
     Object.keys(workspace).sort(),
-    ['makeWorkspaceTools', 'provisionHistoryTools', 'provisionWorkspaceTools'],
+    [
+      'makeWorkspaceTools',
+      'provisionGitWorkspaceTools',
+      'provisionHistoryTools',
+      'provisionWorkspaceTools',
+    ],
     '@endo/agent-tools/workspace.js export surface',
   );
 
@@ -316,6 +322,7 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
       'makeShellTool',
       'makeTool',
       'makeWorkspaceTools',
+      'provisionGitWorkspaceTools',
       'provisionHistoryTools',
       'provisionWorkspaceTools',
     ],

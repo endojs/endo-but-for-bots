@@ -55,7 +55,6 @@ packages/fae/
 ├── agent.js                    # Caplet entry point (make function)
 ├── setup.js                    # Provision fae guest (no tools)
 ├── setup-tools.js              # Create example tools in host inventory
-├── setup-fs-tools.js           # Create filesystem tools (FAE_CWD)
 ├── setup-with-tools.js         # Provision fae with pre-installed tools
 ├── src/
 │   ├── extract-tool-calls.js   # XML <tool_call> parser for models
@@ -66,14 +65,7 @@ packages/fae/
 └── tools/
     ├── greet.js                # Example: greeting generator
     ├── math.js                 # Example: arithmetic
-    ├── timestamp.js            # Example: current time
-    ├── read-file.js            # FaeTool: read files under root
-    ├── write-file.js           # FaeTool: write files under root
-    ├── edit.js                 # FaeTool: edit files by exact-text replacement
-    ├── list-dir.js             # FaeTool: list directory under root
-    ├── glob.js                 # FaeTool: find paths by glob pattern
-    ├── grep.js                 # FaeTool: search file contents by regexp
-    └── run-command.js          # FaeTool: run shell commands in root
+    └── timestamp.js            # Example: current time
 ```
 
 ---
@@ -254,16 +246,8 @@ Unsandboxed modules that produce `FaeTool` exo objects. Created via
 | `timestamp` | Current date/time with timezone support |
 | `greet` | Greeting generator |
 | `math` | Arithmetic operations |
-| `readFile` | Read files under a fixed root directory |
-| `writeFile` | Write files under a fixed root directory |
-| `edit` | Exact-text replacement editing (single or batched), returns a unified diff |
-| `listDir` | List directory contents |
-| `glob` | Find paths by glob pattern |
-| `grep` | Search file contents by regular expression |
-| `runCommand` | Execute shell commands with timeout |
-
-Filesystem tools have their root directory fixed at creation time via
-`FAE_CWD`. Path traversal above the root is rejected.
+Git workspace file and versioning tools are composed from an explicitly granted
+`Git` capability. They are not unconfined daemon-side caplets.
 
 ---
 

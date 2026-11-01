@@ -1,6 +1,7 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -20,9 +21,14 @@ import {
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
+import {
+  provisionLalWorkspaceTools,
+  resolveLalWorkspace,
+} from './workspace-tools.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { GuestPowers, LalContext } from './agent.types.js' */
+/** @import { AgentTool } from '@earendil-works/pi-agent-core' */
+/** @import { GuestPowers, LalContext, WorkerConfig } from './agent.types.js' */
 
 // pi-ai's built-in API providers (anthropic, openai, google, openrouter,
 // mistral, deepseek, groq, xai, github-copilot, and ~20 others) are registered
@@ -56,9 +62,17 @@ const LalInterface = M.interface('Lal', {
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
+ * @param {AgentTool[]} [workspaceTools] - Already provisioned from a
+ *   workspace grant, so a bad grant fails before the worker is reported
+ *   running.
  * @returns {Promise<void>}
  */
-export const spawnWorkerLoop = async (powers, context, workerEnv) => {
+export const spawnWorkerLoop = async (
+  powers,
+  context,
+  workerEnv,
+  workspaceTools = [],
+) => {
   const getCancelled = async () => {
     if (!context) return null;
     const resolvedContext = await context;
@@ -94,6 +108,13 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   const agentTools = tools.map(({ name, summary }) =>
     toAgentTool(name, summary, executeTool),
   );
+  const names = new Set(agentTools.map(tool => tool.name));
+  for (const tool of workspaceTools) {
+    !names.has(tool.name) ||
+      Fail`Workspace tool ${q(tool.name)} would shadow a built-in Lal tool`;
+    names.add(tool.name);
+    agentTools.push(tool);
+  }
 
   const resolvedModel = await resolveModel(model);
   const isOllama = resolvedModel.name?.startsWith('ollama/');
@@ -173,6 +194,17 @@ export const make = (guestPowers, _context) => {
           example: 'sk-ant-... for Anthropic',
           secret: true,
         },
+        {
+          name: 'git',
+          label: 'Git name in the workspaces directory (optional)',
+          default: '',
+        },
+        {
+          name: 'remote',
+          label:
+            'Git remote name in the workspaces directory (optional; requires Git)',
+          default: '',
+        },
       ]),
     );
 
@@ -209,48 +241,56 @@ export const make = (guestPowers, _context) => {
     const existingMessages = /** @type {any[]} */ (
       await E(powers).listMessages()
     );
-    for (const msg of existingMessages) {
+    for (const message of existingMessages) {
       // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+      if (message.from === selfLocator && message.type === 'form') {
+        formMessageId = message.messageId;
       }
     }
 
     const messageIterator = iterateReader(E(powers).followMessages());
     while (true) {
-      const { value: message, done } = await messageIterator.next();
+      const { value: nextMessage, done } = await messageIterator.next();
       if (done) break;
 
-      const msg = /** @type {any} */ (message);
+      const message = /** @type {any} */ (nextMessage);
 
       // Capture the form's messageId from our own outbound message.
       // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+      if (message.from === selfLocator && message.type === 'form') {
+        formMessageId = message.messageId;
       } else if (
-        msg.type === 'value' &&
+        message.type === 'value' &&
         // eslint-disable-next-line @endo/restrict-comparison-operands
-        msg.replyTo === formMessageId
+        message.replyTo === formMessageId
       ) {
         // Only process value messages that reply to our form.
         try {
           // Resolve the submitted values from the value message.
-          const config =
-            /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
-              await E(powers).lookupById(msg.valueId)
-            );
+          const config = /** @type {WorkerConfig} */ (
+            await E(powers).lookupById(message.valueId)
+          );
 
           const { name } = config;
 
           if (activeWorkers.has(name)) {
             // A worker is already running for this name.
             await E(powers).reply(
-              msg.number,
+              message.number,
               [`Agent "${name}" already exists.`],
               [],
               [],
             );
           } else {
+            // Resolve and provision the workspace before creating the guest
+            // or replying, so a bad grant is reported as an error rather
+            // than as a running agent whose loop has already failed.
+            const workspace = await resolveLalWorkspace(powers, config);
+            const workspaceTools =
+              workspace === undefined
+                ? []
+                : await provisionLalWorkspaceTools(workspace);
+
             // Create the guest profile via the host agent.
             // provideGuest returns the full EndoGuest (not the handle).
             // Guard with has() so restart re-uses the existing guest;
@@ -269,19 +309,24 @@ export const make = (guestPowers, _context) => {
             await provisionPrimer(guest);
 
             // Spawn a worker loop for this guest.
-            const workerP = spawnWorkerLoop(guest, null, {
-              LAL_HOST: config.host,
-              LAL_MODEL: config.model,
-              LAL_AUTH_TOKEN: config.authToken,
-            });
-            activeWorkers.set(name, workerP);
-            workerP.catch(error => {
+            const workerPromise = spawnWorkerLoop(
+              guest,
+              null,
+              {
+                LAL_HOST: config.host,
+                LAL_MODEL: config.model,
+                LAL_AUTH_TOKEN: config.authToken,
+              },
+              workspaceTools,
+            );
+            activeWorkers.set(name, workerPromise);
+            workerPromise.catch(error => {
               console.error(`[lal] Worker "${name}" error:`, error);
               activeWorkers.delete(name);
             });
 
             await E(powers).reply(
-              msg.number,
+              message.number,
               [`Agent "${name}" is now running.`],
               [],
               [],
@@ -293,7 +338,7 @@ export const make = (guestPowers, _context) => {
           console.error('[lal] Form submission error:', errorMessage);
           try {
             await E(powers).reply(
-              msg.number,
+              message.number,
               [`Error creating agent: ${errorMessage}`],
               [],
               [],

@@ -335,16 +335,17 @@ interface Git {
   filesystemAt(ref: GitRef | string): Promise<Filesystem>;
   tree(ref: GitRef | string): Promise<ReadableTree>;
 
-  // Attenuation to a read-only posture.  Mutation methods on the returned
-  // cap throw at runtime in the first implementation phase; the type
-  // narrows to drop them when structured shapes land in Phase 7.
+  // Attenuation to the read-only (reader) facet.  The returned cap omits
+  // the mutation methods entirely; see the cumulative facets below.
   readOnly(): Git;
 }
 ```
 
 `tree(ref)` returns the read surface defined by `GitTreeProvider` below; the interface name remains as the documented shape of the returned read capability even though tree access lives as a method on `Git` itself.
 
-`readOnly()` mirrors the `EndoMount.readOnly()` attenuation idiom ([daemon-mount-capabilities](daemon-mount-capabilities.md) § Design Decision 6): the returned `Git` exposes the same methods, but the mutation methods (`add`, `restore`, `commit`, `reword`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`) throw at runtime initially and are narrowed out of the type when structured shapes land (Phase 7).
+`readOnly()` mirrors the `EndoMount.readOnly()` attenuation idiom ([daemon-mount-capabilities](daemon-mount-capabilities.md) § Design Decision 6).
+The shipped contract is a set of cumulative facets of one `Git` instance (reader within writer within rewriter, selected with `scope(name)`): the reader facet returned by `readOnly()` does not carry the mutation methods (`add`, `restore`, `commit`, `reword`, `createBranch`, `deleteBranch`, `renameBranch`, `switchBranch`, `detach`, `merge`, `rebase`, `stashPush`, `stashApply`, `stashPop`, `stashDrop`) at all, in its interface guard or its type (`ReadOnlyEndoGit`), rather than advertising them and throwing at runtime.
+A consumer can therefore discover the posture from the method set, as `@endo/agent-tools`'s `provisionGitWorkspaceTools` does.
 A read-only auditor agent holds the attenuated `Git`; the operator hands it `await E(git).readOnly()` rather than the unattenuated cap.
 Read-only is one of **two independent attenuation axes** on `Git`; the other is the history-rewrite axis (`allowHistoryRewrite`, withheld by default — Design Decision 11), and `readOnly()` drops both.
 
@@ -357,7 +358,7 @@ The chosen shape (tree on `Git` plus `Git.readOnly()`) was picked for consistenc
 | Shape | Pros | Cons |
 |---|---|---|
 | **Chosen: `Git.tree(ref)` plus `Git.readOnly()`** | One-turn read on the common case (caller holds `Git`, wants `tree`).  Matches `EndoMount.readOnly()` idiom.  Read-only auditor is `await E(git).readOnly()` — no new cap shape. | No standalone "tree-only" grant shape: a caller who should only read historical trees still holds an attenuated `Git`, which advertises the read methods it does not care about. |
-| **Considered: split-only (`git.trees() → GitTreeProvider.tree(ref)`)** | Cleanest decomposition: tree-only callers hold a different cap type, not an attenuated parent.  Matches decomplector's "different concerns → different caps" lens. | Two-turn cost on every read (`await E(git).trees()` then `await E(provider).tree(ref)`), unless the holder caches the provider.  No in-place attenuation pattern for the rest of `Git`. |
+| **Considered: split-only (`git.trees() -> GitTreeProvider.tree(ref)`)** | Cleanest decomposition: tree-only callers hold a different cap type, not an attenuated parent.  Matches decomplector's "different concerns -> different caps" lens. | Two-turn cost on every read (`await E(git).trees()` then `await E(provider).tree(ref)`), unless the holder caches the provider.  No in-place attenuation pattern for the rest of `Git`. |
 | **Considered: both axes (`Git.tree(ref)` + `Git.readOnly()` + separately-grantable `GitTreeProvider` via host shortcut)** | Covers every use case: one-turn tree access for `Git` holders, read-only attenuation posture, and tree-only grants for build systems / archivers that should never see worktree state. | Widest public surface.  Two ways to obtain a tree-reading capability (via `Git.tree(ref)` and via the separately-granted provider) is the kind of accidental complexity creep an implementation later regrets. |
 
 If a real build-system or code-archiver use case surfaces that wants a genuinely tree-only grant (without worktree-method advertisement at all), the implementation can revisit and add the separately-grantable `GitTreeProvider` shape.
@@ -446,7 +447,7 @@ type GitRebaseResult =
   | { status: 'in-progress'; current: GitCommit };
 ```
 
-Phase 7 upgrades the `Git` interface in place; the first phase's text-returning methods move under `*Text()` siblings (`diffText`, `showText`, …) so callers that still want the porcelain output for display can keep it.
+Phase 7 upgrades the `Git` interface in place; the first phase's text-returning methods move under `*Text()` siblings (`diffText`, `showText`, ...) so callers that still want the porcelain output for display can keep it.
 The migration is named in `## Migration Strategy` as a discrete step rather than an ambient "we'll structurally-improve later"; consumers who write against the first phase can flip to the structured shapes by replacing one method call per site.
 
 `stashList`'s structured shape, in the same vein, becomes `Promise<Array<{ index: number; ref: GitRef; message: string; created: GitCommit }>>`.
@@ -673,65 +674,67 @@ The existing Fae git tool can survive as a transitional reference branch and lat
 
 ## Implementation Plan
 
+Phases 0-5 shipped (see the status table and § Implementation Progress), so their items are checked; Phase 6 is the agent-adapter migration and Phase 7 remains open.
+
 ### Phase 0: Mount Prerequisites
 
 Complete the required phases from [daemon-mount-capabilities](daemon-mount-capabilities.md):
 
-- [ ] `snapshot()`;
-- [ ] `EndoMountEntry`;
-- [ ] handle-oriented open/create APIs;
-- [ ] metadata;
-- [ ] host-private physical backing provenance.
+- [x] `snapshot()`;
+- [x] `EndoMountEntry`;
+- [x] handle-oriented open/create APIs;
+- [x] metadata;
+- [x] host-private physical backing provenance.
 
 ### Phase 1: Backend Contract and Formula Skeleton
 
-- [ ] Add `GitBackend` abstraction.
-- [ ] Add `Git` interface guards and types.
-- [ ] Add `git` formula type tying a git capability to a mount formula identity.
-- [ ] Add host method to derive git from an existing physical worktree mount.
-- [ ] Add exact-repository-root verification.
+- [x] Add `GitBackend` abstraction.
+- [x] Add `Git` interface guards and types.
+- [x] Add `git` formula type tying a git capability to a mount formula identity.
+- [x] Add host method to derive git from an existing physical worktree mount.
+- [x] Add exact-repository-root verification.
 
 ### Phase 2: Local Inspection Surface
 
-- [ ] Implement `worktree`, `status`, `diff`, `log`, `show`, and `revParse`.
-- [ ] Convert backend path results into `EndoMountEntry` values minted from the worktree mount.
-- [ ] Return structured status entries with optional live nodes when available.
+- [x] Implement `worktree`, `status`, `diff`, `log`, `show`, and `revParse`.
+- [x] Convert backend path results into `EndoMountEntry` values minted from the worktree mount.
+- [x] Return structured status entries with optional live nodes when available.
 
 ### Phase 3: Local Mutation Surface
 
-- [ ] Implement `add`, `restore`, and `commit`.
-- [ ] Implement branch listing / create / delete / rename / `switchBranch` / `detach`.
-- [ ] Enforce read-only mount rejection on all mutation calls.
-- [ ] Port the native hardening checks from the reference implementation into backend tests.
+- [x] Implement `add`, `restore`, and `commit`.
+- [x] Implement branch listing / create / delete / rename / `switchBranch` / `detach`.
+- [x] Enforce read-only mount rejection on all mutation calls.
+- [x] Port the native hardening checks from the reference implementation into backend tests.
 
 ### Phase 4: Integration Workflows
 
-- [ ] Implement merge, rebase, and stash operations.
-- [ ] Define conflict-state reporting and ensure conflict entries are represented by `EndoMountEntry`, not path strings.
-- [ ] Add restart / persistence tests for long-lived git capabilities.
+- [x] Implement merge, rebase, and stash operations.
+- [x] Define conflict-state reporting and ensure conflict entries are represented by `EndoMountEntry`, not path strings.
+- [x] Add restart / persistence tests for long-lived git capabilities.
 
 ### Phase 5: Git-Tree Reads and Read-Only Attenuation
 
-- [ ] Implement `Git.tree(ref) -> ReadableTree` directly on the `Git` cap (the `GitTreeProvider` shape names the returned read surface).
-- [ ] Implement `Git.readOnly()` returning an attenuated `Git`; mutation methods throw at runtime in this phase and are dropped from the type in Phase 7 alongside the structured-result-shape migration.
-- [ ] Add tests for browsing blobs and subtrees at specific refs.
-- [ ] Add tests for read-only attenuation: every mutation method on a `readOnly()` cap throws; every read method still works.
-- [ ] Verify compatibility with existing checkin / checkout / stage-tree flows.
-- [ ] Add a backend-private bulk tree path for large materialization operations, initially using `git archive --format=tar` if the native backend remains the practical implementation.
-- [ ] Keep the read surface separable enough that, if a build-system or archiver use case surfaces a need for a tree-only-grant cap, the separately-grantable `GitTreeProvider` shape can be added without breaking `Git.tree(ref)` consumers (see § Alternatives Considered for Tree Access Shape).
+- [x] Implement `Git.tree(ref) -> ReadableTree` directly on the `Git` cap (the `GitTreeProvider` shape names the returned read surface).
+- [x] Implement `Git.readOnly()` returning the reader facet, which omits the mutation methods from its interface and type (see § the `readOnly()` contract above).
+- [x] Add tests for browsing blobs and subtrees at specific refs.
+- [x] Add tests for read-only attenuation: a `readOnly()` cap carries no mutation method; every read method still works.
+- [x] Verify compatibility with existing checkin / checkout / stage-tree flows.
+- [x] Add a backend-private bulk tree path for large materialization operations, initially using `git archive --format=tar` if the native backend remains the practical implementation.
+- [x] Keep the read surface separable enough that, if a build-system or archiver use case surfaces a need for a tree-only-grant cap, the separately-grantable `GitTreeProvider` shape can be added without breaking `Git.tree(ref)` consumers (see § Alternatives Considered for Tree Access Shape).
 
 ### Phase 6: Agent Adapters and Migration
 
-- [ ] Replace path-root Fae git provisioning with a thin adapter over granted `Git`.
-- [ ] Add Lal / Genie registration over the capability rather than over process wrappers.
-- [ ] Deprecate direct path-string git tool creation once capability-based provisioning exists.
+- [x] Replace path-root Fae git provisioning with a thin adapter over granted `Git` (Fae `createAgent(name, { workspace })`; see § Implementation Progress).
+- [x] Add Lal registration over the capability; the retired `@endo/genie` package has no live adapter to migrate.
+- [x] Remove the direct `FAE_CWD` path-root tool-caplet route.
 - [x] Update [daemon-agent-tools](daemon-agent-tools.md) to point at the revised model (2026-07-06 reconciliation pass: that doc now maps every tool group onto `EndoMount` / `Filesystem` / `Git` / `GitRemote` and carries the remaining Shell-capability delta).
 
 ### Phase 7: Structured Result Shapes
 
 - [ ] Land the structured shapes named in § Structured Result Shapes (`GitDiff`, `GitFileDiff`, `GitDiffHunk`, `GitShow`, `GitConflict`, `GitMergeResult`, `GitRebaseResult`, structured `stashList`).
 - [ ] Rename the text-returning methods to `*Text` siblings (`diffText`, `showText`, `mergeText`, `rebaseText`, `stashListText`, `stashShowText`) so display consumers can keep the porcelain output.
-- [ ] Drop mutation methods from the type of `readOnly()` cap returns; the runtime-throws behavior from Phase 5 stays as a defense-in-depth check.
+- [x] Drop mutation methods from the type of `readOnly()` cap returns (already true of the shipped cumulative facets; see Phase 5).
 - [ ] Migrate every in-tree consumer of the text methods to the structured shape in the same window; the `*Text` siblings remain available for consumers that still need porcelain.
 
 ## Testing Plan
@@ -801,6 +804,16 @@ It is not part of the normative design.
 - **#371** (`fix(daemon): correctness and authority-boundary fixes for the git capability`) — correctness and authority-boundary hardening on the shipped `Git` surface.
 - **`Git.filesystemAt(ref)`** ([endo-fs-from-git](endo-fs-from-git.md) Phases 1-3 plus a Phase-4 slice) — the historical-read `Filesystem` view over the git object database (§ Historical Read); the exo surface now lives in `packages/exo-git` (`makeGit`, `makeGitFsBackend`) with the native driver in `packages/git`.
 - **#644** (`feat(git): add commit amend and reword`) — `commit({ amend })` and `reword(ref, message)` behind the gated `allowHistoryRewrite` attenuation axis (Design Decision 11), plus the elevated `makeGitHistoryTool` in `@endo/agent-tools` and code-mode regeneration.
+
+- **Fae and Lal workspace grants** — Phase 6's live agent adapters.
+  `createAgent(name, { workspace: { git, remote? } })` on the Fae factory resolves those names only in the factory's `workspaces` directory (the deployer's allowlist, so a factory caller cannot name the factory's other capabilities), provisions the tools once to validate the grant before anything durable is created, then stores the granted `Git` (and optional `GitRemote`) in the agent driver's namespace, and the inbox loop composes the `@endo/agent-tools` file, git and remote tools over them as built-in tools (`packages/fae/src/workspace-tools.js`).
+  The catalog follows the grant: a read-only `Git` (no `add` / `commit`) gets the reader git tools and read-only file tools, and is refused alongside a `GitRemote`, whose `fetch` / `pull` / `push` would mutate state; a writable `Git` is narrowed to `scope('writer')`, so history rewrite is never offered.
+  Composition goes through `@endo/agent-tools`'s `provisionGitWorkspaceTools`, which discovers read-only versus writable posture, attenuates writable Git to `scope('writer')`, and then calls `provisionWorkspaceTools`; Fae keeps only the `ToolRecord` adapter.
+  Nothing on a `GitRemote` names the `Git` it is bound to, so the factory cannot verify that the two grants address the same repository; pairing them is the operator's choice, and a host-minted composite workspace capability would close that gap.
+  Subagents do not inherit the workspace.
+  Lal's configuration form accepts names in the manager guest's `workspaces` directory for a `Git` and optional `GitRemote`, resolves and provisions them before creating the worker or replying, and registers the same confined catalog through the Pi adapter. The manager store and capabilities stay out of the worker guest's pet store; only the attenuated tools enter the worker loop, so Lal's `evaluate` tool cannot recover a broader facet.
+  The `setup-fs-tools` caplets rooted at `FAE_CWD` and their path-based tool modules are removed.
+  `@endo/genie` was retired before this migration, so no Genie runtime remains to register; `@endo/agent-tools` retains the provider-independent records distilled from its registry shape.
 
 ### Forward-design notes
 
@@ -877,7 +890,7 @@ No open questions remain on this document; revisit if real implementation surfac
    Adding the caching/throttling itself is **out of scope for this PR**; the optimization is licenced here so the future implementer and reviewers see the cadence concern was acknowledged at the surface that introduces the pin.
 8. **Read-only worktree mounts permit inspection + immutable trees + `worktree.snapshot()`; reject everything else.**
    A read-only `Git` can be obtained two ways and the two paths produce the same authority shape (see § Read-only construction paths):
-   - **Writable→readOnly path:** `await E(git).readOnly()` returns a read-only attenuation of a `Git` constructed from a writable mount.
+   - **Writable->readOnly path:** `await E(git).readOnly()` returns a read-only attenuation of a `Git` constructed from a writable mount.
    - **Read-only-mount-derived path:** `provideGit(readOnlyMount)` constructs a `Git` whose mutability flag is already false; the formula does not briefly mint a writable `Git` and wrap it.
 
    Allowed on a read-only `Git`: `status`, `diff`, `log`, `show`, `revParse`, `branches`, `currentBranch`, `tree(ref)`, `filesystemAt(ref)`, `readOnly()` (idempotent — see Design Decision 9), and `worktree.snapshot()`.

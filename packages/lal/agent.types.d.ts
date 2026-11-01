@@ -61,6 +61,8 @@ export type WorkerConfig = {
   host: string;
   model: string;
   authToken: string;
+  git?: string;
+  remote?: string;
 };
 
 /** Context object for cancellation support */

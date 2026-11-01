@@ -286,7 +286,6 @@ Multiple setup scripts:
 - `setup.js` — bare agent (no tools)
 - `setup-with-tools.js` — agent with pre-installed tool caplets
 - `setup-tools.js` — create tools in host inventory (for later sending)
-- `setup-fs-tools.js` — create filesystem tools with fixed root
 
 ### Lal
 

@@ -15,6 +15,7 @@ export { makeShellTool } from './json-tools/shell.js';
 export { makeHttpTool } from './json-tools/http.js';
 export {
   makeWorkspaceTools,
+  provisionGitWorkspaceTools,
   provisionWorkspaceTools,
   provisionHistoryTools,
 } from './workspace.js';

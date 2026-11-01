@@ -31,6 +31,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   const envs = new Map();
   /** @type {Map<string, Map<string, unknown>>} */
   const inventories = new Map();
+  /** Locators stored into each guest, keyed `guest/petName`. */
+  /** @type {Map<string, string>} */
+  const locators = new Map();
   let nextId = 0;
 
   /** Caplet result names keyed by the powers guest they die with. */
@@ -81,8 +84,8 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
         storeValue: (value, petName) => {
           inventory.set(petName, value);
         },
-        async storeLocator() {
-          return undefined;
+        async storeLocator(petName, locator) {
+          locators.set(`${name}/${petName}`, locator);
         },
       });
     },
@@ -111,7 +114,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       names.delete(key);
     },
   });
-  return { hostAgent, names, cancelled, removed, envs, inventories };
+  return { hostAgent, names, cancelled, removed, envs, inventories, locators };
 };
 
 const provisionOptions = {
@@ -562,5 +565,49 @@ test('two stops of one subagent do not cancel it twice', async t => {
     cancelled.filter(entry => entry === 'profile-for-p.sub.c-driver-handle')
       .length,
     1,
+  );
+});
+
+test('a workspace reaches only the agent driver, and a remote needs a Git', async t => {
+  const { hostAgent, locators } = makeFakeHost();
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'worker',
+    depth: 0,
+    maxDepth: 1,
+    workspaceGitLocator: 'endo://node/git?type=git',
+    workspaceRemoteLocator: 'endo://node/remote?type=git-remote',
+    ...provisionOptions,
+  });
+  t.is(
+    locators.get('worker-driver-handle/workspace-git'),
+    'endo://node/git?type=git',
+  );
+  t.is(
+    locators.get('worker-driver-handle/workspace-remote'),
+    'endo://node/remote?type=git-remote',
+  );
+  // The spawner never holds the workspace, so a subagent cannot inherit it.
+  t.deepEqual(
+    [...locators.keys()].filter(
+      key =>
+        key.endsWith('/workspace-git') || key.endsWith('/workspace-remote'),
+    ),
+    [
+      'worker-driver-handle/workspace-git',
+      'worker-driver-handle/workspace-remote',
+    ],
+  );
+
+  await t.throwsAsync(
+    provisionFaeAgent({
+      hostAgent: makeFakeHost().hostAgent,
+      name: 'stray',
+      depth: 0,
+      maxDepth: 0,
+      workspaceRemoteLocator: 'endo://node/remote?type=git-remote',
+      ...provisionOptions,
+    }),
+    { message: /needs a workspace Git/ },
   );
 });

@@ -9,6 +9,7 @@ import { Far } from '@endo/pass-style';
 
 import {
   makeWorkspaceTools,
+  provisionGitWorkspaceTools,
   provisionWorkspaceTools,
 } from '../src/workspace.js';
 
@@ -57,6 +58,31 @@ test('a git grant composes versioning plus agent-facing status, and nothing else
   for (const absent of ['mountReadText', 'push', 'fetch', 'exec']) {
     t.false(names.has(absent), `"${absent}" absent without its grant`);
   }
+});
+
+test('gitFacet selects the git catalog the granted facet can serve', t => {
+  const reader = nameSet(
+    makeWorkspaceTools({ git: grant('Git'), gitFacet: 'reader' }),
+  );
+  t.true(reader.has('log'));
+  t.true(reader.has('status'));
+  for (const absent of ['add', 'commit', 'createBranch', 'reword']) {
+    t.false(reader.has(absent), `"${absent}" absent from the reader catalog`);
+  }
+  t.false(
+    nameSet(makeWorkspaceTools({ git: grant('Git') })).has('reword'),
+    'the default catalog is the writer facet',
+  );
+});
+
+test('provisionGitWorkspaceTools refuses a capability that is not a Git', async t => {
+  const notGit = Far('HostAgent', { lookup: () => undefined });
+  await t.throwsAsync(
+    provisionGitWorkspaceTools({ git: /** @type {any} */ (notGit) }),
+    {
+      message: 'A workspace grant must be a Git',
+    },
+  );
 });
 
 test('a filesystem grant composes the file tools; readOnly drops the write slice', t => {

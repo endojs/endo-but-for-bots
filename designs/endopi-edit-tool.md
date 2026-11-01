@@ -14,8 +14,7 @@
 > restoration, and a unified diff in the result — is a pure, shared module,
 > `@endo/agentry/edit-text` (`applyEdits`, `computeUnifiedDiff`,
 > `normalizeEdits`). Fae exposes it as the `edit` tool
-> (`packages/fae/src/tool-makers.js` `makeEditTool`, caplet
-> `packages/fae/tools/edit.js`), accepting a single `oldText`/`newText` pair or
+> (`packages/fae/src/tool-makers.js` `makeEditTool`), accepting a single `oldText`/`newText` pair or
 > an `edits` array. Lal exposes it as `editText`
 > (`packages/lal/tools/fs.js` + the dispatch case in
 > `packages/lal/tool-dispatch.js`), operating on a tree capability through the
