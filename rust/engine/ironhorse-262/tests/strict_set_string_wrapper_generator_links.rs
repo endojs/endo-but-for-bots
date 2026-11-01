@@ -3,8 +3,9 @@
 //! `%AsyncGeneratorFunction.prototype%` link descriptors.
 //!
 //! - A strict computed-key store (`o[k] = v`) that `[[Set]]` rejects on a
-//!   frozen, sealed, or non-extensible object throws a `TypeError`, as the
-//!   named-key store does (test262 `built-ins/Object/*/symbol-*-strict.js`,
+//!   frozen, sealed, or non-extensible object (or on a TypedArray's named
+//!   key) throws a `TypeError`, as the named-key store does (test262
+//!   `built-ins/Object/*/symbol-*-strict.js`,
 //!   `built-ins/undefined/15.1.1.3-2.js`).
 //! - `new String(sym)` throws (ToString of a Symbol), while `String(sym)`
 //!   still answers the descriptive string (`built-ins/String/symbol-wrapping.js`).
@@ -71,6 +72,17 @@ fn strict_computed_new_key_on_sealed_or_non_extensible_object_throws() {
 fn strict_computed_store_to_global_undefined_throws() {
     assert_result_agrees(&strict_store_throws(
         "var k = 'undefined'; var o = globalThis;",
+    ));
+}
+
+#[test]
+fn strict_computed_named_store_on_typed_array_throws() {
+    assert_result_agrees(&strict_store_throws(
+        "var k = 'x'; var o = new Uint8Array(1); \
+         Object.defineProperty(o, k, { value: 1 });",
+    ));
+    assert_result_agrees(&strict_store_throws(
+        "var k = 'x'; var o = Object.preventExtensions(new Uint8Array(1));",
     ));
 }
 
