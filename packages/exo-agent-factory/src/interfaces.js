@@ -91,3 +91,20 @@ export const AgentLifecycleInterface = M.interface('AgentLifecycle', {
   followActive: M.call().returns(M.remotable('ActiveIterator')),
 });
 harden(AgentLifecycleInterface);
+
+/**
+ * The coordinator's own facet, held only in the factory's private directory.
+ * It is the sole endowment of each durable facet formula, which re-derives
+ * a bound factory or a child's lifecycle from the live incarnation on
+ * revival. The ids it accepts are coordinator labels, never authority.
+ */
+export const ChildAgentCoordinatorInterface = M.interface(
+  'ChildAgentCoordinator',
+  {
+    boundFacet: M.call(M.number()).returns(
+      M.remotable('BoundChildAgentFactory'),
+    ),
+    lifecycleFor: M.call(M.string()).returns(M.remotable('AgentLifecycle')),
+  },
+);
+harden(ChildAgentCoordinatorInterface);
