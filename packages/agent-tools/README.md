@@ -97,8 +97,24 @@ import {
   makeMountFsTools,
   makeShellTool,
   makeHttpTool,
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionHistoryTools,
 } from '@endo/agent-tools';
 ```
+
+`makeWorkspaceTools` composes an explicit grant record into one catalog.
+It conditionally includes filesystem, Git, GitRemote, Shell, and confined HTTP
+groups from capabilities the host already holds.
+At the composition boundary, it qualifies colliding capability method names as
+`inspectShell`, `inspectGitRemote`, `fetchGitRemote`, and `fetchHttp`, so all of
+the groups can coexist without name shadowing.
+`provisionWorkspaceTools` can derive the filesystem view from a supplied Git
+worktree; it never discovers grants from a petstore.
+`provisionHistoryTools({ git, ref, maxChars })` composes the read-only read,
+list, and stat tools over `git.filesystemAt(ref)`, so an agent can inspect a
+historical ref as an ordinary filesystem without any path to mutate the
+worktree.
 
 Scoped imports expose each layer:
 
@@ -213,6 +229,13 @@ import { makeShellTool } from '@endo/agent-tools/json-tools/shell.js';
 import { makeHttpTool } from '@endo/agent-tools/json-tools/http.js';
 ```
 
+`makeShellTool(shellCap, { commands })` emits `exec` and `inspect` records
+for a `@endo/exo-shell` Shell; `attenuate` is granter-facing and deliberately
+not a tool. Pass the granted command grammars as `commands` to embed their
+rendered usage lines in the `exec` tool description and reject a non-matching
+argv tool-side before the round trip; the capability's own grammar check
+remains the boundary.
+
 `makeTool` produces a `ToolRecord` with a JSON-schema `parameters`, the same
 schema as `inputSchema`, and an `invoke(args)` function.
 `toPiAgentTool` maps that record to the optional Pi `AgentTool` contract and
@@ -246,8 +269,9 @@ destination must be a concrete ref, the all-zeros ID is refused (git reads it as
 Each maker names its records after the capability's own methods, so names can
 collide across makers: `makeGitRemoteTool` emits `inspect` and `fetch`, which
 `makeShellTool` and `makeHttpTool` also emit. A host composing several makers
-into one flat tool list must disambiguate them itself; nothing in `makeTool`
-prefixes or dedupes.
+into one flat tool list must disambiguate them itself. The workspace helpers
+apply the qualified names above; nothing in `makeTool` itself prefixes or
+dedupes.
 
 ## Git history tools
 

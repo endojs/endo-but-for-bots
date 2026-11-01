@@ -28,6 +28,10 @@
       "types": "./define-agent.types.d.ts",
       "default": "./src/define-agent.js"
     },
+    "./workspace-agent": {
+      "types": "./workspace-agent.types.d.ts",
+      "default": "./src/workspace-agent.js"
+    },
     "./code-mode": {
       "types": "./code-mode.types.d.ts",
       "default": "./src/code-mode.js"

@@ -62,7 +62,7 @@ const makeShellLikeFormulaMaker = (mount, policy, opts = {}) => {
   return makeShell({
     cwd: backing.currentDir,
     policy: harden({
-      allowedCommands: harden([...policy.allowedCommands]),
+      commands: policy.commands,
       timeoutMs: policy.timeoutMs,
       maxOutputBytes: policy.maxOutputBytes,
       env: harden({ ...(policy.env || {}) }),
@@ -88,13 +88,26 @@ const writeExecutable = async (dir, name, output) => {
 };
 
 const basePolicy = normalizeShellPolicy({
-  allowedCommands: ['printenv', 'pwd', 'printf'],
+  commands: [
+    {
+      program: 'printenv',
+      argumentVector: [{ kind: 'slot', name: 'variable', type: 'string' }],
+    },
+    { program: 'pwd', argumentVector: [] },
+    {
+      program: 'printf',
+      argumentVector: [
+        { kind: 'slot', name: 'format', type: 'string' },
+        { kind: 'rest', name: 'values', type: 'string' },
+      ],
+    },
+  ],
   timeoutMs: 10_000,
   maxOutputBytes: 65_536,
   env: { CI: 'true' },
 });
 
-test('provideShell composition: exec runs an allowlisted command in the mount cwd', async t => {
+test('provideShell composition: exec runs a grammar-matched command in the mount cwd', async t => {
   const { root, mount } = await provisionMount(t);
   const shell = makeShellLikeFormulaMaker(mount, basePolicy);
 
@@ -107,12 +120,36 @@ test('provideShell composition: exec runs an allowlisted command in the mount cw
   t.is(printf.exitCode, 0);
 });
 
-test('provideShell composition: a command off the allowlist is refused', async t => {
+test('provideShell composition: an argv outside every grammar is refused', async t => {
   const { mount } = await provisionMount(t);
   const shell = makeShellLikeFormulaMaker(mount, basePolicy);
   await t.throwsAsync(() => shell.exec('rm', ['-rf', '.']), {
-    message: /not in the allowlist/,
+    message: /matches no granted command grammar/,
   });
+  // The program is granted, but this argument shape is not in its language.
+  await t.throwsAsync(() => shell.exec('printenv', ['-0', 'HOME']), {
+    message: /matches no granted command grammar/,
+  });
+});
+
+test('normalizeShellPolicy rejects the retired allowedCommands key loudly', t => {
+  t.throws(
+    () =>
+      normalizeShellPolicy({
+        allowedCommands: ['printenv'],
+        timeoutMs: 10_000,
+        maxOutputBytes: 65_536,
+      }),
+    { message: /allowedCommands is gone/ },
+  );
+  t.throws(
+    () =>
+      normalizeShellPolicy({
+        timeoutMs: 10_000,
+        maxOutputBytes: 65_536,
+      }),
+    { message: /policy.commands.*non-empty array/ },
+  );
 });
 
 test('provideShell composition: the child sees only the policy env, never host env', async t => {
@@ -146,7 +183,8 @@ test('provideShell composition: inspect reveals policy bounds but no host path',
   const shell = makeShellLikeFormulaMaker(mount, basePolicy);
   const revealed = await shell.inspect();
   t.deepEqual(revealed, {
-    allowedCommands: ['printenv', 'pwd', 'printf'],
+    commands: basePolicy.commands,
+    usage: ['printenv <variable>', 'pwd', 'printf <format> [<values> ...]'],
     timeoutMs: 10_000,
     maxOutputBytes: 65_536,
   });
@@ -174,7 +212,7 @@ test('provideShell composition: omitted searchPath is baked before reincarnation
     }
   });
   const persistedPolicy = normalizeShellPolicy({
-    allowedCommands: [command],
+    commands: [{ program: command, argumentVector: [] }],
     timeoutMs: 10_000,
     maxOutputBytes: 65_536,
     env: { CI: 'true' },
@@ -196,7 +234,19 @@ test('provideShell composition: a real child that traps SIGTERM is force-killed 
   const { mount } = await provisionMount(t);
   const shell = makeShellLikeFormulaMaker(
     mount,
-    harden({ ...basePolicy, allowedCommands: ['node'], timeoutMs: 500 }),
+    harden({
+      ...basePolicy,
+      commands: harden([
+        {
+          program: 'node',
+          argumentVector: [
+            { kind: 'options', options: ['-e'] },
+            { kind: 'slot', name: 'code', type: 'string' },
+          ],
+        },
+      ]),
+      timeoutMs: 500,
+    }),
     { killGraceMs: 500 },
   );
   const start = Date.now();

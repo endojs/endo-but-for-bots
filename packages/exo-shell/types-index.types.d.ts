@@ -1,2 +1,10 @@
 export type * from './src/types.js';
-export { makeShell, ShellInterface } from './src/index.js';
+export {
+  makeShell,
+  ShellInterface,
+  ShellCommandGrammarShape,
+  normalizeShellCommandGrammar,
+  normalizeShellCommandGrammars,
+  matchShellCommand,
+  formatShellCommandUsage,
+} from './src/index.js';

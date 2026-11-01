@@ -7,7 +7,7 @@ import { shellDeclarations } from '../../generated/code-mode-globals/shell-decla
 
 /**
  * The Shell capability's generated TypeScript declaration.
- * A host decides the command allowlist and other policy when it constructs the
+ * A host decides the command grammars and other policy when it constructs the
  * capability; this descriptor only describes the granted capability.
  */
 export { shellDeclarations };
@@ -26,7 +26,7 @@ export const makeShellGlobal = ({ name, petName = name }) =>
     name,
     petName,
     description:
-      'Daemon-backed Shell capability with an allowlisted argv-only command surface.',
+      'Daemon-backed Shell capability with a command-grammar-bounded argv-only command surface.',
     declaration: shellDeclarations.shell,
   });
 harden(makeShellGlobal);

@@ -18,15 +18,17 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended';
 import { makeGitTool } from './json-tools/git.js';
 import { makeGitMountTools } from './json-tools/git-mount.js';
 import { makeGitRemoteTool } from './json-tools/git-remote.js';
+import { makeHttpTool } from './json-tools/http.js';
 import { makeShellTool } from './json-tools/shell.js';
 import { makeMountFsTools } from './json-tools/fs.js';
+import { concatDistinctTools } from './catalog.js';
 
 /**
  * Capability-based provisioning for one agent workspace: the thin adapter that
  * turns a set of already-granted daemon capabilities into the flat agent-tool
  * catalog a harness advertises to a model, replacing the path-root provisioning
  * sketch (`endo grant fae fs /home/user/project`, a git subprocess rooted at a
- * host path) with composition over the trio's capabilities.
+ * host path) with composition over the granted capabilities.
  *
  * The composition realizes the two rules of daemon-agent-tools § Granting and
  * Provisioning:
@@ -34,9 +36,10 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * - **Conditional composition.** A tool group is present in the catalog only
  *   when the caller holds the backing capability; an ungranted group is
  *   *absent*, not present-but-failing. This maps one grant to one group:
- *   `filesystem` → the mount file tools, `git` → the versioning tools (the
- *   JSON-safe git slice plus agent-facing `status` defaults), `remote` →
- *   the push tier, `shell` → the command tools.
+ *   `filesystem` supplies the mount file tools; `git` supplies the versioning
+ *   tools (the JSON-safe git slice plus agent-facing `status` defaults);
+ *   `remote` supplies the push tier; `shell` supplies the command tools; and
+ *   `http` supplies the confined outbound HTTP tools.
  * - **Formula-owned identity rides the granted `Git`.** Commit attribution is
  *   captured at `provideGit` / `provideGitClone` construction time and is
  *   guest-immutable (daemon-agent-tools § Commit-identity boundary). This
@@ -46,40 +49,11 @@ import { makeMountFsTools } from './json-tools/fs.js';
  *   argument crosses this seam.
  *
  * The catalog is a flat array with unique tool names, so a harness may index it
- * by name without ambiguity.
+ * by name without ambiguity. Names that collide across capability makers are
+ * qualified at this composition boundary: `inspectGitRemote`, `inspectShell`,
+ * `fetchGitRemote`, and `fetchHttp`. The individual makers keep their
+ * established names, while a combined workspace catalog remains unambiguous.
  */
-
-/**
- * Concatenate tool-group record arrays into one catalog, failing closed if two
- * groups would emit the same tool name. A catalog with two identically-named
- * tools is ambiguous the moment a harness dispatches by name, so the collision
- * is an error at composition time rather than a silent shadow. (Known overlap:
- * both `makeShellTool` and `makeGitRemoteTool` emit a bounds-legibility
- * `inspect`; grant at most one of `shell` / `remote` to a single catalog until
- * that tool-layer naming is reconciled.)
- *
- * @param {{ group: string, records: ToolRecord[] }[]} groups
- * @returns {ToolRecord[]}
- */
-const concatDistinctTools = groups => {
-  /** @type {ToolRecord[]} */
-  const catalog = [];
-  /** @type {Map<string, string>} */
-  const sourceByName = new Map();
-  for (const { group, records } of groups) {
-    for (const record of records) {
-      const priorGroup = sourceByName.get(record.name);
-      if (priorGroup !== undefined) {
-        throw new Error(
-          `agent-tool catalog name collision: "${record.name}" is emitted by both the "${priorGroup}" and "${group}" tool groups; grant only one to a single catalog, or disambiguate the tool names before composing`,
-        );
-      }
-      sourceByName.set(record.name, group);
-      catalog.push(record);
-    }
-  }
-  return harden(catalog);
-};
 
 /**
  * Compose the agent-tool catalog from a set of already-held capabilities.
@@ -96,11 +70,20 @@ export const makeWorkspaceTools = ({
   git,
   remote,
   shell,
+  http,
   readOnly = false,
   maxChars,
   shellOptions,
 } = {}) => {
-  /** @type {{ group: string, records: ToolRecord[] }[]} */
+  // `readOnly` describes a workspace whose exposed authority is limited to
+  // reads. A Shell grant can execute commands with its own authority, so the
+  // two cannot describe the same workspace safely.
+  if (readOnly && shell !== undefined) {
+    throw TypeError(
+      'makeWorkspaceTools: readOnly cannot be combined with a shell grant',
+    );
+  }
+  /** @type {{ group: string, records: ToolRecord[], names?: Map<string, string> }[]} */
   const groups = [];
   if (filesystem !== undefined) {
     groups.push({
@@ -116,12 +99,27 @@ export const makeWorkspaceTools = ({
     groups.push({ group: 'gitMount', records: makeGitMountTools(git) });
   }
   if (remote !== undefined) {
-    groups.push({ group: 'gitRemote', records: makeGitRemoteTool(remote) });
+    groups.push({
+      group: 'gitRemote',
+      records: makeGitRemoteTool(remote),
+      names: new Map([
+        ['inspect', 'inspectGitRemote'],
+        ['fetch', 'fetchGitRemote'],
+      ]),
+    });
   }
   if (shell !== undefined) {
     groups.push({
       group: 'shell',
       records: makeShellTool(shell, shellOptions),
+      names: new Map([['inspect', 'inspectShell']]),
+    });
+  }
+  if (http !== undefined) {
+    groups.push({
+      group: 'http',
+      records: makeHttpTool(http),
+      names: new Map([['fetch', 'fetchHttp']]),
     });
   }
   return concatDistinctTools(groups);
@@ -144,6 +142,7 @@ export const provisionWorkspaceTools = async ({
   git,
   remote,
   shell,
+  http,
   filesystem,
   readOnly = false,
   maxChars,
@@ -160,6 +159,7 @@ export const provisionWorkspaceTools = async ({
     git,
     remote,
     shell,
+    http,
     readOnly,
     maxChars,
     shellOptions,

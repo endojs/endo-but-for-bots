@@ -458,7 +458,7 @@ test('Shell and HTTP declarations include named arguments and result shapes', t 
   const http = declarationText(httpDeclarations.http);
   t.true(
     shell.includes(
-      'exec: (command: string, args: readonly string[], options?:',
+      'exec: (command: string, argumentVector: readonly string[], options?:',
     ),
   );
   t.true(shell.includes('}) => Promise<ShellResult>'));

@@ -16,6 +16,7 @@ import { setTimeout } from 'node:timers';
 import { assembleSliceArgv, makeBwrapDriver } from '../src/drivers/bwrap.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
+import { SHARED_UID_LIMITS } from './fixtures/shared-uid-limits.js';
 
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
@@ -248,10 +249,56 @@ const drainReader = async reader => {
 };
 
 /**
+ * Describe the host processes still in a process group, so a cleanup
+ * failure shows what survived and in which state (`Z` zombie, `D`
+ * uninterruptible, ...).
+ *
+ * @param {number} pgid
+ * @returns {string}
+ */
+const describeProcessGroup = pgid => {
+  /** @type {string[]} */
+  const members = [];
+  let entries;
+  try {
+    entries = nodeFs.readdirSync('/proc');
+  } catch {
+    return 'members unknown';
+  }
+  for (const entry of entries) {
+    if (/^\d+$/.test(entry)) {
+      try {
+        const stat = nodeFs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+        // Fields after the parenthesized comm: state ppid pgrp ...
+        const close = stat.lastIndexOf(')');
+        const comm = stat.slice(stat.indexOf('(') + 1, close);
+        const [state, ppid, pgrp] = stat.slice(close + 2).split(' ');
+        if (Number(pgrp) === pgid) {
+          members.push(`${entry}(${comm}) state=${state} ppid=${ppid}`);
+        }
+      } catch {
+        // The process exited while we looked.
+      }
+    }
+  }
+  return members.length ? members.join(', ') : 'no members found';
+};
+
+/**
+ * Wait for a driver-owned host process group to disappear.
+ *
+ * Node reports the bwrap leader's exit before the kernel has finished
+ * with the rest of the group: bwrap's pid-namespace init stays in the
+ * group until the kernel has killed every process in the namespace and
+ * torn down its mount namespace, and then it lingers as a zombie until
+ * the host reaper collects it.  When the podman suite runs alongside,
+ * that teardown can take several seconds on a CI runner, so the bound
+ * is generous.  A process that escaped containment survives any bound.
+ *
  * @param {number} pid
  * @param {number} [timeoutMs]
  */
-const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
+const waitForProcessGroupGone = async (pid, timeoutMs = 10_000) => {
   await null;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -263,7 +310,9 @@ const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
     // eslint-disable-next-line no-await-in-loop
     await new Promise(resolve => setTimeout(resolve, 25));
   }
-  throw new Error(`process group ${pid} survived bounded cleanup`);
+  throw new Error(
+    `process group ${pid} survived bounded cleanup (${timeoutMs}ms): ${describeProcessGroup(pid)}`,
+  );
 };
 
 test.serial('bwrap probe reports available with a version', async t => {
@@ -431,6 +480,7 @@ test.serial('host-bind slice spawns /bin/echo hello', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'none',
     }),
   );
@@ -481,6 +531,7 @@ test.serial('read-only mount rejects writes from inside the slice', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       mounts: [{ cap: roMountCap, innerPath: '/ro', mode: 'ro' }],
       network: 'none',
     }),
@@ -540,6 +591,7 @@ test.serial('network: none blocks loopback reach', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'none',
     }),
   );
@@ -617,6 +669,7 @@ test.serial(
     const handle = await E(factory).make(
       harden({
         rootfs: { kind: 'host-bind' },
+        limits: SHARED_UID_LIMITS,
         network: 'private',
       }),
     );
@@ -650,6 +703,7 @@ test.serial(
     const handle = await E(factory).make(
       harden({
         rootfs: { kind: 'host-bind' },
+        limits: SHARED_UID_LIMITS,
         network: 'host-net',
       }),
     );
@@ -711,6 +765,7 @@ test.serial('host-loopback profile is accepted', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'host-loopback',
     }),
   );
@@ -751,6 +806,7 @@ test.serial('host-lan profile is accepted', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'host-lan',
     }),
   );
@@ -789,6 +845,7 @@ test.serial(
     const handle = await E(factory).make(
       harden({
         rootfs: { kind: 'host-bind' },
+        limits: SHARED_UID_LIMITS,
         network: 'none',
       }),
     );
@@ -863,18 +920,25 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // /bin/sh's `ulimit -u` reports RLIMIT_NPROC, the same value
-  // prlimit set.  We assert the cap is in effect rather than
-  // running an actual fork bomb (which would also stress the host
-  // the test process is running on).
-  const result = await runInSlice(t, handle, ['/bin/sh', '-c', 'ulimit -u']);
+  // /proc/self/limits reports RLIMIT_NPROC as "Max processes", the
+  // same value prlimit set.  We assert the cap is in effect rather
+  // than running an actual fork bomb (which would also stress the
+  // host the test process is running on).  We read /proc rather than
+  // `ulimit -u` because /bin/sh is dash on Debian and Ubuntu, and
+  // dash spells that flag `-p`.
+  const result = await runInSlice(t, handle, [
+    '/bin/sh',
+    '-c',
+    'cat /proc/self/limits',
+  ]);
   if (result === null) return;
   t.is(
     result.exit.code,
     0,
-    `ulimit -u exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
+    `cat /proc/self/limits exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
   );
-  const reported = Number(result.stdout.trim());
+  const nprocLine = result.stdout.match(/^Max processes\s+(\S+)/m);
+  const reported = Number(nprocLine?.[1]);
   t.is(
     reported,
     cap,
@@ -896,6 +960,7 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
   const handle = await E(factory).make(
     harden({
       rootfs: { kind: 'host-bind' },
+      limits: SHARED_UID_LIMITS,
       network: 'none',
     }),
   );
@@ -915,7 +980,7 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
 });
 
 test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
-  t.timeout(10_000);
+  t.timeout(20_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) return;
   const driver = makeBwrapDriver({ env: {} });
@@ -930,7 +995,11 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
   });
 
   const spawnFirst = await E(factory).make(
-    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    harden({
+      rootfs: { kind: 'host-bind' },
+      network: 'none',
+      limits: SHARED_UID_LIMITS,
+    }),
   );
   const spawned = E(spawnFirst).spawn(
     harden(['/bin/sleep', '300']),
@@ -959,7 +1028,11 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
   await E(spawnFirst).dispose();
 
   const disposeFirst = await E(factory).make(
-    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    harden({
+      rootfs: { kind: 'host-bind' },
+      network: 'none',
+      limits: SHARED_UID_LIMITS,
+    }),
   );
   await E(disposeFirst).dispose();
   await t.throwsAsync(() => E(disposeFirst).spawn(harden(['/bin/true'])), {
@@ -978,7 +1051,11 @@ test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
     scratchProvider: powers,
   });
   const handle = await E(factory).make(
-    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    harden({
+      rootfs: { kind: 'host-bind' },
+      network: 'none',
+      limits: SHARED_UID_LIMITS,
+    }),
   );
   t.teardown(async () => {
     await E(handle).dispose();
@@ -1006,7 +1083,7 @@ test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
 test.serial(
   'bwrap output cap kills a soft-refusing group with a pipe-holding descendant',
   async t => {
-    t.timeout(10_000);
+    t.timeout(20_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
     const driver = makeBwrapDriver({ env: {} });
@@ -1016,7 +1093,11 @@ test.serial(
       scratchProvider: powers,
     });
     const handle = await E(factory).make(
-      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+      harden({
+        rootfs: { kind: 'host-bind' },
+        network: 'none',
+        limits: SHARED_UID_LIMITS,
+      }),
     );
     t.teardown(async () => {
       await E(handle).dispose();
@@ -1044,7 +1125,7 @@ test.serial(
 test.serial(
   'bwrap timeout and repeated cancellation reap process groups',
   async t => {
-    t.timeout(15_000);
+    t.timeout(30_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
     const driver = makeBwrapDriver({ env: {} });
@@ -1054,7 +1135,11 @@ test.serial(
       scratchProvider: powers,
     });
     const handle = await E(factory).make(
-      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+      harden({
+        rootfs: { kind: 'host-bind' },
+        network: 'none',
+        limits: SHARED_UID_LIMITS,
+      }),
     );
     t.teardown(async () => {
       await E(handle).dispose();
@@ -1095,7 +1180,7 @@ test.serial(
 );
 
 test.serial('bwrap parent death leaves no owned process group', async t => {
-  t.timeout(10_000);
+  t.timeout(20_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) return;
   const scratch = nodeFs.mkdtempSync(
@@ -1139,9 +1224,12 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
       );
     });
   });
+  t.true(Number.isSafeInteger(pid), `owner reported pid ${pid}`);
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
-  await waitForProcessGroupGone(/** @type {number} */ (pid));
+  await t.notThrowsAsync(() =>
+    waitForProcessGroupGone(/** @type {number} */ (pid)),
+  );
 });
 
 // --- PATH synthesis tests --------------------------------------------------
