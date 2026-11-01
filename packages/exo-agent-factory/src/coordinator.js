@@ -11,6 +11,7 @@ import { Fail, q, makeError } from '@endo/errors';
 import {
   AgentLifecycleInterface,
   BoundChildAgentFactoryInterface,
+  ChildAgentCoordinatorInterface,
   ChildAgentFactoryInterface,
 } from './interfaces.js';
 import {
@@ -91,6 +92,7 @@ const childName = (
   /** @type {string} */ piece,
 ) => `c${operationKey}.${piece}`;
 const childPattern = new RegExp(String.raw`^c(\d+)\.(\d+)\.`);
+const operationKeyPattern = /^(\d+)\.(\d+)$/;
 
 /**
  * Create, or revive, the factory coordinator over its private host.
@@ -302,6 +304,39 @@ export const prepareChildAgentCoordinator = async ({
     }
     return lifecycle;
   };
+
+  /**
+   * A lifecycle for an operation key that names no retained operation: the
+   * child was removed, possibly by a revocation, before this incarnation
+   * began. It reports inactive once and then ends, as a removed child's
+   * lifecycle does, so a runner revived from a stale formula never opens
+   * its follower.
+   *
+   * @param {string} key
+   */
+  const inertLifecycleFor = key =>
+    makeExo(`AgentLifecycle ${key}`, AgentLifecycleInterface, {
+      isActive() {
+        return false;
+      },
+      followActive() {
+        let reported = false;
+        return makeExo(
+          'ActiveIterator',
+          M.interface('ActiveIterator', {
+            next: M.callWhen().returns(M.record()),
+          }),
+          {
+            async next() {
+              await null;
+              if (reported) return harden({ done: true, value: undefined });
+              reported = true;
+              return harden({ done: false, value: false });
+            },
+          },
+        );
+      },
+    });
 
   // ------------------------------------------------------------------
   // Creation: one precheck-and-proof step per phase
@@ -1069,24 +1104,68 @@ export const prepareChildAgentCoordinator = async ({
     },
   });
 
+  const coordinatorFacet = makeExo(
+    'ChildAgentCoordinator',
+    ChildAgentCoordinatorInterface,
+    {
+      /**
+       * Re-derive the facet of a namespace this coordinator issued. A
+       * revoked namespace keeps its registry entry and journal, so its id is
+       * never reissued and its facet rejects every call in every
+       * incarnation. An id no journal introduces names nothing a formula
+       * could hold, so it fails closed rather than designating a namespace
+       * allocated later.
+       *
+       * @param {number} namespaceId
+       */
+      boundFacet(namespaceId) {
+        (namespaces.has(namespaceId) && namespaceId !== ROOT) ||
+          Fail`No bound namespace ${q(namespaceId)}`;
+        return boundFacetFor(namespaceId);
+      },
+      /**
+       * Re-derive a child's lifecycle. A key for a retained operation yields
+       * this incarnation's facet, which observes removal and revocation. A
+       * key the journal has passed but no longer retains yields an inert
+       * facet that is never active. A malformed key, or one the journal has
+       * not reached, fails closed: it cannot name a facet the coordinator
+       * issued, and answering it would bind a later child's lifecycle.
+       *
+       * @param {string} operationKey
+       */
+      lifecycleFor(operationKey) {
+        const operation = operations.get(operationKey);
+        if (operation) return lifecycleFor(operation);
+        const match =
+          operationKeyPattern.exec(operationKey) ||
+          Fail`Malformed operation key ${q(operationKey)}`;
+        const namespace = namespaces.get(Number(match[1]));
+        (namespace && Number(match[2]) < namespace.nextSequence) ||
+          Fail`No operation ${q(operationKey)} has been journaled`;
+        return inertLifecycleFor(operationKey);
+      },
+    },
+  );
+
   return harden({
     rootFacet,
+    /**
+     * The target of durable facet formulas. It belongs in the factory's
+     * private directory and never crosses to a holder or a child.
+     */
+    coordinatorFacet,
     /**
      * Operations reconciliation left reserved because a derived name held the
      * wrong formula type. Reported, never repaired automatically.
      */
     faults: () => harden(Object.fromEntries(faults)),
     /**
-     * Re-issue the facet for an existing namespace. Facets are in-memory exos
-     * in this slice; a deployment re-derives them from durable formulas.
+     * Re-issue the facet for an existing namespace, as a durable facet
+     * formula does through `coordinatorFacet`.
      *
      * @param {number} namespaceId
      */
-    boundFacet: namespaceId => {
-      (namespaces.has(namespaceId) && namespaceId !== ROOT) ||
-        Fail`No bound namespace ${q(namespaceId)}`;
-      return boundFacetFor(namespaceId);
-    },
+    boundFacet: namespaceId => coordinatorFacet.boundFacet(namespaceId),
   });
 };
 harden(prepareChildAgentCoordinator);

@@ -833,3 +833,118 @@ test('endowment names may be __proto__ and constructor', async t => {
     'constructor',
   ]);
 });
+
+test('the coordinator facet re-derives the facets it issued', async t => {
+  const { daemon, coordinator, bound, calls } = await setup();
+  const derived = await E(bound).attenuate('sub', {});
+  await E(bound).create('helper');
+  const { coordinatorFacet } = coordinator;
+  t.is(await E(coordinatorFacet).boundFacet(1), bound);
+  t.is(await E(coordinatorFacet).boundFacet(2), derived);
+  const [{ operationId }] = await E(bound).list();
+  const lifecycle = await E(coordinatorFacet).lifecycleFor(operationId);
+  t.is(lifecycle, calls[0].lifecycle);
+  t.is(
+    await E(daemon.host).lookup(`c${operationId}.driver`, LIFECYCLE_NAME),
+    lifecycle,
+  );
+});
+
+test('a revoked derived facet re-derived after restart rejects every call', async t => {
+  const daemon = makeFakeDaemon();
+  const first = await boot(daemon);
+  const { maker } = daemon.makeMaker();
+  const bound = await E(first.rootFacet).bind(maker);
+  await E(bound).attenuate('sub', {});
+  await E(bound).attenuate('kept', {});
+  await E(bound).revokeDerived('sub');
+  daemon.forgetIncarnations();
+  const second = await boot(daemon);
+  const revoked = await E(second.coordinatorFacet).boundFacet(2);
+  const calls = [
+    () => E(revoked).create('helper'),
+    () => E(revoked).lookup('helper'),
+    () => E(revoked).list(),
+    () => E(revoked).remove('helper'),
+    () => E(revoked).attenuate('deeper', {}),
+    () => E(revoked).listDerived(),
+    () => E(revoked).revokeDerived('deeper'),
+  ];
+  for (const call of calls) {
+    await t.throwsAsync(call, { message: /revoked/ });
+  }
+  t.is(daemon.running().length, 0, 'no rejected call reached the maker');
+  // The id is never reissued, so a later namespace cannot take it over.
+  await E(E(second.boundFacet(1)).attenuate('sub', {})).create('helper');
+  await t.throwsAsync(E(revoked).list(), { message: /revoked/ });
+  const kept = await E(second.coordinatorFacet).boundFacet(3);
+  t.deepEqual(await E(kept).list(), []);
+});
+
+test('a lifecycle re-derived after restart observes removal', async t => {
+  const daemon = makeFakeDaemon();
+  const first = await boot(daemon);
+  const { maker } = daemon.makeMaker();
+  const bound = await E(first.rootFacet).bind(maker);
+  await E(bound).create('helper');
+  const [{ operationId }] = await E(bound).list();
+  daemon.forgetIncarnations();
+  const second = await boot(daemon);
+  const lifecycle = await E(second.coordinatorFacet).lifecycleFor(operationId);
+  t.true(await E(lifecycle).isActive());
+  const follower = await E(lifecycle).followActive();
+  t.deepEqual(await E(follower).next(), { done: false, value: true });
+  const next = E(follower).next();
+  await E(second.boundFacet(1)).remove('helper');
+  t.deepEqual(await next, { done: false, value: false });
+  t.deepEqual(await E(follower).next(), { done: true, value: undefined });
+});
+
+test('a lifecycle for a removed or revoked child is inert after restart', async t => {
+  const daemon = makeFakeDaemon();
+  const first = await boot(daemon);
+  const { maker } = daemon.makeMaker();
+  const bound = await E(first.rootFacet).bind(maker);
+  const derived = await E(bound).attenuate('sub', {});
+  await E(bound).create('gone');
+  await E(derived).create('swept');
+  const [{ operationId: gone }] = await E(bound).list();
+  const [{ operationId: swept }] = await E(derived).list();
+  await E(bound).remove('gone');
+  await E(bound).revokeDerived('sub');
+  daemon.forgetIncarnations();
+  const second = await boot(daemon);
+  t.is(daemon.running().length, 0);
+  for (const key of [gone, swept]) {
+    const lifecycle = await E(second.coordinatorFacet).lifecycleFor(key);
+    t.false(await E(lifecycle).isActive());
+    const follower = await E(lifecycle).followActive();
+    t.deepEqual(await E(follower).next(), { done: false, value: false });
+    t.deepEqual(await E(follower).next(), { done: true, value: undefined });
+  }
+  // A replacement under the old name gets a fresh key, never the old one.
+  await E(second.boundFacet(1)).create('gone');
+  const [{ operationId: fresh }] = await E(second.boundFacet(1)).list();
+  t.not(fresh, gone);
+  const stale = await E(second.coordinatorFacet).lifecycleFor(gone);
+  t.false(await E(stale).isActive());
+});
+
+test('the coordinator facet refuses ids it never issued', async t => {
+  const { coordinator, bound } = await setup();
+  const { coordinatorFacet } = coordinator;
+  t.throws(() => coordinatorFacet.boundFacet(0), { message: /No bound/ });
+  t.throws(() => coordinatorFacet.boundFacet(9), { message: /No bound/ });
+  t.throws(() => coordinatorFacet.lifecycleFor('helper'), {
+    message: /Malformed/,
+  });
+  t.throws(() => coordinatorFacet.lifecycleFor('9.0'), {
+    message: /journaled/,
+  });
+  // The journal has not reached this sequence, so a later child would take it.
+  t.throws(() => coordinatorFacet.lifecycleFor('1.5'), {
+    message: /journaled/,
+  });
+  const { operationId } = (await E(bound).create('helper')).summary;
+  t.true(await E(coordinatorFacet.lifecycleFor(operationId)).isActive());
+});

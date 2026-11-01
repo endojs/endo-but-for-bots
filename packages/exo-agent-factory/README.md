@@ -14,8 +14,8 @@ maker, a credential, the root host, or the coordinator's private directory.
 ## Surface
 
 - `prepareChildAgentCoordinator({ host, rootPolicy })` revives (or creates)
-  the coordinator over its private host and returns `{ rootFacet, faults,
-  boundFacet }`.
+  the coordinator over its private host and returns
+  `{ rootFacet, coordinatorFacet, faults, boundFacet }`.
   It replays every namespace's journal and reconciles each nonterminal record
   before returning, so no facet call observes a half-made child.
 - The root facet (`ChildAgentFactory`) offers `bind(maker, policy?)`,
@@ -32,6 +32,15 @@ maker, a credential, the root host, or the coordinator's private directory.
   A revived coordinator rebinds that name to its own facet before it starts
   any runner, so a revived runner observes removal and revocation made after
   the restart.
+- The `ChildAgentCoordinator` facet (`coordinatorFacet`) is the target of
+  durable facet formulas and belongs only in the factory's private directory.
+  `boundFacet(namespaceId)` re-derives a namespace's facet from the live
+  incarnation; a revoked namespace's id is never reissued, so its facet
+  rejects every call after any number of restarts.
+  `lifecycleFor(operationId)` re-derives a child's lifecycle; a key the
+  journal has passed but no longer retains (a removed or revoked child)
+  yields a lifecycle that is never active.
+  Either method fails closed on an id the coordinator never issued.
 
 The entry point also exports the pieces a deployment or an adapter needs to
 check its own values against the same rules:
