@@ -28,8 +28,8 @@ built-ins/Proxy/has/return-true-target-prop-exists.js sloppy pass
 built-ins/Proxy/has/return-true-target-prop-exists.js strict pass
 built-ins/Proxy/has/return-true-without-same-target-prop.js sloppy pass
 built-ins/Proxy/has/return-true-without-same-target-prop.js strict pass
-built-ins/Proxy/has/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected true but got false"
-built-ins/Proxy/has/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected true but got false"
+built-ins/Proxy/has/trap-is-missing-target-is-proxy.js sloppy pass
+built-ins/Proxy/has/trap-is-missing-target-is-proxy.js strict pass
 built-ins/Proxy/has/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
 built-ins/Proxy/has/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
 built-ins/Proxy/has/trap-is-not-callable-using-with.js sloppy pass
