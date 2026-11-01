@@ -311,7 +311,8 @@ fn check_regexp_charges(source: &str, charges: &[(&str, &str)], pins: &[&str]) {
 }
 
 const MATCHER_CHARGES: &[(&str, &str)] = &[
-    ("save_captures", "STATE_CHARGE"),
+    ("admits", "STATE_CHARGE"),
+    ("admits", "OFFSET_CHARGE"),
     ("match_regexp_budgeted", "ASSERTION_CHARGE"),
     ("match_regexp_budgeted", "QUANTIFIER_CHARGE"),
 ];
