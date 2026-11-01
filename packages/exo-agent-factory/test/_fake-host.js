@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { Far } from '@endo/far';
 import { passStyleOf } from '@endo/pass-style';
 import { Fail, q } from '@endo/errors';
@@ -292,27 +293,16 @@ export const makeFakeDaemon = () => {
         },
         async followMessages() {
           alive();
-          let index = 0;
-          return makeExo(
-            'Fake message reader',
-            M.interface(
-              'FakeMessageReader',
-              {},
-              {
-                defaultGuards: 'passable',
-              },
-            ),
-            {
-              async next() {
+          // The daemon's guest facet returns an exo-stream reader.
+          return readerFromIterator(
+            (async function* follow() {
+              await null;
+              for (const value of messages) {
                 alive();
-                if (index >= messages.length) {
-                  return harden({ done: true, value: undefined });
-                }
-                const value = messages[index];
-                index += 1;
-                return harden({ done: false, value });
-              },
-            },
+                yield value;
+              }
+              alive();
+            })(),
           );
         },
         /**

@@ -4,6 +4,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/eventual-send';
+import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import {
@@ -77,8 +78,10 @@ test('inference adapter derives the child projection for every turn and hides cr
     }),
   );
   t.deepEqual(descriptor, { specifier: 'file:///driver.js' });
-  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference']);
+  t.deepEqual([...stored.keys()].sort(), ['agent', 'inference-source']);
+  t.is(stored.get('inference-source'), maker);
   t.false([...stored.values()].includes(credentialSource));
+  const inference = E(maker).childInference(agent);
 
   const request = harden({
     prompt: 'hello',
@@ -89,8 +92,8 @@ test('inference adapter derives the child projection for every turn and hides cr
     }),
     cancelled: neverCancelled,
   });
-  await E(stored.get('inference')).infer(request);
-  await E(stored.get('inference')).infer(request);
+  await E(inference).infer(request);
+  await E(inference).infer(request);
   t.is(acquisitions, 2);
   t.deepEqual(releases, [1, 2]);
   t.deepEqual(
@@ -99,6 +102,45 @@ test('inference adapter derives the child projection for every turn and hides cr
   );
   t.deepEqual(requests[0].guest.toolNames, ['tool-1']);
   t.deepEqual(requests[1].guest.toolNames, ['tool-2']);
+});
+
+test('inference adapter stores the child instructions and passes the environment', async t => {
+  const backend = makeExo('Backend', InferenceBackendInterface, {
+    describe: () => harden({ provider: 'test', kind: 'fake' }),
+    async infer() {
+      await null;
+      return harden({ type: 'ok', text: 'done' });
+    },
+  });
+  const stored = new Map();
+  const driverGuest = Far('DriverGuest', {
+    storeValue: (value, name) => stored.set(name, value),
+  });
+  const maker = makeInferenceAgentDriverMaker({
+    backend,
+    driverSpecifier: 'file:///driver.js',
+    makeGuestToolProjection: () => Fail`not called`,
+    environment: { MODEL: 'test-model' },
+  });
+  const agent = Far('Agent', {});
+  const descriptor = await E(maker).installDriver(
+    harden({
+      agent,
+      driverGuest,
+      lifecycle: Far('Lifecycle', {}),
+      instructions: 'Be brief.',
+    }),
+  );
+  t.deepEqual(descriptor, {
+    specifier: 'file:///driver.js',
+    env: { MODEL: 'test-model' },
+  });
+  t.deepEqual([...stored.keys()].sort(), [
+    'agent',
+    'inference-source',
+    'instructions',
+  ]);
+  t.is(stored.get('instructions'), 'Be brief.');
 });
 
 test('child spawner attaches explicit powers and recursively revokes descendants', async t => {
