@@ -48,8 +48,8 @@ const EXCLUDED_PACKAGES = new Set([
   // bus-manager-rust-xs.js supplies no `hostTools` power, so
   // manager.js/host.js reach refusing stand-ins instead of its import
   // and the package only needs eliding from the compartment graph.
-  // @endo/host-spawner stays on the graph: shell-engine.js imports its
-  // platform-neutral sandbox-spawner.js directly.
+  // (@endo/host-spawner is deliberately absent: shell-engine.js imports its
+  // platform-neutral sandbox-spawner.js directly.)
   '@endo/git',
   'ses',
   'ws',
