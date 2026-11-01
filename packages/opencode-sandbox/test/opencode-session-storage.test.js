@@ -183,7 +183,7 @@ for (const [name, mutate, message] of refused) {
     const f = await fixture(t);
     await f.populate();
     await t.throwsAsync(f.storage.remove(JSON.stringify(mutate(f.plan, f))), {
-      message,
+      message: new RegExp(message),
     });
     t.true(await f.exists(f.plan.workspaceDir));
     t.deepEqual(f.removedState, []);

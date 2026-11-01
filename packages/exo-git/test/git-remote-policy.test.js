@@ -259,7 +259,7 @@ test('defaultPullRef rejects invalid, wildcard, missing, and ambiguous selectors
             ...(fetchRefspecs === undefined ? {} : { fetchRefspecs }),
           },
         }),
-      { message },
+      { message: new RegExp(message) },
     );
   }
 });
