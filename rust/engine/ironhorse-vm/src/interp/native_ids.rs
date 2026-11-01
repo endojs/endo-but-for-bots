@@ -497,6 +497,12 @@ pub enum NativeMethod {
     TypedArraySort,
     /// `%TypedArray%.prototype.toLocaleString([locales[, options]])`.
     TypedArrayToLocaleString,
+    /// `%TypedArray%.prototype.toReversed()` / `toSorted(comparefn)` /
+    /// `with(index, value)`: the change-array-by-copy family, which always
+    /// allocate through `TypedArrayCreateSameType` (never species).
+    TypedArrayToReversed,
+    TypedArrayToSorted,
+    TypedArrayWith,
     /// Non-allocating shared TypedArray methods. Operation ids select
     /// `forEach`, `every`, `some`, `find`, `findIndex`, `includes`, `indexOf`,
     /// `lastIndexOf`, `reduce`, and `reduceRight`, in that order.

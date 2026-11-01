@@ -727,6 +727,9 @@ impl Interp {
             ("filter", 1, NativeMethod::TypedArrayFilter),
             ("sort", 1, NativeMethod::TypedArraySort),
             ("toLocaleString", 0, NativeMethod::TypedArrayToLocaleString),
+            ("toReversed", 0, NativeMethod::TypedArrayToReversed),
+            ("toSorted", 1, NativeMethod::TypedArrayToSorted),
+            ("with", 2, NativeMethod::TypedArrayWith),
         ] {
             let mf = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((typed_array_proto, name, mf));

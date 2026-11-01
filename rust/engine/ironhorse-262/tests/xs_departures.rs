@@ -724,13 +724,6 @@ const GAPS: &[Row] = &[
         why: "%StringIteratorPrototype% is its own object, tagged `String Iterator`, and %ArrayIteratorPrototype% is tagged `Array Iterator`; Ironhorse shares one untagged prototype",
     },
     Row {
-        program: "[typeof Uint8Array.prototype.toSorted, typeof Uint8Array.prototype.toReversed, typeof Uint8Array.prototype.with].join()",
-        ironhorse: "undefined,undefined,undefined",
-        xs: "function,function,function",
-        v8: "function,function,function",
-        why: "%TypedArray.prototype% lacks ES2023's toSorted, toReversed and with",
-    },
-    Row {
         program: "var r = Proxy.revocable(() => 1, {}); r.revoke(); try { new r.proxy(); 'constructed' } catch (e) { e.message }",
         ironhorse: "(proxy).construct: no handler",
         xs: "new: proxy is not a constructor",
