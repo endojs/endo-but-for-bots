@@ -7,6 +7,14 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
+/// `max_size` for [`fxArrayBuffer`] that makes a fixed-length buffer.
+///
+/// XS treats any non-negative `maxByteLength` as a resizable buffer, and
+/// typed arrays over a resizable buffer cannot be frozen or hardened (XS
+/// throws "extensible object"). Host functions that hand bytes to JS pass
+/// this so the result behaves like `new ArrayBuffer(length)`.
+pub const FIXED_LENGTH_ARRAY_BUFFER: i32 = -1;
+
 /// XS slot — opaque 4-pointer-wide value.
 /// Maps to `xsSlotRecord` / `xsSlot` in xs.h.
 #[repr(C)]

@@ -222,10 +222,42 @@ if (!globalThis.assert) {
 // all downstream harden calls will be shallow.
 if (!globalThis.harden) {
   const visited = new WeakSet();
+  // Brand check via the %TypedArray% toStringTag getter, as in SES's
+  // make-hardener.js (`ArrayBuffer.isView` would also match DataView).
+  const getTypedArrayTag = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(Uint8Array.prototype),
+    Symbol.toStringTag,
+  ).get;
+  const isTypedArray = (obj) => getTypedArrayTag.call(obj) !== undefined;
+  const isIntegerIndex = (key) =>
+    typeof key === 'string' && String(Math.trunc(+key)) === key;
+  // Typed array elements are permanently writable, so `Object.freeze`
+  // throws on any non-empty typed array. Like SES's `freezeTypedArray`,
+  // prevent extensions and make only the non-index properties readonly.
+  const freezeTypedArray = (array) => {
+    Object.preventExtensions(array);
+    for (const name of Reflect.ownKeys(array)) {
+      if (!isIntegerIndex(name)) {
+        const desc = Object.getOwnPropertyDescriptor(array, name);
+        Object.defineProperty(array, name, {
+          ...desc,
+          writable: false,
+          configurable: false,
+        });
+        if ('value' in desc) {
+          deepFreeze(desc.value);
+        }
+      }
+    }
+  };
   const deepFreeze = (obj) => {
     if (Object(obj) !== obj) return obj; // primitive
     if (visited.has(obj)) return obj;
     visited.add(obj);
+    if (isTypedArray(obj)) {
+      freezeTypedArray(obj);
+      return obj;
+    }
     Object.freeze(obj);
     const descs = Object.getOwnPropertyDescriptors(obj);
     for (const name of Reflect.ownKeys(descs)) {

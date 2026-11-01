@@ -38,6 +38,7 @@ use std::os::unix::io::FromRawFd;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Once;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // WorkerTransport trait
@@ -58,6 +59,16 @@ pub enum InitResult {
     Restore(Handle, Vec<u8>),
 }
 
+/// Outcome of [`WorkerTransport::recv_raw_envelope_timeout`].
+pub enum TimedRecv {
+    /// One raw envelope frame.
+    Envelope(Vec<u8>),
+    /// The timeout elapsed with no envelope.
+    TimedOut,
+    /// Clean EOF.
+    Closed,
+}
+
 pub trait WorkerTransport: Send {
     /// Perform the init handshake: consume a pre-seeded init
     /// envelope and return the init result (normal or restore).
@@ -72,6 +83,18 @@ pub trait WorkerTransport: Send {
     /// EOF).  Used by the reactive main loop to drain pending
     /// inbound envelopes between promise-job runs.
     fn try_recv_raw_envelope(&mut self) -> io::Result<Option<Vec<u8>>>;
+
+    /// Like `recv_raw_envelope`, but gives up after `timeout` so the
+    /// main loop can fire a guest timer that falls due while no envelope
+    /// arrives.  Transports without a timed wait block as
+    /// `recv_raw_envelope` does, so their guests' timers fire only when
+    /// the next envelope wakes the loop.
+    fn recv_raw_envelope_timeout(&mut self, _timeout: Duration) -> io::Result<TimedRecv> {
+        Ok(match self.recv_raw_envelope()? {
+            Some(data) => TimedRecv::Envelope(data),
+            None => TimedRecv::Closed,
+        })
+    }
 
     /// Write one raw CBOR byte-string frame.
     fn send_raw_frame(&mut self, data: &[u8]) -> io::Result<()>;
@@ -273,6 +296,14 @@ impl WorkerTransport for ChannelTransport {
             Err(std_mpsc::TryRecvError::Empty) => Ok(None),
             Err(std_mpsc::TryRecvError::Disconnected) => Ok(None),
         }
+    }
+
+    fn recv_raw_envelope_timeout(&mut self, timeout: Duration) -> io::Result<TimedRecv> {
+        Ok(match self.inbound.recv_timeout(timeout) {
+            Ok(bytes) => TimedRecv::Envelope(bytes),
+            Err(std_mpsc::RecvTimeoutError::Timeout) => TimedRecv::TimedOut,
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => TimedRecv::Closed,
+        })
     }
 
     fn send_raw_frame(&mut self, data: &[u8]) -> io::Result<()> {
@@ -857,7 +888,7 @@ pub unsafe extern "C" fn host_get_pending_envelope(the: *mut XsMachine) {
                 &mut (*the).scratch,
                 data.as_mut_ptr() as *mut std::ffi::c_void,
                 data.len() as i32,
-                data.len() as i32,
+                FIXED_LENGTH_ARRAY_BUFFER,
             );
             *(*the).frame.add(1) = (*the).scratch;
         }
@@ -883,7 +914,7 @@ pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
                     &mut (*the).scratch,
                     data.as_mut_ptr() as *mut std::ffi::c_void,
                     data.len() as i32,
-                    data.len() as i32,
+                    FIXED_LENGTH_ARRAY_BUFFER,
                 );
                 *(*the).frame.add(1) = (*the).scratch;
             }
@@ -901,13 +932,13 @@ pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
     guard_ffi(|| unsafe {
         let slot = (*the).frame.sub(1);
-        if let Some(buf) = read_typed_array_bytes(the, slot) {
-            use base64::Engine as _;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
-            let c_str = std::ffi::CString::new(encoded).unwrap_or_default();
-            fxString(the, &mut (*the).scratch, c_str.as_ptr());
-            *(*the).frame.add(1) = (*the).scratch;
-        }
+        // An empty view reads as `None`; it encodes to "", not `undefined`.
+        let buf = read_typed_array_bytes(the, slot).unwrap_or_default();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
+        let c_str = std::ffi::CString::new(encoded).unwrap_or_default();
+        fxString(the, &mut (*the).scratch, c_str.as_ptr());
+        *(*the).frame.add(1) = (*the).scratch;
     });
 }
 
@@ -920,17 +951,17 @@ pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
     guard_ffi(|| unsafe {
         let slot = (*the).frame.sub(1);
-        if let Some(buf) = read_typed_array_bytes(the, slot) {
-            match std::str::from_utf8(&buf) {
-                Ok(s) => {
-                    // The input is valid UTF-8.  XS expects CESU-8, so
-                    // re-encode supplementary characters as surrogate pairs.
-                    set_result_string(the, s);
-                }
-                Err(e) => {
-                    let msg = format!("Error: invalid UTF-8: {}", e);
-                    set_result_string(the, &msg);
-                }
+        // An empty view reads as `None`; it decodes to "", not `undefined`.
+        let buf = read_typed_array_bytes(the, slot).unwrap_or_default();
+        match std::str::from_utf8(&buf) {
+            Ok(s) => {
+                // The input is valid UTF-8.  XS expects CESU-8, so
+                // re-encode supplementary characters as surrogate pairs.
+                set_result_string(the, s);
+            }
+            Err(e) => {
+                let msg = format!("Error: invalid UTF-8: {}", e);
+                set_result_string(the, &msg);
             }
         }
     });
@@ -953,7 +984,7 @@ pub unsafe extern "C" fn host_encode_utf8(the: *mut XsMachine) {
             &mut (*the).scratch,
             data.as_mut_ptr() as *mut std::ffi::c_void,
             len as i32,
-            len as i32,
+            FIXED_LENGTH_ARRAY_BUFFER,
         );
         *(*the).frame.add(1) = (*the).scratch;
     });
@@ -1555,5 +1586,48 @@ mod tests {
             !b_poisoned,
             "worker A's panic must not poison the sibling worker B"
         );
+    }
+
+    #[test]
+    fn channel_timed_recv_reports_envelope_timeout_and_close() {
+        let (in_tx, in_rx) = std_mpsc::channel();
+        let (out_tx, _out_rx) = std_mpsc::channel();
+        let mut t = ChannelTransport::new(in_rx, out_tx);
+
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_millis(1)).unwrap(),
+            TimedRecv::TimedOut
+        ));
+
+        in_tx.send(vec![1, 2, 3]).unwrap();
+        match t.recv_raw_envelope_timeout(Duration::from_secs(5)).unwrap() {
+            TimedRecv::Envelope(data) => assert_eq!(data, vec![1, 2, 3]),
+            _ => panic!("expected the queued envelope"),
+        }
+
+        drop(in_tx);
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_secs(5)).unwrap(),
+            TimedRecv::Closed
+        ));
+    }
+
+    #[test]
+    fn default_timed_recv_blocks_like_recv_raw_envelope() {
+        let env = Envelope {
+            handle: 5,
+            verb: "deliver".to_string(),
+            payload: vec![],
+            nonce: 0,
+        };
+        let mut t = make_test_pipe(&[env]);
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_millis(1)).unwrap(),
+            TimedRecv::Envelope(_)
+        ));
+        assert!(matches!(
+            t.recv_raw_envelope_timeout(Duration::from_millis(1)).unwrap(),
+            TimedRecv::Closed
+        ));
     }
 }

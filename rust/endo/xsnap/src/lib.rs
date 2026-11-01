@@ -1799,6 +1799,11 @@ pub fn run_xs_program(
     if !is_restore {
         match program {
             XsProgram::Bundle(src) => {
+                // The host's WHATWG URL, as archive machines get below.
+                // Without it the manager bundle falls back to its own
+                // `scheme://` polyfill, which rejects `magnet:` content
+                // locators.
+                machine.eval(URL_GLOBALS_JS);
                 // The bundle is an IIFE that:
                 // (a) defines all `const`s in a function scope, and
                 // (b) calls async `main()` with `.catch()` — no
@@ -1925,16 +1930,33 @@ pub fn run_xs_program(
                 break 'outer;
             }
 
-            // Block until the next envelope arrives.
-            let frame = worker_io::with_transport(|t| t.recv_raw_envelope());
+            // Block until the next envelope arrives, or until the guest's
+            // earliest `setTimeout` falls due.
+            let frame = match guest_timer_delay(&machine) {
+                Some(0) => Ok(worker_io::TimedRecv::TimedOut),
+                Some(ms) => worker_io::with_transport(|t| {
+                    t.recv_raw_envelope_timeout(std::time::Duration::from_millis(ms))
+                }),
+                None => worker_io::with_transport(|t| t.recv_raw_envelope()).map(|frame| {
+                    match frame {
+                        Some(data) => worker_io::TimedRecv::Envelope(data),
+                        None => worker_io::TimedRecv::Closed,
+                    }
+                }),
+            };
             match frame {
-                Ok(Some(data)) => {
+                Ok(worker_io::TimedRecv::Envelope(data)) => {
                     if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
                         eprintln!("{label}: suspended");
                         break;
                     }
                 }
-                Ok(None) => break,
+                Ok(worker_io::TimedRecv::TimedOut) => {
+                    // Queues the due callbacks as promise jobs, which the
+                    // metered pump below runs.
+                    machine.eval("__endoRunDueTimers()");
+                }
+                Ok(worker_io::TimedRecv::Closed) => break,
                 Err(e) => {
                     eprintln!("{label}: recv error: {e}");
                     break;
@@ -2156,6 +2178,19 @@ pub unsafe fn run_xs_worker() -> Result<(), XsnapError> {
         "endor[worker]",
         Some(Box::new(t)),
     )
+}
+
+/// Milliseconds until the guest's earliest `setTimeout` falls due, or
+/// `None` when it has no pending timer.  A guest opts in by defining
+/// `__endoTimerDelay` and `__endoRunDueTimers` (the XS manager's timer
+/// polyfill in `packages/daemon/src/bus-manager-rust-xs.js`); without
+/// them the main loop blocks on the next envelope as before.
+fn guest_timer_delay(machine: &Machine) -> Option<u64> {
+    match machine.eval("typeof __endoTimerDelay === 'function' ? __endoTimerDelay() : -1") {
+        Some(JsValue::Integer(ms)) if ms >= 0 => Some(ms as u64),
+        Some(JsValue::Number(ms)) if ms >= 0.0 => Some(ms.ceil() as u64),
+        _ => None,
+    }
 }
 
 /// Run the manager bundle inside the current thread over an

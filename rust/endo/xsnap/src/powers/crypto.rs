@@ -54,7 +54,7 @@ pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
             &mut (*the).scratch,
             hash.as_ptr() as *mut std::os::raw::c_void,
             len,
-            len,
+            FIXED_LENGTH_ARRAY_BUFFER,
         );
         *(*the).frame.add(1) = (*the).scratch;
     });

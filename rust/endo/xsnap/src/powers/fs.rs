@@ -92,7 +92,13 @@ unsafe fn set_result_array_buffer(the: *mut XsMachine, bytes: &[u8]) {
     } else {
         bytes.as_ptr() as *mut std::os::raw::c_void
     };
-    fxArrayBuffer(the, &mut (*the).scratch, data_ptr, len, len);
+    fxArrayBuffer(
+        the,
+        &mut (*the).scratch,
+        data_ptr,
+        len,
+        FIXED_LENGTH_ARRAY_BUFFER,
+    );
     *(*the).frame.add(1) = (*the).scratch;
 }
 
@@ -248,7 +254,7 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
                                 &mut (*the).scratch,
                                 buf.as_mut_ptr() as *mut _,
                                 n as i32,
-                                n as i32,
+                                FIXED_LENGTH_ARRAY_BUFFER,
                             );
                             *(*the).frame.add(1) = (*the).scratch;
                         }
