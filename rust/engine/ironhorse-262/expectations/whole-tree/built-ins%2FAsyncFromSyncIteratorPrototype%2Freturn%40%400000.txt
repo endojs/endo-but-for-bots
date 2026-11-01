@@ -1,21 +1,21 @@
 # engine=ironhorse features=default corpus=built-ins/AsyncFromSyncIteratorPrototype/return tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-done.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-done.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-value.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-value.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-unwrap-promise.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-unwrap-promise.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-done.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-done.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-value.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-value.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-unwrap-promise.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-unwrap-promise.js strict pass
 built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result.js sloppy pass
 built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result.js strict pass
-built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-get-return.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-get-return.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/return-null.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/return-null.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-get-return.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-get-return.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/return-null.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/return-null.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js strict pass
