@@ -11,6 +11,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import {
   AgentDriverMakerInterface,
@@ -318,42 +319,32 @@ test('a recovered coordinator rebinds the lifecycle before revocation', async t 
   t.false(await E(revived).isActive());
 });
 
-test('a maker responder over other powers is refused without a crash', async t => {
+test('a maker returning no driver specifier is refused', async t => {
   const daemon = makeFakeDaemon();
   const coordinator = await boot(daemon);
-  const { maker: honest } = daemon.makeMaker();
-  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
-    installDriver: (/** @type {any} */ context) =>
-      E(honest).installDriver({ ...context, driverGuest: context.agent }),
-  });
+  // The maker names a module and the coordinator formulates the runner over
+  // the driver guest, so a maker cannot choose the runner's powers. A maker
+  // still on the responder contract is refused and the child rolled back.
+  const maker = makeExo(
+    'AgentDriverMaker',
+    M.interface('AgentDriverMaker', {}, { defaultGuards: 'passable' }),
+    {
+      async installDriver() {
+        return harden({ responder: makeToken('NotACaplet') });
+      },
+    },
+  );
   const bound = await E(coordinator.rootFacet).bind(maker);
   await t.throwsAsync(E(bound).create('helper'), {
-    message: /not an unconfined caplet over its driver guest/,
+    message: /must return a driver specifier/,
   });
   t.deepEqual(await E(bound).list(), []);
   const leftovers = [...daemon.names.keys()].filter(name =>
     name.startsWith('c'),
   );
   t.deepEqual(leftovers, []);
-  const [rogue] = daemon.unconfined();
-  t.true(rogue.cancelled, 'the rogue responder was cancelled');
   t.is(daemon.running().length, 0);
   t.deepEqual(coordinator.faults(), {});
-});
-
-test('a maker returning a non-caplet responder is refused', async t => {
-  const daemon = makeFakeDaemon();
-  const coordinator = await boot(daemon);
-  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
-    async installDriver() {
-      return harden({ responder: makeToken('NotACaplet') });
-    },
-  });
-  const bound = await E(coordinator.rootFacet).bind(maker);
-  await t.throwsAsync(E(bound).create('helper'), {
-    message: /not an unconfined caplet/,
-  });
-  t.deepEqual(await E(bound).list(), []);
 });
 
 test('a failed rollback during recovery is not swallowed', async t => {
@@ -650,13 +641,7 @@ test('a stray name in the child directory fails closed', async t => {
 test('a responder formulated with other powers fails closed', async t => {
   const daemon = makeFakeDaemon();
   const coordinator = await boot(daemon);
-  const { maker: honest } = daemon.makeMaker();
-  // A defective maker that formulates the responder over the agent guest
-  // rather than the driver guest.
-  const maker = makeExo('AgentDriverMaker', AgentDriverMakerInterface, {
-    installDriver: (/** @type {any} */ context) =>
-      E(honest).installDriver({ ...context, driverGuest: context.agent }),
-  });
+  const { maker } = daemon.makeMaker();
   const bound = await E(coordinator.rootFacet).bind(maker);
   const probe = makeFakeDaemon();
   const probeBound = await E((await boot(probe)).rootFacet).bind(
@@ -666,10 +651,17 @@ test('a responder formulated with other powers fails closed', async t => {
   await E(probeBound).create('helper');
   // Crash at the first effect after the responder name write, so replay
   // must prove the bound responder.
-  const cut = probe.trace.indexOf('store c1.0.responder', start) - start + 2;
+  const cut =
+    probe.trace.indexOf('name responder c1.0.responder', start) - start + 2;
   daemon.crashAfter(cut);
   await t.throwsAsync(E(bound).create('helper'), { message: crashPattern });
   daemon.restart();
+  // The maker cannot choose the runner's powers, so only a coordinator
+  // defect could leave one formulated over the agent guest at this name.
+  await E(daemon.host).makeUnconfined('fake:driver', {
+    powersName: 'c1.0.guest',
+    resultName: 'c1.0.responder',
+  });
   const revived = await boot(daemon);
   t.regex(Object.values(revived.faults())[0], /other powers/);
   const [summary] = await E(revived.boundFacet(1)).list();
@@ -947,4 +939,17 @@ test('the coordinator facet refuses ids it never issued', async t => {
   });
   const { operationId } = (await E(bound).create('helper')).summary;
   t.true(await E(coordinatorFacet.lifecycleFor(operationId)).isActive());
+});
+
+test('the coordinator facet re-derives a lifecycle that observes removal', async t => {
+  const { coordinator, bound } = await setup();
+  const { summary } = await E(bound).create('helper');
+  const { coordinatorFacet } = coordinator;
+  const lifecycle = coordinatorFacet.lifecycleFor(summary.operationId);
+  t.true(await E(lifecycle).isActive());
+  await E(bound).remove('helper');
+  t.false(await E(lifecycle).isActive());
+  t.throws(() => coordinatorFacet.lifecycleFor('no-such-op'), {
+    message: /^Malformed/,
+  });
 });
