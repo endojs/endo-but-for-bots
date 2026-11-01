@@ -4953,6 +4953,10 @@ mod tests {
                 evaluate_positive(&Config::default(), &run, false),
                 Verdict::RunSkip("ironhorse-aborted-limit".into())
             );
+            assert!(matches!(
+                crate::test262::classify_run(run),
+                crate::test262::Class::Skipped(reason) if reason == "ironhorse-aborted-limit"
+            ));
         }
         // Any other RangeError where the oracle completed is a wrong answer.
         let run = synthetic_oracle_only(Halt::synthetic_throw("RangeError: invalid array length"));
