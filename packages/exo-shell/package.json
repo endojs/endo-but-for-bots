@@ -56,10 +56,10 @@
     "@endo/errors": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/harden": "workspace:^",
-    "@endo/host-spawner": "workspace:^",
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/host-spawner": "workspace:^",
     "@endo/init": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",

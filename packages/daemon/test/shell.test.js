@@ -384,7 +384,6 @@ test('sandbox engine: a cancellation while make() is pending disposes the late s
       assertActive: () => {},
     },
   });
-  // The hook exists before the slice is requested.
   t.is(cancelHooks.length, 1);
   while (makeCalls.length === 0) {
     // eslint-disable-next-line no-await-in-loop

@@ -41,10 +41,30 @@ export type ShellResult = {
 
 /**
  * The engine `makeShell` drives execution through: host or sandbox, chosen by
- * the caller.  `@endo/host-spawner` owns the seam's types, so the Shell and
- * both spawners share one declaration.
+ * the caller.  Declared structurally here so this published package does not
+ * depend on the private `@endo/host-spawner`, whose `Spawner` and
+ * `makeSandboxSpawner` results are assignable to these shapes.
  */
-export type { ProcessLike, Spawner, SpawnerOptions } from '@endo/host-spawner';
+export type SpawnerOptions = {
+  cwd?: string;
+  env?: Record<string, string>;
+  shell?: boolean;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+};
+
+export type ProcessLike = {
+  pid: number;
+  stdout?: AsyncIterable<Uint8Array> | null;
+  stderr?: AsyncIterable<Uint8Array> | null;
+  wait: () => Promise<{ code: number | null; signal: string | null }>;
+  kill: (signal?: string | number) => Promise<void>;
+};
+
+export type Spawner = (
+  argv: string[],
+  options?: SpawnerOptions,
+) => Promise<ProcessLike>;
 
 export type EndoShell = {
   inspect: () => Promise<ShellInspectResult>;

@@ -22,6 +22,9 @@ export type SpawnerOptions = {
   maxOutputBytes?: number;
 };
 
+/** @deprecated Renamed to {@link SpawnerOptions}. */
+export type SpawnerOpts = SpawnerOptions;
+
 export type ProcessLike = {
   pid: number;
   stdout?: AsyncIterable<Uint8Array> | null;
@@ -64,7 +67,6 @@ export type SandboxTerminationSignal =
   'SIGTERM' | 'SIGINT' | 'SIGHUP' | 'SIGQUIT' | 'SIGKILL';
 
 export type SandboxProcess = {
-  // The writer's return value is never read: the adapter only closes stdin.
   stdin(): ERef<PassableBytesWriter<any>>;
   stdout(): ERef<PassableBytesReader>;
   stderr(): ERef<PassableBytesReader>;

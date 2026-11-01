@@ -242,16 +242,9 @@ harden(killProcessGroup);
  *
  * Once the leader is reaped its pid is free, but the pgid is not: a pgid
  * whose group still has a member cannot be adopted by a new session or
- * group (`setsid` and `setpgid` both refuse it).  So the sweep proves the
- * group is still ours before signalling it:
- *
- *   1. a live process holding the pgid as its pid means the number was
- *      reallocated, so the group is not ours and nothing is signalled;
- *   2. a null-signal probe of the group must succeed, proving it still has
- *      a member, which in turn proves the pgid has not been reused; an
- *      `ESRCH` probe means the group is empty and there is nothing to do.
- *
- * Only then does SIGKILL go to the group.  The residual window is the
+ * group (`setsid` and `setpgid` both refuse it).  So the sweep signals the
+ * group only when no live process holds the pgid as its pid and a
+ * null-signal probe finds a member.  The residual window is the
  * microseconds between the probe and the signal, during which every
  * remaining member would have to die and a fresh process would have to
  * take the pid and call `setsid`.  `ESRCH` from the signal itself means the

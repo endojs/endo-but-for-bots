@@ -4,9 +4,7 @@
  * The sandbox engine for the {@link Spawner} seam: each spawn runs inside an
  * already-granted `@endo/sandbox` slice instead of on the host.  The slice's
  * `ProcessHandle` is adapted to {@link ProcessLike} so a caller (the
- * `@endo/exo-shell` Shell) drives either engine through one contract.  This
- * is the one implementation of that adapter; `@endo/sandbox/spawner.js`
- * re-exports it.
+ * `@endo/exo-shell` Shell) drives either engine through one contract.
  */
 
 import { Fail } from '@endo/errors';
@@ -17,7 +15,7 @@ import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
 /**
  * @import { ERef, FarRef } from '@endo/eventual-send'
- * @import { ProcessLike, SandboxSlice, SandboxTerminationSignal, Spawner } from './types.js'
+ * @import { ProcessLike, SandboxSlice, SandboxTerminationSignal, Spawner, SpawnerOptions } from './types.js'
  */
 
 const TERMINATION_SIGNALS = harden([
@@ -45,11 +43,9 @@ harden(DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT);
  * on a remote OS pid, so `pid` is always `0`.
  *
  * A per-spawn `timeoutMs` goes to the slice unchanged, so the slice bounds
- * the process tree even if the caller's own timer never fires.  A per-spawn
- * `maxOutputBytes` does not become a slice limit: like a host process, a
- * sandboxed one may write past the caller's cap, and the caller truncates
- * and drains.  The slice's construction-time `outputByteLimit` is the only
- * kernel-side byte bound.
+ * the process tree even if the caller's own timer never fires.  The slice's
+ * construction-time `outputByteLimit` is the only kernel-side byte bound
+ * (see {@link SpawnerOptions} for `maxOutputBytes`).
  *
  * The slice reports every terminal cancellation as a rejected `wait()`.  The
  * adapter translates exactly one of them, the kill its own caller requested:

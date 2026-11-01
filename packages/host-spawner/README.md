@@ -29,19 +29,11 @@ const spawn = makeHostSpawner({ searchPath: '/usr/bin:/bin', defaultEnv: {} });
 const child = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
 ```
 
-`makeSandboxSpawner(slice, { outputByteLimit })` is the other engine, and the
-one implementation of the slice adapter (`@endo/sandbox/spawner.js`
-re-exports it). It runs each spawn inside an `@endo/sandbox` slice (a
-`SandboxHandle`) and adapts the slice's process handle to `ProcessLike`. It
-refuses `shell: true`, closes stdin, and discloses no remote pid (`pid` is
-`0`). The caller's `timeoutMs` becomes the slice's kernel-side timeout;
-`maxOutputBytes` does not become a slice limit, so, as on the host, the caller
-truncates and drains. The construction-time `outputByteLimit` is the slice's
-runaway-output guard. A kill the caller requested settles `wait()` with
-`{ code: null, signal }` as a killed host process would, once the slice has
-reaped it; every other slice termination, and any containment failure,
-rejects `wait()` (and `kill()`) with the slice's own error. The daemon's Shell
-formula uses it for `engine: 'sandbox'`.
+`makeSandboxSpawner(slice, { outputByteLimit })`, imported from
+`@endo/host-spawner/src/sandbox-spawner.js` (its only entry point), is the
+other engine: it runs each spawn inside an `@endo/sandbox` slice and is the
+daemon Shell's adapter for `engine: 'sandbox'`. Its JSDoc documents how kills,
+timeouts, and containment failures settle `wait()`.
 
 ```js
 import { makeSandboxSpawner } from '@endo/host-spawner/src/sandbox-spawner.js';
