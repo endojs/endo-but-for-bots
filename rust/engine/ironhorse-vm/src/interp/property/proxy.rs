@@ -38,9 +38,18 @@ impl Interp {
         };
         // A proxy instance has no identity prototype of its own (null proto);
         // its `[[Get]]`/`[[GetPrototypeOf]]` come from the traps/target.
-        let inst = self
-            .slots
-            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        // ProxyCreate step 7 gives it `[[Call]]` when the target is callable,
+        // and revocation does not take it away, so `typeof` on a revoked
+        // function proxy stays "function". XS stamps `XS_CAN_CALL_FLAG` on the
+        // instance head here (`fx_Proxy`, `fx_Proxy_revocable`), copied from
+        // the target's, so a proxy over a revoked function proxy has it too;
+        // the flag is read only once the target is gone
+        // (`slot_typeof_is_function`).
+        let mut head = Slot::instance(crate::value::SlotIndex::NULL);
+        if self.slot_typeof_is_function(target_inst) {
+            head.flag |= crate::interp::XS_CAN_CALL_FLAG;
+        }
+        let inst = self.slots.alloc(head);
         self.proxies.insert(
             inst,
             ProxyData {
