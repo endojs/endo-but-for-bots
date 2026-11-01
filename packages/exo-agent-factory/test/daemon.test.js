@@ -500,15 +500,15 @@ test.serial(
     await E(host).storeValue(derived, 'sub-agents');
     const deeper = await E(derived).attenuate('deeper', { maxChildren: 1 });
     await E(host).storeValue(deeper, 'deeper-agents');
-    const { summary: a } = await E(derived).create('a');
+    const { summary: subChild } = await E(derived).create('a');
     await E(derived).create('b');
-    const { summary: c } = await E(deeper).create('c');
+    const { summary: deeperChild } = await E(deeper).create('c');
     t.is((await piecesOf(host, '.guest')).length, 3);
     // The root's quota of four already counts all three descendants.
     await E(forUi).create('top');
     await t.throwsAsync(E(forUi).create('over'), { message: /quota/ });
 
-    await crashAfterAppending(host, config, namespaceOf(a.operationId), {
+    await crashAfterAppending(host, config, namespaceOf(subChild.operationId), {
       type: 'Revoking',
     });
     const host2 = await connect(t, config);
@@ -535,7 +535,7 @@ test.serial(
       ['top'],
     );
     const coordinator = await E(host2).lookup(['agent-factory', 'coordinator']);
-    for (const operationId of [a.operationId, c.operationId]) {
+    for (const operationId of [subChild.operationId, deeperChild.operationId]) {
       // eslint-disable-next-line no-await-in-loop
       const lifecycle = await E(coordinator).lifecycleFor(operationId);
       // eslint-disable-next-line no-await-in-loop
