@@ -7,6 +7,7 @@
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { Fail, q } from '@endo/errors';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { InferResultShape } from '@endo/inference/guards.js';
 import { mustMatch } from '@endo/patterns';
 
@@ -30,9 +31,23 @@ import { mustMatch } from '@endo/patterns';
 /**
  * @typedef {object} MailboxPort
  * @property {(...path: string[]) => Promise<string | undefined>} locate
- * @property {() => Promise<any>} followMessages
+ * @property {() => Promise<any>} followMessages - Returns an exo-stream
+ *   reader, as the daemon's guest facet does.
  * @property {(messageNumber: bigint, strings: string[], edgeNames: string[],
  *   petNames: string[]) => Promise<void>} reply
+ */
+
+/**
+ * A request as the ledger issues it: without `guest` when the backend is a
+ * child-scoped grant that derives its own projection.
+ *
+ * @typedef {Omit<InferRequest, 'guest'> & { guest?: GuestToolProjection }} TurnInferRequest
+ */
+
+/**
+ * An `InferenceBackend`, or a child-scoped grant that supplies the projection.
+ *
+ * @typedef {{ infer(request: TurnInferRequest): Promise<InferResult> }} TurnInference
  */
 
 /**
@@ -45,6 +60,8 @@ import { mustMatch } from '@endo/patterns';
  * @property {bigint} number
  * @property {string} from
  * @property {string[]} [strings]
+ * @property {string} [type]
+ * @property {boolean} [done]
  */
 
 /** @param {bigint} key */
@@ -109,12 +126,18 @@ harden(stringsForInferResult);
  * @param {MailboxPort} options.agent - The child's attenuated mailbox facet.
  * @param {TurnLedgerPort} options.ledger - The driver's private directory.
  * @param {AgentLifecycle} options.lifecycle
- * @param {InferenceBackend} options.inferenceBackend
- * @param {GuestToolProjection} options.guest
+ * @param {TurnInference} options.inferenceBackend
+ * @param {GuestToolProjection} [options.guest] - Omitted when the backend is
+ *   a child-scoped grant that derives a fresh projection for each turn.
  * @param {InferLimits} options.limits
  * @param {PromiseLike<unknown>} options.cancelled
  * @param {string} [options.instructions]
  * @param {string} [options.model]
+ * @param {(message: StampedMessage) => boolean} [options.accepts] - Messages
+ *   it rejects are left unanswered and unrecorded.
+ * @param {(key: bigint) => unknown} [options.afterPublished] - Runs after the
+ *   cursor passes a published turn, including on replay of one already
+ *   published, so an idempotent effect such as dismissal converges.
  */
 export const makeTurnLedgerDriver = ({
   agent,
@@ -126,6 +149,8 @@ export const makeTurnLedgerDriver = ({
   cancelled,
   instructions = '',
   model,
+  accepts = () => true,
+  afterPublished = () => {},
 }) => {
   /** @type {Promise<unknown>} */
   let queue = Promise.resolve();
@@ -153,6 +178,7 @@ export const makeTurnLedgerDriver = ({
 
     if (await E(ledger).has(names.published)) {
       await advanceCursor(key);
+      await afterPublished(key);
       return false;
     }
 
@@ -172,11 +198,11 @@ export const makeTurnLedgerDriver = ({
       }
       const text = (message.strings || []).join('');
       const prompt = instructions ? `${instructions}\n\n${text}` : text;
-      /** @type {InferRequest} */
+      /** @type {TurnInferRequest} */
       const request = harden({
         prompt,
         promptOrigin: 'guest-influenced',
-        guest,
+        ...(guest === undefined ? {} : { guest }),
         limits,
         cancelled,
         ...(model === undefined ? {} : { model }),
@@ -195,6 +221,7 @@ export const makeTurnLedgerDriver = ({
       names.published,
     );
     await advanceCursor(key);
+    await afterPublished(key);
     return true;
   };
 
@@ -209,13 +236,15 @@ export const makeTurnLedgerDriver = ({
     await null;
     if (!(await E(lifecycle).isActive())) return;
     const self = await E(agent).locate('@self');
-    const reader = await E(agent).followMessages();
+    // The daemon's `followMessages` returns an exo-stream reader, not an
+    // iterator; read it through the stream protocol.
+    const messages = iterateReader(E(agent).followMessages());
     for (;;) {
-      const iteration = await E(reader).next();
+      const iteration = await messages.next();
       if (iteration.done) return;
       if (!(await E(lifecycle).isActive())) return;
       const message = /** @type {StampedMessage} */ (iteration.value);
-      if (message.from !== self) await process(message);
+      if (message.from !== self && accepts(message)) await process(message);
     }
   };
 
