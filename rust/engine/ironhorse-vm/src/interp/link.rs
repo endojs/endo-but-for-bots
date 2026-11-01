@@ -1065,6 +1065,25 @@ impl Interp {
                 XS_DONT_ENUM_FLAG,
             );
         }
+        // `%IteratorPrototype%[@@dispose]` and
+        // `%AsyncIteratorPrototype%[@@asyncDispose]`.
+        for (holder, symbol_name, function) in [
+            (self.iterator_proto, "dispose", self.iterator_dispose_method),
+            (
+                self.instance_prototype(self.async_generator_proto),
+                "asyncDispose",
+                self.async_iterator_dispose_method,
+            ),
+        ] {
+            if let Some(id) = self.well_known_symbol_property_id(symbol_name) {
+                self.set_own_unmetered_with_flag(
+                    holder,
+                    id,
+                    Slot::of(Kind::Reference, Payload::Reference(function)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
+        }
         if let Some(id) = self.well_known_symbol_property_id("iterator") {
             self.set_own_unmetered_with_flag(
                 self.iterator_proto,

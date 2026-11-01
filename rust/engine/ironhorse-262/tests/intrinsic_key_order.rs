@@ -112,16 +112,10 @@ __walk.length + '\n' + (__walk[PAGE] || []).join('\n')
 /// this table as they land. A Compartment's global object is checked
 /// against [`COMPARTMENT_GLOBAL_DIFFERENCES`] instead.
 const KEY_SET_DIFFERENCES: &[(&str, &[&str], &[&str])] = &[
-    ("Iterator.prototype", &[], &["Symbol(Symbol.dispose)"]),
     (
         "%ArrayIteratorPrototype%",
         &[],
         &["Symbol(Symbol.toStringTag)"],
-    ),
-    (
-        "%AsyncIteratorPrototype%",
-        &[],
-        &["Symbol(Symbol.asyncDispose)"],
     ),
     (
         "%TypedArray%.prototype",
@@ -146,7 +140,7 @@ const KEY_SET_DIFFERENCES: &[(&str, &[&str], &[&str])] = &[
     (
         "globalThis.AsyncDisposableStack.prototype",
         &[],
-        &["toString", "disposed"],
+        &["toString"],
     ),
     ("globalThis.Atomics", &[], &["wake"]),
     ("globalThis.BigInt", &[], &["bitLength", "fromArrayBuffer"]),
@@ -155,11 +149,7 @@ const KEY_SET_DIFFERENCES: &[(&str, &[&str], &[&str])] = &[
         &[],
         &["import", "importNow"],
     ),
-    (
-        "globalThis.DisposableStack.prototype",
-        &[],
-        &["toString", "disposed"],
-    ),
+    ("globalThis.DisposableStack.prototype", &[], &["toString"]),
     (
         "globalThis.Math",
         &[],

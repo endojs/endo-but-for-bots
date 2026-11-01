@@ -36,6 +36,7 @@ impl Interp {
                 | NativeMethod::AsyncDisposableStackDefer
                 | NativeMethod::AsyncDisposableStackMove
                 | NativeMethod::AsyncDisposableStackDisposeAsync
+                | NativeMethod::AsyncDisposableStackDisposedGetter
         );
         let brand = if is_async {
             "AsyncDisposableStack"
@@ -60,6 +61,13 @@ impl Interp {
                 )
             }
         };
+        if matches!(
+            method,
+            NativeMethod::DisposableStackDisposedGetter
+                | NativeMethod::AsyncDisposableStackDisposedGetter
+        ) {
+            return Ok(Slot::boolean(self.disposable_stacks[&inst].disposed));
+        }
         let disposing = matches!(
             method,
             NativeMethod::DisposableStackDispose | NativeMethod::AsyncDisposableStackDisposeAsync

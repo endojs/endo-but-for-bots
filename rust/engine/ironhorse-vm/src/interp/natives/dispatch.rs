@@ -2379,7 +2379,9 @@ impl Interp {
             | NativeMethod::GeneratorNext
             | NativeMethod::GeneratorReturn
             | NativeMethod::GeneratorThrow
-            | NativeMethod::AsyncIteratorIdentity => {
+            | NativeMethod::AsyncIteratorIdentity
+            | NativeMethod::IteratorDispose
+            | NativeMethod::AsyncIteratorAsyncDispose => {
                 self.native_method_iterator(m, base, argc, code, this, arg0)?
             }
             NativeMethod::MapSizeGetter
@@ -2506,6 +2508,8 @@ impl Interp {
             | NativeMethod::AsyncDisposableStackDefer
             | NativeMethod::AsyncDisposableStackMove
             | NativeMethod::AsyncDisposableStackDisposeAsync
+            | NativeMethod::DisposableStackDisposedGetter
+            | NativeMethod::AsyncDisposableStackDisposedGetter
             | NativeMethod::ProxyRevocable
             | NativeMethod::ProxyRevoke
             | NativeMethod::ObjectGetPrototypeOf
@@ -5592,6 +5596,10 @@ impl Interp {
                 self.resume_generator(code, gen, arg0, GenStatus::Throw)?
             }
             NativeMethod::AsyncIteratorIdentity => this,
+            NativeMethod::IteratorDispose => self.iterator_dispose(code, this)?,
+            NativeMethod::AsyncIteratorAsyncDispose => {
+                self.async_iterator_async_dispose(code, this)?
+            }
             _ => unreachable!("not one of the iterator and generator methods"),
         };
         Ok(NativeResult::Value(result))
@@ -6351,7 +6359,9 @@ impl Interp {
             | NativeMethod::AsyncDisposableStackAdopt
             | NativeMethod::AsyncDisposableStackDefer
             | NativeMethod::AsyncDisposableStackMove
-            | NativeMethod::AsyncDisposableStackDisposeAsync => {
+            | NativeMethod::AsyncDisposableStackDisposeAsync
+            | NativeMethod::DisposableStackDisposedGetter
+            | NativeMethod::AsyncDisposableStackDisposedGetter => {
                 self.explicit_resource_method(m, this, base, argc, code)?
             }
             // `Proxy.revocable(target, handler)` (`fx_Proxy_revocable`): a fresh
