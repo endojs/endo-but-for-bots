@@ -83,8 +83,8 @@ built-ins/Object/defineProperty/15.2.3.6-4-623.js sloppy pass
 built-ins/Object/defineProperty/15.2.3.6-4-623.js strict pass
 built-ins/Object/defineProperty/15.2.3.6-4-624.js sloppy pass
 built-ins/Object/defineProperty/15.2.3.6-4-624.js strict pass
-built-ins/Object/defineProperty/15.2.3.6-4-625gs.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-built-ins/Object/defineProperty/15.2.3.6-4-625gs.js strict fail:"abort-value-differs: oracle=\"this.prop should take precedence over Object.prototype.prop\" ironhorse=\"TypeError: call: not a function\""
+built-ins/Object/defineProperty/15.2.3.6-4-625gs.js sloppy pass
+built-ins/Object/defineProperty/15.2.3.6-4-625gs.js strict skip:oracle-xs-script-decl-eval-framing
 built-ins/Object/defineProperty/15.2.3.6-4-63.js sloppy pass
 built-ins/Object/defineProperty/15.2.3.6-4-63.js strict pass
 built-ins/Object/defineProperty/15.2.3.6-4-64.js sloppy pass

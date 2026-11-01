@@ -938,9 +938,10 @@ impl Interp {
         let previous = self.environment.global_obj;
         let installing = self.installing_intrinsics;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let global = self
-                .slots
-                .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+            // A compartment global inherits from the shared
+            // %Object.prototype%, like the default global (XS's
+            // `fx_Compartment` builds it over `mxObjectPrototype`).
+            let global = self.slots.alloc(Slot::instance(self.object_proto));
             let mut realm = CompartmentEnvironment::new(global);
             realm.global_names = global_names;
             realm.owner = Some(owner);
