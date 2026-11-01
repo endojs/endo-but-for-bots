@@ -252,6 +252,7 @@ impl Interp {
         term(format!("arraybuffer_proto={:?}", self.arraybuffer_proto).as_bytes());
         term(format!("dataview_proto={:?}", self.dataview_proto).as_bytes());
         term(format!("array_iterator_proto={:?}", self.array_iterator_proto).as_bytes());
+        term(format!("string_iterator_proto={:?}", self.string_iterator_proto).as_bytes());
         term(format!("enumerator_proto={:?}", self.enumerator_proto).as_bytes());
         term(format!("string_proto={:?}", self.string_proto).as_bytes());
         term(format!("number_proto={:?}", self.number_proto).as_bytes());
@@ -833,6 +834,13 @@ impl Interp {
         self.array_iterator_proto = array_iter_proto;
         let next_mf = self.alloc_named_method(NativeMethod::ArrayIteratorNext, "next", 0);
         self.proto_methods.push((array_iter_proto, "next", next_mf));
+        // `%StringIteratorPrototype%`: a distinct boot object chaining to
+        // %IteratorPrototype%, whose own `next` accepts only String Iterators
+        // (XS's `mxStringIteratorPrototype`).
+        self.string_iterator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        let string_next = self.alloc_named_method(NativeMethod::StringIteratorNext, "next", 0);
+        self.proto_methods
+            .push((self.string_iterator_proto, "next", string_next));
         // The for-in enumerators' private prototype (XS's
         // `mxEnumeratorFunction.prototype`): it inherits
         // `%IteratorPrototype%` and holds a `next` no global reaches.

@@ -53,10 +53,8 @@ test/Compartment/prototype/importNow/modules-shared-namespaces.js
 test/TextDecoder/immutable-arraybuffer-intersection.js
 test/TextEncoder/immutable-arraybuffer-intersection.js
 test/freeze/monadic.js
-test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/Math/intrinsic-metadata.js
 test/intrinsics/RegExpPrototype/intrinsic-metadata.js
-test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
 test/modules/module-source-reflection/ses-legacy/export-default.js

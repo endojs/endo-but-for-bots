@@ -1477,6 +1477,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("arraybuffer_proto", &[Req::GcRoots], "boot anchor"),
     ("dataview_proto", &[Req::GcRoots], "boot anchor"),
     ("array_iterator_proto", &[Req::GcRoots], "boot anchor"),
+    ("string_iterator_proto", &[Req::GcRoots], "boot iterator prototype retained for future string iterators"),
     ("enumerator_proto", &[Req::GcRoots], "boot anchor (the for-in enumerator prototype)"),
     ("string_proto", &[Req::GcRoots], "boot anchor"),
     ("number_proto", &[Req::GcRoots], "boot anchor"),

@@ -2180,6 +2180,21 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
+    /// The realm's `%StringIteratorPrototype%` (a boot object) — the
+    /// prototype of the iterators `str[Symbol.iterator]()` produces. Carries
+    /// its own `next`, which accepts only String Iterators, and the
+    /// `String Iterator` tag.
+    string_iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The private prototype of every for-in enumerator (XS's
     /// `mxEnumeratorFunction.prototype`, a boot object): it inherits
     /// `%IteratorPrototype%` and owns the enumerator's `next`, which no

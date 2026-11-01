@@ -901,6 +901,8 @@ impl Interp {
                 // configurable descriptor.
                 (self.dataview_proto, "DataView"),
                 (self.promise_proto, "Promise"),
+                (self.array_iterator_proto, "Array Iterator"),
+                (self.string_iterator_proto, "String Iterator"),
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
                 (self.regexp_string_iterator_proto, "RegExp String Iterator"),
@@ -931,9 +933,7 @@ impl Interp {
                 // The other tags XS installs (and the ECMA-402 and Temporal
                 // ones it lacks the objects for), so `Object.prototype.toString`
                 // names a Map, a Symbol wrapper or `JSON` as V8 and XS do
-                // rather than `[object Object]`. `%ArrayIteratorPrototype%`
-                // still has none: String iterators share it here, where XS
-                // tags the two `Array Iterator` and `String Iterator`.
+                // rather than `[object Object]`.
                 (self.map_proto, "Map"),
                 (self.set_proto, "Set"),
                 (self.weakmap_proto, "WeakMap"),

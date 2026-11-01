@@ -618,12 +618,12 @@ impl Interp {
     /// its reused `{value, done}` result, recording a kind-4 [`IterState`] whose
     /// `index` is a BYTE offset into `bytes`. Meters the creation cluster
     /// ([`STRING_ITERATOR_CREATE_METERING`]). The iterator chains to
-    /// `%Array Iterator.prototype%` in ironhorse's model (its `next` dispatches to
-    /// the same [`NativeMethod::ArrayIteratorNext`], which branches on kind).
+    /// `%StringIteratorPrototype%`, whose `next` is
+    /// [`NativeMethod::StringIteratorNext`].
     pub(in crate::interp) fn make_string_iterator(&mut self, bytes: Vec<u8>) -> Slot {
         self.meter.tick_raw(STRING_ITERATOR_CREATE_METERING);
         let result = self.new_reused_iterator_result();
-        let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
+        let iter = self.slots.alloc(Slot::instance(self.string_iterator_proto));
         self.iterators.insert(
             iter,
             IterState {
