@@ -141,6 +141,9 @@ test('the tools of a writable Git hold its writer scope, not the rewriter', asyn
     throw Error('only scope is reached');
   };
   const recordingGit = makeExo('Git', RecordingGitI, {
+    worktree: unreached,
+    status: unreached,
+    log: unreached,
     add: unreached,
     commit: unreached,
     reword: unreached,

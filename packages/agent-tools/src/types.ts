@@ -396,7 +396,7 @@ export declare function provisionWorkspaceTools(
  * closes over it; a read-only Git cannot be combined with a remote.
  */
 export interface GitWorkspaceGrant {
-  git: ERef<object>;
+  git: ERef<EndoGit>;
   remote?: ERef<GitRemoteToolCapability>;
   maxChars?: number;
 }

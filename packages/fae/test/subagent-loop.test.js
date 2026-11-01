@@ -1889,13 +1889,13 @@ test('cancelling an image request checkpoints receipts before stop and recovers 
 });
 
 /**
- * @param {string} id
+ * @param {string} toolCallIdentifier
  * @param {string} name
  * @param {object} toolArguments
  */
-const toolCall = (id, name, toolArguments) =>
+const toolCall = (toolCallIdentifier, name, toolArguments) =>
   harden({
-    id,
+    id: toolCallIdentifier,
     type: 'function',
     function: { name, arguments: JSON.stringify(toolArguments) },
   });
@@ -2057,21 +2057,32 @@ const makeRecordingHost = () => {
 
 /**
  * @param {object} hostAgent
- * @param {Record<string, string>} factoryNames pet name -> locator
+ * @param {Record<string, string>} workspaceNames name in the factory's
+ *   `workspaces` directory -> locator
+ * @param {Record<string, unknown>} [capabilities] locator -> capability
  */
-const makeFactoryPowers = (hostAgent, factoryNames) =>
+const makeFactoryPowers = (hostAgent, workspaceNames, capabilities = {}) =>
   makeStub('FactoryPowers', {
-    lookup: (/** @type {string} */ name) => {
-      if (name === 'host-agent') return hostAgent;
-      throw Error(`Unexpected factory lookup ${name}`);
+    lookup: (/** @type {string | string[]} */ path) => {
+      if (path === 'host-agent') return hostAgent;
+      if (Array.isArray(path) && path[0] === 'workspaces') {
+        const locator = workspaceNames[path[1]];
+        if (locator !== undefined && locator in capabilities) {
+          return capabilities[locator];
+        }
+      }
+      throw Error(`Unexpected factory lookup ${path}`);
     },
     has: () => false,
-    locate: (/** @type {string} */ name) =>
-      ({
+    locate: (/** @type {string[]} */ ...path) => {
+      if (path.length === 2 && path[0] === 'workspaces') {
+        return workspaceNames[path[1]];
+      }
+      return {
         'llm-provider': 'locator:llm-provider',
         'host-agent': 'locator:host-agent',
-        ...factoryNames,
-      })[name],
+      }[path.join('/')];
+    },
   });
 
 test('createAgent with a workspace hands the named Git to the driver, whose loop edits and commits through it', async t => {
@@ -2079,7 +2090,11 @@ test('createAgent with a workspace hands the named Git to the driver, whose loop
   const { git: granted, root } = await makeWorkspaceGit(t);
   const { hostAgent, storedByGuest } = makeRecordingHost();
   const factory = await makeFactory(
-    makeFactoryPowers(hostAgent, { 'project-git': 'locator:project-git' }),
+    makeFactoryPowers(
+      hostAgent,
+      { 'project-git': 'locator:project-git' },
+      { 'locator:project-git': granted },
+    ),
     undefined,
   );
   await E(factory).createAgent(
@@ -2159,7 +2174,7 @@ test('createAgent with a workspace hands the named Git to the driver, whose loop
   );
 });
 
-test('createAgent refuses a workspace name the factory store does not hold', async t => {
+test('createAgent refuses a workspace name its workspaces directory does not hold', async t => {
   const { hostAgent, storedByGuest } = makeRecordingHost();
   const factory = await makeFactory(
     makeFactoryPowers(hostAgent, { 'project-git': 'locator:project-git' }),
@@ -2170,14 +2185,76 @@ test('createAgent refuses a workspace name the factory store does not hold', asy
       'builder',
       harden({ workspace: { git: 'missing-git' } }),
     ),
-    { message: /"missing-git" is not in the factory's store/ },
+    { message: /"missing-git" is not in the factory's "workspaces" directory/ },
   );
   await t.throwsAsync(
     E(factory).createAgent(
       'builder',
       harden({ workspace: { git: 'project-git', remote: 'missing-remote' } }),
     ),
-    { message: /"missing-remote" is not in the factory's store/ },
+    {
+      message:
+        /"missing-remote" is not in the factory's "workspaces" directory/,
+    },
   );
   t.is(storedByGuest.size, 0, 'nothing was provisioned');
+});
+
+test('createAgent cannot name a factory capability outside its workspaces directory', async t => {
+  const { hostAgent, storedByGuest } = makeRecordingHost();
+  const factory = await makeFactory(
+    makeFactoryPowers(hostAgent, {}),
+    undefined,
+  );
+  await t.throwsAsync(
+    E(factory).createAgent(
+      'builder',
+      harden({ workspace: { git: 'host-agent' } }),
+    ),
+    { message: /"host-agent" is not in the factory's "workspaces" directory/ },
+  );
+  t.is(storedByGuest.size, 0, 'nothing was provisioned');
+});
+
+test('createAgent rejects an invalid workspace grant before creating the agent', async t => {
+  const { git: granted } = await makeWorkspaceGit(t);
+  const readOnly = await E(granted).scope('reader');
+  const remote = makeStub('GitRemote', {
+    fetch: () => undefined,
+    pull: () => undefined,
+    push: () => undefined,
+  });
+  const notGit = makeStub('NotGit', { lookup: () => undefined });
+  const { hostAgent, storedByGuest } = makeRecordingHost();
+  const factory = await makeFactory(
+    makeFactoryPowers(
+      hostAgent,
+      {
+        'not-git': 'locator:not-git',
+        'reader-git': 'locator:reader-git',
+        origin: 'locator:origin',
+      },
+      {
+        'locator:not-git': notGit,
+        'locator:reader-git': readOnly,
+        'locator:origin': remote,
+      },
+    ),
+    undefined,
+  );
+  await t.throwsAsync(
+    E(factory).createAgent(
+      'builder',
+      harden({ pin: true, workspace: { git: 'not-git' } }),
+    ),
+    { message: 'A workspace grant must be a Git' },
+  );
+  await t.throwsAsync(
+    E(factory).createAgent(
+      'builder',
+      harden({ pin: true, workspace: { git: 'reader-git', remote: 'origin' } }),
+    ),
+    { message: 'A read-only workspace Git cannot be granted with a GitRemote' },
+  );
+  t.is(storedByGuest.size, 0, 'no guest, driver, or pin was created');
 });

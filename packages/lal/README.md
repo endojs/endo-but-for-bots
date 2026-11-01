@@ -78,11 +78,16 @@ The agent will:
 
 ### Giving a worker a git workspace
 
-The configuration form accepts optional pet names in the Lal manager's store
-for a `Git` and a `GitRemote`. A configured worker receives the confined file
-and git tools over that `Git`'s worktree. A writable Git is narrowed to its
-writer facet, so history-rewrite tools are absent. A read-only Git receives
-only read tools and cannot be combined with a remote.
+The configuration form accepts optional names for a `Git` and a `GitRemote`,
+resolved only in a `workspaces` directory of the Lal manager's store. The
+deployer places there exactly the capabilities a form submitter may grant, so a
+submitted name never reaches the rest of the manager's store. A configured
+worker receives the confined file and git tools over that `Git`'s worktree. A
+writable Git is narrowed to its writer facet, so history-rewrite tools are
+absent. A read-only Git receives only read tools and cannot be combined with a
+remote. Lal provisions the tools before it creates the worker or replies, so a
+missing name, a capability that is not a `Git`, or a remote beside a read-only
+`Git` is answered with an error rather than a running agent.
 
 The capabilities are held by the worker loop's tool closures rather than stored
 in the worker guest's pet-name directory. The `evaluate` tool therefore cannot

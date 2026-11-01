@@ -135,9 +135,9 @@ await E(factory).createAgent('poet', {
 ### Giving an agent a git workspace
 
 An agent can work in a git repository through capabilities rather than a host
-path. Store a `Git` (from `provideGit` or `provideGitClone`) and, optionally,
-a `GitRemote` for it in the factory's store, then name them when creating the
-agent:
+path. Make a `workspaces` directory in the factory's store, place in it a `Git`
+(from `provideGit` or `provideGitClone`) and, optionally, a `GitRemote` for it,
+then name them when creating the agent:
 
 ```js
 await E(factory).createAgent('builder', {
@@ -151,10 +151,16 @@ The agent gets the `@endo/agent-tools` file tools (`mountReadText`,
 tools (`status`, `diff`, `log`, `add`, `commit`, branch navigation and the
 rest of the writer catalog), and `fetch`, `pull` and `push` when a remote is
 given. Commits are attributed to the identity the `Git` formula was created
-with. A read-only `Git` gets only the read tools, and cannot be combined with
-a remote: `createAgent` succeeds, but the agent fails at start rather than
-offer `pull` or `push`. History rewrite is not offered. A subagent does not
-inherit the workspace.
+with. A read-only `Git` gets only the read tools and cannot be combined with
+a remote. History rewrite is not offered. A subagent does not inherit the
+workspace.
+
+`createAgent` resolves workspace names only in the `workspaces` directory, so
+holding the factory conveys exactly the capabilities the deployer placed there
+and none of the factory's other names. It provisions the workspace before it
+creates anything: a name the directory lacks, a capability that is not a `Git`,
+or a remote beside a read-only `Git` makes `createAgent` reject, leaving no
+guest, driver, or pin behind.
 
 The remote is a separate grant with its own authority: its `pull` updates the
 `Git` it was created for, and its `push` writes to its endpoint. Nothing on a

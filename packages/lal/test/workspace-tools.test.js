@@ -25,8 +25,11 @@ const CapabilityInterface = M.interface(
 );
 
 /**
+ * A partial stand-in for a `Git`: just the methods these tests reach.
+ *
  * @param {string[]} calls
  * @param {boolean} writable
+ * @returns {any}
  */
 const makeRecordingGit = (calls, writable) => {
   const methods = {
@@ -104,13 +107,14 @@ test('Lal registers only reader tools over a read-only Git', async t => {
   t.deepEqual(calls, []);
 });
 
-test('Lal resolves workspace names once through its manager store', async t => {
+test('Lal resolves workspace names once, only in its workspaces directory', async t => {
   /** @type {string[]} */
   const calls = [];
   const store = makeExo('ManagerStore', StoreInterface, {
-    lookup: async name => {
-      calls.push(name);
-      return makeExo(`Capability ${name}`, CapabilityInterface, {});
+    has: async (...path) => path[0] === 'workspaces',
+    lookup: async path => {
+      calls.push(path.join('/'));
+      return makeExo(`Capability ${path}`, CapabilityInterface, {});
     },
   });
 
@@ -120,15 +124,45 @@ test('Lal resolves workspace names once through its manager store', async t => {
   });
 
   t.truthy(workspace);
-  t.deepEqual(calls, ['workspace', 'origin']);
+  t.deepEqual(calls, ['workspaces/workspace', 'workspaces/origin']);
+});
+
+test('Lal refuses a name outside its workspaces directory', async t => {
+  /** @type {string[]} */
+  const calls = [];
+  const store = makeExo('ManagerStore', StoreInterface, {
+    has: async (...path) => path.length === 1 && path[0] === 'host-agent',
+    lookup: async path => {
+      calls.push(String(path));
+      return makeExo('Capability', CapabilityInterface, {});
+    },
+  });
+
+  await t.throwsAsync(resolveLalWorkspace(store, { git: 'host-agent' }), {
+    message:
+      'Workspace grant "host-agent" is not in the "workspaces" directory',
+  });
+  t.deepEqual(calls, []);
 });
 
 test('Lal rejects a remote that is not paired with a Git workspace', async t => {
   const store = makeExo('UnusedManagerStore', StoreInterface, {
-    lookup: async _name => makeExo('UnusedCapability', CapabilityInterface, {}),
+    has: async () => true,
+    lookup: async _path => makeExo('UnusedCapability', CapabilityInterface, {}),
   });
 
   await t.throwsAsync(resolveLalWorkspace(store, { remote: 'origin' }), {
     message: 'A Git remote requires a Git workspace',
   });
+});
+
+test('Lal refuses to provision a capability that is not a Git', async t => {
+  await t.throwsAsync(
+    provisionLalWorkspaceTools({
+      git: /** @type {any} */ (
+        makeExo('NotGit', CapabilityInterface, { lookup: () => undefined })
+      ),
+    }),
+    { message: 'A workspace grant must be a Git' },
+  );
 });

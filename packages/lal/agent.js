@@ -1,6 +1,7 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -26,14 +27,8 @@ import {
 } from './workspace-tools.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/**
- * @import {
- *   GuestPowers,
- *   LalContext,
- *   LalWorkspaceGrant,
- *   WorkerConfig,
- * } from './agent.types.js'
- */
+/** @import { AgentTool } from '@earendil-works/pi-agent-core' */
+/** @import { GuestPowers, LalContext, WorkerConfig } from './agent.types.js' */
 
 // pi-ai's built-in API providers (anthropic, openai, google, openrouter,
 // mistral, deepseek, groq, xai, github-copilot, and ~20 others) are registered
@@ -67,14 +62,16 @@ const LalInterface = M.interface('Lal', {
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
- * @param {LalWorkspaceGrant} [workspace]
+ * @param {AgentTool[]} [workspaceTools] - Already provisioned from a
+ *   workspace grant, so a bad grant fails before the worker is reported
+ *   running.
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
   powers,
   context,
   workerEnv,
-  workspace,
+  workspaceTools = [],
 ) => {
   const getCancelled = async () => {
     if (!context) return null;
@@ -111,18 +108,12 @@ export const spawnWorkerLoop = async (
   const agentTools = tools.map(({ name, summary }) =>
     toAgentTool(name, summary, executeTool),
   );
-  if (workspace !== undefined) {
-    const workspaceTools = await provisionLalWorkspaceTools(workspace);
-    const names = new Set(agentTools.map(tool => tool.name));
-    for (const tool of workspaceTools) {
-      if (names.has(tool.name)) {
-        throw new Error(
-          `Workspace tool ${tool.name} would shadow a built-in Lal tool`,
-        );
-      }
-      names.add(tool.name);
-      agentTools.push(tool);
-    }
+  const names = new Set(agentTools.map(tool => tool.name));
+  for (const tool of workspaceTools) {
+    !names.has(tool.name) ||
+      Fail`Workspace tool ${q(tool.name)} would shadow a built-in Lal tool`;
+    names.add(tool.name);
+    agentTools.push(tool);
   }
 
   const resolvedModel = await resolveModel(model);
@@ -205,12 +196,13 @@ export const make = (guestPowers, _context) => {
         },
         {
           name: 'git',
-          label: 'Git workspace pet name (optional)',
+          label: 'Git name in the workspaces directory (optional)',
           default: '',
         },
         {
           name: 'remote',
-          label: 'Git remote pet name (optional; requires Git)',
+          label:
+            'Git remote name in the workspaces directory (optional; requires Git)',
           default: '',
         },
       ]),
@@ -290,7 +282,14 @@ export const make = (guestPowers, _context) => {
               [],
             );
           } else {
+            // Resolve and provision the workspace before creating the guest
+            // or replying, so a bad grant is reported as an error rather
+            // than as a running agent whose loop has already failed.
             const workspace = await resolveLalWorkspace(powers, config);
+            const workspaceTools =
+              workspace === undefined
+                ? []
+                : await provisionLalWorkspaceTools(workspace);
 
             // Create the guest profile via the host agent.
             // provideGuest returns the full EndoGuest (not the handle).
@@ -310,7 +309,7 @@ export const make = (guestPowers, _context) => {
             await provisionPrimer(guest);
 
             // Spawn a worker loop for this guest.
-            const workerP = spawnWorkerLoop(
+            const workerPromise = spawnWorkerLoop(
               guest,
               null,
               {
@@ -318,10 +317,10 @@ export const make = (guestPowers, _context) => {
                 LAL_MODEL: config.model,
                 LAL_AUTH_TOKEN: config.authToken,
               },
-              workspace,
+              workspaceTools,
             );
-            activeWorkers.set(name, workerP);
-            workerP.catch(error => {
+            activeWorkers.set(name, workerPromise);
+            workerPromise.catch(error => {
               console.error(`[lal] Worker "${name}" error:`, error);
               activeWorkers.delete(name);
             });

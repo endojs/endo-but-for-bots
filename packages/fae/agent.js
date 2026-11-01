@@ -1,7 +1,7 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
-/** @import { FaeWorkspaceGrant } from './src/workspace-tools.js' */
+/** @import { GitWorkspaceGrant } from '@endo/agent-tools' */
 
 import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
@@ -62,6 +62,12 @@ import { provisionFaeAgent } from './src/subagent-host.js';
 import { provisionFaeWorkspaceTools } from './src/workspace-tools.js';
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 import { readFaeWorkloadConfig } from './src/workload-config.js';
+
+/**
+ * The factory-store directory holding the only capabilities a `createAgent`
+ * caller may name as a workspace.
+ */
+const WORKSPACES_DIRECTORY = 'workspaces';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
@@ -229,7 +235,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
  * @param {number} [options.maxToolRounds]
  * @param {number} [options.requestTimeoutMs]
- * @param {FaeWorkspaceGrant} [options.workspace]
+ * @param {GitWorkspaceGrant} [options.workspace]
  *   A granted `Git` (and optionally a `GitRemote`) the agent works in.
  *   Absent, the agent has no file or git tools.
  * @returns {Promise<void>}
@@ -415,9 +421,8 @@ export const spawnWorkerLoop = async (
       [...localTools.values()].map(tool => tool.schema().function.name),
     );
     for (const [name, tool] of workspaceTools) {
-      if (builtInNames.has(name)) {
-        throw Error(`Workspace tool ${name} would shadow a built-in tool`);
-      }
+      !builtInNames.has(name) ||
+        Fail`Workspace tool ${q(name)} would shadow a built-in tool`;
       localTools.set(name, tool);
     }
   }
@@ -1243,18 +1248,25 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
   const hostAgent = await E(powers).lookup('host-agent');
 
   /**
-   * A requested workspace grant that names nothing is an error, not an
-   * omitted grant.
+   * Workspace grants resolve only under the factory's `workspaces` directory,
+   * which the deployer populates with exactly the `Git` and `GitRemote`
+   * capabilities a factory caller may hand an agent. A requested name never
+   * reaches the rest of the factory's store (its `host-agent`, its provider),
+   * and a name the directory does not hold is an error, not an omitted grant.
    *
    * @param {string} petName
    * @returns {Promise<string>}
    */
   const locateGrant = async petName => {
-    const locator = await E(powers).locate(petName);
+    const locator = await E(powers).locate(WORKSPACES_DIRECTORY, petName);
     typeof locator === 'string' ||
-      Fail`Workspace grant ${q(petName)} is not in the factory's store`;
+      Fail`Workspace grant ${q(petName)} is not in the factory's ${q(WORKSPACES_DIRECTORY)} directory`;
     return locator;
   };
+
+  /** @param {string} petName */
+  const lookupGrant = petName =>
+    E(powers).lookup([WORKSPACES_DIRECTORY, petName]);
 
   return makeExo('FaeFactory', FaeFactoryInterface, {
     /**
@@ -1272,10 +1284,10 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
      * @param {boolean} [options.pin] - Pin the driver to PINS for restart survival
      * @param {number} [options.maxSubagentDepth] - Layers of delegation this
      *   agent's tree may reach. 0 withholds the subagent tools entirely.
-     * @param {{ git: string, remote?: string }} [options.workspace] - Pet
-     *   names, in this factory's store, of the `Git` the agent works in and
-     *   optionally a `GitRemote` for it. Absent, the agent gets no file or
-     *   git tools.
+     * @param {{ git: string, remote?: string }} [options.workspace] - Names,
+     *   in this factory's `workspaces` directory, of the `Git` the agent works
+     *   in and optionally a `GitRemote` for it. Absent, the agent gets no file
+     *   or git tools.
      * @returns {Promise<string>} The agent's profile petname
      */
     async createAgent(name, options = {}) {
@@ -1297,10 +1309,38 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
 
       if (workspace !== undefined) {
         typeof workspace.git === 'string' ||
-          Fail`workspace.git must name a Git in the factory's store`;
+          Fail`workspace.git must name a Git in the factory's workspaces directory`;
         workspace.remote === undefined ||
           typeof workspace.remote === 'string' ||
-          Fail`workspace.remote must name a GitRemote in the factory's store`;
+          Fail`workspace.remote must name a GitRemote in the factory's workspaces directory`;
+      }
+
+      // Resolve and provision the workspace before anything durable exists:
+      // a name that is not a Git, or a remote beside a read-only Git, fails
+      // here instead of leaving a named (perhaps pinned) agent whose loop
+      // fails at every start.
+      /** @type {{ workspaceGitLocator?: string, workspaceRemoteLocator?: string }} */
+      let workspaceLocators = {};
+      if (workspace !== undefined) {
+        const workspaceGitLocator = await locateGrant(workspace.git);
+        const workspaceRemoteLocator =
+          workspace.remote === undefined
+            ? undefined
+            : await locateGrant(workspace.remote);
+        await provisionFaeWorkspaceTools(
+          harden({
+            git: await lookupGrant(workspace.git),
+            ...(workspace.remote === undefined
+              ? {}
+              : { remote: await lookupGrant(workspace.remote) }),
+          }),
+        );
+        workspaceLocators = {
+          workspaceGitLocator,
+          ...(workspaceRemoteLocator === undefined
+            ? {}
+            : { workspaceRemoteLocator }),
+        };
       }
 
       // The auth token travels as a capability, not as a value: when the
@@ -1331,16 +1371,7 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
         workloadEnv,
         systemPrompt,
         pin,
-        ...(workspace === undefined
-          ? {}
-          : {
-              workspaceGitLocator: await locateGrant(workspace.git),
-              ...(workspace.remote === undefined
-                ? {}
-                : {
-                    workspaceRemoteLocator: await locateGrant(workspace.remote),
-                  }),
-            }),
+        ...workspaceLocators,
       });
 
       console.error(`[fae-factory] Created agent "${name}"`);
@@ -1356,7 +1387,7 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
         return 'Fae factory: creates LLM agent instances bound to a configured LLM provider. Use createAgent(name, { systemPrompt?, pin?, maxSubagentDepth?, workspace? }) to create a new agent.';
       }
       if (methodName === 'createAgent') {
-        return 'createAgent(name, { systemPrompt?, pin?, maxSubagentDepth?, workspace? }) — Create a new agent with its own guest, driver caplet, and inbox loop. Pass pin: true to survive daemon restarts. Pass workspace: { git, remote? }, pet names of a Git (and optionally a GitRemote) in the factory store, to give the agent file and git tools over that worktree. Returns the profile petname.';
+        return 'createAgent(name, { systemPrompt?, pin?, maxSubagentDepth?, workspace? }) — Create a new agent with its own guest, driver caplet, and inbox loop. Pass pin: true to survive daemon restarts. Pass workspace: { git, remote? }, names of a Git (and optionally a GitRemote) in the factory workspaces directory, to give the agent file and git tools over that worktree. Returns the profile petname.';
       }
       return `No documentation for method "${methodName}".`;
     },

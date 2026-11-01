@@ -15,12 +15,15 @@ import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
 const execFileAsync = promisify(execFile);
 
+/** The Git executable; set `GIT_EXECUTABLE` where `git` is not on `PATH`. */
+const gitExecutable = process.env.GIT_EXECUTABLE || 'git';
+
 /**
  * @param {string} cwd
  * @param {string[]} gitArguments
  */
 export const git = async (cwd, gitArguments) => {
-  const { stdout } = await execFileAsync('git', gitArguments, {
+  const { stdout } = await execFileAsync(gitExecutable, gitArguments, {
     cwd,
     env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull },
   });

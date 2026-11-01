@@ -97,8 +97,18 @@ import {
   makeMountFsTools,
   makeShellTool,
   makeHttpTool,
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionGitWorkspaceTools,
+  provisionHistoryTools,
 } from '@endo/agent-tools';
 ```
+
+The workspace provisioners compose those records over granted capabilities.
+`provisionGitWorkspaceTools({ git, remote?, maxChars? })` refuses a capability
+that is not a `Git`, narrows a writable `Git` to its writer facet, offers only
+reader tools over a read-only `Git`, and refuses a remote beside a read-only
+`Git`.
 
 Scoped imports expose each layer:
 

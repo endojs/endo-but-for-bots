@@ -13,6 +13,7 @@
  * } from './types.js'
  */
 
+import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { mountAsFilesystem } from '@endo/platform/fs/extended';
 
@@ -192,17 +193,19 @@ export const provisionGitWorkspaceTools = async ({ git, remote, maxChars }) => {
     // eslint-disable-next-line no-underscore-dangle
     await eventualGit.__getMethodNames__()
   );
+  // Refuse a capability that is not a Git before any tool closes over it, so
+  // a mistaken grant fails at provisioning rather than at a model's first call.
+  ['worktree', 'status', 'log'].every(method => methodNames.includes(method)) ||
+    Fail`A workspace grant must be a Git`;
   const writable = ['add', 'commit'].every(method =>
     methodNames.includes(method),
   );
-  if (!writable && remote !== undefined) {
-    throw new Error(
-      'A read-only workspace Git cannot be granted with a GitRemote',
-    );
-  }
+  writable ||
+    remote === undefined ||
+    Fail`A read-only workspace Git cannot be granted with a GitRemote`;
   const workspaceGit = writable ? await eventualGit.scope('writer') : git;
   return provisionWorkspaceTools({
-    git: /** @type {any} */ (workspaceGit),
+    git: workspaceGit,
     remote,
     readOnly: !writable,
     gitFacet: writable ? 'writer' : 'reader',

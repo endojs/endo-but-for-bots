@@ -5,7 +5,6 @@ import type {
   NameOrPath,
   StampedMessage,
 } from '@endo/daemon';
-import type { ERef } from '@endo/eventual-send';
 
 export type { NameOrPath };
 
@@ -64,11 +63,6 @@ export type WorkerConfig = {
   authToken: string;
   git?: string;
   remote?: string;
-};
-
-export type LalWorkspaceGrant = {
-  git: ERef<object>;
-  remote?: ERef<object>;
 };
 
 /** Context object for cancellation support */

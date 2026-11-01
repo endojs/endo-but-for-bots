@@ -2,19 +2,8 @@
 
 import { provisionGitWorkspaceTools } from '@endo/agent-tools';
 
-/** @import { ERef } from '@endo/eventual-send' */
-/** @import { ToolRecord } from '@endo/agent-tools' */
+/** @import { GitWorkspaceGrant, ToolRecord } from '@endo/agent-tools' */
 /** @import { FaeTool, ToolSchema } from './tool-makers.js' */
-
-/**
- * The capabilities a Fae agent's workspace is provisioned from: already-granted
- * daemon capabilities, never host paths.
- *
- * @typedef {object} FaeWorkspaceGrant
- * @property {ERef<object>} git - A `Git` from `provideGit` / `provideGitClone`,
- *   or its read-only facet.
- * @property {ERef<object>} [remote] - A `GitRemote` from `provideGitRemote`.
- */
 
 /**
  * @param {ToolRecord} record
@@ -47,19 +36,11 @@ harden(faeToolFromRecord);
  * remote state. A writable `Git` is narrowed to its writer scope before any
  * tool closes over it, so history rewrite stays a separate, elevated grant.
  *
- * @param {FaeWorkspaceGrant} grant
- * @param {{ maxChars?: number }} [options]
+ * @param {GitWorkspaceGrant} grant
  * @returns {Promise<Map<string, FaeTool<unknown>>>} tool name -> tool
  */
-export const provisionFaeWorkspaceTools = async (
-  { git, remote },
-  { maxChars } = {},
-) => {
-  const records = await provisionGitWorkspaceTools({
-    git,
-    remote: /** @type {any} */ (remote),
-    maxChars,
-  });
+export const provisionFaeWorkspaceTools = async grant => {
+  const records = await provisionGitWorkspaceTools(grant);
 
   /** @type {Map<string, FaeTool<unknown>>} */
   const tools = new Map();
