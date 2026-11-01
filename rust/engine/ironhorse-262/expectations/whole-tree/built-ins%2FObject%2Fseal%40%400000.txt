@@ -143,8 +143,8 @@ built-ins/Object/seal/seal-object.js sloppy pass
 built-ins/Object/seal/seal-object.js strict pass
 built-ins/Object/seal/seal-promise.js sloppy pass
 built-ins/Object/seal/seal-promise.js strict pass
-built-ins/Object/seal/seal-proxy.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce object to string"
-built-ins/Object/seal/seal-proxy.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce object to string"
+built-ins/Object/seal/seal-proxy.js sloppy pass
+built-ins/Object/seal/seal-proxy.js strict pass
 built-ins/Object/seal/seal-rangeerror.js sloppy pass
 built-ins/Object/seal/seal-rangeerror.js strict pass
 built-ins/Object/seal/seal-referenceerror.js sloppy pass

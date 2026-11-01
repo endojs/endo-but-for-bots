@@ -986,6 +986,12 @@ impl Interp {
         if !self.instance_extensible(inst) {
             return Ok(false);
         }
+        // `%Object.prototype%` is an immutable prototype exotic object
+        // (ECMA-262 10.4.7): only the current prototype is accepted. XS's
+        // `fxOrdinarySetPrototype` refuses it the same way.
+        if inst == self.object_proto {
+            return Ok(false);
+        }
         if self.prototype_chain_would_cycle(inst, new_proto) {
             return Ok(false);
         }

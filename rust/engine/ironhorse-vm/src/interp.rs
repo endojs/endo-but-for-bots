@@ -3201,7 +3201,10 @@ impl Interp {
         // a Symbol (`ToString` of a Symbol is a TypeError), and a bare
         // ordinary object with a null prototype (neither `toString` nor
         // `valueOf`, so `ToPrimitive` fails instead of producing the
-        // generic reference stub). Record the harness's `TypeError`
+        // generic reference stub). A Proxy keeps its target out of its
+        // own prototype slot, so it is not such an object: `String(proxy)`
+        // reaches the target's `toString` through the default traps.
+        // Record the harness's `TypeError`
         // here, without rewriting the engine's verdict: the differential
         // harness folds it into an abort through `RunOutcome::host_coerced`
         // and an embedder keeps the completion. The throw is post-run in
@@ -3215,6 +3218,7 @@ impl Interp {
             (completion.kind == Kind::Reference
                 && self.instance_prototype(object).is_null()
                 && !self.arrays.contains_key(&object)
+                && !self.proxies.contains_key(&object)
                 && self.native_of(object).is_none())
             .then(|| "TypeError: cannot coerce object to string".to_string())
         } else {
