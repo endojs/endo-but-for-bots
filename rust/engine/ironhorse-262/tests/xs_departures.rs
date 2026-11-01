@@ -717,13 +717,6 @@ const GAPS: &[Row] = &[
         why: "XS's global object carries the @@toStringTag `global`, as V8's does",
     },
     Row {
-        program: "var ts = Object.prototype.toString; [Object.getPrototypeOf(''[Symbol.iterator]()) === Object.getPrototypeOf([][Symbol.iterator]()), ts.call([][Symbol.iterator]()), ts.call(''[Symbol.iterator]())].join()",
-        ironhorse: "true,[object Iterator],[object Iterator]",
-        xs: "false,[object Array Iterator],[object String Iterator]",
-        v8: "false,[object Array Iterator],[object String Iterator]",
-        why: "%StringIteratorPrototype% is its own object, tagged `String Iterator`, and %ArrayIteratorPrototype% is tagged `Array Iterator`; Ironhorse shares one untagged prototype",
-    },
-    Row {
         program: "[typeof Uint8Array.prototype.toSorted, typeof Uint8Array.prototype.toReversed, typeof Uint8Array.prototype.with].join()",
         ironhorse: "undefined,undefined,undefined",
         xs: "function,function,function",

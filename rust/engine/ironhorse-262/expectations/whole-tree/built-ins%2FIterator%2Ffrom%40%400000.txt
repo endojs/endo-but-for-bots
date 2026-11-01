@@ -19,8 +19,8 @@ built-ins/Iterator/from/name.js sloppy pass
 built-ins/Iterator/from/name.js strict pass
 built-ins/Iterator/from/non-constructible.js sloppy pass
 built-ins/Iterator/from/non-constructible.js strict pass
-built-ins/Iterator/from/primitives.js sloppy skip:non-primitive-completion
-built-ins/Iterator/from/primitives.js strict skip:non-primitive-completion
+built-ins/Iterator/from/primitives.js sloppy pass
+built-ins/Iterator/from/primitives.js strict pass
 built-ins/Iterator/from/prop-desc.js sloppy pass
 built-ins/Iterator/from/prop-desc.js strict pass
 built-ins/Iterator/from/proto.js sloppy pass
