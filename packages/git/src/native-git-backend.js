@@ -1960,11 +1960,8 @@ export const makeNativeGitBackend = ({
   };
 
   /**
-   * Run a sanitized remote git invocation (fetch, push) whose timeout or
-   * abort terminates every process it started.  With credential bytes,
-   * GIT_ASKPASS is connected to an inherited anonymous pipe: only the fd
-   * number reaches the child environment, and the credential bytes never
-   * appear in argv, env, or a temporary file.
+   * Run a fetch or push through `runRemoteGitAt` after re-verifying the
+   * repository identity.
    *
    * @param {string[]} gitArguments
    * @param {Buffer | undefined} credentialBytes
