@@ -8,8 +8,9 @@
  * `serveRpc` reads LF-delimited JSON commands from `input`, dispatches
  * them through {@link makeRpcBridge}, and writes LF-delimited JSON events
  * to `output`. Diagnostics go to the separate `errorOutput` so the
- * protocol stream on `output` stays clean, exactly as the design
- * requires (logs on stderr, protocol on stdout).
+ * protocol stream on `output` stays clean; when `errorOutput` is omitted,
+ * diagnostics are dropped. At end of input it waits for an in-flight prompt
+ * round to end before returning.
  */
 
 import { encodeRecord, makeJsonlDecoder } from './framing.js';
@@ -68,6 +69,10 @@ export const serveRpc = async ({ input, output, errorOutput, session }) => {
     for (const line of decoder.flush()) {
       await bridge.handleLine(line);
     }
+    // A prompt round runs past the line that started it; let it finish so a
+    // host that closes its input after sending a prompt still receives the
+    // whole round.
+    await bridge.idle();
   } finally {
     bridge.close();
   }

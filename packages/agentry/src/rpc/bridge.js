@@ -57,16 +57,38 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
   // `currentId` state or emit a spurious `error` for an already-ended round.
   /** @type {object | undefined} */
   let activeRound;
+  // Settles when the active round ends, so `idle()` lets the stream wiring
+  // drain an in-flight round at end of input instead of abandoning it.
+  /** @type {Promise<void>} */
+  let idlePromise = Promise.resolve();
+  let resolveIdle = () => {};
+
+  const endRound = () => {
+    busy = false;
+    currentId = undefined;
+    activeRound = undefined;
+    resolveIdle();
+  };
+
+  /** @param {RpcEvent} event */
+  const safeWrite = event => {
+    try {
+      write(event);
+    } catch (error) {
+      log(`failed to write ${event.type} event: ${describeError(error)}`);
+    }
+  };
 
   const unsubscribe = session.subscribe(event => {
     const wire = translateAgentEvent(event, currentId);
-    if (wire) {
-      write(wire);
-    }
+    // Update the round state before writing, and never let a failing write
+    // (a closed pipe) escape into the agent's event dispatch, so the bridge
+    // cannot be wedged busy by an output error.
     if (event.type === 'agent_end') {
-      busy = false;
-      currentId = undefined;
-      activeRound = undefined;
+      endRound();
+    }
+    if (wire) {
+      safeWrite(wire);
     }
   });
 
@@ -96,6 +118,9 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
         currentId = id;
         const round = {};
         activeRound = round;
+        idlePromise = new Promise(resolve => {
+          resolveIdle = resolve;
+        });
         const message = command.message;
         // Fire the round without awaiting completion so that steer/abort
         // commands on subsequent input lines can interleave. Round
@@ -110,10 +135,8 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
             if (activeRound !== round) {
               return;
             }
-            busy = false;
-            currentId = undefined;
-            activeRound = undefined;
-            write(makeErrorEvent(describeError(error), id));
+            endRound();
+            safeWrite(makeErrorEvent(describeError(error), id));
           });
         return;
       }
@@ -221,8 +244,19 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
       );
       return;
     }
-    await handleCommand(command);
+    // A throwing session call is reported on the wire rather than ending
+    // the serving loop.
+    await handleCommand(command).catch(error => {
+      safeWrite(makeErrorEvent(describeError(error), command.id));
+    });
   };
+
+  /**
+   * Resolves once no prompt round is in flight.
+   *
+   * @returns {Promise<void>}
+   */
+  const idle = () => idlePromise;
 
   const close = () => {
     if (unsubscribe) {
@@ -230,6 +264,6 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
     }
   };
 
-  return harden({ handleLine, handleCommand, close });
+  return harden({ handleLine, idle, close });
 };
 harden(makeRpcBridge);

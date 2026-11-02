@@ -432,3 +432,47 @@ test('handleLine — an unknown command type is logged to the diagnostic sink', 
   );
   t.is(written[0].type, 'error');
 });
+
+test('agent_end — a throwing write does not leave the bridge busy', async t => {
+  const fake = makeFakeSession();
+  /** @type {string[]} */
+  const logged = [];
+  let failWrites = false;
+  /** @type {object[]} */
+  const written = [];
+  const bridge = makeRpcBridge({
+    session: fake.session,
+    write: event => {
+      if (failWrites) {
+        throw Error('EPIPE');
+      }
+      written.push(event);
+    },
+    log: message => logged.push(message),
+  });
+  await bridge.handleLine('{"id":"1","type":"prompt","message":"a"}');
+  await flush();
+  failWrites = true;
+  fake.emit({ type: 'agent_end', messages: [] });
+  failWrites = false;
+  t.true(
+    logged.some(line => /failed to write agent_end event: EPIPE/.test(line)),
+  );
+  await bridge.handleLine('{"id":"s","type":"get_status"}');
+  t.like(written.at(-1), { type: 'status', busy: false, id: 's' });
+});
+
+test('idle — resolves only once the active round ends', async t => {
+  const h = makeHarness();
+  await h.bridge.idle();
+  await h.bridge.handleLine('{"id":"1","type":"prompt","message":"a"}');
+  let settled = false;
+  const idle = h.bridge.idle().then(() => {
+    settled = true;
+  });
+  await flush();
+  t.false(settled);
+  h.emit({ type: 'agent_end', messages: [] });
+  await idle;
+  t.true(settled);
+});
