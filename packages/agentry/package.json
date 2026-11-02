@@ -57,7 +57,7 @@
       "default": "./src/edit-text.js"
     },
     "./rpc": {
-      "types": "./src/rpc/index.js",
+      "types": "./rpc.types.d.ts",
       "default": "./src/rpc/index.js"
     },
     "./package.json": "./package.json"

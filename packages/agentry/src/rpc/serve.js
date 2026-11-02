@@ -5,12 +5,8 @@
 /**
  * Wire the RPC bridge to a byte stream pair.
  *
- * `serveRpc` reads LF-delimited JSON commands from `input`, dispatches
- * them through {@link makeRpcBridge}, and writes LF-delimited JSON events
- * to `output`. Diagnostics go to the separate `errorOutput` so the
- * protocol stream on `output` stays clean; when `errorOutput` is omitted,
- * diagnostics are dropped. At end of input it waits for an in-flight prompt
- * round to end before returning.
+ * Diagnostics go to the separate `errorOutput` so the protocol stream on
+ * `output` stays clean; when `errorOutput` is omitted, diagnostics are dropped.
  */
 
 import { encodeRecord, makeJsonlDecoder } from './framing.js';

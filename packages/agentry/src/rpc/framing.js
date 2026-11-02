@@ -6,17 +6,12 @@
 /**
  * Strict LF-delimited JSON (JSONL) framing for the stdio RPC bridge.
  *
- * Pi's framing rule, which this bridge honours: records are separated by
+ * Pi's framing rule, which this bridge honors: records are separated by
  * `\n` and nothing else. Node's `readline` is non-compliant because it
  * also splits on a bare `\r`; a spawning host in another language must
- * not, so neither does this decoder. A bare `\r` stays in the line (a `CRLF` sender yields a line with a trailing `\r`, which
- * `JSON.parse` tolerates as whitespace); `U+2028` / `U+2029` are ordinary
- * characters inside a record.
- *
- * The decoder is stateful: it buffers a partial trailing line across
- * `push` calls and decodes bytes with a streaming `TextDecoder` so a
- * multibyte UTF-8 sequence split across chunk boundaries reassembles
- * correctly.
+ * not, so neither does this decoder. A bare `\r` stays in the line (a `CRLF`
+ * sender yields a line with a trailing `\r`, which `JSON.parse` tolerates as
+ * whitespace); `U+2028` / `U+2029` are ordinary characters inside a record.
  */
 
 /** @import { JsonlDecoder } from './types.js' */
@@ -76,8 +71,7 @@ export const makeJsonlDecoder = () => {
 harden(makeJsonlDecoder);
 
 /**
- * Encode a record as one JSONL output line (JSON text plus a single
- * trailing `\n`).
+ * Encode a record as one JSONL output line.
  *
  * @param {unknown} record
  * @returns {string}

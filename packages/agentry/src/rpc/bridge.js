@@ -26,7 +26,7 @@ import {
   translateAgentEvent,
 } from './protocol.js';
 
-/** @import { RpcCommand, RpcEvent, Session } from './types.js' */
+/** @import { RpcBridge, RpcCommand, RpcEvent, Session } from './types.js' */
 
 /**
  * @param {unknown} error
@@ -44,6 +44,7 @@ const describeError = error => {
  * @param {Session} options.session
  * @param {(event: RpcEvent) => void} options.write
  * @param {(message: string) => void} [options.log]
+ * @returns {RpcBridge}
  */
 export const makeRpcBridge = ({ session, write, log = () => {} }) => {
   let busy = false;
@@ -122,13 +123,8 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
           resolveIdle = resolve;
         });
         const message = command.message;
-        // Fire the round without awaiting completion so that steer/abort
-        // commands on subsequent input lines can interleave. Round
-        // completion is observed via the `agent_end` event above; only a
-        // synchronous/asynchronous prompt failure is handled here — and only
-        // when this is still the active round, so a superseded round's late
-        // rejection neither clobbers a newer round's state nor reports an
-        // error for a round that already ended.
+        // Round completion is observed via the `agent_end` event above; this
+        // handler covers only a failed `prompt`.
         Promise.resolve()
           .then(() => session.prompt(message))
           .catch(error => {
@@ -214,17 +210,18 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
     if (trimmed === '') {
       return;
     }
-    let command;
+    /** @type {unknown} */
+    let parsed;
     try {
-      command = JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
     } catch (error) {
       write(makeErrorEvent(`invalid JSON: ${describeError(error)}`));
       return;
     }
     if (
-      command === null ||
-      typeof command !== 'object' ||
-      Array.isArray(command)
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
     ) {
       write(makeErrorEvent('each record must be a JSON object'));
       return;
@@ -232,22 +229,24 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
     // `id` is echoed verbatim on every correlated event. A non-string `id`
     // would be reflected unchecked (breaking the correlation contract and the
     // typed `string | undefined` currentId), so reject it before dispatch.
-    if (command.id !== undefined && typeof command.id !== 'string') {
+    const { id, type } = /** @type {{ id?: unknown, type?: unknown }} */ (
+      parsed
+    );
+    if (id !== undefined && typeof id !== 'string') {
       write(
         makeErrorEvent('each record\'s "id" must be a string when present'),
       );
       return;
     }
-    if (typeof command.type !== 'string') {
-      write(
-        makeErrorEvent('each record must have a string "type"', command.id),
-      );
+    if (typeof type !== 'string') {
+      write(makeErrorEvent('each record must have a string "type"', id));
       return;
     }
-    // A throwing session call is reported on the wire rather than ending
-    // the serving loop.
+    // Only `id` and `type` are checked here; the dispatcher validates each
+    // payload field before use.
+    const command = /** @type {RpcCommand} */ (parsed);
     await handleCommand(command).catch(error => {
-      safeWrite(makeErrorEvent(describeError(error), command.id));
+      safeWrite(makeErrorEvent(describeError(error), id));
     });
   };
 
@@ -259,9 +258,7 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
   const idle = () => idlePromise;
 
   const close = () => {
-    if (unsubscribe) {
-      unsubscribe();
-    }
+    unsubscribe();
   };
 
   return harden({ handleLine, idle, close });

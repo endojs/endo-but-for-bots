@@ -101,7 +101,6 @@ api-docs
 
 # legacy exceptions to the above rule
 !packages/bundle-source/src/exports.d.ts
-!packages/agentry/src/rpc/types.d.ts
 !packages/captp/src/ts-types.d.ts
 !packages/cli/test/_types.d.ts
 !packages/compartment-mapper/src/types-external.d.ts
