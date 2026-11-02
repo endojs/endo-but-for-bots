@@ -13,8 +13,7 @@ import { compareUint8Arrays } from './bytewise-compare.js';
  *
  * Equal ephemerals do not occur between honest peers, but a peer that
  * echoed ours back would leave both sides deferring to the other's
- * dial. The side that opened the session wins that tie, and exactly
- * one side did.
+ * dial. The side that opened the session wins that tie.
  *
  * @param {Uint8Array} localEphemeral
  * @param {Uint8Array} peerEphemeral

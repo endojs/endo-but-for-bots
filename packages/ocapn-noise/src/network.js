@@ -1314,8 +1314,6 @@ export const makeOcapnNoiseNetwork = ({
           }, hardTimeoutMs);
           backoffMs = reconnectSettings.backoffInitialMs;
         }
-        // Either side redials; if both do, the crossed-hellos
-        // tiebreaker keeps one of the two new transport instances.
         scheduleRedial(0);
       };
 

@@ -343,18 +343,14 @@ test('the winner of crossed hellos stops deferring to a dial of its own that han
 });
 
 test('the winner of crossed hellos stops deferring when its dials keep failing', async t => {
-  // Backoff of a millisecond keeps the greater side dialing nearly all
-  // the time, so a deference window that restarted with each of its
-  // failed dials would drop nearly every dial of the lesser side (paced
-  // apart here) until hardTimeoutMs, past the wait below.
+  // A 1 ms backoff keeps the greater side always dialing, so a deference
+  // window restarted per failed dial would never lapse.
   const quickBackoff = { ...reconnect, backoffInitialMs: 1, backoffMaxMs: 1 };
   const { sessionA, sessionB, injector, injectorB } = await connectLossyPair(
     t,
     cborCodec,
     { reconnectA: quickBackoff, reconnectB: quickBackoff },
   );
-  // The lesser side's dials are held until the greater side is dialing,
-  // so that they arrive while it defers to its own.
   const { greater, lesser } = byEphemeral(injector, injectorB);
   const connectsBefore = greater.getConnects();
   greater.failOutboundAfter((heartbeat.sessionTimeoutMs * 9) / 10);
@@ -386,8 +382,6 @@ test('the crossed-hellos tiebreaker picks exactly one side, even on a tie', t =>
   const high = new Uint8Array(32).fill(2);
   t.true(initiatesOnCrossedHellos(high, low, false));
   t.false(initiatesOnCrossedHellos(low, high, true));
-  // A peer that echoed our ephemeral: the side that opened the session
-  // wins, and only one side did.
   t.true(initiatesOnCrossedHellos(low, low, true));
   t.false(initiatesOnCrossedHellos(low, low, false));
 });

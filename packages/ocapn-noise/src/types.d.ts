@@ -126,13 +126,8 @@ export interface HeartbeatOptions {
  * Session reconnect settings, per
  * `designs/ocapn-noise-session-reconnect.md` §§ 3 and 5. Requires
  * heartbeats, and takes effect for a session only when the peer's
- * `op:session-hello` advertises reconnect too. When a transport instance
- * is lost, either side dials a fresh Noise IK handshake (Rekey) on a new
- * transport instance (the crossed-hellos tiebreaker keeps one if both
- * dial), the session epoch
- * advances, and the frames the lost instance did not deliver are
- * replayed exactly once. The session aborts if no new instance is up
- * within `hardTimeoutMs`.
+ * `op:session-hello` advertises reconnect too. See the README § Session
+ * reconnect for the behavior.
  */
 export interface ReconnectOptions {
   /** `RECONNECT_BACKOFF_INITIAL`. Default 250. */
