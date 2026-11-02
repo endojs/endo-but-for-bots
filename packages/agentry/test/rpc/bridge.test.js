@@ -257,7 +257,9 @@ test('set_model — reports a failed switch as an error event', async t => {
   await h.bridge.handleLine(
     '{"id":"sm","type":"set_model","provider":"anthropic","model":"nope"}',
   );
-  t.deepEqual(h.written, [{ type: 'error', message: 'no such model', id: 'sm' }]);
+  t.deepEqual(h.written, [
+    { type: 'error', message: 'no such model', id: 'sm' },
+  ]);
 });
 
 test('set_model — rejects a missing provider or model', async t => {
