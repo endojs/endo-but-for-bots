@@ -61,6 +61,10 @@ const isFilePresent = location =>
     () => false,
   );
 
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {Record<string, string>} [files]
+ */
 const makeFixture = async (t, files = packageFiles) => {
   const packageRoot = await makeTemporaryDirectory(t);
   await writeTree(packageRoot, files);
@@ -158,6 +162,21 @@ test('readPackageManifest honors the endo key and ignores unknown kinds', async 
   t.deepEqual(directories.skills, ['./lib/skills']);
   t.deepEqual(directories.prompts, [], 'the endo key replaces discovery');
   t.false('themes' in directories);
+});
+
+test('readPackageManifest refuses a package with no package.json', async t => {
+  const packageRoot = await makeTemporaryDirectory(t);
+  await t.throwsAsync(readPackageManifest(packageRoot), {
+    message: /No readable package\.json/,
+  });
+});
+
+test('readPackageManifest reports malformed JSON with its location', async t => {
+  const packageRoot = await makeTemporaryDirectory(t);
+  await writeTree(packageRoot, { 'package.json': '{' });
+  await t.throwsAsync(readPackageManifest(packageRoot), {
+    message: /Invalid JSON in .*package\.json/,
+  });
 });
 
 for (const entry of ['../outside', '/etc', './skills/../../outside']) {
@@ -298,6 +317,19 @@ test('install refuses a declared directory reached through a link', async t => {
   });
 });
 
+test('install refuses a declared directory that does not exist', async t => {
+  const { source, store, packageRoot } = await makeFixture(t, {
+    'package.json': JSON.stringify({
+      name: 'sample',
+      endo: { skills: ['./absent'] },
+    }),
+  });
+  await t.throwsAsync(store.install(source, packageRoot), {
+    message: /"endo\.skills" directory "\.\/absent" does not exist/,
+  });
+  t.deepEqual(await store.list(), []);
+});
+
 test('install refuses a skill name outside the agentskills alphabet', async t => {
   const { source, store, packageRoot } = await makeFixture(t, {
     'package.json': JSON.stringify({ name: 'sample' }),
@@ -390,6 +422,24 @@ test('disabling moves resources out of discovery and enabling restores them', as
   await store.setEnabled(source.id, true);
   t.is(await fs.readFile(skill, 'utf8'), 'alpha');
   t.true((await store.list())[0].enabled);
+});
+
+test('setting the state a package already has changes nothing', async t => {
+  const { home, source, store, packageRoot } = await makeFixture(t);
+  await store.install(source, packageRoot);
+  await store.setEnabled(source.id, true);
+  t.is(
+    await fs.readFile(path.join(home, '.agents/skills/alpha/SKILL.md'), 'utf8'),
+    'alpha',
+  );
+  t.true((await store.list())[0].enabled);
+});
+
+test('enabling a package that is not installed is refused', async t => {
+  const { store } = await makeFixture(t);
+  await t.throwsAsync(store.setEnabled('npm:absent', true), {
+    message: /No package "npm:absent" is installed/,
+  });
 });
 
 test('enabling refuses to overwrite a resource authored meanwhile', async t => {
@@ -531,6 +581,21 @@ test('extractPackageTarball refuses a traversing entry', async t => {
   t.false(await isFilePresent(path.join(workspace, 'evil')));
 });
 
+test('extractPackageTarball refuses a file beside the package root', async t => {
+  const workspace = await makeTemporaryDirectory(t);
+  const archivePath = path.join(workspace, 'package.tgz');
+  await fs.writeFile(
+    archivePath,
+    await compress(
+      Buffer.concat([tarFileHeader('package', 0), tarEndMarker()]),
+    ),
+  );
+  await t.throwsAsync(
+    extractPackageTarball(archivePath, path.join(workspace, 'out')),
+    { message: /has no leading directory/ },
+  );
+});
+
 const runEndo = async (commandArguments, { home, cwd = home }) =>
   execa(process.execPath, [endoBin, ...commandArguments], {
     cwd,
@@ -613,6 +678,26 @@ test('the CLI reports a refusal without a stack trace or a daemon', async t => {
   const absent = await runEndo(['remove', 'npm:absent'], { home });
   t.is(absent.exitCode, 1);
   t.regex(absent.stderr, /^endo: No package "npm:absent" is installed/m);
+});
+
+test('the CLI warns about skipped directories and pending kinds', async t => {
+  const { home, packageRoot } = await makeFixture(t, {
+    ...packageFiles,
+    'skills/helpers/notes.md': '',
+    'guests/agent.js': '',
+  });
+  const { stdout, stderr } = await runEndo(['install', packageRoot], { home });
+  t.regex(stdout, /^installed /m);
+  t.regex(stderr, /^endo: .*helpers: it has no SKILL\.md/m);
+  t.regex(stderr, /^endo: .* also declares guests \(\.\/guests\)/m);
+  t.notRegex(stderr, /also declares providers/);
+});
+
+test('the CLI refuses to update a package that is not installed', async t => {
+  const home = await makeTemporaryDirectory(t);
+  const refused = await runEndo(['update', 'npm:absent'], { home });
+  t.is(refused.exitCode, 1);
+  t.regex(refused.stderr, /^endo: No package "npm:absent" is installed/m);
 });
 
 test('the help screen advertises the package verbs', async t => {
