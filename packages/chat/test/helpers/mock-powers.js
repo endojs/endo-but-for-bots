@@ -123,6 +123,14 @@ export const makeMockPowers = ({
 
   const powers = Far('MockPowers', {
     /**
+     * @param {...string} path
+     * @returns {boolean}
+     */
+    has(...path) {
+      return names.includes(path.join('/')) || values.has(path.join('/'));
+    },
+
+    /**
      * List all pet names.
      * @returns {AsyncIterable<string>}
      */

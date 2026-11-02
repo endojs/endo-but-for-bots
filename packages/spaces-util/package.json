@@ -52,6 +52,7 @@
     "./debugger-panel.js": "./src/debugger-panel.js",
     "./command-executor.js": "./src/command-executor.js",
     "./command-registry.js": "./src/command-registry.js",
+    "./prompt-template-catalog.js": "./src/prompt-template-catalog.js",
     "./error-trace.js": "./src/error-trace.js",
     "./platform-keys.js": "./src/platform-keys.js",
     "./inline-define.js": "./src/inline-define.js",
@@ -81,6 +82,7 @@
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/preact-container": "workspace:^",
+    "@endo/prompt-templates": "workspace:^",
     "marked": "^18.1.1",
     "preact": "^10.29.8"
   },

@@ -2,6 +2,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { EndoHost } from '@endo/daemon' */
+/** @import { PromptTemplate } from '@endo/prompt-templates/types.js' */
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
@@ -10,6 +11,11 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Fragment, h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import {
+  bindArguments,
+  parseCommandArguments,
+  substituteVariables,
+} from '@endo/prompt-templates/substitute.js';
 
 import { sendFormComponent } from './send-form.js';
 import { commandSelectorComponent } from './command-selector.js';
@@ -22,6 +28,10 @@ import { createEndowModal } from './endow-modal.js';
 import { createInlineCommandForm } from './inline-command-form.js';
 import { createPendingCommands } from './pending-commands.js';
 import { createCommandExecutor } from './command-executor.js';
+import {
+  makePromptTemplateCatalog,
+  PROMPT_TEMPLATE_CATEGORY,
+} from './prompt-template-catalog.js';
 import {
   getCommand,
   getCategories,
@@ -290,6 +300,9 @@ const CommandChrome = ({ region, controller }) => {
 };
 harden(CommandChrome);
 
+/** Splits a slash line into a command name and its argument text. */
+const SLASH_LINE_PATTERN = /^\/(\S+)\s+([\s\S]*)$/;
+
 /**
  * @param {HTMLElement} $parent
  * @param {ERef<EndoHost>} powers
@@ -457,7 +470,7 @@ export const chatBarComponent = (
     }
 
     // Resolve alias to get the actual command
-    const command = getCommand(commandName);
+    const command = resolveCommand(commandName);
     /** @type {ModelineHint[]} */
     let hints;
     if (command && command.name === 'js') {
@@ -484,6 +497,15 @@ export const chatBarComponent = (
 
     setModeline(hints);
   };
+
+  const promptTemplates = makePromptTemplateCatalog({ powers });
+  void promptTemplates.refresh();
+
+  /**
+   * @param {string} commandName
+   */
+  const resolveCommand = commandName =>
+    getCommand(commandName) ?? promptTemplates.getCommand(commandName);
 
   /** @type {'send' | 'selecting' | 'inline' | 'js' | 'form' | 'focus' | 'pending'} */
   let mode = 'send';
@@ -631,6 +653,7 @@ export const chatBarComponent = (
     bundles: 'Bundles',
     profile: 'Profile',
     system: 'System',
+    [PROMPT_TEMPLATE_CATEGORY]: 'Prompt templates',
   };
 
   /**
@@ -779,6 +802,17 @@ export const chatBarComponent = (
           })),
         });
       }
+    }
+    const templateCommands = promptTemplates.getCommands();
+    if (templateCommands.length !== 0) {
+      sections.push({
+        category: PROMPT_TEMPLATE_CATEGORY,
+        label: CATEGORY_LABELS[PROMPT_TEMPLATE_CATEGORY],
+        commands: templateCommands.map(({ name, description }) => ({
+          name,
+          description,
+        })),
+      });
     }
 
     renderConfined(
@@ -949,6 +983,15 @@ export const chatBarComponent = (
   const executeWithSpinner = async (commandName, data) => {
     messagePicker.disable();
 
+    const promptTemplate = promptTemplates.getTemplate(commandName);
+    if (promptTemplate) {
+      expandPromptTemplate(
+        promptTemplate,
+        /** @type {Record<string, string>} */ (data),
+      );
+      return;
+    }
+
     if (commandName === 'enter') {
       const { hostName } = /** @type {{ hostName: string }} */ (data);
       exitCommandMode(); // eslint-disable-line no-use-before-define
@@ -1020,6 +1063,7 @@ export const chatBarComponent = (
     powers,
     iterateReader: iterateReaderFactory,
     getContext: () => getCommandContext(), // eslint-disable-line no-use-before-define
+    resolveCommand,
     onSubmit: async (commandName, data) => {
       await executeWithSpinner(commandName, data);
     },
@@ -1107,7 +1151,7 @@ export const chatBarComponent = (
    * @param {Record<string, string>} [prefill] - Optional field values to pre-fill
    */
   const enterCommandMode = (commandName, prefill) => {
-    const command = getCommand(commandName);
+    const command = resolveCommand(commandName);
     if (!command) return;
 
     mode = 'inline';
@@ -1878,11 +1922,83 @@ export const chatBarComponent = (
   }
 
   /**
+   * Replace the editor's content and put the caret at its end.
+   * @param {string} text
+   */
+  const setEditorText = text => {
+    $input.textContent = text;
+    $input.focus();
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents($input);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    $input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  /**
+   * Put a template's text in the editor and return to send mode. Sending stays
+   * the user's decision: nothing reaches the agent until they press Enter.
+   * @param {PromptTemplate} template
+   * @param {Readonly<Record<string, string>>} values
+   */
+  const expandPromptTemplate = (template, values) => {
+    exitCommandMode();
+    setEditorText(substituteVariables(template.body, values));
+  };
+
+  /**
+   * Invoke a template with the argument text from its slash line: expand it if
+   * the arguments fill every variable, ask for the rest in the command form if
+   * they do not, and keep the slash line open for correction if there are too
+   * many.
+   * @param {PromptTemplate} template
+   * @param {string} argumentText
+   */
+  const invokePromptTemplate = (template, argumentText) => {
+    const { name, variables } = template;
+    const { values, missing, excess } = bindArguments(
+      variables,
+      parseCommandArguments(argumentText),
+    );
+    if (excess > 0) {
+      $error.textContent = `/${name} takes ${variables.length} argument(s); ${excess} too many. Quote an argument to include spaces.`;
+      setTimeout(() => {
+        $error.textContent = '';
+      }, 3000);
+      commandSelector.show();
+      commandSelector.filter(name);
+      return;
+    }
+    if (missing.length === 0) {
+      expandPromptTemplate(template, values);
+      return;
+    }
+    sendForm.clear();
+    enterCommandMode(
+      name,
+      Object.keys(values).length === 0 ? undefined : { ...values },
+    );
+  };
+
+  /**
    * Handle command selection.
    * @param {string} commandName
    */
   const handleCommandSelect = commandName => {
     commandPrefix = '';
+
+    const promptTemplate = promptTemplates.getTemplate(commandName);
+    if (promptTemplate) {
+      const slashLine =
+        mode === 'selecting' ? getInputText().match(SLASH_LINE_PATTERN) : null;
+      invokePromptTemplate(promptTemplate, slashLine ? slashLine[2] : '');
+      return;
+    }
+
     sendForm.clear();
 
     const command = getCommand(commandName);
@@ -1956,6 +2072,7 @@ export const chatBarComponent = (
     onSelect: handleCommandSelect,
     onCancel: handleCommandCancel,
     getContext: getCommandContext,
+    getAdditionalCommands: promptTemplates.getCommands,
   });
 
   /**
@@ -1963,6 +2080,19 @@ export const chatBarComponent = (
    * @returns {string}
    */
   const getInputText = () => $input.textContent || '';
+
+  /**
+   * The name to filter the command menu by. Text after a template's name is
+   * its arguments; any other text is all command prefix.
+   * @param {string} text - The input text after the leading slash
+   * @returns {string}
+   */
+  const commandPrefixOf = text => {
+    const slashLine = `/${text}`.match(SLASH_LINE_PATTERN);
+    return slashLine && promptTemplates.getTemplate(slashLine[1])
+      ? slashLine[1]
+      : text;
+  };
 
   // Handle input events for command detection
   $input.addEventListener('input', () => {
@@ -1974,7 +2104,7 @@ export const chatBarComponent = (
     if (mode === 'selecting') {
       // Update filter as user types after "/"
       if (text.startsWith('/')) {
-        commandPrefix = text.slice(1);
+        commandPrefix = commandPrefixOf(text.slice(1));
         commandSelector.filter(commandPrefix);
       } else {
         // User deleted the "/" - cancel command selection
@@ -1990,6 +2120,11 @@ export const chatBarComponent = (
         commandPrefix = '';
         commandSelector.show();
         updateSelectingModeline();
+        void promptTemplates.refresh().then(() => {
+          if (mode === 'selecting') {
+            commandSelector.filter(commandPrefix);
+          }
+        });
       }
     }
   });
@@ -2045,9 +2180,27 @@ export const chatBarComponent = (
           event.preventDefault();
           commandSelector.selectPageUp();
           break;
+        case ' ': {
+          // Space completes a template's name and begins its arguments, unlike
+          // a built-in command, where it confirms the selection.
+          const selected = commandSelector.getSelected();
+          if (selected && promptTemplates.getTemplate(selected)) {
+            if (SLASH_LINE_PATTERN.test(getInputText())) {
+              break;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            setEditorText(`/${selected} `);
+            commandSelector.selectFirst();
+            break;
+          }
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          commandSelector.confirmSelection();
+          break;
+        }
         case 'Tab':
         case 'Enter':
-        case ' ':
           event.preventDefault();
           event.stopImmediatePropagation();
           commandSelector.confirmSelection();

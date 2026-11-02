@@ -384,3 +384,21 @@ test('getCommandsByCategory respects context filter', t => {
   t.true(channelNames.includes('adopt'));
   t.true(channelNames.includes('reply'));
 });
+
+test('filterCommands merges additional commands in name order', t => {
+  const additional = harden({
+    name: 'hello',
+    label: 'hello',
+    description: 'Template',
+    category: 'templates',
+    mode: /** @type {const} */ ('inline'),
+    fields: [],
+  });
+  const names = filterCommands('', undefined, [additional]).map(c => c.name);
+  t.is(names.indexOf('hello'), names.indexOf('help') - 1);
+  t.deepEqual(
+    filterCommands('hell', undefined, [additional]).map(c => c.name),
+    ['hello'],
+  );
+  t.false(filterCommands('', undefined).some(c => c.name === 'hello'));
+});
