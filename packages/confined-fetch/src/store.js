@@ -1,4 +1,5 @@
 // @ts-check
+// build-vs-buy-exempt: moved from @endo/fetch, which no longer defines it.
 
 /**
  * The fetch service's durable store, backed by a writable virtual-file-system
@@ -102,7 +103,10 @@ export const makeFetchStore = async (root, makeId) => {
       try {
         return await readJSON(CONFIG_NAME);
       } catch (error) {
-        console.warn('[fetch] skipping unparseable config.json:', error);
+        console.warn(
+          '[confined-fetch] skipping unparseable config.json:',
+          error,
+        );
         return undefined;
       }
     },
@@ -125,7 +129,10 @@ export const makeFetchStore = async (root, makeId) => {
       try {
         return /** @type {any[]} */ (await readJSON(BINDINGS_NAME));
       } catch (error) {
-        console.warn('[fetch] skipping unparseable bindings.json:', error);
+        console.warn(
+          '[confined-fetch] skipping unparseable bindings.json:',
+          error,
+        );
         return undefined;
       }
     },

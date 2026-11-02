@@ -4,16 +4,17 @@ Pure HTTP confinement primitives for packages that need fetch-like network
 access without depending on remotables, exos, CapTP, or daemon state.
 
 The package validates HTTP(S) origins, methods, and headers, enforces an
-injected-clock rate limit, performs manual-redirect checks, creates request
-abort signals, and reads response streams only up to a configured byte cap.
-All external effects are injected through `fetch`, `now`, and cancellation.
+injected-delay rate limit, performs manual-redirect checks, creates request
+cancellation tokens, and reads response streams only up to a configured byte
+cap. All external effects are injected through `fetch`, `delay`, and
+cancellation.
 
 `limitResponseBytes()` truncates at read time. If a chunk exactly fills
 `maxBytes`, the returned `truncated()` flag is `true` and the upstream reader is
 cancelled, because the reader reached the configured cap and no further bytes
 are permitted.
 
-`makeHttpConfinement(policy, { fetch, now })` composes the primitive checks in
+`makeHttpConfinement(policy, { fetch, delay })` composes the primitive checks in
 the implementation request order:
 
 1. rate slot
