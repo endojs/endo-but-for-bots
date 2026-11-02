@@ -1,42 +1,40 @@
 ---
-'@endo/fetch': minor
-'@endo/confined-fetch': minor
+'@endo/fetch': major
+'@endo/confined-fetch': major
 '@endo/exo-http-client': minor
-'@endo/http-confine': patch
+'@endo/http-confine': minor
 ---
 
-Split confined outbound HTTP into two plugins per `designs/endo-fetch.md`.
+`@endo/fetch` is the unconfined base plugin.
+Its `make()` adapts the worker's ambient `fetch` into a passable, unfettered `Fetch` capability with no allowlist, caps, policy, or persistence.
+A response body is a `CloseablePassableBytesReader`, and a request may carry a `cancelled` promise that aborts it.
+Its `timer.js` entry provides a cancellable `Timer` that confined plugins are endowed with instead of ambient time.
+Migration: the stateful service, allowlist, and pins that `@endo/fetch` previously provisioned (`./src/service.js`, `./src/store.js`) moved to `@endo/confined-fetch`.
+Replace a provisioned `@endo/fetch` plugin with `@endo/confined-fetch`, endowed with a base `Fetch` from `@endo/fetch`.
+Both packages are private and unpublished, so no released consumer is affected.
 
-`@endo/fetch` is now the unconfined base plugin: its `make()` adapts the
-worker's ambient `fetch` into a passable, unfettered `Fetch` capability with no
-allowlist, caps, policy, or persistence. A response is a record whose body is a
-`CloseablePassableBytesReader`, and a request may carry a `cancelled`
-promise that aborts it, so the capability crosses vat boundaries. Its
-`timer.js` entry provides the separately endowed, cancellable `Timer` used by
-confined plugins without granting ambient time.
+`@endo/confined-fetch` is a new plugin that builds the `@endo/exo-http-client` `HttpClient` and `HttpClientControl` pair over an endowed base `Fetch`, never ambient `fetch`.
+A guest receives only the `HttpClient` from its `client()` facet.
+It requires a `timer` power, and persists policy and trust-on-first-bind pins in a private state directory so a service revived under `@pins` keeps them.
 
-`@endo/confined-fetch` is the stateful confined plugin, endowed with that base
-`Fetch` and a private virtual-file-system state directory. It builds the
-`@endo/exo-http-client` `HttpClient` / `HttpClientControl` pair over the
-endowed base only, never ambient `fetch`, and returns a `ConfinedFetchService`
-whose `client()` is the only facet a guest receives. Durable policy
-(`config.json`) and trust-on-first-bind pins (`bindings.json`) persist through
-write-then-`move` replacement; the store, not the `env` initials, is
-authoritative across restarts, and a revoked service revives revoked when the
-integration re-endows the same base and directory under `@pins`.
+`@endo/http-confine` changes its public API.
+`makeRequestSignal` is removed in favor of `makeRequestCancellation`, which takes `{ timeoutMs, cancellation, delay }` and returns a cancellation token rather than an `AbortSignal`.
+`FetchLikeRequestOptions.signal` is replaced by `cancelled` (a `Promise<never>`).
+`makeRateLimiter` takes `{ maxPerMinute, delay, cancelled }` instead of `{ maxPerMinute, now }`.
+`limitResponseBytes` takes a `cancelled` option instead of `signal`.
+`makeHttpConfinement(policy, { fetch, delay })` no longer reads a `now` option.
+Migration: pass `cancelled` where `signal` was passed, and a `delay` function where `now` was passed.
+Redirect validation now applies only to the Fetch redirect statuses (301, 302, 303, 307, 308), so a 304 or other 3xx response without a `Location` is no longer rejected.
+An opaque redirect and a malformed `Location` are rejected.
+The `x-http-method`, `x-http-method-override`, and `x-method-override` request headers are now forbidden.
+The package now depends on `@endo/cancel`.
 
-`@endo/exo-http-client`'s `makeHttpClientAndControl` and
-`makeTrustOnFirstBindPolicyAdapter` gain two backward-compatible persistence
-seams so a request-time pin can survive a restart: an `initialBindings` argument
-that reconstitutes the trust-on-first-bind table, and a change-notification
-callback invoked in a later event after any durable policy or binding mutation. On
-`makeHttpClientAndControl` the callback is `onPolicyChange(snapshot)`, receiving
-the persistable snapshot; the underlying `makeTrustOnFirstBindPolicyAdapter`
-exposes the lower-level `onChange()` (no argument), which `makeHttpClientAndControl`
-adapts into the snapshot-bearing form.
-
-The confinement stack now uses `@endo/cancel` tokens and injected `delay` /
-async-capable `now` seams for request deadlines, revocation, rate windows,
-policy-prompt timeouts, and audit stamps. `@endo/confined-fetch` requires an
-endowed Timer and therefore runs in the ordinary daemon confined-worker
-compartment without ambient timers, `AbortController`, or `Date.now()`.
+`@endo/exo-http-client` changes its public API.
+`FetchLikeRequestOptions.signal` is replaced by `cancelled`, so an injected `fetch` must honor `cancelled` instead of an `AbortSignal`.
+The `HttpClientControl` methods `setAllowedOrigins`, `addAllowedOrigin`, `removeAllowedOrigin`, `revokeBinding`, and `unpin` now return `Promise<void>`.
+`makeHttpClientAndControl` and `makeTrustOnFirstBindPolicyAdapter` take a `delay` function for request deadlines, rate windows, and policy-prompt timeouts.
+A caller-supplied `now` no longer drives the rate window, and `now` may return a `Promise<number>`.
+Migration: await the control mutators, and inject a fake `delay` rather than a fake `now` to control rate windows in tests.
+`policyPromptTimeoutMs` must be at most `2 ** 31 - 1`.
+Two additive seams let a request-time pin survive a restart: `initialBindings` reconstitutes the trust-on-first-bind table, and `onPolicyChange(snapshot)` reports each durable policy or binding change.
+The package exports a new `Delay` type and depends on `@endo/cancel`.
