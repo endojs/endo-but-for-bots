@@ -666,7 +666,20 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
   t.is(stat.atime, stat.mtime);
 });
 
-test.serial(
+const xsHostGlobalNames = [
+  'hostExists',
+  'hostStat',
+  'hostReadDir',
+  'hostRemove',
+  'hostJoinPath',
+];
+// Under a native XS host these globals are real, and mocking them would pass
+// a shim-shaped assertion off as native conformance, so skip there.
+const nativeXsHostPresent = xsHostGlobalNames.some(
+  name => /** @type {any} */ (globalThis)[name] !== undefined,
+);
+
+(nativeXsHostPresent ? test.serial.skip : test.serial)(
   'XS removeDirectory walks in the right order over shim-only host globals',
   async t => {
     // Shim-only: these mocks follow the `stat` JSON shape and the
@@ -674,13 +687,7 @@ test.serial(
     // prove the walk's order and its refusal to recurse through a link, not
     // the native host's behavior, which no CI job runs under endor.
     const globalObject = /** @type {any} */ (globalThis);
-    const names = [
-      'hostExists',
-      'hostStat',
-      'hostReadDir',
-      'hostRemove',
-      'hostJoinPath',
-    ];
+    const names = xsHostGlobalNames;
     const originals = Object.fromEntries(
       names.map(name => [name, globalObject[name]]),
     );
