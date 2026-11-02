@@ -726,6 +726,99 @@ jobs:
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
+  # The daemon's own tests against the Rust `endor` supervisor and its XS
+  # manager (`yarn test:rust`), so the manager's host powers (for example the
+  # XS `removeDirectory`) run against real host globals rather than Node's.
+  test-daemon-rust:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-daemon-rust']) }}
+    name: test-daemon-rust
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      # Restored before the move below so the post-job save, which runs after
+      # the working directory is moved back, finds `target` where it left it.
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-endor-release-${{ hashFiles('Cargo.lock', 'rust/endo/**', 'c/moddable/**') }}
+          restore-keys: |
+            ${{ runner.os }}-endor-release-
+
+      # The daemon tests create Unix domain sockets under the package, and
+      # their full absolute paths MUST remain short.
+      - name: Move working directory
+        id: move-wd
+        run: |
+          ORIGINAL_WORKDIR="$(pwd)"
+          echo "ORIGINAL_WORKDIR=$ORIGINAL_WORKDIR" >> $GITHUB_ENV
+          cd "$RUNNER_TEMP"
+          WORKDIR="$(mktemp --tmpdir="$(pwd)" --dry-run checkout-XXXXXX)"
+          mv -fv "$ORIGINAL_WORKDIR" "$WORKDIR"
+          echo "WORKDIR=$WORKDIR" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKDIR }}
+        run: yarn install --immutable
+
+      # `endor` embeds these gitignored bundles with `include_str!`, so they
+      # must exist before the build or it embeds stubs.
+      - name: Generate XS bootstraps
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          yarn workspace @endo/thixotrope run build:xs-bundles
+          yarn bundle:xs
+
+      - name: Build endor
+        working-directory: ${{ env.WORKDIR }}
+        run: cargo build --locked --release -p endo --bin endor
+
+      # The daemon-starting files that pass in full under the XS manager.
+      # `endo.test.js` (~35 minutes) and `channel.test.js` (~8 minutes) also
+      # pass but would set this lane's length; the files whose tests still
+      # fail on the XS arm (restart durability, teardown, error traces, the
+      # Floot journals) are left out until they pass.
+      - name: Run daemon tests under endor
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          yarn workspace @endo/daemon test:rust \
+            test/content-store-gc.test.js \
+            test/cross-supervisor.test.js \
+            test/floot-attachments.test.js \
+            test/gateway.test.js \
+            test/mail-lifecycle-help.test.js \
+            test/marshal-publication.test.js \
+            test/request-result.test.js \
+            test/retention-paths.test.js
+
+      - name: Restore working directory
+        if: ${{ always() && steps.move-wd.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}
+        run: mv -fv "$WORKDIR" "$ORIGINAL_WORKDIR"
+
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
     needs: changes

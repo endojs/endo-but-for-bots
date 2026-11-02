@@ -172,6 +172,16 @@ class Repository(unittest.TestCase):
         self.assertTrue(selected["test-thixotrope-ironhorse"])
         self.assertTrue(selected["build-xsnap"])
 
+    def test_daemon_on_endor_follows_build_xsnap(self):
+        for path in [
+            "packages/daemon/src/manager.js",
+            "rust/endo/xsnap/src/polyfills.js",
+            "rust/endo/xsnap/xsnap-platform.c",
+        ]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["test-daemon-rust"])
+        self.assertFalse(self.selected("rust/engine/scripts/bench.sh")["test-daemon-rust"])
+
     def test_nonmanifest_bundle_inputs(self):
         self.assertTrue(self.selected("packages/lal/agent.js")["familiar-bundle"])
         self.assertTrue(self.selected("scripts/pack-all.mjs")["viable-release"])
