@@ -2107,18 +2107,11 @@ export interface EndoHost extends EndoAgent {
     },
   ): Promise<GitRemote>;
   /**
-   * Host-only constructive clone. Composes a repo-less remote endpoint
-   * with an empty destination mount, returning a fresh Git cap bound to
-   * `petName` and an `origin` GitRemote, bound to `origin.petName` when
-   * given.  `origin` takes the `provideGitRemote` policy fields except
-   * `name`, `url`, `credential` and `allowLocalFileTransport`, which the
-   * clone fixes from the endpoint, and defaults to fetch-only.
-   * `origin.petName` must differ from `petName`.  Both names are stored
-   * only after the whole composition succeeds.  The clone is staged in
-   * daemon-private staging beside the destination, and publishing never
-   * replaces a destination entry.  On failure only what the call created
-   * is removed, and a name `origin.petName` replaced is restored unless it
-   * was rebound meanwhile, so the caller can retry into the same mount.
+   * Host-only constructive clone into an empty destination mount,
+   * returning a fresh Git cap bound to `petName` and an `origin` GitRemote
+   * (fetch-only by default).  The clone is staged beside the mount, so the
+   * mount's parent directory must be writable and on the mount's
+   * filesystem.  Contract: `designs/daemon-git-remotes.md` § clone.
    */
   provideGitClone(
     destMount: EndoMount,
@@ -2681,6 +2674,7 @@ export type FilePowers = {
    * rely on the JS engine) satisfy `FilePowers` without it.
    */
   search?: import('@endo/platform/fs/search.types').Search;
+  /** `<device>:<inode>` of the object at `path`, following symbolic links. */
   pathIdentity: (path: string) => Promise<string>;
   /**
    * An identity of the entry at `path` itself, without following a symbolic

@@ -565,6 +565,12 @@ Requiring the caller to hold the mount exclusively is not checkable: a mount is 
 Cloning into a fresh child directory, or exposing the staging directory itself as the Git's mount, would put the repository somewhere other than the mount the caller named, and every caller expects the worktree at that mount's root.
 Identity is the device, inode, and birth time, because a filesystem may give a deleted entry's inode to its replacement at once; only where the filesystem records no birth time can such a replacement pass for the original; staging directories lie outside every mount, so their recorded identity is only a defensive check.
 
+Staging beside the mount sets three preconditions, which the clone checks before it runs or states here:
+
+- The mount's parent directory must be writable by the daemon; otherwise the clone is refused with an error naming that requirement.
+- The parent must be on the mount's filesystem, so publication can rename out of staging; a mount root that is itself a mount point, such as a bind mount, is refused before the clone runs.
+- No other capability may reach the mount's parent.  A mount nested inside another mount's tree puts staging inside that outer mount, and its holder could race the identity checks to plant content in the inner mount; host operators must not create such nested mounts for a clone destination.
+
 Cloning is out of scope on the XS manager, and is refused there before anything is cloned: its host has no rename that refuses an existing target and no hard link, so it cannot publish without risking a concurrent entry.
 
 ## Security Model

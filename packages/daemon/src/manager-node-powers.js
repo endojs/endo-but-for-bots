@@ -970,7 +970,9 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     pathIdentity,
     entryIdentity,
     renameNoReplace,
-    supportsRenameNoReplace: () => true,
+    // Windows MoveFileEx replaces an empty directory, so no-replace
+    // publication holds only on POSIX.
+    supportsRenameNoReplace: () => process.platform !== 'win32',
     removeEmptyDirectory,
     statPath,
     isDirectory,

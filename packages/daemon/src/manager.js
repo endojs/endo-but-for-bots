@@ -8839,9 +8839,28 @@ const makeDaemonCore = async (
     try {
       await filePowers.makePath(mountStagingRecordsPath);
       await writeMountStagingRecord(name, { mountId, stagingPath });
-      await filePowers.makePath(stagingPath);
+      try {
+        await filePowers.makePath(stagingPath);
+      } catch (error) {
+        throw makeError(
+          X`mount staging needs a writable parent directory beside the mount: ${/** @type {Error} */ (error).message}`,
+        );
+      }
       identity = await filePowers.entryIdentity(stagingPath);
       await writeMountStagingRecord(name, { mountId, identity, stagingPath });
+      // Publication renames out of staging, so refuse a mount that is
+      // itself a mount point before the clone runs, not at the rename.
+      /** @param {string} path */
+      const deviceOf = async path =>
+        (await filePowers.pathIdentity(path)).split(':')[0];
+      if (
+        (await deviceOf(stagingPath)) !==
+        (await deviceOf(getMountHostPath(mountId)))
+      ) {
+        throw makeError(
+          X`mount staging needs the mount's parent directory on the mount's filesystem`,
+        );
+      }
       return harden({ name, identity });
     } catch (error) {
       // Remove the directory now, but only while it is still the object
