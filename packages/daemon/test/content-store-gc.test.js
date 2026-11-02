@@ -237,16 +237,16 @@ test('scratch-mount backing directory is reclaimed when its formula is collected
 
   const scratchId = await E(host).identify('throwaway-scratch');
   const { number: formulaNumber } = parseId(scratchId);
-  const dirPath = mountPathOf(config.statePath, formulaNumber);
-  t.true(fs.existsSync(dirPath), 'scratch backing dir created');
+  const directoryPath = mountPathOf(config.statePath, formulaNumber);
+  t.true(fs.existsSync(directoryPath), 'scratch backing dir created');
 
   await E(host).remove('throwaway-scratch');
 
-  await waitForCondition(async () => !fs.existsSync(dirPath), {
-    message: `${dirPath} to be removed`,
+  await waitForCondition(async () => !fs.existsSync(directoryPath), {
+    message: `${directoryPath} to be removed`,
   });
   t.false(
-    fs.existsSync(dirPath),
+    fs.existsSync(directoryPath),
     'scratch backing dir pruned after formula collection',
   );
 });
@@ -272,17 +272,17 @@ test('scratch-mount reclamation unlinks symlinks without following them', async 
 
   const scratchId = await E(host).identify('symlink-scratch');
   const { number: formulaNumber } = parseId(scratchId);
-  const dirPath = mountPathOf(config.statePath, formulaNumber);
-  await fs.promises.symlink(victimPath, path.join(dirPath, 'root-link'));
+  const directoryPath = mountPathOf(config.statePath, formulaNumber);
+  await fs.promises.symlink(victimPath, path.join(directoryPath, 'root-link'));
   await fs.promises.symlink(
     victimPath,
-    path.join(dirPath, 'nested', 'child-link'),
+    path.join(directoryPath, 'nested', 'child-link'),
   );
 
   await E(host).remove('symlink-scratch');
 
-  await waitForCondition(async () => !fs.existsSync(dirPath), {
-    message: `${dirPath} to be removed`,
+  await waitForCondition(async () => !fs.existsSync(directoryPath), {
+    message: `${directoryPath} to be removed`,
   });
   t.is(await fs.promises.readFile(keptPath, 'utf8'), 'kept');
 });
