@@ -4,6 +4,7 @@ import harden from '@endo/harden';
 
 /**
  * @import { CodecTestEntry } from './_codecs_util.js'
+ * @import { OcapnHeartbeatMessage } from '../../src/codecs/operations.js'
  */
 
 import test from '@endo/ses-ava/test.js';
@@ -12,6 +13,8 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeHex } from '@endo/hex';
 
 import { makeSelector } from '../../src/selector.js';
+import { cborCodec } from '../../src/cbor/index.js';
+import { syrupCodec } from '../../src/syrup/index.js';
 import {
   readOcapnHeartbeatMessage,
   writeOcapnHeartbeatMessage,
@@ -500,18 +503,21 @@ runTableTestsAllCodecs(
 );
 
 // Error validation tests run with all codec formats
-for (const codec of AllCodecs) {
-  for (const message of [
+for (const [codecName, codec] of /** @type {const} */ ([
+  ['syrup', syrupCodec],
+  ['cbor', cborCodec],
+])) {
+  for (const message of /** @type {OcapnHeartbeatMessage[]} */ ([
     { type: 'op:ping', epoch: 2n, sequence: 3n },
     { type: 'op:pong', epoch: 2n, sequence: 3n, lastAckedRecvNonce: 2n ** 64n },
-  ]) {
-    test(`${message.type} round-trips as a heartbeat [${codec.name}]`, t => {
+  ])) {
+    test(`${message.type} round-trips as a heartbeat [${codecName}]`, t => {
       const bytes = writeOcapnHeartbeatMessage(harden(message), codec);
       t.deepEqual(readOcapnHeartbeatMessage(codec.makeReader(bytes)), message);
     });
   }
 
-  test(`a heartbeat read rejects another operation [${codec.name}]`, t => {
+  test(`a heartbeat read rejects another operation [${codecName}]`, t => {
     const writer = codec.makeWriter({ name: 'not a heartbeat' });
     writer.enterRecord(1);
     writer.writeSelectorFromString('op:abort');
@@ -521,7 +527,9 @@ for (const codec of AllCodecs) {
       { message: /OcapnHeartbeatOperations: read failed/ },
     );
   });
+}
 
+for (const codec of AllCodecs) {
   test(`op:get rejects integer fieldName [${codec.name}]`, t => {
     const testKit = makeCodecTestKit();
     const writer = codec.makeWriter({
