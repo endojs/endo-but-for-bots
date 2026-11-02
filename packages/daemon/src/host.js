@@ -468,6 +468,13 @@ export const makeHostMaker = ({
    * @param {{[name: string]: FormulaIdentifier}} platformNames
    * @param {Context} context
    */
+  /**
+   * Destination directories of the `provideGitClone` calls in progress.
+   *
+   * @type {Set<string>}
+   */
+  const gitClonesInProgress = new Set();
+
   const makeHost = async (
     hostId,
     handleId,
@@ -1795,92 +1802,101 @@ export const makeHostMaker = ({
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
-      // The destination is exclusive to this call (see
-      // designs/daemon-git-remotes.md § clone), so an empty mount now means
-      // that everything in it after a failure is this clone's to remove.
-      if ((await listMountHostEntries(destMountId)).length > 0) {
-        throw makeError(X`provideGitClone: destMount must be empty`);
+      // Discarding a failed clone empties the mount, which is safe only while
+      // this call holds the directory alone and found it empty.
+      if (gitClonesInProgress.has(destPath)) {
+        throw makeError(
+          X`provideGitClone: destMount already has a clone in progress`,
+        );
       }
-      // Formulas minted during the composition stay transiently pinned
-      // until the Git's name is stored, or until discard releases them.
-      /** @type {FormulaIdentifier[]} */
-      const pinned = [];
-      /** @type {FormulaIdentifier | undefined} */
-      let clonedGitId;
-      const cloner = makeGitCloner({
-        endpoint,
-        clone: gitClone,
-        makeGit: async () => {
-          const { value, id } = await formulateGit(
-            destMountId,
-            false,
-            identity,
-            makeDeferredTasks(),
-          );
-          pinTransient(id);
-          pinned.push(id);
-          clonedGitId = id;
-          return value;
-        },
-        makeRemote: async () => {
-          await null;
-          if (clonedGitId === undefined) {
-            throw makeError(X`provideGitClone: cloned Git id was not minted`);
-          }
-          const { value, id } = await formulateGitRemote(
-            clonedGitId,
-            credentialId,
-            'origin',
-            policy,
-            makeDeferredTasks(),
-          );
-          pinTransient(id);
-          pinned.push(id);
-          return value;
-        },
-      });
+      gitClonesInProgress.add(destPath);
       try {
-        const { git, remote } = await cloner.clone({
-          destMount,
-          destPath,
+        if ((await listMountHostEntries(destMountId)).length > 0) {
+          throw makeError(X`provideGitClone: destMount must be empty`);
+        }
+        // Formulas minted during the composition stay transiently pinned
+        // until the Git's name is stored, or until discard releases them.
+        /** @type {FormulaIdentifier[]} */
+        const pinned = [];
+        /** @type {FormulaIdentifier | undefined} */
+        let clonedGitId;
+        const cloner = makeGitCloner({
+          endpoint,
+          clone: gitClone,
+          makeGit: async () => {
+            const { value, id } = await formulateGit(
+              destMountId,
+              false,
+              identity,
+              makeDeferredTasks(),
+            );
+            pinTransient(id);
+            pinned.push(id);
+            clonedGitId = id;
+            return value;
+          },
+          makeRemote: async () => {
+            await null;
+            if (clonedGitId === undefined) {
+              throw makeError(X`provideGitClone: cloned Git id was not minted`);
+            }
+            const { value, id } = await formulateGitRemote(
+              clonedGitId,
+              credentialId,
+              'origin',
+              policy,
+              makeDeferredTasks(),
+            );
+            pinTransient(id);
+            pinned.push(id);
+            return value;
+          },
         });
-        // Naming is the last step, so a failure anywhere above leaves no
-        // name bound.
-        await E(directory).storeIdentifier(
-          namePath,
-          /** @type {FormulaIdentifier} */ (clonedGitId),
-        );
-        return harden({
-          git: /** @type {ReadWriteEndoGit} */ (git),
-          remote,
-        });
-      } catch (error) {
-        const cleanupErrors = [];
-        await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
-          cleanupError => cleanupErrors.push(cleanupError),
-        );
-        await clearMountHostEntries(
-          /** @type {FormulaIdentifier} */ (destMountId),
-        ).catch(cleanupError => cleanupErrors.push(cleanupError));
-        if (cleanupErrors.length > 0) {
-          throw makeError(
-            X`provideGitClone failed and could not discard the partial clone`,
-            AggregateError,
-            {
-              cause: /** @type {Error} */ (error),
-              errors: [error, ...cleanupErrors],
-            },
+        try {
+          const { git, remote } = await cloner.clone({
+            destMount,
+            destPath,
+          });
+          // Naming is the last step, so a failure anywhere above leaves no
+          // name bound.
+          await E(directory).storeIdentifier(
+            namePath,
+            /** @type {FormulaIdentifier} */ (clonedGitId),
+          );
+          return harden({
+            git: /** @type {ReadWriteEndoGit} */ (git),
+            remote,
+          });
+        } catch (error) {
+          const cleanupErrors = [];
+          await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
+            cleanupError => cleanupErrors.push(cleanupError),
+          );
+          await clearMountHostEntries(
+            /** @type {FormulaIdentifier} */ (destMountId),
+          ).catch(cleanupError => cleanupErrors.push(cleanupError));
+          if (cleanupErrors.length > 0) {
+            throw makeError(
+              X`provideGitClone failed and could not discard the partial clone`,
+              AggregateError,
+              {
+                cause: /** @type {Error} */ (error),
+                errors: [error, ...cleanupErrors],
+              },
+            );
+          }
+          throw error;
+        } finally {
+          // The name is bound by now, so a failed unpin must not report a
+          // published clone as failed.  The catch path has already unpinned.
+          await Promise.all(pinned.map(unpinTransient)).catch(error =>
+            console.warn(
+              `provideGitClone: could not release transient pins: ${/** @type {Error} */ (error).message}`,
+            ),
           );
         }
-        throw error;
       } finally {
-        // The name is bound by now, so a failed unpin must not report a
-        // published clone as failed.  The catch path has already unpinned.
-        await Promise.all(pinned.map(unpinTransient)).catch(error =>
-          console.warn(
-            `provideGitClone: could not release transient pins: ${/** @type {Error} */ (error).message}`,
-          ),
-        );
+        gitClonesInProgress.delete(destPath);
       }
     };
 

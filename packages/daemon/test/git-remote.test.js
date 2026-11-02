@@ -1176,12 +1176,9 @@ test.serial(
   async t => {
     const { host } = await provisionHostContext(t);
 
-    // An https listener that reads and never answers holds `git` inside
-    // the TLS handshake, so the rotation lands while the subprocess runs.
-    // Waiting for the ClientHello, not just the connection, makes the
-    // rotation land after `git` has written to the socket.  The listener
-    // keeps reading: unread bytes would withhold `end`, and `close` would
-    // never fire after `git` dies.
+    // An https listener that never answers holds `git` in the TLS handshake.
+    // It keeps reading, because unread bytes would withhold `end`, and `close`
+    // would never fire after `git` dies.
     /** @type {Set<net.Socket>} */
     const sockets = new Set();
     const handshaking = makePromiseKit();
@@ -1239,8 +1236,7 @@ test.serial(
     const destMount = await E(host).provideScratchMount('retry-destination');
     const destPath = await E(host).provideHostPath(destMount);
 
-    // Naming the Git under a directory that does not exist fails at the
-    // last step, after the clone ran and both formulas were minted.
+    // A name under a missing directory fails after the clone and both formulas.
     await t.throwsAsync(
       E(host).provideGitClone(destMount, ['no-such-directory', 'retry-git'], {
         endpoint: { url: remoteUrl, allowLocalFileTransport: true },
@@ -1341,6 +1337,40 @@ test.serial(
     );
     t.is(await E(destMount).readText(['keep.txt']), 'caller content\n');
     t.false(await E(host).has('occupied-git'));
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone refused for a concurrent clone keeps the first clone',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount(
+      'contested-destination',
+    );
+    const destPath = await E(host).provideHostPath(destMount);
+    const endpoint = { url: remoteUrl, allowLocalFileTransport: true };
+    const first = E(host).provideGitClone(destMount, 'first-git', { endpoint });
+    const second = E(host).provideGitClone(destMount, 'second-git', {
+      endpoint,
+    });
+    await t.throwsAsync(second, {
+      message: /destMount already has a clone in progress/,
+    });
+    const { git } = await first;
+    t.true(fs.existsSync(path.join(destPath, '.git')));
+    t.true(await E(host).has('first-git'));
+    t.false(await E(host).has('second-git'));
+    t.truthy(await E(git).status());
+
+    // The refusal lasts only as long as the clone.
+    await t.throwsAsync(
+      E(host).provideGitClone(destMount, 'third-git', { endpoint }),
+      { message: /destMount must be empty/ },
+    );
   },
 );
 
