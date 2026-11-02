@@ -133,3 +133,22 @@ test('setModel — rejects an unknown model and keeps the current one', async t 
   );
   t.is(fake.piAgent.state.model, previous);
 });
+
+test('the session guards its seam against off-shape arguments', async t => {
+  const fake = makeFakePiAgent();
+  const session = sessionOf(fake);
+  await t.throwsAsync(
+    // @ts-expect-error - deliberately off-shape
+    session.prompt(42),
+  );
+  t.throws(
+    // @ts-expect-error - deliberately off-shape
+    () => session.steer({ role: 'system' }),
+  );
+  await t.throwsAsync(
+    // @ts-expect-error - deliberately off-shape
+    session.setModel({ provider: 'anthropic' }),
+  );
+  t.deepEqual(fake.calls.prompt, []);
+  t.deepEqual(fake.calls.steer, []);
+});
