@@ -120,10 +120,6 @@ const GIT_BASE_ARGUMENTS = harden([
 // which git tries to exec, producing "external diff died".
 
 const GIT_TIMEOUT_MS = 60_000;
-/**
- * How long a remote operation's processes get to exit after `SIGTERM`
- * before `SIGKILL` follows.
- */
 const GIT_KILL_GRACE_MS = 2000;
 const GIT_MAX_BUFFER = 1024 * 1024;
 const TOOL_OUTPUT_LIMIT = 50_000;

@@ -817,8 +817,7 @@ export const makeBwrapDriver = ({
     const fullArgv = [...slice.sliceArgv];
 
     // Bubblewrap reports the pid-namespace init on this pipe. Keeping the
-    // report out of stdout/stderr avoids parsing command output and removes
-    // the former dependency on Linux procfs process discovery.
+    // report out of stdout/stderr avoids parsing command output.
     fullArgv.push('--info-fd', '3');
 
     // Per-spawn cwd override.  Layer on top of the slice's cwd.
@@ -954,16 +953,14 @@ export const makeBwrapDriver = ({
       });
 
     /**
-     * Liveness probes and catchable signals go only to the launcher's
-     * process group.  SIGTERM and SIGKILL also SIGKILL the reported
-     * pid-namespace init, closing the setup window before
-     * `--die-with-parent` is armed.  SIGTERM is therefore not a graceful
-     * request to the workload: once `--die-with-parent` is armed, the
-     * launcher's death on SIGTERM already takes the namespace down, and
-     * the init kill makes the setup window behave the same way.
+     * SIGTERM is not a graceful request to the workload: once
+     * `--die-with-parent` is armed, the launcher's death takes the namespace
+     * down, and SIGKILLing the reported init makes the setup window before
+     * that behave the same way.  Other signals reach only the launcher's
+     * process group.
      *
      * The wait for the init pid is bounded, so the group is always
-     * signalled.  Calls are serialized so one kill cannot race another.
+     * signalled.
      *
      * @param {NodeJS.Signals | number} signal
      */

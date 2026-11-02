@@ -1336,8 +1336,6 @@ test.serial(
   'bwrap kill ignores a reported child-pid that cannot be the sandbox init',
   async t => {
     t.timeout(10_000);
-    // The stand-in launcher replaces bwrap, so this needs only POSIX
-    // process groups, not a working bwrap.
     if (process.platform === 'win32') {
       t.pass('SKIP: no POSIX process groups');
       return;
