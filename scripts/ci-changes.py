@@ -20,7 +20,7 @@ import tomllib
 JOBS = (
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
     "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
-    "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
+    "test-daemon-rust", "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
@@ -433,6 +433,9 @@ def classify(paths, graphs, all_jobs=False):
     jobs["lint"] |= jobs["package-uniformity"]
     # This job consumes artifacts from every matrix entry.
     jobs["compare-ironhorse-math"] = jobs["test-ironhorse"]
+    # The daemon on endor reads the same inputs build-xsnap compiles: the
+    # daemon and thixotrope bundles, the endo and xsnap crates, and XS itself.
+    jobs["test-daemon-rust"] = jobs["build-xsnap"]
     return {"jobs": jobs, "packages": sorted(package_names)}
 
 
