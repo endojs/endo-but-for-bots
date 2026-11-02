@@ -1214,7 +1214,6 @@ test.serial(
 
     const cloneP = E(host).provideGitClone(destMount, 'rotating-clone-git', {
       endpoint: { url: `${audience}/repo.git`, credential },
-      origin: { petName: 'rotating-clone-origin' },
     });
     cloneP.catch(() => {});
     // Settles on whichever comes first, so an early rejection fails below
@@ -1226,7 +1225,6 @@ test.serial(
     await disconnected.promise;
     t.deepEqual(await fs.promises.readdir(destPath), []);
     t.false(await E(host).has('rotating-clone-git'));
-    t.false(await E(host).has('rotating-clone-origin'));
   },
 );
 
@@ -1242,12 +1240,10 @@ test.serial(
     const destPath = await E(host).provideHostPath(destMount);
 
     // Naming the Git under a directory that does not exist fails at the
-    // last step, after the clone ran, both formulas were minted, and the
-    // origin was named.
+    // last step, after the clone ran and both formulas were minted.
     await t.throwsAsync(
       E(host).provideGitClone(destMount, ['no-such-directory', 'retry-git'], {
         endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-        origin: { petName: 'retry-origin' },
       }),
     );
     t.deepEqual(
@@ -1256,140 +1252,27 @@ test.serial(
       'the partial clone is discarded',
     );
     t.false(await E(host).has('retry-git'));
-    t.false(await E(host).has('retry-origin'));
 
-    const { git, remote } = await E(host).provideGitClone(
-      destMount,
-      'retry-git',
-      {
-        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-        origin: { petName: 'retry-origin' },
-      },
-    );
+    const { git } = await E(host).provideGitClone(destMount, 'retry-git', {
+      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+    });
     t.is(await E(host).lookup('retry-git'), git);
-    t.is(await E(host).lookup('retry-origin'), remote);
     t.is((await E(git).currentBranch()).name, 'main');
   },
 );
 
 test.serial(
-  'EndoHost.provideGitClone discard keeps a name another holder rebound',
-  async t => {
-    const { root } = await provisionGitContext(t);
-    const remoteRoot = await provisionBareRemote(t, root);
-    const remoteUrl = pathToFileURL(remoteRoot).href;
-    const { host } = await provisionHostContext(t);
-
-    // A name hub that holds the clone's last naming step open until the
-    // test releases it, then refuses.  Everything the clone publishes is in
-    // place while the step is held.
-    const gate = await E(host).evaluate(
-      'MAIN',
-      `(() => {
-        let release;
-        const released = new Promise(resolve => { release = resolve; });
-        let reach;
-        const reached = new Promise(resolve => { reach = resolve; });
-        return makeExo('Gate', M.interface('Gate', {
-          storeIdentifier: M.call().rest(M.any()).returns(M.promise()),
-          reached: M.call().returns(M.promise()),
-          release: M.call().returns(M.undefined()),
-        }), {
-          storeIdentifier: async () => {
-            reach();
-            await released;
-            throw Error('the gate refuses every name');
-          },
-          reached: () => reached,
-          release: () => { release(); },
-        });
-      })()`,
-      [],
-      [],
-      'gate',
-    );
-    const destMount = await E(host).provideScratchMount('replaced-destination');
-    const destPath = await E(host).provideHostPath(destMount);
-
-    const cloneP = E(host).provideGitClone(destMount, ['gate', 'gated-git'], {
-      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-      origin: { petName: 'gated-origin' },
-    });
-    cloneP.catch(() => {});
-    await Promise.race([E(gate).reached(), cloneP]);
-
-    // Another holder rebinds the origin's name before the clone fails.
-    t.deepEqual(await fs.promises.readdir(destPath), ['.git']);
-    await E(host).storeValue('rebound', 'gated-origin');
-    await E(gate).release();
-
-    await t.throwsAsync(cloneP, { message: /refuses every name/ });
-    t.deepEqual(await fs.promises.readdir(destPath), []);
-    t.is(await E(host).lookup('gated-origin'), 'rebound');
-  },
-);
-
-test.serial(
-  'EndoHost.provideGitClone rejects an origin pet name path',
+  'EndoHost.provideGitClone rejects a pet name for the origin',
   async t => {
     const { host } = await provisionHostContext(t);
     const destMount = await E(host).provideScratchMount('path-destination');
     await t.throwsAsync(
       E(host).provideGitClone(destMount, 'path-git', {
         endpoint: { url: 'https://example.invalid/repo.git' },
-        origin: { petName: ['nested', 'path-origin'] },
+        origin: { petName: 'path-origin' },
       }),
-      { message: /origin.petName must be a single pet name/ },
+      { message: /is not an origin policy field/ },
     );
-    t.deepEqual(
-      await fs.promises.readdir(await E(host).provideHostPath(destMount)),
-      [],
-    );
-  },
-);
-
-test.serial(
-  'EndoHost.provideGitClone discard restores a name the origin replaced',
-  async t => {
-    const { root } = await provisionGitContext(t);
-    const remoteRoot = await provisionBareRemote(t, root);
-    const remoteUrl = pathToFileURL(remoteRoot).href;
-    const { host } = await provisionHostContext(t);
-
-    await E(host).storeValue('prior value', 'occupied-origin');
-    const destMount = await E(host).provideScratchMount('restore-destination');
-    // This failure comes after the origin's name replaced the prior binding.
-    await t.throwsAsync(
-      E(host).provideGitClone(destMount, ['no-such-directory', 'restore-git'], {
-        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-        origin: { petName: 'occupied-origin' },
-      }),
-    );
-    t.is(await E(host).lookup('occupied-origin'), 'prior value');
-    t.deepEqual(
-      await fs.promises.readdir(await E(host).provideHostPath(destMount)),
-      [],
-    );
-  },
-);
-
-test.serial(
-  'EndoHost.provideGitClone rejects an origin pet name equal to the Git pet name',
-  async t => {
-    const { root } = await provisionGitContext(t);
-    const remoteRoot = await provisionBareRemote(t, root);
-    const remoteUrl = pathToFileURL(remoteRoot).href;
-    const { host } = await provisionHostContext(t);
-
-    const destMount = await E(host).provideScratchMount('alias-destination');
-    await t.throwsAsync(
-      E(host).provideGitClone(destMount, ['alias-name'], {
-        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-        origin: { petName: 'alias-name' },
-      }),
-      { message: /origin.petName must differ/ },
-    );
-    t.false(await E(host).has('alias-name'));
     t.deepEqual(
       await fs.promises.readdir(await E(host).provideHostPath(destMount)),
       [],
@@ -1585,7 +1468,7 @@ test.serial(
 );
 
 test.serial(
-  'EndoHost.provideGitClone names resolve after a daemon restart',
+  'EndoHost.provideGitClone Git and a remote bound over it resolve after a daemon restart',
   async t => {
     const { root } = await provisionGitContext(t);
     const remoteRoot = await provisionBareRemote(t, root);
@@ -1593,14 +1476,20 @@ test.serial(
     const { host, restart } = await provisionHostContext(t);
 
     const destMount = await E(host).provideScratchMount('durable-destination');
-    await E(host).provideGitClone(destMount, ['durable-git'], {
-      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
-      identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
-      origin: {
-        petName: 'durable-origin',
-        allowedDirections: ['fetch', 'push'],
-        allowedBranches: ['refs/heads/agent/*'],
+    const { git: clonedGit } = await E(host).provideGitClone(
+      destMount,
+      ['durable-git'],
+      {
+        endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+        identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
       },
+    );
+    await E(host).provideGitRemote(clonedGit, 'durable-origin', {
+      name: 'origin',
+      url: remoteUrl,
+      allowLocalFileTransport: true,
+      allowedDirections: ['fetch', 'push'],
+      allowedBranches: ['refs/heads/agent/*'],
     });
 
     const restarted = await restart();

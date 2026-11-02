@@ -355,11 +355,6 @@ export type GitCommitIdentity = {
  * `+refs/heads/*:refs/remotes/origin/*`.
  */
 export type GitCloneOriginOptions = {
-  /**
-   * Names the origin GitRemote in the host's own pet store; unnamed, it is
-   * reachable only by reference.
-   */
-  petName?: string;
   allowedDirections?: Array<'fetch' | 'push'>;
   fetchRefspecs?: string[];
   pushRefspecs?: string[];
@@ -2104,7 +2099,8 @@ export interface EndoHost extends EndoAgent {
    * may write to the mount while the clone runs.  A non-empty mount is
    * refused, the clone is made straight into the mount, and a failed clone
    * removes what it created, so the mount is empty again and the call can
-   * be retried.  Contract: `designs/daemon-git-remotes.md` § clone.
+   * be retried.  The remote is unnamed; bind one with `provideGitRemote`.
+   * Contract: `designs/daemon-git-remotes.md` § clone.
    */
   provideGitClone(
     destMount: EndoMount,

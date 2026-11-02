@@ -546,15 +546,12 @@ The **commit-identity boundary** this note once named as the residual bootstrap 
 
 The method is `EndoHost.provideGitClone(destMount, petName, { endpoint, identity, origin })`, in the argument order of `provideGit` and `provideGitRemote`, and returns `{ git, remote }`: the writable `Git` over the clone, stored under `petName`, and its `GitRemote`.
 The endpoint supplies the URL, credential and transport; the remote is always named `origin`.
-`origin` carries the remote's `provideGitRemote`-shaped policy plus an optional `petName` for storing the remote: a single pet name in the host's own pet store, which must differ from `petName`.
+`origin` carries the remote's `provideGitRemote`-shaped policy; the clone leaves the remote unnamed, and a caller that wants a name binds one with `provideGitRemote` over the returned `git`.
 The `origin` remote defaults to fetch-only, so a caller that pushes must grant push explicitly, for example `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
-Both names are stored only once the clone and both capabilities exist.
-The destination is exclusive: `provideGitClone` assumes that nothing else writes to the mount while the clone runs.
-Concurrent writers on the destination mount are out of scope, and a host that hands the mount to another holder before the clone settles may lose that holder's writes.
-The clone refuses a non-empty mount, clones straight into it, and on failure removes what the clone created, which is everything under the mount's root, leaving the root directory itself.
-Nothing that was there before is removed, because the mount was empty, so a failed clone can be retried into the same mount.
+`petName` is stored only once the clone and both capabilities exist.
+The destination is exclusive: `provideGitClone` assumes that nothing else writes to the mount while the clone runs, and a host that hands the mount to another holder before the clone settles may lose that holder's writes.
+The clone refuses a non-empty mount, clones straight into it, and on failure removes what the clone created, which is everything under the mount's root, leaving the root directory itself, so a failed clone can be retried into the same mount.
 Removal unlinks a symbolic link the clone created and never follows it.
-A name that `origin.petName` replaced is restored only while the name still holds the origin; the check and the restore run in one turn of the host's pet store, so a concurrent rebind wins.
 
 Cloning is unavailable on the XS manager, whose supervisor supplies no host Git tools, and is refused there before anything is cloned.
 

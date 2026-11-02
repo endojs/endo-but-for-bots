@@ -1695,7 +1695,6 @@ export const makeHostMaker = ({
     };
 
     const gitCloneOriginKeys = harden([
-      'petName',
       'allowedDirections',
       'fetchRefspecs',
       'pushRefspecs',
@@ -1729,24 +1728,6 @@ export const makeHostMaker = ({
             X`provideGitClone: origin.${q(key)} is not an origin policy field; the clone fixes the remote name, url, credential and transport from the endpoint`,
           );
         }
-      }
-      if (origin.petName !== undefined && typeof origin.petName !== 'string') {
-        throw makeError(
-          X`provideGitClone: origin.petName must be a single pet name`,
-        );
-      }
-      const originName =
-        origin.petName === undefined
-          ? undefined
-          : petNamePathFrom(origin.petName).petName;
-      if (
-        originName !== undefined &&
-        namePath.length === 1 &&
-        namePath[0] === originName
-      ) {
-        throw makeError(
-          X`provideGitClone: origin.petName must differ from the Git's pet name`,
-        );
       }
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
@@ -1801,10 +1782,9 @@ export const makeHostMaker = ({
             ? false
             : endpointRecord.allowLocalFileTransport,
       });
-      const { petName: _originPetName, ...originPolicy } = origin;
       const policy = makeGitRemotePolicyRecord({
         fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
-        ...originPolicy,
+        ...origin,
         url: endpoint.url,
         allowLocalFileTransport: endpoint.allowLocalFileTransport,
       });
@@ -1822,13 +1802,11 @@ export const makeHostMaker = ({
         throw makeError(X`provideGitClone: destMount must be empty`);
       }
       // Formulas minted during the composition stay transiently pinned
-      // until their names are stored, or until discard releases them.
+      // until the Git's name is stored, or until discard releases them.
       /** @type {FormulaIdentifier[]} */
       const pinned = [];
       /** @type {FormulaIdentifier | undefined} */
       let clonedGitId;
-      /** @type {FormulaIdentifier | undefined} */
-      let originId;
       const cloner = makeGitCloner({
         endpoint,
         clone: gitClone,
@@ -1858,42 +1836,16 @@ export const makeHostMaker = ({
           );
           pinTransient(id);
           pinned.push(id);
-          originId = id;
           return value;
         },
       });
-      // Storing the origin's name replaces whatever the name held before.
-      // That prior identifier stays pinned until the call settles, so that
-      // discard can restore it.
-      /** @type {FormulaIdentifier | undefined} */
-      let priorOriginId;
-      let storedOriginName = false;
       try {
         const { git, remote } = await cloner.clone({
           destMount,
           destPath,
         });
         // Naming is the last step, so a failure anywhere above leaves no
-        // name bound.  The origin is named first so that, if naming the
-        // Git fails, only the origin's name needs to be restored.
-        if (originName !== undefined) {
-          // The pet store applies a store synchronously when it is called,
-          // so reading the prior binding and replacing it in one turn leaves
-          // no gap for another writer.
-          priorOriginId = /** @type {FormulaIdentifier | undefined} */ (
-            petStore.identifyLocal(originName)
-          );
-          const storing = petStore.storeIdentifier(
-            originName,
-            /** @type {FormulaIdentifier} */ (originId),
-          );
-          if (priorOriginId !== undefined) {
-            pinTransient(priorOriginId);
-            pinned.push(priorOriginId);
-          }
-          await storing;
-          storedOriginName = true;
-        }
+        // name bound.
         await E(directory).storeIdentifier(
           namePath,
           /** @type {FormulaIdentifier} */ (clonedGitId),
@@ -1904,19 +1856,6 @@ export const makeHostMaker = ({
         });
       } catch (error) {
         const cleanupErrors = [];
-        if (storedOriginName && originName !== undefined) {
-          // Restore only while the name still holds this call's identifier,
-          // so a concurrent rebind wins.
-          await (async () => {
-            await null;
-            if (petStore.identifyLocal(originName) !== originId) {
-              return;
-            }
-            await (priorOriginId === undefined
-              ? petStore.remove(originName)
-              : petStore.storeIdentifier(originName, priorOriginId));
-          })().catch(cleanupError => cleanupErrors.push(cleanupError));
-        }
         await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
           cleanupError => cleanupErrors.push(cleanupError),
         );
@@ -1935,7 +1874,7 @@ export const makeHostMaker = ({
         }
         throw error;
       } finally {
-        // The names are bound by now, so a failed unpin must not report a
+        // The name is bound by now, so a failed unpin must not report a
         // published clone as failed.  The catch path has already unpinned.
         await Promise.all(pinned.map(unpinTransient)).catch(error =>
           console.warn(

@@ -72,7 +72,6 @@ expectTypeOf<CloneResult['git']>().toEqualTypeOf<ReadWriteEndoGit>();
 const cloned = host.provideGitClone(mount, 'cloned', {
   endpoint: { url: 'https://example.test/repo.git' },
   origin: {
-    petName: 'cloned-origin',
     allowedDirections: ['fetch', 'push'],
     allowedBranches: ['refs/heads/agent/*'],
   },
@@ -82,6 +81,11 @@ host.provideGitClone(mount, 'cloned', {
   endpoint: { url: 'https://example.test/repo.git' },
   // @ts-expect-error the origin url comes from the endpoint
   origin: { url: 'https://example.test/other.git' },
+});
+host.provideGitClone(mount, 'cloned', {
+  endpoint: { url: 'https://example.test/repo.git' },
+  // @ts-expect-error provideGitRemote names a remote, not the clone
+  origin: { petName: 'cloned-origin' },
 });
 // @ts-expect-error the one-object form is removed
 host.provideGitClone({
