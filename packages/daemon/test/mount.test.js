@@ -10,7 +10,6 @@ import path from 'path';
 import fs from 'fs';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { Far } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -608,12 +607,17 @@ test('makeFile rechecks revocation after probing the content source', async t =>
   const probeStarted = new Promise(resolve => {
     probed = () => resolve(undefined);
   });
-  const gatedBlob = Far('GatedBlob', {
-    __getMethodNames__: () => {
+  const GatedBlobInterface = M.interface('GatedBlob', {
+    __getMethodNames__: M.call().returns(M.promise()),
+    streamBase64: M.call().returns(M.any()),
+  });
+  const gatedBlob = makeExo('GatedBlob', GatedBlobInterface, {
+    // eslint-disable-next-line no-underscore-dangle
+    __getMethodNames__() {
       probed();
       return probe;
     },
-    streamBase64: () => {
+    streamBase64() {
       throw Error('must not be read');
     },
   });
