@@ -549,29 +549,14 @@ The endpoint supplies the URL, credential and transport; the remote is always na
 `origin` carries the remote's `provideGitRemote`-shaped policy plus an optional `petName` for storing the remote: a single pet name in the host's own pet store, which must differ from `petName`.
 The `origin` remote defaults to fetch-only, so a caller that pushes must grant push explicitly, for example `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
 Both names are stored only once the clone and both capabilities exist.
-Other holders of the destination mount can write to it throughout, so the clone never takes the mount's contents as its own on the strength of a name.
-A concurrent holder is inside the contract because a mount is a shareable capability: its writes never pass through `provideGitClone`, so per-mount serialization in the host cannot order them, and Git's refusal of a non-empty target holds only at the instant it runs.
-The one decision that requires the mechanism below is that a failed clone must not destroy what another holder wrote.
-Staging records persist because a staging directory is beyond every capability's reach, so after a daemon stops only a record can prove who owns it and reclaim it:
+The destination is exclusive: `provideGitClone` assumes that nothing else writes to the mount while the clone runs.
+Concurrent writers on the destination mount are out of scope, and a host that hands the mount to another holder before the clone settles may lose that holder's writes.
+The clone refuses a non-empty mount, clones straight into it, and on failure removes what the clone created, which is everything under the mount's root, leaving the root directory itself.
+Nothing that was there before is removed, because the mount was empty, so a failed clone can be retried into the same mount.
+Removal unlinks a symbolic link the clone created and never follows it.
+A name that `origin.petName` replaced is restored only while the name still holds the origin; the check and the restore run in one turn of the host's pet store, so a concurrent rebind wins.
 
-- The clone is built in daemon-private staging beside the destination, recorded with its device, inode, and birth time in daemon state, and its entries are moved into place without replacing anything at the target, including an entry created concurrently.
-- A failure discards each entry the call published, and the staging directory, only while it is still the recorded object: the entry is first renamed aside, which takes whatever object holds the name at that instant, and then its identity is checked.  An object another holder put under the name is renamed back.
-- A later clone into the same mount discards a staging directory that a stopped daemon recorded, under the same identity check, and a removal that fails keeps the record for the next attempt.  An entry the daemon did not record is never removed, whatever its name, so the mount is then not empty and the clone refuses.
-- A name that `origin.petName` replaced is restored only while the name still holds the origin; the check and the restore run in one turn of the host's pet store, so a concurrent rebind wins.
-
-Simpler shapes were considered and do not hold the contract.
-Cloning straight into the mount, as `git clone` would, leaves a failed clone's files mixed with a concurrent holder's, with nothing to tell them apart at cleanup.
-Requiring the caller to hold the mount exclusively is not checkable: a mount is a shareable capability with no holder count or lease.
-Cloning into a fresh child directory, or exposing the staging directory itself as the Git's mount, would put the repository somewhere other than the mount the caller named, and every caller expects the worktree at that mount's root.
-Identity is the device, inode, and birth time, because a filesystem may give a deleted entry's inode to its replacement at once; only where the filesystem records no birth time can such a replacement pass for the original; staging directories lie outside every mount, so their recorded identity is only a defensive check.
-
-Staging beside the mount sets three preconditions, which the clone checks before it runs or states here:
-
-- The mount's parent directory must be writable by the daemon; otherwise the clone is refused with an error naming that requirement.
-- The parent must be on the mount's filesystem, so publication can rename out of staging; a mount root that is itself a mount point, such as a bind mount, is refused before the clone runs.
-- No other capability may reach the mount's parent.  A mount nested inside another mount's tree puts staging inside that outer mount, and its holder could race the identity checks to plant content in the inner mount; host operators must not create such nested mounts for a clone destination.
-
-Cloning is out of scope on the XS manager, and is refused there before anything is cloned: its host has no rename that refuses an existing target and no hard link, so it cannot publish without risking a concurrent entry.
+Cloning is unavailable on the XS manager, whose supervisor supplies no host Git tools, and is refused there before anything is cloned.
 
 ## Security Model
 
