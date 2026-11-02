@@ -1181,7 +1181,7 @@ test.serial(
       nodeFs.rmSync(fixtureDirectory, { recursive: true, force: true });
     });
 
-    /** @type {const} */
+    /** @type {import('../src/types.js').TerminationSignal[]} */
     const signals = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT', 'SIGKILL'];
     await null;
     for (const signal of signals) {
