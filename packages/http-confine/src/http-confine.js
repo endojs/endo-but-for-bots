@@ -51,8 +51,15 @@ const FORBIDDEN_HEADER_NAMES = freeze(
     'transfer-encoding',
     'upgrade',
     'via',
+    // Method-override headers would let an allowlisted method smuggle another.
+    'x-http-method',
+    'x-http-method-override',
+    'x-method-override',
   ]),
 );
+
+// https://fetch.spec.whatwg.org/#redirect-status
+const REDIRECT_STATUSES = freeze(new Set([301, 302, 303, 307, 308]));
 
 const HTTP_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 // eslint-disable-next-line no-control-regex
@@ -398,8 +405,13 @@ freeze(limitResponseBytes);
  * @returns {'follow' | 'reject'}
  */
 export const resolveRedirect = (response, origins) => {
+  // A browser-like transport answers `redirect: 'manual'` with an opaque
+  // redirect (status 0, no Location), which the allowlist cannot examine.
+  if (/** @type {{ type?: unknown }} */ (response).type === 'opaqueredirect') {
+    return 'reject';
+  }
   const status = Number(response.status || 0);
-  if (status < 300 || status >= 400) {
+  if (!REDIRECT_STATUSES.has(status)) {
     return 'follow';
   }
   const headers = response.headers || {};
@@ -419,8 +431,8 @@ export const resolveRedirect = (response, origins) => {
     return 'reject';
   }
   const baseUrl = String(response.url || '');
-  const redirectUrl = new URL(String(location), baseUrl).href;
   try {
+    const redirectUrl = new URL(String(location), baseUrl).href;
     checkOriginAllowed(redirectUrl, origins);
   } catch (_err) {
     return 'reject';

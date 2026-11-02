@@ -163,6 +163,34 @@ test('resolveRedirect only follows to allowlisted origins', t => {
   );
 });
 
+test('resolveRedirect validates only Fetch redirect statuses', t => {
+  const origins = parseAllowedOrigins(['https://api.example.com']);
+  for (const status of [300, 304, 305]) {
+    t.is(
+      resolveRedirect(
+        harden({ status, url: 'https://api.example.com/start', headers: {} }),
+        origins,
+      ),
+      'follow',
+      `status ${status} is not a redirect`,
+    );
+  }
+  t.is(
+    resolveRedirect(
+      harden({ status: 0, type: 'opaqueredirect', headers: {} }),
+      origins,
+    ),
+    'reject',
+  );
+  t.is(
+    resolveRedirect(
+      harden({ status: 307, url: '', headers: { location: 'not a url' } }),
+      origins,
+    ),
+    'reject',
+  );
+});
+
 test('makeRequestCancellation propagates cancellation and stops delay', async t => {
   const parent = makeCancelKit();
   let timerStopped = false;
