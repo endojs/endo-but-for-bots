@@ -487,7 +487,9 @@ const prepareConfig = async (
 // Skip such tests on the bare-rust path so the suite can run
 // against test:rust as a smoke test for XS-only paths.
 const testNeedsNodeWorker =
-  process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN ? test.skip : test;
+  process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN
+    ? Object.assign(test.skip, { serial: test.serial.skip })
+    : test;
 
 // A leaked rejection (typically a daemon's graceful-disconnect reason,
 // "Termination requested", arriving on a promise nobody observes) is reported
