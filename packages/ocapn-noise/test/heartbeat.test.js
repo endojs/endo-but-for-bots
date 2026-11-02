@@ -436,6 +436,7 @@ const connectFaultyPair = async (t, options) => {
     writerReturnHold: undefined,
     /** @type {Error | undefined} */
     writerThrow: undefined,
+    writerThrowResolves: false,
     writes: 0,
   };
   await netA.addTransport(
@@ -463,10 +464,14 @@ const connectFaultyPair = async (t, options) => {
             if (faults.writerReturn) throw faults.writerReturn;
             return stream.writer.return(undefined);
           },
-          throw: (/** @type {Error} */ error) =>
-            faults.writerThrow
+          throw: (/** @type {Error} */ error) => {
+            if (faults.writerThrowResolves) {
+              return Promise.resolve(harden({ done: true, value: undefined }));
+            }
+            return faults.writerThrow
               ? Promise.reject(faults.writerThrow)
-              : stream.writer.throw(error),
+              : stream.writer.throw(error);
+          },
         });
         return harden({ reader, writer });
       },
@@ -572,6 +577,22 @@ for (const side of /** @type {const} */ (['reader', 'writer'])) {
     await t.throwsAsync(() => sessionA[side].throw(Error('again')), {
       message: 'again',
     });
+  });
+}
+
+for (const side of /** @type {const} */ (['reader', 'writer'])) {
+  test(`${side}.throw reports its cause when the transport accepts the throw`, async t => {
+    const { netA, locationB, sessionA, sessionB, faults } =
+      await connectFaultyPair(t, { codec: cborCodec });
+    sessionB.close();
+    faults.writerThrowResolves = true;
+    await t.throwsAsync(() => sessionA[side].throw(Error('cause')), {
+      message: 'cause',
+    });
+    faults.writerThrowResolves = false;
+    const replacement = await netA.provideSession(locationB);
+    t.not(replacement, sessionA);
+    replacement.close();
   });
 }
 
