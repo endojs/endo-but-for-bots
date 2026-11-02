@@ -25,6 +25,7 @@ Each surface is opt-in via its own subpath export.
   global descriptors, and non-secret reconstruction data.
 - `@endo/agentry/endo-code-mode-pi-extension` — a directly loadable Pi extension that binds
   one retained daemon guest to each Pi session and exposes only `evaluate`.
+- `@endo/agentry/rpc` — the stdio JSONL RPC bridge; see below.
 
 ## defineAgent
 
@@ -483,6 +484,75 @@ The local Compartment evaluator remains useful to package tests and offline
 smoke tests.
 It is not a selectable product backend for the Pi extension, whose evaluation
 always runs through a daemon guest.
+
+## Stdio JSONL RPC bridge
+
+`@endo/agentry/rpc` is the language-agnostic, LF-delimited JSON surface from
+[`designs/endopi-stdio-rpc-bridge.md`](../../designs/endopi-stdio-rpc-bridge.md):
+an embedding host (an IDE plug-in, a CI runner, a Familiar pane) drives a
+`PiAgent` by writing one JSON command per line and reading one JSON event per
+line back. Diagnostics stay on a separate error stream, so the protocol stream
+carries only records.
+
+Records are separated by `\n` and nothing else: a bare `\r` stays in the line,
+and `U+2028` / `U+2029` are ordinary characters inside a record.
+
+Commands the bridge accepts (the optional `id` is echoed on every event a
+command produces, for correlation):
+
+```json
+{"id": "1", "type": "prompt", "message": "Hello"}
+{"type": "steer", "message": "Stop and do this instead"}
+{"type": "abort"}
+{"type": "list_models"}
+{"type": "set_model", "provider": "anthropic", "model": "claude-sonnet-4-6"}
+{"type": "get_status"}
+```
+
+Events the bridge emits during a round:
+
+```json
+{"type": "message_start", "message": {…}, "id": "1"}
+{"type": "message_update", "delta": "…partial text…", "id": "1"}
+{"type": "endo:thinking", "delta": "…reasoning…", "id": "1"}
+{"type": "tool_execution_start", "toolCallId": "…", "toolName": "bash", "args": {…}, "id": "1"}
+{"type": "tool_execution_end", "toolCallId": "…", "toolName": "bash", "result": {…}, "isError": false, "id": "1"}
+{"type": "message_end", "message": {…}, "id": "1"}
+{"type": "agent_end", "id": "1"}
+```
+
+The streaming events mirror the daemon agent's own event stream.
+`endo:`-namespaced events carry Endo-only affordances the base Pi surface does
+not define. The bridge relays whatever `tool_execution_*` events the agent
+emits; an agent without tools emits none.
+
+Replies to the other commands:
+
+```json
+{"type": "endo:ack", "command": "steer", "id": "2"}
+{"type": "models", "providers": ["anthropic", …], "models": [{"provider": "anthropic", "id": "…", "name": "…"}], "id": "3"}
+{"type": "status", "model": "…", "busy": false, "id": "4"}
+{"type": "error", "message": "…", "id": "5"}
+```
+
+Any rejected or failed command replies with `error`.
+
+The session is single-flight: a `prompt` or `set_model` received while a round
+is still running is rejected, and mid-round control arrives as separate `steer`
+and `abort` commands.
+A `steer` sent while no round is running is queued by the agent and delivered
+into the next round.
+When the input ends, `serveRpc` waits for an in-flight round to finish before
+returning.
+The decoder buffers a partial line without a length limit, so the host on the
+other end of the pipe is trusted.
+
+The exported building blocks: `makeJsonlDecoder` and `encodeRecord` (framing),
+`translateAgentEvent` (event mapping), `makeRpcSession` (a session over a
+`PiAgent`), `makeRpcBridge` (the dispatcher), and `serveRpc` (the stream
+wiring).
+The subpath also exports the types `RpcCommand`, `RpcEvent`, `ModelInfo`,
+`Session`, `JsonlDecoder`, and `RpcBridge`.
 
 ## Status
 
