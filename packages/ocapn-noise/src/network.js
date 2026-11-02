@@ -193,6 +193,15 @@ const MIN_SESSION_TIMEOUT_INTERVALS = 3;
 /** Timers clamp a longer delay to 1ms, so a longer setting is refused. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
+// Bounds the queue: `writer.next` waits for the transport once this many
+// frames are queued. Heartbeats coalesce to one ping/pong pair, so the
+// queue never holds more than this plus two.
+const OUTBOUND_HIGH_WATER_FRAMES = 64;
+
+// The longest plaintext Noise `encrypt` accepts: Noise §3 caps a
+// message at 65535 bytes, less the 16-byte AEAD tag.
+const MAX_FRAME_PLAINTEXT_LENGTH = 65_535 - 16;
+
 /**
  * @param {HeartbeatOptions | undefined} heartbeat
  * @returns {{ intervalMs: number, sessionTimeoutMs: number } | undefined}
@@ -267,7 +276,10 @@ const countNonces = (encrypt, decrypt) => {
  * @param {OcapnCodec} params.codec
  * @param {{ intervalMs: number, sessionTimeoutMs: number }} params.settings
  * @param {ByteStream} params.stream
- * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
+ * @param {(render: () => Uint8Array) => void} params.sendHeartbeatFrame -
+ *   Queues a heartbeat frame, rendered when the transport takes it.
+ * @param {() => boolean} params.isHeartbeatQueued - Whether an earlier
+ *   heartbeat still waits in the outbound queue.
  * @param {bigint} params.epoch
  * @param {() => bigint} params.getSentCount
  * @param {() => bigint | undefined} params.getLastReceivedNonce
@@ -279,7 +291,8 @@ const makeHeartbeat = ({
   codec,
   settings: { intervalMs, sessionTimeoutMs },
   stream,
-  encrypt,
+  sendHeartbeatFrame,
+  isHeartbeatQueued,
   epoch,
   getSentCount,
   getLastReceivedNonce,
@@ -298,40 +311,37 @@ const makeHeartbeat = ({
    */
   const abandonReads = new Set();
 
-  /** @param {Uint8Array} plainText */
-  const sendFrame = plainText => {
-    if (isClosed()) return;
-    // Encrypt and enqueue in the same turn so frames reach the
-    // transport in nonce order.
-    Promise.resolve(stream.writer.next(encrypt(plainText))).catch(error =>
-      close(error),
-    );
-  };
-
   const sendHeartbeat = () => {
-    sendFrame(
+    // While the transport is stalled, heartbeats already waiting in
+    // the queue carry all the liveness a fresh pair would, so do
+    // not let a stall pile them up.
+    if (isHeartbeatQueued()) return;
+    const ping = pingSequence;
+    pingSequence += 1n;
+    sendHeartbeatFrame(() =>
       writeOcapnHeartbeatMessage(
-        { type: 'op:ping', epoch, sequence: pingSequence },
+        { type: 'op:ping', epoch, sequence: ping },
         codec,
       ),
     );
-    pingSequence += 1n;
-    const lastAckedRecvNonce = getLastReceivedNonce();
     // Until the peer's first frame arrives there is no nonce to
     // acknowledge, so the tick carries only the `op:ping`.
-    if (lastAckedRecvNonce === undefined) return;
-    sendFrame(
+    if (getLastReceivedNonce() === undefined) return;
+    const pong = pongSequence;
+    pongSequence += 1n;
+    // Rendered at hand-off, so the acknowledgment is current even when
+    // the frame waited out a stall.
+    sendHeartbeatFrame(() =>
       writeOcapnHeartbeatMessage(
         {
           type: 'op:pong',
           epoch,
-          sequence: pongSequence,
-          lastAckedRecvNonce,
+          sequence: pong,
+          lastAckedRecvNonce: /** @type {bigint} */ (getLastReceivedNonce()),
         },
         codec,
       ),
     );
-    pongSequence += 1n;
   };
 
   /**
@@ -1091,6 +1101,61 @@ export const makeOcapnNoiseNetwork = ({
     let closeFailure;
     /** @type {ReturnType<typeof makeHeartbeat> | undefined} */
     let sessionHeartbeat;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let writeStallTimer;
+
+    // The session-level outbound queue: plaintext frames the session
+    // has accepted but the transport has not. It holds plaintext rather
+    // than a chain of `stream.writer.next` calls because the reconnect
+    // phases of designs/ocapn-noise-session-reconnect.md must carry
+    // accepted frames across transport instances, encrypting each one
+    // for whichever transport finally takes it.
+    /**
+     * @typedef {{ heartbeat: boolean, render: () => Uint8Array }} OutboundFrame
+     */
+    /** @type {OutboundFrame[]} */
+    const outbound = [];
+    let queuedHeartbeatFrames = 0;
+    /**
+     * The running drain, or `undefined` while the queue is idle.
+     *
+     * @type {Promise<void> | undefined}
+     */
+    let activeDrain;
+    // Writers waiting, in call order, for the queue to fall below its
+    // high-water mark. A waiter's frame is enqueued in the same turn
+    // that room appears, so a later writer cannot overtake it.
+    /**
+     * @type {Array<{ plainText: Uint8Array, resolve: (accepted: boolean) => void }>}
+     */
+    let spaceWaiters = [];
+    const rejectSpaceWaiters = () => {
+      const rejected = spaceWaiters;
+      spaceWaiters = [];
+      for (const { resolve } of rejected) resolve(false);
+    };
+
+    // Settles the drain's wait on the frame the transport holds, so a
+    // write the transport never settles cannot hold the drain once the
+    // session has ended. One per frame, so waiting retains nothing past
+    // the frame.
+    /** @type {(() => void) | undefined} */
+    let abandonWrite;
+
+    /** @type {() => void} */
+    let resolveClosed = () => {};
+    /** @type {Promise<void>} */
+    const closedPromise = new Promise(resolve => {
+      resolveClosed = resolve;
+    });
+
+    /**
+     * Accepts a writer frame into the outbound queue, or `undefined`
+     * for a session without heartbeats, which writes directly.
+     *
+     * @type {((plainText: Uint8Array) => Promise<IteratorResult<undefined, undefined>>) | undefined}
+     */
+    let acceptFrame;
 
     /** @returns {bigint | undefined} */
     const getLastReceivedNonce = () => {
@@ -1098,8 +1163,24 @@ export const makeOcapnNoiseNetwork = ({
       return receivedCount === 0n ? undefined : receivedCount - 1n;
     };
 
+    /** @returns {bigint | undefined} */
+    const getLastSentNonce = () => {
+      const sentCount = getSentCount();
+      return sentCount === 0n ? undefined : sentCount - 1n;
+    };
+
     const fireOnClose = () => {
       if (sessionHeartbeat !== undefined) sessionHeartbeat.stop();
+      if (writeStallTimer !== undefined) clearTimeout(writeStallTimer);
+      writeStallTimer = undefined;
+      resolveClosed();
+      if (abandonWrite !== undefined) abandonWrite();
+      // The writes of the frames dropped here have already resolved, so
+      // the error the reader surfaces is the only report of the loss. A
+      // writer still waiting for room learns of it from a `done` result.
+      outbound.length = 0;
+      queuedHeartbeatFrames = 0;
+      rejectSpaceWaiters();
       try {
         onClose();
       } catch (_e) {
@@ -1126,11 +1207,122 @@ export const makeOcapnNoiseNetwork = ({
     };
 
     if (heartbeatSettings !== undefined) {
+      const { sessionTimeoutMs } = heartbeatSettings;
+
+      // A transport write that does not complete within the session
+      // timeout is loss, not a stall: the peer, hearing nothing from us
+      // for as long, has given up on this transport instance too.
+      const onWriteStall = () => {
+        close(
+          makeError(
+            X`ocapn-noise: transport write stalled for ${q(sessionTimeoutMs)}ms; session lost`,
+          ),
+        );
+      };
+
+      // Encrypting at hand-off keeps the Noise nonce order equal to the
+      // transport order however long a frame waits in the queue.
+      // `activeDrain` is cleared in the same turn as the final
+      // empty-queue check, so a frame enqueued after that check starts a
+      // new drain rather than waiting for the next heartbeat.
+      const drain = async () => {
+        await null;
+        try {
+          while (!closed && outbound.length > 0) {
+            const frame = outbound[0];
+            writeStallTimer = setTimeout(onWriteStall, sessionTimeoutMs);
+            try {
+              const written = Promise.resolve(
+                stream.writer.next(encrypt(frame.render())),
+              );
+              // eslint-disable-next-line no-await-in-loop
+              await /** @type {Promise<void>} */ (
+                new Promise((resolve, reject) => {
+                  abandonWrite = () => resolve(undefined);
+                  written.then(() => resolve(undefined), reject);
+                })
+              );
+            } catch (error) {
+              close(/** @type {Error} */ (error));
+              return;
+            } finally {
+              abandonWrite = undefined;
+              clearTimeout(writeStallTimer);
+              writeStallTimer = undefined;
+            }
+            if (closed) return;
+            outbound.shift();
+            if (frame.heartbeat) queuedHeartbeatFrames -= 1;
+            while (
+              spaceWaiters.length > 0 &&
+              outbound.length < OUTBOUND_HIGH_WATER_FRAMES
+            ) {
+              const { plainText, resolve } =
+                /** @type {(typeof spaceWaiters)[number]} */ (
+                  spaceWaiters.shift()
+                );
+              enqueueFrame(plainText);
+              resolve(true);
+            }
+          }
+        } finally {
+          activeDrain = undefined;
+        }
+      };
+
+      /**
+       * @param {OutboundFrame} frame
+       */
+      const enqueue = frame => {
+        if (closed) return;
+        outbound.push(frame);
+        if (frame.heartbeat) queuedHeartbeatFrames += 1;
+        if (activeDrain === undefined) activeDrain = drain();
+      };
+
+      /**
+       * @param {Uint8Array} plainText
+       */
+      const enqueueFrame = plainText => {
+        // The caller may reuse its buffer once the write resolves, and
+        // the frame can wait in the queue past that. Not `.slice()`: on a
+        // Node `Buffer` that returns a view over the same memory.
+        const copy = new Uint8Array(plainText);
+        enqueue({ heartbeat: false, render: () => copy });
+      };
+
+      // Validation stays here rather than in the drain, so a bad frame
+      // rejects its own `writer.next` instead of ending the session.
+      acceptFrame = async plainText => {
+        if (!(plainText instanceof Uint8Array)) {
+          throw makeError(
+            X`ocapn-noise: session frame must be a Uint8Array, got ${q(typeof plainText)}`,
+          );
+        }
+        if (plainText.length > MAX_FRAME_PLAINTEXT_LENGTH) {
+          throw makeError(
+            X`ocapn-noise: session frame of ${q(plainText.length)} bytes exceeds ${q(MAX_FRAME_PLAINTEXT_LENGTH)}`,
+          );
+        }
+        if (
+          spaceWaiters.length === 0 &&
+          outbound.length < OUTBOUND_HIGH_WATER_FRAMES
+        ) {
+          enqueueFrame(plainText);
+          return harden({ done: false, value: undefined });
+        }
+        const accepted = await new Promise(resolve => {
+          spaceWaiters.push({ plainText, resolve });
+        });
+        return harden({ done: !accepted, value: undefined });
+      };
+
       sessionHeartbeat = makeHeartbeat({
         codec,
         settings: heartbeatSettings,
         stream,
-        encrypt,
+        sendHeartbeatFrame: render => enqueue({ heartbeat: true, render }),
+        isHeartbeatQueued: () => queuedHeartbeatFrames > 0,
         epoch,
         getSentCount,
         getLastReceivedNonce,
@@ -1187,17 +1379,17 @@ export const makeOcapnNoiseNetwork = ({
         }
         return harden({ done: true, value: undefined });
       },
-      throw: async err => {
+      throw: async error => {
         await null;
         if (!closed) {
           closed = true;
           try {
-            await stream.writer.throw(err);
+            await stream.writer.throw(error);
           } finally {
             fireOnClose();
           }
         }
-        throw err;
+        throw error;
       },
       [Symbol.asyncIterator]() {
         return reader;
@@ -1209,11 +1401,13 @@ export const makeOcapnNoiseNetwork = ({
       next: async value => {
         await null;
         if (closed) return harden({ done: true, value: undefined });
+        if (acceptFrame !== undefined) return acceptFrame(value);
         await stream.writer.next(encrypt(value));
         return harden({ done: false, value: undefined });
       },
       return: async () => {
         await null;
+        await Promise.race([activeDrain, closedPromise]);
         if (!closed) {
           closed = true;
           try {
@@ -1224,17 +1418,17 @@ export const makeOcapnNoiseNetwork = ({
         }
         return harden({ done: true, value: undefined });
       },
-      throw: async err => {
+      throw: async error => {
         await null;
         if (!closed) {
           closed = true;
           try {
-            await stream.writer.throw(err);
+            await stream.writer.throw(error);
           } finally {
             fireOnClose();
           }
         }
-        throw err;
+        throw error;
       },
       [Symbol.asyncIterator]() {
         return writer;
@@ -1267,6 +1461,8 @@ export const makeOcapnNoiseNetwork = ({
           epoch,
           lastAckedRecvNonce: getLastReceivedNonce(),
           peerLastAckedRecvNonce: sessionHeartbeat?.getPeerLastAckedRecvNonce(),
+          lastSentNonce: getLastSentNonce(),
+          queuedFrames: outbound.length,
         }),
       close: () => close(),
     });
