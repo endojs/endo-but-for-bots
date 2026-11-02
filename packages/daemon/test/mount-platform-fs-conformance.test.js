@@ -667,7 +667,7 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
 });
 
 test.serial(
-  'XS clone-cleanup file powers walk in the right order over shim-only host globals',
+  'XS removeDirectory walks in the right order over shim-only host globals',
   async t => {
     // Shim-only: these mocks follow the `stat` JSON shape and the
     // non-following `remove` of `rust/endo/xsnap/src/powers/fs.rs`, but they
@@ -692,8 +692,6 @@ test.serial(
       ['tree', 'directory'],
       ['tree/link', 'symlink'],
       ['victim', 'directory'],
-      ['empty', 'directory'],
-      ['file', 'file'],
       ['loose', 'file'],
       ['rootlink', 'symlink'],
     ]);
@@ -729,16 +727,6 @@ test.serial(
     await xsPowers.removeDirectory('/rootlink');
     t.deepEqual(removed, ['loose', 'rootlink']);
     t.true(kinds.has('victim'), 'a symlink root is unlinked, not followed');
-
-    await xsPowers.removeEmptyDirectory('/empty');
-    await t.throwsAsync(() => xsPowers.removeEmptyDirectory('/file'), {
-      message: /not a directory/,
-    });
-    await t.throwsAsync(() => xsPowers.renameNoReplace('/source', '/target'), {
-      message: /XS host cannot move/,
-    });
-    // The manager reads this to refuse clone staging before a clone runs.
-    t.false(xsPowers.supportsRenameNoReplace());
   },
 );
 

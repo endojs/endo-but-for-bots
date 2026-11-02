@@ -347,42 +347,6 @@ export const makeXsFilePowers = () => {
     return `${dev}:${ino}`;
   };
 
-  /**
-   * Weaker than the Node powers' identity: the XS host's `stat` has no birth
-   * time, so a replacement that reuses an inode passes for the original.
-   * Nothing depends on the difference, because clone staging is refused here.
-   *
-   * @type {FilePowers['entryIdentity']}
-   */
-  const entryIdentity = pathIdentity;
-
-  /**
-   * The XS host has no rename that refuses an existing target, and a
-   * check before an ordinary rename would leave a window in which another
-   * writer's entry is replaced, so this always refuses.
-   *
-   * @type {FilePowers['renameNoReplace']}
-   */
-  const renameNoReplace = async (source, _target) => {
-    throw new Error(
-      `renameNoReplace: the XS host cannot move ${source} without risking replacing an entry`,
-    );
-  };
-
-  /**
-   * The XS host's `remove` is non-recursive, so it refuses a non-empty
-   * directory.
-   *
-   * @type {FilePowers['removeEmptyDirectory']}
-   */
-  const removeEmptyDirectory = async path => {
-    const { kind } = await statRaw(path);
-    if (kind !== 'directory') {
-      throw new Error(`removeEmptyDirectory: not a directory: ${path}`);
-    }
-    await removePath(path);
-  };
-
   /** @type {FilePowers['isDirectory']} */
   const isDirectory = async path => hostIsDir(DIR_TOKEN, toRelative(path));
 
@@ -514,10 +478,6 @@ export const makeXsFilePowers = () => {
     realPath,
     readLink,
     pathIdentity,
-    entryIdentity,
-    renameNoReplace,
-    supportsRenameNoReplace: () => false,
-    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,

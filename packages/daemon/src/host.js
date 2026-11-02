@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, MountEntryRecord, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 /** @import { SessionRecordDirectory } from './session-record-store.js' */
@@ -308,11 +308,7 @@ harden(normalizeHttpClientPolicy);
  * @param {(id: FormulaIdentifier) => string} powers.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} powers.getMountHostPath
  * @param {DaemonCore['listMountHostEntries']} [powers.listMountHostEntries]
- * @param {DaemonCore['removeStaleMountStagingEntries']} [powers.removeStaleMountStagingEntries]
- * @param {DaemonCore['makeMountStagingEntry']} [powers.makeMountStagingEntry]
- * @param {DaemonCore['assertMountStagingEntry']} [powers.assertMountStagingEntry]
- * @param {DaemonCore['moveMountEntries']} [powers.moveMountEntries]
- * @param {DaemonCore['discardMountEntries']} [powers.discardMountEntries]
+ * @param {DaemonCore['clearMountHostEntries']} [powers.clearMountHostEntries]
  * @param {HostToolPowers['gitClone']} [powers.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} powers.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} powers.formulateReadableBlob
@@ -409,28 +405,8 @@ export const makeHostMaker = ({
   listMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
     throw makeError(X`listMountHostEntries not wired into makeHostMaker`);
   },
-  removeStaleMountStagingEntries = /** @param {FormulaIdentifier} _id */ async _id => {
-    throw makeError(
-      X`removeStaleMountStagingEntries not wired into makeHostMaker`,
-    );
-  },
-  makeMountStagingEntry = /** @param {FormulaIdentifier} _id */ async _id => {
-    throw makeError(X`makeMountStagingEntry not wired into makeHostMaker`);
-  },
-  assertMountStagingEntry = /** @param {...any} _arguments */ async (
-    ..._arguments
-  ) => {
-    throw makeError(X`assertMountStagingEntry not wired into makeHostMaker`);
-  },
-  moveMountEntries = /** @param {...any} _arguments */ async (
-    ..._arguments
-  ) => {
-    throw makeError(X`moveMountEntries not wired into makeHostMaker`);
-  },
-  discardMountEntries = /** @param {...any} _arguments */ async (
-    ..._arguments
-  ) => {
-    throw makeError(X`discardMountEntries not wired into makeHostMaker`);
+  clearMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`clearMountHostEntries not wired into makeHostMaker`);
   },
   gitClone = /** @param {...any} _arguments */ (..._arguments) => {
     throw makeError(X`gitClone not wired into makeHostMaker`);
@@ -1839,22 +1815,12 @@ export const makeHostMaker = ({
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
-      // A daemon process can stop after creating its clone staging
-      // directory but before its catch/finally cleanup runs.  On a later
-      // attempt, discard the staging directories this daemon recorded and
-      // no operation in this process owns, before deciding whether the
-      // caller's mount is otherwise empty.
-      await removeStaleMountStagingEntries(destMountId);
+      // The destination is exclusive to this call (see
+      // designs/daemon-git-remotes.md § clone), so an empty mount now means
+      // that everything in it after a failure is this clone's to remove.
       if ((await listMountHostEntries(destMountId)).length > 0) {
         throw makeError(X`provideGitClone: destMount must be empty`);
       }
-
-      // See designs/daemon-git-remotes.md § clone for why the clone is
-      // staged beside the mount and published without replacing entries.
-      /** @type {MountEntryRecord | undefined} */
-      let staging;
-      /** @type {MountEntryRecord[]} */
-      const movedEntries = [];
       // Formulas minted during the composition stay transiently pinned
       // until their names are stored, or until discard releases them.
       /** @type {FormulaIdentifier[]} */
@@ -1865,25 +1831,7 @@ export const makeHostMaker = ({
       let originId;
       const cloner = makeGitCloner({
         endpoint,
-        clone: async input => {
-          staging = await makeMountStagingEntry(
-            /** @type {FormulaIdentifier} */ (destMountId),
-          );
-          const stagingPath = await assertMountStagingEntry(
-            /** @type {FormulaIdentifier} */ (destMountId),
-            staging,
-          );
-          await gitClone({
-            ...input,
-            destPath: stagingPath,
-          });
-          await moveMountEntries(
-            /** @type {FormulaIdentifier} */ (destMountId),
-            staging,
-            movedEntries,
-          );
-          staging = undefined;
-        },
+        clone: gitClone,
         makeGit: async () => {
           const { value, id } = await formulateGit(
             destMountId,
@@ -1972,9 +1920,8 @@ export const makeHostMaker = ({
         await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
           cleanupError => cleanupErrors.push(cleanupError),
         );
-        await discardMountEntries(
+        await clearMountHostEntries(
           /** @type {FormulaIdentifier} */ (destMountId),
-          staging === undefined ? movedEntries : [...movedEntries, staging],
         ).catch(cleanupError => cleanupErrors.push(cleanupError));
         if (cleanupErrors.length > 0) {
           throw makeError(

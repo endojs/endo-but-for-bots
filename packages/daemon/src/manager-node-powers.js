@@ -131,7 +131,6 @@ export const gunzip = async bytes => {
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
-/** @import { BigIntStats } from 'fs' */
 
 /**
  * @param {object} modules
@@ -588,90 +587,6 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     });
   };
 
-  /**
-   * See designs/daemon-git-remotes.md § clone.  Where the filesystem records
-   * no birth time it is 0 and only `dev:ino` distinguishes entries.
-   *
-   * @param {BigIntStats} stat
-   */
-  const statEntryIdentity = stat =>
-    `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
-
-  /**
-   * Remove `source` now that `target` exists as its copy, and report the
-   * target's identity.  Any failure undoes the copy, unless another writer
-   * has replaced it, so a failed move leaves only the source.
-   *
-   * @param {string} source
-   * @param {string} target
-   */
-  const finishMoveByCopy = async (source, target) => {
-    /** @type {string | undefined} */
-    let targetIdentity;
-    try {
-      targetIdentity = statEntryIdentity(
-        await fs.promises.lstat(target, { bigint: true }),
-      );
-      await fs.promises.unlink(source);
-      return targetIdentity;
-    } catch (error) {
-      try {
-        const currentStat = await fs.promises.lstat(target, { bigint: true });
-        if (
-          targetIdentity === undefined ||
-          statEntryIdentity(currentStat) === targetIdentity
-        ) {
-          await fs.promises.unlink(target);
-        }
-      } catch (undoError) {
-        console.warn(
-          `Could not remove ${target} after failing to move ${source}: ${/** @type {Error} */ (undoError).message}`,
-        );
-      }
-      throw error;
-    }
-  };
-
-  /**
-   * POSIX-only: relies on `rename(2)` replacing an empty directory, which
-   * Windows `MoveFileEx` does not.  Symbolic links are recreated, never
-   * hard-linked, because some platforms follow `link(2)`.  A crash can leave
-   * both names, but nothing replaces the target.
-   *
-   * @type {FilePowers['renameNoReplace']}
-   */
-  const renameNoReplace = async (source, target) =>
-    writeJobs.enqueue(async () => {
-      const sourceStat = await fs.promises.lstat(source, { bigint: true });
-      if (sourceStat.isDirectory()) {
-        await fs.promises.mkdir(target);
-        try {
-          await fs.promises.rename(source, target);
-        } catch (error) {
-          // `rmdir` removes only an empty directory, so this cannot remove
-          // anything another writer put at `target`.
-          await fs.promises.rmdir(target).catch(() => {});
-          throw error;
-        }
-        return statEntryIdentity(sourceStat);
-      }
-      if (sourceStat.isSymbolicLink()) {
-        await fs.promises.symlink(await fs.promises.readlink(source), target);
-      } else {
-        await fs.promises.link(source, target);
-      }
-      return finishMoveByCopy(source, target);
-    });
-
-  /**
-   * Remove `path` only if it is an empty directory.
-   *
-   * @type {FilePowers['removeEmptyDirectory']}
-   */
-  const removeEmptyDirectory = async path => {
-    await writeJobs.enqueue(async () => fs.promises.rmdir(path));
-  };
-
   const joinPath = (...components) => fspath.join(...components);
 
   /** @param {string} path */
@@ -730,15 +645,6 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     const stat = await fs.promises.stat(path);
     return `${stat.dev}:${stat.ino}`;
   };
-
-  /**
-   * The device, inode, and birth time of the entry at `path` itself; a
-   * symbolic link reports its own identity, not its referent's.
-   *
-   * @type {FilePowers['entryIdentity']}
-   */
-  const entryIdentity = async path =>
-    statEntryIdentity(await fs.promises.lstat(path, { bigint: true }));
 
   /** @param {string} path */
   const exists = async path => {
@@ -968,12 +874,6 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     renamePath,
     realPath,
     pathIdentity,
-    entryIdentity,
-    renameNoReplace,
-    // Windows MoveFileEx replaces an empty directory, so no-replace
-    // publication holds only on POSIX.
-    supportsRenameNoReplace: () => process.platform !== 'win32',
-    removeEmptyDirectory,
     statPath,
     isDirectory,
     exists,
