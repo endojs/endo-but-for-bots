@@ -866,13 +866,8 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // The `Max processes` row of `/proc/self/limits` reports
-  // RLIMIT_NPROC, the same value prlimit set; `cat` inherits it from
-  // the slice's process tree.  We read procfs rather than a shell
-  // builtin because `ulimit -u` is a bash spelling that dash, the
-  // `/bin/sh` on Debian and Ubuntu, rejects.  We assert the cap is in
-  // effect rather than running an actual fork bomb (which would also
-  // stress the host the test process is running on).
+  // Read procfs because dash, the `/bin/sh` on Debian and Ubuntu, rejects
+  // `ulimit -u`.  Assert the cap rather than stress the host with a fork bomb.
   const result = await runInSlice(t, handle, ['/bin/cat', '/proc/self/limits']);
   if (result === null) return;
   t.is(
@@ -1107,8 +1102,6 @@ test.serial(
 );
 
 /**
- * List host processes whose command line contains `marker`.
- *
  * @param {string} marker
  * @returns {number[]}
  */
@@ -1130,7 +1123,7 @@ const findMarkedProcesses = marker => {
 };
 
 test.serial(
-  'bwrap kill preserves signal semantics and reaches a reported sandbox init',
+  'every bwrap termination signal reaches a reported sandbox init',
   async t => {
     // A stand-in launcher holds the setup window open deterministically.
     // Like bwrap's init before `--die-with-parent` is armed, its child is
@@ -1145,18 +1138,14 @@ test.serial(
     const marker = `7777.${process.pid}${Date.now() % 100_000}`;
     const launcherPath = nodePath.join(fixtureDirectory, 'launcher.sh');
     const commandPath = nodePath.join(fixtureDirectory, 'command.sh');
-    const signalReceiptPath = nodePath.join(
-      fixtureDirectory,
-      'signal-received',
-    );
     nodeFs.writeFileSync(
       commandPath,
-      '#!/bin/sh\ntrap \'printf received > "$2"\' USR1\nwhile :; do read -r _ || :; done\n',
+      '#!/bin/sh\nwhile :; do sleep 1; done\n',
       { mode: 0o755 },
     );
     nodeFs.writeFileSync(
       launcherPath,
-      `#!/bin/sh\nsetsid ${commandPath} ${marker} ${signalReceiptPath} 3>&- &\ninit_pid=$!\ntrap 'kill -USR1 "$init_pid"' USR1\nprintf '{"child-pid":%s}\\n' "$init_pid" >&3\nexec 3>&-\nwhile kill -0 "$init_pid" 2>/dev/null; do wait "$init_pid" || true; done\n`,
+      `#!/bin/sh\nsetsid ${commandPath} ${marker} 3>&- &\ninit_pid=$!\nprintf '{"child-pid":%s}\\n' "$init_pid" >&3\nexec 3>&-\nwhile kill -0 "$init_pid" 2>/dev/null; do wait "$init_pid" || true; done\n`,
       { mode: 0o755 },
     );
     // Not hardened: that would freeze Node's own child_process classes.
@@ -1192,56 +1181,38 @@ test.serial(
       nodeFs.rmSync(fixtureDirectory, { recursive: true, force: true });
     });
 
-    const sliceProcess = await driver.spawn(slice, ['/bin/true'], {
-      captureStdout: false,
-      captureStderr: false,
-    });
-    let started = findMarkedProcesses(marker);
-    const startDeadline = Date.now() + 5000;
-    while (started.length === 0 && Date.now() < startDeadline) {
+    /** @type {const} */
+    const signals = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT', 'SIGKILL'];
+    await null;
+    for (const signal of signals) {
       // eslint-disable-next-line no-await-in-loop
-      await new Promise(resolve => setTimeout(resolve, 10));
-      started = findMarkedProcesses(marker);
-    }
-    t.is(started.length, 1, 'the stand-in sandbox init is running');
+      const sliceProcess = await driver.spawn(slice, ['/bin/true'], {
+        captureStdout: false,
+        captureStderr: false,
+      });
+      let started = findMarkedProcesses(marker);
+      const startDeadline = Date.now() + 5000;
+      while (started.length === 0 && Date.now() < startDeadline) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(resolve => setTimeout(resolve, 10));
+        started = findMarkedProcesses(marker);
+      }
+      t.is(started.length, 1, `the stand-in init is running for ${signal}`);
 
-    await sliceProcess.kill(0);
-    t.deepEqual(
-      findMarkedProcesses(marker),
-      started,
-      'signal 0 does not terminate the sandbox init',
-    );
-
-    await sliceProcess.kill('SIGUSR1');
-    const signalDeadline = Date.now() + 3000;
-    while (
-      !nodeFs.existsSync(signalReceiptPath) &&
-      Date.now() < signalDeadline
-    ) {
       // eslint-disable-next-line no-await-in-loop
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    t.true(
-      nodeFs.existsSync(signalReceiptPath),
-      'a catchable signal reaches the stand-in command',
-    );
-    t.deepEqual(
-      findMarkedProcesses(marker),
-      started,
-      'a caught signal does not hard-kill the sandbox init',
-    );
-
-    await sliceProcess.kill('SIGTERM');
-    await sliceProcess.wait();
-
-    const deadline = Date.now() + 3000;
-    let survivors = findMarkedProcesses(marker);
-    while (survivors.length > 0 && Date.now() < deadline) {
+      await sliceProcess.kill(signal);
       // eslint-disable-next-line no-await-in-loop
-      await new Promise(resolve => setTimeout(resolve, 50));
-      survivors = findMarkedProcesses(marker);
+      await sliceProcess.wait();
+
+      const deadline = Date.now() + 3000;
+      let survivors = findMarkedProcesses(marker);
+      while (survivors.length > 0 && Date.now() < deadline) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(resolve => setTimeout(resolve, 50));
+        survivors = findMarkedProcesses(marker);
+      }
+      t.deepEqual(survivors, [], `${signal} killed the stand-in init`);
     }
-    t.deepEqual(survivors, [], 'the stand-in sandbox init was killed');
   },
 );
 

@@ -32,7 +32,7 @@ import {
   probeMountRootfsBinPaths,
 } from './path.js';
 
-/** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
+/** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, TerminationSignal } from '../types.js' */
 /** @import * as NodeFs from 'fs' */
 /** @import { Readable } from 'stream' */
 
@@ -953,16 +953,17 @@ export const makeBwrapDriver = ({
       });
 
     /**
-     * SIGTERM is not a graceful request to the workload: once
-     * `--die-with-parent` is armed, the launcher's death takes the namespace
-     * down, and SIGKILLing the reported init makes the setup window before
-     * that behave the same way.  Other signals reach only the launcher's
-     * process group.
+     * Every termination signal ends the workload at once.  A group kill
+     * cannot do that alone: the init calls `setsid()` for `--new-session`, so
+     * the group holds only the launcher, and bwrap arms `--die-with-parent`
+     * only after user-namespace setup.  A launcher killed inside that window
+     * strands the init, and once Node reaps the launcher no later kill can
+     * reach it.  So the reported init is SIGKILLed first.
      *
      * The wait for the init pid is bounded, so the group is always
      * signalled.
      *
-     * @param {NodeJS.Signals | number} signal
+     * @param {TerminationSignal} signal
      */
     const killSliceNow = async signal => {
       await null;
@@ -975,24 +976,22 @@ export const makeBwrapDriver = ({
       // is reported only after the group has been signalled.
       /** @type {unknown} */
       let initKillError;
-      if (signal === 'SIGKILL' || signal === 'SIGTERM') {
-        const initPid = await raceSandboxInitPid();
-        // bwrap holds the init as its child until it reaps it, so while
-        // bwrap is unreaped the init pid cannot have been recycled.
-        if (initPid !== undefined && isLive()) {
-          try {
-            process.kill(initPid, 'SIGKILL');
-          } catch (e) {
-            const error = /** @type {Error & { code?: string }} */ (e);
-            if (error.code !== 'ESRCH') initKillError = error;
-          }
+      const initPid = await raceSandboxInitPid();
+      // bwrap holds the init as its child until it reaps it, so while
+      // bwrap is unreaped the init pid cannot have been recycled.
+      if (initPid !== undefined && isLive()) {
+        try {
+          process.kill(initPid, 'SIGKILL');
+        } catch (e) {
+          const error = /** @type {Error & { code?: string }} */ (e);
+          if (error.code !== 'ESRCH') initKillError = error;
         }
       }
       killProcessGroup(child, signal);
       if (initKillError !== undefined) throw initKillError;
     };
     let killSequence = Promise.resolve();
-    /** @param {NodeJS.Signals | number} signal */
+    /** @param {TerminationSignal} signal */
     const killSlice = signal => {
       const result = killSequence.then(() => killSliceNow(signal));
       killSequence = result.catch(() => undefined);
