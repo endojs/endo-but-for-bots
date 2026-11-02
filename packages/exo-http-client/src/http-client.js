@@ -192,6 +192,26 @@ const validatePositiveInteger = (value, name) => {
   return value;
 };
 
+// Hosts clamp or reject timer delays above a signed 32-bit millisecond count
+// (HTML timer initialization steps; Node clamps to 1), so the endowed Timer
+// rejects them and a policy-prompt timeout must stay within the same range.
+const MAX_TIMER_DELAY_MILLISECONDS = 2 ** 31 - 1;
+
+/**
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {number}
+ */
+const validateTimerDelay = (value, name) => {
+  const delayMs = validatePositiveInteger(value, name);
+  if (delayMs > MAX_TIMER_DELAY_MILLISECONDS) {
+    throw makeError(
+      X`${name} must be at most ${q(MAX_TIMER_DELAY_MILLISECONDS)}, got ${q(value)}`,
+    );
+  }
+  return delayMs;
+};
+
 /**
  * @param {string} urlString
  * @returns {URL}
@@ -320,7 +340,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
 } = {}) => {
   /** @type {PolicyMode} */
   let mode = validatePolicyMode(policyMode);
-  const promptTimeoutMs = validatePositiveInteger(
+  const promptTimeoutMs = validateTimerDelay(
     policyPromptTimeoutMs,
     'policyPromptTimeoutMs',
   );
@@ -843,14 +863,17 @@ export const makeHttpClientAndControl = ({
       await null;
       assertNotRevoked();
       const nextAllowed = validateOrigins(origins);
-      for (const origin of allowed) {
+      const previousAllowed = allowed;
+      // Narrow the allowlist before any await, so a removed origin is refused
+      // by the request path at once and stays refused if a revoke rejects.
+      allowed = nextAllowed;
+      for (const origin of previousAllowed) {
         if (!nextAllowed.includes(origin)) {
           // eslint-disable-next-line no-await-in-loop
           await policy.revokeBinding(origin);
         }
       }
-      allowed = nextAllowed;
-      for (const origin of allowed) {
+      for (const origin of nextAllowed) {
         // eslint-disable-next-line no-await-in-loop
         await policy.unpin(origin);
       }
@@ -897,14 +920,18 @@ export const makeHttpClientAndControl = ({
     listBindings: () => policy.listBindings(),
     revokeBinding: async origin => {
       assertNotRevoked();
-      await policy.revokeBinding(origin);
-      allowed = harden(allowed.filter(item => item !== validateOrigin(origin)));
+      const validated = validateOrigin(origin);
+      // As in removeAllowedOrigin, the allowlist shrinks before the await.
+      allowed = harden(allowed.filter(item => item !== validated));
+      await policy.revokeBinding(validated);
       notifyPolicyChange();
     },
     unpin: async origin => {
       assertNotRevoked();
-      await policy.unpin(origin);
-      allowed = harden(allowed.filter(item => item !== validateOrigin(origin)));
+      const validated = validateOrigin(origin);
+      // As in removeAllowedOrigin, the allowlist shrinks before the await.
+      allowed = harden(allowed.filter(item => item !== validated));
+      await policy.unpin(validated);
       notifyPolicyChange();
     },
     setPolicyMode: mode => {
