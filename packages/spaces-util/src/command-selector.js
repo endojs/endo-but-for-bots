@@ -197,6 +197,7 @@ harden(CommandSelectorRoot);
  * @param {(commandName: string) => void} options.onSelect - Called when a command is selected
  * @param {() => void} options.onCancel - Called when selection is cancelled
  * @param {() => 'inbox' | 'channel' | undefined} [options.getContext] - Returns the current UI context
+ * @param {() => readonly CommandDefinition[]} [options.getAdditionalCommands] - Returns commands to list alongside the built-in ones
  * @returns {CommandSelectorAPI}
  */
 export const commandSelectorComponent = ({
@@ -204,6 +205,7 @@ export const commandSelectorComponent = ({
   onSelect,
   onCancel,
   getContext,
+  getAdditionalCommands,
 }) => {
   let isVisible = false;
   let selectedIndex = 0;
@@ -245,7 +247,11 @@ export const commandSelectorComponent = ({
     isVisible = true;
     currentFilter = '';
     const context = getContext ? getContext() : undefined;
-    filteredCommands = filterCommands('', context);
+    filteredCommands = filterCommands(
+      '',
+      context,
+      getAdditionalCommands && getAdditionalCommands(),
+    );
     selectedIndex = 0;
     render();
     $menu.classList.add('visible');
@@ -269,7 +275,11 @@ export const commandSelectorComponent = ({
   const filter = prefix => {
     currentFilter = prefix;
     const context = getContext ? getContext() : undefined;
-    filteredCommands = filterCommands(prefix, context);
+    filteredCommands = filterCommands(
+      prefix,
+      context,
+      getAdditionalCommands && getAdditionalCommands(),
+    );
     if (selectedIndex >= filteredCommands.length) {
       selectedIndex = Math.max(0, filteredCommands.length - 1);
     }

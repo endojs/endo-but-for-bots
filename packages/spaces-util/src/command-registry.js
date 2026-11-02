@@ -983,11 +983,15 @@ export const getCommandList = () =>
  * Filter commands by prefix (matches name or aliases).
  * @param {string} prefix - Prefix to filter by
  * @param {'inbox' | 'channel'} [context] - Filter by context ('inbox' or 'channel')
+ * @param {readonly CommandDefinition[]} [additionalCommands] - Commands to list alongside the built-in ones
  * @returns {CommandDefinition[]}
  */
-export const filterCommands = (prefix, context) => {
+export const filterCommands = (prefix, context, additionalCommands = []) => {
   const lower = prefix.toLowerCase();
-  return getCommandList().filter(cmd => {
+  const commands = [...getCommandList(), ...additionalCommands].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  return commands.filter(cmd => {
     // Filter by context if specified
     if (context) {
       const cmdContext = cmd.context || 'both';
