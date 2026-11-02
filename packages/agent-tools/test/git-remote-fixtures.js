@@ -122,20 +122,28 @@ export const seedBareRemote = async t => {
 };
 
 /**
- * Advance the bare remote's `main` by one real commit, returning the new head
- * oid. Clones the remote, commits a new file, pushes, and reports the oid the
- * remote now points at, so a fetch/pull round-trip can assert against it.
+ * Advance one branch of the bare remote by one real commit, returning the new
+ * head oid. Clones the remote at that branch, commits a new file, pushes, and
+ * reports the oid the remote now points at, so a fetch/pull round-trip can
+ * assert against it.
  *
  * @param {import('ava').ExecutionContext} t
  * @param {string} remoteRoot absolute path to a bare remote
- * @returns {Promise<string>} the new `main` head oid
+ * @param {string} branch the remote branch to advance
+ * @returns {Promise<string>} the branch's new head oid
  */
-export const advanceRemoteMain = async (t, remoteRoot) => {
+export const advanceRemoteBranch = async (t, remoteRoot, branch) => {
   const cloneRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-remote-upstream-'),
   );
   t.teardown(() => fs.promises.rm(cloneRoot, { recursive: true, force: true }));
-  await execFileAsync('git', ['clone', remoteRoot, cloneRoot]);
+  await execFileAsync('git', [
+    'clone',
+    '--branch',
+    branch,
+    remoteRoot,
+    cloneRoot,
+  ]);
   await fs.promises.writeFile(
     path.join(cloneRoot, 'upstream.txt'),
     'upstream\n',
@@ -146,9 +154,20 @@ export const advanceRemoteMain = async (t, remoteRoot) => {
     ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'upstream'],
     { cwd: cloneRoot },
   );
-  await execFileAsync('git', ['push', 'origin', 'main'], { cwd: cloneRoot });
-  const { stdout } = await execFileAsync('git', ['rev-parse', 'main'], {
+  await execFileAsync('git', ['push', 'origin', branch], { cwd: cloneRoot });
+  const { stdout } = await execFileAsync('git', ['rev-parse', branch], {
     cwd: cloneRoot,
   });
   return stdout.trim();
 };
+
+/**
+ * Advance the bare remote's `main` by one real commit, returning the new head
+ * oid.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} remoteRoot absolute path to a bare remote
+ * @returns {Promise<string>} the new `main` head oid
+ */
+export const advanceRemoteMain = (t, remoteRoot) =>
+  advanceRemoteBranch(t, remoteRoot, 'main');
