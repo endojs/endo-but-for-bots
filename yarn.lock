@@ -2400,6 +2400,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
+    "@endo/http-confine": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/promise-kit": "workspace:^"
