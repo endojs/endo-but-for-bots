@@ -5,14 +5,16 @@
  * A {@link Session} backed by a live `PiAgent`.
  *
  * This adapts the raw `pi-agent-core` `Agent` (as constructed by the
- * harness `makePiAgent`) to the narrow seam the RPC bridge drives: it
- * forwards `subscribe` / `prompt` / `abort` / `steer` straight through, and
- * answers `list_models` / `set_model` / status queries against the `pi-ai`
- * model registry. The bridge itself never imports the model libraries —
+ * harness `makePiAgent`) to the narrow seam the RPC bridge drives. The
+ * session is an exo whose interface guard admits only that seam's shapes, so
+ * the bridge (and the less-trusted wire host behind it) never holds the live
+ * agent itself. The bridge itself never imports the model libraries —
  * keeping that coupling here is what lets the dispatcher be tested against a
  * fake.
  */
 
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { getModels, getProviders } from '@earendil-works/pi-ai/compat';
 
 import { resolveModel } from '../harness/model.js';
@@ -25,18 +27,44 @@ import { resolveModel } from '../harness/model.js';
  * @param {PiAgent} options.piAgent
  * @returns {Session}
  */
+const RpcSessionI = M.interface('RpcSession', {
+  // The listener is a host-local closure, not a passable, so it and the
+  // returned unsubscribe function cross the guard raw.
+  subscribe: M.call(M.raw()).returns(M.raw()),
+  prompt: M.callWhen(M.string()).returns(M.undefined()),
+  abort: M.call().returns(M.undefined()),
+  steer: M.call(M.string()).returns(M.undefined()),
+  describeModel: M.call().returns(M.string()),
+  listModels: M.call().returns(M.record()),
+  setModel: M.callWhen(
+    M.splitRecord({ provider: M.string(), model: M.string() }),
+  ).returns(M.undefined()),
+});
+
+/**
+ * @param {object} options
+ * @param {PiAgent} options.piAgent
+ * @returns {Session}
+ */
 export const makeRpcSession = ({ piAgent }) => {
-  return harden({
-    subscribe: listener => piAgent.subscribe(listener),
-    prompt: message => piAgent.prompt(message),
-    abort: () => piAgent.abort(),
-    steer: message =>
-      piAgent.steer({ role: 'user', content: message, timestamp: Date.now() }),
-    describeModel: () => {
+  return makeExo('RpcSession', RpcSessionI, {
+    subscribe(listener) {
+      return piAgent.subscribe(listener);
+    },
+    async prompt(message) {
+      await piAgent.prompt(message);
+    },
+    abort() {
+      piAgent.abort();
+    },
+    steer(message) {
+      piAgent.steer({ role: 'user', content: message, timestamp: Date.now() });
+    },
+    describeModel() {
       const model = piAgent.state.model;
       return model?.name ?? model?.id ?? 'unknown';
     },
-    listModels: () => {
+    listModels() {
       const providers = getProviders();
       /** @type {ModelInfo[]} */
       const models = [];
@@ -50,13 +78,13 @@ export const makeRpcSession = ({ piAgent }) => {
           // name only; skip its models rather than failing the whole query.
         }
       }
-      return { providers: [...providers], models };
+      return harden({ providers: [...providers], models });
     },
-    setModel: async ({ provider, model }) => {
+    async setModel({ provider, model }) {
       const resolved = await resolveModel(`${provider}/${model}`);
-      // pi-ai's registry lookup returns `undefined` for an unknown provider or
-      // model rather than throwing; refuse it so a typo cannot clear the live
-      // agent's model and leave the next round without one.
+      // The harness's `resolveModel` yields `undefined` for an unknown
+      // provider or model rather than throwing; refuse it so a typo cannot
+      // clear the live agent's model and leave the next round without one.
       if (resolved === undefined) {
         throw Error(`unknown model: ${provider}/${model}`);
       }
