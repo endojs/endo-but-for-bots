@@ -108,6 +108,19 @@ The location signature in `op:start-session` carries the Noise
 transcript hash as a channel-binding value, so it cannot be replayed
 across sessions even though it is signed only once per identity.
 
+### Session reconnect
+
+With the `heartbeat` and `reconnect` options, and a peer that
+advertises reconnect in its `op:session-hello`, a session outlives the
+transport instance it opened on
+([design](../../designs/ocapn-noise-session-reconnect.md)).
+When an instance is lost, either side dials a fresh Noise IK handshake
+on a new instance and sends an `op:session-hello` naming the session
+and its next epoch.
+The session advances its epoch and replays, exactly once, the frames
+the lost instance did not deliver.
+The session aborts if no new instance is up within `hardTimeoutMs`.
+
 # Aspirational Design
 
 The OCapN JavaScript netlayer interface is intended to be as near to

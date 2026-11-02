@@ -178,10 +178,12 @@ test('a CapTP session rides out a lost transport instance', async t => {
   t.is(await E(greeter).hello('Carol'), 'hello, Carol');
   t.is(await E(greeter).hello('Dave'), 'hello, Dave');
   t.is(calls, 3);
+  // Either side may have redialed, but a stream opened after the
+  // partition is up and carried the answers.
   t.true(
     /** @type {ReturnType<typeof makeLossyTransport>} */ (
       injector
-    ).getConnects() >= 2,
+    ).getOpenStreams() >= 1,
   );
 });
 
