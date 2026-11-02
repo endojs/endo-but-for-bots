@@ -728,12 +728,15 @@ const nativeXsHostPresent = xsHostGlobalNames.some(
       'the symlink target survives recursive removal',
     );
 
-    // A file or symlink root is removed as one entry, never walked.
     removed.length = 0;
     await xsPowers.removeDirectory('/loose');
     await xsPowers.removeDirectory('/rootlink');
     t.deepEqual(removed, ['loose', 'rootlink']);
     t.true(kinds.has('victim'), 'a symlink root is unlinked, not followed');
+
+    removed.length = 0;
+    await xsPowers.removeDirectory('/missing');
+    t.deepEqual(removed, [], 'a missing directory is not an error');
   },
 );
 

@@ -251,6 +251,42 @@ test('scratch-mount backing directory is reclaimed when its formula is collected
   );
 });
 
+// Under `yarn test:rust` the daemon runs the XS manager, so this exercises the
+// XS `removeDirectory` against the native host globals.
+test('scratch-mount reclamation unlinks symlinks without following them', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const victimPath = await fs.promises.mkdtemp(
+    path.join(tmpdir(), 'endo-gc-victim-'),
+  );
+  t.teardown(() =>
+    fs.promises.rm(victimPath, { recursive: true, force: true }),
+  );
+  const keptPath = path.join(victimPath, 'kept.txt');
+  await fs.promises.writeFile(keptPath, 'kept');
+
+  await E(host).provideScratchMount('symlink-scratch');
+  const scratch = await E(host).lookup(['symlink-scratch']);
+  await E(scratch).writeText(['nested', 'draft.txt'], 'pending');
+
+  const scratchId = await E(host).identify('symlink-scratch');
+  const { number: formulaNumber } = parseId(scratchId);
+  const dirPath = mountPathOf(config.statePath, formulaNumber);
+  await fs.promises.symlink(victimPath, path.join(dirPath, 'root-link'));
+  await fs.promises.symlink(
+    victimPath,
+    path.join(dirPath, 'nested', 'child-link'),
+  );
+
+  await E(host).remove('symlink-scratch');
+
+  await waitForCondition(async () => !fs.existsSync(dirPath), {
+    message: `${dirPath} to be removed`,
+  });
+  t.is(await fs.promises.readFile(keptPath, 'utf8'), 'kept');
+});
+
 test('content-store blob from a readable-tree formula is reclaimed when the tree is collected', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
