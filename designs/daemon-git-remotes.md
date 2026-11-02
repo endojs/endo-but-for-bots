@@ -536,14 +536,14 @@ Cloning creates both repository metadata and a worktree; it crosses the boundary
 For the MVP there are two legitimate product flows:
 
 1. The host provides an already-existing physical worktree mount, then derives `Git` and `GitRemote`.
-2. The host performs a separate trusted bootstrap operation that creates a new physical worktree from a bounded remote source and then returns the resulting `EndoMount` plus `Git`.
+2. The host performs a separate trusted bootstrap operation that clones a bounded remote source into an empty mount the host supplies and then returns the resulting `Git` and its `GitRemote`.
 
 The second flow is product-relevant when an agent starts from only a remote repository, but it should remain host-mediated.
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.
 
 **Landed (2026-07-11 reconciliation note).**
 The second flow shipped host-mediated via #538 as `EndoHost.provideGitClone(opts)`: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
-The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half; the residual bootstrap gap is the **commit-identity boundary**, pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ identity: { authorName, authorEmail } }` construction option on `provideGit` / `provideGitClone`, guest-immutable).
+[daemon-git-clone](daemon-git-clone.md) (2026-10-22) records that bootstrap and proposes its revision: a `(destMount, petName, options)` signature, a fetch-only default `origin` policy that the host can narrow at clone time, host-owned discard on failure, and the commit-identity boundary as a capability shape. The bootstrap's identity half, the **commit-identity boundary**, was pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ identity: { authorName, authorEmail } }` construction option on `provideGit` / `provideGitClone`, guest-immutable).
 
 ## Security Model
 
@@ -838,7 +838,7 @@ Each gets a one-line follow-up deliverable.
   If a non-trivial fraction needs SSH, the SSH design in Phase 7 moves earlier.
   Deliverable: a one-page note in `designs/` confirming or revising the HTTPS-only Phase 1.
 - **Bootstrap / clone API.**
-  Resolved: `provideGitClone` landed host-mediated via #538 (see § Repository Bootstrap and `clone`), without a separate `daemon-git-clone.md`.
+  Resolved: `provideGitClone` landed host-mediated via #538 (see § Repository Bootstrap and `clone`), and is recorded, with a proposed revision, in [daemon-git-clone](daemon-git-clone.md).
   The residual identity boundary is Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan.
 - **Telemetry to distinguish CapTP control-plane time from remote transport data-plane time.**
   During Phase 2, add structured timing fields to `GitFetchResult` and `GitPushResult` (initial shape: `{ captpMs: number; transportMs: number }` augmenting the existing result types) and iterate based on what debug sessions actually need.
