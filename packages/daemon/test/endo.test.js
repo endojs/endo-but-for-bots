@@ -2071,15 +2071,30 @@ test('agents register their keys only with the networks in their own @nets', asy
   const registered = new Set(await E(network).registeredAgentKeys());
   t.true(registered.has(hostKey));
   t.true(registered.has(reachableKey));
-  // A guest with an empty `@nets` stays undisclosed to every network.
   t.false(registered.has(hiddenKey));
 
-  // Removing the network from the guest's `@nets` unregisters its key.
   await E(reachableNets).remove('recording');
   await agentKey(reachable);
   const afterRemoval = new Set(await E(network).registeredAgentKeys());
   t.false(afterRemoval.has(reachableKey));
   t.true(afterRemoval.has(hostKey));
+
+  await E(reachableNets).storeIdentifier(['recording'], networkId);
+  await agentKey(reachable);
+  const afterReAdd = new Set(await E(network).registeredAgentKeys());
+  t.true(afterReAdd.has(reachableKey));
+
+  // Unregistration on cancel is asynchronous; poll for it, bounded.
+  await E(host).cancel('reachable-agent');
+  let afterCancel = new Set(await E(network).registeredAgentKeys());
+  for (let i = 0; i < 50 && afterCancel.has(reachableKey); i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 100));
+    // eslint-disable-next-line no-await-in-loop
+    afterCancel = new Set(await E(network).registeredAgentKeys());
+  }
+  t.false(afterCancel.has(reachableKey));
+  t.true(afterCancel.has(hostKey));
 });
 
 test('move moves value, between different guests', async t => {

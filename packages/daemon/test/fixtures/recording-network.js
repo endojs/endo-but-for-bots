@@ -5,7 +5,7 @@ const RecordingNetworkInterface = M.interface('RecordingNetwork', {
   addresses: M.call().returns(M.arrayOf(M.string())),
   supports: M.call(M.string()).returns(M.boolean()),
   connect: M.call(M.string(), M.any()).returns(M.promise()),
-  registerAgentKey: M.call(M.string(), M.string()).returns(),
+  registerAgentKey: M.call(M.string()).returns(),
   unregisterAgentKey: M.call(M.string()).returns(),
   registeredAgentKeys: M.call().returns(M.arrayOf(M.string())),
 });
@@ -15,20 +15,20 @@ const RecordingNetworkInterface = M.interface('RecordingNetwork', {
  * registers with it.
  */
 export const make = () => {
-  /** @type {Map<string, string>} */
-  const agentIdForKey = new Map();
+  /** @type {Set<string>} */
+  const agentKeys = new Set();
   return makeExo('RecordingNetwork', RecordingNetworkInterface, {
     addresses: () => harden([]),
     supports: () => false,
     connect: async () => {
       throw Error('The recording network cannot connect');
     },
-    registerAgentKey: (publicKey, agentId) => {
-      agentIdForKey.set(publicKey, agentId);
+    registerAgentKey: publicKey => {
+      agentKeys.add(publicKey);
     },
     unregisterAgentKey: publicKey => {
-      agentIdForKey.delete(publicKey);
+      agentKeys.delete(publicKey);
     },
-    registeredAgentKeys: () => harden([...agentIdForKey.keys()]),
+    registeredAgentKeys: () => harden([...agentKeys]),
   });
 };

@@ -41,8 +41,8 @@ system:
    incarnated agent's public key with the networks in that agent's own
    NETS, and unregisters it when the agent's context is cancelled or the
    network leaves the agent's NETS. The OCapN-Noise network keeps the
-   registered keys and answers `servesAgent(publicKey)` on its peer entry
-   point. See "Network Registration" below.
+   registered keys for inbound routing, which is not yet built. See
+   "Network Registration" below.
 
 The per-agent connection hints (relay requirements, transport preferences)
 remain unbuilt; see "Per-Agent Connection Hints" below.
@@ -73,15 +73,16 @@ negotiate connections on behalf of any persona.
    the daemon unregisters its key from every network that holds it.
 4. When a network receives an inbound connection, it can identify which local
    agent the remote peer is trying to reach by matching the target public key.
-   The OCapN-Noise network exposes this as `servesAgent(publicKey)` on its
-   peer entry point.
+   No peer-reachable object answers membership questions about the
+   registered keys, since that would disclose which personas the daemon
+   hosts. The inbound routing that reads the keys is not yet built.
 
 **Interface:**
 
 ```typescript
 interface EndoNetwork {
   // ... existing methods ...
-  registerAgentKey(publicKey: string, agentId: FormulaIdentifier): Promise<void>;
+  registerAgentKey(publicKey: string): Promise<void>;
   unregisterAgentKey(publicKey: string): Promise<void>;
 }
 ```

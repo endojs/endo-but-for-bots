@@ -483,7 +483,7 @@ const fetchPeerEntry = async address => {
   return { peerEntry, shutdown: () => client.shutdown() };
 };
 
-test('registered agent keys are served through the peer entry point', async t => {
+test('agent key registration discloses nothing through the peer entry point', async t => {
   t.timeout(60_000);
   const context = makeMockContext();
   t.teardown(() => context.cancel());
@@ -495,19 +495,14 @@ test('registered agent keys are served through the peer entry point', async t =>
   t.teardown(shutdown);
 
   const guestKey = toHex(generateEd25519Keypair().publicKey);
+  await E(service).registerAgentKey(guestKey);
 
-  // The daemon's own node is served by default; other agents only once
-  // registered.
-  t.true(await E(peerEntry).servesAgent(nodeId));
-  t.false(await E(peerEntry).servesAgent(guestKey));
-
-  await E(service).registerAgentKey(guestKey, 'guest-formula-id');
-  t.true(await E(peerEntry).servesAgent(guestKey));
+  await t.throwsAsync(() => E(peerEntry).servesAgent(guestKey));
 
   await E(service).unregisterAgentKey(guestKey);
-  t.false(await E(peerEntry).servesAgent(guestKey));
-
-  // The daemon's own node cannot be unregistered.
   await E(service).unregisterAgentKey(nodeId);
-  t.true(await E(peerEntry).servesAgent(nodeId));
+  await t.throwsAsync(() => E(service).registerAgentKey('not-a-key'), {
+    message: /64 hex digits/,
+  });
+  await t.throwsAsync(() => E(service).registerAgentKey(guestKey, 'agent-id'));
 });

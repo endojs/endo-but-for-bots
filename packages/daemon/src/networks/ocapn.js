@@ -172,9 +172,23 @@ const EndoPeerEntryInterface = M.interface('EndoPeerEntry', {
   getNodeId: M.call().returns(M.string()),
   getAgentBinding: M.call().returns(M.promise()),
   getGreeter: M.call().returns(M.any()),
-  servesAgent: M.call(M.string()).returns(M.boolean()),
   help: M.call().returns(M.string()),
 });
+
+const OcapnNoiseServiceInterface = M.interface('OcapnNoiseService', {
+  addresses: M.call().returns(M.arrayOf(M.string())),
+  supports: M.call(M.string()).returns(M.boolean()),
+  connect: M.call(M.string(), M.any()).returns(M.promise()),
+  registerAgentKey: M.call(M.string()).returns(),
+  unregisterAgentKey: M.call(M.string()).returns(),
+});
+
+/** @param {string} publicKey */
+const assertAgentKey = publicKey => {
+  if (!/^[0-9a-f]{64}$/.test(publicKey)) {
+    throw TypeError(`Expected an agent public key of 64 hex digits`);
+  }
+};
 
 export const make = async (powers, context) => {
   const cancelled = /** @type {Promise<never>} */ (E(context).whenCancelled());
@@ -237,13 +251,11 @@ export const make = async (powers, context) => {
     signature: bindingSignature,
   });
 
-  // Public keys of the local agents this network carries, registered by
-  // the daemon for every agent whose `@nets` holds this network. The
-  // daemon's own node is always served. A peer that holds a locator
-  // naming an agent key can ask `servesAgent` whether this daemon hosts
-  // that agent; agents whose `@nets` omits this network stay undisclosed.
-  /** @type {Map<string, string | undefined>} */
-  const agentIdForKey = new Map([[String(localNodeId), undefined]]);
+  // Public keys of the local agents this network carries. The daemon's own
+  // node is always carried. No peer-reachable object reads this set, so it
+  // discloses no persona; it awaits the inbound key-based routing.
+  /** @type {Set<string>} */
+  const agentKeys = new Set([String(localNodeId)]);
 
   // The daemon's peer entry-point capability: the single object a remote
   // peer reaches over an OCapN session by fetching PEER_ENTRY_SWISSNUM
@@ -255,9 +267,8 @@ export const make = async (powers, context) => {
     getNodeId: () => localNodeId,
     getAgentBinding: async () => agentBinding,
     getGreeter: () => localGreeter,
-    servesAgent: publicKey => agentIdForKey.has(publicKey),
     help: () =>
-      `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake; servesAgent(publicKey) reports whether this daemon carries the agent with that public key on this network.`,
+      `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
   });
 
   // The OCapN locator (a "nonce locator"): the table of local
@@ -426,22 +437,21 @@ export const make = async (powers, context) => {
     );
   };
 
-  /**
-   * @param {string} publicKey
-   * @param {string} agentId
-   */
-  const registerAgentKey = (publicKey, agentId) => {
-    agentIdForKey.set(publicKey, agentId);
+  /** @param {string} publicKey */
+  const registerAgentKey = publicKey => {
+    assertAgentKey(publicKey);
+    agentKeys.add(publicKey);
   };
 
   /** @param {string} publicKey */
   const unregisterAgentKey = publicKey => {
+    assertAgentKey(publicKey);
     if (publicKey !== String(localNodeId)) {
-      agentIdForKey.delete(publicKey);
+      agentKeys.delete(publicKey);
     }
   };
 
-  return Far('OcapnNoiseService', {
+  return makeExo('OcapnNoiseService', OcapnNoiseServiceInterface, {
     addresses: () => harden([address]),
     supports,
     connect,

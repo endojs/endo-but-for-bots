@@ -7171,20 +7171,16 @@ const makeDaemonCore = async (
   };
 
   // Network registration (designs/daemon-agent-network-identity.md).
-  // Each incarnated agent's public key is registered with the networks in
-  // that agent's own `@nets`, so a network knows every persona it carries
-  // and can recognize an inbound peer that names one of them. An agent
-  // whose `@nets` is empty is registered with no network, which keeps the
-  // anonymizing-persona default: no network can disclose that this daemon
-  // hosts it. Networks that lack `registerAgentKey`/`unregisterAgentKey`
-  // are skipped.
+  // An empty `@nets` registers with no network, so nothing discloses the
+  // persona.
 
   /**
    * @typedef {object} AgentNetworkRegistration
    * @property {NodeNumber} publicKey
    * @property {FormulaIdentifier} networksDirectoryId
-   * @property {Map<EndoNetwork, Promise<void>>} networks - the networks
-   *   holding the key, each with its settling registration call
+   * @property {Set<EndoNetwork>} networks - the networks that hold, or
+   *   are about to hold, the key
+   * @property {boolean} cancelled
    */
 
   /** @type {Map<FormulaIdentifier, AgentNetworkRegistration>} */
@@ -7192,6 +7188,15 @@ const makeDaemonCore = async (
 
   /** @type {WeakMap<EndoNetwork, Promise<boolean>>} */
   const networkAcceptsAgentKeys = new WeakMap();
+
+  /**
+   * The tail of the register/unregister calls issued to each network for
+   * each key, so the calls land in the order they were issued, across
+   * reincarnations too.
+   *
+   * @type {WeakMap<EndoNetwork, Map<NodeNumber, Promise<void>>>}
+   */
+  const agentKeyCallTails = new WeakMap();
 
   /**
    * @param {EndoNetwork} network
@@ -7210,7 +7215,11 @@ const makeDaemonCore = async (
         methodNames =>
           methodNames.includes('registerAgentKey') &&
           methodNames.includes('unregisterAgentKey'),
-        () => false,
+        error => {
+          // Do not remember a transient failure; the next call probes again.
+          networkAcceptsAgentKeys.delete(network);
+          throw error;
+        },
       );
       networkAcceptsAgentKeys.set(network, accepts);
     }
@@ -7218,21 +7227,55 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Queue a register or unregister call to one network behind the calls
+   * already issued to it for this agent.
+   *
+   * @param {AgentNetworkRegistration} registration
    * @param {EndoNetwork} network
-   * @param {NodeNumber} publicKey
+   * @param {'register' | 'unregister'} action
+   * @returns {Promise<void>}
    */
-  const unregisterAgentKeyFromNetwork = async (network, publicKey) => {
-    if (await provideNetworkAcceptsAgentKeys(network)) {
-      await E(network).unregisterAgentKey?.(publicKey);
+  const enqueueAgentKeyCall = (registration, network, action) => {
+    const { publicKey } = registration;
+    let tails = agentKeyCallTails.get(network);
+    if (tails === undefined) {
+      tails = new Map();
+      agentKeyCallTails.set(network, tails);
     }
+    const previous = tails.get(publicKey) || Promise.resolve();
+    const next = previous.then(async () => {
+      if (!(await provideNetworkAcceptsAgentKeys(network))) {
+        return;
+      }
+      if (action === 'register') {
+        await E(network).registerAgentKey?.(publicKey);
+      } else {
+        await E(network).unregisterAgentKey?.(publicKey);
+      }
+    });
+    const settled = next.catch(error => {
+      if (action === 'register') {
+        // Forget the network so the next sync retries.
+        registration.networks.delete(network);
+      }
+      console.error(
+        `Endo daemon failed to ${action} agent key ${publicKey.slice(0, 8)} with a network`,
+        error,
+      );
+    });
+    tails.set(publicKey, settled);
+    settled.then(() => {
+      if (tails.get(publicKey) === settled) {
+        tails.delete(publicKey);
+      }
+    });
+    return settled;
   };
 
   /**
    * Bring the networks holding an agent's key in line with the networks
-   * currently in the agent's `@nets`: register with networks added since
-   * the last sync and unregister from networks since removed. Settles
-   * once every registration call for a current network has settled,
-   * including calls an earlier sync started.
+   * currently in the agent's `@nets`. Settles once every call queued for a
+   * current network has settled, including calls an earlier sync queued.
    *
    * @param {FormulaIdentifier} agentId
    */
@@ -7241,36 +7284,34 @@ const makeDaemonCore = async (
     if (registration === undefined) {
       return;
     }
-    const {
-      publicKey,
-      networksDirectoryId,
-      networks: registered,
-    } = registration;
-    const current = new Set(await getAllNetworks(networksDirectoryId));
-    for (const network of [...registered.keys()]) {
+    const current = new Set(
+      await getAllNetworks(registration.networksDirectoryId),
+    );
+    // The agent may have been cancelled or reincarnated during the await.
+    if (
+      registration.cancelled ||
+      networkRegistrationForAgent.get(agentId) !== registration
+    ) {
+      return;
+    }
+    for (const network of [...registration.networks]) {
       if (!current.has(network)) {
-        registered.delete(network);
-        unregisterAgentKeyFromNetwork(network, publicKey).catch(() => {});
+        registration.networks.delete(network);
+        enqueueAgentKeyCall(registration, network, 'unregister');
       }
     }
     for (const network of current) {
-      if (!registered.has(network)) {
-        const registering = (async () => {
-          if (await provideNetworkAcceptsAgentKeys(network)) {
-            await E(network).registerAgentKey?.(publicKey, agentId);
-          }
-        })().catch(error => {
-          // Forget the network so the next sync retries.
-          registered.delete(network);
-          console.error(
-            `Endo daemon failed to register agent key ${publicKey.slice(0, 8)} with a network`,
-            error,
-          );
-        });
-        registered.set(network, registering);
+      if (!registration.networks.has(network)) {
+        registration.networks.add(network);
+        enqueueAgentKeyCall(registration, network, 'register');
       }
     }
-    await Promise.all(registered.values());
+    const { publicKey } = registration;
+    await Promise.all(
+      [...current].map(network =>
+        agentKeyCallTails.get(network)?.get(publicKey),
+      ),
+    );
   };
 
   /**
@@ -7286,22 +7327,36 @@ const makeDaemonCore = async (
     networksDirectoryId,
     context,
   ) => {
+    // A reincarnation inherits the networks its predecessor registered
+    // with, so the next sync unregisters any it no longer reaches.
+    const predecessor = networkRegistrationForAgent.get(agentId);
     /** @type {AgentNetworkRegistration} */
     const registration = {
       publicKey,
       networksDirectoryId,
-      networks: new Map(),
+      networks:
+        predecessor && predecessor.publicKey === publicKey
+          ? predecessor.networks
+          : new Set(),
+      cancelled: false,
     };
+    if (predecessor && predecessor.publicKey !== publicKey) {
+      for (const network of predecessor.networks) {
+        enqueueAgentKeyCall(predecessor, network, 'unregister');
+      }
+    }
     networkRegistrationForAgent.set(agentId, registration);
     context.cancelled.catch(async () => {
-      // A reincarnation may already have replaced this registration.
       if (networkRegistrationForAgent.get(agentId) !== registration) {
         return;
       }
+      registration.cancelled = true;
       networkRegistrationForAgent.delete(agentId);
-      await Promise.allSettled(
-        [...registration.networks.keys()].map(network =>
-          unregisterAgentKeyFromNetwork(network, publicKey),
+      const networks = [...registration.networks];
+      registration.networks.clear();
+      await Promise.all(
+        networks.map(network =>
+          enqueueAgentKeyCall(registration, network, 'unregister'),
         ),
       );
     });
