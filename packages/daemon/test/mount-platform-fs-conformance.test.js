@@ -667,8 +667,12 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
 });
 
 test.serial(
-  'XS clone-cleanup file powers behave correctly over Node-shimmed host globals',
+  'XS clone-cleanup file powers walk in the right order over shim-only host globals',
   async t => {
+    // Shim-only: these mocks follow the `stat` JSON shape and the
+    // non-following `remove` of `rust/endo/xsnap/src/powers/fs.rs`, but they
+    // prove the walk's order and its refusal to recurse through a link, not
+    // the native host's behavior, which no CI job runs under endor.
     const globalObject = /** @type {any} */ (globalThis);
     const names = [
       'hostExists',
@@ -690,6 +694,8 @@ test.serial(
       ['victim', 'directory'],
       ['empty', 'directory'],
       ['file', 'file'],
+      ['loose', 'file'],
+      ['rootlink', 'symlink'],
     ]);
     const removed = [];
     globalObject.hostExists = (_token, targetPath) => kinds.has(targetPath);
@@ -716,6 +722,13 @@ test.serial(
       kinds.has('victim'),
       'the symlink target survives recursive removal',
     );
+
+    // A file or symlink root is removed as one entry, never walked.
+    removed.length = 0;
+    await xsPowers.removeDirectory('/loose');
+    await xsPowers.removeDirectory('/rootlink');
+    t.deepEqual(removed, ['loose', 'rootlink']);
+    t.true(kinds.has('victim'), 'a symlink root is unlinked, not followed');
 
     await xsPowers.removeEmptyDirectory('/empty');
     await t.throwsAsync(() => xsPowers.removeEmptyDirectory('/file'), {
