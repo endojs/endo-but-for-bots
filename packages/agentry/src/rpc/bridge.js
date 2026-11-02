@@ -29,14 +29,14 @@ import {
 /** @import { RpcCommand, RpcEvent, Session } from './types.js' */
 
 /**
- * @param {unknown} err
+ * @param {unknown} error
  * @returns {string}
  */
-const describeError = err => {
-  if (err instanceof Error) {
-    return err.message;
+const describeError = error => {
+  if (error instanceof Error) {
+    return error.message;
   }
-  return String(err);
+  return String(error);
 };
 
 /**
@@ -106,14 +106,14 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
         // error for a round that already ended.
         Promise.resolve()
           .then(() => session.prompt(message))
-          .catch(err => {
+          .catch(error => {
             if (activeRound !== round) {
               return;
             }
             busy = false;
             currentId = undefined;
             activeRound = undefined;
-            write(makeErrorEvent(describeError(err), id));
+            write(makeErrorEvent(describeError(error), id));
           });
         return;
       }
@@ -167,8 +167,8 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
             model: command.model,
           });
           write(makeAckEvent('set_model', id));
-        } catch (err) {
-          write(makeErrorEvent(describeError(err), id));
+        } catch (error) {
+          write(makeErrorEvent(describeError(error), id));
         }
         return;
       }
@@ -194,8 +194,8 @@ export const makeRpcBridge = ({ session, write, log = () => {} }) => {
     let command;
     try {
       command = JSON.parse(trimmed);
-    } catch (err) {
-      write(makeErrorEvent(`invalid JSON: ${describeError(err)}`));
+    } catch (error) {
+      write(makeErrorEvent(`invalid JSON: ${describeError(error)}`));
       return;
     }
     if (

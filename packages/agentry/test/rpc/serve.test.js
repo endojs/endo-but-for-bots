@@ -175,17 +175,19 @@ test('serveRpc — an unencodable record yields a fallback error, not a throw', 
 
 test('serveRpc — diagnostics go to errorOutput, not the protocol stream', async t => {
   const out = makeSink();
-  const err = makeSink();
+  const errorSink = makeSink();
 
   await serveRpc({
     input: streamOf(['{"type":"boop"}\n']),
     output: out.stream,
-    errorOutput: err.stream,
+    errorOutput: errorSink.stream,
     session: makeFakeSession(),
   });
 
   // The unknown-command diagnostic lands on errorOutput...
-  t.true(err.writes.join('').includes('ignoring unknown command type: boop'));
+  t.true(
+    errorSink.writes.join('').includes('ignoring unknown command type: boop'),
+  );
   // ...while the protocol stream on output carries only the error record.
   const records = out.records();
   t.is(records.length, 1);

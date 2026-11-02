@@ -38,8 +38,8 @@ export const serveRpc = async ({ input, output, errorOutput, session }) => {
     let line;
     try {
       line = encodeRecord(record);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       line = encodeRecord({
         type: 'error',
         message: `failed to encode ${record.type} event: ${message}`,

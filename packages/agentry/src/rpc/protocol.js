@@ -1,4 +1,6 @@
 // @ts-check
+// spell-out-exempt: `args` is the tool-call field name fixed by
+// `pi-agent-core` events and the RPC wire vocabulary; it cannot be renamed.
 /// <reference types="ses"/>
 
 /**

@@ -1,4 +1,6 @@
 // @ts-check
+// reexport-policy-exempt: this is the `@endo/agentry/rpc` entry point, not a
+// compatibility shim; each name has no older home to deprecate.
 
 // The stdio JSONL RPC bridge: a language-agnostic, LF-delimited JSON surface
 // that lets a spawned child drive a `PiAgent` over stdin and stdout, per

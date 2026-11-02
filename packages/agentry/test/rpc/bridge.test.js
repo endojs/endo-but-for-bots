@@ -1,4 +1,6 @@
 // @ts-check
+// spell-out-exempt: `args` is the tool-call field name fixed by
+// `pi-agent-core` events and the RPC wire vocabulary; it cannot be renamed.
 
 /**
  * Tests for the stdio RPC bridge dispatcher.
@@ -99,13 +101,13 @@ test('prompt — streams translated events tagged with the command id', async t 
     type: 'tool_execution_start',
     toolCallId: 't1',
     toolName: 'bash',
-    args: { cmd: 'ls' },
+    args: { command: 'ls' },
   });
   h.emit({
     type: 'tool_execution_end',
     toolCallId: 't1',
     toolName: 'bash',
-    result: { ok: true },
+    result: { success: true },
     isError: false,
   });
   h.emit({
@@ -126,14 +128,14 @@ test('prompt — streams translated events tagged with the command id', async t 
       type: 'tool_execution_start',
       toolCallId: 't1',
       toolName: 'bash',
-      args: { cmd: 'ls' },
+      args: { command: 'ls' },
       id: '1',
     },
     {
       type: 'tool_execution_end',
       toolCallId: 't1',
       toolName: 'bash',
-      result: { ok: true },
+      result: { success: true },
       isError: false,
       id: '1',
     },
@@ -356,7 +358,7 @@ test('prompt — a rejected round clears busy and reports the error', async t =>
 test("prompt — a superseded round's late failure does not clobber the active round", async t => {
   const h = makeHarness();
   let call = 0;
-  /** @type {(err: Error) => void} */
+  /** @type {(error: Error) => void} */
   let failFirst = () => {};
   h.session.prompt = message => {
     call += 1;
