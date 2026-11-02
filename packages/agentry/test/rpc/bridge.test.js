@@ -7,8 +7,7 @@
  *
  * The bridge is driven against a scripted fake {@link Session}, so these
  * exercise the command parsing, event translation, `id` correlation, and
- * single-flight busy tracking without a live model round-trip. Each
- * assertion fails if the corresponding mapping or guard regresses.
+ * single-flight busy tracking without a live model round-trip.
  */
 
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -350,7 +349,6 @@ test('prompt — a rejected round clears busy and reports the error', async t =>
   t.is(written[0].id, '1');
   t.regex(written[0].message, /model unreachable/);
 
-  // Busy was cleared, so a follow-up prompt is accepted.
   await bridge.handleLine('{"id":"2","type":"get_status"}');
   t.is(written[1].busy, false);
 });
@@ -371,13 +369,11 @@ test("prompt — a superseded round's late failure does not clobber the active r
     return Promise.resolve();
   };
 
-  // Round A starts and is left pending.
   await h.bridge.handleLine('{"id":"A","type":"prompt","message":"a"}');
   await flush();
   // A ends (as an abort would drive it): agent_end clears busy so a new
   // round is admissible.
   h.emit({ type: 'agent_end', messages: [] });
-  // Round B starts and becomes the active round.
   await h.bridge.handleLine('{"id":"B","type":"prompt","message":"b"}');
   await flush();
   // A's prompt now rejects, late. Its catch must be inert.

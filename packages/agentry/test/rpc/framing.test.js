@@ -86,7 +86,6 @@ test('flush — surfaces a trailing unterminated line', t => {
   const decoder = makeJsonlDecoder();
   t.deepEqual(decoder.push('{"a":1}'), []);
   t.deepEqual(decoder.flush(), ['{"a":1}']);
-  // A second flush with nothing buffered yields nothing.
   t.deepEqual(decoder.flush(), []);
 });
 
