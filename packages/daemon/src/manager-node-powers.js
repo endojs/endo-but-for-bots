@@ -589,10 +589,8 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
   };
 
   /**
-   * A filesystem may hand a deleted entry's inode straight to the next
-   * entry created, so the birth time tells a replacement from the original.
-   * Where the filesystem records no birth time it is 0 and only `dev:ino`
-   * distinguishes entries.
+   * See designs/daemon-git-remotes.md § clone.  Where the filesystem records
+   * no birth time it is 0 and only `dev:ino` distinguishes entries.
    *
    * @param {BigIntStats} stat
    */
@@ -600,16 +598,45 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
 
   /**
-   * A directory claims `target` with an exclusive `mkdir(2)` and then
-   * renames over that empty directory, relying on the POSIX `rename(2)` rule
-   * that a directory may replace an empty one; Windows `MoveFileEx` does not,
-   * so this is POSIX-only.  A symbolic link is recreated with `symlink`, and
-   * any other entry is hard-linked with `link(2)`, which fails with `EXDEV`
-   * across filesystems and `EPERM` where the filesystem lacks hard links;
-   * both refuse an existing `target` before the source is unlinked.  (`link`
-   * is not used for a symbolic link because some platforms follow it.)  A
-   * crash or unlink failure can leave both names, but cannot replace the
-   * target.
+   * Remove `source` now that `target` exists as its copy, and report the
+   * target's identity.  Any failure undoes the copy, unless another writer
+   * has replaced it, so a failed move leaves only the source.
+   *
+   * @param {string} source
+   * @param {string} target
+   */
+  const finishMoveByCopy = async (source, target) => {
+    /** @type {string | undefined} */
+    let targetIdentity;
+    try {
+      targetIdentity = statEntryIdentity(
+        await fs.promises.lstat(target, { bigint: true }),
+      );
+      await fs.promises.unlink(source);
+      return targetIdentity;
+    } catch (error) {
+      try {
+        const currentStat = await fs.promises.lstat(target, { bigint: true });
+        if (
+          targetIdentity === undefined ||
+          statEntryIdentity(currentStat) === targetIdentity
+        ) {
+          await fs.promises.unlink(target);
+        }
+      } catch (undoError) {
+        console.warn(
+          `Could not remove ${target} after failing to move ${source}: ${/** @type {Error} */ (undoError).message}`,
+        );
+      }
+      throw error;
+    }
+  };
+
+  /**
+   * POSIX-only: relies on `rename(2)` replacing an empty directory, which
+   * Windows `MoveFileEx` does not.  Symbolic links are recreated, never
+   * hard-linked, because some platforms follow `link(2)`.  A crash can leave
+   * both names, but nothing replaces the target.
    *
    * @type {FilePowers['renameNoReplace']}
    */
@@ -630,14 +657,10 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
       }
       if (sourceStat.isSymbolicLink()) {
         await fs.promises.symlink(await fs.promises.readlink(source), target);
-        const targetStat = await fs.promises.lstat(target, { bigint: true });
-        await fs.promises.unlink(source);
-        return statEntryIdentity(targetStat);
+      } else {
+        await fs.promises.link(source, target);
       }
-      await fs.promises.link(source, target);
-      const targetStat = await fs.promises.lstat(target, { bigint: true });
-      await fs.promises.unlink(source);
-      return statEntryIdentity(targetStat);
+      return finishMoveByCopy(source, target);
     });
 
   /**
@@ -947,6 +970,7 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     pathIdentity,
     entryIdentity,
     renameNoReplace,
+    supportsRenameNoReplace: () => true,
     removeEmptyDirectory,
     statPath,
     isDirectory,

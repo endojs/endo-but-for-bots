@@ -724,6 +724,8 @@ test.serial(
     await t.throwsAsync(() => xsPowers.renameNoReplace('/source', '/target'), {
       message: /XS host cannot move/,
     });
+    // The manager reads this to refuse clone staging before a clone runs.
+    t.false(xsPowers.supportsRenameNoReplace());
   },
 );
 

@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import process from 'node:process';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 
@@ -87,6 +88,33 @@ test('renameNoReplace refuses every existing target and leaves it intact', async
   t.is(await fs.promises.readFile(path.join(root, 'file'), 'utf8'), 'source\n');
   t.true(fs.existsSync(path.join(root, 'directory')));
   t.is(await fs.promises.readlink(path.join(root, 'link')), '/nonexistent');
+});
+
+test('renameNoReplace undoes the copy when the source cannot be unlinked', async t => {
+  if (process.getuid?.() === 0) {
+    t.pass('root ignores the directory mode this test relies on');
+    return;
+  }
+  const { root, renameNoReplace } = await makeFixture(t);
+  const sourceDirectory = path.join(root, 'locked');
+  await fs.promises.mkdir(sourceDirectory);
+  await fs.promises.writeFile(path.join(sourceDirectory, 'file'), 'source\n');
+  await fs.promises.symlink('/nonexistent', path.join(sourceDirectory, 'link'));
+  await fs.promises.chmod(sourceDirectory, 0o555);
+  t.teardown(() => fs.promises.chmod(sourceDirectory, 0o755));
+
+  for (const name of ['file', 'link']) {
+    const target = path.join(root, `${name}-moved`);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      renameNoReplace(path.join(sourceDirectory, name), target),
+      { code: 'EACCES' },
+      name,
+    );
+    t.false(fs.existsSync(target), name);
+    // eslint-disable-next-line no-await-in-loop
+    t.truthy(await fs.promises.lstat(path.join(sourceDirectory, name)), name);
+  }
 });
 
 test('removeEmptyDirectory refuses a directory with content', async t => {

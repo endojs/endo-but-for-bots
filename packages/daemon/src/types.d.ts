@@ -2661,6 +2661,11 @@ export type FilePowers = {
    * new identity. Regular files require same-filesystem hard-link support.
    */
   renameNoReplace: (source: string, target: string) => Promise<string>;
+  /**
+   * Whether `renameNoReplace` can succeed on this host.  Clone staging is
+   * refused where it cannot, before anything is cloned.
+   */
+  supportsRenameNoReplace: () => boolean;
   removeEmptyDirectory: (path: string) => Promise<void>;
   realPath: (path: string) => Promise<string>;
   // Optional: only the XS-backed powers surface readLink today; the

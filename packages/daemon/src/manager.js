@@ -8822,6 +8822,12 @@ const makeDaemonCore = async (
    * @returns {Promise<MountEntryRecord>}
    */
   const makeMountStagingEntry = async mountId => {
+    // Refuse here, before a clone runs, on a host that could never publish it.
+    if (!filePowers.supportsRenameNoReplace()) {
+      throw makeError(
+        X`mount staging is unavailable on this engine: its file powers cannot move an entry without risking replacing another`,
+      );
+    }
     const name = `.endo-staging-${(await randomHex256()).slice(0, 32)}`;
     const stagingPath = mountStagingPath(mountId, name);
     if (await filePowers.exists(stagingPath)) {
@@ -8886,15 +8892,11 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Discard entries directly under a mount's host path, each only while it
-   * is still the very filesystem object that was recorded.  Each entry is
-   * first renamed into a fresh staging directory, which takes whatever
-   * object holds the name at that instant, and its identity is checked
-   * there.  A match is removed; a symbolic link is unlinked, never
-   * followed.  An object another holder put under the name meanwhile is
-   * renamed back, without replacing anything; if the name has been taken
-   * again, the object is left in the staging directory and the call
-   * throws.  A missing entry is not an error.
+   * Discard each recorded entry while it is still the recorded object, and
+   * keep any object another holder put under the name.  Throws if that
+   * object cannot be given its name back.  A missing entry is not an error.
+   * A staging record whose directory could not be removed is kept, so a
+   * later call retries.
    *
    * @param {FormulaIdentifier} mountId
    * @param {MountEntryRecord[]} entries
@@ -8913,19 +8915,20 @@ const makeDaemonCore = async (
       if (await filePowers.exists(mountStagingRecordPath(entry.name))) {
         const stagingPath = mountStagingPath(mountId, entry.name);
         try {
-          if (
-            (await filePowers.entryIdentity(stagingPath)) === entry.identity
-          ) {
-            await filePowers.removeDirectory(stagingPath);
+          try {
+            if (
+              (await filePowers.entryIdentity(stagingPath)) === entry.identity
+            ) {
+              await filePowers.removeDirectory(stagingPath);
+            }
+          } catch (error) {
+            if (!isMissingEntryError(error)) throw error;
           }
+          // Removed, gone, or replaced: the record no longer proves ownership.
+          await forgetMountStagingEntry(entry.name);
         } catch (error) {
-          if (/** @type {{ code?: unknown }} */ (error).code !== 'ENOENT') {
-            errors.push(error);
-          }
+          errors.push(error);
         }
-        await forgetMountStagingEntry(entry.name).catch(error =>
-          errors.push(error),
-        );
         liveMountStagingPaths.delete(stagingPath);
       } else {
         mountEntries.push(entry);
@@ -8958,7 +8961,16 @@ const makeDaemonCore = async (
         continue;
       }
       try {
-        if ((await filePowers.entryIdentity(heldPath)) === identity) {
+        /** @type {string} */
+        let heldIdentity;
+        try {
+          heldIdentity = await filePowers.entryIdentity(heldPath);
+        } catch (error) {
+          // Nothing now says whose object this is.
+          keepHolding = true;
+          throw error;
+        }
+        if (heldIdentity === identity) {
           await filePowers.removeDirectory(heldPath);
           await forgetMountStagingEntry(name);
         } else {
@@ -8977,14 +8989,22 @@ const makeDaemonCore = async (
         errors.push(error);
       }
     }
-    if (!keepHolding) {
-      await filePowers
-        .removeEmptyDirectory(holdingPath)
-        .catch(error => errors.push(error));
+    // A record kept after a failed removal lets a later call remove what is
+    // left, which is only this call's own entries.  A directory that may hold
+    // another holder's object must lose its record, or that call would remove
+    // the object too.
+    try {
+      if (!keepHolding) {
+        try {
+          await filePowers.removeEmptyDirectory(holdingPath);
+        } catch (error) {
+          if (!isMissingEntryError(error)) throw error;
+        }
+      }
+      await forgetMountStagingEntry(holding.name);
+    } catch (error) {
+      errors.push(error);
     }
-    await forgetMountStagingEntry(holding.name).catch(error =>
-      errors.push(error),
-    );
     liveMountStagingPaths.delete(holdingPath);
     if (errors.length === 1) {
       throw errors[0];
@@ -9038,16 +9058,7 @@ const makeDaemonCore = async (
     };
   };
 
-  /**
-   * Discard the clone staging directories that this daemon recorded for a
-   * mount and that no operation in this process still owns: those a prior
-   * daemon process left when it stopped between creating one and removing
-   * it.  Each is removed only if it is still the recorded object.  An
-   * unrecorded entry is never touched, whatever its name.
-   *
-   * @param {FormulaIdentifier} mountId
-   * @returns {Promise<void>}
-   */
+  /** @param {FormulaIdentifier} mountId */
   const removeStaleMountStagingEntries = async mountId => {
     if (!(await filePowers.exists(mountStagingRecordsPath))) {
       return;
@@ -9122,13 +9133,16 @@ const makeDaemonCore = async (
           if (removed) await forgetMountStagingEntry(name);
         } else if (record.mountId === mountId && !isLiveName(name)) {
           stale.push(harden({ name, identity: record.identity }));
+        } else if (record.mountId !== mountId) {
+          // Only a stagingPath can locate another mount's staging directory.
+          console.warn(
+            `Forgetting mount staging record ${name} with no staging path`,
+          );
+          await forgetMountStagingEntry(name);
         }
       }
     }
     await discardMountEntries(mountId, stale);
-    for (const { name } of stale) {
-      await forgetMountStagingEntry(name);
-    }
   };
 
   /**

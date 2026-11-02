@@ -348,7 +348,9 @@ export const makeXsFilePowers = () => {
   };
 
   /**
-   * `pathIdentity` already reads the entry itself, not a link's referent.
+   * Weaker than the Node powers' identity: the XS host's `stat` has no birth
+   * time, so a replacement that reuses an inode passes for the original.
+   * Nothing depends on the difference, because clone staging is refused here.
    *
    * @type {FilePowers['entryIdentity']}
    */
@@ -514,6 +516,7 @@ export const makeXsFilePowers = () => {
     pathIdentity,
     entryIdentity,
     renameNoReplace,
+    supportsRenameNoReplace: () => false,
     removeEmptyDirectory,
     statPath,
     isDirectory,
