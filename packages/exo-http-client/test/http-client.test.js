@@ -1151,3 +1151,44 @@ test('pinAllowed admits an origin a strict adapter would refuse', async t => {
     decisionMode: 'strict',
   });
 });
+
+for (const [label, mutate] of /** @type {const} */ ([
+  ['revokeBinding', control => E(control).revokeBinding(ALLOWED)],
+  ['unpin', control => E(control).unpin(ALLOWED)],
+  ['setAllowedOrigins', control => E(control).setAllowedOrigins([])],
+])) {
+  test(`${label} refuses a fetch fired while its update is pending`, async t => {
+    const fake = makeFakeFetch();
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const { client, control } = makeHttpClientAndControl({
+      fetch: fake.fetch,
+      allowedOrigins: [ALLOWED],
+      now: async () => {
+        await gate;
+        return 0;
+      },
+    });
+
+    const mutation = mutate(control);
+    const pending = E(client).fetch(ALLOWED_URL);
+    await Promise.resolve();
+    release();
+    await mutation;
+    await t.throwsAsync(() => pending, { message: /not in the allowed/ });
+    t.deepEqual(fake.calls, []);
+  });
+}
+
+test('policyPromptTimeoutMs above the timer range is rejected', t => {
+  t.throws(
+    () => makeTrustOnFirstBindPolicyAdapter({ policyPromptTimeoutMs: 2 ** 31 }),
+    { message: /policyPromptTimeoutMs" must be at most/ },
+  );
+  t.notThrows(() =>
+    makeTrustOnFirstBindPolicyAdapter({ policyPromptTimeoutMs: 2 ** 31 - 1 }),
+  );
+});
