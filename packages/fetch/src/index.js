@@ -23,6 +23,7 @@
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { snapshotHeaders } from '@endo/http-confine';
 import { toAbortSignal } from '@endo/cancel/to-abort';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -66,26 +67,6 @@ Fetch - unfettered outbound HTTP. Not for guests.
 body is a CloseablePassableBytesReader, or null for a null-body response.
 Rejecting the cancelled token aborts the request and its body.
 Endow this to @endo/confined-fetch; grant guests only its HttpClient.`;
-
-/**
- * Copy transport headers into a plain record with lowercased names. Native
- * `Headers` must not be hardened (Undici caches its sorted map lazily), so it
- * is read once and never escapes.
- *
- * @param {unknown} headers
- * @returns {Record<string, string>}
- */
-const snapshotHeaders = headers => {
-  /** @type {Iterable<[string, string]>} */
-  const entries =
-    headers &&
-    typeof (/** @type {any} */ (headers)[Symbol.iterator]) === 'function'
-      ? /** @type {Iterable<[string, string]>} */ (headers)
-      : Object.entries(/** @type {Record<string, string>} */ (headers || {}));
-  return Object.fromEntries(
-    [...entries].map(([name, value]) => [name.toLowerCase(), String(value)]),
-  );
-};
 
 /**
  * Drain a transport body as an async iterator of byte chunks, cancelling the

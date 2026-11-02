@@ -6,6 +6,9 @@ import { M } from '@endo/patterns';
 
 /** @import { Timer } from './types.js' */
 
+// HTML timer initialization steps treat a delay as a signed 32-bit millisecond
+// count, and Node clamps a larger one to 1. The bound is a host profile choice,
+// not ECMA-262; this Timer rejects rather than clamps.
 export const MAX_TIMER_DELAY_MILLISECONDS = 2 ** 31 - 1;
 harden(MAX_TIMER_DELAY_MILLISECONDS);
 
