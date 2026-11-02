@@ -6,15 +6,14 @@
  * wire vocabulary from `designs/endopi-stdio-rpc-bridge.md`. Commands arrive
  * from an embedding host as LF-delimited JSON; events flow back the same way.
  * These types are the single source of truth the bridge, framing,
- * protocol, session, and serve modules share; they will become
- * `M.interface()` guards if this surface graduates into the daemon.
+ * protocol, session, and serve modules share.
  */
 
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 
 /**
- * A decoded RPC command record. The framing layer guarantees only that
- * `type` is a string; every payload field is validated by the dispatcher
+ * A decoded RPC command record. The bridge's `handleLine` checks only that
+ * `type` is a string (and `id`, when present); every payload field is validated by the dispatcher
  * before use, so they are declared optional here.
  *
  * The command set (per the design): `prompt` and `steer` carry a `message`;
@@ -85,6 +84,10 @@ export type Session = {
   subscribe: (listener: (event: AgentEvent) => void) => () => void;
   prompt: (message: string) => Promise<void>;
   abort: () => void;
+  /**
+   * inject a message into the running round; with no round running, the
+   * agent queues it into the next one
+   */
   steer: (message: string) => void;
   /** human-readable current model */
   describeModel: () => string;
