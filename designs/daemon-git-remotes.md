@@ -536,7 +536,7 @@ Cloning creates both repository metadata and a worktree; it crosses the boundary
 For the MVP there are two legitimate product flows:
 
 1. The host provides an already-existing physical worktree mount, then derives `Git` and `GitRemote`.
-2. The host performs a separate trusted bootstrap operation that creates a new physical worktree from a bounded remote source and then returns the resulting `EndoMount` plus `Git`.
+2. The host performs a separate trusted bootstrap operation that clones a bounded remote source into an empty mount the host supplies and then returns the resulting `Git` and its `GitRemote`.
 
 The second flow is product-relevant when an agent starts from only a remote repository, but it should remain host-mediated.
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.

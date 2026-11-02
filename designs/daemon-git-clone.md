@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-22 |
+| **Updated** | 2026-11-02 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -10,6 +11,7 @@
 
 This design is the home that [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone` and [daemon-git-next-steps](daemon-git-next-steps.md) § Reconciliation deltas deferred to.
 It has two parts: a record of what is already on `llm`, and a normative revision of the bootstrap surface.
+Draft #1538 builds the revision, and this document states the contract as of its head `f00001ed01` (2026-11-02).
 
 Already on `llm`:
 
@@ -65,7 +67,6 @@ provideGitClone(
     };
     identity?: GitCommitIdentity;   // formula-owned, guest-immutable
     origin?: {
-      petName?: string | string[];  // names the origin GitRemote
       allowedDirections?: Array<'fetch' | 'push'>; // default ['fetch']
       fetchRefspecs?: string[];     // default +refs/heads/*:refs/remotes/origin/*
       pushRefspecs?: string[];
@@ -82,21 +83,24 @@ provideGitClone(
 The argument order is `(subject, petName, options)`, the same as `provideGit` and `provideGitRemote`.
 The `origin` record takes the same policy fields that `provideGitRemote` accepts, minus three that the clone fixes: `name` (always `origin`), `url` and `credential` (both come from the endpoint, so the remote talks to the server that was cloned).
 `allowLocalFileTransport` is inherited from the endpoint and cannot be set on `origin`.
+Any other key on `origin` is refused, including `petName`.
 Policy normalization is the existing `git-remote-policy.js` path, so a clone-minted `origin` cannot hold a policy that `provideGitRemote` would reject.
 
 **Defaults.** `origin` defaults to fetch-only, the same as `provideGitRemote`.
 To push, the host opts in, typically with the Agent MVP Profile: `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
 The hardcoded fetch+push over `refs/heads/*` is removed.
 
-**Names.** `petName` names the `Git`, and `origin.petName` names the remote if given.
-Both `storeIdentifier` tasks are deferred and run only after the whole composition succeeds.
-An unnamed `origin` is reachable only through the returned reference.
+**Names.** `petName` names the `Git`, and storing it is the last step of the composition, so a failure anywhere earlier binds no name.
+The clone never names the remote.
+A caller that wants a named remote calls `provideGitRemote` over the returned `git`.
+The unnamed `origin` is reachable only through the returned reference.
 Once that reference is dropped, the existing formula mark-and-sweep (`collectIfDirty`, [daemon-content-store-gc](daemon-content-store-gc.md)) collects it.
 Retention is owned by whoever names the formula, as it is for every other `provide*` method.
 
 **Migration.** The one-object form `provideGitClone({ destMount, endpoint, identity })` is removed, and the build migrates every in-tree caller in the same change.
 Today those are the floot bootstrap, `packages/daemon/test/git-remote.test.js` and `git-authority-types.test-d.ts`.
-The floot bootstrap shrinks to a single call that passes its push-to-`agent` policy as `origin`, with no separate `provideGit` and `provideGitRemote` re-derivation.
+The floot bootstrap keeps the `git` from the clone, passes `identity` once, and no longer calls `provideGit`.
+It still calls `provideGitRemote` over that `git` to bind its named push-to-`agent` remote, so its only unnamed leftover is a fetch-only `origin`.
 
 ### Composition and commit/discard
 
@@ -108,8 +112,8 @@ flowchart TD
   native["gitClone<br/>(askpass fd, sanitized env)"]
   git["formulateGit<br/>(identity in formula)"]
   origin["formulateGitRemote 'origin'<br/>(host-chosen policy)"]
-  names["storeIdentifier tasks<br/>(petName, origin.petName)"]
-  discard["discard: empty destMount;<br/>unnamed formulas left to GC"]
+  names["storeIdentifier<br/>(petName)"]
+  discard["discard: remove every entry under the mount root;<br/>release pins, unnamed formulas left to GC"]
 
   mount --> cloner
   endpoint --> cloner
@@ -117,19 +121,28 @@ flowchart TD
   native -. failure .-> discard
   git -. failure .-> discard
   origin -. failure .-> discard
+  names -. failure .-> discard
 ```
 
 `provideGitClone` validates its inputs and then calls `makeGitCloner(...).clone(...)`.
 The cloner runs the native clone, mints the `Git` formula over the destination, and mints the `origin` formula.
 It checks that the endpoint credential has not changed between every pair of steps.
+Minted formulas stay transiently pinned until the name is stored or discard releases them.
 A credential change during the native clone aborts the git subprocess through the `AbortController` that is wired to `endpoint.watchChange`.
 
-**Discard is owned by the host method.**
-On entry, `gitClone` proves the destination is empty, and the caller is expected to hold the mount exclusively until the call returns.
-If any step after the emptiness check fails, `provideGitClone` empties the destination before it rethrows.
-That leaves the mount as it was on entry, so the caller can retry into the same mount.
-Formulas minted before the failure have not been named, because naming is deferred to the last step, so formula GC collects them.
-Content another writer puts in the mount during the call is discarded along with the partial clone: concurrent writes to a clone destination are caller error.
+**The destination is exclusive, and discard is owned by the host method.**
+`provideGitClone` assumes that nothing else writes to the mount while the clone runs.
+It refuses a non-empty mount without touching it, then clones straight into the mount.
+If any later step fails, it removes every entry under the mount root and rethrows, leaving the root directory in place, so the caller can retry into the same mount.
+Removal unlinks a symbolic link the clone created and never follows it.
+If the removal itself fails, the call rejects with an `AggregateError` that carries the original error as its `cause`, and the mount may keep partial content.
+Formulas minted before the failure have not been named, because naming is the last step, so formula GC collects them once their pins are released.
+A host that hands the mount to another holder before the call settles may lose that holder's writes.
+
+Discard runs only in a live daemon.
+A daemon that stops mid-clone leaves partial content in the mount, with no name bound and no record of the clone, and a retry into that mount is refused as non-empty (§ Open Questions).
+
+Cloning is unavailable on the XS manager, whose supervisor supplies no host Git tools, and is refused there before anything is cloned.
 `makeGitCloner` itself stays portable and does no filesystem cleanup, because the emptying happens through the daemon's mount host path.
 
 ### Clone-time restrictions (unchanged)
@@ -137,6 +150,7 @@ Content another writer puts in the mount during the call is discarded along with
 The `gitClone` boundary checks the following before it spawns git, and `native-git-backend.test.js` already covers these checks:
 
 - the URL must not embed credentials (`user:pass@`);
+- the credential, checked earlier by `provideGitClone`, must be a daemon-minted Git credential capability, never a raw secret;
 - `http:` is rejected, and a credential requires `https:`;
 - `file:` requires `allowLocalFileTransport`;
 - the destination must be empty;
@@ -181,17 +195,17 @@ Considered and rejected: a separate `GitIdentity` capability passed into `provid
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| host method to mount layer | `getMountHostPath` | the mount's own (`readOnly`, deny patterns) | the `mount` / `scratch-mount` formula | the caller provisions and retires the mount; `provideGitClone` empties it on failure | `EndoMount` in, host path internally |
+| host method to mount layer | `getMountHostPath` | the mount's own (`readOnly`, deny patterns) | the `mount` / `scratch-mount` formula | the caller provisions and retires the mount, and keeps it exclusive during the call; `provideGitClone` clears it on failure | `EndoMount` in, host path internally |
 | host method to cloner seam (`@endo/exo-git`) | `makeGitCloner` | none; it composes injected makers | none | the cloner orders the steps and fences the credential; the host method decides commit or discard | endpoint, `clone`, `makeGit`, `makeRemote` in; `{ git, remote }` out |
 | cloner to native backend (`@endo/git`) | `gitClone` subprocess | clone-time restrictions above | the worktree bytes in the mount | ends when the subprocess exits or the signal aborts it | URL, path, credential (fd only), `AbortSignal` |
-| host method to formula store | `formulateGit`, `formulateGitRemote`, deferred `storeIdentifier` | `identity` in the `git` formula; `origin` policy in the `gitRemote` formula | both formulas | named on success; otherwise unnamed and collected by mark-and-sweep | formula ids |
+| host method to formula store | `formulateGit`, `formulateGitRemote`, final `storeIdentifier` | `identity` in the `git` formula; `origin` policy in the `gitRemote` formula | both formulas | the `Git` is named on success; anything unnamed is collected by mark-and-sweep | formula ids |
 | credential layer to cloner | `GitRemoteEndpoint` (`ensureCredentialUsable`, `watchChange`) | the credential controller's rotation and revocation | credential material, daemon-process-local | the credential controller can abort a clone in progress | sealed credential; the guest never sees the material |
 
 The four ownership questions:
 
 - **Persistent state** belongs to the formula store (the identity and `origin` policy) and the mount (the bytes).
 - **Commit or discard** belongs to `provideGitClone`.
-- **Restart and replay** belong to formula reincarnation. A clone that has not finished when the daemon restarts produced no named formula and is not resumed. The caller retries into the emptied mount.
+- **Restart and replay** belong to formula reincarnation. A clone that has not finished when the daemon restarts produced no named formula and is not resumed. Its partial content stays in the mount, so the host provisions a fresh mount before it retries.
 - **Execution classification** (credential-change abort versus any other failure) belongs to the cloner, through `assertCredentialUnchanged` in its `catch`.
 
 Naming check: the cloner returns a composition result, `{ git, remote }`, and none of its types are named for host lifecycle concepts.
@@ -210,18 +224,21 @@ Naming check: the cloner returns a composition result, `{ git, remote }`, and no
 
 ## Phased implementation
 
-One build job, rooted at `llm`:
+One build job, rooted at `llm`, in progress as draft #1538:
 
 1. **Surface.** Change `provideGitClone` to `(destMount, petName, options)` with the `origin` record and a fetch-only default.
    Defer the `storeIdentifier` tasks to the end of the composition.
    Update `EndoHost['provideGitClone']` in `types.d.ts` and the `interfaces.js` guard.
-2. **Discard.** Empty the destination on any failure after the emptiness check, and rethrow the original error.
-3. **Callers.** Migrate the floot bootstrap to a single call, and migrate the daemon tests.
+2. **Discard.** Refuse a non-empty destination, remove every entry under the mount root on any later failure, and rethrow the original error.
+3. **Callers.** Migrate the floot bootstrap and the daemon tests.
 4. **Tests.** Add:
    - a credential rotated during the native clone aborts the subprocess, rejects the call, and leaves the mount empty;
    - a failure injected after `formulateGit` leaves the mount empty and no pet name bound, and a retry into the same mount succeeds;
    - the default `origin` refuses `push`, and an `origin` that opts into the Agent MVP Profile pushes only `refs/heads/agent/*`;
-   - `petName` and `origin.petName` resolve after a daemon restart;
+   - `petName`, and a remote bound with `provideGitRemote` over the returned `git`, resolve after a daemon restart;
+   - `origin.petName` is refused;
+   - a non-empty destination is refused and keeps its content;
+   - discard unlinks a cloned symbolic link without following it;
    - an `origin` policy that `provideGitRemote` would reject is rejected here too.
 
 ## Design Decisions
@@ -229,18 +246,28 @@ One build job, rooted at `llm`:
 1. **Host-mediated, never guest authority.** This is the second flow of [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone`.
 2. **The mount is an input, not a product.** Mount policy is decided once, at the mount layer.
    Considered and rejected: minting the mount inside `provideGitClone` (the original roadmap sketch). Reason: it would duplicate the `provideMount` / `provideScratchMount` option surface behind clone flags. Callers create a scratch mount in one call anyway.
+   The call therefore returns `{ git, remote }` and not the `EndoMount` plus `Git` of that sketch, because the caller already holds the mount.
 3. **Clone lives on neither `Git` nor `GitRemote`.** Both attenuate a repository that already exists. The seam takes the endpoint and the mount, the two authorities that exist before the repository does.
 4. **`makeGitCloner` stays a standalone portable maker.** That keeps a later guest-held `GitCloner` plus `GitClonerController` an addition rather than a rewrite.
 5. **`origin` policy is host-chosen data that defaults to fetch-only.** The clone-time default matches `provideGitRemote`, and the Agent MVP Profile is opt-in.
-6. **Discard belongs to the host method, and naming happens last.** A failed bootstrap leaves an empty mount and no named formulas.
+6. **Discard belongs to the host method, and naming happens last.** A failed bootstrap in a live daemon leaves an empty mount and no named formulas.
+   Considered and rejected: cloning into a sibling staging directory and publishing with a no-replace rename, so that concurrent writers survive. Reason: its identity records, restart reclamation and new `FilePowers` methods protect only a case this design puts out of scope, and #1538 removed them (see the exclusivity question in § Open Questions).
 7. **Identity is construction-time formula data, and the `Git` is its bearer capability** (§ The commit-identity boundary as a capability shape).
 8. **Keep the `{ git, remote }` return.** Considered and rejected: returning only `Git` like the other `provide*` methods. Reason: the remote is only reachable through the composition, and an unnamed `origin` would be unreachable.
+9. **The clone names only the `Git`.** Considered and rejected: an `origin.petName` option. Reason: `provideGitRemote` already binds a remote over the returned `git`, and a second name in the clone needs a two-name rollback on failure.
 
 ## Open Questions
 
+- Should this document land as the bootstrap contract, or should the PR close in favor of [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone`? #1538 writes the same contract into that section and points its JSDoc there, and [daemon-git-next-steps](daemon-git-next-steps.md) says a standalone clone design is not a prerequisite. If this document lands, one of the two should defer to the other. The capability shape of the identity boundary is the one part that exists only here.
+- Should the exclusive destination stand? The liaison proxy ruled for it tentatively on #1538 (2026-11-02), so it awaits a maintainer ruling. The rejected alternative is the staging design in Design Decision 6.
+- Should the daemon reclaim a mount left partial by a restart during a clone? Today the host must notice the refusal and provision a fresh mount. Reclaiming needs a durable record of the clone in progress, which is part of what #1538 removed.
 - Should verifiable attribution become a capability, by signing commits with a daemon-sealed signing key handed to `provideGit` / `provideGitClone` the way `GitCredential` is? Under this design the identity is a label and not proof. A signing key would be a real new authority (it can be used, rotated and revoked), unlike the `GitIdentity` capability rejected above. Tracking issue: to be filed.
 - Should `provideGitClone` accept an optional `depth` / `singleBranch` bound on the native clone, so a host can cap what a large remote costs on disk? Today it does a full clone.
 
 ## Prompt
 
 > Design step for endojs/endo-but-for-bots (base `llm`): write `designs/daemon-git-clone.md`, specifying `provideGitClone(...)` repository bootstrap (mount creation + endpoint policy + sealed credential authority + clone into the new mount) and the commit-author/identity boundary as a capability shape. This is the open item in `daemon-git-next-steps` that the `GitRemote` composition (`daemon-git-remotes` § Repository Bootstrap) now unblocks, and it serves the capability git remote arc.
+
+Second request, 2026-11-02 (`daemon-git-clone-bootstrap-design`), answered by this update:
+
+> Designer step for endojs/endo-but-for-bots (base branch `llm`): write the new `designs/daemon-git-clone.md` named in `designs/daemon-git-next-steps.md` § Open Work. It covers `provideGitClone` repository bootstrap (mount creation, endpoint policy, sealed credential authority, and clone into the new mount, returning `EndoMount` + `Git`) and the commit-author / identity boundary as a capability shape. It builds on `daemon-git-remotes` § Repository Bootstrap, and it should put any unresolved questions in an Open questions section.
