@@ -1125,6 +1125,10 @@ export const makeOcapn = (
       const { reason } = message;
       abort(reason);
     },
+    // Absorbed by the OCapN-Noise session reader when heartbeats are on;
+    // otherwise ignored here.
+    'op:ping': () => {},
+    'op:pong': () => {},
   });
 
   /**

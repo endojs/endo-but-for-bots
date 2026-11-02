@@ -4,6 +4,7 @@ import harden from '@endo/harden';
 
 /**
  * @import { CodecTestEntry } from './_codecs_util.js'
+ * @import { OcapnHeartbeatMessage } from '../../src/codecs/operations.js'
  */
 
 import test from '@endo/ses-ava/test.js';
@@ -12,6 +13,12 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeHex } from '@endo/hex';
 
 import { makeSelector } from '../../src/selector.js';
+import { cborCodec } from '../../src/cbor/index.js';
+import { syrupCodec } from '../../src/syrup/index.js';
+import {
+  readOcapnHeartbeatMessage,
+  writeOcapnHeartbeatMessage,
+} from '../../src/codecs/operations.js';
 import {
   exampleSigParamBytes,
   examplePubKeyQBytes,
@@ -209,6 +216,25 @@ export const table = [
     value: {
       type: 'op:gc-answers',
       answerPositions: [1n],
+    },
+  },
+  {
+    // <op:ping epoch sequence>
+    name: 'op:ping',
+    value: {
+      type: 'op:ping',
+      epoch: 0n,
+      sequence: 7n,
+    },
+  },
+  {
+    // <op:pong epoch sequence last-acked-recv-nonce>
+    name: 'op:pong',
+    value: {
+      type: 'op:pong',
+      epoch: 1n,
+      sequence: 3n,
+      lastAckedRecvNonce: 42n,
     },
   },
   // Below are messages observed in the ocapn python test suite.
@@ -477,6 +503,32 @@ runTableTestsAllCodecs(
 );
 
 // Error validation tests run with all codec formats
+for (const [codecName, codec] of /** @type {const} */ ([
+  ['syrup', syrupCodec],
+  ['cbor', cborCodec],
+])) {
+  for (const message of /** @type {OcapnHeartbeatMessage[]} */ ([
+    { type: 'op:ping', epoch: 2n, sequence: 3n },
+    { type: 'op:pong', epoch: 2n, sequence: 3n, lastAckedRecvNonce: 2n ** 64n },
+  ])) {
+    test(`${message.type} round-trips as a heartbeat [${codecName}]`, t => {
+      const bytes = writeOcapnHeartbeatMessage(harden(message), codec);
+      t.deepEqual(readOcapnHeartbeatMessage(codec.makeReader(bytes)), message);
+    });
+  }
+
+  test(`a heartbeat read rejects another operation [${codecName}]`, t => {
+    const writer = codec.makeWriter({ name: 'not a heartbeat' });
+    writer.enterRecord(1);
+    writer.writeSelectorFromString('op:abort');
+    writer.exitRecord();
+    t.throws(
+      () => readOcapnHeartbeatMessage(codec.makeReader(writer.getBytes())),
+      { message: /OcapnHeartbeatOperations: read failed/ },
+    );
+  });
+}
+
 for (const codec of AllCodecs) {
   test(`op:get rejects integer fieldName [${codec.name}]`, t => {
     const testKit = makeCodecTestKit();
