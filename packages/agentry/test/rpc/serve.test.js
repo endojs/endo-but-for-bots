@@ -194,3 +194,66 @@ test('serveRpc — diagnostics go to errorOutput, not the protocol stream', asyn
   t.is(records[0].type, 'error');
   t.regex(records[0].message, /unknown command type: boop/);
 });
+
+test('serveRpc — at end of input, waits for an in-flight round to finish', async t => {
+  const sink = makeSink();
+  /** @type {((event: unknown) => void) | undefined} */
+  let listener;
+  const session = {
+    ...makeFakeSession(),
+    subscribe: l => {
+      listener = l;
+      return () => {
+        listener = undefined;
+      };
+    },
+    // The round outlives the input: its events arrive after stdin closes.
+    prompt: async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      listener?.({
+        type: 'message_end',
+        message: { role: 'assistant', content: [] },
+      });
+      listener?.({ type: 'agent_end', messages: [] });
+    },
+  };
+
+  await serveRpc({
+    input: streamOf(['{"id":"1","type":"prompt","message":"hi"}\n']),
+    output: sink.stream,
+    session,
+  });
+
+  t.deepEqual(
+    sink.records().map(r => r.type),
+    ['message_end', 'agent_end'],
+  );
+});
+
+test('serveRpc — a throwing session call is reported, not fatal', async t => {
+  const sink = makeSink();
+  const session = {
+    ...makeFakeSession(),
+    listModels: () => {
+      throw Error('registry unavailable');
+    },
+  };
+
+  await serveRpc({
+    input: streamOf([
+      '{"id":"m","type":"list_models"}\n{"id":"s","type":"get_status"}\n',
+    ]),
+    output: sink.stream,
+    session,
+  });
+
+  const records = sink.records();
+  t.deepEqual(
+    records.map(r => [r.type, r.id]),
+    [
+      ['error', 'm'],
+      ['status', 's'],
+    ],
+  );
+  t.regex(records[0].message, /registry unavailable/);
+});
