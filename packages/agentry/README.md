@@ -535,8 +535,6 @@ Replies to the other commands:
 {"type": "error", "message": "…", "id": "5"}
 ```
 
-`steer`, `abort`, and a successful `set_model` reply with `endo:ack`;
-`list_models` replies with `models`; `get_status` replies with `status`.
 Any rejected or failed command replies with `error`.
 
 The session is single-flight: a `prompt` or `set_model` received while a round
@@ -553,16 +551,8 @@ The exported building blocks: `makeJsonlDecoder` and `encodeRecord` (framing),
 `translateAgentEvent` (event mapping), `makeRpcSession` (a session over a
 `PiAgent`), `makeRpcBridge` (the dispatcher), and `serveRpc` (the stream
 wiring).
-
-```mermaid
-flowchart LR
-  host[Embedding host] -->|JSON commands| decoder[makeJsonlDecoder]
-  decoder --> bridge[makeRpcBridge]
-  bridge --> session[makeRpcSession]
-  session --> agent[PiAgent]
-  agent -->|agent events| bridge
-  bridge -->|JSON events| host
-```
+The subpath also exports the types `RpcCommand`, `RpcEvent`, `ModelInfo`,
+`Session`, `JsonlDecoder`, and `RpcBridge`.
 
 ## Status
 

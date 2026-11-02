@@ -11,7 +11,6 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { serveRpc } from '../../src/rpc/serve.js';
 
-// An async iterable that yields the given string chunks in order.
 const streamOf = chunks => ({
   async *[Symbol.asyncIterator]() {
     for (const chunk of chunks) {
@@ -36,7 +35,6 @@ const makeSink = () => {
   };
 };
 
-/** A synchronous fake session that emits a scripted round on prompt. */
 const makeFakeSession = () => {
   /** @type {((event: unknown) => void) | undefined} */
   let listener;
