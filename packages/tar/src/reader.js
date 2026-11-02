@@ -335,6 +335,7 @@ export const readTarEntries = async function* readTarEntries(source) {
       type,
       path: archivePath,
       size,
+      mode: tarOctal(header.slice(100, 108)),
       linkname: type === 'symlink' ? linkpath : '',
       content: reader.streamContent(size, archivePath),
     });

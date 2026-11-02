@@ -137,6 +137,7 @@ api-docs
 !packages/ses/src/reporting-types.d.ts
 !packages/ses/types.d.ts
 !packages/stream/types.d.ts
+!packages/tar/src/types.d.ts
 !packages/trampoline/types.d.ts
 !packages/where/types.d.ts
 !packages/ocapn/src/codec-interface.d.ts
