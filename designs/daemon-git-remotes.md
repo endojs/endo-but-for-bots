@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-10-25 |
+| **Updated** | 2026-11-02 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538; Phases 6-7 open) |
+| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538, its `(destMount, petName, { origin })` form via #1538; Phases 6-7 open) |
 
 > **Read in order.**
 > This is doc 3 of 3.
@@ -685,7 +685,7 @@ This preserves the same authority shape as `HttpClient` even when the first impl
 
 Before Phase 2 ships the first credential-bearing remote, run a spike across the target host matrix (Linux, macOS, Windows where applicable) to measure:
 
-1. Whether the anonymous-pipe-fed `GIT_ASKPASS` helper works on every target host's stock `git` (>= 2.30; see [daemon-git-capability](daemon-git-capability.md) for the version pin), including under `git`'s recent `setup_credential_helpers` defaults.
+1. Whether the anonymous-pipe-fed `GIT_ASKPASS` helper works on every target host's stock `git` (≥ 2.30; see [daemon-git-capability](daemon-git-capability.md) for the version pin), including under `git`'s recent `setup_credential_helpers` defaults.
 2. Whether the askpass-fed-by-anonymous-pipe path can carry a bearer token (treating the bearer as a password fed through askpass) while keeping the token out of argv, `/proc/*/environ`, and any persisted temp-file artifact a panicked git invocation might leave behind.
    If not, bearer support stays gated until a mechanism that meets the "no secret in env / argv / temp file" bar is identified.
 3. Whether the daemon-shipped helper binary can be located on macOS in a way that survives `git`'s notarization / quarantine attributes for packaged installers.
