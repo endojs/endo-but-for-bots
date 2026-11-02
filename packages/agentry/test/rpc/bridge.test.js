@@ -247,6 +247,19 @@ test('set_model — forwards the selection and acks', async t => {
   ]);
 });
 
+test('set_model — reports a failed switch as an error event', async t => {
+  const h = makeHarness();
+  h.session.setModel = async () => {
+    // A non-Error rejection is described by its string form.
+    // eslint-disable-next-line no-throw-literal
+    throw 'no such model';
+  };
+  await h.bridge.handleLine(
+    '{"id":"sm","type":"set_model","provider":"anthropic","model":"nope"}',
+  );
+  t.deepEqual(h.written, [{ type: 'error', message: 'no such model', id: 'sm' }]);
+});
+
 test('set_model — rejects a missing provider or model', async t => {
   const h = makeHarness();
   await h.bridge.handleLine('{"id":"sm","type":"set_model","provider":"x"}');

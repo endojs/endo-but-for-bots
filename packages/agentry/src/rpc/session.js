@@ -54,6 +54,12 @@ export const makeRpcSession = ({ piAgent }) => {
     },
     setModel: async ({ provider, model }) => {
       const resolved = await resolveModel(`${provider}/${model}`);
+      // pi-ai's registry lookup returns `undefined` for an unknown provider or
+      // model rather than throwing; refuse it so a typo cannot clear the live
+      // agent's model and leave the next round without one.
+      if (resolved === undefined) {
+        throw Error(`unknown model: ${provider}/${model}`);
+      }
       piAgent.state.model = resolved;
     },
   });

@@ -71,6 +71,15 @@ test('push — reassembles a multibyte character split across chunks', t => {
   t.deepEqual(decoder.push(second), ['{"c":"€"}']);
 });
 
+test('flush — drains a truncated multibyte sequence from the decoder', t => {
+  const decoder = makeJsonlDecoder();
+  const bytes = new TextEncoder().encode('{"a":"é');
+  // Withhold the final byte of the two-byte `é`, so the streaming decoder
+  // holds a partial sequence that only `flush` can surface.
+  t.deepEqual(decoder.push(bytes.subarray(0, bytes.length - 1)), []);
+  t.deepEqual(decoder.flush(), ['{"a":"\uFFFD']);
+});
+
 test('flush — surfaces a trailing unterminated line', t => {
   const decoder = makeJsonlDecoder();
   t.deepEqual(decoder.push('{"a":1}'), []);
