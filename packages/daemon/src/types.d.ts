@@ -2093,14 +2093,11 @@ export interface EndoHost extends EndoAgent {
     },
   ): Promise<GitRemote>;
   /**
-   * Host-only constructive clone into an empty destination mount,
-   * returning a fresh Git cap bound to `petName` and an `origin` GitRemote
-   * (fetch-only by default).  The destination is exclusive: nothing else
-   * may write to the mount while the clone runs.  A non-empty mount is
-   * refused, the clone is made straight into the mount, and a failed clone
-   * removes what it created, so the mount is empty again and the call can
-   * be retried.  The remote is unnamed; bind one with `provideGitRemote`.
-   * Contract: `designs/daemon-git-remotes.md` § clone.
+   * Host-only constructive clone into an empty mount that nothing else
+   * writes to, returning a fresh Git cap bound to `petName` and a GitRemote
+   * whose Git name is `origin` (fetch-only by default, with no pet name; bind
+   * one with `provideGitRemote`).  Contract:
+   * `designs/daemon-git-remotes.md` § clone.
    */
   provideGitClone(
     destMount: EndoMount,

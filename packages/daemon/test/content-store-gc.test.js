@@ -251,8 +251,10 @@ test('scratch-mount backing directory is reclaimed when its formula is collected
   );
 });
 
-// Under `yarn test:rust` the daemon runs the XS manager, so this exercises the
-// XS `removeDirectory` against the native host globals.
+// Under `yarn test:rust` this would exercise the XS `removeDirectory` on native
+// host globals, but no daemon starts there yet and no CI lane runs it; job
+// `ebfb-xs-daemon-start-without-fetch` tracks both.  Under Node it covers the
+// Node manager.
 test('scratch-mount reclamation unlinks symlinks without following them', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);

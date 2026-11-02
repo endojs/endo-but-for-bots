@@ -426,7 +426,8 @@ harden(remoteProtocolArguments);
  * keep the output pipes open, so if they are still open `killGraceMs` later,
  * `SIGKILL` follows, which no process can refuse.  The call therefore
  * settles within `timeoutMs + killGraceMs`, or `killGraceMs` after an abort
- * or an overflow.
+ * or an overflow, unless a descendant has left the process group and holds
+ * the output pipes open.
  *
  * @param {object} input
  * @param {string} input.cwd

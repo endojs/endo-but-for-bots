@@ -542,14 +542,16 @@ The second flow is product-relevant when an agent starts from only a remote repo
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.
 
 The second flow is host-mediated: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
-The **commit-identity boundary** this note once named as the residual bootstrap gap, Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan, has since landed via #706 as the formula-owned, guest-immutable `identity` construction option on `provideGit` and `provideGitClone`.
+`provideGit` and `provideGitClone` take a formula-owned, guest-immutable `identity` construction option.
 
 The method is `EndoHost.provideGitClone(destMount, petName, { endpoint, identity, origin })`, in the argument order of `provideGit` and `provideGitRemote`, and returns `{ git, remote }`: the writable `Git` over the clone, stored under `petName`, and its `GitRemote`.
-The endpoint supplies the URL, credential and transport; the remote is always named `origin`.
-`origin` carries the remote's `provideGitRemote`-shaped policy; the clone leaves the remote unnamed, and a caller that wants a name binds one with `provideGitRemote` over the returned `git`.
+The endpoint supplies the URL, credential and transport, and the remote's Git name is always `origin`.
+The `origin` option carries the remote's `provideGitRemote`-shaped policy.
+The clone stores no pet name for the remote; a caller that wants one binds a remote with `provideGitRemote` over the returned `git`.
 The `origin` remote defaults to fetch-only, so a caller that pushes must grant push explicitly, for example `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
 `petName` is stored only once the clone and both capabilities exist.
 The destination is exclusive: `provideGitClone` assumes that nothing else writes to the mount while the clone runs, and a host that hands the mount to another holder before the clone settles may lose that holder's writes.
+A second `provideGitClone` on a directory with a clone in progress is refused before it can discard anything.
 The clone refuses a non-empty mount, clones straight into it, and on failure removes what the clone created, which is everything under the mount's root, leaving the root directory itself, so a failed clone can be retried into the same mount.
 Removal unlinks a symbolic link the clone created and never follows it.
 
@@ -849,7 +851,7 @@ Each gets a one-line follow-up deliverable.
   Deliverable: a one-page note in `designs/` confirming or revising the HTTPS-only Phase 1.
 - **Bootstrap / clone API.**
   Resolved: `provideGitClone` landed host-mediated via #538 (see § Repository Bootstrap and `clone`), without a separate `daemon-git-clone.md`.
-  The residual identity boundary is Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan.
+  The identity boundary, Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan, shipped via #706.
 - **Telemetry to distinguish CapTP control-plane time from remote transport data-plane time.**
   During Phase 2, add structured timing fields to `GitFetchResult` and `GitPushResult` (initial shape: `{ captpMs: number; transportMs: number }` augmenting the existing result types) and iterate based on what debug sessions actually need.
   The shape may change after the spike; the principle (timing is observable) is decision 12.

@@ -71,8 +71,6 @@ wait
 };
 
 /**
- * Wait until the stand-in git records its descendant.
- *
  * @param {string} pidFile
  */
 const readDescendantPid = async pidFile => {
@@ -94,8 +92,6 @@ const readDescendantPid = async pidFile => {
 };
 
 /**
- * Wait until a process-group kill has reaped a descendant.
- *
  * @param {number} pid
  */
 const waitForProcessGone = async pid => {
