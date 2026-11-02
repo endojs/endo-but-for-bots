@@ -11,6 +11,7 @@ import { makeGit, makeGitOperations } from '@endo/exo-git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
+/** @import { ExecutionContext } from 'ava' */
 /** @import { ReadWriteEndoGit, GitOperations } from '@endo/exo-git' */
 
 const execFileAsync = promisify(execFile);
@@ -44,7 +45,7 @@ export const composeGitOverWorktree = async (root, { identity } = {}) => {
  * commit on `main`, then compose a `mount -> Git` over it. Used by the
  * push/fetch round-trip that pushes from a freshly initialized local repo.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @returns {Promise<{ git: ReadWriteEndoGit, operations: GitOperations, mount: ReturnType<typeof makeMount>, root: string }>}
  */
 export const provisionGitContext = async t => {
@@ -71,7 +72,7 @@ export const provisionGitContext = async t => {
 /**
  * Clone an existing source working tree into a bare `file://` remote.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} sourceRepo absolute path to a non-bare source repository
  * @returns {Promise<string>} absolute path to the bare remote
  */
@@ -93,7 +94,7 @@ export const provisionBareRemote = async (t, sourceRepo) => {
  * by the clone-loop test, which needs material content (not just an empty
  * commit) on the remote so a host clone has a file to edit.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @returns {Promise<string>} absolute path to the bare remote
  */
 export const seedBareRemote = async t => {
@@ -122,20 +123,28 @@ export const seedBareRemote = async t => {
 };
 
 /**
- * Advance the bare remote's `main` by one real commit, returning the new head
- * oid. Clones the remote, commits a new file, pushes, and reports the oid the
- * remote now points at, so a fetch/pull round-trip can assert against it.
+ * Advance one branch of the bare remote by one real commit, returning the new
+ * head oid. Clones the remote at that branch, commits a new file, pushes, and
+ * reports the oid the remote now points at, so a fetch/pull round-trip can
+ * assert against it.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} remoteRoot absolute path to a bare remote
- * @returns {Promise<string>} the new `main` head oid
+ * @param {string} branch the remote branch to advance
+ * @returns {Promise<string>} the branch's new head oid
  */
-export const advanceRemoteMain = async (t, remoteRoot) => {
+export const advanceRemoteBranch = async (t, remoteRoot, branch) => {
   const cloneRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-remote-upstream-'),
   );
   t.teardown(() => fs.promises.rm(cloneRoot, { recursive: true, force: true }));
-  await execFileAsync('git', ['clone', remoteRoot, cloneRoot]);
+  await execFileAsync('git', [
+    'clone',
+    '--branch',
+    branch,
+    remoteRoot,
+    cloneRoot,
+  ]);
   await fs.promises.writeFile(
     path.join(cloneRoot, 'upstream.txt'),
     'upstream\n',
@@ -146,9 +155,20 @@ export const advanceRemoteMain = async (t, remoteRoot) => {
     ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'upstream'],
     { cwd: cloneRoot },
   );
-  await execFileAsync('git', ['push', 'origin', 'main'], { cwd: cloneRoot });
-  const { stdout } = await execFileAsync('git', ['rev-parse', 'main'], {
+  await execFileAsync('git', ['push', 'origin', branch], { cwd: cloneRoot });
+  const { stdout } = await execFileAsync('git', ['rev-parse', branch], {
     cwd: cloneRoot,
   });
   return stdout.trim();
 };
+
+/**
+ * Advance the bare remote's `main` by one real commit, returning the new head
+ * oid.
+ *
+ * @param {ExecutionContext} t
+ * @param {string} remoteRoot absolute path to a bare remote
+ * @returns {Promise<string>} the new `main` head oid
+ */
+export const advanceRemoteMain = (t, remoteRoot) =>
+  advanceRemoteBranch(t, remoteRoot, 'main');
