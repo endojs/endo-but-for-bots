@@ -67,7 +67,8 @@ export const isNamePersisted = async (agent, name) => {
   await null;
   try {
     const id = await E(agent).identify(name);
-    await E(agent).getFormula(id);
+    const diagnostics = await E(agent).diagnostics();
+    await E(diagnostics).getFormula(id);
     return true;
   } catch {
     return false;

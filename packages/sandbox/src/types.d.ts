@@ -8,10 +8,22 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
+import type { DriverPreparation } from './native-factory-types.js';
 import type {
   PassableBytesReader,
   PassableBytesWriter,
 } from '@endo/exo-stream';
+
+import type {
+  GeneratedFile,
+  ValidatedGeneratedFile,
+} from './generated-file-types.js';
+export type { GeneratedFile } from './generated-file-types.js';
+export type {
+  GeneratedFileMount,
+  GeneratedFileStage,
+  GeneratedFileStorage,
+} from './generated-file-storage-types.js';
 
 // ---------------------------------------------------------------------------
 // Network policy
@@ -41,7 +53,8 @@ export type NetworkProfile =
   | 'private'
   | 'host-loopback'
   | 'host-lan'
-  | 'host-net';
+  | 'host-net'
+  | 'join';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -190,7 +203,17 @@ export type SeccompPolicy = 'default' | 'unconfined' | { profile: unknown };
 export type SandboxMakeOpts = {
   rootfs: RootfsSpec;
   mounts?: readonly MountSpec[];
+  /** Literal read-only files; requires explicit driver support. */
+  generatedFiles?: readonly GeneratedFile[];
   network?: NetworkProfile;
+  /**
+   * Container whose network namespace this slice joins. Required with
+   * `network: 'join'` and rejected for every other profile. The driver
+   * observes the shared namespace is loopback-only (interfaces exactly
+   * `lo`, zero routable routes) before admitting the slice, so a networkless
+   * provider broker can front the slice without giving it egress.
+   */
+  networkRef?: string;
   backend?: BackendSelector;
   seccomp?: SeccompPolicy;
   env?: Record<string, string>;
@@ -227,6 +250,13 @@ export type SandboxMakeOpts = {
  */
 export type SlicePolicyMount =
   | {
+      role: 'resolver';
+      kind: 'resolver';
+      source: string;
+      destination: '/etc/resolv.conf';
+      mode: 'ro';
+    }
+  | {
       role: string;
       kind: 'tmpfs';
       destination: string;
@@ -254,6 +284,23 @@ export type SlicePolicyMount =
       /** Absolute, normal host path of the 9P mountpoint. */
       source: string;
       /** Absolute, normal path under `/mnt/`. */
+      destination: string;
+      mode: 'ro' | 'rw';
+    }
+  | {
+      role: string;
+      /**
+       * A host bind, attested as exactly that and nothing more: this is a
+       * bind of that host path, at that destination, in that mode, with
+       * `nosuid` and `nodev`. It makes no projection claim, which is what
+       * keeps `attach` worth having. The source must lie under one of the
+       * request's declared `bindRoots`, so a table cannot say "and also
+       * this" for an arbitrary host path and have the attestation agree.
+       */
+      kind: 'bind';
+      /** Absolute, normal host path, under a declared bind root. */
+      source: string;
+      /** Absolute, normal destination path. */
       destination: string;
       mode: 'ro' | 'rw';
     };
@@ -396,6 +443,7 @@ export type ObservedSliceState = {
    * `null` when nothing is mounted at it. May be absent when the policy
    * declares no attaches; an attach with no entry here is not proved.
    */
+  resolverContents?: string;
   attachMounts?: ReadonlyMap<
     string,
     { fstype: string; root: string; options: readonly string[] } | null
@@ -489,10 +537,14 @@ export type SliceSpec = {
     | { kind: 'oci'; ref: string };
   /** Resolved bind-mount triples. */
   mounts: Array<{ hostPath: string; innerPath: string; mode: MountMode }>;
+  /** Validated literal configuration, staged privately by a supporting driver. */
+  generatedFiles?: readonly ValidatedGeneratedFile[];
   /** Writable scratch host path provided by the daemon's scratch service. */
   scratchHostPath: string;
   /** Network policy. */
   network: NetworkProfile;
+  /** Container to join for `network: 'join'`; absent otherwise. */
+  networkRef?: string;
   /** Seccomp policy. */
   seccomp: SeccompPolicy;
   /**
@@ -567,10 +619,9 @@ export type SandboxFactory = FarRef<{
 }>;
 
 /**
- * A live sandbox slice. Pinned by the formula that minted it; when the
- * handle is dropped, every `ProcessHandle` it spawned is killed and every
- * `MountHandle` it minted is unmounted before the driver tears down the
- * underlying namespace / container.
+ * A live sandbox slice with static mounts declared at construction.
+ * Disposal fences admission and terminates owned processes before the
+ * driver tears down the underlying namespace / container.
  */
 export type SandboxHandle = FarRef<{
   help(methodName?: string): string;
@@ -589,23 +640,6 @@ export type SandboxHandle = FarRef<{
    * mistake for one saying something is.
    */
   policy(): Promise<SlicePolicyAttestation>;
-  mount(
-    cap: MountCap,
-    innerPath: string,
-    mode?: MountMode,
-  ): Promise<MountHandle>;
-  /** Mint an ephemeral, slice-lifetime scratch mount at `innerPath`. */
-  scratch(innerPath: string): Promise<MountHandle>;
-  /** Open a single file inside the slice as a `ReadableFile`-shaped cap. */
-  open(innerPath: string): Promise<ERef<unknown>>;
-  /**
-   * Mint a nested sub-slice. Phase 0–2 stubs return a structured
-   * `notImplemented` error; Phase 3 lands the real implementation behind
-   * a kernel-feature probe.
-   */
-  fork(opts?: SandboxMakeOpts): Promise<SandboxHandle>;
-  /** Tear down processes and ephemeral scratch, keeping mounts. */
-  reset(): Promise<void>;
   /** Full teardown — all processes killed, all mounts released. */
   dispose(): Promise<void>;
 }>;
@@ -644,22 +678,6 @@ export type ProcessHandle = FarRef<{
    * observe liveness rather than a `kill(0)` probe.
    */
   kill(signal?: TerminationSignal): Promise<void>;
-}>;
-
-/**
- * A mount bound into a slice. Holds the original `Mount` capability so
- * the inner path can be related back to the cap it came from.
- */
-export type MountHandle = FarRef<{
-  help(methodName?: string): string;
-  /** Path inside the slice where the mount appears. */
-  innerPath(): string;
-  /** Back-reference to the original `Mount` capability. */
-  cap(): MountCap;
-  /** Effective mount mode (`ro` or `rw`). */
-  mode(): MountMode;
-  /** Detach the mount from the slice. */
-  unmount(): Promise<void>;
 }>;
 
 // ---------------------------------------------------------------------------
@@ -723,8 +741,18 @@ export type DriverSpawnControls = {
 export type SandboxDriver = {
   /** Stable name (matches `BackendName`). */
   name: BackendName;
+  /** Advertised only when private staging, bounds, and cleanup are enforced. */
+  supportsGeneratedFiles?: true;
   /** Best-effort availability check. */
   probe(): Promise<Omit<BackendProbe, 'name'>>;
+  /**
+   * Optional retained preparation owner, returned before acquisition begins.
+   * close fences publication and operation admission, drains acquisition, and
+   * retries this preparation's cleanup without stopping sibling slices.
+   * Drivers without this kit retain their legacy failed-preparation semantics;
+   * the factory cannot provide scoped failed-acquisition cleanup for them.
+   */
+  prepareSliceKit?(spec: SliceSpec): DriverPreparation;
   /** Materialise a slice from a fully-resolved `SliceSpec`. */
   prepareSlice(spec: SliceSpec): Promise<DriverSliceContext>;
   /**
@@ -741,7 +769,12 @@ export type SandboxDriver = {
     opts: SpawnOpts,
     controls?: DriverSpawnControls,
   ): Promise<DriverProcess>;
-  /** Tear down the slice's namespace / container. */
+  /**
+   * Fence admission and release the slice's processes and resources.
+   * Success accounts for pending acquisitions: none can later produce unowned
+   * execution. Failure retains cleanup ownership so teardown can be retried.
+   * Process wait failures describe historical outcomes, not release proof.
+   */
   teardown(slice: DriverSliceContext): Promise<void>;
 };
 

@@ -30,7 +30,8 @@ jobs:
   build:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['depcheck']) }}
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 Graphviz omits tred, which the cycle checker requires.
+    runs-on: ubuntu-24.04
     steps:
       - name: Require successful change detection
         if: needs.changes.result != 'success'

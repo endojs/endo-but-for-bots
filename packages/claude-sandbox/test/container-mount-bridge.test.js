@@ -150,7 +150,7 @@ test('bridges a Mount-shaped cap over 9P at a host-picked layout', async t => {
   );
   t.is(h.mountCalls.length, 1);
   t.is(h.mountCalls[0].mountPoint, '/attach-mounts/claude-attach-abc123');
-  t.true(h.mountCalls[0].opts.lazyUnmount);
+  t.is(h.mountCalls[0].opts.lazyUnmount, undefined);
   t.false(h.mountCalls[0].opts.readOnly);
   // The Mount cap is wrapped as a Filesystem before serving (not passed raw).
   t.not(h.mountCalls[0].fs, h.byId.get('cap-1'));

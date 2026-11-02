@@ -2,6 +2,8 @@
 
 import { M } from '@endo/patterns';
 
+import { GeneratedFileShape } from './generated-files.js';
+
 /**
  * Runtime `M.interface()` guards for the `@endo/sandbox` capability
  * surface. The compile-time shapes live in `./types.d.ts`; these guards
@@ -19,6 +21,7 @@ const NetworkProfileShape = M.or(
   'host-loopback',
   'host-lan',
   'host-net',
+  'join',
 );
 
 const BackendNameShape = M.or(
@@ -90,6 +93,15 @@ const ResourceLimitsShape = M.splitRecord(
  * because those are policy questions rather than marshalling ones.
  */
 const SlicePolicyMountShape = M.or(
+  // The public-egress listener's generated DNS file. Keep this distinct from
+  // an arbitrary host bind; policy.js verifies its path and observed contents.
+  M.splitRecord({
+    role: 'resolver',
+    kind: 'resolver',
+    source: M.string(),
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  }),
   M.splitRecord({
     role: M.string(),
     kind: 'tmpfs',
@@ -102,6 +114,23 @@ const SlicePolicyMountShape = M.or(
     source: M.string(),
     destination: M.string(),
     sizeBytes: M.nat(),
+  }),
+  // A capability-backed projection, and a host bind that claims to be
+  // nothing more. Neither carries a `sizeBytes`: the bytes are bounded where
+  // they live, not by this slice.
+  M.splitRecord({
+    role: M.string(),
+    kind: 'attach',
+    source: M.string(),
+    destination: M.string(),
+    mode: M.or('ro', 'rw'),
+  }),
+  M.splitRecord({
+    role: M.string(),
+    kind: 'bind',
+    source: M.string(),
+    destination: M.string(),
+    mode: M.or('ro', 'rw'),
   }),
 );
 
@@ -125,41 +154,75 @@ const SlicePolicyRequestShape = M.splitRecord({
     writableBytes: M.nat(),
   }),
   mounts: M.arrayOf(SlicePolicyMountShape),
+  bindRoots: M.arrayOf(M.string()),
   attestationArgv: M.arrayOf(M.string()),
 });
 
+const CommonMakeOptions = harden({
+  generatedFiles: M.arrayOf(GeneratedFileShape),
+  network: NetworkProfileShape,
+  networkRef: M.string(),
+  backend: BackendSelectorShape,
+  seccomp: SeccompPolicyShape,
+  env: EnvShape,
+  cwd: M.string(),
+  limits: ResourceLimitsShape,
+  policy: SlicePolicyRequestShape,
+});
+
 const SandboxMakeOptsShape = M.splitRecord(
+  { rootfs: RootfsSpecShape },
+  { ...CommonMakeOptions, mounts: M.arrayOf(MountSpecShape) },
+);
+
+const NativeSandboxMakeOptsShape = M.splitRecord(
   {
-    rootfs: RootfsSpecShape,
+    rootfs: M.or(
+      M.splitRecord({ kind: 'host-bind' }),
+      M.splitRecord({ kind: 'minimal' }),
+      M.splitRecord({ kind: 'oci', ref: M.string() }),
+      M.splitRecord({
+        kind: 'mount',
+        hostPath: M.string(),
+        mode: MountModeShape,
+      }),
+    ),
   },
   {
-    mounts: M.arrayOf(MountSpecShape),
-    network: NetworkProfileShape,
-    backend: BackendSelectorShape,
-    seccomp: SeccompPolicyShape,
-    env: EnvShape,
-    cwd: M.string(),
-    limits: ResourceLimitsShape,
-    policy: SlicePolicyRequestShape,
+    ...CommonMakeOptions,
+    mounts: M.arrayOf(
+      M.splitRecord({
+        hostPath: M.string(),
+        innerPath: M.string(),
+        mode: MountModeShape,
+      }),
+    ),
+    scratchHostPath: M.string(),
   },
 );
+
+const CopySpawnOptions = harden({
+  env: EnvShape,
+  cwd: M.string(),
+  captureStdout: M.boolean(),
+  captureStderr: M.boolean(),
+  stdoutByteLimit: M.and(M.nat(), M.gte(1n)),
+  stderrByteLimit: M.and(M.nat(), M.gte(1n)),
+  // Capped at ~24.8 days by choice, not by the domain: a process
+  // deadline is not inherently a 32-bit quantity, but every timer
+  // implementation we target clamps there, and a single un-rearmed
+  // timer is the simpler mechanism. Lifting the cap means re-arming
+  // across the clamp, not widening this bound alone.
+  timeoutMs: M.and(M.number(), M.gte(1), M.lte(0x7fff_ffff)),
+});
+
+const NativeSpawnOptsShape = M.splitRecord({}, CopySpawnOptions, {});
 
 const SpawnOptsShape = M.splitRecord(
   {},
   {
-    env: EnvShape,
-    cwd: M.string(),
+    ...CopySpawnOptions,
     stdin: M.remotable('Reader'),
-    captureStdout: M.boolean(),
-    captureStderr: M.boolean(),
-    stdoutByteLimit: M.and(M.nat(), M.gte(1n)),
-    stderrByteLimit: M.and(M.nat(), M.gte(1n)),
-    // Capped at ~24.8 days by choice, not by the domain: a process
-    // deadline is not inherently a 32-bit quantity, but every timer
-    // implementation we target clamps there, and a single un-rearmed
-    // timer is the simpler mechanism. Lifting the cap means re-arming
-    // across the clamp, not widening this bound alone.
-    timeoutMs: M.and(M.number(), M.gte(1), M.lte(0x7fff_ffff)),
   },
 );
 
@@ -219,13 +282,6 @@ export const SandboxHandleInterface = M.interface('SandboxHandle', {
     .optional(SpawnOptsShape)
     .returns(M.promise()),
   policy: M.call().returns(M.promise()),
-  mount: M.call(M.remotable('Mount'), M.string())
-    .optional(MountModeShape)
-    .returns(M.promise()),
-  scratch: M.call(M.string()).returns(M.promise()),
-  open: M.call(M.string()).returns(M.promise()),
-  fork: M.call().optional(SandboxMakeOptsShape).returns(M.promise()),
-  reset: M.call().returns(M.promise()),
   dispose: M.call().returns(M.promise()),
 });
 
@@ -243,17 +299,6 @@ export const ProcessHandleInterface = M.interface('SandboxProcess', {
   kill: M.call().optional(TerminationSignalShape).returns(M.promise()),
 });
 
-/**
- * A mount bound into a slice.
- */
-export const MountHandleInterface = M.interface('SandboxMount', {
-  help: M.call().optional(M.string()).returns(M.string()),
-  innerPath: M.call().returns(M.string()),
-  cap: M.call().returns(M.remotable('Mount')),
-  mode: M.call().returns(MountModeShape),
-  unmount: M.call().returns(M.promise()),
-});
-
 // ---------------------------------------------------------------------------
 // Re-exported shape fragments — useful for tests / driver authors
 // ---------------------------------------------------------------------------
@@ -268,6 +313,8 @@ export {
   MountModeShape,
   MountSpecShape,
   NetworkProfileShape,
+  NativeSpawnOptsShape,
+  NativeSandboxMakeOptsShape,
   ResourceLimitsShape,
   RootfsSpecShape,
   SandboxMakeOptsShape,

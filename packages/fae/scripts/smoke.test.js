@@ -49,6 +49,7 @@ import url from 'node:url';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, purge, makeEndoClient } from '@endo/daemon';
+import { provideAuthSecret } from '../src/credentials.js';
 
 /**
  * Per-test mutable context populated by `test.beforeEach` and consumed
@@ -525,11 +526,17 @@ const setupDaemon = async () => {
     const factoryGuestName = `${factoryName}-handle`;
     const factoryAgentName = `profile-for-${factoryGuestName}`;
 
+    const { secretName: authSecretName } = await provideAuthSecret({
+      hostAgent: host,
+      name: `${providerName}-auth`,
+      description: 'Manual Fae smoke provider credential',
+      token: process.env.LAL_AUTH_TOKEN,
+    });
     await E(host).storeValue(
       harden({
         host: process.env.LAL_HOST,
         model: modelName,
-        authToken: process.env.LAL_AUTH_TOKEN,
+        authSecretName,
       }),
       providerName,
     );

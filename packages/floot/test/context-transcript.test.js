@@ -1,0 +1,1089 @@
+// @ts-check
+import test from '@endo/ses-ava/prepare-endo.js';
+import { Far } from '@endo/far';
+import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
+import { claudeToolInput } from '@endo/claude-sandbox/src/claude-tool-input.js';
+// Test the actual native writer/reader boundary rather than a hand-normalized fixture.
+import {
+  writeClaudeTranscript,
+  readClaudeTranscript,
+  // eslint-disable-next-line import/no-relative-packages
+} from '../../claude-sandbox/src/claude-transcript-writer.js';
+import {
+  projectContextTranscript,
+  readContextTranscript,
+} from '../src/context-transcript.js';
+import { makeTurnJournal } from '../src/turn-journal.js';
+import { encodeJournalTranscript } from '../src/journal-transcript.js';
+import { transcriptToProviderMessages } from '../src/transcript-projection.js';
+
+/** @import {TranscriptNativeContext} from '@endo/hosted-agent/transcript-records.js' */
+
+const message = content => ({ kind: 'message', role: 'assistant', content });
+const checkpoint = summary => ({
+  kind: 'compaction',
+  summary,
+  retainedTail: [],
+});
+const call = (id, name) => ({ kind: 'tool-call', id, name, args: '{}' });
+const result = (id, content) => ({ kind: 'tool-result', id, content });
+const turn = (turnId, records, extra = {}) => ({
+  turnId: `${turnId}`,
+  dispatchState: 'possibly-dispatched',
+  state: 'completed',
+  transcriptComplete: true,
+  input: `input ${turnId}`,
+  activity: [],
+  tools: /** @type {any[]} */ ([]),
+  transcript: records.map((record, index) => ({
+    ordinal: `${index}`,
+    sequence: `${turnId + index + 1}`,
+    kind: record.kind,
+    payload: encodeJournalTranscript(record),
+  })),
+  ...extra,
+});
+const noRead = async () => {
+  throw Error('Unexpected content hydration');
+};
+
+/** @param {ReturnType<typeof pairToolCalls>['pairs'][number]} pair */
+const resultContent = pair => {
+  if (!pair.result) throw Error('Expected a paired tool result');
+  return pair.result.content;
+};
+
+const nativeCheckpoint = () => ({
+  kind: 'native-context',
+  format: 'claude-code-jsonl-v1',
+  payload: 'opaque signed native payload',
+  context: [
+    { kind: 'compaction', summary: 'portable summary' },
+    call('native', 'effect'),
+    result('native', 'done'),
+  ],
+});
+
+test('native-required dispatch cannot fall back to portable history before its first checkpoint', async t => {
+  for (const extra of [
+    { state: 'failed', transcriptComplete: false },
+    { state: 'cancelled', transcriptComplete: false },
+    { state: 'completed', transcriptComplete: true },
+  ]) {
+    const attempted = turn(1, [message('partial answer')], {
+      ...extra,
+      nativeContextFormat: 'claude-code-jsonl-v1',
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(projectContextTranscript([attempted], noRead), {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    });
+  }
+  const native = nativeCheckpoint();
+  t.deepEqual(
+    await projectContextTranscript(
+      [
+        turn(1, [native], {
+          nativeContextFormat: native.format,
+        }),
+      ],
+      noRead,
+    ),
+    [native],
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [
+        turn(1, [native], {
+          nativeContextFormat: 'different-native-format',
+        }),
+      ],
+      noRead,
+    ),
+  );
+});
+
+// Live 2026-09-25: one failed Claude capture made every later turn in the
+// session refuse. A backend that rebuilds its conversation from supplied
+// records every turn (`continuity: 'transcript'`) gets portable records
+// instead, with the evidence the native bytes could not cover. Nothing is
+// hidden; only native fidelity is lost.
+const fallback = {
+  portableFallback: true,
+  toolArgumentKey: args => JSON.stringify(claudeToolInput(args)),
+};
+const failedCapture = (turnId, records, extra = {}) =>
+  turn(turnId, records, {
+    state: 'failed',
+    transcriptComplete: false,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    ...extra,
+  });
+const PREFIX_NOTICE =
+  '[Recovered a durable transcript prefix. The remaining streamed text or events may be missing; do not assume the turn completed.]';
+const EVIDENCE_NOTICE =
+  '[Recovered durable tool evidence. Its position relative to the streamed text is unknown; it does not imply another execution. Verify uncertain outcomes before retrying.]';
+const user = content => ({ kind: 'message', role: 'user', content });
+
+test('portable fallback carries a failed first turn instead of refusing', async t => {
+  const attempted = failedCapture(1, [message('partial answer')]);
+  t.deepEqual(
+    await projectContextTranscript([attempted], noRead, undefined, fallback),
+    [
+      user('input 1'),
+      message('partial answer'),
+      message(PREFIX_NOTICE),
+      message('[Floot turn failed.]'),
+    ],
+  );
+  await t.throwsAsync(projectContextTranscript([attempted], noRead), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
+
+const hostOnly = {
+  callId: 'host-only',
+  name: 'effect',
+  args: '{}',
+  settled: true,
+  result: 'ran',
+  sequence: '21',
+  resultSequence: '22',
+};
+
+test('portable fallback replaces a native checkpoint with its portable context and keeps later evidence', async t => {
+  const native = nativeCheckpoint();
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')], { tools: [hostOnly] }),
+  ];
+  const selected = await projectContextTranscript(
+    turns,
+    noRead,
+    undefined,
+    fallback,
+  );
+  t.false(selected.some(record => record.kind === 'native-context'));
+  t.deepEqual(selected, [
+    ...native.context,
+    user('input 20'),
+    message('reported'),
+    message(EVIDENCE_NOTICE),
+    call('recovered:20:host-only', 'effect'),
+    result('recovered:20:host-only', 'ran'),
+    message(PREFIX_NOTICE),
+    message('[Floot turn failed.]'),
+  ]);
+  await t.throwsAsync(projectContextTranscript(turns, noRead), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
+
+test('a later captured checkpoint restores native context after a fallback without host-only evidence', async t => {
+  const native = nativeCheckpoint();
+  const later = { ...native, payload: 'later native payload' };
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')]),
+    turn(30, [later], { nativeContextFormat: native.format }),
+  ];
+  // No fallback needed: the failed turn left no evidence outside the new
+  // checkpoint, so the session is native again.
+  t.deepEqual(await projectContextTranscript(turns, noRead), [later]);
+  t.deepEqual(
+    await projectContextTranscript(turns, noRead, undefined, fallback),
+    [later],
+  );
+});
+
+test('host-only evidence before a later checkpoint keeps the fallback portable, never hidden', async t => {
+  const native = nativeCheckpoint();
+  const later = { ...native, payload: 'later native payload' };
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')], { tools: [hostOnly] }),
+    turn(30, [later], { nativeContextFormat: native.format }),
+  ];
+  t.deepEqual(
+    await projectContextTranscript(turns, noRead, undefined, fallback),
+    [
+      ...later.context,
+      message(EVIDENCE_NOTICE),
+      call('recovered-context_20_0', 'effect'),
+      result('recovered-context_20_0', 'ran'),
+    ],
+  );
+  await t.throwsAsync(projectContextTranscript(turns, noRead), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
+
+test('fallback swaps only the selected checkpoint, never duplicating its turn', async t => {
+  // An ordinary Claude capture has no leading summary; its turn's own tool
+  // records precede the checkpoint and are superseded by it.
+  const context = [
+    user('input 10'),
+    call('toolu_A', 'effect'),
+    result('toolu_A', 'done'),
+    message('ten'),
+  ];
+  const native = {
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'opaque native payload',
+    context,
+  };
+  const selected = await projectContextTranscript(
+    [
+      turn(
+        10,
+        [
+          call('toolu_A', 'effect'),
+          result('toolu_A', 'done'),
+          message('ten'),
+          native,
+        ],
+        { nativeContextFormat: native.format },
+      ),
+      failedCapture(20, [message('reported')]),
+    ],
+    noRead,
+    undefined,
+    fallback,
+  );
+  t.deepEqual(selected, [
+    ...context,
+    user('input 20'),
+    message('reported'),
+    message(PREFIX_NOTICE),
+    message('[Floot turn failed.]'),
+  ]);
+  const ids = selected
+    .filter(record => record.kind === 'tool-call')
+    .map(record => record.id);
+  t.is(new Set(ids).size, ids.length);
+  t.is(selected[0].role, 'user');
+});
+
+test('fallback repeats no evidence a later checkpoint already holds', async t => {
+  const native = nativeCheckpoint();
+  // A checkpoint that holds the `recovered-context_…` copy verbatim. Live, the
+  // first checkpoint after the failure holds turn-evidence's own id for the
+  // call instead, so this copy reaches a checkpoint one turn later: the model
+  // sees the call at most twice, and the count stops there.
+  const later = {
+    ...native,
+    payload: 'later native payload',
+    context: [
+      ...native.context,
+      user('input 20'),
+      message('reported'),
+      message(EVIDENCE_NOTICE),
+      call('recovered-context_20_0', 'effect'),
+      result('recovered-context_20_0', 'ran'),
+    ],
+  };
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')], { tools: [hostOnly] }),
+    turn(30, [later], { nativeContextFormat: native.format }),
+  ];
+  t.deepEqual(
+    await projectContextTranscript(turns, noRead, undefined, fallback),
+    later.context,
+  );
+});
+
+test('an unsafe checkpoint turn resumes portably with its uncovered evidence', async t => {
+  const native = nativeCheckpoint();
+  const selected = await projectContextTranscript(
+    [
+      turn(10, [native], {
+        nativeContextFormat: native.format,
+        tools: [{ ...hostOnly, sequence: '11', resultSequence: '12' }],
+      }),
+    ],
+    noRead,
+    undefined,
+    fallback,
+  );
+  t.false(selected.some(record => record.kind === 'native-context'));
+  t.deepEqual(selected.slice(0, native.context.length), native.context);
+  // The host-only call is never dropped; it follows as recovered evidence.
+  t.true(
+    selected.some(
+      record => record.kind === 'tool-result' && record.content === 'ran',
+    ),
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [
+        turn(10, [native], {
+          nativeContextFormat: native.format,
+          tools: [{ ...hostOnly, sequence: '11', resultSequence: '12' }],
+        }),
+      ],
+      noRead,
+    ),
+    { message: /cannot conceal unresolved or recovered tool evidence/ },
+  );
+});
+
+/** @type {Array<[string, {settled: boolean, result?: string, resultSequence?: string}, RegExp]>} */
+const fallbackCases = [
+  [
+    'host-settled result',
+    { settled: true, result: 'host result', resultSequence: '13' },
+    /host result/,
+  ],
+  ['unsettled call', { settled: false }, /outcome unknown/i],
+];
+for (const [label, tool, expected] of fallbackCases) {
+  test(`a checkpoint turn's ${label} before the checkpoint stays paired in the fallback`, async t => {
+    const native = nativeCheckpoint();
+    const selected = await projectContextTranscript(
+      [
+        turn(10, [call('toolu_X', 'effect'), native], {
+          nativeContextFormat: native.format,
+          tools: [
+            {
+              callId: 'toolu_X',
+              name: 'effect',
+              args: '{}',
+              sequence: '11',
+              ...tool,
+            },
+          ],
+        }),
+      ],
+      noRead,
+      undefined,
+      fallback,
+    );
+    // A result without its call would be dropped by the writer: the call
+    // must come with it.
+    const { pairs } = pairToolCalls(selected);
+    t.true(
+      pairs.some(
+        pair =>
+          pair.call.name === 'effect' &&
+          pair.call.id !== 'native' &&
+          expected.test(pair.result?.content ?? ''),
+      ),
+    );
+  });
+}
+
+for (const args of [
+  '{ "path" : "/" }',
+  '42',
+  '"hello"',
+  '[1,2]',
+  'null',
+  '{malformed',
+]) {
+  test(`held evidence uses explicit Claude round-trip semantics for ${args}`, async t => {
+    const native = nativeCheckpoint();
+    const original = [
+      { ...call('recovered-context_20_0', 'effect'), args },
+      result('recovered-context_20_0', 'ran'),
+    ];
+    const originalBytes = JSON.stringify(original);
+    const context = readClaudeTranscript(
+      writeClaudeTranscript(original, {
+        sessionUuid: 'normalization-test',
+        cwd: '/workspace',
+        version: 'test',
+        now: () => '2026-09-30T00:00:00.000Z',
+      }),
+    );
+    const capturedCall = context.find(record => record.kind === 'tool-call');
+    t.is(capturedCall?.args, JSON.stringify(claudeToolInput(args)));
+    const later = {
+      ...native,
+      payload: 'later native payload',
+      context,
+    };
+    const turns = [
+      turn(10, [native], { nativeContextFormat: native.format }),
+      failedCapture(20, [message('reported')], {
+        tools: [{ ...hostOnly, args }],
+      }),
+      turn(30, [later], { nativeContextFormat: native.format }),
+    ];
+    const journalBytes = JSON.stringify(turns);
+    t.deepEqual(
+      await projectContextTranscript(turns, noRead, undefined, fallback),
+      later.context,
+    );
+    const exact = await projectContextTranscript(turns, noRead, undefined, {
+      portableFallback: true,
+    });
+    t.is(
+      pairToolCalls(exact).pairs.length,
+      2,
+      'shared selector does not assume Claude wrapping or reserialization',
+    );
+    t.true(
+      exact.some(record => record.kind === 'tool-call' && record.args === args),
+    );
+    const changed = [
+      turns[0],
+      failedCapture(20, [message('reported')], {
+        tools: [{ ...hostOnly, args, result: 'changed outcome' }],
+      }),
+      turns[2],
+    ];
+    const retained = await projectContextTranscript(
+      changed,
+      noRead,
+      undefined,
+      fallback,
+    );
+    t.deepEqual(pairToolCalls(retained).pairs.map(resultContent), [
+      'ran',
+      'changed outcome',
+    ]);
+    t.is(
+      JSON.stringify(original),
+      originalBytes,
+      'native conversion does not rewrite source records',
+    );
+    t.is(
+      JSON.stringify(turns),
+      journalBytes,
+      'comparison never changes durable arguments or results',
+    );
+  });
+}
+
+test('native context remains atomic with its suffix and refuses direct-provider conversion', async t => {
+  const native = nativeCheckpoint();
+  const selected = await projectContextTranscript(
+    [
+      turn(1, [message('superseded')]),
+      turn(10, [message('before'), native, message('after')]),
+    ],
+    noRead,
+  );
+  t.deepEqual(selected, [native, message('after')]);
+  t.throws(() => transcriptToProviderMessages(selected), {
+    message: /cannot restore backend-native/,
+  });
+});
+
+test('opaque Codex context needs no portable projection but cannot conceal tool evidence', async t => {
+  /** @type {TranscriptNativeContext} */
+  const native = {
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    payload: 'opaque native rollout',
+    context: [],
+  };
+  const records = [
+    call('effect', 'exec'),
+    result('effect', 'completed'),
+    native,
+  ];
+  const complete = turn(10, records, { nativeContextFormat: native.format });
+  t.deepEqual(await projectContextTranscript([complete], noRead), [native]);
+  // Projection must not mutate the original canonical conversation/effect rows.
+  t.is(complete.transcript.length, 3);
+  t.throws(() => transcriptToProviderMessages([native]), {
+    message: /cannot restore backend-native/,
+  });
+  for (const unsafe of [
+    turn(10, [call('effect', 'exec'), native]),
+    turn(10, [native], {
+      tools: [
+        {
+          callId: 'effect',
+          name: 'exec',
+          args: '{}',
+          settled: false,
+          sequence: '11',
+        },
+      ],
+    }),
+    turn(10, [native], {
+      tools: [
+        {
+          callId: 'effect',
+          name: 'exec',
+          args: '{}',
+          settled: true,
+          result: 'host-only recovery',
+          sequence: '11',
+          resultSequence: '12',
+        },
+      ],
+    }),
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(projectContextTranscript([unsafe], noRead), {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    });
+  }
+});
+
+test('native context refuses unresolved later turns without hiding their evidence', async t => {
+  const native = turn(10, [nativeCheckpoint()]);
+  for (const later of [
+    turn(20, [call('late', 'effect')]),
+    turn(20, [message('partial')], {
+      state: 'failed',
+      transcriptComplete: false,
+    }),
+    turn(20, [message('reported')], {
+      tools: [
+        {
+          callId: 'host-only',
+          name: 'effect',
+          args: '{}',
+          settled: false,
+          sequence: '21',
+        },
+      ],
+    }),
+  ]) {
+    // The refusal does not modify the journal or manufacture a tool result.
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(projectContextTranscript([native, later], noRead), {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    });
+  }
+});
+
+test('Codex recovery keeps native bytes and appends a resolved late tool result without replay', async t => {
+  const native = {
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    payload: 'opaque native rollout',
+    context: [],
+  };
+  const first = turn(1, [native], { nativeContextFormat: native.format });
+  const interrupted = turn(20, [call('grep', 'endo_exec')], {
+    state: 'outcome-unknown',
+    transcriptComplete: false,
+    nativeContextFormat: native.format,
+    error: 'Dynamic tool call was not correlated to the active turn',
+    tools: [
+      {
+        callId: 'host-grep',
+        name: 'endo_exec',
+        args: '{}',
+        sequence: '22',
+        settled: false,
+      },
+    ],
+  });
+  const options = { reconciledNativeSuffix: true };
+  await t.throwsAsync(
+    projectContextTranscript([first, interrupted], noRead, undefined, options),
+    {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    },
+  );
+  interrupted.tools[0] = {
+    ...interrupted.tools[0],
+    settled: true,
+    result: 'grep finished after session failure',
+    resultSequence: '23',
+  };
+  // Settlement alone does not resolve an unknown native outcome.
+  await t.throwsAsync(
+    projectContextTranscript([first, interrupted], noRead, undefined, options),
+    {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    },
+  );
+  const resolved = {
+    ...interrupted,
+    resolution:
+      'Verified the diagnostic call completed; no outstanding effects.',
+  };
+  const records = await projectContextTranscript(
+    [first, resolved],
+    noRead,
+    undefined,
+    options,
+  );
+  t.deepEqual(records[0], native);
+  const pairs = pairToolCalls(records.slice(1), { perTurn: true });
+  t.is(pairs.unanswered.length, 0);
+  t.is(pairs.pairs.length, 1);
+  t.is(resultContent(pairs.pairs[0]), 'grep finished after session failure');
+  t.true(
+    records.some(
+      row => row.kind === 'message' && row.content.includes('outcome-unknown'),
+    ),
+  );
+  t.is(interrupted.transcript.length, 1);
+  // Still refuse evidence that the checkpoint itself could be hiding.
+  await t.throwsAsync(
+    projectContextTranscript(
+      [
+        {
+          ...first,
+          tools: [
+            {
+              callId: 'hidden',
+              name: 'write',
+              args: '{}',
+              sequence: '2',
+              settled: true,
+              result: 'changed',
+              resultSequence: '3',
+            },
+          ],
+        },
+        resolved,
+      ],
+      noRead,
+      undefined,
+      options,
+    ),
+    { message: /cannot conceal/ },
+  );
+});
+
+test('native context refuses unresolved prior and same-turn evidence rather than rewriting signed IDs', async t => {
+  const native = nativeCheckpoint();
+  const unresolved = turn(1, [call('native', 'effect')]);
+  await t.throwsAsync(
+    projectContextTranscript([unresolved, turn(10, [native])], noRead),
+    {
+      message: /cannot conceal unresolved/,
+    },
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [turn(10, [call('native', 'effect'), native])],
+      noRead,
+    ),
+    {
+      message: /cannot conceal unresolved/,
+    },
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [turn(10, [native], { transcriptComplete: false })],
+      noRead,
+    ),
+    {
+      message: /cannot conceal unresolved/,
+    },
+  );
+});
+
+test('context skips superseded prose and boundary input, expanding retained tail exactly once', async t => {
+  const old = turn(1, [message('old')], { inputRef: 'old-input' });
+  old.transcript[0].payloadRef = 'old-prose';
+  const tail = [call('tail', 'retained'), result('tail', 'pruned output')];
+  const boundary = turn(
+    10,
+    [
+      message('before'),
+      { ...checkpoint('summary'), retainedTail: tail },
+      message('after'),
+    ],
+    { inputRef: 'boundary-input' },
+  );
+  boundary.transcript[0].payloadRef = 'before';
+  boundary.transcript[1].payloadRef = 'checkpoint';
+  const reads = [];
+  const projected = await projectContextTranscript(
+    [boundary, old],
+    async ref => {
+      reads.push(ref);
+      t.is(ref, 'checkpoint');
+      return boundary.transcript[1].payload;
+    },
+  );
+  t.deepEqual(reads, ['checkpoint']);
+  t.deepEqual(projected, [
+    { kind: 'compaction', summary: 'summary' },
+    ...tail,
+    message('after'),
+  ]);
+});
+
+test('latest dispatch and ordinal win over archive publication order; pending and excluded checkpoints do not win', async t => {
+  const old = turn(1, [checkpoint('old')]);
+  const latest = turn(10, [checkpoint('first'), checkpoint('latest')]);
+  const pending = turn(20, [checkpoint('pending')], { state: 'pending' });
+  const excluded = turn(30, [checkpoint('excluded')]);
+  const projected = await projectContextTranscript(
+    [excluded, latest, pending, old],
+    noRead,
+    '30',
+  );
+  t.deepEqual(projected, [{ kind: 'compaction', summary: 'latest' }]);
+});
+
+test('settled canonical prior calls are summarized but unresolved and unmatched host evidence survive', async t => {
+  const old = turn(
+    1,
+    [
+      call('settled', 'done'),
+      result('settled', 'known'),
+      call('pending', 'unfinished'),
+    ],
+    {
+      tools: [
+        {
+          callId: 'host',
+          name: 'hostOnly',
+          args: '{}',
+          result: 'host effect',
+          settled: true,
+          sequence: '5',
+          resultSequence: '6',
+        },
+      ],
+    },
+  );
+  const projected = await projectContextTranscript(
+    [old, turn(10, [checkpoint('summary')])],
+    noRead,
+  );
+  const { pairs } = pairToolCalls(projected);
+  t.deepEqual(
+    pairs.map(pair => pair.call.name),
+    ['unfinished', 'hostOnly'],
+  );
+  t.regex(
+    resultContent(pairs[0]),
+    /outcome unknown; do not automatically retry/,
+  );
+  t.is(resultContent(pairs[1]), 'host effect');
+  t.true(
+    projected.some(
+      record =>
+        record.kind === 'message' &&
+        record.content.includes('position relative'),
+    ),
+  );
+});
+
+test('same native IDs in different old turns retain independent late settlements', async t => {
+  const makeOld = (id, content) =>
+    turn(id, [call('same', `exec${id}`)], {
+      activity: [
+        {
+          callId: 'same',
+          name: `exec${id}`,
+          args: '{}',
+          result: content,
+          settled: true,
+          sequence: `${id + 1}`,
+          resultSequence: '50',
+        },
+      ],
+    });
+  const projected = await projectContextTranscript(
+    [
+      makeOld(1, 'first'),
+      makeOld(10, 'second'),
+      turn(30, [checkpoint('summary')]),
+    ],
+    noRead,
+  );
+  const { pairs } = pairToolCalls(projected);
+  t.deepEqual(pairs.map(resultContent), ['first', 'second']);
+  t.not(pairs[0].call.id, pairs[1].call.id);
+});
+
+test('failed committed checkpoint still defines context and preserves terminal failure', async t => {
+  const projected = await projectContextTranscript(
+    [
+      turn(1, [message('old')]),
+      turn(10, [checkpoint('summary')], {
+        state: 'failed',
+        error: 'lost stream',
+      }),
+    ],
+    noRead,
+  );
+  t.is(projected[0].kind, 'compaction');
+  t.false(JSON.stringify(projected).includes('input 10'));
+  t.true(JSON.stringify(projected).includes('lost stream'));
+});
+
+test('mixed old pairs preserve only late canonical results and unresolved calls', async t => {
+  const old = turn(1, [
+    call('same', 'finished'),
+    result('same', 'before'),
+    call('same', 'late'),
+    result('same', 'after'),
+    call('open', 'unfinished'),
+  ]);
+  old.transcript[3].sequence = '40';
+  old.transcript[4].sequence = '41';
+  const projected = await projectContextTranscript(
+    [old, turn(10, [checkpoint('summary')])],
+    noRead,
+  );
+  const { pairs } = pairToolCalls(projected);
+  t.deepEqual(
+    pairs.map(pair => pair.call.name),
+    ['late', 'unfinished'],
+  );
+  t.is(resultContent(pairs[0]), 'after');
+  t.regex(resultContent(pairs[1]), /outcome unknown/);
+});
+
+test('recovered context IDs cannot alias a retained native call', async t => {
+  const nativeId = 'recovered-context_1_0';
+  const tail = [
+    call(nativeId, 'retained'),
+    result(nativeId, 'retained result'),
+  ];
+  const projected = await projectContextTranscript(
+    [
+      turn(1, [call('old', 'unfinished')]),
+      turn(10, [{ ...checkpoint('summary'), retainedTail: tail }]),
+    ],
+    noRead,
+  );
+  const { pairs } = pairToolCalls(projected);
+  t.is(pairs.length, 2);
+  t.not(pairs[0].call.id, pairs[1].call.id);
+  t.is(resultContent(pairs[0]), 'retained result');
+  t.regex(resultContent(pairs[1]), /outcome unknown/);
+});
+
+test('real journal late old-turn settlement survives subsequent archive publication and revival', async t => {
+  const store = new Map();
+  const powers = Far('ContextJournalStorage', {
+    list: () => harden([...store.keys()]),
+    lookup: name => store.get(name),
+    storeValue: (value, name) => {
+      if (store.has(name)) throw Error('Overwrite forbidden');
+      store.set(name, value);
+    },
+    remove: name => store.delete(name),
+  });
+  const journal = makeTurnJournal(powers);
+  const options = harden({
+    input: 'input',
+    backendId: 'codex',
+    modelId: 'sol',
+  });
+  const old = await journal.begin(options);
+  await journal.dispatch(old);
+  await journal.recordTranscript(old, '0', call('native', 'exec'));
+  await journal.append(old, {
+    type: 'observed-tool-call',
+    callId: 'native',
+    name: 'exec',
+    args: '{}',
+  });
+  await journal.append(old, { type: 'finish', state: 'completed' });
+  const boundary = await journal.begin(options);
+  await journal.dispatch(boundary);
+  await journal.recordTranscript(boundary, '0', checkpoint('durable summary'));
+  await journal.append(boundary, { type: 'finish', state: 'completed' });
+  // Publish the checkpoint before the earlier unresolved turn can be archived.
+  /* eslint-disable no-await-in-loop */
+  for (let index = 0; index < 290; index += 1) {
+    const id = await journal.begin(options);
+    await journal.dispatch(id);
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  await journal.append(old, {
+    type: 'observed-tool-result',
+    callId: 'native',
+    result: 'late effect',
+  });
+  await journal.resolve(old, 'Effect checked');
+  for (let index = 0; index < 80; index += 1) {
+    const id = await journal.begin(options);
+    await journal.dispatch(id);
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  const revived = makeTurnJournal(powers);
+  const archived = await revived.listArchived();
+  t.true(
+    Number(archived.findIndex(item => item.turnId === old)) >
+      Number(archived.findIndex(item => item.turnId === boundary)),
+  );
+  const projected = await projectContextTranscript(
+    [...archived, ...(await revived.list())],
+    ref => revived.readContent(ref),
+  );
+  const { pairs } = pairToolCalls(projected);
+  t.is(pairs.length, 1);
+  t.is(resultContent(pairs[0]), 'late effect');
+  t.is(projected[0].summary, 'durable summary');
+  t.deepEqual(await readContextTranscript(revived), projected);
+});
+
+test('indexed reader pins one cut across publication and late settlement during its single archive pass', async t => {
+  const old = turn(1, [call('unsettled', 'exec')]);
+  const boundary = turn(10, [checkpoint('old summary')]);
+  const after = turn(20, [message('after checkpoint')]);
+  const newer = turn(30, [checkpoint('new summary')]);
+  let published = false;
+  let views = 0;
+  const cursors = [];
+  const journal = {
+    readView: async () => {
+      views += 1;
+      return {
+        retained: structuredClone([
+          published
+            ? {
+                ...old,
+                activity: [
+                  {
+                    callId: 'unsettled',
+                    name: 'exec',
+                    args: '{}',
+                    settled: true,
+                    result: 'new settlement',
+                    sequence: '2',
+                    resultSequence: '40',
+                  },
+                ],
+              }
+            : old,
+        ]),
+        archiveCursor: published ? '0:3' : '0:2',
+        archivedCheckpoint: published
+          ? { turnId: '30', ordinal: '0', sequence: '31', chunk: '2' }
+          : { turnId: '10', ordinal: '0', sequence: '11', chunk: '1' },
+      };
+    },
+    listArchivedPage: async cursor => {
+      cursors.push(cursor);
+      const [index, end] = cursor.split(':').map(Number);
+      // Publication order intentionally differs from dispatch order.
+      const pages = [[after], [boundary], [newer]];
+      if (cursor === '1:2') published = true;
+      return {
+        records: pages[index],
+        next: Number(index) + 1 < Number(end) ? `${index + 1}:${end}` : null,
+      };
+    },
+    readContent: noRead,
+  };
+  const first = await readContextTranscript(journal);
+  t.is(views, 1);
+  t.deepEqual(cursors, ['0:2', '1:2']);
+  t.is(first[0].summary, 'old summary');
+  t.true(first.some(record => record.content === 'after checkpoint'));
+  t.regex(resultContent(pairToolCalls(first).pairs[0]), /outcome unknown/);
+  t.false(JSON.stringify(first).includes('new settlement'));
+  const second = await readContextTranscript(journal);
+  t.is(views, 2);
+  t.deepEqual(cursors.slice(2), ['0:3', '1:3', '2:3']);
+  t.is(second[0].summary, 'new summary');
+  t.is(resultContent(pairToolCalls(second).pairs[0]), 'new settlement');
+  t.false(second.some(record => record.content === 'after checkpoint'));
+});
+
+for (const failingPass of [1, 2]) {
+  test(`paged reader rejects archive failure in pass ${failingPass}`, async t => {
+    let visits = 0;
+    let views = 0;
+    const journal = {
+      readView: async () => {
+        views += 1;
+        return {
+          retained: [turn(20, [message('not partial output')])],
+          archiveCursor: '0:1',
+          archivedCheckpoint: {
+            turnId: '99',
+            ordinal: '0',
+            sequence: '100',
+            chunk: '0',
+          },
+        };
+      },
+      listArchivedPage: async cursor => {
+        t.is(cursor, '0:1');
+        visits += 1;
+        if (visits === failingPass) throw Error('Archive unavailable');
+        return { records: [turn(1, [checkpoint('summary')])], next: null };
+      },
+      readContent: noRead,
+    };
+    await t.throwsAsync(readContextTranscript(journal, '99'), {
+      message: 'Archive unavailable',
+    });
+    t.is(views, 1);
+    t.is(visits, failingPass);
+  });
+}
+
+for (const corruption of ['missing', 'sequence', 'kind', 'ordinal']) {
+  test(`indexed reader rejects ${corruption} checkpoint during archive pass`, async t => {
+    let visits = 0;
+    const original = turn(1, [checkpoint('summary')]);
+    const changed = structuredClone(original);
+    if (corruption === 'sequence') changed.transcript[0].sequence = '99';
+    if (corruption === 'kind') changed.transcript[0].kind = 'message';
+    if (corruption === 'ordinal') changed.transcript[0].ordinal = '1';
+    const journal = {
+      readView: async () => ({
+        retained: [],
+        archiveCursor: '0:1',
+        archivedCheckpoint: {
+          turnId: '1',
+          ordinal: '0',
+          sequence: '2',
+          chunk: '0',
+        },
+      }),
+      listArchivedPage: async () => {
+        visits += 1;
+        return {
+          records: corruption === 'missing' ? [] : [changed],
+          next: null,
+        };
+      },
+      readContent: noRead,
+    };
+    await t.throwsAsync(readContextTranscript(journal), {
+      message: /Context checkpoint (changed|missing)/,
+    });
+    t.is(visits, 1);
+  });
+}
+
+test('excluding archived maximum falls back to two pinned passes and selects previous checkpoint', async t => {
+  const cursors = [];
+  let views = 0;
+  const journal = {
+    readView: async () => {
+      views += 1;
+      return {
+        retained: [],
+        archiveCursor: '0:1',
+        archivedCheckpoint: {
+          turnId: '10',
+          ordinal: '0',
+          sequence: '11',
+          chunk: '0',
+        },
+      };
+    },
+    listArchivedPage: async cursor => {
+      cursors.push(cursor);
+      return {
+        records: [
+          turn(10, [checkpoint('excluded')]),
+          turn(1, [checkpoint('previous')]),
+        ],
+        next: null,
+      };
+    },
+    readContent: noRead,
+  };
+  t.deepEqual(await readContextTranscript(journal, '10'), [
+    { kind: 'compaction', summary: 'previous' },
+  ]);
+  t.is(views, 1);
+  t.deepEqual(cursors, ['0:1', '0:1']);
+});

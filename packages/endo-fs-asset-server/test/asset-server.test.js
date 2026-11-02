@@ -9,9 +9,11 @@ import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
-import { makeAssetServer } from '../src/asset-server.js';
+import { makeAssetServer, makeAssetServerKit } from '../src/asset-server.js';
 import { contentTypeForName, normalizeSegments } from '../src/index.js';
 
 const backend = makeNodeHttpBackend();
@@ -26,9 +28,9 @@ const getRandomValues = bytes => globalThis.crypto.getRandomValues(bytes);
 // those sockets with a `ClientDestroyedError`, which SES surfaces as a
 // fatal unhandled rejection on Node 24. A no-keep-alive client closes
 // each socket as soon as the body is read, so `server.close()` is clean.
-const httpGet = url =>
+const httpGet = (url, method = 'GET') =>
   new Promise((resolve, reject) => {
-    const req = http.get(url, { agent: false }, res => {
+    const req = http.request(url, { agent: false, method }, res => {
       let body = '';
       res.setEncoding('utf-8');
       res.on('data', chunk => {
@@ -43,6 +45,7 @@ const httpGet = url =>
       );
     });
     req.on('error', reject);
+    req.end();
   });
 
 const writeBytes = async (writerRef, bytes) => {
@@ -77,6 +80,16 @@ const startServer = async t => {
   const server = await makeAssetServer({ backend, getRandomValues });
   t.teardown(() => E(server).stop());
   return server;
+};
+
+const startKit = async (t, options = {}) => {
+  const kit = await makeAssetServerKit({
+    backend,
+    getRandomValues,
+    ...options,
+  });
+  t.teardown(() => E(kit.admin).stop());
+  return kit;
 };
 
 test('contentTypeForName maps extensions', t => {
@@ -131,6 +144,54 @@ test.serial('serves the index file for directory paths', async t => {
   t.is(dirRes.text, '<h1>app</h1>');
 });
 
+test.serial(
+  'canonical directory redirects preserve queries and relative asset resolution',
+  async t => {
+    const fs = await makeSiteFs();
+    const server = await startServer(t);
+    const { url, path, revoke } = await E(server).serve(fs);
+    const { origin } = new URL(url);
+    const query = '?next=https%3A%2F%2Fevil.example%2F&x=%0D%0A&x=two';
+    for (const method of ['GET', 'HEAD']) {
+      const response = await httpGet(`${url.slice(0, -1)}${query}`, method);
+      t.is(response.status, 308);
+      t.is(response.headers.location, `${path}${query}`);
+      t.is(response.text, '');
+      t.is(response.headers['referrer-policy'], 'no-referrer');
+      const canonical = new URL(response.headers.location, origin);
+      t.is(canonical.origin, origin);
+      const page = await httpGet(canonical, method);
+      t.is(page.status, 200);
+      t.is(page.text, method === 'HEAD' ? '' : '<h1>home</h1>');
+      const asset = await httpGet(new URL('style.css', canonical));
+      t.is(asset.status, 200);
+      const nested = await httpGet(`${url}app${query}`, method);
+      t.is(nested.status, 308);
+      t.is(nested.headers.location, `${path}app/${query}`);
+      t.is(
+        (
+          await httpGet(
+            new URL('main.js', new URL(nested.headers.location, origin)),
+          )
+        ).status,
+        200,
+      );
+      const file = await httpGet(`${url}app/main.js${query}`, method);
+      t.is(file.status, 200);
+      t.is(file.headers.location, undefined);
+    }
+    // Decoded leading slashes must never become an authority-relative Location.
+    const encoded = await httpGet(`${origin}/%2F${path.slice(1, -1)}`);
+    t.is(encoded.status, 308);
+    t.is(encoded.headers.location, path);
+    t.false(encoded.headers.location.startsWith('//'));
+    t.is((await httpGet(`${url}missing`)).status, 404);
+    t.is((await httpGet(`${origin}/unknown-token`)).status, 404);
+    await E(revoke).revoke();
+    t.is((await httpGet(url.slice(0, -1))).status, 404);
+  },
+);
+
 test.serial('responses carry hardening headers', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);
@@ -165,12 +226,17 @@ test.serial('a directory with no real index file 404s', async t => {
   const { url } = await E(server).serve(fs);
 
   t.is((await httpGet(`${url}empty/`)).status, 404);
+  t.is((await httpGet(`${url}empty`)).status, 404);
 });
 
 test.serial('subPath rebases the served root', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);
   const { url } = await E(server).serve(fs, { subPath: 'app' });
+
+  const redirect = await httpGet(`${url.slice(0, -1)}?view=mobile`);
+  t.is(redirect.status, 308);
+  t.is(redirect.headers.location, `${new URL(url).pathname}?view=mobile`);
 
   const res = await httpGet(`${url}main.js`);
   t.is(res.status, 200);
@@ -241,3 +307,443 @@ test.serial('rejects path traversal in the request', async t => {
   const res = await httpGet(`${origin}${path}..%2f..%2fetc`);
   t.true(res.status === 400 || res.status === 404);
 });
+
+test.serial(
+  'a capability the server cannot take a read-only facet of is refused, not mounted',
+  async t => {
+    // Regression: `serve()` once accepted any non-null cap and returned a URL
+    // whose every request 404'd. The server now classifies what it is handed —
+    // Filesystem, Mount or Git — takes its own read-only facet, and refuses the
+    // rest before anything is retained or a URL minted.
+    const { admin, publisher } = await startKit(t);
+
+    const sloppy = (label, methods) =>
+      makeExo(
+        label,
+        M.interface(label, {}, { defaultGuards: 'passable' }),
+        methods,
+      );
+
+    // Neither a Filesystem, a Mount nor a Git workspace.
+    await t.throwsAsync(
+      () => E(publisher).serve(sloppy('Thing', { lookup: () => undefined })),
+      { message: /Filesystem, Mount or Git capability/ },
+    );
+    // A Git workspace whose read-only facet cannot be taken.
+    await t.throwsAsync(() =>
+      E(publisher).serve(
+        sloppy('Git', {
+          worktree: () => undefined,
+          status: () => harden({}),
+          commit: () => '',
+        }),
+      ),
+    );
+    // A Filesystem whose root() does not answer.
+    await t.throwsAsync(() =>
+      E(publisher).serve(
+        sloppy('Filesystem', {
+          root: () => {
+            throw Error('no root');
+          },
+          statfs: () => harden({}),
+        }),
+      ),
+    );
+
+    // Nothing was registered or retained for any of them.
+    t.deepEqual(await E(admin).list(), []);
+    const { url } = await E(publisher).serve(await makeSiteFs());
+    t.is((await httpGet(url)).status, 200);
+  },
+);
+
+/** A store shared by successive servers, the way a durable one is. */
+const makeSharedStore = () => {
+  const facets = new Map();
+  const records = new Map();
+  const broken = new Set();
+  const failRelease = { count: 0 };
+  return {
+    facets,
+    records,
+    failRelease,
+    breakTarget: id => broken.add(id),
+    mendTarget: id => broken.delete(id),
+    store: harden({
+      retain: async (id, target) => {
+        facets.set(id, target);
+        return target;
+      },
+      record: async record => {
+        records.set(record.id, record);
+      },
+      load: async () => [...records.values()],
+      recall: async id => {
+        if (broken.has(id) || !facets.has(id)) throw Error('target is gone');
+        return facets.get(id);
+      },
+      release: async id => {
+        if (failRelease.count > 0) {
+          failRelease.count -= 1;
+          throw Error('store is unreachable');
+        }
+        const had = facets.delete(id);
+        return records.delete(id) || had;
+      },
+    }),
+  };
+};
+
+test.serial(
+  'routes are restored from the store by the next server, with nobody serving again',
+  async t => {
+    const shared = makeSharedStore();
+    const first = await makeAssetServerKit({
+      backend,
+      getRandomValues,
+      store: shared.store,
+    });
+    const kept = await E(first.publisher).serve(await makeSiteFs(), {
+      label: 'kept',
+    });
+    const dropped = await E(first.publisher).serve(await makeSiteFs());
+    await E(dropped.revoke).revoke();
+    t.true(await E(dropped.revoke).isRevoked());
+    // Stopping releases nothing.
+    await E(first.admin).stop();
+    t.is(shared.records.size, 1);
+
+    const second = await startKit(t, { store: shared.store });
+    const { origin } = await E(second.admin).getAddress();
+    t.is((await httpGet(`${origin}${kept.path}`)).text, '<h1>home</h1>');
+    t.is((await httpGet(`${origin}${dropped.path}`)).status, 404);
+    const [listed] = await E(second.admin).list();
+    t.like(listed, {
+      id: kept.id,
+      path: kept.path,
+      label: 'kept',
+      status: 'ready',
+    });
+    t.is((await E(second.admin).list()).length, 1);
+  },
+);
+
+test.serial(
+  'a route whose target cannot be revived is kept, answers 503, and recovers',
+  async t => {
+    const shared = makeSharedStore();
+    const first = await makeAssetServerKit({
+      backend,
+      getRandomValues,
+      store: shared.store,
+    });
+    const served = await E(first.publisher).serve(await makeSiteFs());
+    await E(first.admin).stop();
+
+    shared.breakTarget(served.id);
+    let clock = 1000;
+    const second = await startKit(t, { store: shared.store, now: () => clock });
+    const { origin } = await E(second.admin).getAddress();
+    const unavailable = await httpGet(`${origin}${served.path}`);
+    t.is(unavailable.status, 503);
+    t.is(unavailable.headers['retry-after'], '5');
+    t.like((await E(second.admin).list())[0], {
+      id: served.id,
+      status: 'unavailable',
+      error: 'target is gone',
+    });
+    // Only a revocation ends a route: the record is still there.
+    t.is(shared.records.size, 1);
+
+    // A failure is remembered for as long as the Retry-After it was answered
+    // with, so a dead target does not cost a store lookup per request...
+    shared.mendTarget(served.id);
+    t.is((await httpGet(`${origin}${served.path}`)).status, 503);
+    // ...and no longer.
+    clock += 5001;
+    t.is((await httpGet(`${origin}${served.path}`)).status, 200);
+    t.like((await E(second.admin).list())[0], { status: 'ready' });
+  },
+);
+
+test.serial(
+  'the administrator lists and removes; the publisher serves and releases its own',
+  async t => {
+    const { root, admin, publisher } = await startKit(t);
+    // eslint-disable-next-line no-underscore-dangle
+    const adminMethods = await E(admin).__getMethodNames__();
+    // eslint-disable-next-line no-underscore-dangle
+    const publisherMethods = await E(publisher).__getMethodNames__();
+    for (const name of ['serve', 'publisher', 'release']) {
+      t.false(adminMethods.includes(name), `an administrator cannot ${name}`);
+    }
+    for (const name of ['list', 'getTarget', 'revoke', 'stop', 'admin']) {
+      t.false(publisherMethods.includes(name), name);
+    }
+    t.is(await E(root).admin(), admin);
+    t.is(await E(root).publisher(), publisher);
+
+    const one = await E(publisher).serve(await makeSiteFs(), { label: 'one' });
+    const two = await E(publisher).serve(await makeSiteFs(), { label: 'two' });
+    t.deepEqual((await E(admin).list()).map(item => item.label).sort(), [
+      'one',
+      'two',
+    ]);
+
+    // The administrator reaches the retained facet, and it does not write.
+    const facet = await E(admin).getTarget(one.id);
+    const facetRoot = await E(facet).root();
+    await t.throwsAsync(E(facetRoot).create('defaced.html', {}));
+    await t.throwsAsync(E(admin).getTarget('f'.repeat(32)), {
+      message: /no served item/,
+    });
+
+    t.true(await E(admin).revoke(one.id));
+    t.false(await E(admin).revoke(one.id), 'idempotent');
+    t.is((await httpGet(one.url)).status, 404);
+    t.is(await E(publisher).describe(one.id), undefined);
+    t.like(await E(publisher).describe(two.id), { url: two.url, label: 'two' });
+    t.false('error' in (await E(publisher).describe(two.id)));
+    t.true(await E(publisher).release(two.id));
+    t.is((await httpGet(two.url)).status, 404);
+    t.deepEqual(await E(admin).list(), []);
+  },
+);
+
+test.serial(
+  'serve validates its options before it retains anything',
+  async t => {
+    const shared = makeSharedStore();
+    const { publisher } = await startKit(t, { store: shared.store });
+    const fs = await makeSiteFs();
+    await t.throwsAsync(E(publisher).serve(fs, { index: '' }));
+    await t.throwsAsync(E(publisher).serve(fs, { subPath: '../up' }));
+    await t.throwsAsync(E(publisher).serve(fs, { label: 'x'.repeat(257) }));
+    t.is(shared.facets.size, 0);
+    t.is(shared.records.size, 0);
+  },
+);
+
+test.serial(
+  'a release that fails can be repeated, and a revoked URL does not come back',
+  async t => {
+    const shared = makeSharedStore();
+    const first = await makeAssetServerKit({
+      backend,
+      getRandomValues,
+      store: shared.store,
+    });
+    const served = await E(first.publisher).serve(await makeSiteFs());
+
+    shared.failRelease.count = 1;
+    await t.throwsAsync(E(first.admin).revoke(served.id), {
+      message: /unreachable/,
+    });
+    // It stopped serving at once, and the record is still in the store...
+    t.is((await httpGet(served.url)).status, 404);
+    t.is(shared.records.size, 1);
+    t.false((await E(served.revoke).isRevoked()) && shared.records.size === 0);
+    // ...so the release is repeated until it holds, though this incarnation
+    // no longer knows the id.
+    t.true(await E(first.admin).revoke(served.id));
+    t.is(shared.records.size, 0);
+    await E(first.admin).stop();
+
+    const second = await startKit(t, { store: shared.store });
+    const { origin } = await E(second.admin).getAddress();
+    t.is((await httpGet(`${origin}${served.path}`)).status, 404);
+    t.deepEqual(await E(second.admin).list(), []);
+  },
+);
+
+test.serial(
+  'a stopped server still lists and releases what the next one would serve',
+  async t => {
+    const shared = makeSharedStore();
+    const first = await makeAssetServerKit({
+      backend,
+      getRandomValues,
+      store: shared.store,
+    });
+    const served = await E(first.publisher).serve(await makeSiteFs());
+    await E(first.admin).stop();
+
+    t.is((await E(first.admin).list()).length, 1);
+    await t.throwsAsync(E(first.publisher).serve(await makeSiteFs()), {
+      message: /stopped/,
+    });
+    t.true(await E(first.publisher).release(served.id));
+    t.is(shared.records.size, 0);
+
+    const second = await startKit(t, { store: shared.store });
+    t.deepEqual(await E(second.admin).list(), []);
+  },
+);
+
+test.serial('routes are in place before the listener answers', async t => {
+  // A store slow to load must delay the listener, not leave a window in
+  // which a valid URL is told 404.
+  const shared = makeSharedStore();
+  const first = await makeAssetServerKit({
+    backend,
+    getRandomValues,
+    store: shared.store,
+  });
+  const served = await E(first.publisher).serve(await makeSiteFs());
+  const { port } = await E(first.admin).getAddress();
+  await E(first.admin).stop();
+
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  const slow = harden({
+    ...shared.store,
+    load: async () => {
+      await gate;
+      return shared.store.load();
+    },
+  });
+  const starting = makeAssetServerKit({
+    backend,
+    getRandomValues,
+    port,
+    store: slow,
+  });
+  const early = await httpGet(`http://127.0.0.1:${port}${served.path}`).catch(
+    error => error.code,
+  );
+  t.is(early, 'ECONNREFUSED');
+  release();
+  const second = await starting;
+  t.teardown(() => E(second.admin).stop());
+  t.is((await httpGet(`http://127.0.0.1:${port}${served.path}`)).status, 200);
+});
+
+test.serial(
+  'a store that cannot be read fails the server with nothing bound',
+  async t => {
+    const broken = harden({
+      ...makeSharedStore().store,
+      load: async () => {
+        throw Error('pet store is unreachable');
+      },
+    });
+    const probe = await startKit(t);
+    const { port } = await E(probe.admin).getAddress();
+    await E(probe.admin).stop();
+    await t.throwsAsync(
+      makeAssetServerKit({ backend, getRandomValues, port, store: broken }),
+      { message: /unreachable/ },
+    );
+    // The port is free: the next attempt binds it.
+    const retry = await startKit(t, { port });
+    t.is((await E(retry.admin).getAddress()).port, port);
+  },
+);
+
+test.serial(
+  'serve by a caller-chosen id is idempotent, so a recorded id is never lost',
+  async t => {
+    const { admin, publisher } = await startKit(t);
+    const id = 'ab'.repeat(16);
+    const fs = await makeSiteFs();
+    const first = await E(publisher).serve(fs, { id, label: 'mine' });
+    const again = await E(publisher).serve(fs, { id, label: 'ignored' });
+    t.is(first.id, id);
+    t.is(again.url, first.url);
+    t.is((await E(admin).list()).length, 1);
+    await t.throwsAsync(E(publisher).serve(fs, { id: 'not-an-id' }));
+    await E(again.revoke).revoke();
+    t.is((await httpGet(first.url)).status, 404);
+  },
+);
+
+test.serial(
+  'an unreadable record is listed and removable, not hidden',
+  async t => {
+    const shared = makeSharedStore();
+    const id = 'cd'.repeat(16);
+    const store = harden({
+      ...shared.store,
+      load: async () => [{ id, unreadable: 'lookup failed' }],
+      release: async released => {
+        t.is(released, id);
+        return true;
+      },
+    });
+    const { admin, publisher } = await startKit(t, { store });
+    t.deepEqual(await E(admin).list(), [
+      { id, status: 'unreadable', error: 'lookup failed' },
+    ]);
+    t.is(await E(publisher).describe(id), undefined);
+    t.true(await E(admin).revoke(id));
+    t.deepEqual(await E(admin).list(), []);
+  },
+);
+
+test.serial(
+  'the repository beside a published worktree is not served',
+  async t => {
+    const { publisher } = await startKit(t);
+    const fs = makeInMemoryFilesystem();
+    const root = await E(fs).root();
+    await writeFileAt(root, ['index.html'], utf8('<h1>home</h1>'));
+    await writeFileAt(root, ['.git', 'config'], utf8('[core]'));
+    const { url } = await E(publisher).serve(fs);
+    t.is((await httpGet(url)).status, 200);
+    t.is((await httpGet(`${url}.git/config`)).status, 404);
+    t.is((await httpGet(`${url}sub/.git/config`)).status, 404);
+  },
+);
+
+test.serial(
+  'two serves of one id are one route, and a release waits for the serve it is for',
+  async t => {
+    const { admin, publisher } = await startKit(t);
+    const id = 'ef'.repeat(16);
+    const fs = await makeSiteFs();
+    const [one, two] = await Promise.all([
+      E(publisher).serve(fs, { id }),
+      E(publisher).serve(fs, { id }),
+    ]);
+    t.is(one.url, two.url);
+    t.is((await E(admin).list()).length, 1);
+
+    const other = '12'.repeat(16);
+    const serving = E(publisher).serve(fs, { id: other });
+    const releasing = E(publisher).release(other);
+    const served = await serving;
+    t.true(await releasing, 'the release saw the route the serve made');
+    t.is((await httpGet(served.url)).status, 404);
+    t.is((await E(admin).list()).length, 1);
+  },
+);
+
+test.serial(
+  'check() asks the target now, where describe() reports the last failure',
+  async t => {
+    const shared = makeSharedStore();
+    const first = await makeAssetServerKit({
+      backend,
+      getRandomValues,
+      store: shared.store,
+    });
+    const served = await E(first.publisher).serve(await makeSiteFs());
+    await E(first.admin).stop();
+
+    shared.breakTarget(served.id);
+    const clock = 1000;
+    const second = await startKit(t, { store: shared.store, now: () => clock });
+    const { origin } = await E(second.admin).getAddress();
+    t.is((await httpGet(`${origin}${served.path}`)).status, 503);
+    shared.mendTarget(served.id);
+    // Still inside the backoff, and nothing has asked again.
+    t.like(await E(second.publisher).describe(served.id), {
+      status: 'unavailable',
+    });
+    t.like(await E(second.publisher).check(served.id), { status: 'ready' });
+    t.is(await E(second.publisher).check('0'.repeat(32)), undefined);
+  },
+);

@@ -19,6 +19,7 @@
     ".": "./src/index.js",
     "./src/asset-server.js": "./src/asset-server.js",
     "./src/asset-server-module.js": "./src/asset-server-module.js",
+    "./src/endo-store.js": "./src/endo-store.js",
     "./src/serve-tree.js": "./src/serve-tree.js",
     "./src/type-guards.js": "./src/type-guards.js",
     "./src/mime.js": "./src/mime.js",
@@ -41,6 +42,8 @@
     "@endo/platform": "workspace:^"
   },
   "devDependencies": {
+    "@endo/daemon": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"
   },

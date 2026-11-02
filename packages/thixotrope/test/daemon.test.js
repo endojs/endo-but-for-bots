@@ -18,11 +18,16 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeTimerResource } from '../src/resources.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { MAX_TIMER_DELAY_MS } from '../src/platform/timers.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
+import { sleepWorkers } from './_sleep-workers.js';
+
+import { makeNodePowers } from '../src/platform/node/powers.js';
+
+const nodePowers = makeNodePowers();
 
 const COUNTER_SOURCE = `
 (() => {
@@ -37,13 +42,41 @@ const COUNTER_SOURCE = `
 })()
 `;
 
+/**
+ * A minimal host resource for these tests: a non-durable timer whose
+ * `delay` is an ordinary host answer (it aborts on restart, which is what
+ * the tests about answers rely on).
+ * @param {import('../src/platform/timers.js').TimerPowers} timers
+ */
+const makeTimerResource = timers =>
+  Far('TestTimer', {
+    now: () => timers.now(),
+    /** @param {number} ms */
+    delay: async ms => {
+      const delayMs = Number(ms);
+      if (!(
+        Number.isFinite(delayMs) &&
+        delayMs >= 0 &&
+        delayMs <= MAX_TIMER_DELAY_MS
+      ))
+        throw Error(
+          `delay must be between 0 and ${MAX_TIMER_DELAY_MS} milliseconds`,
+        );
+      return new Promise(resolve =>
+        timers.setTimer(() => resolve(timers.now()), delayMs),
+      );
+    },
+  });
+
 /** @import { ExecutionContext } from 'ava' */
-/** @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options] */
+/**
+ * @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options]
+ */
 const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const store = makeFsStore(statePath);
-  const daemon = await makeThixotropeDaemon({
+  const store = makeFsStore(nodePowers, statePath);
+  const daemon = await makeThixotropeDaemon(nodePowers, {
     store: harden({
       ...store,
       deleteWorker: id => {
@@ -51,9 +84,11 @@ const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
         onDeleteWorker(id);
       },
     }),
-    engine: makePeerJournalReplayEngine(),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
-    resources: { timer: makeTimerResource },
+    resources: {
+      timer: () => makeTimerResource(nodePowers.timers),
+    },
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
   });
@@ -156,21 +191,25 @@ test.serial('a host resource reaches a guest as an endowment', async t => {
   t.is(typeof (await E(clock).read()), 'number');
 
   // The worker sleeps and wakes; the resource endowment still works.
-  await worker.sleep();
+  // `sleepWorkers` rather than a bare `sleep`: trailing protocol traffic can
+  // re-wake a worker just after it sleeps, so one sleep is not always enough —
+  // which is why the helper retries. Under a loaded suite that race is
+  // reachable often enough to matter.
+  await sleepWorkers(daemon);
   t.false(worker.isAwake());
   t.is(typeof (await E(clock).read()), 'number');
   t.true(worker.isAwake());
 });
 
 test.serial(
-  'an idle worker parks itself and wakes on the next call',
+  'an idle worker sleeps itself and wakes on the next call',
   async t => {
     t.timeout(10_000);
     const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
     t.teardown(() => rm(statePath, { recursive: true, force: true }));
-    const daemon = await makeThixotropeDaemon({
-      store: makeFsStore(statePath),
-      engine: makePeerJournalReplayEngine(),
+    const daemon = await makeThixotropeDaemon(nodePowers, {
+      store: makeFsStore(nodePowers, statePath),
+      engine: makePeerJournalReplayEngine(nodePowers),
       codec: syrupCodec,
       idleSleepMs: 100,
       makeNetlayer: ({ handlers, logger }) =>
@@ -185,13 +224,13 @@ test.serial(
 
     // Workers run to quiescence after every delivery and have no timer
     // queue, so "no inbound frames for a while" is exact dormancy: the
-    // idle policy parks the worker without being asked.
+    // idle policy sleeps the worker without being asked.
     const deadline = Date.now() + 5000;
     while (worker.isAwake() && Date.now() < deadline) {
       // eslint-disable-next-line no-await-in-loop
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    t.false(worker.isAwake(), 'the worker parked itself');
+    t.false(worker.isAwake(), 'the worker sleeping itself');
     t.is(await E(counter).incr(), 2, 'the next delivery wakes it');
   },
 );
@@ -200,9 +239,9 @@ test.serial('a third-party gift routes through the hub bootstrap', async t => {
   t.timeout(15_000);
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-gift-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
+  const daemon = await makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     // The tcp-testing netlayer distinguishes peers by designator; each
     // node in a three-party exchange needs its own.
@@ -280,9 +319,9 @@ test.serial(
       join(tmpdir(), 'thixotrope-daemon-redeem-'),
     );
     t.teardown(() => rm(statePath, { recursive: true, force: true }));
-    const daemon = await makeThixotropeDaemon({
-      store: makeFsStore(statePath),
-      engine: makePeerJournalReplayEngine(),
+    const daemon = await makeThixotropeDaemon(nodePowers, {
+      store: makeFsStore(nodePowers, statePath),
+      engine: makePeerJournalReplayEngine(nodePowers),
       codec: syrupCodec,
       makeNetlayer: ({ handlers, logger }) =>
         makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'daemon' }),
@@ -367,8 +406,7 @@ test.serial(
       [first.workerId, await first.evaluate(COUNTER_SOURCE)],
       [second.workerId, await second.evaluate(COUNTER_SOURCE)],
     ]);
-    await first.sleep();
-    await second.sleep();
+    await sleepWorkers(daemon);
     const [victim, rescued] = daemon.inspectReachability().collectible;
     t.is(daemon.inspectReachability().collectible.length, 2);
     deleting = id => {
@@ -378,5 +416,52 @@ test.serial(
     t.deepEqual(await daemon.collectVats(), [victim]);
     t.true(daemon.listWorkerIds().includes(rescued));
     t.is(await E(await daemon.lookup('rescued-during-collection')).incr(), 1);
+  },
+);
+
+test.serial(
+  'a peer without a resume token has a transient session, which the next start forgets',
+  async t => {
+    t.timeout(15_000);
+    const statePath = await mkdtemp(
+      join(tmpdir(), 'thixotrope-daemon-transient-peer-'),
+    );
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const start = () =>
+      makeThixotropeDaemon(nodePowers, {
+        store: makeFsStore(nodePowers, statePath),
+        engine: makePeerJournalReplayEngine(nodePowers),
+        codec: syrupCodec,
+        makeNetlayer: ({ handlers, logger }) =>
+          makeTcpNetLayer({ handlers, logger }),
+      });
+    const transientKeys = () =>
+      Object.keys(
+        makeFsStore(nodePowers, statePath).getHubState()?.sessions ?? {},
+      ).filter(key => key.startsWith('transient:'));
+    const first = await start();
+    t.teardown(() => first.shutdown());
+    const worker = await first.createWorker();
+    const secret = first.publish(await worker.evaluate(COUNTER_SOURCE));
+    const peer = await makeTestOcapn({
+      codec: syrupCodec,
+      debugLabel: 'token-less-peer',
+      network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
+        makeTcpNetLayer({ handlers, logger }),
+    });
+    t.teardown(() => peer.shutdown());
+    const counter = await peer.enlivenSturdyRef(
+      peer.makeSturdyRef(first.location, secret),
+    );
+    t.is(await E(counter).incr(), 1);
+    const held = transientKeys();
+    t.is(held.length, 1, 'the connection is a transient session');
+    // A crash leaves the session's rows, as a shutdown does: the close
+    // handler forgets nothing once the daemon is stopping.
+    await first.crash();
+    t.deepEqual(transientKeys(), held);
+    const second = await start();
+    t.teardown(() => second.shutdown());
+    t.deepEqual(transientKeys(), [], 'the next start forgot it');
   },
 );

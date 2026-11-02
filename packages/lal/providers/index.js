@@ -4,10 +4,15 @@
  * Use createProvider(env) to get a provider for the current configuration.
  */
 
+import {
+  DEFAULT_WORKLOAD_LIMITS,
+  readWorkloadLimit,
+} from '@endo/hosted-agent/workload-limits.js';
 import { makeAnthropicProvider } from './anthropic.js';
 import { makeGeminiProvider } from './gemini.js';
 import { makeLlamaCppProvider } from './llamacpp.js';
 import { makeOllamaProvider } from './ollama.js';
+import { makeOpenRouterProvider } from './openrouter.js';
 import { detectProviderKind, resolveModelForHost } from './config.js';
 
 /**
@@ -30,13 +35,25 @@ import { detectProviderKind, resolveModelForHost } from './config.js';
  * - LAL_MAX_TOKENS: Max tokens for completion (llama.cpp only)
  * - LAL_MAX_MESSAGES: Truncate to last N messages (llama.cpp only)
  *
- * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string, LAL_MAX_TOKENS?: string, LAL_MAX_MESSAGES?: string }} env
+ * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string, LAL_MAX_TOKENS?: string, LAL_MAX_MESSAGES?: string, LAL_REQUEST_TIMEOUT_MS?: string }} env
  * @returns {Provider}
  */
 export const createProvider = env => {
   const baseURL = env.LAL_HOST || 'http://localhost:11434';
   const providerKind = detectProviderKind(baseURL);
   const model = resolveModelForHost(baseURL, env.LAL_MODEL);
+
+  if (providerKind === 'openrouter') {
+    return makeOpenRouterProvider({
+      apiKey: env.LAL_AUTH_TOKEN || '',
+      model: env.LAL_MODEL || '',
+      requestTimeoutMs: readWorkloadLimit(
+        env,
+        'LAL_REQUEST_TIMEOUT_MS',
+        DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs,
+      ),
+    });
+  }
 
   if (providerKind === 'anthropic') {
     const apiKey = env.LAL_AUTH_TOKEN;
@@ -112,3 +129,13 @@ export { makeGeminiProvider } from './gemini.js';
 export { makeLlamaCppProvider } from './llamacpp.js';
 export { findMockTrace, makeMockProvider } from './mock.js';
 export { makeOllamaProvider } from './ollama.js';
+export { makeOpenRouterProvider } from './openrouter.js';
+export {
+  makeSubscriptionResponsesProvider,
+  messageFromResponsesOutput,
+  assertSubscriptionResponsesRecipe,
+} from './subscription-responses.js';
+export {
+  planContextCompaction,
+  summarizeContext,
+} from './context-compaction.js';

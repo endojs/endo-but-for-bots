@@ -109,13 +109,16 @@ const makeFakeRoot = () => {
       if (!names.has(k)) throw Error(`fake-root: nothing at ${k}`);
       return `id:${k}`;
     },
-    getFormula: async id => {
-      const k = `${id}`.replace(/^id:/, '');
-      if (!names.has(k) || names.get(k) === DANGLING) {
-        throw Error(`No reference exists at path ${k}`);
-      }
-      return harden({ type: 'fake' });
-    },
+    diagnostics: () =>
+      Far('Diagnostics', {
+        getFormula: async id => {
+          const k = `${id}`.replace(/^id:/, '');
+          if (!names.has(k) || names.get(k) === DANGLING) {
+            throw Error(`No reference exists at path ${k}`);
+          }
+          return harden({ type: 'fake' });
+        },
+      }),
     remove: async (...args) => {
       names.delete(key(varargsPath(args)));
     },

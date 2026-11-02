@@ -7,6 +7,7 @@ import { makeSimulator } from '@endo/workflow/src/simulate.js';
 import { renderGraph } from '@endo/workflow/src/graph.js';
 
 import {
+  makeReviewedChangeChart,
   reviewCharts,
   reviewedChangeChart,
   reviewedEndoReleaseChart,
@@ -112,6 +113,64 @@ test('the public chart boundary rejects unusable panels and budgets', t => {
         portShape,
       ),
       `${remaining} is outside the review-budget domain`,
+    );
+  }
+});
+
+test('implementation has no deadline by default across every review variant', t => {
+  for (const chart of reviewCharts) {
+    const sim = makeSimulator(chart, { params });
+    t.is(sim.pending().length, 1, chart.name);
+    t.is(sim.pending()[0].effect.kind, 'ask');
+    const ask = pendingOf(sim, 'ask', { to: 'developer' });
+    sim.settle(ask.effectId, 'fulfilled', harden({ head: HEAD, files: [] }));
+    verdict(sim, false, 'Revise the implementation.');
+    t.is(sim.status().state, 'implement');
+    t.is(sim.pending().length, 1, 'retries also have no timer');
+  }
+});
+
+test('an opted-in implementation deadline retries and consumes one round', t => {
+  const chart = makeReviewedChangeChart({
+    name: 'timed-review',
+    version: 1,
+    implementationTimeoutMs: 21_600_000,
+  });
+  const sim = makeSimulator(chart, { params });
+  const deadline = pendingOf(sim, 'after');
+  t.is(deadline.effect.ms, 21_600_000);
+  sim.fireTimer(deadline.effectId);
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.round, 1n);
+  t.is(sim.status().context.remaining, 1n);
+  t.true(pendingOf(sim, 'ask').effect.what.description.includes('deadline'));
+  t.is(pendingOf(sim, 'after').effect.ms, 21_600_000);
+  submitHead(sim);
+  t.false(sim.pending().some(record => record.path[0] === 'implement'));
+});
+
+test('implementation timeout configuration rejects invalid durations', t => {
+  for (const implementationTimeoutMs of [
+    0,
+    -1,
+    1.5,
+    NaN,
+    -Infinity,
+    '6000',
+    null,
+  ]) {
+    t.throws(
+      () =>
+        makeReviewedChangeChart({
+          name: 'invalid-timeout',
+          version: 1,
+          // Deliberately exercise the untyped host-setup boundary.
+          implementationTimeoutMs: /** @type {any} */ (implementationTimeoutMs),
+        }),
+      {
+        message:
+          /implementationTimeoutMs must be a positive integer or Infinity/,
+      },
     );
   }
 });
@@ -245,7 +304,12 @@ test('the budget burns down, exhausts, and the operator can extend it', t => {
 });
 
 test('the initiator can raise the budget mid-round without disturbing the ask', t => {
-  const sim = makeSimulator(reviewedChangeChart, { params });
+  const chart = makeReviewedChangeChart({
+    name: 'timed-review',
+    version: 1,
+    implementationTimeoutMs: 60_000,
+  });
+  const sim = makeSimulator(chart, { params });
 
   const before = pendingOf(sim, 'ask', { to: 'developer' });
   t.is(sim.status().context.remaining, 2n);

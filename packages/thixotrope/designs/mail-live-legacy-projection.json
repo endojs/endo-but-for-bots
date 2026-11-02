@@ -1,0 +1,506 @@
+{
+  "method": "Read-only service.snapshot() against the existing default demo, same isolated introspection/proxy probe; no send or mailbox mutation. One before/after sample; overlapping RPC durations are not exclusive wall time.",
+  "date": "2026-10-20",
+  "sourceBase": "86ac53167",
+  "nativeSha256": "519bc30198aa199ceb20346ca939556c33f16c642266e7d6f960e9519e42660f",
+  "guestSha256": "126928aa10cc4dbac1dc3f506e02592d4c9f687addf82005213f9965e319f928",
+  "before": {
+    "totalMs": 2918.426666,
+    "counts": {
+      "inbox": 12,
+      "outbox": 12
+    },
+    "deliveryCount": 45,
+    "deliveryMs": 3730.708746999793,
+    "wakes": 0,
+    "snapshots": 0,
+    "groups": {
+      "book.contacts": {
+        "count": 1,
+        "totalMs": 91.65758299999993,
+        "maxMs": 91.65758299999993
+      },
+      "inventory.snapshot": {
+        "count": 1,
+        "totalMs": 171.05195900000012,
+        "maxMs": 171.05195900000012
+      },
+      "mailbox.inbox": {
+        "count": 1,
+        "totalMs": 192.9420419999999,
+        "maxMs": 192.9420419999999
+      },
+      "mailbox.outbox": {
+        "count": 1,
+        "totalMs": 349.83570800000007,
+        "maxMs": 349.83570800000007
+      },
+      "inventory.entries": {
+        "count": 1,
+        "totalMs": 92.73112500000002,
+        "maxMs": 92.73112500000002
+      },
+      "contacts.get": {
+        "count": 1,
+        "totalMs": 87.96424999999999,
+        "maxMs": 87.96424999999999
+      },
+      "contacts.keyOf": {
+        "count": 24,
+        "totalMs": 14853.715708,
+        "maxMs": 1045.867875
+      },
+      "mailbox.take": {
+        "count": 12,
+        "totalMs": 1615.888166000001,
+        "maxMs": 181.87237499999992
+      },
+      "inventory.keyOf": {
+        "count": 3,
+        "totalMs": 1787.248834,
+        "maxMs": 823.6015419999999
+      }
+    },
+    "events": [
+      {
+        "label": "book",
+        "method": "contacts",
+        "start": 1595.982042,
+        "ms": 91.65758299999993
+      },
+      {
+        "label": "inventory",
+        "method": "snapshot",
+        "start": 1596.03525,
+        "ms": 171.05195900000012
+      },
+      {
+        "label": "mailbox",
+        "method": "inbox",
+        "start": 1596.002625,
+        "ms": 192.9420419999999
+      },
+      {
+        "label": "mailbox",
+        "method": "outbox",
+        "start": 1596.019417,
+        "ms": 349.83570800000007
+      },
+      {
+        "label": "inventory",
+        "method": "entries",
+        "start": 1945.879542,
+        "ms": 92.73112500000002
+      },
+      {
+        "label": "contacts",
+        "method": "get",
+        "start": 2038.756167,
+        "ms": 87.96424999999999
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.057292,
+        "ms": 195.8575420000002
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.123292,
+        "ms": 272.58966699999974
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2323.061542,
+        "ms": 86.51983300000029
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.162375,
+        "ms": 347.43049999999994
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2323.082167,
+        "ms": 161.30716699999994
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.180584,
+        "ms": 424.44904099999985
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2474.646209,
+        "ms": 112.9462910000002
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.196792,
+        "ms": 499.41729199999963
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2474.665125,
+        "ms": 181.87237499999992
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.211167,
+        "ms": 576.3498749999999
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2551.657334,
+        "ms": 171.92883299999994
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.225375,
+        "ms": 652.3109589999999
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.244542,
+        "ms": 726.3897919999999
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.259,
+        "ms": 800.2983749999999
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.274292,
+        "ms": 875.366583
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.287959,
+        "ms": 950.8541660000001
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2127.307334,
+        "ms": 1026.1965
+      },
+      {
+        "label": "inventory",
+        "method": "keyOf",
+        "start": 2409.606292,
+        "ms": 821.6655000000001
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 3153.53175,
+        "ms": 88.46458399999983
+      },
+      {
+        "label": "inventory",
+        "method": "keyOf",
+        "start": 2484.41275,
+        "ms": 823.6015419999999
+      },
+      {
+        "label": "inventory",
+        "method": "keyOf",
+        "start": 3242.023542,
+        "ms": 141.98179200000004
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.175459,
+        "ms": 197.35283299999992
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.188417,
+        "ms": 278.12516700000015
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 3581.5865,
+        "ms": 91.388375
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.199917,
+        "ms": 357.0076250000002
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 3581.603417,
+        "ms": 169.68712500000038
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.212042,
+        "ms": 434.0594579999997
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 3741.254834,
+        "ms": 112.9948330000002
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.222792,
+        "ms": 509.99458300000015
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 3741.271042,
+        "ms": 180.98075000000017
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.233875,
+        "ms": 588.0562500000001
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 3818.299042,
+        "ms": 173.89033299999983
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.244875,
+        "ms": 666.070209
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.255917,
+        "ms": 744.3477500000004
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.267084,
+        "ms": 819.3724160000002
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.279167,
+        "ms": 895.4384999999997
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.290042,
+        "ms": 970.5127500000003
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 3384.300625,
+        "ms": 1045.867875
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 4430.19625,
+        "ms": 83.9076670000004
+      }
+    ]
+  },
+  "after": {
+    "totalMs": 1417.0595420000002,
+    "counts": {
+      "inbox": 12,
+      "outbox": 12
+    },
+    "deliveryCount": 19,
+    "deliveryMs": 1518.4970400001039,
+    "wakes": 0,
+    "snapshots": 0,
+    "groups": {
+      "book.contacts": {
+        "count": 1,
+        "totalMs": 93.93095900000003,
+        "maxMs": 93.93095900000003
+      },
+      "inventory.snapshot": {
+        "count": 1,
+        "totalMs": 172.77441599999997,
+        "maxMs": 172.77441599999997
+      },
+      "mailbox.inbox": {
+        "count": 1,
+        "totalMs": 196.79054199999996,
+        "maxMs": 196.79054199999996
+      },
+      "inventory.entries": {
+        "count": 1,
+        "totalMs": 251.91445900000008,
+        "maxMs": 251.91445900000008
+      },
+      "mailbox.outbox": {
+        "count": 1,
+        "totalMs": 353.31495799999993,
+        "maxMs": 353.31495799999993
+      },
+      "contacts.get": {
+        "count": 1,
+        "totalMs": 86.70070799999985,
+        "maxMs": 86.70070799999985
+      },
+      "contacts.keyOf": {
+        "count": 1,
+        "totalMs": 90.14383300000009,
+        "maxMs": 90.14383300000009
+      },
+      "mailbox.take": {
+        "count": 12,
+        "totalMs": 3255.3367469999994,
+        "maxMs": 452.70716600000014
+      }
+    },
+    "events": [
+      {
+        "label": "book",
+        "method": "contacts",
+        "start": 1661.52125,
+        "ms": 93.93095900000003
+      },
+      {
+        "label": "inventory",
+        "method": "snapshot",
+        "start": 1661.571834,
+        "ms": 172.77441599999997
+      },
+      {
+        "label": "mailbox",
+        "method": "inbox",
+        "start": 1661.541167,
+        "ms": 196.79054199999996
+      },
+      {
+        "label": "inventory",
+        "method": "entries",
+        "start": 1661.586875,
+        "ms": 251.91445900000008
+      },
+      {
+        "label": "mailbox",
+        "method": "outbox",
+        "start": 1661.556792,
+        "ms": 353.31495799999993
+      },
+      {
+        "label": "contacts",
+        "method": "get",
+        "start": 2015.008084,
+        "ms": 86.70070799999985
+      },
+      {
+        "label": "contacts",
+        "method": "keyOf",
+        "start": 2101.886334,
+        "ms": 90.14383300000009
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2192.189209,
+        "ms": 100.71983300000011
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2192.203584,
+        "ms": 166.748333
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2192.21675,
+        "ms": 231.75287500000013
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2192.231917,
+        "ms": 298.670083
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2192.243959,
+        "ms": 365.1630829999999
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2192.256667,
+        "ms": 433.0894169999997
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2625.515459,
+        "ms": 103.75087499999972
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2625.529334,
+        "ms": 172.12004100000013
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2625.542334,
+        "ms": 241.0304159999996
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2625.55475,
+        "ms": 309.8179170000003
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2625.566834,
+        "ms": 379.76670799999965
+      },
+      {
+        "label": "mailbox",
+        "method": "take",
+        "start": 2625.579584,
+        "ms": 452.70716600000014
+      }
+    ]
+  }
+}

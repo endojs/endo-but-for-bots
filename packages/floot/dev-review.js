@@ -2,7 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import { M } from '@endo/patterns';
-import { reviewedChangeChart } from './review-charts.js';
+import { makeReviewedChangeChart } from './review-charts.js';
 
 const retry = harden({
   target: 'gate',
@@ -23,186 +23,203 @@ const candidate = harden({
   base: { $ctx: 'base' },
   round: { $ctx: 'round' },
 });
-const baseChart = reviewedChangeChart;
-const implement = baseChart.states.implement;
-const states = {
-  ...baseChart.states,
-  boot: {
-    ...baseChart.states.boot,
-    on: {
-      seed: [{ ...baseChart.states.boot.on.seed[0], target: 'resolve-base' }],
-    },
-  },
-  'resolve-base': {
-    entry: [
-      {
-        kind: 'invoke',
-        target: 'project',
-        method: 'revParse',
-        args: [{ $params: 'base' }],
-        outcome: 'base-pinned',
-        failure: 'base-failed',
+/**
+ * Build a dev-review chart with an optional implementation deadline.
+ * @param {{ implementationTimeoutMs?: number }} [options] - Infinity (default)
+ *   leaves implementation open until submission, rejection, or cancellation
+ */
+export const makeDevReviewChart = ({
+  implementationTimeoutMs = Infinity,
+} = {}) => {
+  const baseChart = makeReviewedChangeChart({
+    name: 'reviewed-change',
+    version: 1,
+    implementationTimeoutMs,
+  });
+  const implement = baseChart.states.implement;
+  const states = {
+    ...baseChart.states,
+    boot: {
+      ...baseChart.states.boot,
+      on: {
+        seed: [{ ...baseChart.states.boot.on.seed[0], target: 'resolve-base' }],
       },
-      { kind: 'after', ms: 3_600_000, emit: { type: 'base-timed-out' } },
-    ],
-    on: {
-      'set-remaining': implement.on['set-remaining'],
-      'base-pinned': [
-        {
-          target: 'implement',
-          assign: {
-            base: { $event: 'value.oid' },
-          },
-        },
-      ],
-      'base-timed-out': [
-        {
-          target: 'abandoned',
-          assign: {
-            reason: 'The project did not resolve the base before its deadline.',
-          },
-        },
-      ],
-      'base-failed': [
-        {
-          target: 'abandoned',
-          assign: { reason: 'The project base could not be resolved.' },
-        },
-      ],
     },
-  },
-  implement: {
-    ...implement,
-    entry: implement.entry.map(effect =>
-      effect.kind === 'ask' && effect.what !== undefined
-        ? {
-            ...effect,
-            what: {
-              description: `${effect.what.description.replace(
-                '{$params.base}',
-                '{$ctx.base}',
-              )} Use the Git capability at petname {$params.projectName}. Commit the implementation before submitting its head object ID.`,
+    'resolve-base': {
+      entry: [
+        {
+          kind: 'invoke',
+          target: 'project',
+          method: 'revParse',
+          args: [{ $params: 'base' }],
+          outcome: 'base-pinned',
+          failure: 'base-failed',
+        },
+        { kind: 'after', ms: 3_600_000, emit: { type: 'base-timed-out' } },
+      ],
+      on: {
+        'set-remaining': implement.on['set-remaining'],
+        'base-pinned': [
+          {
+            target: 'implement',
+            assign: {
+              base: { $event: 'value.oid' },
             },
-          }
-        : effect,
-    ),
-    on: {
-      ...implement.on,
-      submitted: [
-        { ...implement.on.submitted[0], target: 'pin-candidate' },
-        ...implement.on.submitted.slice(1),
-      ],
-    },
-  },
-  'pin-candidate': {
-    entry: [
-      {
-        kind: 'invoke',
-        target: 'project',
-        method: 'pinCandidate',
-        args: [{ $ctx: 'head' }],
-        outcome: 'candidate-pinned',
-        failure: 'candidate-invalid',
+          },
+        ],
+        'base-timed-out': [
+          {
+            target: 'abandoned',
+            assign: {
+              reason:
+                'The project did not resolve the base before its deadline.',
+            },
+          },
+        ],
+        'base-failed': [
+          {
+            target: 'abandoned',
+            assign: { reason: 'The project base could not be resolved.' },
+          },
+        ],
       },
-      { kind: 'after', ms: 3_600_000, emit: { type: 'candidate-timed-out' } },
-    ],
-    on: {
-      'set-remaining': implement.on['set-remaining'],
-      'candidate-pinned': [
-        { target: 'review', assign: { head: { $event: 'value.oid' } } },
-      ],
-      'candidate-invalid': [retry],
-      'candidate-timed-out': [retry],
     },
-  },
-  review: {
-    ...baseChart.states.review,
-    regions: {
-      ...baseChart.states.review.regions,
-      input: {
-        ...baseChart.states.review.regions.input,
-        base: { $ctx: 'base' },
+    implement: {
+      ...implement,
+      entry: implement.entry.map(effect =>
+        effect.kind === 'ask' && effect.what !== undefined
+          ? {
+              ...effect,
+              what: {
+                description: `${effect.what.description.replace(
+                  '{$params.base}',
+                  '{$ctx.base}',
+                )} Use the Git capability at petname {$params.projectName}. Commit the implementation before submitting its head object ID.`,
+              },
+            }
+          : effect,
+      ),
+      on: {
+        ...implement.on,
+        submitted: [
+          { ...implement.on.submitted[0], target: 'pin-candidate' },
+          ...implement.on.submitted.slice(1),
+        ],
       },
-      chart: {
-        ...baseChart.states.review.regions.chart,
-        states: {
-          ...baseChart.states.review.regions.chart.states,
-          reviewing: {
-            ...baseChart.states.review.regions.chart.states.reviewing,
-            entry:
-              baseChart.states.review.regions.chart.states.reviewing.entry.map(
-                effect =>
-                  effect.kind === 'ask' && effect.what !== undefined
-                    ? {
-                        ...effect,
-                        what: {
-                          description: `${
-                            effect.what.description
-                          } Use the read-only Git capability at petname {$params.projectName}; inspect filesystemAt(head) and the diff from base. Review the pinned commit, not the moving worktree.`,
-                        },
-                      }
-                    : effect,
-              ),
+    },
+    'pin-candidate': {
+      entry: [
+        {
+          kind: 'invoke',
+          target: 'project',
+          method: 'pinCandidate',
+          args: [{ $ctx: 'head' }],
+          outcome: 'candidate-pinned',
+          failure: 'candidate-invalid',
+        },
+        { kind: 'after', ms: 3_600_000, emit: { type: 'candidate-timed-out' } },
+      ],
+      on: {
+        'set-remaining': implement.on['set-remaining'],
+        'candidate-pinned': [
+          { target: 'review', assign: { head: { $event: 'value.oid' } } },
+        ],
+        'candidate-invalid': [retry],
+        'candidate-timed-out': [retry],
+      },
+    },
+    review: {
+      ...baseChart.states.review,
+      regions: {
+        ...baseChart.states.review.regions,
+        input: {
+          ...baseChart.states.review.regions.input,
+          base: { $ctx: 'base' },
+        },
+        chart: {
+          ...baseChart.states.review.regions.chart,
+          states: {
+            ...baseChart.states.review.regions.chart.states,
+            reviewing: {
+              ...baseChart.states.review.regions.chart.states.reviewing,
+              entry:
+                baseChart.states.review.regions.chart.states.reviewing.entry.map(
+                  effect =>
+                    effect.kind === 'ask' && effect.what !== undefined
+                      ? {
+                          ...effect,
+                          what: {
+                            description: `${
+                              effect.what.description
+                            } Use the read-only Git capability at petname {$params.projectName}; inspect filesystemAt(head) and the diff from base. Review the pinned commit, not the moving worktree.`,
+                          },
+                        }
+                      : effect,
+                ),
+            },
           },
         },
       },
     },
-  },
-  approved: {
-    entry: [
-      {
-        kind: 'ask',
-        to: 'initiator',
-        what: {
-          description:
-            'Your design {$params.title} is ready after implementation and review. Candidate {$ctx.head}, base {$ctx.base}. Tell the user the reviewed candidate is ready; no merge or deployment has occurred. Acknowledge this notice with resolveRequest and { acknowledged: true }.',
+    approved: {
+      entry: [
+        {
+          kind: 'ask',
+          to: 'initiator',
+          what: {
+            description:
+              'Your design {$params.title} is ready after implementation and review. Candidate {$ctx.head}, base {$ctx.base}. Tell the user the reviewed candidate is ready; no merge or deployment has occurred. Acknowledge this notice with resolveRequest and { acknowledged: true }.',
+          },
+          outcome: 'notice-delivered',
+          failure: 'notice-failed',
         },
-        outcome: 'notice-delivered',
-        failure: 'notice-failed',
+      ],
+      on: {
+        'notice-delivered': [{ target: 'ready-notified' }],
+        'notice-failed': [{ target: 'notification-failed' }],
       },
-    ],
-    on: {
-      'notice-delivered': [{ target: 'ready-notified' }],
-      'notice-failed': [{ target: 'notification-failed' }],
     },
-  },
-  abandoned: {
-    entry: [
-      {
-        kind: 'ask',
-        to: 'initiator',
-        what: {
-          description:
-            'The design {$params.title} did not produce a ready candidate: {$ctx.reason}. Latest feedback: {$ctx.feedback}. Tell the user and acknowledge this notice with resolveRequest and { acknowledged: true }.',
+    abandoned: {
+      entry: [
+        {
+          kind: 'ask',
+          to: 'initiator',
+          what: {
+            description:
+              'The design {$params.title} did not produce a ready candidate: {$ctx.reason}. Latest feedback: {$ctx.feedback}. Tell the user and acknowledge this notice with resolveRequest and { acknowledged: true }.',
+          },
+          outcome: 'stopped-notice-delivered',
+          failure: 'notice-failed',
         },
-        outcome: 'stopped-notice-delivered',
-        failure: 'notice-failed',
+      ],
+      on: {
+        'stopped-notice-delivered': [{ target: 'stopped-notified' }],
+        'notice-failed': [{ target: 'notification-failed' }],
       },
-    ],
-    on: {
-      'stopped-notice-delivered': [{ target: 'stopped-notified' }],
-      'notice-failed': [{ target: 'notification-failed' }],
     },
-  },
-  'ready-notified': { final: true, output: candidate },
-  'stopped-notified': {
-    final: true,
-    output: { status: 'abandoned', reason: { $ctx: 'reason' } },
-  },
-  'notification-failed': {
-    final: true,
-    output: { status: 'notification-failed', head: { $ctx: 'head' } },
-  },
-};
+    'ready-notified': { final: true, output: candidate },
+    'stopped-notified': {
+      final: true,
+      output: { status: 'abandoned', reason: { $ctx: 'reason' } },
+    },
+    'notification-failed': {
+      final: true,
+      output: { status: 'notification-failed', head: { $ctx: 'head' } },
+    },
+  };
 
-export const devReviewChart = harden({
-  ...baseChart,
-  name: 'dev-review',
-  version: 1,
-  params: M.and(baseChart.params, M.splitRecord({ projectName: M.string() })),
-  context: { ...baseChart.context, base: '' },
-  states,
-});
+  return harden({
+    ...baseChart,
+    name: 'dev-review',
+    version: 1,
+    params: M.and(baseChart.params, M.splitRecord({ projectName: M.string() })),
+    context: { ...baseChart.context, base: '' },
+    states,
+  });
+};
+harden(makeDevReviewChart);
+
+export const devReviewChart = makeDevReviewChart();
 harden(devReviewChart);
 
 /**
@@ -221,6 +238,8 @@ harden(devReviewChart);
  * @param {any[]} options.reviewers - reviewer guest powers
  * @param {any} options.initiator - originating Floot guest powers
  * @param {any} options.operator - human operator mail handle
+ * @param {number} [options.implementationTimeoutMs] - optional positive integer
+ *   milliseconds per implementation attempt; defaults to Infinity (no deadline)
  */
 export const provisionDevReview = async ({
   host,
@@ -231,7 +250,9 @@ export const provisionDevReview = async ({
   reviewers,
   initiator,
   operator,
+  implementationTimeoutMs = Infinity,
 }) => {
+  const chart = makeDevReviewChart({ implementationTimeoutMs });
   if (!/^[a-z][a-z0-9-]{0,79}$/.test(projectName))
     throw Error('Invalid project petname');
   if (
@@ -281,7 +302,7 @@ export const provisionDevReview = async ({
   }
   const result = await E(service).makeFactory(
     harden({
-      chart: devReviewChart,
+      chart,
       params: { projectName, reviewers: names },
       endowments,
     }),

@@ -67,8 +67,6 @@ const isDecodedTrapMethod = value =>
   isArray(value[1]) &&
   (value[0] === 'next' || value[0] === 'return' || value[0] === 'throw');
 
-const WELL_KNOWN_SLOT_PROPERTIES = harden(['answerID', 'questionID', 'target']);
-
 const sink = () => {};
 harden(sink);
 
@@ -389,9 +387,7 @@ export const makeCapTP = (
   const send = obj => {
     sendStats[obj.type] = (sendStats[obj.type] || 0) + 1;
 
-    for (const prop of WELL_KNOWN_SLOT_PROPERTIES) {
-      sendSlot.add(obj[prop]);
-    }
+    // Commit the references that serializing this message's payload added.
     sendSlot.commit();
 
     // Don't throw here if unplugged, just don't send.
@@ -763,8 +759,17 @@ export const makeCapTP = (
         // We are dropping the last known reference to this slot.
         gcStats.DROPPED += 1;
         slotToNumRefs.delete(slot);
+        const exported = importExportTables.getExport(slot);
+        // The local object may outlive its remote references. Forget its
+        // reverse mapping too, so a later export allocates a fresh live slot.
+        if (exported !== undefined && valToSlot.get(exported) === slot) {
+          valToSlot.delete(exported);
+        }
         importExportTables.deleteExport(slot);
-        answers.delete(slot);
+        // Answers use the peer's question ID, not a locally reversed export
+        // slot. Deleting q+N would leave the stored q-N promise (and its
+        // fulfilled payload) retained for the lifetime of this connection.
+        answers.delete(slotID);
       }
     },
     // Remote is invoking a method or retrieving a property.
@@ -1010,9 +1015,8 @@ export const makeCapTP = (
         return false;
       }
 
-      for (const prop of WELL_KNOWN_SLOT_PROPERTIES) {
-        recvSlot.add(obj[prop]);
-      }
+      // These headers name a question or target, not a reference transfer.
+      // Payload references are already counted by convertSlotToVal.
       fn(obj);
       recvSlot.commit();
 

@@ -159,6 +159,25 @@ describe('preact/secure: common event handlers', () => {
     expect(picks).to.deep.equal(['green', 'blue']);
   });
 
+  it('textarea events expose a frozen primitive caret snapshot', () => {
+    let target;
+    renderConfined(
+      h('textarea', {
+        onInput: e => {
+          target = e.target;
+        },
+      }),
+      scratch,
+    );
+    const input = scratch.querySelector('textarea');
+    input.value = 'hello @counter';
+    input.setSelectionRange(8, 8);
+    fire(input, 'input');
+    expect(target.selectionStart).to.equal(8);
+    expect(Object.isFrozen(target)).to.equal(true);
+    expect(target.setSelectionRange).to.equal(undefined);
+  });
+
   it('native <select> dropdown reports e.target.value and selectedIndex', () => {
     let lastValue;
     let lastIndex;

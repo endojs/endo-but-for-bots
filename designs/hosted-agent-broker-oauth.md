@@ -52,9 +52,15 @@ A user who already pays for a ChatGPT or Claude subscription cannot use it to
 drive a hosted agent.
 The API-key broker in `@endo/hosted-agent` keeps the credential out of the slice
 but bills usage-based API credit.
-The Claude backend in `@endo/claude-sandbox` accepts a subscription token but
-materializes it into the slice's environment.
-So the secure path has no subscription and the subscription path is not secure.
+The Claude backend in `@endo/claude-sandbox` accepts a subscription token but,
+when this was written, materialized it into the slice's environment.
+So the secure path had no subscription and the subscription path was not secure.
+(Status, 2026-09-14: that backend now runs behind the shared broker, which
+keeps the token on the host and presents it upstream as a Bearer token with
+the OAuth beta capability, forwarding the request body but none of the CLI's
+own headers; see `packages/claude-sandbox/README.md`.
+That is the "synthesise it" shape discussed below, and it is unproven until a
+live session runs through it.)
 
 `SUBSCRIPTION-AUTH.md` states the contract both would have to meet: the broker
 alone stores, rotates, and refreshes the credential; the slice receives a
@@ -210,7 +216,8 @@ it.
 and "this token authenticates with your Claude subscription and requires a Pro,
 Max, Team, or Enterprise plan"
 ([Authentication](https://code.claude.com/docs/en/authentication)).
-It is exactly what `@endo/claude-sandbox` injects into its slice today.
+It is exactly what `@endo/claude-sandbox` injected into its slice when this
+was written, and what its broker now holds on the host.
 
 So the obstacle is not that a subscription credential cannot be moved.
 It is that every documented use of that token puts it in the *client*: it is

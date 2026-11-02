@@ -6,7 +6,7 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { provideAuthSecret } from './src/credentials.js';
+import { provideAuthSecret, hasAuthSecret } from './src/credentials.js';
 
 const ProviderFactoryInterface = M.interface('LLMProviderFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
@@ -55,6 +55,13 @@ export const make = (guestPowers, _context) => {
             'Examples: qwen3, claude-sonnet-4-6-20250514, gemini-2.5-flash',
         },
         {
+          name: 'authSecretName',
+          label: 'Existing Secrets name (without secrets/ prefix)',
+          default: '',
+          example:
+            'openrouter-auth — leave the API token blank when using this',
+        },
+        {
           name: 'authToken',
           label: 'API auth token',
           default: '',
@@ -90,11 +97,17 @@ export const make = (guestPowers, _context) => {
       } else if (msg.type === 'value' && msg.replyTo === formMessageId) {
         try {
           const config =
-            /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
+            /** @type {{ name: string, host: string, model: string, authToken: string, authSecretName?: string }} */ (
               await E(powers).lookupById(msg.valueId)
             );
 
           const { name, host, model, authToken } = config;
+          const openRouter = /^https:\/\/openrouter\.ai(?:\/|$)/.test(host);
+          if (openRouter && (!model || !model.includes('/'))) {
+            throw Error(
+              'OpenRouter requires an organization-qualified model ID',
+            );
+          }
 
           // The token goes to the daemon's secret manager, not into the config
           // value: a value in the pet store is plaintext, cannot be rotated or
@@ -104,38 +117,35 @@ export const make = (guestPowers, _context) => {
           // delegates the capability.
           /** @type {string | undefined} */
           let authSecretName;
-          /** @type {string | undefined} */
-          let secretFailure;
-          if (authToken) {
-            try {
-              ({ secretName: authSecretName } = await provideAuthSecret({
-                hostAgent,
-                name: `${name}-auth`,
-                description: `LLM auth token for provider "${name}"`,
-                token: authToken,
-              }));
-            } catch (secretError) {
-              // `@secrets` is carried only by the root host. Say so rather than
-              // silently storing a plaintext token as if nothing happened.
-              secretFailure =
-                secretError instanceof Error
-                  ? secretError.message
-                  : String(secretError);
-              console.error(
-                `[llm-provider-factory] secret manager unavailable (${secretFailure}); storing a plaintext token for "${name}"`,
+          if (config.authSecretName) {
+            if (authToken)
+              throw Error(
+                'Choose an existing secret OR supply a token, not both',
               );
+            if (
+              !(await hasAuthSecret({ hostAgent, name: config.authSecretName }))
+            ) {
+              throw Error('The selected auth secret does not exist');
             }
+            authSecretName = config.authSecretName;
+          }
+          if (openRouter && !authSecretName && !authToken) {
+            throw Error('OpenRouter requires an API key in Secrets');
+          }
+          if (authToken) {
+            ({ secretName: authSecretName } = await provideAuthSecret({
+              hostAgent,
+              name: `${name}-auth`,
+              description: `LLM auth token for provider "${name}"`,
+              token: authToken,
+            }));
           }
 
           await E(hostAgent).storeValue(
             harden({
               host,
               model,
-              ...(authSecretName
-                ? { authSecretName }
-                : authToken
-                  ? { authToken }
-                  : {}),
+              ...(authSecretName ? { authSecretName } : {}),
             }),
             name,
           );
@@ -144,15 +154,9 @@ export const make = (guestPowers, _context) => {
           await E(powers).reply(
             msg.number,
             [
-              // The operator, not just the caplet's stderr, is told when the
-              // token was stored in plaintext: what they lose is rotation,
-              // revocation, and an audit trail, and only they can fix it.
-              // eslint-disable-next-line no-nested-ternary
               authSecretName
                 ? `Provider "${name}" created successfully; its token is held as secrets/${authSecretName}.`
-                : secretFailure
-                  ? `Provider "${name}" created, but the secret manager was unavailable (${secretFailure}), so its token is stored in plaintext under the pet name "${name}". That token cannot be rotated, revoked, or audited. Re-run this from the daemon's root host to move it into @secrets.`
-                  : `Provider "${name}" created successfully.`,
+                : `Provider "${name}" created successfully.`,
             ],
             [],
             [],

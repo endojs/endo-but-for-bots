@@ -46,12 +46,13 @@
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "ollama": "^0.6.4",
-    "openai": "^7.32.0"
+    "openai": "^7.43.0"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",

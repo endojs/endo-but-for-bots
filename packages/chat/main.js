@@ -16,42 +16,43 @@ import './pre-lockdown.js';
 import '@endo/init';
 
 import { connectToGateway } from './connection.js';
+import { connectToAndroid } from './android-connection.js';
 import { make } from './chat.js';
 
 // Whylip ships its own stylesheet. The `@endo/space-whylip` package does no
 // rendering and deliberately avoids a JS CSS side-effect import (so it stays
 // loadable under plain Node / tsc / AVA); the host bundles the stylesheet here
 // instead. This import is Vite-only — no test loads `main.js`.
-// eslint-disable-next-line import/no-unresolved
+
 import '@endo/space-whylip/whylip.css';
 
 // The peers view (`@endo/space-peers`) likewise does no rendering and
 // ships its stylesheet via the `./peers.css` package export; the host bundles
 // it here. Vite-only — no test loads `main.js`.
-// eslint-disable-next-line import/no-unresolved
+
 import '@endo/space-peers/peers.css';
 
 // The Floot view (`@endo/space-floot`) is a pure confined component and ships
 // its stylesheet via the `./floot.css` package export; the host bundles it
 // here (the old imperative floot-component carried inline <style>). Vite-only —
 // no test loads `main.js`.
-// eslint-disable-next-line import/no-unresolved
+
 import '@endo/space-floot/floot.css';
 
 // The workflow space ('@endo/space-workflow') is likewise a pure confined
 // component package; its stylesheet ships via the package export map.
-// eslint-disable-next-line import/no-unresolved
+
 import '@endo/space-workflow/workflow.css';
 
 // The channel space family (`@endo/space-channel`) ships its stylesheet via the
 // `./channel.css` package export (previously a `<link>` in index.html). Vite-only.
-// eslint-disable-next-line import/no-unresolved
+
 import '@endo/space-channel/channel.css';
 
 // The hosted-Endo management view (`@endo/space-endo-mgmt`) ships its
 // stylesheet via the `./mgmt.css` package export; the host bundles it here.
 // Vite-only — no test loads `main.js`.
-// eslint-disable-next-line import/no-unresolved
+
 import '@endo/space-endo-mgmt/mgmt.css';
 
 // Delays before each reconnect attempt, walked in order and then held at the
@@ -87,6 +88,7 @@ const isElectronMode =
 // and agent ID in the fragment so the bearer-token-like agent ID is
 // never sent over HTTP.
 const urlParams = new URLSearchParams(window.location.hash.slice(1));
+const androidBridge = /** @type {any} */ (window).AndroidEndo;
 const gateway = urlParams.get('gateway');
 const agent = urlParams.get('agent');
 
@@ -94,7 +96,7 @@ const agent = urlParams.get('agent');
 // which will redirect back with the config in the fragment.
 // Guard against infinite loops: only attempt the redirect once per page load.
 // In Electron mode, /dev is not available — show an error instead.
-if (!gateway || !agent) {
+if (!androidBridge && (!gateway || !agent)) {
   if (!isElectronMode && !sessionStorage.getItem('endo-dev-attempted')) {
     sessionStorage.setItem('endo-dev-attempted', '1');
     console.log('[Chat] No config in fragment, trying /dev...');
@@ -112,7 +114,7 @@ sessionStorage.removeItem('endo-dev-attempted');
 
 console.log('[Chat] Starting application...');
 console.log(`[Chat] Gateway: ${gateway}`);
-console.log(`[Chat] Agent: ${agent.slice(0, 16)}...`);
+console.log(`[Chat] Agent: ${(agent || 'local').slice(0, 16)}...`);
 
 /**
  * Show reconnecting UI overlay.
@@ -255,7 +257,7 @@ function reconnectInElectronMode() {
 
     try {
       // Re-run the full connect-and-run flow.
-      await connectAndRun(); // eslint-disable-line no-use-before-define
+      await connectAndRun();
     } catch {
       scheduleAttempt(tryConnect);
     }
@@ -289,15 +291,16 @@ const startReconnection = () => {
  * Handles reconnection on disconnect.
  */
 async function connectAndRun() {
-  document.body.innerHTML = `
-    <h1>Connecting to Endo Gateway…</h1>
-    <p>Gateway: <code>${gateway}</code></p>
-  `;
+  document.body.replaceChildren();
+  const heading = document.createElement('h1');
+  heading.textContent = androidBridge
+    ? 'Connecting to this phone’s Endo…'
+    : 'Connecting to Endo Gateway…';
+  document.body.append(heading);
 
-  const connection = connectToGateway({
-    gateway: String(gateway),
-    agent: String(agent),
-  });
+  const connection = androidBridge
+    ? connectToAndroid(androidBridge, crypto.randomUUID())
+    : connectToGateway({ gateway: String(gateway), agent: String(agent) });
 
   let powers;
   try {

@@ -217,6 +217,38 @@ test('a failed load is not cached; a later read retries', async t => {
   t.is(counts.list, 2, 'the failed load did not poison the cache');
 });
 
+test('one rejected retained-node lookup fails the whole load and can retry', async t => {
+  let failNextLookup = true;
+  const { powers, counts } = makeMockPowers({
+    beforeLookup: () => {
+      if (failNextLookup) {
+        failNextLookup = false;
+        throw Error('node lookup unavailable');
+      }
+    },
+  });
+  const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
+  const root = await tree.addNode(null, [{ role: 'system', content: 's' }]);
+  const child = await tree.addNode(root.id, [], { inboundNumber: 1n });
+  await t.throwsAsync(() => tree.getNodes(), {
+    message: /node lookup unavailable/,
+  });
+  t.deepEqual(
+    (await tree.getNodes()).map(node => node.id),
+    [root.id, child.id],
+  );
+  t.is(counts.list, 2);
+});
+
+test('malformed retained nodes fail closed rather than disappearing from the index', async t => {
+  const { powers, store } = makeMockPowers();
+  store.set('ct-broken', harden({ id: 'different' }));
+  const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
+  await t.throwsAsync(() => tree.getNodes(), {
+    message: /Invalid retained conversation node/,
+  });
+});
+
 test('getNode falls back to a lookup for a node another writer added', async t => {
   // The index is a snapshot, so it deliberately does not observe a second
   // writer. `getNode` covers that with a direct lookup on a miss — the escape

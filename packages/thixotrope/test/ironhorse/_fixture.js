@@ -9,13 +9,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeThixotropeDaemon } from '../../src/daemon.js';
-import { callerSource, counterSource } from '../../src/demo-counter-vats.js';
-import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
-import { makeFsStore } from '../../src/store-fs.js';
+import { makeThixotropeDaemon } from '../../src/core/daemon.js';
+import {
+  callerSource,
+  counterSource,
+} from '../../src/ironhorse/demo-counter-vats.js';
+import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { makeFsStore } from '../../src/store/store-fs.js';
+
+import { makeNodePowers } from '../../src/platform/node/powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import { ExecutionContext } from 'ava' */
-/** @import { WorkerEngine } from '../../src/worker-engine.js' */
+/** @import { WorkerEngine } from '../../src/core/worker-engine.js' */
 
 const packagePath = fileURLToPath(new URL('../../', import.meta.url));
 const workerBinary =
@@ -23,7 +30,10 @@ const workerBinary =
   join(packagePath, '../../target/release/thixotrope-ironhorse-worker');
 const bootPaths = harden(
   ['boot.js', 'worker-peer.js'].map(name =>
-    join(packagePath, 'dist-ironhorse', name),
+    join(
+      process.env.THIXOTROPE_BOOT_DIR ?? join(packagePath, 'dist-ironhorse'),
+      name,
+    ),
   ),
 );
 // Fail at module load, never turn missing CI artifacts into skipped tests.
@@ -52,8 +62,8 @@ export const makeFixture = async (
       await rm(statePath, { recursive: true, force: true });
     }
   });
-  const store = makeFsStore(statePath);
-  const rawEngine = makeIronhorseEngine({
+  const store = makeFsStore(nodePowers, statePath);
+  const rawEngine = makeIronhorseEngine(nodePowers, {
     workerBinary,
     bootPaths,
     storePath: join(statePath, 'heaps'),
@@ -80,6 +90,14 @@ export const makeFixture = async (
       let incrementCrank = false;
       const worker = await rawEngine.start({
         ...options,
+        onOutboundBatch:
+          options.onOutboundBatch === undefined
+            ? undefined
+            : frames => {
+                if (incrementCrank && frames.length > 0)
+                  inject('after commit before outbound', options.debugName);
+                options.onOutboundBatch?.(frames);
+              },
         onOutbound: frame => {
           if (incrementCrank)
             inject('after commit before outbound', options.debugName);
@@ -118,7 +136,7 @@ export const makeFixture = async (
     },
   });
   const start = () =>
-    makeThixotropeDaemon({
+    makeThixotropeDaemon(nodePowers, {
       store,
       engine,
       codec: syrupCodec,

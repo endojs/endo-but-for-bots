@@ -5,9 +5,48 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { isCredentialRejection } from './provider-broker.js';
+import {
+  isCredentialRejection,
+  isResponseLost,
+  isSubscriptionExhaustion,
+} from './provider-broker.js';
+import {
+  isSubscriptionExhausted,
+  rateLimitReadingFromHeaders,
+} from './rate-limit-headers.js';
 
 /** @import { UpstreamRequest } from './provider-broker.js' */
+
+/**
+ * Host-only failure metadata. Never includes request data, headers, URLs, or
+ * exception text. HTTP statuses are restricted to 100–599.
+ *
+ * `refusal` is the one exception to "no response bodies", and only ever a
+ * bounded prefix of a body that was REFUSED — never one that was served. A
+ * status alone cannot tell an operator whether an unentitled model, an
+ * undeclared beta capability or a malformed body caused a 400, and the
+ * upstream says so in words. It is screened for the credential the request
+ * carried, host-only, and emitted only when an observer is installed.
+ * @typedef {object} ProviderTransportDiagnostic
+ * @property {'request' | 'fetch' | 'response' | 'body' | 'timeout'} stage
+ * @property {number} [status]
+ * @property {string} [refusal]
+ * @property {string} [detail] Host-only: which request-stage check refused.
+ */
+
+/**
+ * What one response's headers said about the account that paid for it. Parsed
+ * figures only (`rate-limit-headers.js`); no header text.
+ *
+ * @typedef {object} ProviderAccountReading
+ * @property {{ windows: any[], limitReached: boolean, credits?: any }} rateLimits
+ * @property {number} status The response's HTTP status.
+ * @property {boolean} exhausted Whether this response refused the request
+ *   because the subscription's allowance is used up.
+ */
+
+/** Bounded prefix of a refused body kept for the host observer. */
+const REFUSAL_EXCERPT_BYTES = 1024;
 
 /**
  * Per-lease fetch transport. Fetch is an explicit trusted power, never ambient
@@ -23,12 +62,20 @@ import { isCredentialRejection } from './provider-broker.js';
  * @param {bigint} options.maxResponseBytes
  * @param {(callback: () => void, delay: number) => unknown} [options.setTimer]
  * @param {(timer: unknown) => void} [options.clearTimer]
+ * @param {(diagnostic: ProviderTransportDiagnostic) => void | Promise<void>} [options.onDiagnostic]
+ * @param {(reading: ProviderAccountReading) => void} [options.onReading]
+ *   Host-only. Called synchronously with what a response's rate-limit headers
+ *   say about the account, for every response that says anything, served or
+ *   refused, and before a refusal is thrown: a caller that handles `Provider
+ *   subscription exhausted` already has the reading that says until when.
  */
 export const makeProviderFetchTransport = ({
   fetch,
   timeoutMs,
   maxRequestBytes,
   maxResponseBytes,
+  onDiagnostic = undefined,
+  onReading = undefined,
   setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
   clearTimer = timer =>
     globalThis.clearTimeout(
@@ -48,6 +95,35 @@ export const makeProviderFetchTransport = ({
   let disposed = false;
   /** @type {Set<() => void>} */
   const pending = new Set();
+  /** @type {Set<Promise<any>>} */
+  const fetchingBodies = new Set();
+  /** @type {Set<Promise<void>>} Response acquisition through reader publication. */
+  const acquisitions = new Set();
+  /** @type {Set<Promise<void>>} Failures remain as uncertain cleanup proof. */
+  const bodyCancellations = new Set();
+  /** @param {() => Promise<void>} cancel */
+  const retainCancellation = cancel => {
+    let result;
+    try {
+      result = Promise.resolve(cancel());
+    } catch (error) {
+      result = Promise.reject(error);
+    }
+    bodyCancellations.add(result);
+    void result.then(
+      () => bodyCancellations.delete(result),
+      () => {},
+    );
+  };
+  // Match the broker's bounded admission envelope, not M.string's implicit
+  // 100,000-character default. The request's UTF-8 byte limit is still checked
+  // before fetch; 8MiB is the private provider pipe's maximum frame size.
+  const BodyShape = M.string({
+    stringLengthLimit: Math.max(
+      100_000,
+      Number(maxRequestBytes < 8_388_608n ? maxRequestBytes : 8_388_608n),
+    ),
+  });
   const transport = makeExo(
     'ProviderFetchTransport',
     M.interface('ProviderFetchTransport', {
@@ -56,7 +132,7 @@ export const makeProviderFetchTransport = ({
           url: M.string(),
           method: M.string(),
           headers: M.recordOf(M.string(), M.string()),
-          body: M.string(),
+          body: BodyShape,
           redirect: /** @type {const} */ ('error'),
           maxResponseBytes: M.bigint(),
         }),
@@ -67,7 +143,7 @@ export const makeProviderFetchTransport = ({
           url: M.string(),
           method: M.string(),
           headers: M.recordOf(M.string(), M.string()),
-          body: M.string(),
+          body: BodyShape,
           redirect: /** @type {const} */ ('error'),
           maxResponseBytes: M.bigint(),
         }),
@@ -77,8 +153,10 @@ export const makeProviderFetchTransport = ({
       /** @param {UpstreamRequest} request */
       async request(request) {
         !disposed || Fail`Provider transport disposed`;
+        let responded = false;
         try {
           const response = await E(transport).requestStream(request);
+          responded = true;
           const parts = [];
           for (;;) {
             // eslint-disable-next-line no-await-in-loop
@@ -88,9 +166,16 @@ export const makeProviderFetchTransport = ({
           }
           return harden({ status: response.status, body: parts.join('') });
         } catch (error) {
-          // The credential classification is the one detail worth preserving
-          // across the buffering wrapper; everything else collapses.
+          // The two classifications are the detail worth preserving across
+          // the buffering wrapper; everything else collapses.
           if (isCredentialRejection(error)) throw error;
+          if (isSubscriptionExhaustion(error)) throw error;
+          // A third, for whoever charges for the request: the provider had
+          // begun to answer, or was given the whole deadline to, so the work
+          // may well have been done though nothing of it arrived.
+          if (responded || isResponseLost(error)) {
+            return Fail`Provider response lost`;
+          }
           return Fail`Provider transport failed`;
         }
       },
@@ -100,12 +185,46 @@ export const makeProviderFetchTransport = ({
         const controller = new AbortController();
         /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
         let reader;
+        /** @type {ReadableStream<Uint8Array> | null | undefined} */
+        let responseBody;
         let finished = false;
+        let timedOut = false;
         let credentialRejected = false;
+        let subscriptionExhausted = false;
+        /** @type {ProviderTransportDiagnostic['stage']} */
+        let stage = 'request';
+        /** @type {number | undefined} */
+        let status;
+        let reported = false;
+        /** @type {string | undefined} */
+        let refusal;
+        /** @type {string | undefined} */
+        let detail;
+        const reportFailure = () => {
+          if (reported) return;
+          reported = true;
+          if (onDiagnostic === undefined) return;
+          try {
+            const diagnostic = harden({
+              stage,
+              ...(status === undefined ? {} : { status }),
+              ...(refusal === undefined ? {} : { refusal }),
+              ...(detail === undefined ? {} : { detail }),
+            });
+            // A host observer must not change request settlement or leak its
+            // own exception through the provider capability.
+            void Promise.resolve(onDiagnostic(diagnostic)).catch(() => {});
+          } catch (_error) {
+            // Diagnostics are best effort and silent by default.
+          }
+        };
+        let cancellationStarted = false;
         const cancelBody = () => {
-          if (reader) {
+          const active = reader ?? responseBody;
+          if (active && !cancellationStarted) {
+            cancellationStarted = true;
             // Cancellation is best effort and cannot extend the request deadline.
-            void reader.cancel().catch(() => {});
+            retainCancellation(() => active.cancel());
           }
         };
         /** @type {(error: Error) => void} */
@@ -114,10 +233,21 @@ export const makeProviderFetchTransport = ({
         const stopped = new Promise((_, reject) => {
           rejectStopped = reject;
         });
+        // How the response ended, for whoever accounts for it: `complete`
+        // only when the end of the body was reached. A deadline, a reset, a
+        // body that grew too large and a reader that was returned all close
+        // it too, and none of them is a response read to its end.
+        /** @type {(complete: boolean) => void} */
+        let resolveClosed;
+        const closed = new Promise(resolve => {
+          resolveClosed = complete => resolve(harden({ complete }));
+        });
         // A deadline may fire while the caller is not pulling.
         void stopped.catch(() => {});
-        const finish = () => {
+        const finish = (complete = false) => {
           finished = true;
+          // The first word stands: a later call cannot make it complete.
+          resolveClosed(complete);
           pending.delete(stop);
           clearTimer(timer);
           try {
@@ -133,9 +263,21 @@ export const makeProviderFetchTransport = ({
           finish();
         };
         pending.add(stop);
-        const timer = setTimer(stop, timeoutMs);
+        const timer = setTimer(() => {
+          timedOut = true;
+          stage = 'timeout';
+          reportFailure();
+          stop();
+        }, timeoutMs);
+        let releaseAcquisition = () => {};
+        /** @type {Promise<void>} */
+        const acquisition = new Promise(resolve => {
+          releaseAcquisition = () => resolve(undefined);
+        });
+        acquisitions.add(acquisition);
         try {
           const url = new URL(request.url);
+          detail = 'request shape';
           (url.protocol === 'https:' &&
             !url.username &&
             !url.password &&
@@ -148,22 +290,38 @@ export const makeProviderFetchTransport = ({
             typeof request.maxResponseBytes === 'bigint' &&
             request.maxResponseBytes > 0n) ||
             Fail`Invalid provider request`;
+          detail = undefined;
           const limit =
             request.maxResponseBytes < maxResponseBytes
               ? request.maxResponseBytes
               : maxResponseBytes;
           for (const [name, value] of Object.entries(request.headers)) {
-            ([
-              'authorization',
-              'x-api-key',
-              'anthropic-version',
-              'anthropic-beta',
-              'content-type',
-            ].includes(name) &&
-              typeof value === 'string' &&
-              /^[\x20-\x7e]*$/.test(value)) ||
-              Fail`Invalid provider header`;
+            // The last gate before the network checks that a header is SHAPED
+            // safely, not that its name was foreseen. Curating names here was
+            // the fourth copy of the same pinned list — after the route, the
+            // listener's path check and the beta capabilities — and each one
+            // turned a CLI release into an opaque outage. What the shape rules
+            // still guarantee is what matters: a name cannot contain a
+            // separator and a value cannot contain CR, LF or NUL, so no header
+            // can terminate itself or begin another. Which headers exist at all
+            // is decided by the broker, which screens the slice's set against
+            // BROKER_OWNED_HEADERS and applies the credential after it, and
+            // which ROUTE they may reach is decided by the broker too: the
+            // subscription headers used to be admitted here only for the fixed
+            // ChatGPT route, but the general name rule matches both of their
+            // names, so keeping that branch would only have read as a binding
+            // this layer no longer makes.
+            const nameOk = /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
+            // HTAB is legal in a field value; the point of the rule is that
+            // CR, LF and NUL are not.
+            const valueOk =
+              typeof value === 'string' && /^[\t\x20-\x7e]*$/.test(value);
+            if (!nameOk || !valueOk) {
+              detail = nameOk ? 'header value' : 'header name';
+            }
+            (nameOk && valueOk) || Fail`Invalid provider header`;
           }
+          stage = 'fetch';
           const fetching = Promise.resolve(
             fetch(url.href, {
               method: 'POST',
@@ -176,13 +334,33 @@ export const makeProviderFetchTransport = ({
               referrerPolicy: 'no-referrer',
             }),
           ).then(response => {
+            responseBody = response.body;
             if (finished || controller.signal.aborted) {
-              void response.body?.cancel().catch(() => {});
+              cancelBody();
               Fail`Provider transport stopped`;
             }
             return response;
           });
+          fetchingBodies.add(fetching);
+          void fetching.then(
+            () => fetchingBodies.delete(fetching),
+            () => fetchingBodies.delete(fetching),
+          );
           const response = await Promise.race([fetching, stopped]);
+          // Disposal can interleave after fetch resolved but before this
+          // continuation owns its reader. Never publish that late response.
+          if (finished || controller.signal.aborted) {
+            cancelBody();
+            Fail`Provider transport stopped`;
+          }
+          stage = 'response';
+          if (
+            Number.isInteger(response.status) &&
+            response.status >= 100 &&
+            response.status <= 599
+          ) {
+            status = response.status;
+          }
           // Only successful inference bodies are exposed; never redirects,
           // authentication challenges, response headers, or error payloads.
           reader = response.body?.getReader();
@@ -198,12 +376,90 @@ export const makeProviderFetchTransport = ({
           // second dispatch, a token exchange and a secret write, none of which
           // the request and cost quotas meter.
           if (response.status === 401) credentialRejected = true;
-          (Number.isInteger(response.status) &&
+          // The account reading, before the served check and before anything
+          // is thrown: a refusal is exactly where a drained subscription says
+          // when it comes back. Parsed figures only, and an observer's failure
+          // is its own.
+          {
+            const header = (/** @type {string} */ name) =>
+              response.headers.get(name);
+            subscriptionExhausted = isSubscriptionExhausted(
+              response.status,
+              header,
+            );
+            if (onReading !== undefined) {
+              try {
+                const accountReading = rateLimitReadingFromHeaders(header);
+                if (accountReading !== undefined) {
+                  // Synchronous by contract; an observer that returns a
+                  // promise anyway must not leave a rejection unhandled.
+                  const told = /** @type {unknown} */ (
+                    onReading(
+                      harden({
+                        ...accountReading,
+                        status: response.status,
+                        exhausted: subscriptionExhausted,
+                      }),
+                    )
+                  );
+                  void Promise.resolve(told).catch(() => {});
+                }
+              } catch (_error) {
+                // A reading is an observation; it never changes settlement.
+              }
+            }
+          }
+          const served =
+            Number.isInteger(response.status) &&
             response.status >= 200 &&
             response.status < 300 &&
             !response.redirected &&
-            response.body) ||
-            Fail`Invalid provider response`;
+            !!response.body;
+          if (!served && onDiagnostic !== undefined && reader) {
+            // Best effort, host-only, and strictly on the path where the
+            // response is already refused: one bounded chunk, screened for the
+            // credential this request carried in case the upstream echoed it
+            // back, and dropped entirely if anything goes wrong. It is
+            // attached to the diagnostic, never returned through the grant,
+            // and a failure here must not change how the request settles.
+            try {
+              const first = await Promise.race([reader.read(), stopped]);
+              const chunk = first?.value;
+              if (chunk) {
+                const text = new TextDecoder('utf-8').decode(
+                  chunk.subarray(0, REFUSAL_EXCERPT_BYTES),
+                );
+                const carried = ['authorization', 'x-api-key']
+                  .map(name => request.headers[name])
+                  .filter(value => typeof value === 'string' && value !== '');
+                const authorization = request.headers.authorization;
+                if (authorization?.startsWith('Bearer ')) {
+                  const token = authorization.slice('Bearer '.length);
+                  if (token !== '') carried.push(token);
+                }
+                // The excerpt or the first upstream chunk can end in the
+                // middle of a credential. Never publish that prefix either:
+                // withhold the longest suffix that could continue as one of
+                // the carried secrets. No additional body pull is needed.
+                let safeEnd = text.length;
+                for (const secret of carried) {
+                  const longest = Math.min(secret.length - 1, text.length);
+                  for (let length = longest; length > 0; length -= 1) {
+                    if (text.endsWith(secret.slice(0, length))) {
+                      safeEnd = Math.min(safeEnd, text.length - length);
+                      break;
+                    }
+                  }
+                }
+                refusal = carried.some(secret => text.includes(secret))
+                  ? '[redacted: upstream echoed the credential]'
+                  : text.slice(0, safeEnd);
+              }
+            } catch (_error) {
+              // A refused body the host could not read is simply not reported.
+            }
+          }
+          served || Fail`Invalid provider response`;
           const bodyReader = reader;
           if (!bodyReader) throw Fail`Missing provider body`;
           const length = response.headers.get('content-length');
@@ -211,6 +467,7 @@ export const makeProviderFetchTransport = ({
             (/^\d+$/.test(length) && BigInt(length) <= limit) ||
             Fail`Provider response too large`;
           const decoder = new TextDecoder('utf-8', { fatal: true });
+          stage = 'body';
           let bytes = 0n;
           let reading = false;
           const stream = makeExo(
@@ -234,7 +491,7 @@ export const makeProviderFetchTransport = ({
                     Fail`Provider transport stopped`;
                   if (chunk.done) {
                     const value = decoder.decode();
-                    finish();
+                    finish(true);
                     // The decoder can emit a final value; deliver it before EOF.
                     return harden({ done: value.length === 0, value });
                   }
@@ -247,6 +504,7 @@ export const makeProviderFetchTransport = ({
                     value: decoder.decode(chunk.value, { stream: true }),
                   });
                 } catch (_error) {
+                  reportFailure();
                   stop();
                   return Fail`Provider transport failed`;
                 } finally {
@@ -257,21 +515,47 @@ export const makeProviderFetchTransport = ({
               return: stop,
             },
           );
-          return harden({ status: response.status, reader: stream });
+          return harden({ status: response.status, reader: stream, closed });
         } catch (_error) {
+          reportFailure();
           stop();
           // This exact wording is the contract `isCredentialRejection` reads.
           if (credentialRejected) return Fail`Provider credential rejected`;
+          // And this one `isSubscriptionExhaustion`.
+          if (subscriptionExhausted) {
+            return Fail`Provider subscription exhausted`;
+          }
+          // And this one `isResponseLost`: the deadline passed with the
+          // request out.
+          if (timedOut) return Fail`Provider response lost`;
           return Fail`Provider transport failed`;
+        } finally {
+          acquisitions.delete(acquisition);
+          releaseAcquisition();
         }
       },
     },
   );
+  const dispose = () => {
+    disposed = true;
+    for (const stop of pending) stop();
+  };
   return harden({
     transport,
-    dispose: () => {
-      disposed = true;
-      for (const stop of pending) stop();
+    dispose,
+    // Unlike the synchronous fence, an owner's acknowledgement waits for
+    // late fetch bodies and cancellation. A rejected cancellation is sticky:
+    // it is not proof that the upstream resource has stopped.
+    close: async () => {
+      dispose();
+      await Promise.all([...acquisitions]);
+      await Promise.allSettled([...fetchingBodies]);
+      const results = await Promise.allSettled([...bodyCancellations]);
+      const failures = results.flatMap(result =>
+        result.status === 'rejected' ? [result.reason] : [],
+      );
+      if (failures.length)
+        throw AggregateError(failures, 'Provider transport cleanup uncertain');
     },
   });
 };

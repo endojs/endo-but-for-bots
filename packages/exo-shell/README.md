@@ -31,9 +31,29 @@ const { stdout, exitCode, truncated } = await shell.exec('grep', ['-r', 'TODO'])
 
 The exo enforces the guest-facing bounds: allowlist-before-spawn, argv arrays
 only (no shell string / interpolation), the policy's sanitized environment, a
-per-stream output cap with a `truncated` flag, and a timeout that a per-call
-value may only *narrow*. `inspect()` reveals the policy bounds but never the host
+per-stream output cap with a `truncated` flag, and a default timeout that a per-call
+`options.timeoutMs` may override, longer or shorter.
+The Floot development preset defaults to ten minutes (600,000 ms).
+Overrides must be positive integers up to 2**31 - 1 ms, the native timer range;
+zero does not disable the deadline.
+`inspect().timeoutMs` reveals the default, not a maximum, and never the host
 working directory, env passlist, or search path.
+
+Ordinary nonzero exits return `exitCode`; spawn, stream, stdin-close, transport,
+and timeout failures reject `exec` instead of returning a successful partial result.
+The deadline includes process admission, not only execution after spawn.
+Termination starts with `SIGTERM`, escalates to `SIGKILL`, and bounds the caller's
+wait for an unresponsive engine.
+A bounded rejection is not proof of native cleanup: the engine must retain
+ownership of late admission and failed termination.
+
+`@endo/sandbox/spawner.js` supplies `makeSandboxSpawner(slice)` for an already-granted
+local or remote sandbox slice.
+It closes stdin, adapts separate Endo byte readers, and forwards termination through
+eventual sends; native process ownership remains with the sandbox factory.
+Shell's output bound truncates capture while continuing to drain.
+A separate native safety ceiling may terminate the operation and reject `exec`.
+This adapter does not by itself provision a durable environment or restore live processes.
 
 ## The honest boundary
 

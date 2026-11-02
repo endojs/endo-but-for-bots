@@ -3,8 +3,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
 import { makeStreamingAgent } from '../agent.js';
+import { makeReplyChannel } from '../src/stream.js';
 
 const NODE = 'a'.repeat(64);
 const SELF = 'b'.repeat(64);
@@ -15,6 +17,53 @@ const HOST = 'd'.repeat(64);
 // because floot does not depend on `@endo/daemon`.
 /** @param {string} number */
 const locatorFor = number => `endo://${NODE}/${number}?type=handle`;
+
+test('first inbox message starts a dormant hosted backend', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let acquisitions = 0;
+  let sends = 0;
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: () => {
+        acquisitions += 1;
+        return harden({
+          async send(text) {
+            sends += 1;
+            t.regex(text, /hello dormant agent/);
+            const channel = makeBufferedReader();
+            channel.push({ type: 'text-delta', text: 'Awake.' });
+            channel.push({ type: 'end' });
+            return channel.reader;
+          },
+        });
+      },
+    },
+    'test prompt',
+    { journalPowers: mailbox.powers },
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  t.is(acquisitions, 0);
+  agent.startInbox();
+  mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['hello dormant agent'],
+  });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.is(acquisitions, 1);
+  t.is(sends, 1);
+  t.is((await agent.getTurns())[0].state, 'completed');
+});
 
 /**
  * Guest powers with a *live* mailbox: the stream stays open, and every send is
@@ -100,6 +149,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
    * @param {string} [options.replyTo]
    * @param {boolean} [options.done]
    * @param {bigint} [options.number]
+   * @param {string[]} [options.names]
+   * @param {string[]} [options.ids]
    */
   const deliver = ({
     from,
@@ -109,6 +160,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     number,
     type = 'package',
     description = '',
+    names = [],
+    ids = [],
   }) => {
     nextId += 1;
     const messageNumber = number === undefined ? nextNumber : number;
@@ -119,8 +172,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
       from,
       to: locatorFor(SELF),
       strings: harden([...strings]),
-      names: harden([]),
-      ids: harden([]),
+      names: harden([...names]),
+      ids: harden([...ids]),
       messageId: `in-${nextId}`,
       number: messageNumber,
       done,
@@ -224,6 +277,115 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   return { ...mailbox, deliver, powers, resolved, replay };
 };
 
+for (const fail of [false, true]) {
+  test(`automatic ${fail ? 'error' : 'success'} replies cannot start an agent reply loop`, async t => {
+    t.timeout(5000);
+    let calls = 0;
+    let echoes = 0;
+    const mailbox = makeLiveMailbox({
+      onEcho(message, box) {
+        // Model another agent automatically answering our answer. Bound the
+        // old broken behavior so the negative control cannot run forever.
+        if (message.replyTo && echoes < 5) {
+          echoes += 1;
+          box.deliver({
+            from: locatorFor(CHILD),
+            strings: ['Peer reply, including a possible provider error.'],
+            replyTo: message.messageId,
+          });
+        }
+      },
+    });
+    const agent = await makeStreamingAgent(
+      mailbox.powers,
+      undefined,
+      {
+        kind: 'provider',
+        provideProvider: () =>
+          harden({
+            async chatStream() {
+              calls += 1;
+              if (fail) throw Error('Input exceeds the model context window');
+              return { message: { role: 'assistant', content: 'Answer.' } };
+            },
+          }),
+      },
+      'test prompt',
+      { journalPowers: mailbox.powers },
+    );
+    t.teardown(async () => {
+      mailbox.close();
+      await agent.shutdown();
+    });
+    agent.startInbox();
+    mailbox.deliver({ from: locatorFor(HOST), strings: ['Initial task.'] });
+    t.true(await until(() => mailbox.dismissed.length > 0));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    t.is(calls, 1);
+    t.is(echoes, 1);
+    t.is((await agent.getTurns()).length, 1);
+    const reply = (await mailbox.powers.listMessages()).find(m => m.replyTo);
+    t.truthy(reply);
+    t.false(mailbox.dismissed.includes(reply.number));
+  });
+}
+
+test('unclaimed replies remain passive across restart and do not block fresh tasks', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let calls = 0;
+  /** @type {Parameters<typeof makeStreamingAgent>[2]} */
+  const config = {
+    kind: 'provider',
+    provideProvider: () =>
+      harden({
+        async chatStream() {
+          calls += 1;
+          return {
+            message: { role: 'assistant', content: 'Fresh task done.' },
+          };
+        },
+      }),
+  };
+  const open = () =>
+    makeStreamingAgent(mailbox.powers, undefined, config, 'test prompt', {
+      journalPowers: mailbox.powers,
+    });
+  let agent = await open();
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const reply = mailbox.deliver({
+    from: locatorFor(CHILD),
+    strings: ['Late result.'],
+    replyTo: 'old-request',
+    names: ['repository'],
+    ids: ['read-only-repository'],
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  t.is(calls, 0);
+  t.false(mailbox.dismissed.includes(reply.number));
+  mailbox.close();
+  await agent.shutdown();
+  mailbox.replay();
+  agent = await open();
+  agent.startInbox();
+  const task = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['Fresh task.'],
+  });
+  t.true(await until(() => mailbox.dismissed.includes(task.number)));
+  t.is(calls, 1);
+  t.false(mailbox.dismissed.includes(reply.number));
+  t.deepEqual(
+    (await mailbox.powers.listMessages()).find(m => m.number === reply.number)
+      .names,
+    ['repository'],
+  );
+});
+
 /** Timers that never fire, so a test asserts on the answer, not the deadline. */
 const inertTimers = /** @type {any} */ (
   harden({
@@ -310,9 +472,16 @@ test('a mail turn blocked on askSubagent still observes the reply', async t => {
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
-    harden({ spawner: stubSpawner, timers: inertTimers }),
+    {
+      journalPowers: mailbox.powers,
+      spawner: stubSpawner,
+      timers: inertTimers,
+    },
   );
   agent.startInbox();
   t.teardown(async () => {
@@ -355,9 +524,12 @@ test('a partial message does not swallow its settled revision', async t => {
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   t.teardown(async () => {
@@ -388,6 +560,185 @@ test('a partial message does not swallow its settled revision', async t => {
   await agent.shutdown();
 });
 
+test('poisoned journal preserves queued mail and shutdown releases its readiness wait', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let turns = 0;
+  const journalValues = new Map();
+  const journalPowers = Far('UncertainJournalStorage', {
+    list: () => harden([...journalValues.keys()]),
+    lookup: name => journalValues.get(name),
+    storeValue: (value, name) => {
+      journalValues.set(name, value);
+      throw Error('Lost journal acknowledgement');
+    },
+  });
+  const provider = makeScriptedProvider([
+    () => {
+      turns += 1;
+      return harden({
+        message: { role: 'assistant', content: 'ack' },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+    },
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
+    'test',
+    harden({ timers: inertTimers, journalPowers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  // Commit the dispatch but lose its acknowledgement before provider execution.
+  // This incarnation cannot safely recover by simply acknowledging a turn.
+  await t.throwsAsync(
+    agent.converse('UI operation', makeReplyChannel().writer),
+    { message: /Lost journal acknowledgement/ },
+  );
+  t.is(journalValues.size, 1);
+  t.is([...journalValues.values()][0].type, 'begin');
+  agent.startInbox();
+  const message = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['queued work'],
+  });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(turns, 0);
+  t.false(mailbox.dismissed.includes(message.number));
+  t.is(mailbox.sent.length, 0);
+  await t.throwsAsync(agent.resolveTurn('1', 'External effects checked'), {
+    message: /uncertain storage/,
+  });
+  // Do not close the mailbox first: shutdown must release its own readiness wait.
+  await agent.shutdown();
+  t.is(turns, 0);
+  t.false(mailbox.dismissed.includes(message.number));
+  t.is(mailbox.sent.length, 0);
+  t.is(journalValues.size, 1);
+});
+
+test('unrelated queued mail proceeds after UI uncertainty without resolving or replaying it', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  const first = makeBufferedReader();
+  let sends = 0;
+  const hostedClient = harden({
+    async interrupt() {
+      await null;
+    },
+    async send() {
+      sends += 1;
+      if (sends === 1) return first.reader;
+      const completed = makeBufferedReader();
+      completed.push({ type: 'text-delta', text: 'Mail completed once' });
+      completed.push({ type: 'end' });
+      return completed.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'test',
+    { journalPowers: mailbox.powers, timers: inertTimers },
+  );
+  t.teardown(async () => {
+    first.push({ type: 'end' });
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const uiFailed = t.throwsAsync(
+    agent.converse('UI operation', makeReplyChannel().writer),
+    { message: /outcome unknown|unsettled tool/i },
+  );
+  t.true(await until(() => sends === 1));
+  const mail = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['queued mail'],
+  });
+  // Mail waits behind the active UI turn, but historical uncertainty alone
+  // must not prevent its independent dispatch after that turn settles.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  first.push({ type: 'tool-call', id: 'native', name: 'shell', args: '{}' });
+  first.push({ type: 'end' });
+  await uiFailed;
+  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
+  t.is(sends, 2);
+  const [unknown] = await agent.getTurns();
+  t.is(unknown.state, 'outcome-unknown');
+  t.is(unknown.resolution, undefined);
+  t.is((await agent.getTurns())[1].state, 'completed');
+  await agent.resolveTurn(
+    unknown.turnId,
+    'Checked UI operation effects independently',
+  );
+  t.is(sends, 2);
+  t.is((await agent.getTurns()).length, 2);
+});
+
+test('acknowledging an admitted mail turn with unknown effects never replays it', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let sends = 0;
+  const hostedClient = harden({
+    async interrupt() {
+      await null;
+    },
+    async send() {
+      sends += 1;
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'tool-call',
+        id: 'native',
+        name: 'shell',
+        args: '{}',
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'test',
+    { journalPowers: mailbox.powers, timers: inertTimers },
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const mail = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['perform external effect'],
+  });
+  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
+  const [unknown] = await agent.getTurns();
+  t.is(unknown.state, 'outcome-unknown');
+  t.is(sends, 1);
+  await agent.resolveTurn(
+    unknown.turnId,
+    'Checked external effect; do not replay',
+  );
+  mailbox.replay();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(sends, 1, 'acknowledgment must not retry an admitted failed turn');
+  t.is((await agent.getTurns()).length, 1);
+  t.is(
+    mailbox.sent.filter(message => message.replyTo === mail.number).length,
+    1,
+  );
+});
+
 test('a backlog larger than any bound is answered, not declined', async t => {
   t.timeout(30_000);
   const mailbox = makeLiveMailbox();
@@ -404,9 +755,12 @@ test('a backlog larger than any bound is answered, not declined', async t => {
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   t.teardown(async () => {
@@ -450,9 +804,12 @@ test('a completed turn is answered even if shutdown starts mid-drain', async t =
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   t.teardown(() => mailbox.close());
@@ -491,9 +848,12 @@ test('a session with a quiet inbox shuts down without waiting for it', async t =
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   // Let the pump reach its parked read.
@@ -543,9 +903,12 @@ test('workflow requests reach Floot as tasks and settle with typed verdicts', as
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Reviewer',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   t.teardown(async () => {
     mailbox.close();
@@ -600,9 +963,15 @@ for (const acknowledge of [false, true]) {
     const agent = await makeStreamingAgent(
       mailbox.powers,
       undefined,
-      { provider: makeScriptedProvider(acknowledge ? [answer, fail] : [fail]) },
+      {
+        kind: 'provider',
+        provideProvider: (
+          value => () =>
+            value
+        )(makeScriptedProvider(acknowledge ? [answer, fail] : [fail])),
+      },
       'Originating conversation',
-      harden({ timers: inertTimers }),
+      { journalPowers: mailbox.powers, timers: inertTimers },
     );
     t.teardown(async () => {
       mailbox.close();
@@ -634,13 +1003,20 @@ for (const acknowledge of [false, true]) {
         mailbox.powers,
         undefined,
         {
-          provider: makeScriptedProvider([
-            answer,
-            () => harden({ message: { role: 'assistant', content: 'Ready.' } }),
-          ]),
+          kind: 'provider',
+          provideProvider: (
+            value => () =>
+              value
+          )(
+            makeScriptedProvider([
+              answer,
+              () =>
+                harden({ message: { role: 'assistant', content: 'Ready.' } }),
+            ]),
+          ),
         },
         'Originating conversation',
-        harden({ timers: inertTimers }),
+        { journalPowers: mailbox.powers, timers: inertTimers },
       );
       t.teardown(async () => {
         mailbox.close();

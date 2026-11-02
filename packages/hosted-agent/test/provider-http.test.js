@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { request as httpRequest } from 'node:http';
 
 import { makeProviderHttpListener } from '../src/provider-http.js';
@@ -18,7 +19,51 @@ const options = harden({
 });
 
 test.serial(
-  'HTTP listener forwards incremental chunks and strips caller headers',
+  'HTTP admission diagnostics expose fixed checks but never request data',
+  async t => {
+    t.timeout(5000);
+    const diagnostics = [];
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('must not dispatch', {
+        requestByteStream() {
+          t.fail('must not dispatch');
+        },
+      }),
+      onDiagnostic: diagnostic => {
+        diagnostics.push(diagnostic);
+        throw Error('observer-canary-secret');
+      },
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers: { ...headers, 'content-encoding': 'encoding-canary-secret' },
+      body: 'body-canary-secret',
+    });
+    t.is(response.statusCode, 502);
+    t.is(await readHttpText(response), 'Inference request failed');
+    t.deepEqual(diagnostics, [
+      {
+        stage: 'headers',
+        checks: {
+          method: true,
+          path: true,
+          host: true,
+          origin: true,
+          cookie: true,
+          authorization: true,
+          encoding: false,
+          contentType: true,
+        },
+      },
+    ]);
+    t.false(JSON.stringify(diagnostics).includes('canary'));
+  },
+);
+
+test.serial(
+  'HTTP listener forwards incremental chunks and the caller\u2019s own headers',
   async t => {
     t.timeout(5000);
     /** @type {() => void} */
@@ -31,24 +76,38 @@ test.serial(
     });
     let calls = 0;
     let returned = false;
-    const reader = Far('reader', {
-      async next() {
-        calls += 1;
-        if (calls === 1)
-          return harden({ done: false, value: 'data: first\n\n' });
-        await finished;
-        return harden({ done: true });
-      },
-      return() {
-        returned = true;
-        finish();
-      },
+    /** @type {() => void} */
+    let acknowledgeReturn;
+    const returnAcknowledged = new Promise(resolve => {
+      acknowledgeReturn = () => resolve(undefined);
     });
+    /** @type {any} */
+    let seen;
+    const reader = bytesReaderFromIterator(
+      /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+        async next() {
+          calls += 1;
+          if (calls === 1)
+            return {
+              done: false,
+              value: new TextEncoder().encode('data: first\n\n'),
+            };
+          await finished;
+          return { done: true, value: undefined };
+        },
+        async return() {
+          returned = true;
+          finish();
+          acknowledgeReturn();
+          return { done: true, value: undefined };
+        },
+      }),
+    );
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
-        requestStream(request) {
-          t.deepEqual(request, { method: 'POST', path: '/v1/responses', body });
+        requestByteStream(request) {
+          seen = request;
           return harden({
             status: 200,
             contentType: 'text/event-stream',
@@ -60,7 +119,10 @@ test.serial(
     t.teardown(() => listener.dispose());
     const response = await requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
-      headers: { ...headers, 'x-secret': 'not-forwarded' },
+      headers: {
+        ...headers,
+        'anthropic-beta': 'context-management-2026-01-01',
+      },
       body,
     });
     t.is(response.statusCode, 200);
@@ -70,7 +132,27 @@ test.serial(
     t.is(new TextDecoder().decode(first.value), 'data: first\n\n');
     finish();
     t.true((await stream.next()).done);
+    await returnAcknowledged;
     t.true(returned);
+    // The harness describes its own request, including a capability this
+    // listener has never heard of. What it cannot do is authenticate that
+    // request: a client credential is refused outright before admission (see
+    // the credentials case below), and the broker-owned names the transport
+    // adds — `host` and `content-length` — are dropped here and re-supplied
+    // by the broker against the pinned authority and the body it actually
+    // read.
+    t.is(seen.method, 'POST');
+    t.is(seen.path, '/v1/responses');
+    t.is(seen.body, body);
+    t.is(seen.headers['content-type'], 'application/json');
+    t.is(
+      seen.headers['anthropic-beta'],
+      'context-management-2026-01-01',
+      'a capability the listener has never heard of still reaches the broker',
+    );
+    for (const owned of ['authorization', 'host', 'content-length']) {
+      t.false(owned in seen.headers, `${owned} is the broker's`);
+    }
   },
 );
 
@@ -82,7 +164,7 @@ test.serial(
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
-        requestStream() {
+        requestByteStream() {
           calls += 1;
           throw Error('must not run');
         },
@@ -130,10 +212,122 @@ test.serial(
 );
 
 test.serial(
+  'HTTP listener refuses invalid path allowlists and authorization modes',
+  async t => {
+    const endpoint = Far('endpoint', {
+      requestByteStream() {
+        t.fail('must not dispatch');
+      },
+    });
+    await t.throwsAsync(
+      () =>
+        makeProviderHttpListener({ ...options, endpoint, allowedPaths: [] }),
+      { message: /Invalid inference paths/ },
+    );
+    // A bounded query is now part of an exact target, because real routes
+    // carry one: Anthropic's subscription route is `/v1/messages?beta=true`.
+    // Admission is still an exact comparison against the whole request target,
+    // so this widens what an operator may ALLOWLIST, never what a slice may
+    // reach: a request whose target is not listed is refused either way.
+    // Unlike every other case here, this one SUCCEEDS, so it binds a real
+    // server on a real port. Await it for the handle rather than asserting it
+    // does not throw: an undisposed listener keeps the ava worker alive after
+    // the tests pass, which reads as "Failed to exit", not as a failure.
+    const accepted = await makeProviderHttpListener({
+      ...options,
+      endpoint,
+      allowedPaths: ['/v1/responses?admin=true'],
+    });
+    t.teardown(() => accepted.dispose());
+    t.regex(accepted.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+    // What stays refused is a target that is not a single exact one: a
+    // fragment, a repeated `?`, or a query outside the admitted shape.
+    for (const badPath of [
+      '/v1/responses#admin',
+      '/v1/responses?a=b?c=d',
+      '/v1/responses?',
+      '/v1/responses?admin=%2e%2e',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        () =>
+          makeProviderHttpListener({
+            ...options,
+            endpoint,
+            allowedPaths: [badPath],
+          }),
+        { message: /Invalid inference path/ },
+        badPath,
+      );
+    }
+    await t.throwsAsync(
+      () =>
+        makeProviderHttpListener({
+          ...options,
+          endpoint,
+          clientAuthorization: /** @type {any} */ ('forward'),
+        }),
+      { message: /Invalid client authorization mode/ },
+    );
+  },
+);
+
+test.serial(
+  'strip mode admits a placeholder client credential on the configured path only',
+  async t => {
+    t.timeout(5000);
+    const paths = [];
+    const listener = await makeProviderHttpListener({
+      ...options,
+      clientAuthorization: 'strip',
+      allowedPaths: ['/api/v1/chat/completions'],
+      endpoint: Far('endpoint', {
+        requestByteStream(request) {
+          paths.push(request.path);
+          return harden({
+            status: 200,
+            contentType: 'application/json',
+            reader: bytesReaderFromIterator(
+              /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+                async next() {
+                  return { done: true, value: undefined };
+                },
+              }),
+            ),
+          });
+        },
+      }),
+    });
+    t.teardown(() => listener.dispose());
+    const admitted = await requestHttp(
+      `${listener.url}/api/v1/chat/completions`,
+      {
+        method: 'POST',
+        headers: { ...headers, authorization: 'Bearer placeholder-key' },
+        body,
+      },
+    );
+    t.is(admitted.statusCode, 200);
+    await readHttpText(admitted);
+    t.deepEqual(paths, ['/api/v1/chat/completions']);
+    // The strip mode does not widen the path allowlist.
+    const rejected = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(rejected.statusCode, 502);
+    await readHttpText(rejected);
+    t.deepEqual(paths, ['/api/v1/chat/completions']);
+  },
+);
+
+test.serial(
   'HTTP disposal cancels an active stream and is idempotent',
   async t => {
     t.timeout(5000);
     let resolveRead;
+    /** @type {Promise<IteratorResult<Uint8Array, undefined>>} */
     const read = new Promise(resolve => {
       resolveRead = resolve;
     });
@@ -144,17 +338,23 @@ test.serial(
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
-        requestStream: () =>
+        requestByteStream: () =>
           harden({
             status: 200,
             contentType: 'text/event-stream',
-            reader: Far('reader', {
-              next: () => read,
-              return: () => {
-                resolveRead(harden({ done: true }));
-                cancelled();
+            reader: bytesReaderFromIterator(
+              /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+                next: () => read,
+                return: async () => {
+                  cancelled();
+                  return { done: true, value: undefined };
+                },
+              }),
+              {
+                cancelPending: () =>
+                  resolveRead({ done: true, value: undefined }),
               },
-            }),
+            ),
           }),
       }),
     });
@@ -219,7 +419,7 @@ test.serial(
         deadlines.delete(timer);
       },
       endpoint: Far('endpoint', {
-        requestStream() {
+        requestByteStream() {
           entered();
           return result;
         },
@@ -245,14 +445,17 @@ test.serial(
       harden({
         status: 200,
         contentType: 'text/event-stream',
-        reader: Far('late reader', {
-          next() {
-            throw Error('must not read');
-          },
-          return() {
-            cancelled();
-          },
-        }),
+        reader: bytesReaderFromIterator(
+          /** @satisfies {AsyncIterator<Uint8Array, undefined>} */ ({
+            next() {
+              throw Error('must not read');
+            },
+            async return() {
+              cancelled();
+              return { done: true, value: undefined };
+            },
+          }),
+        ),
       }),
     );
     await cancellation;
@@ -264,7 +467,7 @@ test.serial('HTTP masks upstream exceptions', async t => {
   const listener = await makeProviderHttpListener({
     ...options,
     endpoint: Far('endpoint', {
-      requestStream() {
+      requestByteStream() {
         throw Error('canary-secret');
       },
     }),
@@ -278,3 +481,83 @@ test.serial('HTTP masks upstream exceptions', async t => {
   t.is(response.statusCode, 502);
   t.is(await readHttpText(response), 'Inference request failed');
 });
+
+test.serial(
+  'an endpoint with a bytes stream is read ahead of, and the body arrives whole',
+  async t => {
+    t.timeout(5000);
+    const text = ['data: one\n\n', 'data: two 😀\n\n', 'data: [DONE]\n\n'];
+    const calls = [];
+    let pulls = 0;
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('endpoint with bytes', {
+        requestStream() {
+          calls.push('requestStream');
+          throw Error('the text reader must not be used');
+        },
+        requestByteStream(message) {
+          calls.push('requestByteStream');
+          t.is(message.method, 'POST');
+          const encoder = new TextEncoder();
+          const source = (async function* chunks() {
+            for (const part of text) {
+              pulls += 1;
+              yield encoder.encode(part);
+            }
+          })();
+          return harden({
+            status: 200,
+            contentType: 'text/event-stream',
+            reader: bytesReaderFromIterator(source),
+          });
+        },
+      }),
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(response.statusCode, 200);
+    t.is(response.headers['content-type'], 'text/event-stream');
+    t.is(await readHttpText(response), text.join(''));
+    t.deepEqual(calls, ['requestByteStream']);
+    t.is(pulls, text.length);
+    // Every request uses the same bytes-only endpoint contract.
+    const again = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(await readHttpText(again), text.join(''));
+    t.deepEqual(calls, ['requestByteStream', 'requestByteStream']);
+  },
+);
+
+test.serial(
+  'a text-only endpoint is refused without invoking its legacy method',
+  async t => {
+    t.timeout(5000);
+    let legacyCalls = 0;
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('endpoint without bytes', {
+        requestStream() {
+          legacyCalls += 1;
+          throw Error('Legacy endpoint must not be invoked');
+        },
+      }),
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(response.statusCode, 502);
+    t.is(await readHttpText(response), 'Inference request failed');
+    t.is(legacyCalls, 0);
+  },
+);

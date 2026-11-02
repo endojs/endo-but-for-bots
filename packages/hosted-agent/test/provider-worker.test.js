@@ -1,26 +1,261 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
+import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { build } from 'esbuild';
 
 import { makeProviderPipe } from '../src/provider-pipe.js';
 import { readHttpText, requestHttp } from './http-client.js';
 
-test.serial(
-  'separate credential-free worker forwards HTTP over private capability pipes',
-  async t => {
-    // A hang guard, not a speed bound: booting the worker child (lockdown,
-    // CapTP bootstrap, and listener startup) takes a fraction of a second
-    // here but has exceeded 5s on a loaded macOS runner. The production
-    // runtime grants a worker two 10s handshakes; keep the guard above that.
-    t.timeout(30_000);
+for (const placement of ['network', 'limits']) {
+  test(`private network bootstrap rejects extra authority in ${placement}`, async t => {
+    t.timeout(5000);
+    let activations = 0;
     const worker = spawn(
       process.execPath,
       [
         '--input-type=module',
         '-e',
-        `import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)}; await startProviderListenerWorker({input:process.stdin,output:process.stdout});`,
+        `
+      import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)};
+      import { E } from ${JSON.stringify(import.meta.resolve('@endo/eventual-send'))};
+      await startProviderListenerWorker({ input: process.stdin, output: process.stdout,
+        async makeNetworkListeners({endpoint}) {
+          await E(endpoint).activated();
+          return harden({ evidence: {}, dispose() {} });
+        }
+      });
+    `,
+      ],
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    const finished = new Promise(resolve => worker.once('close', resolve));
+    const extra = { unexpectedAuthority: Far('must not be admitted', {}) };
+    const pipe = makeProviderPipe({
+      input: worker.stdout,
+      output: worker.stdin,
+      bootstrap: harden({
+        network: {
+          endpoint: Far('test network', {
+            activated() {
+              activations += 1;
+            },
+          }),
+          ...(placement === 'network' ? extra : {}),
+          limits: {
+            maxConnections: 1024,
+            timeoutMs: 86_400_000,
+            maxUploadBytes: 1024n ** 4n,
+            maxDownloadBytes: 1024n ** 4n,
+            ...(placement === 'limits' ? extra : {}),
+          },
+        },
+      }),
+    });
+    t.teardown(async () => {
+      pipe.close();
+      worker.kill();
+      await finished;
+    });
+    await t.throwsAsync(
+      (async () => {
+        const control = await pipe.getBootstrap();
+        await E(control).ready();
+        await E(control).activateNetwork();
+      })(),
+    );
+    await pipe.closed;
+    t.is(await finished, 0);
+    t.is(activations, 0);
+  });
+}
+
+for (const diagnosticsEnabled of [false, true]) {
+  test.serial(
+    `shared worker ${diagnosticsEnabled ? 'bundle' : 'source'} forwards HTTP over private capability pipes (diagnostics=${diagnosticsEnabled})`,
+    async t => {
+      // Preserve the upstream loaded-runner startup guard.
+      t.timeout(30_000);
+      let entryPath = fileURLToPath(
+        new URL('../src/provider-worker-entry.js', import.meta.url),
+      );
+      if (diagnosticsEnabled) {
+        const directory = await mkdtemp(join(tmpdir(), 'endo-worker-bundle-'));
+        t.teardown(() => rm(directory, { recursive: true, force: true }));
+        const outfile = join(directory, 'worker.mjs');
+        await build({
+          entryPoints: [entryPath],
+          bundle: true,
+          platform: 'node',
+          format: 'esm',
+          target: 'node22',
+          outfile,
+          banner: {
+            js: "import { createRequire as __endoCreateRequire } from 'node:module'; const require = __endoCreateRequire(import.meta.url);",
+          },
+          logLevel: 'silent',
+        });
+        entryPath = outfile;
+      }
+      // macOS adds this variable even with an explicit child environment.
+      // Normalize the fixture before loading the real Linux image entrypoint;
+      // do not relax the production environment allowlist for a test host.
+      const args =
+        process.platform === 'darwin'
+          ? [
+              '--input-type=module',
+              '-e',
+              `delete process.env.__CF_USER_TEXT_ENCODING; await import(${JSON.stringify(pathToFileURL(entryPath).href)});`,
+            ]
+          : [entryPath];
+      const worker = spawn(process.execPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          NODE_VERSION: '22.19.0',
+          YARN_VERSION: '1.22.22',
+          HOME: '/home/node',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+        },
+      });
+      let diagnostics = '';
+      worker.stderr.on('data', chunk => {
+        diagnostics += chunk;
+      });
+      const finished = new Promise(resolve => worker.once('close', resolve));
+      t.teardown(async () => {
+        worker.kill();
+        await finished;
+        if (diagnostics) t.log(diagnostics);
+      });
+      let calls = 0;
+      const endpoint = Far('host-only inference', {
+        requestByteStream(request) {
+          calls += 1;
+          t.is(request.path, '/v1/responses');
+          if (calls === 2) throw Fail`Inference quota exhausted`;
+          return harden({
+            status: 200,
+            contentType: 'text/event-stream',
+            reader: bytesReaderFromIterator(
+              [new TextEncoder().encode('data: hello\n\n')].values(),
+            ),
+          });
+        },
+      });
+      const pipe = makeProviderPipe({
+        input: worker.stdout,
+        output: worker.stdin,
+        bootstrap: harden({
+          endpoint,
+          limits: {
+            diagnostics: diagnosticsEnabled,
+            maxConnections: 2,
+            maxRequestBytes: 1024n,
+            maxResponseBytes: 1024n,
+            timeoutMs: 1000,
+          },
+        }),
+      });
+      t.teardown(pipe.close);
+      const control = await pipe.getBootstrap();
+      const ready = await E(control).ready();
+      const response = await requestHttp(`${ready.endpoint}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"allowed"}',
+      });
+      t.is(await readHttpText(response), 'data: hello\n\n');
+      t.is(calls, 1);
+      const rejected = await requestHttp(`${ready.endpoint}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"allowed"}',
+      });
+      t.is(rejected.statusCode, 502);
+      t.is(await readHttpText(rejected), 'Inference request failed');
+      const subsequent = await requestHttp(`${ready.endpoint}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"allowed"}',
+      });
+      t.is(subsequent.statusCode, 200);
+      t.is(await readHttpText(subsequent), 'data: hello\n\n');
+      t.is(calls, 3);
+      for (let index = 0; index < 5; index += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const denied = await requestHttp(`${ready.endpoint}/v1/responses`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: 'canary-header-secret',
+          },
+          body: 'canary-body-secret',
+        });
+        t.is(denied.statusCode, 502);
+        // eslint-disable-next-line no-await-in-loop
+        await readHttpText(denied);
+      }
+      // No network capability was supplied. Activation must fail closed even
+      // though this shared image also contains the public listener modules.
+      await t.throwsAsync(E(control).activateNetwork(), {
+        message: /network unavailable|Provider pipe closed/,
+      });
+      pipe.close();
+      t.is(await finished, 0, diagnostics);
+      const lines = diagnostics
+        .split('\n')
+        .filter(line => line.startsWith('Provider HTTP diagnostic: '));
+      // One line per failed request — the rejected one and all five denied —
+      // not a lifetime budget of four.
+      t.is(lines.length, diagnosticsEnabled ? 6 : 0);
+      t.true(lines.every(line => line.length <= 800));
+      t.false(lines.join('\n').includes('canary'));
+      if (diagnosticsEnabled) {
+        t.deepEqual(
+          JSON.parse(lines[0].slice('Provider HTTP diagnostic: '.length)),
+          { stage: 'endpoint' },
+        );
+        t.like(
+          JSON.parse(lines[1].slice('Provider HTTP diagnostic: '.length)),
+          {
+            stage: 'headers',
+            checks: { authorization: false },
+          },
+        );
+      }
+    },
+  );
+}
+
+test.serial(
+  'network listeners start only after trusted activation and are disposed with the worker',
+  async t => {
+    t.timeout(5000);
+    const worker = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+    import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)};
+    import { E } from ${JSON.stringify(import.meta.resolve('@endo/eventual-send'))};
+    await startProviderListenerWorker({input:process.stdin,output:process.stdout,
+      async makeNetworkListeners({endpoint,limits}) {
+        await E(endpoint).activated(limits);
+        return harden({evidence:{policy:'test-only'},dispose:()=>E(endpoint).disposed()});
+      }});
+  `,
       ],
       {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -34,61 +269,181 @@ test.serial(
         },
       },
     );
-    let diagnostics = '';
-    worker.stderr.on('data', chunk => {
-      diagnostics += chunk;
-    });
     const finished = new Promise(resolve => worker.once('close', resolve));
     t.teardown(async () => {
       worker.kill();
       await finished;
-      if (diagnostics) t.log(diagnostics);
     });
-    let calls = 0;
-    const endpoint = Far('host-only inference', {
-      requestStream(request) {
-        calls += 1;
-        t.is(request.path, '/v1/responses');
-        let done = false;
-        return harden({
-          status: 200,
-          contentType: 'text/event-stream',
-          reader: Far('host-only reader', {
-            async next() {
-              if (done) return harden({ done: true, value: '' });
-              done = true;
-              return harden({ done: false, value: 'data: hello\n\n' });
-            },
-            return() {},
-          }),
-        });
-      },
-    });
+    let activations = 0;
+    let disposals = 0;
     const pipe = makeProviderPipe({
       input: worker.stdout,
       output: worker.stdin,
       bootstrap: harden({
-        endpoint,
+        endpoint: Far('unused inference', {
+          requestByteStream() {
+            throw Error('unused');
+          },
+        }),
         limits: {
           maxConnections: 2,
           maxRequestBytes: 1024n,
           maxResponseBytes: 1024n,
           timeoutMs: 1000,
         },
+        network: {
+          endpoint: Far('test network lifecycle', {
+            activated(limits) {
+              t.deepEqual(limits, {
+                maxConnections: 2048,
+                timeoutMs: 86_400_000,
+                maxUploadBytes: 1024n ** 4n,
+                maxDownloadBytes: 1024n ** 4n,
+              });
+              activations += 1;
+            },
+            disposed() {
+              disposals += 1;
+            },
+          }),
+          limits: {
+            maxConnections: 2048,
+            timeoutMs: 86_400_000,
+            maxUploadBytes: 1024n ** 4n,
+            maxDownloadBytes: 1024n ** 4n,
+          },
+        },
       }),
     });
     t.teardown(pipe.close);
     const control = await pipe.getBootstrap();
-    const ready = await E(control).ready();
-    const response = await requestHttp(`${ready.endpoint}/v1/responses`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{"model":"allowed"}',
-    });
-    t.is(await readHttpText(response), 'data: hello\n\n');
-    t.is(calls, 1);
+    await E(control).ready();
+    t.is(activations, 0);
+    t.deepEqual(
+      await Promise.all([
+        E(control).activateNetwork(),
+        E(control).activateNetwork(),
+      ]),
+      [{ policy: 'test-only' }, { policy: 'test-only' }],
+    );
+    t.is(activations, 1);
     await E(control).stop();
+    t.is(disposals, 1);
+    await t.throwsAsync(E(control).activateNetwork(), {
+      message: /network unavailable|Provider pipe closed/,
+    });
     pipe.close();
-    t.is(await finished, 0, diagnostics);
+    t.is(await finished, 0);
   },
 );
+
+for (const bundled of [false, true]) {
+  test.serial(
+    `a bytes response crosses the private pipe whole, read ahead of by the ${bundled ? 'bundled' : 'source'} worker`,
+    async t => {
+      t.timeout(10_000);
+      let entryPath = fileURLToPath(
+        new URL('../src/provider-worker-entry.js', import.meta.url),
+      );
+      if (bundled) {
+        // What the listener image carries: exo-stream, patterns and base64
+        // all have to survive the bundler.
+        const directory = await mkdtemp(join(tmpdir(), 'endo-worker-bundle-'));
+        t.teardown(() => rm(directory, { recursive: true, force: true }));
+        const outfile = join(directory, 'worker.mjs');
+        await build({
+          entryPoints: [entryPath],
+          bundle: true,
+          platform: 'node',
+          format: 'esm',
+          target: 'node22',
+          outfile,
+          banner: {
+            js: "import { createRequire as __endoCreateRequire } from 'node:module'; const require = __endoCreateRequire(import.meta.url);",
+          },
+          logLevel: 'silent',
+        });
+        entryPath = outfile;
+      }
+      const args =
+        process.platform === 'darwin'
+          ? [
+              '--input-type=module',
+              '-e',
+              `delete process.env.__CF_USER_TEXT_ENCODING; await import(${JSON.stringify(pathToFileURL(entryPath).href)});`,
+            ]
+          : [entryPath];
+      const worker = spawn(process.execPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          NODE_VERSION: '22.19.0',
+          YARN_VERSION: '1.22.22',
+          HOME: '/home/node',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+        },
+      });
+      let diagnostics = '';
+      worker.stderr.on('data', chunk => {
+        diagnostics += chunk;
+      });
+      const finished = new Promise(resolve => worker.once('close', resolve));
+      t.teardown(async () => {
+        worker.kill();
+        await finished;
+        if (diagnostics) t.log(diagnostics);
+      });
+      // A token stream: many small chunks.
+      const chunks = Array.from(
+        { length: 300 },
+        (_, index) => `data: token ${index} 😀\n\n`,
+      );
+      const used = [];
+      const endpoint = Far('host-only inference', {
+        requestStream() {
+          used.push('requestStream');
+          throw Fail`the text reader must not be used`;
+        },
+        requestByteStream() {
+          used.push('requestByteStream');
+          const encoder = new TextEncoder();
+          return harden({
+            status: 200,
+            contentType: 'text/event-stream',
+            reader: bytesReaderFromIterator(
+              (async function* source() {
+                for (const chunk of chunks) yield encoder.encode(chunk);
+              })(),
+            ),
+          });
+        },
+      });
+      const pipe = makeProviderPipe({
+        input: worker.stdout,
+        output: worker.stdin,
+        bootstrap: harden({
+          endpoint,
+          limits: {
+            diagnostics: false,
+            maxConnections: 2,
+            maxRequestBytes: 1024n,
+            maxResponseBytes: 1_000_000n,
+            timeoutMs: 5000,
+          },
+        }),
+      });
+      t.teardown(pipe.close);
+      const control = await pipe.getBootstrap();
+      const ready = await E(control).ready();
+      const response = await requestHttp(`${ready.endpoint}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"allowed"}',
+      });
+      t.is(response.statusCode, 200);
+      t.is(await readHttpText(response), chunks.join(''));
+      t.deepEqual(used, ['requestByteStream']);
+    },
+  );
+}

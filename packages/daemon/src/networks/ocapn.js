@@ -49,9 +49,9 @@ import { fromHex, toHex } from '../hex.js';
  * application protocol — `EndoGreeter.hello`, `EndoGateway.provide`,
  * `EndoGateway.followRetentionSet` — rides on top of the OCapN session
  * unchanged, exactly as it rode on CapTP before. This module conforms
- * to the existing `EndoNetwork` interface (`addresses`, `supports`,
- * `connect`) and needs no daemon-core changes to be discovered through
- * `@nets`.
+ * to the `EndoNetwork` interface (`addresses`, `supports`, `connect`,
+ * and the optional `registerAgentKey`/`unregisterAgentKey`) and is
+ * discovered through `@nets`.
  */
 
 // The well-known OCapN swissnum under which a daemon publishes its peer
@@ -175,6 +175,21 @@ const EndoPeerEntryInterface = M.interface('EndoPeerEntry', {
   help: M.call().returns(M.string()),
 });
 
+const OcapnNoiseServiceInterface = M.interface('OcapnNoiseService', {
+  addresses: M.call().returns(M.arrayOf(M.string())),
+  supports: M.call(M.string()).returns(M.boolean()),
+  connect: M.call(M.string(), M.any()).returns(M.promise()),
+  registerAgentKey: M.call(M.string()).returns(),
+  unregisterAgentKey: M.call(M.string()).returns(),
+});
+
+/** @param {string} publicKey */
+const assertAgentKey = publicKey => {
+  if (!/^[0-9a-f]{64}$/.test(publicKey)) {
+    throw TypeError(`Expected an agent public key of 64 hex digits`);
+  }
+};
+
 export const make = async (powers, context) => {
   const cancelled = /** @type {Promise<never>} */ (E(context).whenCancelled());
 
@@ -235,6 +250,12 @@ export const make = async (powers, context) => {
     agentPublicKey: String(localNodeId),
     signature: bindingSignature,
   });
+
+  // Public keys of the local agents this network carries. The daemon's own
+  // node is always carried. No peer-reachable object reads this set, so it
+  // discloses no persona; it awaits the inbound key-based routing.
+  /** @type {Set<string>} */
+  const agentKeys = new Set([String(localNodeId)]);
 
   // The daemon's peer entry-point capability: the single object a remote
   // peer reaches over an OCapN session by fetching PEER_ENTRY_SWISSNUM
@@ -416,10 +437,26 @@ export const make = async (powers, context) => {
     );
   };
 
-  return Far('OcapnNoiseService', {
+  /** @param {string} publicKey */
+  const registerAgentKey = publicKey => {
+    assertAgentKey(publicKey);
+    agentKeys.add(publicKey);
+  };
+
+  /** @param {string} publicKey */
+  const unregisterAgentKey = publicKey => {
+    assertAgentKey(publicKey);
+    if (publicKey !== String(localNodeId)) {
+      agentKeys.delete(publicKey);
+    }
+  };
+
+  return makeExo('OcapnNoiseService', OcapnNoiseServiceInterface, {
     addresses: () => harden([address]),
     supports,
     connect,
+    registerAgentKey,
+    unregisterAgentKey,
   });
 };
 harden(make);

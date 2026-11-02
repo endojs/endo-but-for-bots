@@ -259,3 +259,5 @@ export const makeOcapnOperationsCodecs = (
     writeOcapnMessage,
   };
 };
+
+export { makeGcBatcher } from './gc-batch.js';

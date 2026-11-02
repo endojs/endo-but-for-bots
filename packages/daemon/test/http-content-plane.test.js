@@ -116,3 +116,17 @@ test('Gateway serves a content-addressed blob from its web-seed route', async t 
     await service.stopped;
   }
 });
+
+test('XS without fetch can initialize and advertise content; HTTP retrieval fails explicitly', async t => {
+  const plane = makeHttpContentDataPlane(null);
+  const share = makeHttpContentShare('https://gateway.example/');
+  t.is((await plane.source('a'.repeat(64), 'blob', share))[0].plane, 'ws');
+  await t.throwsAsync(
+    plane.fetch(
+      { plane: 'ws', payload: 'https://gateway.example/content/a' },
+      'a',
+      'blob',
+    ),
+    { message: 'HTTP content plane requires fetch' },
+  );
+});

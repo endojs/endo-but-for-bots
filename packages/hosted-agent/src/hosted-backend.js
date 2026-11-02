@@ -15,8 +15,9 @@ harden(HostedToolSetInterface);
 /**
  * Provider-neutral facets for a hosted agent backend.
  *
- * `interrupt()` is a terminal barrier. `destroy()` is idempotent for lifecycle
- * replay when no live admin facet survives.
+ * `interrupt()` is a turn-terminal barrier, not session shutdown.
+ * Factory `stop()` preserves durable state; `destroy()` removes it.
+ * Both reach the durable owner when no live admin facet survives.
  */
 export const HostedTurnBackendInterface = M.interface('HostedTurnBackend', {
   send: M.call(M.string())
@@ -45,10 +46,17 @@ export const HostedBackendFactoryInterface = M.interface(
   'HostedBackendFactory',
   {
     describe: M.call().returns(M.promise()),
-    listModels: M.call().returns(M.promise()),
+    // What each account of the backend's provider lists now, per account
+    // (`backend-catalog.js`): `{ authority?, accounts: [{ subscriptionId,
+    // label?, pinnedOnly?, state, observedAt, models }] }`, or the one
+    // account named; `authority` is the account authority the broker serves.
+
+    modelCatalog: M.call().optional(M.string()).returns(M.promise()),
+    inspectBindings: M.call(M.record()).returns(M.promise()),
     create: M.call(M.record(), M.remotable('HostedToolSet')).returns(
       M.promise(),
     ),
+    stop: M.call(M.record()).returns(M.promise()),
     destroy: M.call(M.record()).returns(M.promise()),
     help: M.call().returns(M.string()),
   },
@@ -79,6 +87,149 @@ export const CONTINUITY_MODES = harden([
 ]);
 
 /**
+ * What a system prompt has to know about the place a model runs, as plain
+ * data a backend declares about itself. A prompt written for one backend is
+ * wrong on another in exactly these ways: the model sees Endo's tools under
+ * other names, it has (or lacks) a shell and file tools of its own, and the
+ * session's workspace is (or is not) a directory it can simply edit.
+ *
+ * - `toolNamePrefix`: what the backend's runtime puts in front of every Endo
+ *   tool name (`endo_` for an MCP server named `endo` under opencode,
+ *   `mcp__endo__` under Claude Code). Empty when names are passed unchanged.
+ * - `toolNames`: exceptions to the prefix, by Endo tool name (Codex renames
+ *   only `exec`, to keep it apart from its native exec).
+ * - `nativeTools`: the model has its runtime's own shell and file tools,
+ *   acting inside a sandbox that cannot reach Endo capabilities.
+ * - `workspacePath`: where that sandbox mounts a session's git workspace;
+ *   empty when it does not.
+ *
+ * @typedef {object} PromptEnvironment
+ * @property {string} toolNamePrefix
+ * @property {Record<string, string>} toolNames
+ * @property {boolean} nativeTools
+ * @property {string} workspacePath
+ */
+
+const TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const TOOL_NAME_PREFIX = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const PROMPT_ENVIRONMENT_KEYS = harden([
+  'nativeTools',
+  'toolNamePrefix',
+  'toolNames',
+  'workspacePath',
+]);
+
+/**
+ * Validate and copy a backend's declared prompt environment. Every string in
+ * it ends up inside a system prompt, so each is held to the shape of the
+ * thing it names rather than accepted as free text.
+ *
+ * @param {any} environment
+ * @returns {PromptEnvironment}
+ */
+export const assertPromptEnvironment = environment => {
+  (environment &&
+    typeof environment === 'object' &&
+    !Array.isArray(environment) &&
+    Object.keys(environment).sort().join(',') ===
+      PROMPT_ENVIRONMENT_KEYS.join(',')) ||
+    Fail`Prompt environment must be a record of ${q(PROMPT_ENVIRONMENT_KEYS)}`;
+  const { toolNamePrefix, nativeTools, workspacePath } = environment;
+  (typeof toolNamePrefix === 'string' &&
+    (toolNamePrefix === '' || TOOL_NAME_PREFIX.test(toolNamePrefix))) ||
+    Fail`Prompt environment has an invalid tool name prefix`;
+  const declaredNames = environment.toolNames;
+  (declaredNames &&
+    typeof declaredNames === 'object' &&
+    !Array.isArray(declaredNames)) ||
+    Fail`Prompt environment has invalid tool names`;
+  // Read once, then check and keep what was read: an object that answers
+  // differently the second time must not get an unchecked answer through.
+  const nameEntries = Object.entries(declaredNames);
+  (nameEntries.length <= 64 &&
+    nameEntries.every(
+      ([from, to]) =>
+        TOOL_NAME.test(from) && typeof to === 'string' && TOOL_NAME.test(to),
+    )) ||
+    Fail`Prompt environment has invalid tool names`;
+  typeof nativeTools === 'boolean' ||
+    Fail`Prompt environment must say whether the model has native tools`;
+  (typeof workspacePath === 'string' &&
+    (workspacePath === '' ||
+      (/^\/[A-Za-z0-9._-]{1,64}(\/[A-Za-z0-9._-]{1,64}){0,7}$/.test(
+        workspacePath,
+      ) &&
+        !workspacePath
+          .split('/')
+          .some(part => part === '.' || part === '..')))) ||
+    Fail`Prompt environment has an invalid workspace path`;
+  workspacePath === '' ||
+    nativeTools ||
+    Fail`A workspace path means nothing to a model without native tools`;
+  return harden({
+    toolNamePrefix,
+    toolNames: Object.fromEntries(nameEntries),
+    nativeTools,
+    workspacePath,
+  });
+};
+harden(assertPromptEnvironment);
+
+const REQUIRED_DESCRIPTOR_KEYS = harden([
+  'continuity',
+  'id',
+  'kind',
+  'title',
+  'toolOwnership',
+]);
+const OPTIONAL_DESCRIPTOR_KEYS = harden([
+  'promptEnvironment',
+  'providerId',
+  // The bindings a reopen of a session on this backend may be authorized
+  // to change, as its provisioner names them (`image`, `provider`, ...).
+  'rebindableBindings',
+  'nativeContextFormat',
+  'subscriptions',
+  'supportedNetworkPolicies',
+]);
+
+const SUBSCRIPTION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * The subscriptions of its provider a backend can serve a session from, as a
+ * picker shows them: an id and the operator's label. Empty, or absent, when
+ * the backend holds one credential and there is nothing to choose. No
+ * credential, account number or secret name is in it.
+ *
+ * @param {unknown} candidate
+ * @returns {Array<{ id: string, label: string }>}
+ */
+export const assertBackendSubscriptions = candidate => {
+  (Array.isArray(candidate) && candidate.length <= 16) ||
+    Fail`A backend may list at most 16 subscriptions`;
+  const projected = /** @type {any[]} */ (candidate).map(entry => {
+    (entry !== null && typeof entry === 'object') ||
+      Fail`A backend subscription must be a record`;
+    const { id, label, pinnedOnly } = entry;
+    (typeof id === 'string' && SUBSCRIPTION_ID.test(id) && id !== 'auto') ||
+      Fail`Invalid backend subscription id ${q(id)}`;
+    (typeof label === 'string' && label.length > 0 && label.length <= 128) ||
+      Fail`Invalid label for backend subscription ${q(id)}`;
+    // A lane set aside for somebody else's sessions: listed, so its account
+    // is shown, and marked, so a picker does not offer it.
+    return harden({
+      id,
+      label,
+      ...(pinnedOnly === true ? { pinnedOnly } : {}),
+    });
+  });
+  new Set(projected.map(entry => entry.id)).size === projected.length ||
+    Fail`Backend subscription ids must be distinct`;
+  return harden(projected);
+};
+harden(assertBackendSubscriptions);
+
+/**
  * Validate and project the exact capability-free descriptor fields Floot uses
  * for selection and recovery.
  *
@@ -87,8 +238,13 @@ export const CONTINUITY_MODES = harden([
 export const assertHostedBackendDescriptor = descriptor => {
   (descriptor &&
     typeof descriptor === 'object' &&
-    Object.keys(descriptor).sort().join(',') ===
-      'continuity,id,kind,title,toolOwnership') ||
+    !Array.isArray(descriptor) &&
+    REQUIRED_DESCRIPTOR_KEYS.every(key => Object.hasOwn(descriptor, key)) &&
+    Object.keys(descriptor).every(
+      key =>
+        REQUIRED_DESCRIPTOR_KEYS.includes(key) ||
+        OPTIONAL_DESCRIPTOR_KEYS.includes(key),
+    )) ||
     Fail`Hosted backend descriptor must be a record`;
   (typeof descriptor.id === 'string' &&
     /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(descriptor.id)) ||
@@ -104,15 +260,89 @@ export const assertHostedBackendDescriptor = descriptor => {
   (typeof descriptor.toolOwnership === 'string' &&
     descriptor.toolOwnership !== '') ||
     Fail`Hosted backend descriptor must declare tool ownership`;
+  if (descriptor.supportedNetworkPolicies !== undefined) {
+    (Array.isArray(descriptor.supportedNetworkPolicies) &&
+      descriptor.supportedNetworkPolicies.every(policy =>
+        ['off', 'public-internet'].includes(policy),
+      ) &&
+      new Set(descriptor.supportedNetworkPolicies).size ===
+        descriptor.supportedNetworkPolicies.length) ||
+      Fail`Invalid supported network policies`;
+  }
+  descriptor.providerId === undefined ||
+    (typeof descriptor.providerId === 'string' &&
+      SUBSCRIPTION_ID.test(descriptor.providerId)) ||
+    Fail`Hosted backend descriptor has an invalid provider id`;
+  const nativeContextFormat = /** @type {unknown} */ (
+    descriptor.nativeContextFormat
+  );
+  nativeContextFormat === undefined ||
+    (typeof nativeContextFormat === 'string' &&
+      nativeContextFormat.length > 0 &&
+      nativeContextFormat.length <= 128) ||
+    Fail`Hosted backend descriptor has an invalid native context format`;
+  if (descriptor.rebindableBindings !== undefined) {
+    const declared = /** @type {unknown} */ (descriptor.rebindableBindings);
+    (Array.isArray(declared) &&
+      declared.length <= 8 &&
+      declared.every(
+        name =>
+          typeof name === 'string' && name.length > 0 && name.length <= 64,
+      ) &&
+      new Set(declared).size === declared.length) ||
+      Fail`Hosted backend descriptor has invalid rebindable bindings`;
+  }
   return harden({
     id: descriptor.id,
     title: descriptor.title,
     kind: descriptor.kind,
     continuity: descriptor.continuity,
     toolOwnership: descriptor.toolOwnership,
+    ...(descriptor.nativeContextFormat === undefined
+      ? {}
+      : { nativeContextFormat: descriptor.nativeContextFormat }),
+    // Which provider's credential the backend spends (`codex`), as distinct
+    // from the backend's own id, and which of that provider's subscriptions
+    // a session may be pinned to.
+    ...(descriptor.providerId === undefined
+      ? {}
+      : { providerId: descriptor.providerId }),
+    ...(descriptor.subscriptions === undefined
+      ? {}
+      : {
+          subscriptions: assertBackendSubscriptions(descriptor.subscriptions),
+        }),
+    ...(descriptor.supportedNetworkPolicies === undefined
+      ? {}
+      : { supportedNetworkPolicies: [...descriptor.supportedNetworkPolicies] }),
+    ...(descriptor.rebindableBindings === undefined
+      ? {}
+      : { rebindableBindings: [...descriptor.rebindableBindings] }),
+    ...(descriptor.promptEnvironment === undefined
+      ? {}
+      : {
+          promptEnvironment: assertPromptEnvironment(
+            descriptor.promptEnvironment,
+          ),
+        }),
   });
 };
 harden(assertHostedBackendDescriptor);
+
+const MODEL_DESCRIPTOR_KEYS = harden([
+  'default',
+  'defaultReasoningEffort',
+  'description',
+  'id',
+  'reasoningEfforts',
+  'title',
+]);
+// Provider-observed token limits, not execution budgets or guarantees for
+// every endpoint behind a dynamic route. Missing metadata stays unknown.
+const MODEL_DESCRIPTOR_OPTIONAL_KEYS = harden([
+  'contextLength',
+  'maxOutputTokens',
+]);
 
 /**
  * Validate and project Floot's exact capability-free model catalog DTO.
@@ -121,23 +351,27 @@ harden(assertHostedBackendDescriptor);
  * this record before it crosses the backend seam.
  *
  * @param {any} candidate
+ * @returns {{ id: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[], contextLength?: number, maxOutputTokens?: number }}
  */
 export const normalizeHostedModelDescriptor = candidate => {
   (candidate &&
     typeof candidate === 'object' &&
-    Object.keys(candidate).sort().join(',') ===
-      'default,defaultReasoningEffort,description,id,reasoningEfforts,title') ||
+    !Array.isArray(candidate) &&
+    MODEL_DESCRIPTOR_KEYS.every(key => Object.hasOwn(candidate, key)) &&
+    Object.keys(candidate).every(
+      key =>
+        MODEL_DESCRIPTOR_KEYS.includes(key) ||
+        MODEL_DESCRIPTOR_OPTIONAL_KEYS.includes(key),
+    )) ||
     Fail`Hosted model descriptor must be a record`;
   const id = /** @type {unknown} */ (candidate.id);
   (typeof id === 'string' && id !== '' && id.length <= 256) ||
     Fail`Hosted model descriptor has an invalid id`;
-  const title = candidate.title;
+  const { title, description, reasoningEfforts: rawEfforts } = candidate;
   (typeof title === 'string' && title !== '' && title.length <= 1024) ||
     Fail`Hosted model descriptor has an invalid title`;
-  const description = candidate.description;
   (typeof description === 'string' && description.length <= 16_384) ||
     Fail`Hosted model descriptor has an invalid description`;
-  const rawEfforts = candidate.reasoningEfforts;
   (Array.isArray(rawEfforts) &&
     rawEfforts.length <= 64 &&
     rawEfforts.every(
@@ -146,20 +380,44 @@ export const normalizeHostedModelDescriptor = candidate => {
     ) &&
     new Set(rawEfforts).size === rawEfforts.length) ||
     Fail`Hosted model descriptor has invalid reasoning efforts`;
+  /** @type {string[]} */
+  const reasoningEfforts = [...rawEfforts];
   typeof candidate.default === 'boolean' ||
     Fail`Hosted model descriptor has an invalid default marker`;
-  const defaultReasoningEffort = candidate.defaultReasoningEffort;
+  const { defaultReasoningEffort, contextLength, maxOutputTokens } = candidate;
   defaultReasoningEffort === null ||
     (typeof defaultReasoningEffort === 'string' &&
-      rawEfforts.includes(defaultReasoningEffort)) ||
+      reasoningEfforts.includes(defaultReasoningEffort)) ||
     Fail`Hosted model descriptor has an invalid default reasoning effort`;
+  contextLength === undefined ||
+    contextLength === null ||
+    (typeof contextLength === 'number' &&
+      Number.isInteger(contextLength) &&
+      contextLength > 0 &&
+      contextLength <= 0xffff_ffff) ||
+    Fail`Hosted model descriptor has an invalid context length`;
+  maxOutputTokens === undefined ||
+    maxOutputTokens === null ||
+    (typeof maxOutputTokens === 'number' &&
+      Number.isInteger(maxOutputTokens) &&
+      maxOutputTokens > 0 &&
+      maxOutputTokens <= 0xffff_ffff) ||
+    Fail`Hosted model descriptor has an invalid output token limit`;
   return harden({
-    id,
-    title,
-    description,
-    default: candidate.default,
-    defaultReasoningEffort,
-    reasoningEfforts: harden([...rawEfforts]),
+    id: /** @type {string} */ (id),
+    title: /** @type {string} */ (title),
+    description: /** @type {string} */ (description),
+    default: /** @type {boolean} */ (candidate.default),
+    defaultReasoningEffort: /** @type {string | null} */ (
+      defaultReasoningEffort
+    ),
+    reasoningEfforts: harden(reasoningEfforts),
+    ...(typeof contextLength === 'number'
+      ? { contextLength: /** @type {number} */ (contextLength) }
+      : {}),
+    ...(typeof maxOutputTokens === 'number'
+      ? { maxOutputTokens: /** @type {number} */ (maxOutputTokens) }
+      : {}),
   });
 };
 harden(normalizeHostedModelDescriptor);

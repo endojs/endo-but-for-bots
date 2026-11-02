@@ -19,7 +19,7 @@ class TaskSelection(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         for name, scripts in {
-            "real": {"test": "ava", "test:types": "tsc"},
+            "real": {"test": "ava", "test:c8": "c8 ava", "test:types": "tsc"},
             "noop": {"test": "exit 0"},
             "absent": {},
         }.items():
@@ -33,7 +33,15 @@ class TaskSelection(unittest.TestCase):
 
     def test_only_exact_selected_package_runs(self):
         self.assertEqual(runner.command("test", ["@endo/real", "@endo/real"], self.root),
-                         ["corepack", "yarn", "turbo", "run", "test", "--filter=@endo/real"])
+                         ["corepack", "yarn", "turbo", "run", "test", "--concurrency=1",
+                          "--filter=@endo/real"])
+
+    def test_runtime_workspaces_share_one_worker_pool_budget(self):
+        for task in ["test", "test:c8"]:
+            with self.subTest(task=task):
+                self.assertIn("--concurrency=1", runner.command(task, ["@endo/real"], self.root))
+        self.assertNotIn("--concurrency=1",
+                         runner.command("test:types", ["@endo/real"], self.root))
 
     def test_type_contracts_keep_collecting_failures(self):
         self.assertIn("--continue=always", runner.command("test:types", ["@endo/real"], self.root))

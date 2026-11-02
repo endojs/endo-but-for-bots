@@ -174,13 +174,13 @@ test('exec tool forwards command/args/options to the capability', async t => {
   const result = await byName.exec.invoke({
     command: 'echo',
     args: ['hello'],
-    options: { timeoutMs: 500 },
+    options: { timeoutMs: 900_000 },
   });
   t.is(/** @type {any} */ (result).stdout, 'ran');
   t.deepEqual(calls[0], {
     command: 'echo',
     args: ['hello'],
-    options: { timeoutMs: 500 },
+    options: { timeoutMs: 900_000 },
   });
 });
 

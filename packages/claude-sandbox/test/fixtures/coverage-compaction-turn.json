@@ -1,0 +1,673 @@
+{
+  "source": "Synthetic pinned Claude Code 2.1.233 automatic compaction on Tokyo 2026-09-24, --include-partial-messages. Actual first compaction wire; context metadata preserved. Synthetic signatures are not provider-valid.",
+  "prompt": "Run the synthetic print tool, then continue.",
+  "beforePayload": "{\"parentUuid\":null,\"isSidechain\":false,\"userType\":\"external\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"endo-restored\",\"gitBranch\":\"\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Earlier synthetic question\"},\"uuid\":\"00000000-1111-4111-a111-111111111111\",\"timestamp\":\"2026-09-24T07:33:37.945Z\"}\n{\"parentUuid\":\"00000000-1111-4111-a111-111111111111\",\"isSidechain\":false,\"userType\":\"external\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"endo-restored\",\"gitBranch\":\"\",\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-4-6\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Earlier synthetic answer\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"uuid\":\"00000001-1111-4111-a111-111111111111\",\"timestamp\":\"2026-09-24T07:33:37.945Z\"}\n{\"parentUuid\":\"00000001-1111-4111-a111-111111111111\",\"isSidechain\":false,\"promptId\":\"0fac7078-a5e9-4dce-af4f-5931ff7c9bba\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Remember this synthetic fact: the cat is blue and the ship is red.\"},\"uuid\":\"7d6f3203-4283-485c-95f5-658ce354cf56\",\"timestamp\":\"2026-09-24T07:33:38.410Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"7d6f3203-4283-485c-95f5-658ce354cf56\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"4d2248ce-adda-4d01-a895-d8a47f306e42\",\"timestamp\":\"2026-09-24T07:33:38.409Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"4d2248ce-adda-4d01-a895-d8a47f306e42\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"333d6e9c-a90b-4696-8576-05a5977adf17\",\"timestamp\":\"2026-09-24T07:33:38.437Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"333d6e9c-a90b-4696-8576-05a5977adf17\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE: The project uses a blue cat and a red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"c21d17ae-1c83-4a31-a769-8c025ef6def4\",\"timestamp\":\"2026-09-24T07:33:38.442Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"c21d17ae-1c83-4a31-a769-8c025ef6def4\",\"isSidechain\":false,\"promptId\":\"5fec6b71-03da-475d-b699-19223a99dd31\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Synthetic follow-up 0: keep the original colors and add a wooden deck.\"},\"uuid\":\"e7317361-8d2f-48db-940b-7f418db25594\",\"timestamp\":\"2026-09-24T07:33:38.859Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"e7317361-8d2f-48db-940b-7f418db25594\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"b1247684-35d0-400d-8c89-d58a1c416539\",\"timestamp\":\"2026-09-24T07:33:38.859Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"b1247684-35d0-400d-8c89-d58a1c416539\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_2\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"bde088b5-125b-4afd-9cd7-0dbc722173f7\",\"timestamp\":\"2026-09-24T07:33:38.881Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"bde088b5-125b-4afd-9cd7-0dbc722173f7\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_2\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE SUMMARY: Keep the blue cat and red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"83a2a256-28a8-4122-8209-e1580dcf9a2e\",\"timestamp\":\"2026-09-24T07:33:38.885Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"83a2a256-28a8-4122-8209-e1580dcf9a2e\",\"isSidechain\":false,\"promptId\":\"d221ffd5-145f-4689-8789-51a938ef708d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Synthetic follow-up 1: keep the original colors and add a wooden deck.\"},\"uuid\":\"42458297-8c34-4899-a7c8-8e9944999ab2\",\"timestamp\":\"2026-09-24T07:33:39.344Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"42458297-8c34-4899-a7c8-8e9944999ab2\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"4521d463-ae55-4690-b633-a17830506202\",\"timestamp\":\"2026-09-24T07:33:39.344Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"4521d463-ae55-4690-b633-a17830506202\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_3\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"8a9a7e41-8d57-4b9a-a971-402ad55a3106\",\"timestamp\":\"2026-09-24T07:33:39.369Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"8a9a7e41-8d57-4b9a-a971-402ad55a3106\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_3\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE SUMMARY: Keep the blue cat and red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"ed64754e-2a05-4bc4-9251-8d1eb4dc6f7b\",\"timestamp\":\"2026-09-24T07:33:39.375Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"ed64754e-2a05-4bc4-9251-8d1eb4dc6f7b\",\"isSidechain\":false,\"promptId\":\"d999b83a-946f-4785-b5b3-eac03ca39c42\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Synthetic follow-up 2: keep the original colors and add a wooden deck.\"},\"uuid\":\"0e8af7b1-dab8-4a58-9fec-3ea6f48f4344\",\"timestamp\":\"2026-09-24T07:33:39.814Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"0e8af7b1-dab8-4a58-9fec-3ea6f48f4344\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"f026da0c-5d51-4af3-bbb9-575614d16108\",\"timestamp\":\"2026-09-24T07:33:39.813Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"f026da0c-5d51-4af3-bbb9-575614d16108\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_4\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"ee651de5-7b8f-4a24-816d-0ecba6c4ca4a\",\"timestamp\":\"2026-09-24T07:33:39.843Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"ee651de5-7b8f-4a24-816d-0ecba6c4ca4a\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_4\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE SUMMARY: Keep the blue cat and red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"6d6d5541-431e-4d9e-8da2-42265bda5a41\",\"timestamp\":\"2026-09-24T07:33:39.848Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"6d6d5541-431e-4d9e-8da2-42265bda5a41\",\"isSidechain\":false,\"promptId\":\"7c1c4934-b4ce-43da-b2e6-d4b7884afe9a\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Synthetic follow-up 3: keep the original colors and add a wooden deck.\"},\"uuid\":\"34b87db2-5707-41ec-9b53-f9f93b0b0875\",\"timestamp\":\"2026-09-24T07:33:40.302Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"34b87db2-5707-41ec-9b53-f9f93b0b0875\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"cced08ac-6afb-4dcf-8a4a-0f0854e700d6\",\"timestamp\":\"2026-09-24T07:33:40.301Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"cced08ac-6afb-4dcf-8a4a-0f0854e700d6\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_5\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"8d038cb7-7f8f-4855-bebe-3c4116dd42ff\",\"timestamp\":\"2026-09-24T07:33:40.326Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"8d038cb7-7f8f-4855-bebe-3c4116dd42ff\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_5\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE SUMMARY: Keep the blue cat and red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"eaa15130-c0c3-49e4-8b5d-22d7adbf0c00\",\"timestamp\":\"2026-09-24T07:33:40.331Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"eaa15130-c0c3-49e4-8b5d-22d7adbf0c00\",\"isSidechain\":false,\"promptId\":\"ec4652db-df68-4c08-a1d7-b3e3d5eb4fdc\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Synthetic follow-up 4: keep the original colors and add a wooden deck.\"},\"uuid\":\"bdf2982d-8c47-48e6-ac56-eedce0ea0fe0\",\"timestamp\":\"2026-09-24T07:33:40.765Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"bdf2982d-8c47-48e6-ac56-eedce0ea0fe0\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"89b9aebf-4571-4467-8fa7-a0b5e3e8b5d1\",\"timestamp\":\"2026-09-24T07:33:40.765Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"89b9aebf-4571-4467-8fa7-a0b5e3e8b5d1\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_6\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"e9334127-be34-49c2-a147-4ad7c69ae251\",\"timestamp\":\"2026-09-24T07:33:40.789Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"e9334127-be34-49c2-a147-4ad7c69ae251\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_6\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE SUMMARY: Keep the blue cat and red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"2dd13124-38fc-4764-aff2-1c6b70aa60cf\",\"timestamp\":\"2026-09-24T07:33:40.793Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n",
+  "beforeUuid": "2dd13124-38fc-4764-aff2-1c6b70aa60cf",
+  "sessionId": "11111111-1111-4111-8111-111111111111",
+  "events": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/tmp",
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "tools": [
+        "Bash"
+      ],
+      "mcp_servers": [],
+      "model": "claude-sonnet-4-6",
+      "permissionMode": "bypassPermissions",
+      "slash_commands": [
+        "deep-research",
+        "dataviz",
+        "update-config",
+        "verify",
+        "debug",
+        "code-review",
+        "simplify",
+        "batch",
+        "fewer-permission-prompts",
+        "doctor",
+        "loop",
+        "claude-api",
+        "run",
+        "run-skill-generator",
+        "agents",
+        "auto-mode-setup",
+        "autocompact",
+        "clear",
+        "color",
+        "compact",
+        "config",
+        "context",
+        "effort",
+        "fast",
+        "heapdump",
+        "init",
+        "mcp",
+        "model",
+        "__remote-workflow",
+        "workflow-launch-exec",
+        "reload-skills",
+        "rename",
+        "security-review",
+        "usage",
+        "insights",
+        "recap",
+        "goal",
+        "team-onboarding"
+      ],
+      "terminal_slash_commands": [
+        "doctor",
+        "color"
+      ],
+      "apiKeySource": "ANTHROPIC_API_KEY",
+      "claude_code_version": "2.1.233",
+      "output_style": "default",
+      "agents": [
+        "claude",
+        "Explore",
+        "general-purpose",
+        "Plan",
+        "statusline-setup"
+      ],
+      "skills": [
+        "deep-research",
+        "dataviz",
+        "update-config",
+        "verify",
+        "debug",
+        "code-review",
+        "simplify",
+        "batch",
+        "fewer-permission-prompts",
+        "doctor",
+        "loop",
+        "claude-api",
+        "run",
+        "run-skill-generator"
+      ],
+      "plugins": [],
+      "capabilities": [
+        "interrupt_receipt_v1",
+        "interrupt_cancel_queued_v1",
+        "msg_lifecycle_v1"
+      ],
+      "analytics_disabled": true,
+      "product_feedback_disabled": true,
+      "uuid": "a07a2a3f-e0b3-482f-b137-4ce71207aa06",
+      "memory_paths": {
+        "auto": "/tmp/claude-compact-XxZSiF/config/projects/-tmp/memory/"
+      },
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required"
+    },
+    {
+      "type": "system",
+      "subtype": "status",
+      "status": "requesting",
+      "uuid": "fcd2fb42-d4e6-44f1-8cdf-dcd97a686894",
+      "session_id": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "id": "msg_probe_7",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-4-6",
+          "content": [],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 190000,
+            "output_tokens": 20
+          }
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "24c4b030-1cfd-4a86-ba80-15c5de1cbdfd",
+      "ttft_ms": 6
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "thinking",
+          "thinking": ""
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "a2b257c4-52e9-4f34-9769-888678ef86f0"
+    },
+    {
+      "type": "system",
+      "subtype": "thinking_tokens",
+      "estimated_tokens": 7,
+      "estimated_tokens_delta": 7,
+      "uuid": "e4c6d8c1-d4a7-4362-9979-1d8f54e28193",
+      "session_id": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "thinking_delta",
+          "thinking": "SYNTHETIC visible reasoning"
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "c6ce1545-d622-4672-bf19-3f23556c3683"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "signature_delta",
+          "signature": "SYNTHETIC_NOT_A_VALID_SIGNATURE"
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "05a7a3d9-e9b5-405d-ad98-eeb6f1bae8f1"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_7",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "SYNTHETIC visible reasoning",
+            "signature": "SYNTHETIC_NOT_A_VALID_SIGNATURE"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 190000,
+          "output_tokens": 20
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "288e36f9-0777-4ca5-bdcc-5a37b0994850",
+      "timestamp": "2026-09-24T07:33:41.281Z"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "4efc76d7-e84c-4c0c-b639-49f4738c3348"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+          "type": "tool_use",
+          "id": "probe_tool_1",
+          "name": "Bash",
+          "input": {}
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "2236b9bf-a073-434c-897c-04d6372cb44c"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{\"command\":\"printf \\\"PROBE_TOOL_RESULT\\\\n\\\"; printf x >> /tmp/endo-probe-tool-runs\",\"description\":\"Print synthetic probe text and count this isolated tool run\"}"
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "e550418b-5c1d-451b-a718-96771a9e7503"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_7",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "probe_tool_1",
+            "name": "Bash",
+            "input": {
+              "command": "printf \"PROBE_TOOL_RESULT\\n\"; printf x >> /tmp/endo-probe-tool-runs",
+              "description": "Print synthetic probe text and count this isolated tool run"
+            }
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 190000,
+          "output_tokens": 20
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "0b15802a-657d-4086-936e-6e8c7a0c6ffa",
+      "timestamp": "2026-09-24T07:33:41.322Z"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 1
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "2d34173b-240a-4da6-a407-b87cb4d8e034"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use",
+          "stop_sequence": null
+        },
+        "usage": {
+          "output_tokens": 20
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "bf867e08-681d-456f-8c99-49005d69a27f"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "ac3b545c-76c5-4343-a651-51970c5983d0"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "probe_tool_1",
+            "type": "tool_result",
+            "content": "PROBE_TOOL_RESULT",
+            "is_error": false
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "f54ee065-f451-4da6-b4cf-c1f565cdabbd",
+      "timestamp": "2026-09-24T07:33:41.371Z",
+      "tool_use_result": {
+        "stdout": "PROBE_TOOL_RESULT",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      }
+    },
+    {
+      "type": "system",
+      "subtype": "status",
+      "status": "requesting",
+      "uuid": "def13cd2-071a-4edd-aa82-dae44841c653",
+      "session_id": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "system",
+      "subtype": "status",
+      "status": "compacting",
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "80a1bb36-2b08-42ba-b917-757a4afad211"
+    },
+    {
+      "type": "system",
+      "subtype": "status",
+      "status": null,
+      "compact_result": "success",
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "2a5619e8-0d7b-496f-ba16-3e524c5a8527"
+    },
+    {
+      "type": "system",
+      "subtype": "compact_boundary",
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "55e67bf6-2b48-41fa-a1a9-d84d0d25a562",
+      "compact_metadata": {
+        "trigger": "auto",
+        "pre_tokens": 190087,
+        "post_tokens": 255,
+        "cumulative_dropped_tokens": 189832,
+        "duration_ms": 11,
+        "preserved_segment": {
+          "head_uuid": "288e36f9-0777-4ca5-bdcc-5a37b0994850",
+          "anchor_uuid": "d74ff3cf-c28f-449f-b0af-34d15f824120",
+          "tail_uuid": "2678d9b5-4536-4a6c-a7d9-b2296a934715"
+        },
+        "preserved_messages": {
+          "anchor_uuid": "d74ff3cf-c28f-449f-b0af-34d15f824120",
+          "uuids": [
+            "288e36f9-0777-4ca5-bdcc-5a37b0994850",
+            "0b15802a-657d-4086-936e-6e8c7a0c6ffa",
+            "f54ee065-f451-4da6-b4cf-c1f565cdabbd",
+            "2678d9b5-4536-4a6c-a7d9-b2296a934715"
+          ],
+          "all_uuids": [
+            "288e36f9-0777-4ca5-bdcc-5a37b0994850",
+            "0b15802a-657d-4086-936e-6e8c7a0c6ffa",
+            "f54ee065-f451-4da6-b4cf-c1f565cdabbd",
+            "2678d9b5-4536-4a6c-a7d9-b2296a934715"
+          ]
+        }
+      },
+      "logical_parent_uuid": "2678d9b5-4536-4a6c-a7d9-b2296a934715"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nPROBE SUMMARY: Keep the blue cat and red ship.\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /tmp/claude-compact-XxZSiF/config/projects/-tmp/11111111-1111-4111-8111-111111111111.jsonl\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with \"I'll continue\" or similar. Pick up the last task as if the break never happened."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "d74ff3cf-c28f-449f-b0af-34d15f824120",
+      "timestamp": "2026-09-24T07:33:41.384Z",
+      "isSynthetic": true
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "id": "msg_probe_9",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-4-6",
+          "content": [],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1500,
+            "output_tokens": 20
+          }
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "910c598a-5dcf-4406-a30f-bd2f673fcce9",
+      "ttft_ms": 3
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "thinking",
+          "thinking": ""
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "0bdd8ea2-8dc5-4914-b138-1095afb3d42e"
+    },
+    {
+      "type": "system",
+      "subtype": "thinking_tokens",
+      "estimated_tokens": 7,
+      "estimated_tokens_delta": 7,
+      "uuid": "d8f31941-3701-4098-a806-727054342345",
+      "session_id": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "thinking_delta",
+          "thinking": "SYNTHETIC visible reasoning"
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "1e41b7ff-1a9f-4a03-ae70-b32af033a5d2"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "signature_delta",
+          "signature": "SYNTHETIC_NOT_A_VALID_SIGNATURE"
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "251b4246-fd0c-44f4-ba5a-a54ea368d6cb"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_9",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "SYNTHETIC visible reasoning",
+            "signature": "SYNTHETIC_NOT_A_VALID_SIGNATURE"
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1500,
+          "output_tokens": 20
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "93d0c16e-d955-47b5-a3ef-dfe677c8799f",
+      "timestamp": "2026-09-24T07:33:41.394Z"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "52d6f9a3-8cf8-42cc-8270-f8f535438e5a"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+          "type": "text",
+          "text": ""
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "0cb0a666-9d70-49f9-85bc-69756ef143e9"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {
+          "type": "text_delta",
+          "text": "PROBE SUMMARY: Keep the blue cat and red ship."
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "eee1c64b-5b34-4dd0-9cec-df239b084856"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_9",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "text",
+            "text": "PROBE SUMMARY: Keep the blue cat and red ship."
+          }
+        ],
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1500,
+          "output_tokens": 20
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "uuid": "e12b7d15-e949-49bb-9cb9-fc25b6a4d550",
+      "timestamp": "2026-09-24T07:33:41.394Z"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "content_block_stop",
+        "index": 1
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "7bf24418-4b2a-40ea-862c-2e669aeea767"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "end_turn",
+          "stop_sequence": null
+        },
+        "usage": {
+          "output_tokens": 20
+        }
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "f19134a9-d55e-4342-b8a5-f7b535205d9f"
+    },
+    {
+      "type": "stream_event",
+      "event": {
+        "type": "message_stop"
+      },
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "parent_tool_use_id": null,
+      "uuid": "4ba51e46-eb27-4bee-9adb-38b4ddc7ddce"
+    },
+    {
+      "is_error": false,
+      "duration_api_ms": 87,
+      "num_turns": 3,
+      "stop_reason": "end_turn",
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "total_cost_usd": 0.5799000000000001,
+      "usage": {
+        "input_tokens": 191500,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 40,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-sonnet-4-6": {
+          "inputTokens": 193000,
+          "outputTokens": 60,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.5799000000000001,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "canonicalModel": "claude-sonnet-4-6",
+          "provider": "firstParty"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "completed",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subtype": "success",
+      "api_error_status": null,
+      "result": "PROBE SUMMARY: Keep the blue cat and red ship.",
+      "ttft_ms": 41,
+      "ttft_stream_ms": 40,
+      "time_to_request_ms": 35,
+      "type": "result",
+      "duration_ms": 160,
+      "uuid": "b489fc47-d9ef-4832-a27b-18b88f05c880"
+    }
+  ],
+  "nativeTranscript": "{\"parentUuid\":\"eb5f9696-b006-4b74-ab53-e30b5f703dc9\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_7\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":190000,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"timestamp\":\"2026-09-24T07:33:41.281Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_7\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"tool_use\",\"id\":\"probe_tool_1\",\"name\":\"Bash\",\"input\":{\"command\":\"printf \\\"PROBE_TOOL_RESULT\\\\n\\\"; printf x >> /tmp/endo-probe-tool-runs\",\"description\":\"Print synthetic probe text and count this isolated tool run\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":190000,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"timestamp\":\"2026-09-24T07:33:41.322Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"isSidechain\":false,\"promptId\":\"f752d656-43c8-48d1-94b3-c12fa1a44c9d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"probe_tool_1\",\"type\":\"tool_result\",\"content\":\"PROBE_TOOL_RESULT\",\"is_error\":false}]},\"uuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"timestamp\":\"2026-09-24T07:33:41.371Z\",\"toolUseResult\":{\"stdout\":\"PROBE_TOOL_RESULT\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false},\"sourceToolAssistantUUID\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>14811500 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"2678d9b5-4536-4a6c-a7d9-b2296a934715\",\"timestamp\":\"2026-09-24T07:33:41.373Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"isSidechain\":false,\"promptId\":\"f752d656-43c8-48d1-94b3-c12fa1a44c9d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"probe_tool_1\",\"type\":\"tool_result\",\"content\":\"PROBE_TOOL_RESULT\",\"is_error\":false}]},\"uuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"timestamp\":\"2026-09-24T07:33:41.371Z\",\"toolUseResult\":{\"stdout\":\"PROBE_TOOL_RESULT\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false},\"sourceToolAssistantUUID\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n{\"parentUuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>14811500 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"2678d9b5-4536-4a6c-a7d9-b2296a934715\",\"timestamp\":\"2026-09-24T07:33:41.373Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n{\"parentUuid\":null,\"logicalParentUuid\":\"2678d9b5-4536-4a6c-a7d9-b2296a934715\",\"isSidechain\":false,\"type\":\"system\",\"subtype\":\"compact_boundary\",\"content\":\"Conversation compacted\",\"isMeta\":false,\"timestamp\":\"2026-09-24T07:33:41.385Z\",\"uuid\":\"55e67bf6-2b48-41fa-a1a9-d84d0d25a562\",\"level\":\"info\",\"compactMetadata\":{\"trigger\":\"auto\",\"preTokens\":190087,\"durationMs\":11,\"preservedSegment\":{\"headUuid\":\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"anchorUuid\":\"d74ff3cf-c28f-449f-b0af-34d15f824120\",\"tailUuid\":\"2678d9b5-4536-4a6c-a7d9-b2296a934715\"},\"preservedMessages\":{\"anchorUuid\":\"d74ff3cf-c28f-449f-b0af-34d15f824120\",\"uuids\":[\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"2678d9b5-4536-4a6c-a7d9-b2296a934715\"],\"allUuids\":[\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"2678d9b5-4536-4a6c-a7d9-b2296a934715\"]},\"postTokens\":255,\"cumulativeDroppedTokens\":189832},\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n{\"parentUuid\":\"55e67bf6-2b48-41fa-a1a9-d84d0d25a562\",\"isSidechain\":false,\"promptId\":\"f752d656-43c8-48d1-94b3-c12fa1a44c9d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\\n\\nPROBE SUMMARY: Keep the blue cat and red ship.\\n\\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /tmp/claude-compact-XxZSiF/config/projects/-tmp/11111111-1111-4111-8111-111111111111.jsonl\\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with \\\"I'll continue\\\" or similar. Pick up the last task as if the break never happened.\"},\"isVisibleInTranscriptOnly\":true,\"isCompactSummary\":true,\"uuid\":\"d74ff3cf-c28f-449f-b0af-34d15f824120\",\"timestamp\":\"2026-09-24T07:33:41.384Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n{\"parentUuid\":\"d74ff3cf-c28f-449f-b0af-34d15f824120\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_9\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"93d0c16e-d955-47b5-a3ef-dfe677c8799f\",\"timestamp\":\"2026-09-24T07:33:41.394Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n{\"parentUuid\":\"93d0c16e-d955-47b5-a3ef-dfe677c8799f\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_9\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"PROBE SUMMARY: Keep the blue cat and red ship.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1500,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"e12b7d15-e949-49bb-9cb9-fc25b6a4d550\",\"timestamp\":\"2026-09-24T07:33:41.394Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n",
+  "compactionWitness": "{\"parentUuid\":\"2dd13124-38fc-4764-aff2-1c6b70aa60cf\",\"isSidechain\":false,\"promptId\":\"f752d656-43c8-48d1-94b3-c12fa1a44c9d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Run the synthetic print tool, then continue.\"},\"uuid\":\"d1031711-d368-44ec-8c01-bbccf029e786\",\"timestamp\":\"2026-09-24T07:33:41.253Z\",\"permissionMode\":\"bypassPermissions\",\"promptSource\":\"sdk\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"d1031711-d368-44ec-8c01-bbccf029e786\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>15000000 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"eb5f9696-b006-4b74-ab53-e30b5f703dc9\",\"timestamp\":\"2026-09-24T07:33:41.252Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"eb5f9696-b006-4b74-ab53-e30b5f703dc9\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_7\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"SYNTHETIC visible reasoning\",\"signature\":\"SYNTHETIC_NOT_A_VALID_SIGNATURE\"}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":190000,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"timestamp\":\"2026-09-24T07:33:41.281Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"288e36f9-0777-4ca5-bdcc-5a37b0994850\",\"isSidechain\":false,\"message\":{\"id\":\"msg_probe_7\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[{\"type\":\"tool_use\",\"id\":\"probe_tool_1\",\"name\":\"Bash\",\"input\":{\"command\":\"printf \\\"PROBE_TOOL_RESULT\\\\n\\\"; printf x >> /tmp/endo-probe-tool-runs\",\"description\":\"Print synthetic probe text and count this isolated tool run\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":190000,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":20,\"output_tokens_details\":{\"thinking_tokens\":0},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"stop_details\":null},\"type\":\"assistant\",\"uuid\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"timestamp\":\"2026-09-24T07:33:41.322Z\",\"effort\":\"high\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"isSidechain\":false,\"promptId\":\"f752d656-43c8-48d1-94b3-c12fa1a44c9d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"probe_tool_1\",\"type\":\"tool_result\",\"content\":\"PROBE_TOOL_RESULT\",\"is_error\":false}]},\"uuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"timestamp\":\"2026-09-24T07:33:41.371Z\",\"toolUseResult\":{\"stdout\":\"PROBE_TOOL_RESULT\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false},\"sourceToolAssistantUUID\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>14811500 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"2678d9b5-4536-4a6c-a7d9-b2296a934715\",\"timestamp\":\"2026-09-24T07:33:41.373Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\"}\n{\"parentUuid\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"isSidechain\":false,\"promptId\":\"f752d656-43c8-48d1-94b3-c12fa1a44c9d\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"probe_tool_1\",\"type\":\"tool_result\",\"content\":\"PROBE_TOOL_RESULT\",\"is_error\":false}]},\"uuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"timestamp\":\"2026-09-24T07:33:41.371Z\",\"toolUseResult\":{\"stdout\":\"PROBE_TOOL_RESULT\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false},\"sourceToolAssistantUUID\":\"0b15802a-657d-4086-936e-6e8c7a0c6ffa\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n{\"parentUuid\":\"f54ee065-f451-4da6-b4cf-c1f565cdabbd\",\"isSidechain\":false,\"attachment\":{\"type\":\"total_tokens_reminder\",\"text\":\"<total_tokens>14811500 tokens left</total_tokens>\"},\"type\":\"attachment\",\"uuid\":\"2678d9b5-4536-4a6c-a7d9-b2296a934715\",\"timestamp\":\"2026-09-24T07:33:41.373Z\",\"userType\":\"external\",\"entrypoint\":\"sdk-cli\",\"cwd\":\"/tmp\",\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"version\":\"2.1.233\",\"gitBranch\":\"HEAD\",\"slug\":\"sunny-mixing-whisper\"}\n"
+}

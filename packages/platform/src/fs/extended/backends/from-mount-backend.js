@@ -11,10 +11,9 @@
  *   whole file via `streamBase64()` and slices. `write`/`setStat`
  *   likewise read-modify-write the whole file, since Mount has no
  *   partial-range write. Cost is O(filesize) on the wire (≈1.33×, base64)
- *   and in memory; the write side sends the file as a *single* base64
- *   chunk via `makeBytesBlob` (no back-pressure). Acceptable for the
- *   config/source-tree files this adapter targets; large-blob streaming
- *   would need a chunked `makeBytesBlob`.
+ *   and in memory. The write side streams the coalesced buffer in bounded
+ *   chunks via `makeBytesBlob`, respecting the Mount reader's frame limit
+ *   and back-pressure independently of the whole file's size.
  * - No xattrs / locks / events surface (left absent so wrapBackend
  *   uses its vat-local lock table and synthesizes empty watchers).
  * - `kind` returns 'file' | 'directory' | undefined based on
@@ -67,10 +66,15 @@ harden(isNotFoundMessage);
  * @param {Uint8Array} bytes
  */
 const makeBytesBlob = bytes => {
-  async function* singleChunk() {
-    yield bytes;
+  async function* chunks() {
+    // 64 KiB expands to 87,384 base64 characters, below the default
+    // iterateBytesReader/M.string frame bound of 100,000 characters.
+    const chunkSize = 64 * 1024;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      yield bytes.subarray(offset, offset + chunkSize);
+    }
   }
-  return bytesReaderFromIterator(singleChunk());
+  return bytesReaderFromIterator(chunks());
 };
 harden(makeBytesBlob);
 

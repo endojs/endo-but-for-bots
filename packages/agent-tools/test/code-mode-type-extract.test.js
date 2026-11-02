@@ -212,6 +212,99 @@ test('a generic base fails rather than printing an unsubstituted parameter', t =
   );
 });
 
+test('empty auxiliary interfaces preserve generic array, record and tagged heritage', t => {
+  const ir = extract(`
+    type Items<T> = readonly T[];
+    type Fields<T> = { readonly [key: string]: T };
+    type Tagged<K, V> = { tag: K; payload: V };
+    interface ArrayBox<T> extends Items<T> {}
+    interface RecordBox<T> extends Fields<T> {}
+    interface TagBox<T> extends Tagged<'value', T> {}
+    export interface Root {
+      array(): ArrayBox<string>;
+      record(): RecordBox<number>;
+      tagged(): TagBox<boolean>;
+    }
+  `);
+  t.is(auxText(ir, 'ArrayBox'), 'Items<T>');
+  t.is(auxText(ir, 'RecordBox'), 'Fields<T>');
+  t.is(auxText(ir, 'TagBox'), "Tagged<'value', T>");
+  t.is(auxText(ir, 'Items'), 'readonly T[]');
+  const printed = renderDeclaration(ir, { globalName: 'root' });
+  t.true(
+    printed.aux.includes('interface ArrayBox<T = unknown> extends Items<T>'),
+  );
+  t.false(printed.aux.includes('type ArrayBox'));
+});
+
+test('preserved auxiliary interface heritage keeps multiple bases and root references', t => {
+  const ir = extract(`
+    type Value<T> = { value: T };
+    type Extra<T> = { extra: T };
+    interface Both<T> extends Value<Root>, Extra<T> {}
+    export interface Root { read(): Both<string>; }
+  `);
+  const printed = renderDeclaration(ir, { globalName: 'root' });
+  t.true(printed.aux.includes('extends Value<typeof root>, Extra<T>'));
+  t.false(printed.aux.includes('Value<Root>'));
+  t.true(printed.aux.includes('type Value'));
+  t.true(printed.aux.includes('type Extra'));
+});
+
+test('imported literal constants preserve computed keys and typeof queries', t => {
+  const path = writeModules(t, {
+    'keys.d.ts': `export const KEY: 'literal-key'; export const INDEX: 7;`,
+    'root.d.ts': `
+      import { KEY, INDEX } from './keys.js';
+      type Tagged = { [KEY]: 'tag'; [INDEX]: string };
+      type Key = typeof KEY;
+      export interface Root { read(): Tagged; key(): Key; }
+    `,
+  });
+  const ir = extract(
+    `
+    import { KEY, INDEX } from './keys.js';
+    type Tagged = { [KEY]: 'tag'; [INDEX]: string };
+    type Key = typeof KEY;
+    export interface Root { read(): Tagged; key(): Key; }
+  `,
+    { fileName: path('root.d.ts') },
+  );
+  t.regex(auxText(ir, 'Tagged'), /"literal-key": 'tag'/u);
+  t.regex(auxText(ir, 'Tagged'), /7: string/u);
+  t.is(auxText(ir, 'Key'), '"literal-key"');
+});
+
+test('unsupported imported computed property identities fail closed', t => {
+  const path = writeModules(t, {
+    'keys.d.ts': 'export const KEY: unique symbol;',
+  });
+  t.throws(
+    () =>
+      extract(
+        `
+    import { KEY } from './keys.js';
+    type Tagged = { [KEY]: string };
+    export interface Root { read(): Tagged; }
+  `,
+        { fileName: path('root.d.ts') },
+      ),
+    { message: /cannot resolve computed property KEY/u },
+  );
+});
+
+test('nonempty auxiliary generic inheritance still refuses unsafe flattening', t => {
+  t.throws(
+    () =>
+      extract(`
+    interface Base<T> { value(): T; }
+    interface Child extends Base<string> { value(): 'specific'; }
+    export interface Root { child(): Child; }
+  `),
+    { message: /type arguments are not substituted/u },
+  );
+});
+
 test('a type reference outside the @endo namespace still collapses', t => {
   const ir = extract(`
     import type { Dirent } from 'node:fs';

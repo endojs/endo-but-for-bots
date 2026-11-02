@@ -1,16 +1,21 @@
 // @ts-check
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 import { initialCount } from './initial-count.js';
 
-/** @import { Far as FarType } from '@endo/far' */
-// The guest realm supplies Far; the type import does not bundle its library.
-const { Far } = /** @type {typeof globalThis & { Far: typeof FarType }} */ (
-  globalThis
-);
+// The guest prelude supplies these; the type import bundles nothing.
+const { makeExo, M } = /** @type {GuestGlobals} */ (globalThis);
+
+const CounterI = M.interface('CounterApplication', {
+  help: M.call().returns(M.string()),
+  incr: M.call().returns(M.bigint()),
+  read: M.call().returns(M.bigint()),
+  powerNames: M.call().returns(M.arrayOf(M.string())),
+});
 
 /** @param {{}} powers */
 export const make = powers => {
   let count = initialCount;
-  return Far('CounterApplication', {
+  return makeExo('CounterApplication', CounterI, {
     help: () => 'incr() increments the persistent counter; read() returns it.',
     incr: () => {
       count += 1n;

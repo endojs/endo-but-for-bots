@@ -1,0 +1,527 @@
+// @ts-check
+/** @import { CompartmentEndowments } from '@endo/preact-container/compartment' */
+
+/** @typedef {{name: string, token: string, localName?: string}} ValuePart */
+/** @typedef {{id: string, content: readonly (string | ValuePart)[], from?: string, to?: string, status?: string, error?: string}} Message */
+/** @typedef {{name: string, token: string, status: string}} Contact */
+/** @typedef {{workspace: string, inbox: Message[], outbox: Message[], contacts: Contact[], attachments: ValuePart[], inventory: [string, string][]}} MailSnapshot */
+/** @typedef {{subscribe: (onState: (state: MailSnapshot) => void, onError: (error: Error) => void) => (() => void), adopt: (token: string, name: string) => Promise<string>, send: (recipient: string | {token: string}, content: readonly (string | {token: string})[]) => Promise<string>}} MailUiApi */
+
+/** @typedef {{parts: (string | ValuePart)[], query?: string}} EditorSnapshot */
+/** @typedef {{subscribe: (listener: (state: EditorSnapshot) => void) => (() => void), insert: (value: ValuePart) => void, clear: () => void}} MailEditor */
+
+/**
+ * Evaluated in a fresh SES compartment. Its only powers are the renderer's
+ * hooks and the mail and adoption operations the host passes as props.
+ * @param {CompartmentEndowments} tools
+ * @param {{api: MailUiApi, editor: MailEditor}} props
+ */
+export const MailUi = ({ h, useState, useEffect, useRef }, { api, editor }) => {
+  const [data, setData] = useState(
+    /** @type {MailSnapshot | undefined} */ (undefined),
+  );
+  const [folder, setFolder] = useState('inbox');
+  const [selected, setSelected] = useState('');
+  const [composing, setComposing] = useState(false);
+  const [recipient, setRecipient] = useState('');
+  const [draft, setDraft] = useState(
+    /** @type {(string | ValuePart)[]} */ (['']),
+  );
+  const [query, setQuery] = useState(
+    /** @type {string | undefined} */ (undefined),
+  );
+  const suggestions = (data?.attachments ?? []).filter(part =>
+    part.name.toLowerCase().includes(query?.toLowerCase() ?? ''),
+  );
+  const text = draft
+    .map(part => (typeof part === 'string' ? part : part.name))
+    .join('');
+  useEffect(
+    () =>
+      editor.subscribe(state => {
+        setDraft(state.parts);
+        setQuery(state.query);
+      }),
+    [],
+  );
+  const [busy, setBusy] = useState(false);
+  const sending = useRef(false);
+  const [adopting, setAdopting] = useState(
+    /** @type {ValuePart | undefined} */ (undefined),
+  );
+  const [localName, setLocalName] = useState('');
+  const [adoptError, setAdoptError] = useState('');
+  const [adoptBusy, setAdoptBusy] = useState(false);
+  const adoptPending = useRef(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [accessDenied, setAccessDenied] = useState(false);
+
+  const [connected, setConnected] = useState(false);
+  useEffect(
+    () =>
+      api.subscribe(
+        state => {
+          setData(state);
+          setConnected(true);
+          setError('');
+          setAccessDenied(false);
+        },
+        reason => {
+          setConnected(false);
+          setError(reason.message);
+          setAccessDenied(reason.name === 'MailAccessError');
+        },
+      ),
+    [],
+  );
+
+  /** @param {{preventDefault: () => void}} event */
+  const send = async event => {
+    event.preventDefault();
+    if (sending.current || busy || !recipient || !text.trim()) return;
+    sending.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await api.send(
+        { token: recipient },
+        draft.map(part =>
+          typeof part === 'string' ? part : { token: part.token },
+        ),
+      );
+      editor.clear();
+      setComposing(false);
+      setFolder('outbox');
+      setSelected('');
+      setNotice('Message queued. Delivery status updates automatically.');
+    } catch (reason) {
+      setError(
+        `${/** @type {Error} */ (reason).message} Check Sent before sending again.`,
+      );
+    } finally {
+      setBusy(false);
+    }
+    sending.current = false;
+  };
+  /** @param {ValuePart} part */
+  const showAdoption = part => {
+    setAdopting(part);
+    setLocalName(part.name);
+    setAdoptError('');
+  };
+  const closeAdoption = () => {
+    if (!adoptPending.current) setAdopting(undefined);
+  };
+  /** @param {{preventDefault: () => void}} event */
+  const adopt = async event => {
+    event.preventDefault();
+    if (!adopting || adoptPending.current || !localName.trim()) return;
+    adoptPending.current = true;
+    setAdoptBusy(true);
+    setAdoptError('');
+    try {
+      const name = await api.adopt(adopting.token, localName);
+      setAdopting(undefined);
+      setNotice(`Adopted as ${name}.`);
+    } catch (reason) {
+      setAdoptError(/** @type {Error} */ (reason).message);
+    } finally {
+      adoptPending.current = false;
+      setAdoptBusy(false);
+    }
+  };
+  const messages = data ? (folder === 'inbox' ? data.inbox : data.outbox) : [];
+  const message = messages.find(item => item.id === selected);
+  const contacts =
+    data?.contacts.filter(contact => contact.status === 'ready') ?? [];
+  /** @param {string} next */
+  const openFolder = next => {
+    setFolder(next);
+    setSelected('');
+    setComposing(false);
+  };
+  if (accessDenied)
+    return h(
+      'main',
+      { class: 'mail-access-error' },
+      h('p', { role: 'alert', class: 'error' }, error),
+    );
+  return h(
+    'main',
+    { class: 'mail' },
+    h(
+      'aside',
+      { class: 'inventory', 'aria-label': 'Inventory' },
+      h('p', { class: 'eyebrow' }, 'YOUR WORKSPACE'),
+      h('h2', null, 'Inventory'),
+      h('p', { class: 'hint' }, 'The names you know.'),
+      ...(data?.inventory ?? []).map(([name, summary]) =>
+        h(
+          'div',
+          { key: name, class: 'inventory-entry' },
+          h('strong', null, name),
+          h('span', { class: 'hint' }, summary),
+        ),
+      ),
+      data &&
+        !data.inventory.length &&
+        h('p', { class: 'hint' }, 'Your inventory is empty.'),
+    ),
+    h(
+      'div',
+      { class: 'mail-area' },
+      h(
+        'div',
+        {
+          class: 'mail-content',
+          'aria-hidden': adopting ? 'true' : undefined,
+        },
+        h(
+          'header',
+          { class: 'masthead' },
+          h(
+            'div',
+            null,
+            h('p', { class: 'eyebrow' }, 'THIXOTROPE'),
+            h('h1', null, 'Mail'),
+          ),
+          h(
+            'div',
+            { class: 'header-actions' },
+            h(
+              'span',
+              { class: 'workspace' },
+              data?.workspace ?? (error ? 'Unavailable' : 'Connecting…'),
+            ),
+            h(
+              'span',
+              { class: 'hint', role: 'status' },
+              connected ? 'Live' : error ? 'Disconnected' : 'Connecting…',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'primary',
+                disabled: busy || !data,
+                onClick: () => {
+                  setComposing(true);
+                  setNotice('');
+                },
+              },
+              'Compose',
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { role: 'status', 'aria-live': 'polite', class: 'notice' },
+          notice,
+        ),
+        error && h('p', { role: 'alert', class: 'error' }, error),
+        h(
+          'div',
+          { class: 'layout' },
+          h(
+            'nav',
+            { 'aria-label': 'Mail folders' },
+            ...[
+              ['inbox', 'Inbox', data?.inbox.length ?? 0],
+              ['outbox', 'Sent', data?.outbox.length ?? 0],
+            ].map(([key, label, count]) =>
+              h(
+                'button',
+                {
+                  type: 'button',
+                  class:
+                    folder === key && !composing ? 'folder active' : 'folder',
+                  'aria-pressed': folder === key && !composing,
+                  onClick: () => openFolder(String(key)),
+                },
+                label,
+                h('span', null, count),
+              ),
+            ),
+          ),
+          composing
+            ? h(
+                'section',
+                { class: 'compose', 'aria-label': 'Compose message' },
+                h('h2', null, 'New message'),
+                h(
+                  'form',
+                  { onSubmit: send },
+                  h(
+                    'label',
+                    null,
+                    'To',
+                    h(
+                      'select',
+                      {
+                        required: true,
+                        value: recipient,
+                        disabled: busy,
+                        onChange: event => setRecipient(event.target.value),
+                      },
+                      h('option', { value: '' }, 'Choose a contact'),
+                      ...contacts.map(contact =>
+                        h(
+                          'option',
+                          { key: contact.token, value: contact.token },
+                          contact.name,
+                        ),
+                      ),
+                    ),
+                  ),
+                  !contacts.length &&
+                    h(
+                      'p',
+                      { class: 'hint' },
+                      'No ready contacts. Introduce a correspondent with thix invite / accept.',
+                    ),
+                  h(
+                    'p',
+                    { class: 'hint' },
+                    'Type @ to insert a value from your inventory.',
+                  ),
+                  h('div', {
+                    class: 'draft-editor',
+                    'data-disabled': busy,
+                    onKeyDown: event => {
+                      if (query !== undefined && event.key === 'Enter') {
+                        event.preventDefault();
+                        if (suggestions.length) editor.insert(suggestions[0]);
+                      }
+                    },
+                  }),
+                  query !== undefined &&
+                    h(
+                      'div',
+                      {
+                        class: 'value-suggestions',
+                        'aria-label': 'Inventory suggestions',
+                      },
+                      ...suggestions.map(part =>
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            onClick: () => editor.insert(part),
+                          },
+                          part.name,
+                        ),
+                      ),
+                      !suggestions.length &&
+                        h(
+                          'p',
+                          { class: 'hint' },
+                          'No matching inventory values.',
+                        ),
+                    ),
+                  h(
+                    'div',
+                    { class: 'compose-footer' },
+                    h('span', { class: 'hint' }, `${text.length} / 4096`),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        disabled: busy,
+                        onClick: () => setComposing(false),
+                      },
+                      'Cancel',
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'submit',
+                        class: 'primary',
+                        disabled: busy || !recipient || !text.trim(),
+                      },
+                      busy ? 'Sending…' : 'Send message',
+                    ),
+                  ),
+                ),
+              )
+            : h(
+                'section',
+                {
+                  class: 'messages',
+                  'aria-label': folder === 'inbox' ? 'Inbox' : 'Sent messages',
+                },
+                h(
+                  'div',
+                  { class: 'message-list' },
+                  !messages.length &&
+                    h(
+                      'p',
+                      { class: 'empty' },
+                      data
+                        ? folder === 'inbox'
+                          ? 'Your inbox is empty.'
+                          : 'No sent messages yet.'
+                        : error
+                          ? 'Mail could not be loaded.'
+                          : 'Loading mail…',
+                    ),
+                  ...[...messages].reverse().map(item =>
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        key: item.id,
+                        class:
+                          item.id === selected
+                            ? 'message-row selected'
+                            : 'message-row',
+                        onClick: () => setSelected(item.id),
+                      },
+                      h('strong', null, item.from ?? item.to),
+                      h(
+                        'span',
+                        { class: 'preview' },
+                        item.content
+                          .map(part =>
+                            typeof part === 'string'
+                              ? part
+                              : `[${part.localName ?? part.name}]`,
+                          )
+                          .join(''),
+                      ),
+                      item.status && h('small', null, item.status),
+                    ),
+                  ),
+                ),
+                h(
+                  'article',
+                  { class: 'reader', 'aria-label': 'Message' },
+                  message
+                    ? [
+                        h(
+                          'p',
+                          { class: 'eyebrow' },
+                          folder === 'inbox' ? 'FROM' : 'TO',
+                        ),
+                        h('h2', null, message.from ?? message.to),
+                        message.status &&
+                          h('p', { class: 'hint' }, message.status),
+                        h(
+                          'div',
+                          { class: 'message-body' },
+                          ...message.content.map((part, index) =>
+                            typeof part === 'string'
+                              ? h('span', { key: index }, part)
+                              : part.localName !== undefined
+                                ? h(
+                                    'span',
+                                    {
+                                      key: index,
+                                      class: 'shared-value known-value',
+                                      title: 'In your inventory',
+                                    },
+                                    part.localName,
+                                  )
+                                : h(
+                                    'button',
+                                    {
+                                      key: index,
+                                      type: 'button',
+                                      class: 'shared-value unknown-value',
+                                      title:
+                                        'Unknown value — adopt into your inventory',
+                                      'aria-label': `Adopt ${part.name}`,
+                                      onClick: () => showAdoption(part),
+                                    },
+                                    h(
+                                      'span',
+                                      {
+                                        class: 'unknown-marker',
+                                        'aria-hidden': 'true',
+                                      },
+                                      '?',
+                                    ),
+                                    part.name,
+                                  ),
+                          ),
+                        ),
+                        message.error &&
+                          h('p', { class: 'error' }, message.error),
+                      ]
+                    : h('p', { class: 'empty' }, 'Select a message to read.'),
+                ),
+              ),
+        ),
+      ),
+      adopting &&
+        h(
+          'div',
+          {
+            class: 'adoption-shade',
+            onKeyDown: event => {
+              if (event.key === 'Escape') closeAdoption();
+            },
+          },
+          h(
+            'section',
+            {
+              class: 'adoption-modal',
+              role: 'dialog',
+              'aria-modal': 'true',
+              'aria-labelledby': 'adoption-title',
+            },
+            h('p', { class: 'eyebrow' }, 'UNKNOWN VALUE'),
+            h('h2', { id: 'adoption-title' }, 'Adopt a value'),
+            h(
+              'p',
+              { class: 'hint' },
+              `The sender calls this “${adopting.name}”. Choose your own name to keep it in your inventory.`,
+            ),
+            h(
+              'form',
+              { onSubmit: adopt },
+              h(
+                'label',
+                null,
+                'Your name',
+                h('input', {
+                  autoFocus: true,
+                  required: true,
+                  maxLength: 128,
+                  value: localName,
+                  disabled: adoptBusy,
+                  onInput: event => setLocalName(event.currentTarget.value),
+                }),
+              ),
+              adoptError &&
+                h('p', { class: 'error', role: 'alert' }, adoptError),
+              h(
+                'div',
+                { class: 'compose-footer' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: adoptBusy,
+                    onClick: closeAdoption,
+                  },
+                  'Cancel',
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'submit',
+                    class: 'primary',
+                    disabled: adoptBusy || !localName.trim(),
+                  },
+                  adoptBusy ? 'Adopting…' : 'Adopt value',
+                ),
+              ),
+            ),
+          ),
+        ),
+    ),
+  );
+};
+harden(MailUi);

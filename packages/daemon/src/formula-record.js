@@ -36,6 +36,24 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
   const properties = {};
 
   switch (formula.type) {
+    case 'environment': {
+      properties.runner = { kind: 'reference', identifier: formula.runner };
+      properties.workspace = {
+        kind: 'reference',
+        identifier: formula.workspace,
+      };
+      properties.state = { kind: 'reference', identifier: formula.state };
+      properties.recipe = { kind: 'literal', value: formula.recipe };
+      break;
+    }
+    case 'environment-facet': {
+      properties.environment = {
+        kind: 'reference',
+        identifier: formula.environment,
+      };
+      properties.facet = { kind: 'literal', value: formula.facet };
+      break;
+    }
     case 'eval': {
       properties.source = { kind: 'literal', value: formula.source };
       properties.worker = { kind: 'reference', identifier: formula.worker };

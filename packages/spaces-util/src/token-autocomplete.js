@@ -1,5 +1,4 @@
 // @ts-check
-/* eslint-disable no-use-before-define */
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { EndoHost } from '@endo/daemon' */
@@ -50,6 +49,9 @@ import { lookupPath } from './name-hub.js';
 /**
  * @typedef {object} TokenAutocompleteAPI
  * @property {() => ChatMessage} getMessage - Parse the input into structured message
+ * @property {(message: ChatMessage) => void} [setMessage] - Restore a structured draft
+ * @property {() => void} [dispose] - Release document listeners and pending blur
+ * @property {() => void} [close] - Dismiss completion
  * @property {() => void} clear - Clear the input
  * @property {() => boolean} isMenuVisible - Check if autocomplete menu is visible
  * @property {(petName: string) => void} insertTokenAtCursor - Insert a token programmatically
@@ -237,6 +239,8 @@ export const tokenAutocompleteComponent = (
   // the selected name as a path prefix and fetch sub-directory names.
   /** @type {string[]} */
   let pathPrefix = [];
+  let directoryGeneration = 0;
+  let blurTimer;
   /** @type {string[] | null} */
   let directoryNames = null;
 
@@ -279,6 +283,7 @@ export const tokenAutocompleteComponent = (
   };
 
   const hideMenu = () => {
+    directoryGeneration += 1;
     isMenuVisible = false;
     $menu.classList.remove('visible');
     triggerNode = null;
@@ -381,6 +386,18 @@ export const tokenAutocompleteComponent = (
    * @returns {HTMLSpanElement}
    */
   const createTokenElement = (petName, edgeName) => {
+    if (!edgeName) {
+      const base =
+        (petName.split('/').at(-1) || 'object').replace(/@/g, '') || 'object';
+      const used = new Set(
+        [...$input.querySelectorAll('.chat-token')].map(
+          el => /** @type {HTMLElement} */ (el).dataset.edgeName,
+        ),
+      );
+      edgeName = base;
+      for (let index = 2; used.has(edgeName); index += 1)
+        edgeName = `${base.slice(0, 240)}-${index}`;
+    }
     const $token = document.createElement('span');
     $token.className = 'chat-token';
     $token.contentEditable = 'false';
@@ -410,6 +427,8 @@ export const tokenAutocompleteComponent = (
    * @param {string} selectedName
    */
   const drillDown = async selectedName => {
+    directoryGeneration += 1;
+    const generation = directoryGeneration;
     pathPrefix = [...pathPrefix, selectedName];
 
     // Replace the filter text with the confirmed path + trailing /
@@ -449,8 +468,10 @@ export const tokenAutocompleteComponent = (
       for await (const name of names) {
         result.push(name);
       }
+      if (generation !== directoryGeneration) return;
       directoryNames = result.sort();
     } catch {
+      if (generation !== directoryGeneration) return;
       directoryNames = [];
     }
 
@@ -489,7 +510,7 @@ export const tokenAutocompleteComponent = (
     const afterText = fullText.slice(cursorOffset);
 
     // Create token element
-    const $token = createTokenElement(fullPetName, edgeName || fullPetName);
+    const $token = createTokenElement(fullPetName, edgeName);
 
     // Split the text node and insert token
     // Add a space after the token for easy continuation
@@ -513,6 +534,7 @@ export const tokenAutocompleteComponent = (
 
     hideMenu();
     $input.focus();
+    $input.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
   /**
@@ -628,6 +650,7 @@ export const tokenAutocompleteComponent = (
     enteringEdgeName = false;
     pendingToken = null;
     $input.focus();
+    $input.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
   /**
@@ -656,7 +679,15 @@ export const tokenAutocompleteComponent = (
           currentText = '';
           messagePetNames.push(el.dataset.petName || '');
           edgeNames.push(el.dataset.edgeName || el.dataset.petName || '');
+        } else if (el.tagName === 'BR') {
+          currentText += '\n';
         } else {
+          if (
+            ['DIV', 'P'].includes(el.tagName) &&
+            currentText &&
+            !currentText.endsWith('\n')
+          )
+            currentText += '\n';
           // Recurse into children
           for (const child of node.childNodes) {
             walk(child);
@@ -813,6 +844,7 @@ export const tokenAutocompleteComponent = (
   });
 
   $input.addEventListener('keydown', e => {
+    if (e.isComposing) return;
     // Handle Enter in edge name mode
     if (
       enteringEdgeName &&
@@ -841,6 +873,7 @@ export const tokenAutocompleteComponent = (
             ) {
               e.preventDefault();
               prev.remove();
+              $input.dispatchEvent(new Event('input', { bubbles: true }));
               return;
             }
           }
@@ -854,6 +887,7 @@ export const tokenAutocompleteComponent = (
             ) {
               e.preventDefault();
               prev.remove();
+              $input.dispatchEvent(new Event('input', { bubbles: true }));
               return;
             }
           }
@@ -1003,7 +1037,7 @@ export const tokenAutocompleteComponent = (
   });
 
   // Close menu on outside click
-  document.addEventListener('click', e => {
+  const onDocumentClick = e => {
     if (
       isMenuVisible &&
       !$menu.contains(/** @type {Node} */ (e.target)) &&
@@ -1011,11 +1045,13 @@ export const tokenAutocompleteComponent = (
     ) {
       hideMenu();
     }
-  });
+  };
+  document.addEventListener('click', onDocumentClick);
 
   // Close on blur
   $input.addEventListener('blur', () => {
-    setTimeout(() => {
+    clearTimeout(blurTimer);
+    blurTimer = setTimeout(() => {
       if (isMenuVisible && document.activeElement !== $input) {
         hideMenu();
       }
@@ -1039,7 +1075,7 @@ export const tokenAutocompleteComponent = (
     const range = sel.getRangeAt(0);
 
     // Create token element
-    const $token = createTokenElement(petName, petName);
+    const $token = createTokenElement(petName, '');
     const $space = document.createTextNode(' ');
 
     range.insertNode($space);
@@ -1050,6 +1086,7 @@ export const tokenAutocompleteComponent = (
     range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
+    $input.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
   // Mount the confined dropdown into the host's container. The host owns the
@@ -1059,6 +1096,23 @@ export const tokenAutocompleteComponent = (
 
   return harden({
     getMessage,
+    close: hideMenu,
+    dispose: () => {
+      hideMenu();
+      document.removeEventListener('click', onDocumentClick);
+      clearTimeout(blurTimer);
+    },
+    setMessage: message => {
+      hideMenu();
+      $input.replaceChildren();
+      for (let i = 0; i < message.strings.length; i += 1) {
+        $input.appendChild(document.createTextNode(message.strings[i]));
+        if (i < message.petNames.length)
+          $input.appendChild(
+            createTokenElement(message.petNames[i], message.edgeNames[i]),
+          );
+      }
+    },
     clear,
     isMenuVisible: () => isMenuVisible || enteringEdgeName,
     insertTokenAtCursor,

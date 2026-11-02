@@ -2,12 +2,12 @@
 
 import { makeExo } from '@endo/exo';
 
-import { PassableReaderInterface } from './type-guards.js';
+import { CloseablePassableReaderInterface } from './type-guards.js';
 import { makeReaderPump } from './reader-pump.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
-/** @import { SomehowAsyncIterable, MakeReaderOptions, PassableReader } from './types.js' */
+/** @import { SomehowAsyncIterable, MakeReaderOptions, CloseablePassableReader } from './types.js' */
 
 /**
  * Convert a local iterator to a remote PassableReader reference (Responder/Producer side).
@@ -36,7 +36,7 @@ import { makeReaderPump } from './reader-pump.js';
  * @template {Passable} [TReadReturn=undefined]
  * @param {SomehowAsyncIterable<TRead, undefined, TReadReturn>} iterator
  * @param {MakeReaderOptions} [options]
- * @returns {PassableReader<TRead, TReadReturn>}
+ * @returns {CloseablePassableReader<TRead, TReadReturn>}
  */
 export const readerFromIterator = (iterator, options = {}) => {
   const { buffer = 0, readPattern, readReturnPattern, cancelPending } = options;
@@ -48,13 +48,14 @@ export const readerFromIterator = (iterator, options = {}) => {
     readReturnPattern,
   });
 
-  return /** @type {PassableReader<TRead, TReadReturn>} */ (
+  return /** @type {CloseablePassableReader<TRead, TReadReturn>} */ (
     /** @type {unknown} */ (
       makeExo(
         'PassableReader',
-        PassableReaderInterface,
+        CloseablePassableReaderInterface,
         /** @type {any} */ ({
           stream: pump,
+          close: pump.close,
 
           /**
            * Returns the pattern for validating TRead (yielded values).

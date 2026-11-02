@@ -1,0 +1,1372 @@
+// @ts-check
+import '@endo/init';
+import test from 'ava';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { makeClaudeContextCoverage } from '../src/claude-context-coverage.js';
+
+const id = n => `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
+const sessionId = id(1);
+const prompt = 'Current prompt';
+const sha256 = text => createHash('sha256').update(text).digest('hex');
+const emptyPrefix = sha256('');
+const makeCoverage = () => makeClaudeContextCoverage({ sha256 });
+
+test('coverage refusal identifies static phase and check without producer content', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  const error = t.throws(() =>
+    coverage.observe({
+      type: 'system',
+      subtype: 'SECRET_UNKNOWN_SUBTYPE',
+      session_id: sessionId,
+      message: 'SECRET_PRODUCER_CONTENT',
+    }),
+  );
+  t.regex(error.message, /phase=observe\/system, check=\d+/);
+  t.false(error.message.includes('SECRET_'));
+  t.throws(() =>
+    coverage.observe({
+      type: 'system',
+      subtype: 'status',
+      session_id: sessionId,
+    }),
+  );
+});
+
+test('coverage terminal refusal identifies outcome stage without widening acceptance', t => {
+  const coverage = makeCoverage();
+  const error = t.throws(() => coverage.assertOutcome('success'));
+  t.regex(error.message, /phase=outcome, check=1/);
+});
+
+for (const type of ['tool_progress', 'tool_use_summary']) {
+  test(`known unsupported ${type} is named but remains refused`, t => {
+    const coverage = makeCoverage();
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    });
+    const error = t.throws(() =>
+      coverage.observe({
+        type,
+        session_id: sessionId,
+        content: 'SECRET_PRODUCER_CONTENT',
+      }),
+    );
+    t.true(error.message.includes(`phase=observe/${type}, check=6`));
+    t.false(error.message.includes('SECRET_'));
+    t.throws(() => coverage.assertOutcome('success'));
+  });
+}
+
+test('unknown top-level event names remain hidden and refused', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  const error = t.throws(() =>
+    coverage.observe({
+      type: 'SECRET_UNKNOWN_TYPE',
+      session_id: sessionId,
+    }),
+  );
+  t.true(error.message.includes('phase=observe, check=6'));
+  t.false(error.message.includes('SECRET_'));
+});
+
+const compactionFixture = async () => {
+  await null;
+  return JSON.parse(
+    await readFile(
+      new URL('./fixtures/coverage-compaction-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+};
+const checkCompaction = f => {
+  const coverage = makeCoverage();
+  for (const event of f.events) coverage.observe(event);
+  coverage.assertCaptured(f.nativeTranscript, {
+    sessionId: f.sessionId,
+    beforeUuid: f.beforeUuid,
+    beforePayload: f.beforePayload,
+    prefixSha256: f.prefixSha256 ?? sha256(f.beforePayload),
+    compactionWitness: f.compactionWitness,
+    prompt: f.prompt,
+    outcome: 'success',
+  });
+};
+const capacityEvent = () => ({
+  type: 'rate_limit_event',
+  uuid: id(99),
+  session_id: sessionId,
+  rate_limit_info: { status: 'allowed', utilization: 0.2 },
+});
+test('capacity may arrive before init without initializing the dialogue', t => {
+  const coverage = makeCoverage();
+  t.notThrows(() => coverage.observe(capacityEvent()));
+  t.notThrows(() =>
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    }),
+  );
+  t.throws(() => coverage.assertOutcome('success'));
+});
+test('pre-init capacity does not authorize a terminal result', t => {
+  const coverage = makeCoverage();
+  coverage.observe(capacityEvent());
+  t.throws(
+    () =>
+      coverage.observe({
+        type: 'result',
+        subtype: 'success',
+        session_id: sessionId,
+        is_error: false,
+      }),
+    { message: /phase=observe\/result, check=5/ },
+  );
+});
+test('pre-init capacity preserves exact subsequent compaction coverage', async t => {
+  const f = await compactionFixture();
+  f.events.unshift({ ...capacityEvent(), session_id: f.sessionId });
+  t.notThrows(() => checkCompaction(f));
+});
+test('pre-init capacity rejects unknown payload fields', t => {
+  const coverage = makeCoverage();
+  t.throws(() =>
+    coverage.observe({ ...capacityEvent(), message: 'not inert capacity' }),
+  );
+});
+test('pre-init capacity binds the later initialization to the same session', t => {
+  const coverage = makeCoverage();
+  coverage.observe(capacityEvent());
+  t.throws(() =>
+    coverage.observe({ type: 'system', subtype: 'init', session_id: id(98) }),
+  );
+});
+test('capacity after terminal still refuses coverage', async t => {
+  const f = await compactionFixture();
+  f.events.push({ ...capacityEvent(), session_id: f.sessionId });
+  t.throws(() => checkCompaction(f));
+});
+test('capacity notification never establishes a terminal result', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  for (const status of ['allowed', 'allowed_warning', 'rejected']) {
+    t.notThrows(() =>
+      coverage.observe({ ...capacityEvent(), rate_limit_info: { status } }),
+    );
+  }
+  t.throws(() => coverage.assertOutcome('success'));
+});
+test('validated capacity notifications interleave without changing exact compaction coverage', async t => {
+  const f = await compactionFixture();
+  const events = [];
+  for (const event of f.events) {
+    events.push(event);
+    if (event.type !== 'result')
+      events.push({ ...capacityEvent(), session_id: f.sessionId });
+  }
+  f.events = events;
+  t.notThrows(() => checkCompaction(f));
+});
+/** @type {[string, (event: Record<string, unknown>) => void][]} */
+const invalidCapacityEvents = [
+  [
+    'extra dialogue',
+    event => {
+      event.message = { role: 'assistant', content: 'hidden' };
+    },
+  ],
+  [
+    'extra nested payload',
+    event => {
+      if (!event.rate_limit_info || typeof event.rate_limit_info !== 'object')
+        throw Error('Expected fixture rate limits');
+      Object.assign(event.rate_limit_info, { message: 'hidden' });
+    },
+  ],
+  [
+    'invalid status',
+    event => {
+      if (!event.rate_limit_info || typeof event.rate_limit_info !== 'object')
+        throw Error('Expected fixture rate limits');
+      Object.assign(event.rate_limit_info, { status: 'done' });
+    },
+  ],
+  [
+    'invalid numeric',
+    event => {
+      if (!event.rate_limit_info || typeof event.rate_limit_info !== 'object')
+        throw Error('Expected fixture rate limits');
+      Object.assign(event.rate_limit_info, { utilization: '0.2' });
+    },
+  ],
+  [
+    'array info',
+    event => {
+      event.rate_limit_info = [];
+    },
+  ],
+  [
+    'invalid uuid',
+    event => {
+      event.uuid = 'invalid';
+    },
+  ],
+  [
+    'wrong session',
+    event => {
+      event.session_id = id(98);
+    },
+  ],
+];
+for (const [name, change] of invalidCapacityEvents) {
+  test(`capacity event refuses ${name}`, t => {
+    const coverage = makeCoverage();
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    });
+    const event = capacityEvent();
+    change(event);
+    t.throws(() => coverage.observe(event));
+    t.throws(() => coverage.assertOutcome('success'));
+  });
+}
+test('actual partial-stream auto compaction certifies prompt, retained tool frames and summary', async t => {
+  const f = await compactionFixture();
+  t.notThrows(() => checkCompaction(f));
+});
+const changeRows = (f, field, change) => {
+  const rows = f[field].trimEnd().split('\n').map(JSON.parse);
+  change(rows);
+  f[field] = `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+};
+test('compaction accepts identical duplicate prior tail without changing the trusted cut', async t => {
+  const f = await compactionFixture();
+  changeRows(f, 'beforePayload', rows => rows.push(rows[0]));
+  t.notThrows(() => checkCompaction(f));
+});
+// Synthetic parser variation of the recorded transition: preserve one old
+// signed block too. This is not an additional live-loader behavior claim.
+const retainPrior = f => {
+  const prior = f.beforePayload
+    .trimEnd()
+    .split('\n')
+    .map(JSON.parse)
+    .find(row => row.message?.content?.[0]?.type === 'thinking');
+  const boundary = f.events.find(event => event.subtype === 'compact_boundary');
+  boundary.compact_metadata.preserved_messages.all_uuids.unshift(prior.uuid);
+  changeRows(f, 'nativeTranscript', rows => {
+    rows.unshift(prior);
+    rows
+      .find(row => row.subtype === 'compact_boundary')
+      .compactMetadata.preservedMessages.allUuids.unshift(prior.uuid);
+  });
+};
+test('compaction retained historical signed block must match trusted host projection', async t => {
+  const f = await compactionFixture();
+  retainPrior(f);
+  t.notThrows(() => checkCompaction(f));
+  changeRows(f, 'nativeTranscript', rows => {
+    rows[0].message.content[0].signature = 'rewritten';
+  });
+  t.throws(() => checkCompaction(f));
+});
+test('compaction refuses changed old grouping under the trusted retained UUID', async t => {
+  const f = await compactionFixture();
+  retainPrior(f);
+  changeRows(f, 'nativeTranscript', rows => {
+    rows[0].message.id = 'regrouped';
+  });
+  t.throws(() => checkCompaction(f));
+});
+test('compaction validates exact trusted beforePayload receipt even when old rows were dropped', async t => {
+  const f = await compactionFixture();
+  f.prefixSha256 = sha256(f.beforePayload);
+  changeRows(f, 'beforePayload', rows => {
+    rows[0].message.content = 'rewritten old prompt';
+  });
+  t.throws(() => checkCompaction(f));
+});
+test('compaction fresh cut proves its admitted prompt without inventing prior history', async t => {
+  const f = await compactionFixture();
+  f.beforePayload = '';
+  f.beforeUuid = null;
+  changeRows(f, 'compactionWitness', rows => {
+    rows[0].parentUuid = null;
+  });
+  t.notThrows(() => checkCompaction(f));
+});
+for (const [name, mutate] of Object.entries({
+  'missing witness': f => {
+    f.compactionWitness = undefined;
+  },
+  'missing prior payload': f => {
+    f.beforePayload = undefined;
+  },
+  'changed admitted prompt': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows[0].message.content = 'other prompt';
+    }),
+  'changed summary visibility': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(row => row.isCompactSummary).isVisibleInTranscriptOnly = false;
+    }),
+  'unknown witness attachment': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows[1].attachment.type = 'unknown';
+    }),
+  'duplicate witness mutation': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows.at(-1).attachment.text = 'changed';
+    }),
+  'unknown retained UUID in observed metadata': f => {
+    const boundary = f.events.find(
+      event => event.subtype === 'compact_boundary',
+    );
+    boundary.compact_metadata.preserved_messages.all_uuids.unshift(id(905));
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.unshift({ ...rows[0], uuid: id(905) });
+      rows
+        .find(row => row.subtype === 'compact_boundary')
+        .compactMetadata.preservedMessages.allUuids.unshift(id(905));
+    });
+  },
+  'changed witness parent': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows[0].parentUuid = id(900);
+    }),
+  'missing preboundary frame': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows.splice(2, 1);
+    }),
+  'changed retained signature': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows[0].message.content[0].signature = 'other';
+    }),
+  'changed retained grouping': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows[0].message.id = 'other';
+    }),
+  'changed duplicate retained content': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows[4].message.content = 'other';
+    }),
+  'changed boundary identity': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(r => r.subtype === 'compact_boundary').uuid = id(901);
+    }),
+  'changed boundary metadata': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(
+        r => r.subtype === 'compact_boundary',
+      ).compactMetadata.preTokens += 1;
+    }),
+  'changed boundary parent': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(r => r.subtype === 'compact_boundary').parentUuid = id(902);
+    }),
+  'changed summary': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(r => r.isCompactSummary).message.content = 'invented summary';
+    }),
+  'missing suffix': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.pop();
+    }),
+  'extra unknown history': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.unshift({ ...rows[0], uuid: id(903) });
+    }),
+  'second streamed compaction': f => {
+    const index = f.events.findIndex(e => e.subtype === 'compact_boundary');
+    f.events.splice(index + 1, 0, f.events[index]);
+  },
+  'missing streamed summary': f => {
+    const index = f.events.findIndex(e => e.subtype === 'compact_boundary');
+    f.events.splice(index + 1, 1);
+  },
+  'partial message at boundary': f => {
+    const index = f.events.findIndex(e => e.event?.type === 'message_stop');
+    f.events.splice(index, 1);
+  },
+})) {
+  test(`compaction refuses ${name}`, async t => {
+    const f = await compactionFixture();
+    mutate(f);
+    t.throws(() => checkCompaction(f));
+  });
+}
+
+test('actual pinned max-turns failure proves the captured current-turn cut', async t => {
+  await null;
+  const f = JSON.parse(
+    await readFile(
+      new URL('./fixtures/coverage-failed-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const coverage = makeCoverage();
+  for (const event of f.events) coverage.observe(event);
+  const native = `${f.rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+  const before = f.rows.findIndex(row => row.uuid === f.cut.beforeUuid);
+  const beforePayload = `${f.rows
+    .slice(0, before + 1)
+    .map(row => JSON.stringify(row))
+    .join('\n')}\n`;
+  const prefixSha256 = sha256(beforePayload);
+  t.notThrows(() =>
+    coverage.assertCaptured(native, {
+      ...f.cut,
+      beforePayload,
+      prefixSha256,
+      outcome: 'failure',
+    }),
+  );
+});
+const fixture = () => {
+  const coverage = makeCoverage();
+  const events = [];
+  /** @type {{type: string, sessionId: string, uuid: string, parentUuid: string | null, message: {role: string, content: unknown, [key: string]: unknown}, [key: string]: unknown}[]} */
+  const rows = [
+    {
+      type: 'user',
+      sessionId,
+      uuid: id(2),
+      parentUuid: null,
+      message: { role: 'user', content: prompt },
+    },
+  ];
+  const emit = event => {
+    const full = { ...event, session_id: sessionId };
+    events.push(full);
+    coverage.observe(full);
+  };
+  const stream = event => emit({ type: 'stream_event', event });
+  emit({ type: 'system', subtype: 'init' });
+  let serial = 3;
+  const start = () =>
+    stream({
+      type: 'message_start',
+      message: {
+        id: 'm',
+        type: 'message',
+        model: 'synthetic-model',
+        role: 'assistant',
+        content: [],
+      },
+    });
+  const block = (value, deltas, final, index = 0) => {
+    stream({ type: 'content_block_start', index, content_block: value });
+    for (const delta of deltas)
+      stream({ type: 'content_block_delta', index, delta });
+    const uuid = id(serial);
+    serial += 1;
+    emit({
+      type: 'assistant',
+      uuid,
+      message: {
+        id: 'm',
+        type: 'message',
+        model: 'synthetic-model',
+        role: 'assistant',
+        content: [final],
+      },
+    });
+    rows.push({
+      type: 'assistant',
+      sessionId,
+      uuid,
+      parentUuid: rows[rows.length - 1].uuid,
+      message: {
+        id: 'm',
+        type: 'message',
+        model: 'synthetic-model',
+        role: 'assistant',
+        content: [final],
+      },
+    });
+    stream({ type: 'content_block_stop', index });
+  };
+  const stop = () => stream({ type: 'message_stop' });
+  const text = (value = 'answer') => {
+    start();
+    block({ type: 'text', text: '' }, [{ type: 'text_delta', text: value }], {
+      type: 'text',
+      text: value,
+    });
+    stop();
+  };
+  const jsonl = () => `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+  let finished = false;
+  const finish = (
+    result = { type: 'result', subtype: 'success', is_error: false },
+  ) => {
+    if (!finished) {
+      emit(result);
+      finished = true;
+    }
+  };
+  /** @param {{ sessionId: string, beforeUuid: string | null, beforePayload?: string, prefixSha256: string | undefined, prompt: string }} [cut] */
+  const assert = (
+    cut = {
+      sessionId,
+      beforeUuid: null,
+      beforePayload: '',
+      prefixSha256: emptyPrefix,
+      prompt,
+    },
+  ) => {
+    finish();
+    // Negative fixtures intentionally pass absent receipt fields to the real
+    // validator; retain those runtime inputs at this test-only boundary.
+    return coverage.assertCaptured(
+      jsonl(),
+      /** @type {Parameters<typeof coverage.assertCaptured>[1]} */ ({
+        ...cut,
+        outcome: 'success',
+      }),
+    );
+  };
+  return {
+    coverage,
+    events,
+    rows,
+    emit,
+    stream,
+    start,
+    block,
+    stop,
+    text,
+    jsonl,
+    assert,
+    finish,
+  };
+};
+
+test('complete block before stop matches native prompt and dialogue', t => {
+  const f = fixture();
+  f.text();
+  t.notThrows(() => f.assert());
+  t.notThrows(() => f.assert());
+});
+
+for (const expected of ['success', 'failure']) {
+  test(`capture requires observed mainline ${expected} terminal evidence`, t => {
+    const f = fixture();
+    f.text();
+    f.finish({
+      type: 'result',
+      subtype: expected === 'success' ? 'success' : 'error_max_turns',
+      is_error: expected === 'failure',
+    });
+    t.notThrows(() =>
+      f.coverage.assertCaptured(f.jsonl(), {
+        sessionId,
+        beforeUuid: null,
+        beforePayload: '',
+        prefixSha256: emptyPrefix,
+        prompt,
+        outcome: /** @type {'success'|'failure'} */ (expected),
+      }),
+    );
+    t.throws(() =>
+      f.coverage.assertOutcome(expected === 'success' ? 'failure' : 'success'),
+    );
+  });
+}
+
+test('complete dialogue without mainline terminal result cannot certify a cut', t => {
+  const f = fixture();
+  f.text();
+  f.emit({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    parent_tool_use_id: 'child',
+  });
+  t.throws(() => f.coverage.assertOutcome('success'));
+});
+
+test('opaque redacted thinking matches exact complete block without deltas', t => {
+  const f = fixture();
+  const value = { type: 'redacted_thinking', data: 'opaque-synthetic-bytes' };
+  f.start();
+  f.block(value, [], { ...value });
+  f.stop();
+  t.notThrows(() => f.assert());
+});
+
+test('redacted thinking rejects empty data and any delta', t => {
+  for (const data of ['', 'opaque']) {
+    const f = fixture();
+    f.start();
+    const start = () =>
+      f.stream({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'redacted_thinking', data },
+      });
+    if (!data) t.throws(start);
+    else {
+      start();
+      t.throws(() =>
+        f.stream({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{}' },
+        }),
+      );
+    }
+    t.throws(() => f.assert());
+  }
+});
+
+test('thinking/signature and tool JSON deltas must match complete frames', t => {
+  const f = fixture();
+  f.start();
+  f.block(
+    { type: 'thinking', thinking: '' },
+    [
+      { type: 'thinking_delta', thinking: 'reason' },
+      { type: 'signature_delta', signature: 'signed' },
+    ],
+    { type: 'thinking', thinking: 'reason', signature: 'signed' },
+  );
+  f.block(
+    { type: 'tool_use', id: 'call', name: 'Bash', input: {} },
+    [
+      { type: 'input_json_delta', partial_json: '{"command":' },
+      { type: 'input_json_delta', partial_json: '"true"}' },
+    ],
+    { type: 'tool_use', id: 'call', name: 'Bash', input: { command: 'true' } },
+    1,
+  );
+  f.stop();
+  const content = [{ type: 'tool_result', tool_use_id: 'call', content: 'ok' }];
+  f.emit({ type: 'user', uuid: id(5), message: { role: 'user', content } });
+  f.rows.push({
+    type: 'user',
+    sessionId,
+    uuid: id(5),
+    parentUuid: id(4),
+    message: { role: 'user', content },
+  });
+  f.rows.push(
+    /** @type {any} */ ({
+      type: 'attachment',
+      sessionId,
+      uuid: id(6),
+      parentUuid: id(5),
+      attachment: { type: 'max_turns_reached', maxTurns: 1, turnCount: 2 },
+    }),
+  );
+  t.notThrows(() => f.assert());
+});
+
+const parallelToolCase = async (separateMessages = false) => {
+  const f = JSON.parse(
+    await readFile(
+      new URL('./fixtures/parallel-tool-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const rows = f.rows.map(row => ({ ...row, sessionId: f.sessionId }));
+  if (separateMessages) rows[4].message.id = 'other-message';
+  const coverage = makeCoverage();
+  const observe = event =>
+    coverage.observe({ ...event, session_id: f.sessionId });
+  const stream = event => observe({ type: 'stream_event', event });
+  let messageId;
+  let index = 0;
+  const stop = () => {
+    if (messageId !== undefined) stream({ type: 'message_stop' });
+    messageId = undefined;
+  };
+  observe({ type: 'system', subtype: 'init' });
+  for (const row of rows.slice(1)) {
+    if (row.type === 'assistant') {
+      if (row.message.id !== messageId) {
+        stop();
+        messageId = row.message.id;
+        index = 0;
+        stream({
+          type: 'message_start',
+          message: { ...row.message, content: [] },
+        });
+      }
+      const block = row.message.content[0];
+      let start = block;
+      const deltas = [];
+      if (block.type === 'thinking') {
+        start = { type: 'thinking', thinking: '' };
+        deltas.push(
+          { type: 'thinking_delta', thinking: block.thinking },
+          { type: 'signature_delta', signature: block.signature },
+        );
+      } else if (block.type === 'tool_use') {
+        start = { ...block, input: {} };
+        deltas.push({
+          type: 'input_json_delta',
+          partial_json: JSON.stringify(block.input),
+        });
+      } else if (block.type === 'text') {
+        start = { type: 'text', text: '' };
+        deltas.push({ type: 'text_delta', text: block.text });
+      }
+      stream({ type: 'content_block_start', index, content_block: start });
+      for (const delta of deltas)
+        stream({ type: 'content_block_delta', index, delta });
+      observe({ type: 'assistant', uuid: row.uuid, message: row.message });
+      stream({ type: 'content_block_stop', index });
+      index += 1;
+    } else if (row.type === 'user') {
+      stop();
+      observe({ type: 'user', uuid: row.uuid, message: row.message });
+    }
+  }
+  stop();
+  observe({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: 'cats; policy off',
+  });
+  return {
+    rows,
+    assert: (captured = rows) =>
+      coverage.assertCaptured(
+        `${captured.map(row => JSON.stringify(row)).join('\n')}\n`,
+        {
+          sessionId: f.sessionId,
+          beforeUuid: null,
+          beforePayload: '',
+          prefixSha256: emptyPrefix,
+          prompt: f.prompt,
+          outcome: 'success',
+        },
+      ),
+  };
+};
+
+test('covered parallel tools retain signed and opaque native context without reparenting', async t => {
+  const f = await parallelToolCase();
+  t.notThrows(() => f.assert());
+});
+
+test('fully observed results from different assistant message groups cannot certify sibling ancestry', async t => {
+  const f = await parallelToolCase(true);
+  t.throws(() => f.assert(), {
+    message: /native context coverage unavailable/,
+  });
+});
+
+for (const scenario of [
+  'wrong-source',
+  'wrong-tool-parent',
+  'missing-source',
+  'future-parent',
+  'repeated-tool',
+  'signature',
+  'opaque-data',
+  'extra-dialogue',
+]) {
+  test(`parallel native coverage refuses ${scenario}`, async t => {
+    const f = await parallelToolCase();
+    const rows = structuredClone(f.rows);
+    const first = rows[5];
+    const second = rows[6];
+    if (scenario === 'wrong-source')
+      first.sourceToolAssistantUUID = rows[4].uuid;
+    else if (scenario === 'wrong-tool-parent') {
+      first.parentUuid = rows[4].uuid;
+      first.sourceToolAssistantUUID = rows[4].uuid;
+    } else if (scenario === 'missing-source')
+      delete first.sourceToolAssistantUUID;
+    else if (scenario === 'future-parent') {
+      first.parentUuid = rows[8].uuid;
+      first.sourceToolAssistantUUID = rows[8].uuid;
+    } else if (scenario === 'repeated-tool')
+      second.message.content[0].tool_use_id = 'native-shell';
+    else if (scenario === 'signature')
+      rows[2].message.content[0].signature = 'changed-signature';
+    else if (scenario === 'opaque-data')
+      rows[8].message.content[0].data = 'changed-opaque-context';
+    else if (scenario === 'extra-dialogue')
+      first.message.content.push({ type: 'text', text: 'unstated dialogue' });
+    t.throws(() => f.assert(rows), {
+      message: /native context coverage unavailable/,
+    });
+  });
+}
+
+// Observed live on 2026-09-25: the pinned CLI writes its agent and skill
+// catalogs to the transcript but not to the public stream. They are preserved
+// as native context only; they never stand in for dialogue or tool evidence.
+const agentListing = {
+  type: 'agent_listing_delta',
+  addedTypes: ['general'],
+  addedLines: ['- general: synthetic agent line'],
+  removedTypes: [],
+  isInitial: true,
+  showConcurrencyNote: false,
+};
+const skillListing = {
+  type: 'skill_listing',
+  content: '- synthetic: synthetic skill line',
+  skillCount: 1,
+  isInitial: true,
+  names: ['synthetic'],
+};
+const listingCase = attachments => {
+  const f = fixture();
+  f.start();
+  f.block({ type: 'text', text: '' }, [{ type: 'text_delta', text: 'ok' }], {
+    type: 'text',
+    text: 'ok',
+  });
+  f.stop();
+  let parentUuid = f.rows[f.rows.length - 1].uuid;
+  for (const [index, attachment] of attachments.entries()) {
+    const uuid = id(20 + index);
+    f.rows.push(
+      /** @type {any} */ ({
+        type: 'attachment',
+        sessionId,
+        uuid,
+        parentUuid,
+        attachment,
+      }),
+    );
+    parentUuid = uuid;
+  }
+  return f;
+};
+
+test('agent and skill listings are preserved as native-only context', t => {
+  t.notThrows(() => listingCase([agentListing, skillListing]).assert());
+});
+
+// Observed live on 2026-09-25: the CLI's to-do reminder.
+const taskReminder = { type: 'task_reminder', content: [], itemCount: 0 };
+test('a task reminder is preserved as native-only context', t => {
+  t.notThrows(() => listingCase([taskReminder]).assert());
+  t.throws(() => listingCase([{ ...taskReminder, content: 'x' }]).assert(), {
+    message: /native context coverage unavailable/,
+  });
+  t.throws(() => listingCase([{ ...taskReminder, extra: 1 }]).assert(), {
+    message: /native context coverage unavailable/,
+  });
+});
+
+for (const [label, attachment] of [
+  ['an extra key', { ...agentListing, extra: true }],
+  ['non-string agent lines', { ...agentListing, addedLines: [1] }],
+  ['a string skill count', { ...skillListing, skillCount: '1' }],
+  ['non-string skill names', { ...skillListing, names: [1] }],
+  ['an unknown attachment', { type: 'world-fact', text: 'unsupported' }],
+]) {
+  test(`listing attachments refuse ${label}`, t => {
+    t.throws(() => listingCase([attachment]).assert(), {
+      message: /native context coverage unavailable/,
+    });
+  });
+}
+
+for (const [name, complete, category] of [
+  ['text', { type: 'text', text: 'SECRET_CHANGED' }, 'text-value'],
+  [
+    'citations',
+    { type: 'text', text: 'ok', citations: [] },
+    'citations-presence',
+  ],
+  [
+    'unknown',
+    { type: 'text', text: 'ok', SECRET_FIELD: 'SECRET_VALUE' },
+    'block-other',
+  ],
+]) {
+  test(`assistant mismatch diagnostics expose only fixed categories: ${name}`, t => {
+    const f = fixture();
+    f.start();
+    const error = t.throws(() =>
+      f.block(
+        { type: 'text', text: '' },
+        [{ type: 'text_delta', text: 'ok' }],
+        complete,
+      ),
+    );
+    t.true(error.message.includes(`phase=observe/assistant/${category}`));
+    t.false(error.message.includes('SECRET'));
+    t.throws(() => f.assert());
+  });
+}
+
+test('tool frames and captured blocks accept only object-property reordering', t => {
+  const f = fixture();
+  const input = {
+    command: 'true',
+    nested: { enabled: true, count: 2, absent: null },
+    items: [1, 'two'],
+  };
+  const reordered = {
+    items: [1, 'two'],
+    nested: { absent: null, count: 2, enabled: true },
+    command: 'true',
+  };
+  f.start();
+  f.block(
+    { type: 'tool_use', id: 'call', name: 'Bash', input: {} },
+    [{ type: 'input_json_delta', partial_json: JSON.stringify(input) }],
+    { input: reordered, name: 'Bash', id: 'call', type: 'tool_use' },
+  );
+  f.stop();
+  // The native JSONL may independently serialize the same block's keys.
+  f.rows[1].message.content = /** @type {any} */ ([
+    { type: 'tool_use', id: 'call', name: 'Bash', input },
+  ]);
+  t.notThrows(() => f.assert());
+});
+
+for (const name of ['mcp__endo__exec', 'Bash']) {
+  for (const input of [
+    { items: [2, 1], value: null },
+    { items: [1, 2] },
+    { items: [1, 2], value: false },
+    { items: [1, 2], value: null, extra: 1 },
+    { items: { 0: 1, 1: 2 }, value: null },
+    { items: [1, '2'], value: null },
+  ]) {
+    test(`structural tool equality still rejects changed JSON ${name} ${JSON.stringify(input)}`, t => {
+      const extra = Object.hasOwn(input, 'extra');
+      // Exact equality for MCP tools, Endo's host effects among them. A
+      // built-in tool may gain CLI schema defaults: claude-context-cli-defaults.
+      const f = fixture();
+      f.start();
+      const attempt = () =>
+        f.block(
+          { type: 'tool_use', id: 'call', name, input: {} },
+          [
+            {
+              type: 'input_json_delta',
+              partial_json: '{"items":[1,2],"value":null}',
+            },
+          ],
+          { type: 'tool_use', id: 'call', name, input },
+        );
+      if (name === 'Bash' && extra) {
+        // Only an added key, and only for a built-in tool.
+        t.notThrows(attempt);
+      } else {
+        t.throws(attempt);
+        t.throws(() => f.assert());
+      }
+    });
+  }
+}
+
+test('deep JSON comparison uses bounded traversal depth without recursive calls', t => {
+  t.timeout(10_000);
+  let input = /** @type {any} */ ({ value: 'leaf', flag: true });
+  let reordered = /** @type {any} */ ({ flag: true, value: 'leaf' });
+  // The JSON parser/encoder has its own depth limit; stay within that boundary
+  // while exercising thousands of comparison frames, not recursive JS calls.
+  for (let depth = 0; depth < 2000; depth += 1) {
+    input = { child: input, index: depth };
+    reordered = { index: depth, child: reordered };
+  }
+  const f = fixture();
+  f.start();
+  f.block(
+    { type: 'tool_use', id: 'call', name: 'Bash', input: {} },
+    [{ type: 'input_json_delta', partial_json: JSON.stringify(input) }],
+    { type: 'tool_use', id: 'call', name: 'Bash', input: reordered },
+  );
+  f.stop();
+  t.notThrows(() => f.assert());
+});
+
+test('previous native cut must exist and immediately precede admitted prompt', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  f.rows.unshift({
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  });
+  const beforePayload = `${JSON.stringify(f.rows[0])}\n`;
+  const prefixSha256 = sha256(beforePayload);
+  t.notThrows(() =>
+    f.assert({
+      sessionId,
+      beforeUuid: id(9),
+      beforePayload,
+      prefixSha256,
+      prompt,
+    }),
+  );
+  t.throws(() =>
+    f.assert({
+      sessionId,
+      beforeUuid: id(99),
+      beforePayload,
+      prefixSha256,
+      prompt,
+    }),
+  );
+});
+
+test('same pre-turn leaf cannot conceal modified historical prefix', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  f.rows.unshift({
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  });
+  const cut = {
+    sessionId,
+    beforeUuid: id(9),
+    prefixSha256: sha256(`${JSON.stringify(f.rows[0])}\n`),
+    beforePayload: `${JSON.stringify(f.rows[0])}\n`,
+    prompt,
+  };
+  t.notThrows(() => f.assert(cut));
+  f.rows[0].message.content = [{ type: 'text', text: 'tampered history' }];
+  t.throws(() => f.assert(cut));
+});
+
+test('ordinary cut uses exact trusted bytes including duplicate older tail', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  const older = {
+    type: 'user',
+    sessionId,
+    uuid: id(8),
+    parentUuid: null,
+    message: { role: 'user', content: 'old prompt' },
+  };
+  const leaf = {
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: id(8),
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  };
+  const beforePayload = `${[older, leaf, older].map(row => JSON.stringify(row)).join('\n')}\n`;
+  f.rows.unshift(older, leaf, older);
+  const cut = {
+    sessionId,
+    beforeUuid: id(9),
+    beforePayload,
+    prefixSha256: sha256(beforePayload),
+    prompt,
+  };
+  t.notThrows(() => f.assert(cut));
+  // Identical parsed rows with changed bytes still fail the trusted prefix.
+  f.rows[0] = { ...older, extra: 'changed' };
+  t.throws(() => f.assert(cut));
+});
+
+for (const restored of [false, true]) {
+  test(`ordinary ${restored ? 'restored' : 'fresh'} cut refuses missing host-projected bytes`, t => {
+    const f = fixture();
+    f.text();
+    let beforeUuid = null;
+    let prefixSha256 = emptyPrefix;
+    if (restored) {
+      const prior = {
+        type: 'user',
+        sessionId,
+        uuid: id(9),
+        parentUuid: null,
+        message: { role: 'user', content: 'prior prompt' },
+      };
+      beforeUuid = prior.uuid;
+      prefixSha256 = sha256(`${JSON.stringify(prior)}\n`);
+      f.rows[0].parentUuid = beforeUuid;
+      f.rows.unshift(prior);
+    }
+    // A matching digest and discoverable UUID are not permission to infer the
+    // trusted cut from candidate guest bytes, even for an empty initial store.
+    t.throws(() => f.assert({ sessionId, beforeUuid, prefixSha256, prompt }));
+  });
+}
+
+test('prefix receipt binds exact serialization rather than parsed row equality', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  f.rows.unshift({
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  });
+  const cut = {
+    sessionId,
+    beforeUuid: id(9),
+    prefixSha256: sha256(`${JSON.stringify(f.rows[0])}\n`),
+    beforePayload: `${JSON.stringify(f.rows[0])}\n`,
+    prompt,
+  };
+  const changedBytes = ` ${f.jsonl()}`;
+  f.finish();
+  t.throws(() =>
+    f.coverage.assertCaptured(changedBytes, { ...cut, outcome: 'success' }),
+  );
+});
+
+for (const change of ['signature', 'grouping', 'duplicate-cut']) {
+  test(`trusted receipt rejects historical ${change} mutation`, t => {
+    const f = fixture();
+    f.text();
+    f.rows[0].parentUuid = id(9);
+    const prior = {
+      type: 'assistant',
+      sessionId,
+      uuid: id(9),
+      parentUuid: null,
+      message: {
+        id: 'old-group',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'old', signature: 'old-signature' },
+        ],
+      },
+    };
+    f.rows.unshift(prior);
+    const cut = {
+      sessionId,
+      beforeUuid: id(9),
+      prefixSha256: sha256(`${JSON.stringify(prior)}\n`),
+      beforePayload: `${JSON.stringify(prior)}\n`,
+      prompt,
+    };
+    if (change === 'signature') prior.message.content[0].signature = 'changed';
+    if (change === 'grouping') prior.message.id = 'changed';
+    if (change === 'duplicate-cut') f.rows.splice(1, 0, { ...prior });
+    t.throws(() => f.assert(cut));
+  });
+}
+
+for (const digest of [undefined, '', 'x'.repeat(64), '0'.repeat(64)]) {
+  test(`missing, malformed, or incorrect prefix receipt refuses: ${digest}`, t => {
+    const f = fixture();
+    f.text();
+    t.throws(() =>
+      f.assert({
+        sessionId,
+        beforeUuid: null,
+        beforePayload: '',
+        prefixSha256: digest,
+        prompt,
+      }),
+    );
+  });
+}
+
+test('complete A followed by unpersisted partial B never certifies A as full cut', t => {
+  const f = fixture();
+  f.text('A');
+  f.start();
+  f.stream({
+    type: 'content_block_start',
+    index: 0,
+    content_block: { type: 'text', text: '' },
+  });
+  f.stream({
+    type: 'content_block_delta',
+    index: 0,
+    delta: { type: 'text_delta', text: 'partial B' },
+  });
+  t.throws(() => f.assert());
+});
+
+test('empty or init-only observations cannot certify a stale native file', t => {
+  const f = fixture();
+  t.throws(() => f.assert());
+  t.throws(() =>
+    makeCoverage().assertCaptured(f.jsonl(), {
+      sessionId,
+      beforeUuid: null,
+      beforePayload: '',
+      prefixSha256: emptyPrefix,
+      prompt,
+      outcome: 'success',
+    }),
+  );
+});
+
+for (const change of [
+  'prompt',
+  'content',
+  'uuid',
+  'message-id',
+  'message-type',
+  'message-model',
+  'order',
+  'ancestry',
+  'session',
+  'missing',
+  'extra',
+]) {
+  test(`captured ${change} mismatch refuses and stays refused`, t => {
+    const f = fixture();
+    f.text('A');
+    f.text('B');
+    if (change === 'prompt') f.rows[0].message.content = 'stale';
+    if (change === 'content')
+      f.rows[1].message.content = [{ type: 'text', text: 'different' }];
+    if (change === 'uuid') f.rows[1].uuid = id(99);
+    if (change === 'message-id') f.rows[1].message.id = 'changed-group';
+    if (change === 'message-type') f.rows[1].message.type = 'changed-type';
+    if (change === 'message-model') f.rows[1].message.model = 'changed-model';
+    if (change === 'order') [f.rows[1], f.rows[2]] = [f.rows[2], f.rows[1]];
+    if (change === 'ancestry') f.rows[2].parentUuid = id(2);
+    if (change === 'session') f.rows[1].sessionId = id(99);
+    if (change === 'missing') f.rows.pop();
+    if (change === 'extra')
+      f.rows.push({ ...f.rows[2], uuid: id(99), parentUuid: f.rows[2].uuid });
+    t.throws(() => f.assert());
+    t.throws(() => f.emit({ type: 'system', subtype: 'status' }));
+  });
+}
+
+for (const event of [
+  { type: 'system', subtype: 'compact_boundary' },
+  { type: 'new_protocol' },
+  {
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: 'orphan' },
+    },
+  },
+]) {
+  test(`unsupported ${JSON.stringify(event)} is sticky refusal`, t => {
+    const f = fixture();
+    f.text();
+    t.throws(() => f.emit(event));
+    t.throws(() => f.assert());
+  });
+}
+
+test('unmatched stop and mutated complete block refuse', t => {
+  for (const complete of [false, true]) {
+    const f = fixture();
+    f.start();
+    f.stream({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    });
+    f.stream({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: 'actual' },
+    });
+    if (complete)
+      t.throws(() =>
+        f.emit({
+          type: 'assistant',
+          uuid: id(3),
+          message: {
+            id: 'm',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'changed' }],
+          },
+        }),
+      );
+    else t.throws(() => f.stream({ type: 'content_block_stop', index: 0 }));
+  }
+});
+
+for (const flag of [
+  'isCompactSummary',
+  'isVisibleInTranscriptOnly',
+  'isMeta',
+]) {
+  for (const rowIndex of [0, 1]) {
+    test(`unobserved loader role ${flag} on current row ${rowIndex} refuses`, t => {
+      const f = fixture();
+      f.text();
+      f.rows[rowIndex][flag] = true;
+      t.throws(() => f.assert(), { message: /coverage unavailable/ });
+    });
+  }
+}
+
+test('explicit false loader flags preserve ordinary-turn coverage', t => {
+  const f = fixture();
+  f.text();
+  for (const row of f.rows) {
+    row.isCompactSummary = false;
+    row.isVisibleInTranscriptOnly = false;
+    row.isMeta = false;
+  }
+  t.notThrows(() => f.assert());
+});
+
+test('16Mi observation bound refuses instead of truncating', t => {
+  const f = fixture();
+  t.throws(() =>
+    f.emit({
+      type: 'system',
+      subtype: 'status',
+      ignored: 'x'.repeat(16 * 1024 * 1024),
+    }),
+  );
+  t.throws(() => f.assert());
+});
+
+test('caller mutation cannot rewrite retained complete frame evidence', t => {
+  const f = fixture();
+  f.text();
+  const captured = f.jsonl();
+  const event = f.events.find(e => e.type === 'assistant');
+  event.message.content[0].text = 'changed externally';
+  f.finish();
+  t.notThrows(() =>
+    f.coverage.assertCaptured(captured, {
+      sessionId,
+      beforeUuid: null,
+      beforePayload: '',
+      prefixSha256: emptyPrefix,
+      prompt,
+      outcome: 'success',
+    }),
+  );
+});
+
+test('different mainline session refuses; subagent traffic cannot supply proof', t => {
+  const f = fixture();
+  f.coverage.observe({
+    type: 'assistant',
+    parent_tool_use_id: 'subagent',
+    session_id: id(9),
+  });
+  f.text();
+  t.notThrows(() => f.assert());
+  t.throws(() =>
+    f.coverage.observe({
+      type: 'system',
+      subtype: 'status',
+      session_id: id(9),
+    }),
+  );
+});

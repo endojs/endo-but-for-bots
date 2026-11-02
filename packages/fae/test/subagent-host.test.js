@@ -29,6 +29,8 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   /** Caplet environments keyed by result name. */
   /** @type {Map<string, Record<string, string> | undefined>} */
   const envs = new Map();
+  /** @type {Map<string, Map<string, unknown>>} */
+  const inventories = new Map();
   let nextId = 0;
 
   /** Caplet result names keyed by the powers guest they die with. */
@@ -72,7 +74,13 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       onStep({ op: 'provideGuest', name });
       bind(name);
       if (options.agentName) bind(options.agentName);
+      const inventory = new Map([['existing', harden({})]]);
+      inventories.set(name, inventory);
       return Far('Guest', {
+        has: petName => inventory.has(petName),
+        storeValue: (value, petName) => {
+          inventory.set(petName, value);
+        },
         async storeLocator() {
           return undefined;
         },
@@ -103,7 +111,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       names.delete(key);
     },
   });
-  return { hostAgent, names, cancelled, removed, envs };
+  return { hostAgent, names, cancelled, removed, envs, inventories };
 };
 
 const provisionOptions = {
@@ -112,6 +120,42 @@ const provisionOptions = {
   driverSpecifier: 'file:///driver.js',
   spawnerSpecifier: 'file:///spawner.js',
 };
+
+test('spawn gives the child only explicit capabilities in its own inventory', async t => {
+  const { hostAgent, inventories } = makeFakeHost();
+  const capability = Far('ReadOnlySource', { read: () => 'source' });
+  const spawner = makeSubagentSpawner({
+    provideContext: async () => ({ hostAgent, ...provisionOptions }),
+    parentName: 'parent',
+    depth: 1,
+    maxDepth: 1,
+    ...provisionOptions,
+  });
+  await spawner.spawn('helper', {
+    capabilities: [{ name: 'project', value: capability }],
+  });
+  const inventory = inventories.get('parent.sub.helper');
+  t.is(inventory.get('project'), capability);
+  t.deepEqual([...inventory.keys()], ['existing', 'project']);
+  t.false(inventory.has('host-agent'));
+});
+
+test('spawn refuses an occupied inventory name and rolls back the new guest', async t => {
+  const { hostAgent, names, cancelled } = makeFakeHost();
+  await t.throwsAsync(
+    provisionFaeAgent({
+      hostAgent,
+      name: 'parent',
+      depth: 0,
+      maxDepth: 0,
+      ...provisionOptions,
+      capabilities: [{ name: 'existing', value: 'replacement' }],
+    }),
+    { message: /already exists/ },
+  );
+  t.true(cancelled.includes('profile-for-parent'));
+  t.is(names.size, 0);
+});
 
 test('provisioning releases a half-built agent when a later step fails', async t => {
   const { hostAgent, names, cancelled } = makeFakeHost({

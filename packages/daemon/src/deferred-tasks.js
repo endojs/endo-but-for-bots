@@ -12,9 +12,13 @@ export const makeDeferredTasks = () => {
 
   return {
     execute: async param => {
-      await Promise.all(
-        tasks.map(task => task(/** @type {Readonly<T>} */ (param))),
+      // A rejection must not let callers release construction pins while a
+      // sibling publication still uses them. Capture synchronous throws too.
+      const results = await Promise.allSettled(
+        tasks.map(async task => task(/** @type {Readonly<T>} */ (param))),
       );
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
     },
     push: task => {
       tasks.push(task);

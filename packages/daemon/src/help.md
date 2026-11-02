@@ -177,13 +177,41 @@ The handle is used internally for receiving messages.
 
 ## listMessages() -> Promise<Message[]>
 
-List all messages in the inbox.
-Each message has: number, date, from, to, type, and content.
+Read the current mailbox entries without waiting for their lifecycle to finish.
+Metadata includes number, date, from, to, type, messageId, and optional replyTo.
+Payload fields depend on type: packages have strings/names/ids; requests have description.
+A message's done boolean means its content is complete, not that its task was answered.
+
+Lifecycle fields are not payload or status snapshots:
+- dismissed is a Promise<void> that resolves only after dismiss(number) removes this entry.
+- dismisser is a capability whose dismiss() removes the entry; it is not metadata.
+- A request's settled promise resolves when that request is resolved or rejected.
+
+Never blindly await every field, Promise.all(Object.values(message)), or a
+message's dismissed/settled promise while processing that same message.
+Doing so can wait for the completion action your own handler must perform.
+Inspect explicit data fields instead; for example, this returns while dismissed is pending:
+
+```js
+const messages = await E(powers).listMessages();
+return messages.map(({ number, type, from, to, messageId, replyTo, done, strings, names }) =>
+  ({ number, type, from, to, messageId, replyTo, done, strings, names }));
+```
+
+Reply or resolve/reject first, then dismiss if you own message handling.
+Floot's automatic mail handler replies and dismisses after the agent finishes;
+do not wait for or dismiss its active task message yourself.
+Dismissal removes the entry needed by reply(number); do not use it to unblock inspection.
 
 ## followMessages() -> AsyncIterator<Message>
 
 Subscribe to incoming messages.
 First yields existing messages, then yields new ones as they arrive.
+This is a long-lived subscription, not a finite list to collect until completion.
+Use listMessages() for a snapshot. Yielded entries carry the same dismissed and
+request settled lifecycle promises documented by help("listMessages").
+Do not await those promises in the handler responsible for replying or settling
+that message; Floot dismisses its task only after the agent finishes.
 Use with for-await-of:
   for await (const message of E(guest).followMessages()) { ... }
 
@@ -208,8 +236,23 @@ Edge names are the labels the sender attached to values in the package.
 
 ## dismiss(messageNumber) -> Promise<void>
 
-Remove a message from the inbox.
-Use after you've processed a message.
+Remove a message from the inbox and resolve its dismissed lifecycle promise.
+Reply or resolve/reject before dismissing: reply(number) needs the mailbox entry.
+Never dismiss an active task merely to release an inspection waiting on dismissed.
+Floot's automatic mail handler replies and dismisses its task after the agent finishes.
+
+## reply(messageNumber, strings, edgeNames, petNames) -> Promise<void>
+
+Reply to a retained mailbox entry, preserving its messageId as the replyTo correlation.
+Call before dismiss(number); replying to an already-dismissed entry fails.
+Do not await the entry's dismissed promise before replying.
+Floot's automatic mail handler sends your final answer and then dismisses the task.
+
+## messageHistory(messageNumber) -> Promise<Revision[]>
+
+Read recorded content revisions for a retained mailbox entry.
+Each revision contains envelope, done, date, and timestamp.
+Use this for content history, not to wait for dismissal or request settlement.
 
 ## dismissAll() -> Promise<void>
 
@@ -394,6 +437,14 @@ Prefer endowing a formula with a secret capability instead of calling its
 
 Use help("methodName") for details on specific methods.
 
+## createDirectory(petNamePath) -> Promise<void>
+
+Host only. Create a directory at the given name or array of path segments.
+Like makeDirectory, this replaces an existing binding: check absence first.
+Returns no directory capability. Use path-based list, lookup, storeValue, and
+remove operations when a worker must survive collection of its owned storage.
+
+
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
@@ -432,6 +483,22 @@ Options: { agentName, introducedNames, pins, networks }
 Create or retrieve a worker for running code.
 Workers are isolated JavaScript environments.
 
+## provideSessionOwner(recordsPath) -> Promise<SessionOwner>
+
+Provide an administrative session owner backed by a private local directory.
+Missing directory parents are created inside the daemon.
+Repeated calls share the owner and refuse a changed directory binding.
+Another host cannot claim the same directory during this daemon incarnation.
+A revived host formula cannot take over its earlier incarnation's claim either:
+cancellation does not establish that admitted cleanup has drained.
+The owner provides create, inspect, revise, client, stop, and remove methods.
+It retains exact formula identifiers; disposable directories and raw client
+capabilities stay inside the daemon.
+The client method returns a forwarding facet for one session incarnation.
+Re-provide the owner after a daemon restart.
+Cancelling its host or original directory fences the owner and its client facets,
+but does not prove that native resources have been cleaned up.
+
 ## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
 
 Evaluate JavaScript code in a worker with named endowments.
@@ -443,6 +510,16 @@ Evaluate JavaScript code in a worker with named endowments.
 
 Example: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])
   Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
+
+## getFormulaEnvironment(identifier) -> Promise<Record<string, string>>
+
+Read a local caplet formula's persisted construction environment without reviving it.
+Supports make-unconfined, make-archive, and make-from-tree formulas, returning an
+empty record when no environment was stored.
+Other formula types and cross-peer identifiers are rejected.
+This host-only method can reveal environment credentials; it is absent from the
+guest and diagnostics facets, and ordinary formula inspection omits these values.
+Use the formula identifier rather than a mutable pet name when verifying configuration.
 
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 

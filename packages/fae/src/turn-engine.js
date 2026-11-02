@@ -2,6 +2,10 @@
 
 import { Fail } from '@endo/errors';
 
+/** Finite runaway-loop guard, not a provider or model-context limit. */
+export const DEFAULT_MAX_TOOL_ROUNDS = 1024;
+harden(DEFAULT_MAX_TOOL_ROUNDS);
+
 /**
  * Run the provider/tool state machine shared by FAE and Floot.
  *
@@ -13,8 +17,9 @@ import { Fail } from '@endo/errors';
  * @param {object} options
  * @param {string} options.leafId
  * @param {number} options.maxRounds
+ * @param {AbortSignal} [options.signal] Fence late provider outcomes and further tool admission.
  * @param {(round: number) => Promise<any>} options.getTools
- * @param {(leafId: string) => Promise<readonly any[]>} options.getContext
+ * @param {(leafId: string, tools: any, round: number) => Promise<{leafId: string, messages: readonly any[]}>} options.getContext A selected context snapshot; checkpoint selection may advance the durable head.
  * @param {(context: readonly any[], tools: any, round: number) => Promise<{ message?: any }>} options.invoke
  * @param {(message: any) => readonly any[]} options.getToolCalls
  * @param {(calls: readonly any[], tools: any, round: number) => Promise<any>} options.runTools
@@ -24,6 +29,7 @@ import { Fail } from '@endo/errors';
 export const runAgenticTurn = async ({
   leafId,
   maxRounds,
+  signal,
   getTools,
   getContext,
   invoke,
@@ -37,12 +43,17 @@ export const runAgenticTurn = async ({
   let currentLeafId = leafId;
   await null;
   for (let round = 0; round < maxRounds; round += 1) {
+    signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
     const tools = await getTools(round);
+    signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
-    const context = await getContext(currentLeafId);
+    const snapshot = await getContext(currentLeafId, tools, round);
+    currentLeafId = snapshot.leafId;
+    signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
-    const outcome = await invoke(context, tools, round);
+    const outcome = await invoke(snapshot.messages, tools, round);
+    signal?.throwIfAborted();
     if (!outcome.message) {
       return harden({
         answered: false,

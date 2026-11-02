@@ -8,10 +8,12 @@
 /** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
+/** @import { SessionRecordDirectory } from './session-record-store.js' */
+/** @import { NativeSessionConstruction } from './session-owner.js' */
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { makeError, q, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 import {
   getGitCredentialController as getGitCredentialControllerForCap,
   getGitRemoteController as getGitRemoteControllerForCap,
@@ -21,6 +23,7 @@ import {
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
+import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
   assertPetName,
@@ -28,20 +31,22 @@ import {
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import { parseId } from './formula-identifier.js';
+import { assertValidId, parseId } from './formula-identifier.js';
 import { idFromLocator, internalizeLocator } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
+import { makeSerialJobs } from './serial-jobs.js';
+import { makeSessionOwner } from './session-owner.js';
 
 import {
   DiagnosticsInterface,
   HostInterface,
   TracesInterface,
 } from './interfaces.js';
-import { hostHelp, makeHelp } from './help-text.js';
+import { hostHelp, mailHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
 
 /**
@@ -288,6 +293,7 @@ harden(normalizeHttpClientPolicy);
 /**
  * @param {object} args
  * @param {DaemonCore['provide']} args.provide
+ * @param {DaemonCore['provideController']} args.provideController
  * @param {DaemonCore['provideStoreController']} args.provideStoreController
  * @param {DaemonCore['cancelValue']} args.cancelValue
  * @param {DaemonCore['formulateWorker']} args.formulateWorker
@@ -309,6 +315,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
  * @param {DaemonCore['formulateGit']} args.formulateGit
  * @param {DaemonCore['formulateShell']} args.formulateShell
+ * @param {DaemonCore['formulateEnvironment']} args.formulateEnvironment
  * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
  * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
@@ -317,7 +324,6 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
  * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
- * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
  * @param {DaemonCore['formulateTimer']} args.formulateTimer
@@ -326,6 +332,7 @@ harden(normalizeHttpClientPolicy);
  * @param {ContentLoadable['loadContent']} args.loadContent
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {DaemonCore['getActiveContext']} args.getActiveContext
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {NodeNumber} args.localNodeNumber
@@ -345,6 +352,7 @@ harden(normalizeHttpClientPolicy);
  */
 export const makeHostMaker = ({
   provide,
+  provideController,
   provideStoreController,
   cancelValue,
   formulateWorker,
@@ -363,13 +371,13 @@ export const makeHostMaker = ({
   formulateSubMount,
   formulateGit,
   formulateShell,
+  formulateEnvironment,
   formulateHttpClient,
   getHttpClientControlForClient,
   formulateGitCredential,
   formulateGitRemote,
   formulateInvitation,
   acceptInvitation,
-  formulateDirectoryForStore,
   getPeerIdForNodeIdentifier,
   formulateChannel,
   formulateTimer,
@@ -378,6 +386,7 @@ export const makeHostMaker = ({
   loadContent,
   getTypeForId,
   getFormulaForId,
+  getActiveContext,
   makeMailbox,
   makeDirectoryNode,
   localNodeNumber,
@@ -424,6 +433,11 @@ export const makeHostMaker = ({
   secretManager,
   formulateSecretLookup,
 }) => {
+  // A directory is one administrative serialization domain, even when its ID
+  // is named by several hosts. Claims last for this daemon incarnation; host
+  // cancellation alone does not establish that its native cleanup completed.
+  /** @type {Map<FormulaIdentifier, {hostId: FormulaIdentifier, context: Context}>} */
+  const sessionDirectoryHosts = new Map();
   /**
    * @param {FormulaIdentifier} hostId
    * @param {FormulaIdentifier} handleId
@@ -536,6 +550,368 @@ export const makeHostMaker = ({
       getNetworkAddresses,
       getContentSources,
     );
+
+    // These owners belong to this host incarnation, not the worker which
+    // requested one. Directory and client references remain daemon-local.
+    let sessionOwnersActive = true;
+    void context.cancelled.catch(() => {
+      sessionOwnersActive = false;
+    });
+    const assertSessionOwnersActive = () => {
+      sessionOwnersActive || Fail`Session owner host is cancelled`;
+    };
+    const sessionOwnerJobs = makeSerialJobs();
+    /** @type {Map<FormulaIdentifier, {owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void, checkConfiguration: (specifier: string | undefined) => Promise<void>}>} */
+    const sessionOwnersById = new Map();
+    /** @type {Map<string, Promise<{identifier: FormulaIdentifier, owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void, checkConfiguration: (specifier: string | undefined) => Promise<void>}>>} */
+    const sessionOwnersByPath = new Map();
+
+    /** @type {EndoHost['provideSessionOwner']} */
+    const provideSessionOwner = async (recordsPath, controllerSpecifier) => {
+      const { namePath } = assertPetNamePath(namePathFrom(recordsPath));
+      const key = JSON.stringify(namePath);
+      assertSessionOwnersActive();
+      let pending = sessionOwnersByPath.get(key);
+      if (pending === undefined) {
+        // Serialize creation across paths as well: two new owners may need
+        // the same missing parent, and makeDirectory replaces existing names.
+        pending = sessionOwnerJobs.enqueue(async () => {
+          assertSessionOwnersActive();
+          let identifier;
+          for (let length = 1; length <= namePath.length; length += 1) {
+            const prefix = namePath.slice(0, length);
+            // eslint-disable-next-line no-await-in-loop
+            identifier = await E(directory).identify(...prefix);
+            assertSessionOwnersActive();
+            if (identifier === undefined) {
+              // The returned directory stays here; it must not cross CapTP
+              // into a worker merely because it initiated this operation.
+              // eslint-disable-next-line no-await-in-loop
+              await E(directory).makeDirectory(prefix);
+              assertSessionOwnersActive();
+              // eslint-disable-next-line no-await-in-loop
+              identifier = await E(directory).identify(...prefix);
+              assertSessionOwnersActive();
+            }
+            if (identifier === undefined) {
+              throw makeError(X`Missing session owner directory`);
+            }
+            assertValidId(identifier);
+            isLocalKey(parseId(identifier).node) ||
+              Fail`Session owner storage must be a local directory`;
+            // Validate each parent before using it to traverse or create the
+            // next segment; an arbitrary NameHub is not administrative storage.
+            // eslint-disable-next-line no-await-in-loop
+            const formula = await getFormulaForId(identifier);
+            assertSessionOwnersActive();
+            formula.type === 'directory' ||
+              Fail`Session owner storage must be a local directory`;
+          }
+          if (identifier === undefined) {
+            throw makeError(X`Missing session owner directory`);
+          }
+          const claimedHost = sessionDirectoryHosts.get(identifier);
+          claimedHost === undefined ||
+            claimedHost.hostId === hostId ||
+            Fail`Session owner directory is already owned by another host`;
+          claimedHost === undefined ||
+            claimedHost.context === context ||
+            Fail`Session owner directory is retained by an earlier host incarnation`;
+          let retainedOwner = sessionOwnersById.get(identifier);
+          if (retainedOwner === undefined) {
+            // Capture value and cancellation from the same controller. A
+            // separate later lookup could observe a successor incarnation.
+            const controller = provideController(identifier);
+            let directoryActive = true;
+            let recordsActive = true;
+            /** @type {FormulaIdentifier | undefined} */
+            let recordsIdentifier;
+            void controller.context.cancelled.catch(() => {
+              directoryActive = false;
+            });
+            const assertActive = () => {
+              assertSessionOwnersActive();
+              directoryActive || Fail`Session owner directory is cancelled`;
+              recordsActive || Fail`Session record directory is cancelled`;
+            };
+            const rootRecords = /** @type {SessionRecordDirectory} */ (
+              await controller.value
+            );
+            assertActive();
+            (await E(rootRecords).maybeReadText('controller-owner')) ===
+              undefined ||
+              Fail`Native session records must be opened through their configured owner directory`;
+            // Reading the marker can yield to another host. Claim only after
+            // refusing nested records, and recheck before this synchronous set.
+            const currentClaim = sessionDirectoryHosts.get(identifier);
+            currentClaim === undefined ||
+              (currentClaim.hostId === hostId &&
+                currentClaim.context === context) ||
+              Fail`Session owner directory is already owned`;
+            sessionDirectoryHosts.set(identifier, harden({ hostId, context }));
+            const storedSpecifier = await E(rootRecords).maybeReadText(
+              'controller-specifier',
+            );
+            assertActive();
+            if (
+              storedSpecifier === undefined &&
+              controllerSpecifier !== undefined
+            ) {
+              controllerSpecifier.length > 0 ||
+                Fail`Controller specifier must not be empty`;
+              (await E(rootRecords).list()).length === 0 ||
+                Fail`Native session configuration requires an empty owner directory`;
+              await E(rootRecords).writeText(
+                'controller-specifier',
+                controllerSpecifier,
+              );
+              assertActive();
+            } else {
+              storedSpecifier === controllerSpecifier ||
+                Fail`Session controller configuration does not match its owner`;
+            }
+            /** @param {string | undefined} specifier */
+            const checkConfiguration = async specifier => {
+              assertActive();
+              specifier === controllerSpecifier ||
+                Fail`Session controller configuration does not match its owner`;
+              const currentSpecifier = await E(rootRecords).maybeReadText(
+                'controller-specifier',
+              );
+              assertActive();
+              currentSpecifier === specifier ||
+                Fail`Session controller configuration changed`;
+              if (recordsIdentifier !== undefined) {
+                const currentRecords =
+                  await E(rootRecords).identify('sessions');
+                assertActive();
+                currentRecords === recordsIdentifier ||
+                  Fail`Session record directory changed`;
+              }
+            };
+            let records = rootRecords;
+            /** @type {NativeSessionConstruction | undefined} */
+            let native;
+            /** @type {Map<FormulaIdentifier, Context>} */
+            const nativeContexts = new Map();
+            if (controllerSpecifier !== undefined) {
+              if ((await E(rootRecords).identify('sessions')) === undefined) {
+                await E(rootRecords).makeDirectory('sessions');
+              }
+              const sessionsId = await E(rootRecords).identify('sessions');
+              if (sessionsId === undefined)
+                throw Fail`Missing session record directory`;
+              assertValidId(sessionsId);
+              isLocalKey(parseId(sessionsId).node) ||
+                Fail`Session records must be local`;
+              const sessionsFormula = await getFormulaForId(sessionsId);
+              sessionsFormula.type === 'directory' ||
+                Fail`Session records require a directory`;
+              const previousClaim = sessionDirectoryHosts.get(sessionsId);
+              previousClaim === undefined ||
+                (previousClaim.hostId === hostId &&
+                  previousClaim.context === context) ||
+                Fail`Session record directory is already owned`;
+              !sessionOwnersById.has(sessionsId) ||
+                Fail`Session record directory is already owned`;
+              sessionDirectoryHosts.set(
+                sessionsId,
+                harden({ hostId, context }),
+              );
+              recordsIdentifier = sessionsId;
+              const recordController = provideController(sessionsId);
+              void recordController.context.cancelled.catch(() => {
+                recordsActive = false;
+              });
+              records = /** @type {SessionRecordDirectory} */ (
+                await recordController.value
+              );
+              assertActive();
+              const recordedOwner =
+                await E(records).maybeReadText('controller-owner');
+              if (recordedOwner === undefined) {
+                (await E(records).list()).length === 0 ||
+                  Fail`Native session records require an empty unowned directory`;
+                await E(records).writeText('controller-owner', identifier);
+              } else {
+                recordedOwner === identifier ||
+                  Fail`Native session records belong to another owner directory`;
+              }
+              assertActive();
+              let inputId = await E(rootRecords).identify('constructor-input');
+              if (inputId === undefined) {
+                /** @type {DeferredTasks<MarshalDeferredTaskParams>} */
+                const inputTasks = makeDeferredTasks();
+                inputTasks.push(ids =>
+                  E(rootRecords).storeIdentifier(
+                    'constructor-input',
+                    ids.marshalId,
+                  ),
+                );
+                const input = await formulateMarshalValue(null, inputTasks);
+                inputId = input.id;
+              }
+              assertValidId(inputId);
+              const inputFormula = await getFormulaForId(inputId);
+              (inputFormula.type === 'marshal' &&
+                inputFormula.slots.length === 0) ||
+                Fail`Native controller construction requires copy-only powers`;
+              const powersId = inputId;
+              native = harden({
+                provideClient: async id => {
+                  assertActive();
+                  assertValidId(id);
+                  const original = provideController(id);
+                  nativeContexts.set(id, original.context);
+                  const value = await original.value;
+                  assertActive();
+                  return value;
+                },
+                construct: (name, publish) => {
+                  let cancelled = false;
+                  /** @type {Map<FormulaIdentifier, Context>} */
+                  const acquired = new Map();
+                  /** @type {Promise<void> | undefined} */
+                  let cancelling;
+                  const check = () => {
+                    assertActive();
+                    !cancelled || Fail`Native session construction cancelled`;
+                  };
+                  /**
+                   * @param {FormulaIdentifier} id
+                   * @param {Context} originalContext
+                   */
+                  const retain = (id, originalContext) => {
+                    nativeContexts.set(id, originalContext);
+                    acquired.set(id, originalContext);
+                  };
+                  // Keep the boxed formulation result separate from its value:
+                  // an inert module constructor can wait for cancellation.
+                  const formulation = Promise.resolve().then(async () => {
+                    check();
+                    await checkConfiguration(controllerSpecifier);
+                    check();
+                    /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
+                    const tasks = makeDeferredTasks();
+                    tasks.push(async ids => {
+                      check();
+                      await publish(ids.workerId, ids.capletId);
+                      check();
+                    });
+                    const result = await formulateUnconfined(
+                      hostId,
+                      handleId,
+                      controllerSpecifier,
+                      tasks,
+                      undefined,
+                      powersId,
+                      {},
+                      undefined,
+                      `session:${name}`,
+                      retain,
+                    );
+                    retain(result.id, result.context);
+                    return result;
+                  });
+                  const value = formulation.then(result => {
+                    check();
+                    return result.value;
+                  });
+                  void value.catch(() => {});
+                  const cancelConstruction = () => {
+                    cancelled = true;
+                    if (cancelling) return cancelling;
+                    cancelling = (async () => {
+                      // Cancelling a worker before caplet formulation settles
+                      // could let that pending formulation provide it again.
+                      await formulation.catch(() => {});
+                      const results = await Promise.allSettled(
+                        [...acquired].map(async ([id, original]) => {
+                          await original.cancel(
+                            Error(`Session ${name} construction cancelled`),
+                          );
+                          acquired.delete(id);
+                          if (nativeContexts.get(id) === original) {
+                            nativeContexts.delete(id);
+                          }
+                        }),
+                      );
+                      const errors = results.flatMap(result =>
+                        result.status === 'rejected' ? [result.reason] : [],
+                      );
+                      if (errors.length)
+                        throw AggregateError(
+                          errors,
+                          'Native construction cleanup pending',
+                        );
+                    })().catch(error => {
+                      cancelling = undefined;
+                      throw error;
+                    });
+                    return cancelling;
+                  };
+                  return harden({ value, cancel: cancelConstruction });
+                },
+                cancel: async (id, reason) => {
+                  assertActive();
+                  assertValidId(id);
+                  // Never provide a formula during cancellation. In particular,
+                  // publication failure can leave an identity with no formula.
+                  const original =
+                    nativeContexts.get(id) ?? getActiveContext(id);
+                  if (original !== undefined) {
+                    nativeContexts.set(id, original);
+                    await original.cancel(reason);
+                    nativeContexts.delete(id);
+                  }
+                  assertActive();
+                },
+              });
+            }
+            const owner = makeSessionOwner({
+              directory: records,
+              assertActive,
+              native,
+              provide: async id => {
+                assertActive();
+                assertValidId(id);
+                const value = await provide(id);
+                assertActive();
+                return value;
+              },
+              cancel: async (id, reason) => {
+                assertActive();
+                assertValidId(id);
+                await cancelValue(id, reason);
+                assertActive();
+              },
+            });
+            retainedOwner = harden({ owner, assertActive, checkConfiguration });
+            sessionOwnersById.set(identifier, retainedOwner);
+            if (recordsIdentifier !== undefined) {
+              sessionOwnersById.set(recordsIdentifier, retainedOwner);
+            }
+          }
+          retainedOwner.assertActive();
+          return harden({ identifier, ...retainedOwner });
+        });
+        sessionOwnersByPath.set(key, pending);
+        void pending.catch(() => {
+          if (sessionOwnersByPath.get(key) === pending) {
+            sessionOwnersByPath.delete(key);
+          }
+        });
+      }
+      const retained = await pending;
+      assertSessionOwnersActive();
+      const current = await E(directory).identify(...namePath);
+      assertSessionOwnersActive();
+      current === retained.identifier ||
+        Fail`Session owner directory changed while its owner is retained`;
+      retained.assertActive();
+      await retained.checkConfiguration(controllerSpecifier);
+      return retained.owner;
+    };
     /**
      * Inspect one inventory path without resolving its value.
      * @param {Name[]} path
@@ -795,12 +1171,31 @@ export const makeHostMaker = ({
       options = {},
     ) => {
       const { readOnly = false } = options;
-      const parentNamePath = namePathFrom(mountName);
-      const mountId = await E(directory).identify(...parentNamePath);
-      if (mountId === undefined) {
-        throw makeError(
-          X`provideSubMount: unknown parent mount ${q(mountName)}`,
-        );
+      /** @type {string | undefined} */
+      let mountId;
+      if (typeof mountName === 'string' || Array.isArray(mountName)) {
+        const parentNamePath = namePathFrom(mountName);
+        mountId = await E(directory).identify(...parentNamePath);
+        if (mountId === undefined) {
+          throw makeError(
+            X`provideSubMount: unknown parent mount ${q(mountName)}`,
+          );
+        }
+      } else {
+        // The parent as a capability rather than a name, as `provideGit` and
+        // `provideShell` take theirs: a holder of a mount it was handed, and
+        // never had a name for, can still derive a narrower durable mount
+        // from it. CapTP round-trips preserve exo identity, so only a mount
+        // this daemon minted resolves; a view derived from one (`readOnly()`,
+        // `subView()`) has no formula and is refused. What is derived can
+        // only narrow: `formulateSubMount` clamps the path beneath the
+        // parent's root and never lifts a read-only parent.
+        mountId = getIdForRef(await mountName);
+        if (mountId === undefined) {
+          throw makeError(
+            X`provideSubMount: parent must be a pet name or a daemon-minted mount cap`,
+          );
+        }
       }
       const { namePath } = petNamePathFrom(newName);
 
@@ -1021,6 +1416,50 @@ export const makeHostMaker = ({
       );
 
       const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
+      return value;
+    };
+
+    /** @type {EndoHost['provideEnvironment']} */
+    const provideEnvironment = async (
+      runner,
+      workspace,
+      adminName,
+      shellName,
+      recipe,
+    ) => {
+      assertEnvironmentRecipe(recipe);
+      const adminPath = petNamePathFrom(adminName).namePath;
+      const shellPath = petNamePathFrom(shellName).namePath;
+      if (
+        JSON.stringify(adminPath) === JSON.stringify(shellPath) ||
+        (await E(directory).has(...adminPath)) ||
+        (await E(directory).has(...shellPath))
+      ) {
+        throw makeError(X`Environment names are already bound or identical`);
+      }
+      const runnerId = getIdForRef(runner);
+      const workspaceId = getIdForRef(workspace);
+      if (runnerId === undefined || workspaceId === undefined)
+        throw makeError(
+          X`Environment dependencies require retained daemon identities`,
+        );
+      const backing = getMountBacking(workspace);
+      if (backing?.readOnly)
+        throw makeError(X`Environment requires a writable workspace`);
+      const tasks =
+        /** @type {DeferredTasks<import('./types.js').EnvironmentDeferredTaskParams>} */ (
+          makeDeferredTasks()
+        );
+      tasks.push(async ids => {
+        await E(directory).storeIdentifier(adminPath, ids.adminId);
+        await E(directory).storeIdentifier(shellPath, ids.shellId);
+      });
+      const { value } = await formulateEnvironment(
+        runnerId,
+        workspaceId,
+        recipe,
+        tasks,
+      );
       return value;
     };
 
@@ -2311,9 +2750,8 @@ export const makeHostMaker = ({
      * on genuinely remote peers are rejected with a clear error.
      *
      * @param {FormulaIdentifier} identifier
-     * @returns {Promise<FormulaRecord>}
      */
-    const getFormula = async identifier => {
+    const getLocalFormula = async identifier => {
       await null;
       if (typeof identifier !== 'string') {
         throw new TypeError(
@@ -2345,6 +2783,15 @@ export const makeHostMaker = ({
           { cause },
         );
       }
+      return harden({ formula, number });
+    };
+
+    /**
+     * @param {FormulaIdentifier} identifier
+     * @returns {Promise<FormulaRecord>}
+     */
+    const getFormula = async identifier => {
+      const { formula, number } = await getLocalFormula(identifier);
       // A scratch-mount carries no path on disk; resolve the daemon-
       // managed host path so the formula record can surface it. Other
       // formula types (including `mount`, whose path lives in the
@@ -2356,6 +2803,27 @@ export const makeHostMaker = ({
         );
       }
       return makeFormulaRecord(formula, number, { mountHostPath });
+    };
+
+    /**
+     * Read construction policy without reviving the formula. Environment values
+     * can include credentials, so this authority is on EndoHost itself, never on
+     * the separately delegable diagnostics facet or ordinary formula records.
+     * @param {FormulaIdentifier} identifier
+     * @returns {Promise<Record<string, string>>}
+     */
+    const getFormulaEnvironment = async identifier => {
+      const { formula } = await getLocalFormula(identifier);
+      if (
+        formula.type !== 'make-unconfined' &&
+        formula.type !== 'make-archive' &&
+        formula.type !== 'make-from-tree'
+      ) {
+        throw makeError(
+          X`Formula ${q(identifier)} has no construction environment`,
+        );
+      }
+      return harden({ ...formula.env });
     };
 
     const { reverseIdentify } = specialStore;
@@ -2434,6 +2902,12 @@ export const makeHostMaker = ({
     const makeDirectory = async petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);
       return makeDirectoryLocal(namePath);
+    };
+    /** @type {EndoHost['createDirectory']} */
+    const createDirectory = async petNameOrPath => {
+      // A supervisor must be able to own storage without receiving its formula
+      // presence: collecting that presence would terminate its entire worker.
+      await makeDirectoryLocal(namePathFrom(petNameOrPath));
     };
     const {
       listMessages,
@@ -2679,6 +3153,7 @@ export const makeHostMaker = ({
       move,
       copy,
       makeDirectory,
+      createDirectory,
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
@@ -2703,9 +3178,11 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideSessionOwner,
       provideSubMount,
       provideGit,
       provideShell,
+      provideEnvironment,
       provideHttpClient,
       getHttpClientControl,
       provideGitRemote,
@@ -2744,6 +3221,7 @@ export const makeHostMaker = ({
       sendValue,
       // Diagnostics (formula records, dependency graph, error traces)
       diagnostics,
+      getFormulaEnvironment,
       listRetentionPaths: listRetentionPathsForHost,
       followRetentionPaths: followRetentionPathsForHost,
     };
@@ -2752,7 +3230,7 @@ export const makeHostMaker = ({
       'EndoHost',
       HostInterface,
       /** @type {any} */ ({
-        help: makeHelp(hostHelp),
+        help: makeHelp(hostHelp, [mailHelp]),
         ...host,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {

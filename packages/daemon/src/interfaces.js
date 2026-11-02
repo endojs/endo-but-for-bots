@@ -13,6 +13,7 @@ import {
   rangeReadMethodGuards,
   rangeAttenuationMethodGuards,
 } from '@endo/platform/fs/lite';
+import { EnvironmentRecipeShape } from '@endo/exo-shell/environment-interfaces.js';
 import {
   NamePathShape,
   NameOrPathShape,
@@ -38,8 +39,14 @@ const LocatorShape = M.string();
 // Message numbers are non-negative BigInts
 const MessageNumberShape = M.bigint();
 
+// Mail dialogue and formula construction data have workload admission at their
+// harness/setup boundary. Their structural text profile must also admit older
+// retained values after those workload settings are lowered.
+const RetainedTextShape = M.string({ stringLengthLimit: 0x7fff_ffff });
+const MessageStringsShape = M.arrayOf(RetainedTextShape);
+
 // Environment variables as string-to-string record
-const EnvShape = M.recordOf(M.string(), M.string());
+const EnvShape = M.recordOf(M.string(), RetainedTextShape);
 
 // Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
@@ -193,6 +200,7 @@ export const SecretImporterInterface = M.interface('SecretImporter', {
 
 export const SecretCatalogInterface = M.interface('SecretCatalog', {
   list: M.call().returns(M.promise()),
+  adminFor: M.call(M.remotable()).returns(M.promise()),
 });
 
 export const SecretAuditReaderInterface = M.interface('SecretAuditReader', {
@@ -286,7 +294,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Send a package message
   send: M.call(
     NameOrPathShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -295,14 +303,14 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -338,7 +346,7 @@ export const GuestInterface = M.interface('EndoGuest', {
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
   // Internal: deliver a message
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
   // Mint a guest-owned invitation (network mediation stays internal)
@@ -348,6 +356,7 @@ export const GuestInterface = M.interface('EndoGuest', {
 });
 
 export const HostInterface = M.interface('EndoHost', {
+  createDirectory: M.call(NameOrPathShape).returns(M.promise()),
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
@@ -379,13 +388,13 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   send: M.call(
     NameOrPathShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
     NameOrPathShape, // recipientName
@@ -401,6 +410,10 @@ export const HostInterface = M.interface('EndoHost', {
   storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
+  // Administrative session records and lifecycle remain daemon-local.
+  provideSessionOwner: M.call(NameOrPathShape)
+    .optional(M.string())
+    .returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's
   // default restricted-segment set (an empty array disables denial).
   provideMount: M.call(M.string(), NameOrPathShape)
@@ -423,7 +436,8 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Mint a sub-mount rooted at a subdirectory of an existing mount
   provideSubMount: M.call(
-    NameOrPathShape,
+    // The parent by pet name, or the daemon-minted mount capability itself.
+    M.or(NameOrPathShape, M.remotable()),
     M.arrayOf(M.string()),
     NameOrPathShape,
   )
@@ -452,6 +466,13 @@ export const HostInterface = M.interface('EndoHost', {
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('Shell')),
+  provideEnvironment: M.callWhen(
+    M.remotable(),
+    M.remotable(),
+    NameOrPathShape,
+    NameOrPathShape,
+    EnvironmentRecipeShape,
+  ).returns(harden({ shell: M.remotable(), admin: M.remotable() })),
   // Mint a confined outbound-HTTP client from a host-owned `fetch` seam. No
   // mount arg: the Network tier is rooted in the fetch seam, not a mount.
   provideHttpClient: M.callWhen(
@@ -566,14 +587,14 @@ export const HostInterface = M.interface('EndoHost', {
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -610,6 +631,9 @@ export const HostInterface = M.interface('EndoHost', {
   // `EndoInspector` already denotes the per-formula reference walker.)
   // See `designs/formula-inspector.md`.
   diagnostics: M.call().returns(M.promise()),
+  // Read sensitive stored caplet environment. This is deliberately excluded
+  // from the separately delegable read-only diagnostics facet.
+  getFormulaEnvironment: M.call(IdShape).returns(M.promise()),
   // Snapshot every retention path from a GC root to the target locator
   listRetentionPaths: M.call(LocatorShape).returns(M.promise()),
   // Subscribe to retention-path changes for a target locator
@@ -684,7 +708,6 @@ export const ChannelInvitationInterface = M.interface('EndoChannelInvitation', {
   help: M.call().optional(M.string()).returns(M.string()),
   join: M.call(M.string()).returns(M.promise()),
 });
-harden(ChannelInvitationInterface);
 
 export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   setInvitationValidity: M.call(M.boolean()).returns(M.promise()),
@@ -692,7 +715,6 @@ export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   getHeatConfig: M.call().returns(M.promise()),
   temporaryBan: M.call(M.number()).returns(M.promise()),
 });
-harden(AttenuatorInterface);
 
 export const InvitationInterface = M.interface('EndoInvitation', {
   accept: M.call(IdShape).optional(M.string()).returns(M.promise()),

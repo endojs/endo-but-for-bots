@@ -14,6 +14,8 @@ import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 import {
   DirectoryInterface as PlatformDirectoryInterface,
   FileInterface as PlatformFileInterface,
@@ -171,6 +173,42 @@ const makeConfiguredMount = t => {
   });
   return { mount, rootPath };
 };
+
+test('projected Mount writes and resizes large screenshots through standard byte streams', async t => {
+  const { mount, rootPath } = makeConfiguredMount(t);
+  const filesystem = mountAsFilesystem(mount);
+  const root = await E(filesystem).root();
+  const file = await E(root).create('scene.png', {});
+  t.teardown(() => E(file).close());
+  const content = Uint8Array.from(
+    { length: 338_000 },
+    (_, index) => index % 251,
+  );
+  const writer = iterateBytesWriter(await E(file).write(0n));
+  await writer.next(content);
+  await writer.return();
+  t.deepEqual(
+    new Uint8Array(fs.readFileSync(path.join(rootPath, 'scene.png'))),
+    content,
+  );
+  const patch = Uint8Array.of(255, 254, 253);
+  const patchWriter = iterateBytesWriter(await E(file).write(80_000n));
+  await patchWriter.next(patch);
+  await patchWriter.return();
+  content.set(patch, 80_000);
+  await E(file).truncate(500_000n);
+  const grown = new Uint8Array(
+    fs.readFileSync(path.join(rootPath, 'scene.png')),
+  );
+  t.deepEqual(grown.subarray(0, content.length), content);
+  t.is(grown.length, 500_000);
+  t.true(grown.subarray(content.length).every(byte => byte === 0));
+  // Follow-up I/O on the same handle remains valid after crossing many frames.
+  const reader = iterateBytesReader(await E(file).read(79_999n, 5n));
+  const chunks = [];
+  for await (const chunk of reader) chunks.push(...chunk);
+  t.deepEqual(chunks, [...content.subarray(79_999, 80_004)]);
+});
 
 test('EndoMount exposes every method on PlatformDirectoryInterface', async t => {
   const { mount } = makeConfiguredMount(t);

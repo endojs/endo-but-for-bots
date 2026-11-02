@@ -63,6 +63,12 @@ test('subagent tools appear only when the session was given a spawner', async t 
   });
   const plain = await makeFlootToolRegistry(powers).snapshot();
   t.false(plain.names.includes('askSubagent'));
+  t.true(plain.names.includes('describeCapability'));
+  t.true(plain.names.includes('readSources'));
+  await t.throwsAsync(
+    () => plain.execute('list', harden({ path: 'invented' })),
+    { message: /Unexpected argument/ },
+  );
 
   const delegated = await makeFlootToolRegistry(powers, {
     spawner: Far('SubagentSpawner', {}),
@@ -141,9 +147,22 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
     refresh: async () => undefined,
   });
   const withOracle = await makeFlootToolRegistry(powers, {
-    accountOracle: oracle,
-    getUsage: async () => harden({ inputTokens: 1200, outputTokens: 340 }),
-    getModelId: () => 'm',
+    readAccounts: async () =>
+      harden({
+        accounts: [
+          {
+            accountId: 'test',
+            title: 'Test',
+            plan: await oracle.getPlan(),
+            rateLimits: await oracle.getRateLimits(),
+            rateCard: await oracle.getRateCard(),
+          },
+        ],
+        complete: true,
+        selection: 'eligible-accounts',
+        usage: { inputTokens: 1200, outputTokens: 340 },
+        costUnavailable: 'No per-account usage attribution.',
+      }),
   }).snapshot();
   t.true(withOracle.names.includes('accountStatus'));
   t.not(plain.toolSetId, withOracle.toolSetId);
@@ -153,7 +172,7 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
   t.regex(report, /declared by the operator/);
   t.regex(report, /750 of 1000 remaining \(25% used\)/);
   t.regex(report, /1200 input and 340 output tokens/);
-  t.regex(report, /No list price is configured/);
+  t.regex(report, /No per-account usage attribution/);
 });
 
 test('a stored caplet tool is located with the path as separate name arguments', async t => {
@@ -228,4 +247,106 @@ test('extra tools join the pinned catalog and cannot shadow a built-in', async t
       }),
     { message: /"exec" is already defined/ },
   );
+});
+
+test('all built-in argument envelopes are closed and validated before effects', async t => {
+  const effects = [];
+  const powers = Far('Powers', {
+    list: () => harden([]),
+    storeValue: (...args) => {
+      effects.push(['storeValue', args]);
+    },
+    remove: (...args) => {
+      effects.push(['remove', args]);
+    },
+    listMessages: () => {
+      effects.push(['listMessages']);
+      return harden([]);
+    },
+  });
+  const snapshot = await makeFlootToolRegistry(powers).snapshot();
+  for (const name of ['store', 'remove', 'listMessages']) {
+    const descriptor = snapshot.dynamicTools.find(tool => tool.name === name);
+    if (!descriptor) throw Error(`Missing tool ${name}`);
+    t.is(descriptor.inputSchema.additionalProperties, false);
+  }
+  await t.throwsAsync(
+    () =>
+      snapshot.execute(
+        'store',
+        harden({ petName: 'note', value: 1, method: 'ignored' }),
+      ),
+    { message: /Unexpected argument "method"/ },
+  );
+  await t.throwsAsync(
+    () =>
+      snapshot.execute('remove', harden({ petName: 'note', path: 'ignored' })),
+    { message: /Unexpected argument "path"/ },
+  );
+  await t.throwsAsync(
+    () => snapshot.execute('listMessages', harden({ limit: 1 })),
+    { message: /Unexpected argument "limit"/ },
+  );
+  t.deepEqual(effects, []);
+  await snapshot.execute(
+    'store',
+    harden({ petName: 'note', value: { arbitraryValueKey: 1 } }),
+  );
+  t.deepEqual(effects, [['storeValue', [{ arbitraryValueKey: 1 }, 'note']]]);
+});
+
+test('open stored tool and factory-extra schemas remain open without re-reading schemas at dispatch', async t => {
+  let schemaReads = 0;
+  const makeOpenTool = name =>
+    harden({
+      schema: () => {
+        schemaReads += 1;
+        return harden({
+          type: 'function',
+          function: {
+            name,
+            description: 'Accept arbitrary JSON keys',
+            parameters: {
+              type: 'object',
+              properties: {},
+              additionalProperties: true,
+            },
+          },
+        });
+      },
+      execute: async args => JSON.stringify(args),
+      help: () => 'open',
+    });
+  const stored = makeOpenTool('stored');
+  const powers = Far('Powers', {
+    list: directory => harden(directory === 'tools' ? ['stored'] : []),
+    lookup: () => stored,
+    locate: () => 'stored-locator',
+  });
+  const snapshot = await makeFlootToolRegistry(powers, {
+    extraTools: new Map([['extra', makeOpenTool('extra')]]),
+  }).snapshot();
+  const readsAtSnapshot = schemaReads;
+  for (const name of ['stored', 'extra']) {
+    const descriptor = snapshot.dynamicTools.find(tool => tool.name === name);
+    if (!descriptor) throw Error(`Missing tool ${name}`);
+    t.is(descriptor.inputSchema.additionalProperties, true);
+    t.is(
+      // eslint-disable-next-line no-await-in-loop
+      await snapshot.execute(name, harden({ arbitrary: 'accepted' })),
+      '{"arbitrary":"accepted"}',
+    );
+  }
+  t.is(schemaReads, readsAtSnapshot);
+});
+
+test('image capability is advertised only when backend recovery supports it', async t => {
+  const powers = Far('Powers', { list: () => harden([]) });
+  const supported = await makeFlootToolRegistry(powers).snapshot();
+  const unsupported = await makeFlootToolRegistry(powers, {
+    imageInputs: false,
+  }).snapshot();
+  t.true(supported.names.includes('viewImage'));
+  t.false(unsupported.names.includes('viewImage'));
+  t.not(supported.toolSetId, unsupported.toolSetId);
 });

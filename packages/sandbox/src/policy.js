@@ -127,18 +127,31 @@ export const PINNED_IMAGE_REFERENCE_PATTERN =
 harden(PINNED_IMAGE_REFERENCE_PATTERN);
 
 /** Portable, bounded name for a volume, container, or mount role. */
-const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-
-/** Absolute, normal, non-traversing destination path inside the slice. */
-const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+export const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 /**
- * Where a runtime attach may land: strictly under `/mnt/`, so it can
- * never shadow a role the profile fixes elsewhere in the table. The
- * segment shape is `INNER_PATH_PATTERN`'s, which is also what rejects
- * `..`.
+ * Absolute, normal, non-traversing path — a destination inside the slice, and
+ * the shape a mount's host source must have too. Exported so an adapter
+ * composing a mount table holds a source to the runtime's own rule rather than
+ * to a transcription of it.
  */
-const ATTACH_DESTINATION_PATTERN = /^\/mnt(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+export const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+harden(INNER_PATH_PATTERN);
+
+/**
+ * Where a runtime attach may land: any absolute, normal, non-traversing
+ * destination — `INNER_PATH_PATTERN`'s shape, which is also what rejects `..`.
+ *
+ * This was once strictly `/mnt/`, "so it can never shadow a role the profile
+ * fixes elsewhere in the table". That was a proxy for the property, and it held
+ * only because no profile happened to fix a role under `/mnt/`. It is replaced
+ * by the property itself: `assertSlicePolicyRequest` refuses a table whose
+ * destinations nest, whatever their kinds. That is strictly stronger — the
+ * prefix rule never stopped one attach nesting inside another — and it is what
+ * lets a fixed role be capability-backed, which is how a workspace served over
+ * 9P becomes attestable rather than an unverified host bind.
+ */
+const ATTACH_DESTINATION_PATTERN = INNER_PATH_PATTERN;
 
 /** The filesystem type a bind must carry to be an attach and not host data. */
 const ATTACH_FSTYPE = '9p';
@@ -260,12 +273,43 @@ const assertPolicyMount = candidate => {
     typeof candidate === 'object' && candidate !== null ? candidate : {}
   );
   const kind = record.kind;
-  if (kind !== 'volume' && kind !== 'tmpfs' && kind !== 'attach') {
+  if (kind === 'resolver') {
+    assertExactKeys(
+      record,
+      ['role', 'kind', 'source', 'destination', 'mode'],
+      'resolver mount',
+    );
+    if (
+      record.role !== 'resolver' ||
+      record.destination !== '/etc/resolv.conf' ||
+      record.mode !== 'ro' ||
+      typeof record.source !== 'string' ||
+      !INNER_PATH_PATTERN.test(record.source) ||
+      !record.source.endsWith('/public-resolv.conf')
+    ) {
+      throw makeError(
+        X`slice policy resolver must be a fixed read-only generated public-resolv.conf mount`,
+      );
+    }
+    return harden({
+      role: 'resolver',
+      kind,
+      source: record.source,
+      destination: '/etc/resolv.conf',
+      mode: 'ro',
+    });
+  }
+  if (
+    kind !== 'volume' &&
+    kind !== 'tmpfs' &&
+    kind !== 'attach' &&
+    kind !== 'bind'
+  ) {
     throw makeError(
-      X`slice policy mount kind must be "volume", "tmpfs", or "attach"; got ${q(kind)}`,
+      X`slice policy mount kind must be "volume", "tmpfs", "attach", or "bind"; got ${q(kind)}`,
     );
   }
-  if (kind === 'attach') {
+  if (kind === 'attach' || kind === 'bind') {
     assertExactKeys(
       record,
       ['role', 'kind', 'source', 'destination', 'mode'],
@@ -278,7 +322,7 @@ const assertPolicyMount = candidate => {
       !ATTACH_DESTINATION_PATTERN.test(destination)
     ) {
       throw makeError(
-        X`slice policy attach ${q(role)} needs an absolute normal destination under /mnt/; got ${q(destination)}`,
+        X`slice policy ${q(kind)} ${q(role)} needs an absolute normal destination; got ${q(destination)}`,
       );
     }
     // The host side of the bind. The same bounded shape as a destination:
@@ -288,12 +332,12 @@ const assertPolicyMount = candidate => {
     // own option separators.
     if (typeof source !== 'string' || !INNER_PATH_PATTERN.test(source)) {
       throw makeError(
-        X`slice policy attach ${q(role)} needs an absolute normal host mountpoint; got ${q(source)}`,
+        X`slice policy ${q(kind)} ${q(role)} needs an absolute normal host mountpoint; got ${q(source)}`,
       );
     }
     if (mode !== 'ro' && mode !== 'rw') {
       throw makeError(
-        X`slice policy attach ${q(role)} mode must be "ro" or "rw"; got ${q(mode)}`,
+        X`slice policy ${q(kind)} ${q(role)} mode must be "ro" or "rw"; got ${q(mode)}`,
       );
     }
     return harden({ role, kind, source, destination, mode });
@@ -355,6 +399,7 @@ export const assertSlicePolicyRequest = request => {
       'brokerSidecar',
       'resources',
       'mounts',
+      'bindRoots',
       'attestationArgv',
     ],
     'request',
@@ -468,6 +513,24 @@ export const assertSlicePolicyRequest = request => {
   const containers = 1n + BigInt(resources.maxConcurrentOperations);
   let perContainerWritable = resources.shmBytes;
   let sharedWritable = 0n;
+  // The roots a `bind` mount's source may lie under. A bind attests only
+  // that it is a bind of a host path, so what makes the row worth attesting
+  // at all is that the path came from somewhere this deployment owns: an
+  // unrestricted bind would let a table say "and also this", for any host
+  // path, with the attestation agreeing. Declared even when empty, because a
+  // profile that binds nothing should say so rather than leave it to be
+  // inferred from a table.
+  const bindRoots = record.bindRoots;
+  if (!Array.isArray(bindRoots)) {
+    throw makeError(X`slice policy bindRoots must be an array`);
+  }
+  for (const root of bindRoots) {
+    if (typeof root !== 'string' || !INNER_PATH_PATTERN.test(root)) {
+      throw makeError(
+        X`slice policy bind root must be an absolute normal path; got ${q(root)}`,
+      );
+    }
+  }
   for (const mount of mounts) {
     if (roles.has(mount.role)) {
       throw makeError(
@@ -479,6 +542,32 @@ export const assertSlicePolicyRequest = request => {
       throw makeError(
         X`slice policy mount destination ${q(mount.destination)} is duplicated`,
       );
+    }
+    // Nor may one destination sit inside another. Both would be declared and
+    // both attested, but the attested table has no ordering, so it could not
+    // say which projection the slice actually sees at the shadowed path — a
+    // record that cannot describe the result. This is the rule the `/mnt/`
+    // prefix on attach destinations used to approximate; unlike the prefix it
+    // also covers two attaches, and it holds for every kind.
+    if (
+      mount.kind === 'bind' &&
+      !bindRoots.some(
+        root => mount.source === root || mount.source.startsWith(`${root}/`),
+      )
+    ) {
+      throw makeError(
+        X`slice policy bind ${q(mount.role)} source ${q(mount.source)} is outside every declared bind root`,
+      );
+    }
+    for (const taken of destinations) {
+      if (
+        mount.destination.startsWith(`${taken}/`) ||
+        taken.startsWith(`${mount.destination}/`)
+      ) {
+        throw makeError(
+          X`slice policy mount destination ${q(mount.destination)} nests with ${q(taken)}`,
+        );
+      }
     }
     if (mount.destination === SHM_DESTINATION) {
       throw makeError(
@@ -494,13 +583,17 @@ export const assertSlicePolicyRequest = request => {
       }
       sources.add(mount.source);
       sharedWritable += mount.sizeBytes;
-    } else if (mount.kind === 'attach') {
-      // Not host storage: an attach is served through a capability, and
-      // its bytes live wherever that capability keeps them. It adds
-      // nothing to the writable ceiling this table bounds.
+    } else if (
+      mount.kind === 'attach' ||
+      mount.kind === 'bind' ||
+      mount.kind === 'resolver'
+    ) {
+      // Attaches are capability-backed storage and a bind is host storage the
+      // host already accounts for. The generated resolver is immutable
+      // configuration. None adds local writable storage to this slice.
       if (sources.has(mount.source)) {
         throw makeError(
-          X`slice policy attach ${q(mount.source)} is mounted twice`,
+          X`slice policy ${q(mount.kind)} ${q(mount.source)} is mounted twice`,
         );
       }
       sources.add(mount.source);
@@ -538,6 +631,7 @@ export const assertSlicePolicyRequest = request => {
     brokerSidecar,
     resources,
     mounts,
+    bindRoots: harden([...bindRoots]),
     attestationArgv: harden([...attestationArgv]),
   });
 };
@@ -576,16 +670,32 @@ export const assemblePolicyArgv = policy => {
   const argv = [
     '--user',
     `${policy.uid}:${policy.gid}`,
-    // The user namespace is deliberately *not* requested here.
-    // `--userns private` asks a rootless engine to nest a second one
-    // inside its own, which needs subordinate id ranges to map from and
-    // fails outright on a host that has none — while adding nothing:
-    // rootless containers already run outside the daemon's user
-    // namespace, and `attestSlicePolicy` proves that from
-    // `/proc/<pid>/ns/user` rather than from any flag. The driver
-    // additionally refuses a namespace another of its live slices
+    // `--userns private` is still refused: it asks a rootless engine to
+    // nest a second namespace inside its own, which needs subordinate id
+    // ranges to map from and fails outright on a host that has none —
+    // while adding nothing, because rootless containers already run
+    // outside the daemon's user namespace and `attestSlicePolicy` proves
+    // that from `/proc/<pid>/ns/user` rather than from any flag. The
+    // driver additionally refuses a namespace another of its live slices
     // holds. Both are observations, which is the point.
     //
+    // `keep-id` is a different request, and this policy does need it: it
+    // maps the daemon's own uid to the slice's declared one. Without it
+    // the default rootless mapping puts the daemon at container uid 0
+    // and the slice at an unmapped subordinate id, so every bind and 9P
+    // projection — all of them owned by the daemon — reads back as
+    // root-owned and the slice can neither read its MCP configuration
+    // nor write its workspace. A declared uid that does not own the
+    // declared mounts is not a policy, it is a slice that cannot run.
+    //
+    // The alternative, chowning each source into the subordinate range
+    // (`U=true`, as the tmpfs rows below do), is right for a root the
+    // slice alone uses and wrong for every root here: these are shared
+    // with the daemon, which holds the MCP listening socket and writes
+    // the transcript, and the chown is one-way — it takes the directory
+    // away from the daemon permanently.
+    '--userns',
+    `keep-id:uid=${policy.uid},gid=${policy.gid}`,
     // The two below are named explicitly because they cost nothing and
     // let the attestation read a definite value back instead of an
     // empty string meaning "whatever this host does".
@@ -626,8 +736,12 @@ export const assemblePolicyArgv = policy => {
         '--mount',
         `type=tmpfs,destination=${mount.destination},rw,nosuid,nodev,tmpfs-size=${mount.sizeBytes},tmpfs-mode=0700,U=true,notmpcopyup`,
       );
-    } else if (mount.kind === 'attach') {
-      // The one bind the table admits, and only because the attestation
+    } else if (
+      mount.kind === 'attach' ||
+      mount.kind === 'bind' ||
+      mount.kind === 'resolver'
+    ) {
+      // These binds are admitted only because the attestation
       // then proves what it was bound from. `rprivate` is the runtime's
       // default, stated because a policy states everything: a shared
       // propagation would let a mount event inside the slice reach the
@@ -770,7 +884,13 @@ const findEffectiveMount = (inspect, tmpfs, mount) => {
       // eslint-disable-next-line no-continue
       continue;
     }
-    if (candidate.Type !== (mount.kind === 'attach' ? 'bind' : mount.kind)) {
+    // An attach and the generated resolver are binds to the runtime; `bind`
+    // is already the runtime's own name for one.
+    const runtimeType =
+      mount.kind === 'attach' || mount.kind === 'resolver'
+        ? 'bind'
+        : mount.kind;
+    if (candidate.Type !== runtimeType) {
       return null;
     }
     const options = harden(effectiveMountOptions(candidate.Options));
@@ -816,9 +936,17 @@ const attestMounts = (policy, state) => {
   const declaredDestinations = new Set(
     policy.mounts.map(mount => mount.destination),
   );
+  // Every destination the table says may be a bind. An attach is a 9P
+  // projection, the resolver is the fixed read-only generated file, and a
+  // `bind` is host storage declared as such.
   const attachDestinations = new Set(
     policy.mounts
-      .filter(mount => mount.kind === 'attach')
+      .filter(
+        mount =>
+          mount.kind === 'attach' ||
+          mount.kind === 'bind' ||
+          mount.kind === 'resolver',
+      )
       .map(mount => mount.destination),
   );
   // An undeclared mount is the failure this table exists to exclude, so
@@ -846,11 +974,18 @@ const attestMounts = (policy, state) => {
       !attachDestinations.has(destination)
     ) {
       // A bind is the only mount shape that can reach host state — a
-      // home directory, a credential store, a runtime socket. The only
-      // binds the table admits are its declared attaches, each of which
-      // is proved below to be a 9P projection rather than host data, so
-      // `hostHome` and `hostSockets` still follow from the absence of any
-      // other bind rather than from a path blocklist.
+      // home directory, a credential store, a runtime socket — so an
+      // undeclared one is refused here.
+      //
+      // `hostHome` and `hostSockets` used to follow from there being no
+      // bind at all beyond 9P projections and the generated resolver. They
+      // now follow from something narrower but still not a path blocklist:
+      // every bind in the table is declared, and `assertSlicePolicyRequest`
+      // admits a declared `bind` only when its source lies under one of the
+      // request's `bindRoots`. So the question "can this slice see the
+      // operator's home directory" is answered by the roots the request
+      // named, which the attestation restates, rather than by hoping no
+      // path matched a list.
       return unproved('mount table', `host bind mount at ${destination}`);
     }
   }
@@ -870,7 +1005,38 @@ const attestMounts = (policy, state) => {
       if (effective === null) {
         return unproved(`mount ${mount.role}`, 'not attached');
       }
-      if (mount.kind === 'attach') {
+      if (mount.kind === 'resolver') {
+        const kernel = state.attachMounts?.get(mount.destination);
+        if (
+          effective.source !== mount.source ||
+          !effective.readOnly ||
+          !kernel?.options.includes('ro') ||
+          REQUIRED_MOUNT_OPTIONS.some(
+            option =>
+              !effective.options.includes(option) ||
+              !kernel.options.includes(option),
+          ) ||
+          state.resolverContents !==
+            'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n'
+        ) {
+          return unproved(
+            'resolver mount',
+            'fixed read-only contents are not proved',
+          );
+        }
+        return harden({
+          role: mount.role,
+          source: `resolver:${mount.source}`,
+          destination: mount.destination,
+          mode: /** @type {const} */ ('ro'),
+          options: harden(
+            ATTESTED_MOUNT_OPTIONS.filter(option =>
+              kernel.options.includes(option),
+            ),
+          ),
+        });
+      }
+      if (mount.kind === 'attach' || mount.kind === 'bind') {
         // The runtime's half: the bind is of the declared host mountpoint,
         // in the declared mode, with the hardening options.
         if (effective.source !== mount.source) {
@@ -890,6 +1056,23 @@ const attestMounts = (policy, state) => {
             `mount ${mount.role}`,
             `missing ${missingRuntime.join(',')}`,
           );
+        }
+        // A `bind` claims no projection, so the runtime's half is the whole
+        // claim: this is a bind of that host path, in that mode, hardened.
+        // It is attested as what it is rather than described as something
+        // stronger — the distinction that keeps `attach` worth having.
+        if (mount.kind === 'bind') {
+          return harden({
+            role: mount.role,
+            source: `bind:${mount.source}`,
+            destination: mount.destination,
+            mode: mount.mode,
+            options: harden(
+              ATTESTED_MOUNT_OPTIONS.filter(option =>
+                effective.options.includes(option),
+              ),
+            ),
+          });
         }
         // The kernel's half, which is the part the runtime cannot answer:
         // what filesystem the slice actually sees at the destination. A

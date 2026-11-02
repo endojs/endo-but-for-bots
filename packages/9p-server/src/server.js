@@ -134,11 +134,16 @@ const errnoOf = e => {
  * }} opts
  *
  * `cancelled`: settlement (resolve or reject) is the cancellation
- * signal — `close()` fires when it settles, so any awaited
- * dispatch unblocks promptly instead of waiting for the
- * socket-close cascade. The caller composes additional triggers
+ * signal — new input is fenced immediately, but admitted filesystem calls
+ * must settle before cleanup can finish. The caller composes additional triggers
  * by `Promise.race([cancelled, ownTrigger])`. The default is a
  * permanently-deferred promise (never cancels).
+ *
+ * The returned local close control proves admitted processing and resource
+ * cleanup have finished. Failed resource closes remain owned for retry.
+ * Socket-triggered failures are observed internally; the caller must retain
+ * the control until close() succeeds. onClose fires only after successful drain.
+ * @returns {{close: () => Promise<void>}}
  */
 export const serveConnection = ({
   fs,
@@ -155,50 +160,156 @@ export const serveConnection = ({
   let buf = /** @type {Buffer} */ (Buffer.alloc(0));
 
   let closed = false;
+  /** @type {Set<Promise<any>>} */
+  const pendingCalls = new Set();
+  /** @type {Map<any, () => Promise<unknown>>} */
+  const resources = new Map();
+  /** @type {Map<any, Set<any>>} */
+  const streams = new Map();
+  /** @type {Map<any, Promise<void>>} */
+  const resourceCloses = new Map();
 
-  // Close any open handle a fid holds — a File's OpenFile and/or a
-  // Directory's Cursor — so the backing FS releases resources promptly
-  // instead of waiting for the dropped cap to be GC'd. Best-effort.
+  /**
+   * @template V
+   * @param {() => Promise<V>} issue
+   */
+  const call = issue => {
+    if (closed) throw Error('9P connection is closed');
+    const pending = issue();
+    pendingCalls.add(pending);
+    pending.then(
+      () => pendingCalls.delete(pending),
+      () => pendingCalls.delete(pending),
+    );
+    return pending;
+  };
+
+  /** @param {any} handle */
+  const retainHandle = handle => {
+    resources.set(handle, () => E(handle).close());
+    return handle;
+  };
+
+  /**
+   * @param {any} endpoint
+   * @param {any} parent
+   */
+  const retainStream = (endpoint, parent) => {
+    retainHandle(endpoint);
+    let parents = streams.get(endpoint);
+    if (!parents) {
+      parents = new Set();
+      streams.set(endpoint, parents);
+    }
+    parents.add(parent);
+    // A stream acquired after the fence is still owned, even though no
+    // iterator or application pull will be started on it.
+    if (closed) void closeResource(endpoint).catch(() => {});
+    return endpoint;
+  };
+
+  /**
+   * Preserve the stream outcome while obtaining separate resource-release
+   * proof. An iterator's cached error is neither proof of cleanup failure nor
+   * proof that its responder has stopped.
+   * @param {any} endpoint
+   * @param {any} iterator
+   */
+  const finishStream = async (endpoint, iterator) => {
+    try {
+      await iterator.return();
+    } finally {
+      await closeResource(endpoint);
+    }
+  };
+
+  /** @param {any} resource */
+  const closeResource = resource => {
+    const release = resources.get(resource);
+    if (!release) return Promise.resolve();
+    const existing = resourceCloses.get(resource);
+    if (existing) return existing;
+    const attempt = (async () => {
+      await release();
+      resources.delete(resource);
+      streams.delete(resource);
+    })();
+    resourceCloses.set(resource, attempt);
+    attempt.then(
+      () => resourceCloses.delete(resource),
+      () => resourceCloses.delete(resource),
+    );
+    return attempt;
+  };
+
+  /** @param {any[]} owned */
+  const closeResources = async owned => {
+    const results = await Promise.allSettled(owned.map(closeResource));
+    const failures = results
+      .filter(result => result.status === 'rejected')
+      .map(result => /** @type {PromiseRejectedResult} */ (result).reason);
+    if (failures.length) {
+      throw new AggregateError(
+        failures,
+        '9P connection resource cleanup failed',
+      );
+    }
+  };
+
   /** @param {Fid} f */
-  const closeFidHandles = f => {
-    const ps = [];
-    if (f.openFile) {
-      ps.push(Promise.resolve(E(f.openFile).close()).catch(() => {}));
-    }
-    if (f.cursor) {
-      ps.push(Promise.resolve(E(f.cursor).close()).catch(() => {}));
-    }
-    return Promise.all(ps);
+  const closeFidHandles = async f => {
+    const parents = [f.openFile, f.cursor].filter(Boolean);
+    const children = [...streams]
+      .filter(([, owners]) => parents.some(parent => owners.has(parent)))
+      .map(([endpoint]) => endpoint);
+    await closeResources(children);
+    await closeResources(parents);
   };
 
+  /** @type {Promise<void> | undefined} */
+  let closeAttempt;
+  let notified = false;
   const close = () => {
-    // Idempotent. `'error'` and `'close'` can both fire (an
-    // error usually triggers a subsequent close), and `dispatch`
-    // failures can call this from the data path too.
-    if (closed) return;
-    closed = true;
-    socket.removeListener('error', close);
-    socket.removeListener('close', close);
-    socket.removeListener('data', onData);
-    // Best-effort close of every fid's open handle (OpenFile and/or
-    // Cursor) so the underlying FS doesn't leak handles when a client
-    // disconnects without `Tclunk`-ing each fid. We fire the closes in
-    // parallel and ignore failures; the connection is already going away.
-    for (const f of fids.values()) {
-      closeFidHandles(f);
+    if (!closed) {
+      closed = true;
+      socket.removeListener('data', onData);
+      buf = Buffer.alloc(0);
+      socket.destroy();
     }
-    fids.clear();
-    socket.destroy();
-    if (onClose) onClose();
+    if (closeAttempt) return closeAttempt;
+    // Signal streams before waiting for dispatch: a reader may need its
+    // cancelPending hook to settle the very next() dispatch is awaiting.
+    // OpenFile and Cursor handles remain open until that processing drains.
+    for (const endpoint of streams.keys()) {
+      void closeResource(endpoint).catch(() => {});
+    }
+    const attempt = (async () => {
+      await processing;
+      // A partial Twalk reply can precede the rest of its issued pipeline.
+      // Those calls still belong to this connection even after dispatch ends.
+      await Promise.allSettled([...pendingCalls]);
+      // A failed stream cleanup still owns its underlying file or cursor.
+      // Keep those parent handles alive until the stream release is proven.
+      await closeResources([...streams.keys()]);
+      await closeResources([...resources.keys()]);
+      fids.clear();
+      if (!notified) {
+        notified = true;
+        onClose?.();
+      }
+    })();
+    closeAttempt = attempt;
+    void attempt.catch(() => {
+      if (closeAttempt === attempt) closeAttempt = undefined;
+    });
+    return attempt;
   };
 
-  // External cancellation (e.g., `fs-bridge.stop()`) propagates
-  // as `cancelled` settling. Settlement flips `closed` so the next
-  // `drainOnce` iteration returns without dispatching, even if a
-  // long-running awaited operation is still in flight. Either
-  // resolve or reject counts as a cancellation signal; we don't
-  // distinguish.
-  cancelled.then(close, close);
+  const requestClose = () => {
+    // Events start one attempt; only an explicit caller retries a failure.
+    if (!closed) void close().catch(() => {});
+  };
+  cancelled.then(requestClose, requestClose);
 
   // Drain every complete message currently sitting in `buf`.
   // Each call awaits its own dispatches in order; concurrent
@@ -222,7 +333,7 @@ export const serveConnection = ({
         // bytestream.
         // eslint-disable-next-line no-console
         console.error('[9p] frame parse error; closing connection', e);
-        close();
+        requestClose();
         return;
       }
       if (!parsed) return;
@@ -235,7 +346,7 @@ export const serveConnection = ({
           // eslint-disable-next-line no-console
           console.error('[9p] dispatch error', e);
         } catch {
-          close();
+          requestClose();
           return;
         }
       }
@@ -258,8 +369,8 @@ export const serveConnection = ({
     processing = processing.then(drainOnce, drainOnce);
   };
 
-  socket.on('error', close);
-  socket.on('close', close);
+  socket.on('error', requestClose);
+  socket.on('close', requestClose);
   socket.on('data', onData);
 
   /**
@@ -311,7 +422,7 @@ export const serveConnection = ({
   };
 
   const send = (/** @type {Buffer} */ data) => {
-    socket.write(data);
+    if (!closed) socket.write(data);
   };
 
   const sendEmpty = (
@@ -397,8 +508,8 @@ export const serveConnection = ({
       // Pipeline `root()` and `getQid()` so both messages reach the
       // wire in one CapTP batch — `getQid` runs against the
       // promise of the root cap. One RTT instead of two.
-      const rootP = E(fs).root();
-      const qidP = E(rootP).getQid();
+      const rootP = call(() => E(fs).root());
+      const qidP = call(() => E(rootP).getQid());
       const [root, qid] = await Promise.all([rootP, qidP]);
       fids.set(fid, {
         cap: root,
@@ -438,7 +549,7 @@ export const serveConnection = ({
         if (curAncestry.length === 0) {
           steps.push({
             capRef: curCap,
-            qidPromise: E(curCap).getQid(),
+            qidPromise: call(() => E(curCap).getQid()),
             ancestry: curAncestry,
             name: '',
           });
@@ -448,7 +559,7 @@ export const serveConnection = ({
           curCap = parent;
           steps.push({
             capRef: parent,
-            qidPromise: E(parent).getQid(),
+            qidPromise: call(() => E(parent).getQid()),
             ancestry: curAncestry,
             name: curAncestry.length > 0 ? curAncestry[0].name : '',
           });
@@ -456,18 +567,18 @@ export const serveConnection = ({
       } else if (name === '.' || name === '') {
         steps.push({
           capRef: curCap,
-          qidPromise: E(curCap).getQid(),
+          qidPromise: call(() => E(curCap).getQid()),
           ancestry: curAncestry,
           name: '',
         });
       } else {
-        const childRef = E(curCap).lookup(name);
+        const childRef = call(() => E(curCap).lookup(name));
         const newAncestry = [{ parent: curCap, name }, ...curAncestry];
         curAncestry = newAncestry;
         curCap = childRef;
         steps.push({
           capRef: childRef,
-          qidPromise: E(childRef).getQid(),
+          qidPromise: call(() => E(childRef).getQid()),
           ancestry: newAncestry,
           name,
         });
@@ -542,7 +653,7 @@ export const serveConnection = ({
     if (!f) return sendError(tag, ERRNO.EBADF);
     try {
       if (f.qid.type === 'directory') {
-        const cursor = await E(f.cap).list();
+        const cursor = retainHandle(await call(() => E(f.cap).list()));
         f.cursor = cursor;
         f.dirBuffer = [];
         f.dirBufferDone = false;
@@ -556,13 +667,17 @@ export const serveConnection = ({
         const wantWrite = oflag === 0o1 || oflag === 0o2;
         const wantAppend = !!(flags & 0o2000);
         const wantTrunc = !!(flags & 0o1000);
-        const oh = await E(f.cap).open(
-          harden({
-            read: wantRead,
-            write: wantWrite,
-            append: wantAppend,
-            truncate: wantTrunc,
-          }),
+        const oh = retainHandle(
+          await call(() =>
+            E(f.cap).open(
+              harden({
+                read: wantRead,
+                write: wantWrite,
+                append: wantAppend,
+                truncate: wantTrunc,
+              }),
+            ),
+          ),
         );
         f.openFile = oh;
         f.open = true;
@@ -608,7 +723,14 @@ export const serveConnection = ({
     // the backend OpenFile to reject it.
     if (!f.readable) return sendError(tag, ERRNO.EBADF);
     try {
-      const reader = await E(f.openFile).read(offset, BigInt(count));
+      const reader = retainStream(
+        await call(() => E(f.openFile).read(offset, BigInt(count))),
+        f.openFile,
+      );
+      if (closed) {
+        await closeResource(reader);
+        return undefined;
+      }
       const chunks = [];
       let total = 0;
       const want = Number(count);
@@ -626,17 +748,23 @@ export const serveConnection = ({
       // `stringLengthLimit` overrides @endo/patterns' 100_000-character
       // default, which is narrower than `count` and surfaces as EIO
       // (see `base64LimitFor`).
-      for await (const chunk of iterateBytesReader(reader, {
+      const iterator = iterateBytesReader(reader, {
         buffer: 2,
         stringLengthLimit: base64LimitFor(count),
-      })) {
-        // Stop pulling from the FS if the connection was torn down
-        // mid-read (cancellation / disconnect) instead of draining a
-        // potentially large read against a dead socket.
+      });
+      try {
         if (closed) return undefined;
-        chunks.push(chunk);
-        total += chunk.length;
-        if (total >= want) break;
+        for await (const chunk of iterator) {
+          // Stop pulling from the FS if the connection was torn down
+          // mid-read (cancellation / disconnect) instead of draining a
+          // potentially large read against a dead socket.
+          if (closed) return undefined;
+          chunks.push(chunk);
+          total += chunk.length;
+          if (total >= want) break;
+        }
+      } finally {
+        await finishStream(reader, iterator);
       }
       const data = Buffer.concat(
         chunks.map(c => Buffer.from(c.buffer, c.byteOffset, c.byteLength)),
@@ -669,7 +797,7 @@ export const serveConnection = ({
     const f = fids.get(fid);
     if (!f) return sendError(tag, ERRNO.EBADF);
     try {
-      const attrs = await E(f.cap).getAttrs();
+      const attrs = await call(() => E(f.cap).getAttrs());
       const w = makeWriter(160);
       // st_result_mask: report only the basic fields the client actually
       // requested (we can fill the whole basic set; the kernel uses the
@@ -730,11 +858,24 @@ export const serveConnection = ({
     // `buffer: 64` lets the responder pre-ack up to 64 entries
     // ahead of our pulls — one batch round-trip for typical dirs
     // rather than one-per-entry.
-    const reader = await E(f.cursor).stream();
-    for await (const entry of iterateReader(reader, { buffer: 64 })) {
-      // Abandon the drain if the connection was torn down mid-listing.
+    const reader = retainStream(
+      await call(() => E(f.cursor).stream()),
+      f.cursor,
+    );
+    if (closed) {
+      await closeResource(reader);
+      return;
+    }
+    const iterator = iterateReader(reader, { buffer: 64 });
+    try {
       if (closed) return;
-      f.dirBuffer.push(/** @type {{ name: string, qid: any }} */ (entry));
+      for await (const entry of iterator) {
+        // Abandon the drain if the connection was torn down mid-listing.
+        if (closed) return;
+        f.dirBuffer.push(/** @type {{ name: string, qid: any }} */ (entry));
+      }
+    } finally {
+      await finishStream(reader, iterator);
     }
     f.dirBufferDone = true;
   };
@@ -807,7 +948,7 @@ export const serveConnection = ({
     // identity isn't exposed by endo-fs at the Node level)
     let stats;
     try {
-      stats = await E(fs).statfs();
+      stats = await call(() => E(fs).statfs());
     } catch {
       stats = { totalBytes: 0n, freeBytes: 0n };
     }
@@ -850,11 +991,13 @@ export const serveConnection = ({
       // eagerly, which is why this only surfaced on a disk-backed
       // mount. Once create resolves the entry exists, so lookup +
       // getQid still pipeline into one further round-trip.
-      const oh = await E(f.cap).create(name, harden({}));
-      const childCapP = E(f.cap).lookup(name);
+      const oh = retainHandle(
+        await call(() => E(f.cap).create(name, harden({}))),
+      );
+      const childCapP = call(() => E(f.cap).lookup(name));
       const [childCap, childQid] = await Promise.all([
         childCapP,
-        E(childCapP).getQid(),
+        call(() => E(childCapP).getQid()),
       ]);
       // Replace fid: 9P semantics put newly-created file at the
       // original fid. Ancestry extends. If the directory fid was open
@@ -910,16 +1053,27 @@ export const serveConnection = ({
     // O_RDONLY fd).
     if (!f.writable) return sendError(tag, ERRNO.EBADF);
     try {
-      const writer = await E(f.openFile).write(offset);
+      const writer = retainStream(
+        await call(() => E(f.openFile).write(offset)),
+        f.openFile,
+      );
+      if (closed) {
+        await closeResource(writer);
+        return undefined;
+      }
       // `buffer: 1` lets us push the one chunk this Twrite carries
       // without waiting for the responder's first ack — saves one
       // RTT for the (always single-chunk) Twrite path.
       const w8 = iterateBytesWriter(writer, { buffer: 1 });
       // r.take returns a Buffer; the bytes writer wants Uint8Array.
-      await w8.next(
-        new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
-      );
-      await w8.return();
+      try {
+        if (closed) return undefined;
+        await w8.next(
+          new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+        );
+      } finally {
+        await finishStream(writer, w8);
+      }
       const w = makeWriter(4);
       w.u32(data.length);
       send(wrapMessage(T.Rwrite, tag, w.finish()));
@@ -940,8 +1094,8 @@ export const serveConnection = ({
     try {
       // Pipeline mkdir + getQid: `getQid` rides against the promise
       // of the new Directory cap, in the same CapTP batch.
-      const newDirP = E(f.cap).mkdir(name, harden({}));
-      const qid = await E(newDirP).getQid();
+      const newDirP = call(() => E(f.cap).mkdir(name, harden({})));
+      const qid = await call(() => E(newDirP).getQid());
       sendQid(tag, T.Rmkdir, qidToWire(qid));
     } catch (e) {
       return sendError(tag, errnoOf(e));
@@ -957,7 +1111,7 @@ export const serveConnection = ({
     if (!f) return sendError(tag, ERRNO.EBADF);
     if (f.qid.type !== 'directory') return sendError(tag, ERRNO.ENOTDIR);
     try {
-      await E(f.cap).unlink(name);
+      await call(() => E(f.cap).unlink(name));
       sendEmpty(tag, T.Runlinkat);
     } catch (e) {
       return sendError(tag, errnoOf(e));
@@ -977,7 +1131,7 @@ export const serveConnection = ({
       return sendError(tag, ERRNO.ENOTDIR);
     }
     try {
-      await E(a.cap).rename(oldName, b.cap, newName);
+      await call(() => E(a.cap).rename(oldName, b.cap, newName));
       sendEmpty(tag, T.Rrenameat);
     } catch (e) {
       return sendError(tag, errnoOf(e));
@@ -1012,7 +1166,7 @@ export const serveConnection = ({
     }
     try {
       if (Object.keys(updates).length > 0) {
-        await E(f.cap).setAttrs(harden(updates));
+        await call(() => E(f.cap).setAttrs(harden(updates)));
       }
       sendEmpty(tag, T.Rsetattr);
     } catch (e) {
@@ -1020,5 +1174,6 @@ export const serveConnection = ({
     }
     return undefined;
   };
+  return harden({ close });
 };
 harden(serveConnection);

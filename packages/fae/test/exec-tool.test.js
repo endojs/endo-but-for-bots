@@ -17,6 +17,22 @@ import { makeExecTool } from '../src/tool-makers.js';
 // the tool still endows it, so a bare object is enough.
 const powers = {};
 
+test('exec explains missing returns without inviting effect replay', async t => {
+  const tool = makeExecTool(powers);
+  for (const code of [
+    '21 * 2;',
+    'await (async () => 42)();',
+    'return undefined;',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await tool.execute({ code });
+    t.regex(result, /top-level return/);
+    t.regex(result, /console output goes to daemon logs/);
+    t.regex(result, /do not repeat/);
+  }
+  t.is(await tool.execute({ code: 'return await (async () => 42)();' }), '42');
+});
+
 test('exec runs a plain multiline snippet', async t => {
   const tool = makeExecTool(powers);
   const result = await tool.execute({
@@ -100,4 +116,73 @@ test('exec still has no ambient timers', async t => {
       code: 'return typeof setTimeout === "function" ? setTimeout(() => {}, 1) : (() => { throw new Error("no setTimeout") })();',
     }),
   );
+});
+
+test('a parse failure is explained by its cause, not by a stock phrase', async t => {
+  const tool = makeExecTool(powers);
+  const failure = async code =>
+    (await t.throwsAsync(tool.execute({ code }))).message;
+
+  // What the three.js session hit twice: a GLSL shader's backticks inside
+  // the template literal that was building the page. It was told "no
+  // markdown fences" and resent the same code.
+  const nested = await failure(
+    'const html = `<script>const s = `varying vec3 v;`;</script>`;\nreturn html;',
+  );
+  t.regex(nested, /inner backtick ends the literal/);
+  t.notRegex(nested, /markdown fences/);
+
+  // And what the next session tried.
+  const imported = await failure("const fs = await import('fs'); return 1;");
+  t.regex(imported, /no import, import\(\) or require/);
+  t.notRegex(imported, /markdown fences/);
+  t.notRegex(imported, /template literals/);
+
+  // Fences are mentioned when the code had one that could not be stripped.
+  const fenced = await failure('```js\nreturn 1 +;\n');
+  t.regex(fenced, /without markdown fences/);
+  t.notRegex(fenced, /template literals/);
+  const prose = await failure('Here is the code:\n```js\nreturn 1;\n```');
+  t.regex(prose, /without markdown fences or any prose/);
+  t.notRegex(prose, /template literals/);
+  // A fence that was stripped is not what is wrong with the code inside it.
+  const stripped = await failure('```js\nreturn 1 +;\n```');
+  t.notRegex(stripped, /markdown fences/);
+
+  const staticImport = await failure('import fs from "fs"; return 1;');
+  t.regex(staticImport, /no import, import\(\) or require/);
+
+  // The evaluator refuses the characters wherever they are, so the advice
+  // has to cover a page whose own script imports something.
+  const quoted = await failure(
+    'const page = "<script>import(\\"three\\")</script>"; return page;',
+  );
+  t.regex(quoted, /even inside a string or a comment/);
+  t.regex(quoted, /"imp" \+ "ort\("/);
+
+  // Anything else gets the plain advice, and always the engine's message.
+  const plain = await failure('return 1 +;');
+  t.regex(
+    plain,
+    /^Could not parse the code \(.+\)\. Check the code for syntax errors/,
+  );
+
+  const nestedAwait = await failure(
+    'const f = () => { await sleep(1); }; return 1;',
+  );
+  t.regex(
+    nestedAwait,
+    /not inside a nested function unless that function is async/,
+  );
+});
+
+test('the description says what is not there, since nothing else will', t => {
+  const { description } = makeExecTool(powers).schema().function;
+  // An undeclared name reads as undefined here instead of throwing, so the
+  // error a model sees never names it.
+  t.regex(description, /A petname is NOT a variable/);
+  t.regex(description, /E\(powers\)\.lookup\("workspace"\)/);
+  t.regex(description, /typeof target is "undefined"/);
+  t.regex(description, /No import, import\(\) or require/);
+  t.regex(description, /inner backtick\s+ends the literal/);
 });

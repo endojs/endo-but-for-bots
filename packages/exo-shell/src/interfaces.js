@@ -42,7 +42,7 @@ const ShellResultShape = M.splitRecord({
   truncated: M.boolean(),
 });
 
-/** Per-call options; a per-call `timeoutMs` may only *narrow* the policy's. */
+/** Per-call options; `timeoutMs` overrides the policy's default timeout. */
 const ExecOptionsShape = M.splitRecord({}, { timeoutMs: M.number() });
 
 // #endregion

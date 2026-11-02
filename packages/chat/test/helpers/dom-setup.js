@@ -2,6 +2,7 @@
 /* eslint-disable import/no-unresolved */
 
 import { Window } from 'happy-dom';
+import { makeTestLocks } from './web-locks.js';
 
 /**
  * @typedef {object} DOMContext
@@ -29,6 +30,16 @@ export const createDOM = () => {
   globalThis.window = window;
   // @ts-expect-error - happy-dom document type
   globalThis.document = document;
+  globalThis.localStorage = window.localStorage;
+  const previousNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'navigator',
+  );
+  Object.defineProperty(window.navigator, 'locks', { value: makeTestLocks() });
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: window.navigator,
+  });
   globalThis.setTimeout = window.setTimeout.bind(window);
   globalThis.clearTimeout = window.clearTimeout.bind(window);
 
@@ -80,6 +91,10 @@ export const createDOM = () => {
       delete globalThis.window;
       // @ts-expect-error - cleanup
       delete globalThis.document;
+      delete globalThis.localStorage;
+      if (previousNavigator)
+        Object.defineProperty(globalThis, 'navigator', previousNavigator);
+      else delete globalThis.navigator;
       // @ts-expect-error - cleanup
       delete globalThis.Node;
       // @ts-expect-error - cleanup

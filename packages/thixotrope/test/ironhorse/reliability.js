@@ -17,9 +17,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
-import { inspectIronhorseStore } from '../../src/inspect-ironhorse.js';
+import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { inspectIronhorseStore } from '../../src/ironhorse/inspect-ironhorse.js';
 import { makeFixture } from './_fixture.js';
+
+import { makeNodePowers } from '../../src/platform/node/powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import {ExecutionContext} from 'ava' */
 
@@ -127,7 +131,7 @@ test.serial(
       .find(row => row.workerId === f.guestId);
     t.regex(online?.failure ?? '', /MeterAbort/);
     t.false(online?.awake);
-    const offline = await inspectIronhorseStore(f.statePath);
+    const offline = await inspectIronhorseStore(nodePowers, f.statePath);
     t.regex(
       offline.workers.find(row => row.workerId === f.guestId)?.metadata.failure,
       /MeterAbort/,
@@ -188,11 +192,11 @@ test.serial(
     t.deepEqual(await first.receive(), { event: 'result', value: 42 });
     first.child.send({ command: 'stop' });
     await first.exited;
-    const before = await inspectIronhorseStore(state);
+    const before = await inspectIronhorseStore(nodePowers, state);
     await t.throwsAsync(() => launch(t, state, env), {
       message: /Incompatible Ironhorse runtime/,
     });
-    t.deepEqual(await inspectIronhorseStore(state), before);
+    t.deepEqual(await inspectIronhorseStore(nodePowers, state), before);
     await copyFile(
       fileURLToPath(
         new URL('../../dist-ironhorse/worker-peer.js', import.meta.url),
@@ -200,7 +204,7 @@ test.serial(
       join(boot, 'worker-peer.js'),
     );
     await t.throwsAsync(
-      () => launch(t, state, { ...env, THIXOTROPE_CRANK_BUDGET: '9999999' }),
+      () => launch(t, state, { ...env, THIXOTROPE_SLOT_CEILING: '999999' }),
       { message: /Incompatible Ironhorse runtime/ },
     );
     const recovered = await launch(t, state, env);
@@ -214,7 +218,7 @@ test.serial(
 test.serial('ownership rejects an alternative heap directory', async t => {
   const path = await mkdtemp(join(tmpdir(), 'thixotrope-heap-path-'));
   t.teardown(() => rm(path, { recursive: true, force: true }));
-  const engine = makeIronhorseEngine({
+  const engine = makeIronhorseEngine(nodePowers, {
     workerBinary: '/unused',
     bootPaths: [],
     storePath: join(path, 'custom'),
@@ -266,7 +270,7 @@ exec ${quote(binary)} "$@"
       bootPaths: [boot],
       storePath: join(path, 'heaps'),
     };
-    const engine = makeIronhorseEngine(options);
+    const engine = makeIronhorseEngine(nodePowers, options);
     const { acquireStore } = engine;
     if (!acquireStore) throw Error('missing ownership support');
     release = await acquireStore(path);
@@ -295,7 +299,7 @@ exec ${quote(binary)} "$@"
     process.kill(helperPid, 'SIGKILL');
     await rejected;
     t.throws(() => process.kill(workerPid, 0), { code: 'ESRCH' });
-    const competitor = makeIronhorseEngine(options);
+    const competitor = makeIronhorseEngine(nodePowers, options);
     const { acquireStore: acquireCompetitor } = competitor;
     if (!acquireCompetitor) throw Error('missing ownership support');
     await t.throwsAsync(() => acquireCompetitor(path), {
@@ -303,5 +307,116 @@ exec ${quote(binary)} "$@"
     });
     await release();
     release = await acquireCompetitor(path);
+  },
+);
+
+test.serial(
+  'the ownership helper ignores a termination request and exits on release',
+  async t => {
+    t.timeout(30_000);
+    const path = await mkdtemp(join(tmpdir(), 'thixotrope-term-lease-'));
+    let release;
+    t.teardown(async () => {
+      await release?.();
+      await rm(path, { recursive: true, force: true });
+    });
+    const binary =
+      process.env.THIXOTROPE_IRONHORSE_WORKER ??
+      fileURLToPath(
+        new URL(
+          '../../../../target/release/thixotrope-ironhorse-worker',
+          import.meta.url,
+        ),
+      );
+    // The wrapper only records the helper's PID; `exec` keeps it the same.
+    const wrapper = join(path, 'worker');
+    const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+    await writeFile(
+      wrapper,
+      `#!/bin/sh
+if [ "$1" = "--lock-state" ]; then
+  echo $$ > ${quote(join(path, 'helper.pid'))}
+fi
+exec ${quote(binary)} "$@"
+`,
+      { mode: 0o700 },
+    );
+    const boot = join(path, 'boot.js');
+    await writeFile(boot, 'globalThis.booted = true;');
+    const options = {
+      workerBinary: wrapper,
+      bootPaths: [boot],
+      storePath: join(path, 'heaps'),
+    };
+    const engine = makeIronhorseEngine(nodePowers, options);
+    const { acquireStore } = engine;
+    if (!acquireStore) throw Error('missing ownership support');
+    release = await acquireStore(path);
+    const helperPid = Number(await readFile(join(path, 'helper.pid'), 'utf8'));
+
+    // What a service manager's stop sends to every process in the group.
+    process.kill(helperPid, 'SIGTERM');
+    process.kill(helperPid, 'SIGINT');
+    process.kill(helperPid, 'SIGHUP');
+    // Long enough for a signal that was honored to have taken effect.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    t.notThrows(
+      () => process.kill(helperPid, 0),
+      'the helper is still running',
+    );
+    // And the lease is intact: another supervisor is still refused.
+    const competitor = makeIronhorseEngine(nodePowers, options);
+    const { acquireStore: acquireCompetitor } = competitor;
+    if (!acquireCompetitor) throw Error('missing ownership support');
+    await t.throwsAsync(() => acquireCompetitor(path), { message: /busy/ });
+
+    // Release ends the helper's stdin, which it does honor.
+    await release();
+    release = undefined;
+    t.throws(() => process.kill(helperPid, 0), { code: 'ESRCH' });
+    release = await acquireCompetitor(path);
+  },
+);
+
+test.serial(
+  "an incarnation directory carries its worker's debug name",
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp(join(tmpdir(), 'thixotrope-vat-name-'));
+    let release;
+    t.teardown(async () => {
+      await release?.();
+      await rm(path, { recursive: true, force: true });
+    });
+    const boot = join(path, 'boot.js');
+    await writeFile(boot, 'globalThis.booted = true;');
+    const engine = makeIronhorseEngine(nodePowers, {
+      workerBinary:
+        process.env.THIXOTROPE_IRONHORSE_WORKER ??
+        fileURLToPath(
+          new URL(
+            '../../../../target/release/thixotrope-ironhorse-worker',
+            import.meta.url,
+          ),
+        ),
+      bootPaths: [boot],
+      storePath: join(path, 'heaps'),
+    });
+    const { acquireStore } = engine;
+    if (!acquireStore) throw Error('missing ownership support');
+    release = await acquireStore(path);
+    const incarnation = await engine.start({
+      debugName: 'app:chat(deadbeef)',
+      snapshot: undefined,
+      onOutbound: () => {},
+    });
+    try {
+      const names = await readdir(join(path, 'heaps', 'incarnations'));
+      t.is(names.length, 1);
+      // An operator maps a chat to its vat from `ls` or the heap path in `ps`.
+      t.regex(names[0], /^vat-app-chat-deadbeef-/);
+    } finally {
+      await incarnation.terminate();
+    }
   },
 );

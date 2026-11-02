@@ -3,8 +3,28 @@
 The inference broker and isolated listener are implemented, for API-key and for
 a broker-held refreshing OAuth credential.
 Subscription authentication is a separate requirement.
-Hosted subscription mode remains disabled until the relevant stock CLI is
-proven to work through this boundary using a vendor-supported configuration.
+Codex now has an explicitly enabled experimental host composition, described
+below; this does not change the Claude conclusions in this document.
+
+## Live Codex experiment (2026-09-10; supersedes earlier Codex status)
+
+The pinned Codex 0.152.0 custom-provider configuration completed real Floot
+Codex Sol turns through the strict attested sandbox with no slice credential.
+The host broker held the renewable ChatGPT credential in general Secrets,
+successfully renewed it, and mapped only the permitted Responses inference route.
+This is empirical acceptance of the fixed subscription route, not a claim that
+OpenAI promises a stable public third-party subscription proxy API.
+The model-facing app-server does not receive even a short-lived bearer token;
+the external `chatgptAuthTokens` login mode is therefore not used in the slice.
+
+The account is pinned in formula configuration and checked against every credential
+read, including revival; replacement with another account fails closed.
+The long-lived refresh token, not the cached access token, drives renewal.
+Uncertain refresh intents require operator recovery rather than unsafe replay.
+See [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) for the explicit operator
+entry point and limits that remain before general-purpose deployment.
+
+The findings below are retained as historical research, not current enablement status.
 
 ## Finding: Codex has a documented path; Claude does not (revised 2026-09-09)
 
@@ -108,12 +128,11 @@ lease: origin, method, path, model allowlist, expiry, and quota enforcement are
 the broker's, and none of them can be expressed as a secret record.
 
 The real bearer or refresh token cannot be exported through the endpoint.
-Provider reachability is process-scoped: the app-server process can use the
-lease, but model-launched commands and descendants cannot connect to the broker
-route even though stock CLIs launch tools under their own UID.
-Production must verify this separation from effective cgroup/network state; an
-environment-variable convention or an undisclosed loopback port is not an
-authority boundary.
+Provider reachability is session-scoped: app-server and guest commands can use
+the credential-free endpoint while its grant remains active.
+It does not expose provider credentials or grant administration.
+The host broker bounds the granted provider authority; identifying which guest
+process calls it is neither required nor claimed.
 
 ## Codex with a ChatGPT subscription
 
@@ -134,10 +153,10 @@ The slice receives a session-scoped `CODEX_HOME` that is durable across slice
 replacement and destroyed at logical-session teardown, with no `auth.json`.
 The pinned runtime verifier now probes that absence directly and reports
 `codexHomeAuthFile: 'absent'` in `CodexRuntimeEvidenceV1`; the session
-scoping, durability, and teardown are established by the durable `stateVolume`
-bound at `/codex-home`.
-App-server can write it, but the pinned `workspaceWrite` tool sandbox permits
-model-launched commands to read and not modify it.
+scoping, durability, and teardown are established by the session's state
+directory, held by the session storage owner and bound at `/codex-home`.
+App-server and guest commands can both read and modify it.
+It is native conversation state, not the authoritative host effects record.
 App-server requests for `account/chatgptAuthTokens/refresh`, account login,
 logout, rate-limit-credit consumption, and account/session management are not
 exposed to the model-facing client.
@@ -157,10 +176,12 @@ Claude Code inference protocol, with hooks, plugins, user MCP configuration,
 and shared Claude home state disabled unless separately endowed.
 
 No `CLAUDE_CODE_OAUTH_TOKEN`, API key, reusable credential file, or shared
-Claude configuration may enter the slice.
-If the pinned Claude Code release cannot target the broker using an officially
-supported proxy/gateway configuration without receiving the real subscription
-token, Claude-subscription mode must remain unavailable.
+Claude configuration may enter the slice. The hosted Claude backend
+(`@endo/claude-sandbox`, `claude-native-controller.js` with `claude-broker.js`)
+meets this: the slice holds a placeholder, the broker holds the credential and
+presents the subscription Bearer upstream. Only the legacy inbox-form factory
+path of that package still materialises a credential into a slice, and Floot
+does not route sessions to it.
 
 Before enabling either provider, deployment tests must cover refresh, expiry,
 revocation, account switching, model allowlists, quota exhaustion, broker crash,

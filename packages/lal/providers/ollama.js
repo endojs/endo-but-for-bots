@@ -1,4 +1,8 @@
 // @ts-check
+import {
+  decodeImageResult,
+  imageResultText,
+} from '@endo/hosted-agent/image-result.js';
 /**
  * Native Ollama provider for the Lal agent.
  * Uses the `ollama` npm package directly for Ollama-specific features.
@@ -42,8 +46,11 @@ const toOllamaTools = tools =>
 const toOllamaMessages = messages => {
   /** @type {import('ollama').Message[]} */
   const ollamaMessages = [];
+  /** @type {import('ollama').Message[]} */
+  const pendingImages = [];
 
   for (const msg of messages) {
+    if (msg.role !== 'tool') ollamaMessages.push(...pendingImages.splice(0));
     if (msg.role === 'system') {
       ollamaMessages.push({ role: 'system', content: msg.content });
     } else if (msg.role === 'user') {
@@ -64,15 +71,22 @@ const toOllamaMessages = messages => {
       }
       ollamaMessages.push(ollamaMsg);
     } else if (msg.role === 'tool') {
+      const image = decodeImageResult(msg.content);
       // Ollama expects tool results as a tool message
       ollamaMessages.push({
         role: 'tool',
-        content: msg.content,
+        content: imageResultText(msg.content),
       });
+      if (image)
+        pendingImages.push({
+          role: 'user',
+          content: 'Image returned by the preceding tool:',
+          images: [image.data],
+        });
     }
   }
 
-  return ollamaMessages;
+  return [...ollamaMessages, ...pendingImages];
 };
 
 /**

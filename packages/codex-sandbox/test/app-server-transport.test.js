@@ -4,6 +4,7 @@ import '@endo/init';
 import test from 'ava';
 
 import { E } from '@endo/eventual-send';
+import { imageDataUrl } from '@endo/hosted-agent/image-result.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 import { makeSandboxFactory } from '@endo/sandbox/factory.js';
@@ -14,17 +15,19 @@ const textChunks = parts =>
   bytesReaderFromIterator(parts.map(part => new TextEncoder().encode(part)));
 
 /**
- * @param {{ stdout?: string[], stderr?: string[], closeStdinEarly?: boolean, stdinError?: string, stdoutError?: string, stdinBarrier?: Promise<void>, stdoutBarrier?: Promise<void>, killError?: string, waitBarrier?: Promise<void>, waitError?: string }} [options]
+ * @param {{ stdout?: string[], stderr?: string[], closeStdinEarly?: boolean, stdinError?: string, stdinReturnError?: string, stdoutError?: string, stdinBarrier?: Promise<void>, stdoutBarrier?: Promise<void>, killError?: string, killFailures?: number, waitBarrier?: Promise<void>, waitError?: string }} [options]
  */
 const makeFixture = ({
   stdout = ['{"id":1,"result":{}}\n'],
   stderr = ['diagnostic\n'],
   closeStdinEarly = false,
   stdinError,
+  stdinReturnError,
   stdoutError,
   stdinBarrier,
   stdoutBarrier,
   killError,
+  killFailures = 0,
   waitBarrier,
   waitError,
 } = {}) => {
@@ -43,6 +46,7 @@ const makeFixture = ({
     },
     async return() {
       stdinReturns += 1;
+      if (stdinReturnError) throw Error(stdinReturnError);
       return { done: true, value: undefined };
     },
     [Symbol.asyncIterator]() {
@@ -77,6 +81,10 @@ const makeFixture = ({
     async kill() {
       kills += 1;
       if (killError) throw Error(killError);
+      if (killFailures > 0) {
+        killFailures -= 1;
+        throw Error('transient kill failure');
+      }
     },
     async wait() {
       waits += 1;
@@ -102,6 +110,44 @@ const makeFixture = ({
   };
 };
 
+test('real stdio transport carries a maximum-sized image reply and completed-item echo', async t => {
+  t.timeout(5000);
+  const contentItems = [
+    {
+      type: 'inputImage',
+      imageUrl: imageDataUrl({
+        mimeType: 'image/png',
+        // Exactly 2 MiB of binary data, beyond both former transport caps.
+        data: `${'AAAA'.repeat(699_050)}AAA=`,
+      }),
+    },
+  ];
+  const reply = { id: 7, result: { success: true, contentItems } };
+  const echo = {
+    method: 'item/completed',
+    params: {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { type: 'dynamicToolCall', id: 'image-1', contentItems },
+    },
+  };
+  const line = `${JSON.stringify(echo)}\n`;
+  const stdout = [];
+  for (let offset = 0; offset < line.length; offset += 64 * 1024) {
+    stdout.push(line.slice(offset, offset + 64 * 1024));
+  }
+  const fixture = makeFixture({ stdout });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+  });
+  t.teardown(() => transport.close());
+  await transport.send(reply);
+  t.deepEqual(JSON.parse(new TextDecoder().decode(fixture.writes[0])), reply);
+  const messages = [];
+  for await (const message of transport.messages) messages.push(message);
+  t.deepEqual(messages, [echo]);
+});
+
 test('transport binds app-server stdio and owns process cleanup', async t => {
   const fixture = makeFixture({
     stdout: ['{"id":', '1,"result":{}}\n{"method":"ready"}\n'],
@@ -116,7 +162,16 @@ test('transport binds app-server stdio and owns process cleanup', async t => {
   });
 
   t.deepEqual(fixture.getSpawnCall(), {
-    argv: ['/bin/codex', 'app-server', '--listen', 'stdio://'],
+    argv: [
+      '/bin/codex',
+      '-c',
+      'features.multi_agent=false',
+      '-c',
+      'features.multi_agent_v2=false',
+      'app-server',
+      '--listen',
+      'stdio://',
+    ],
     options: {
       cwd: '/work',
       env: {
@@ -313,6 +368,61 @@ test('close attempts all teardown steps and preserves failure', async t => {
   });
   await t.throwsAsync(transport.close(), { message: /teardown failed/ });
   await t.throwsAsync(transport.close(), { message: /teardown failed/ });
+  t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 2, waits: 1 });
+});
+
+test('a terminal stdin failure is diagnostic only after process reap', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const waitBarrier = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(() => release());
+  const fixture = makeFixture({
+    stdinReturnError: 'stdin return failed',
+    waitBarrier,
+  });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+    teardownTimeoutMs: 5,
+  });
+  await t.throwsAsync(transport.close(), { message: /teardown failed/ });
+  release();
+  await transport.close();
+  await transport.close();
+  t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
+  t.regex(transport.diagnostics(), /stdin close failed/);
+});
+
+test('close retries only rejected stages and retains successful cleanup', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({ killFailures: 1 });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+  });
+  await t.throwsAsync(transport.close(), { message: /teardown failed/ });
+  await transport.close();
+  await transport.close();
+  t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 2, waits: 1 });
+});
+
+test('close retries observation without duplicating a timed-out native operation', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const waitBarrier = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(() => release());
+  const fixture = makeFixture({ waitBarrier });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+    teardownTimeoutMs: 5,
+  });
+  await t.throwsAsync(transport.close(), { message: /teardown failed/ });
+  await t.throwsAsync(transport.close(), { message: /teardown failed/ });
+  t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
+  release();
+  await transport.close();
   t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
 });
 

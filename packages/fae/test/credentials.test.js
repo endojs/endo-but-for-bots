@@ -63,7 +63,7 @@ test('a revoked secret makes the next read fail rather than the next setup', asy
   await t.throwsAsync(readAuthToken(revoked), { message: /SECRET_REVOKED/ });
 });
 
-test('the secret capability wins over an inline token', async t => {
+test('the secret capability supplies authentication', async t => {
   const powers = Far('Powers', {
     has: async name => name === AUTH_SECRET_PETNAME,
     lookup: async () => makeBlob(encodeAuthToken(TOKEN)),
@@ -71,23 +71,33 @@ test('the secret capability wins over an inline token', async t => {
   t.is(
     await resolveAuthToken({
       powers,
-      config: { authToken: 'stale-plaintext' },
+      config: {},
     }),
     TOKEN,
   );
 });
 
-test('an inline token is still honoured when no secret is endowed', async t => {
+test('inline token fields reject before accessing the namespace', async t => {
   const powers = Far('Powers', {
-    has: async () => false,
+    has: async () => {
+      t.fail('must not inspect namespace');
+      return false;
+    },
     lookup: async () => {
       throw Error('should not be reached');
     },
   });
-  t.is(
-    await resolveAuthToken({ powers, config: { authToken: 'legacy' } }),
-    'legacy',
+  await Promise.all(
+    ['legacy', '', undefined].map(authToken =>
+      t.throwsAsync(resolveAuthToken({ powers, config: { authToken } }), {
+        message: /Inline provider authToken is unsupported/,
+      }),
+    ),
   );
+});
+
+test('tokenless configuration needs no Secret', async t => {
+  const powers = Far('TokenlessPowers', { has: () => false });
   t.is(await resolveAuthToken({ powers, config: {} }), '');
 });
 

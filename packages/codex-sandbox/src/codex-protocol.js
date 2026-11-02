@@ -1,8 +1,16 @@
 // @ts-check
+import { imageResultFromBlocks } from '@endo/hosted-agent/image-result.js';
 
 import { makeError, q, X } from '@endo/errors';
+import {
+  disjointFromInclusive,
+  projectContext,
+  tokenCount,
+} from '@endo/hosted-agent/token-usage.js';
 
-export const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
+// A 2 MiB image expands to base64 in both tool replies and completed-item
+// echoes. Keep the client and its real stdio transport on the same bound.
+export const DEFAULT_MAX_LINE_BYTES = 4 * 1024 * 1024;
 harden(DEFAULT_MAX_LINE_BYTES);
 
 /**
@@ -114,6 +122,8 @@ harden(encodeJsonLine);
  * @returns {string}
  */
 export const renderToolResult = value => {
+  const image = imageResultFromBlocks(value);
+  if (image !== undefined) return image;
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
@@ -151,6 +161,7 @@ harden(renderToolResult);
  * version-specific schema.
  *
  * @param {any} item
+ * @returns {Readonly<{ id: string, name: string, args: unknown, result: unknown, status?: unknown, ok?: boolean }> | undefined}
  */
 export const toolFromItem = item => {
   if (!item || typeof item !== 'object') return undefined;
@@ -165,6 +176,11 @@ export const toolFromItem = item => {
         }),
         result: item.aggregatedOutput ?? '',
         status: item.status,
+        ...(typeof item.exitCode === 'number'
+          ? { ok: item.exitCode === 0 }
+          : ['failed', 'declined'].includes(item.status)
+            ? { ok: false }
+            : {}),
       });
     case 'fileChange':
       return harden({
@@ -173,6 +189,11 @@ export const toolFromItem = item => {
         args: harden({ changes: item.changes || [] }),
         result: item.status || '',
         status: item.status,
+        ...(item.status === 'completed'
+          ? { ok: true }
+          : ['failed', 'declined'].includes(item.status)
+            ? { ok: false }
+            : {}),
       });
     case 'mcpToolCall':
       return harden({
@@ -181,6 +202,11 @@ export const toolFromItem = item => {
         args: item.arguments ?? {},
         result: item.error ?? item.result ?? '',
         status: item.status,
+        ...(item.error != null || item.status === 'failed'
+          ? { ok: false }
+          : typeof item.result?.isError === 'boolean'
+            ? { ok: !item.result.isError }
+            : {}),
       });
     case 'dynamicToolCall':
       return harden({
@@ -191,6 +217,11 @@ export const toolFromItem = item => {
         args: item.arguments ?? {},
         result: item.contentItems ?? '',
         status: item.status,
+        ...(typeof item.success === 'boolean'
+          ? { ok: item.success }
+          : item.status === 'failed'
+            ? { ok: false }
+            : {}),
       });
     case 'webSearch':
       return harden({
@@ -207,3 +238,48 @@ export const toolFromItem = item => {
   }
 };
 harden(toolFromItem);
+
+/**
+ * The `usage` turn event for one `thread/tokenUsage/updated` notification, or
+ * undefined when it carries no `last` breakdown.
+ *
+ * App-server reports the **last request** in `last`, in the Responses API's
+ * convention: `cachedInputTokens` is part of `inputTokens` and
+ * `reasoningOutputTokens` part of `outputTokens`. `totalTokens` is that
+ * request's whole window use; when it is absent the input, the cache writes
+ * and the output are added instead.
+ *
+ * TO CONFIRM ON A LIVE TURN (designs/hosted-agent-subscriptions.md, Known
+ * Gaps): whether `cacheWriteInputTokens` is inside `inputTokens`. It is
+ * treated as beside it, which is right while it is 0, its default. If a live
+ * turn shows it inside, pass `cacheWriteInsideInput: true` below and drop it
+ * from the fallback sum, or the writes are counted twice.
+ *
+ * @param {any} tokenUsage `params.tokenUsage` of the notification
+ */
+export const usageEventFromTokenUsage = tokenUsage => {
+  const last = tokenUsage?.last;
+  if (last === null || typeof last !== 'object') return undefined;
+  const counts = disjointFromInclusive({
+    inputTokens: last.inputTokens,
+    outputTokens: last.outputTokens,
+    cachedInputTokens: last.cachedInputTokens,
+    cacheWriteInputTokens: last.cacheWriteInputTokens,
+    reasoningOutputTokens: last.reasoningOutputTokens,
+  });
+  const usedTokens =
+    tokenCount(last.totalTokens) ||
+    tokenCount(last.inputTokens) +
+      tokenCount(last.cacheWriteInputTokens) +
+      tokenCount(last.outputTokens);
+  const context = projectContext({
+    usedTokens,
+    windowTokens: tokenUsage.modelContextWindow,
+  });
+  return harden({
+    type: 'usage',
+    ...counts,
+    ...(context === undefined ? {} : { context }),
+  });
+};
+harden(usageEventFromTokenUsage);

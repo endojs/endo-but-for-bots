@@ -16,6 +16,15 @@ import {
 import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
 import safeRegex from 'safe-regex2';
 
+import { assertToolArguments } from './tool-arguments.js';
+
+export {
+  makeDescribeCapabilityTool,
+  makeReadSourcesTool,
+} from './source-tools.js';
+export { makeViewImageTool } from './image-tool.js';
+export { assertToolArguments } from './tool-arguments.js';
+
 /** @import { GrepMatch } from '@endo/platform/fs/search.types.js' */
 
 /**
@@ -766,9 +775,10 @@ export const makeListPetnamesTool = host => {
     function: {
       name: 'list',
       description:
-        'List petnames in the Endo directory. Returns an array of stored capability names.',
+        'List petnames in your Endo directory. Takes no arguments. These are capability names, not filesystem paths. Use readSources for files or describeCapability for callable methods.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {},
         required: [],
       },
@@ -779,8 +789,8 @@ export const makeListPetnamesTool = host => {
     schema() {
       return toolSchema;
     },
-    // eslint-disable-next-line no-underscore-dangle
-    async execute(_args) {
+    async execute(args) {
+      assertToolArguments(toolSchema, args);
       const names = await E(host).list();
       return JSON.stringify(names, null, 2);
     },
@@ -802,9 +812,10 @@ export const makeLookupTool = host => {
     function: {
       name: 'lookup',
       description:
-        'Look up a stored value by petname. Returns the value stored under that name.',
+        'Look up a stored value by petname. This does not invoke methods; method and args are not accepted. Use describeCapability for signatures and examples, then exec (endo_exec on Codex) with E(ref).method(...).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           petName: {
             type: 'string',
@@ -821,6 +832,7 @@ export const makeLookupTool = host => {
       return toolSchema;
     },
     async execute(args) {
+      assertToolArguments(toolSchema, args);
       const { petName } = /** @type {{ petName: string }} */ (args);
       if (!petName) {
         throw new Error('petName is required');
@@ -956,9 +968,12 @@ export const makeSendTool = powers => {
         type: 'object',
         properties: {
           recipient: {
-            type: 'string',
+            anyOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' }, minItems: 1 },
+            ],
             description:
-              'Who to send to (e.g., "@host", or a petname for an agent).',
+              'Who to send to: a name such as "@host" or a path such as ["subagents", "researcher"]. Slashes in a string are not path separators.',
           },
           strings: {
             type: 'array',
@@ -973,8 +988,14 @@ export const makeSendTool = powers => {
           },
           petNames: {
             type: 'array',
-            items: { type: 'string' },
-            description: 'Your local petnames for the capabilities to attach.',
+            items: {
+              anyOf: [
+                { type: 'string' },
+                { type: 'array', items: { type: 'string' }, minItems: 1 },
+              ],
+            },
+            description:
+              'Your local names or arrays of path segments for the capabilities to attach.',
           },
         },
         required: ['recipient', 'strings'],
@@ -992,7 +1013,7 @@ export const makeSendTool = powers => {
         strings = [],
         edgeNames = [],
         petNames = [],
-      } = /** @type {{ recipient: string, strings?: string[], edgeNames?: string[], petNames?: string[] }} */ (
+      } = /** @type {{ recipient: string | string[], strings?: string[], edgeNames?: string[], petNames?: (string | string[])[] }} */ (
         args
       );
       if (!recipient) {
@@ -1229,6 +1250,16 @@ export const makeMessageHistoryTool = powers => {
 };
 harden(makeMessageHistoryTool);
 
+// Lifecycle promises are notification hooks, not values an inspector should await.
+const mailLifecycleGuidance =
+  'Raw listMessages()/followMessages() entries include lifecycle fields: ' +
+  'dismissed resolves only after removal; request settled resolves after resolve/reject. ' +
+  'Do not blindly await every field or await dismissed/settled while handling that message. ' +
+  'Inspect explicit data fields (number, type, from, strings, names, done) instead. ' +
+  'done means content complete, not task answered. Reply before dismissing. ' +
+  'Floot automatically replies and dismisses its task after you finish; do not dismiss ' +
+  'that task yourself or wait for its dismissal. Early dismissal breaks reply(number).';
+
 /**
  * @param {import('@endo/eventual-send').ERef<object>} powers
  * @returns {FaeTool}
@@ -1241,7 +1272,7 @@ export const makeListMessagesTool = powers => {
       name: 'listMessages',
       description:
         'List messages in your inbox. Returns an array of message summaries ' +
-        'with number, from, and edge names.',
+        `with number, from, and edge names. ${mailLifecycleGuidance}`,
       parameters: {
         type: 'object',
         properties: {},
@@ -1254,12 +1285,12 @@ export const makeListMessagesTool = powers => {
     schema() {
       return toolSchema;
     },
-    // eslint-disable-next-line no-underscore-dangle
+
     async execute(_args) {
       return E(powers).listMessages();
     },
     help() {
-      return 'List messages in your inbox.';
+      return `List messages in your inbox. ${mailLifecycleGuidance}`;
     },
   });
 };
@@ -1275,7 +1306,7 @@ export const makeDismissTool = powers => {
     type: 'function',
     function: {
       name: 'dismiss',
-      description: 'Dismiss (acknowledge) a message from your inbox by number.',
+      description: `Dismiss a processed message from your inbox by number. ${mailLifecycleGuidance}`,
       parameters: {
         type: 'object',
         properties: {
@@ -1302,7 +1333,7 @@ export const makeDismissTool = powers => {
       return `Dismissed message #${messageNumber}`;
     },
     help() {
-      return 'Dismiss a message from your inbox by number.';
+      return `Dismiss a processed message from your inbox by number. ${mailLifecycleGuidance}`;
     },
   });
 };
@@ -1456,39 +1487,109 @@ const stripCodeFence = code => {
   return fenced ? fenced[1] : code;
 };
 
+/**
+ * What to tell a model whose code did not parse. The advice has to fit the
+ * cause: told "no markdown fences" about code that had none, a model resends
+ * the same thing with something else changed.
+ *
+ * @param {string} code
+ * @param {string} message - the engine's message; it carries no position.
+ * @returns {string}
+ */
+export const describeParseFailure = (code, message) => {
+  const hints = [];
+  if (
+    /SES_IMPORT_REJECTED|import expression|import statement|import\.meta/i.test(
+      message,
+    )
+  ) {
+    hints.push(
+      'exec has no import, import() or require: there is no module loader and no Node built-ins. Reach files and everything else outside through capabilities: E(powers).lookup(...). This evaluator refuses the characters "import(" anywhere in the source, even inside a string or a comment — so if you are writing a file that contains a dynamic import, build that text as "imp" + "ort(".',
+    );
+  } else if (/SES_HTML_COMMENT_REJECTED|html comment/i.test(message)) {
+    hints.push(
+      'The source contains an HTML comment marker (<!-- or -->), which this evaluator refuses even inside a string. Write it as "<!" + "--" and "--" + ">".',
+    );
+  } else {
+    // A fence that was stripped before evaluating is not the problem; one
+    // that is still there (prose around it, or only half of it) is.
+    if (stripCodeFence(code) === code && code.includes('```')) {
+      hints.push(
+        'Send raw JavaScript in the "code" argument, without markdown fences or any prose around the code.',
+      );
+    }
+    // The fences' own backticks are not template literals.
+    if (code.replace(/```/g, '').includes('`')) {
+      hints.push(
+        'The code uses template literals. If one of them holds text that itself contains a backtick or ${ (a shader, a template, markdown), that inner backtick ends the literal and the rest is parsed as code — a common cause of "Unexpected identifier". Build such text from single-quoted strings joined together, or escape each inner backtick and ${.',
+      );
+    }
+    if (/await is only valid|Unexpected reserved word/.test(message)) {
+      hints.push(
+        'await works at the top level of the code, but not inside a nested function unless that function is async.',
+      );
+    }
+  }
+  if (hints.length === 0) {
+    hints.push('Check the code for syntax errors and send it again.');
+  }
+  return `Could not parse the code (${message}). ${hints.join(' ')}`;
+};
+harden(describeParseFailure);
+
 export const makeExecTool = powers => {
   /** @type {ToolSchema} */
   const toolSchema = harden({
     type: 'function',
     function: {
       name: 'exec',
-      description:
+      description: [
         'Execute JavaScript code with access to your guest powers. ' +
-        'The code runs as an async function body (top-level await works). ' +
-        'Return a value to get it as the tool result.\n\n' +
-        'Available globals:\n' +
-        '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
-        '- E: eventual send — use E(ref).method() for all remote calls\n' +
-        '- harden: freeze objects for safe passing\n' +
-        '- console: for logging\n' +
-        '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
-        'The code runs under SES lockdown, which surprises callers who expect a ' +
-        'normal environment:\n' +
-        '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
-        'let a capability supply one.\n' +
-        '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
-        'between polls within one call.\n' +
-        '- The result is JSON-serialized for the model. BigInts render as ' +
-        'decimal strings, so a stat() or workflow status can be returned as ' +
-        'it came. A remote capability is described by its method names.\n\n' +
-        'Example — adopt a channel, join it, and post a reply:\n' +
-        '```\n' +
-        'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
-        'const channel = await E(powers).lookup("my-channel");\n' +
-        'const member = await E(channel).join("fae");\n' +
-        'await E(member).post(["Hello from fae!"], [], []);\n' +
-        'return "Posted to channel";\n' +
-        '```',
+          'The code runs as an async function body (top-level await works). ' +
+          'Use a top-level return to produce the tool result, e.g. return await E(powers).list(); ' +
+          'A final expression or an unreturned nested IIFE does not return a result. ' +
+          'console output goes to daemon logs, not the tool result.\n\n' +
+          'Available globals:\n' +
+          '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
+          '- E: eventual send — use E(ref).method() for all remote calls\n' +
+          '- harden: freeze objects for safe passing\n' +
+          '- console: for logging\n' +
+          '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
+          'Nothing else is in scope. A petname is NOT a variable: reach a stored ' +
+          'object with const workspace = await E(powers).lookup("workspace"); at ' +
+          'the top of every call that uses it (each call is a fresh function ' +
+          'body; nothing carries over). A name you never declared does not ' +
+          'throw here, it reads as undefined — so the error Cannot deliver ' +
+          '"someMethod" to target; typeof target is "undefined" means a name in ' +
+          'your code was never declared or looked up.\n\n' +
+          'The code runs under SES lockdown, which surprises callers who expect a ' +
+          'normal environment:\n' +
+          '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
+          'let a capability supply one.\n' +
+          '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
+          'between polls within one call.\n' +
+          '- No import, import() or require: there is no module loader and no ' +
+          'Node built-ins (fs, path, child_process). Files, network and ' +
+          'everything else outside come from capabilities reached through ' +
+          'powers.\n' +
+          '- The code is JavaScript source inside a JSON string. To build a file ' +
+          'that itself contains backticks or ${ (a shader, a template, ' +
+          'markdown), do not put it in a template literal — the inner backtick ' +
+          'ends the literal. Use single-quoted strings joined together, or ' +
+          'escape each inner backtick and ${.\n' +
+          '- The result is JSON-serialized for the model. BigInts render as ' +
+          'decimal strings, so a stat() or workflow status can be returned as ' +
+          'it came. A remote capability is described by its method names.\n\n' +
+          'Example — adopt a channel, join it, and post a reply:\n' +
+          '```\n' +
+          'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
+          'const channel = await E(powers).lookup("my-channel");\n' +
+          'const member = await E(channel).join("fae");\n' +
+          'await E(member).post(["Hello from fae!"], [], []);\n' +
+          'return "Posted to channel";\n' +
+          '```',
+        mailLifecycleGuidance,
+      ].join('\n\n'),
       parameters: {
         type: 'object',
         properties: {
@@ -1500,6 +1601,7 @@ export const makeExecTool = powers => {
           },
         },
         required: ['code'],
+        additionalProperties: false,
       },
     },
   });
@@ -1509,6 +1611,7 @@ export const makeExecTool = powers => {
       return toolSchema;
     },
     async execute(args) {
+      assertToolArguments(toolSchema, args);
       const { code } = /** @type {{ code: string }} */ (args);
       if (!code) {
         throw new Error('code is required');
@@ -1531,9 +1634,7 @@ export const makeExecTool = powers => {
         // nudge to resend clean source, so the model can self-correct on the
         // next round instead of the turn aborting.
         const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Could not parse the code (${message}). Send raw JavaScript in the "code" argument — no markdown fences — and check for syntax errors.`,
-        );
+        throw new Error(describeParseFailure(code, message));
       }
       // The compartment has no timers, so an agent watching something change
       // (a workflow reaching await-approval, a build finishing) could not wait
@@ -1546,15 +1647,16 @@ export const makeExecTool = powers => {
         });
       const result = await fn(powers, E, harden, console, sleep);
       if (result === undefined) {
-        return 'done (no return value)';
+        return 'done (no return value). Use a top-level return to produce a result (for example: return await E(powers).list();). Final expressions and unreturned nested functions do not return a result; console output goes to daemon logs. Any effects already performed still happened: do not repeat them just to obtain output.';
       }
       return renderToolResult(result);
     },
     help() {
       return (
         'Execute JavaScript code with access to guest powers, E, and harden. ' +
+        'Use top-level return for the result; console output is only logged. ' +
         'Use for multi-step operations like adopting values, joining channels, ' +
-        'and posting messages in a single call.'
+        `and posting messages in a single call. ${mailLifecycleGuidance}`
       );
     },
   });

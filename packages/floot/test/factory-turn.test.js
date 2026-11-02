@@ -6,6 +6,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 
 test('factory facets retain disconnected turns, commit history, and provision delegation tools', async t => {
   t.timeout(5000);
@@ -81,53 +82,56 @@ test('factory facets retain disconnected turns, commit history, and provision de
   });
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
+  for (const sessionId of ['one']) {
+    hostStore.set(
+      `floot-private-sessions/${sessionId}/schema`,
+      harden({ version: 2, sessionId }),
+    );
+  }
   hostStore.set(
-    'floot-sessions',
-    harden([
-      {
-        id: 'one',
-        title: 'One',
-        createdAt: 1,
-        presetId: 'general',
-        lifecycle: 'ready',
-        backendId: 'test',
-        modelId: 'm',
-      },
-      {
-        id: 'legacy',
-        title: 'Legacy Claude',
-        createdAt: 0,
-        presetId: 'general',
-        lifecycle: 'ready',
-        model: 'claude-cli',
-      },
-    ]),
+    'floot-sessions-v1-00000000000000000000',
+    harden({
+      version: 1,
+      sequence: 0n,
+      sessions: [
+        {
+          id: 'one',
+          title: 'One',
+          createdAt: 1,
+          systemPrompt: 'Captured fixture prompt.',
+          presetId: 'general',
+          lifecycle: 'ready',
+          backendId: 'test',
+          modelId: 'm',
+        },
+      ],
+    }),
   );
   const lookups = [];
-  hostStore.set('session-agent-legacy', guest);
   hostStore.set('codex-backend', backend);
-  hostStore.set('session-agent-one', guest);
   const host = Far('TestHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => {
-      lookups.push(name);
-      return hostStore.get(name);
+    ...directoryHost(hostStore),
+    lookup: (...names) => {
+      lookups.push(names.flat().join('/'));
+      return hostStore.get(names.flat().join('/'));
     },
-    provideGuest: () => undefined,
-    storeValue: (value, name) => {
-      hostStore.set(name, value);
+    provideGuest: (_name, { agentName }) => {
+      hostStore.set(agentName, guest);
     },
     remove: name => {
       hostStore.delete(name);
     },
   });
   const factory = make(host);
+  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
+  hostStore.delete('codex-backend');
+  t.false((await E(factory).listBackends()).some(item => item.id === 'test'));
+  hostStore.set('codex-backend', backend);
+  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
   t.teardown(async () => {
     backendEvents.push(harden({ type: 'end' }));
     inbox.close();
     await E(factory).deleteSession('one');
-    await E(factory).deleteSession('legacy');
   });
   const session = await E(factory).getSession('one');
   const turn = await E(session).startTurn('hello');
@@ -179,15 +183,11 @@ test('factory facets retain disconnected turns, commit history, and provision de
   backendEvents.push(harden({ type: 'end', checkpoint: 'committed' }));
   await ackStarted;
   t.false((await E(turn).getStatus()).done);
-  t.is((await E(session).getHistory()).length, 2);
+  t.is((await E(session).getHistory()).length, 3);
   t.deepEqual(await (await E(session).getCurrentTurn()).history, []);
   releaseAck();
   await E(turn).whenFinished();
   t.is(await E(session).getCurrentTurn(), null);
-  const legacy = await E(factory).getSession('legacy');
-  const refused = await E(legacy).startTurn('must not run legacy credentials');
-  await E(refused).whenFinished();
-  t.regex((await E(refused).getStatus()).error, /attested hosted backend/);
   t.false(lookups.some(name => name.startsWith('claude-client')));
   t.false(
     (await E(factory).listModels()).some(model => model.id === 'claude-cli'),
@@ -195,5 +195,19 @@ test('factory facets retain disconnected turns, commit history, and provision de
   t.deepEqual(await E(session).getHistory(), [
     { role: 'user', content: 'hello' },
     { role: 'assistant', content: 'hello back' },
+    {
+      role: 'tool',
+      name: 'handoffDesign',
+      args: JSON.stringify({
+        name: 'design',
+        title: 'Design',
+        design: 'Agreed acceptance criteria',
+        base: 'main',
+        rounds: '2',
+      }),
+      result: `[Recovered evidence; ordering relative to the reply is unknown.]\n${handoff}`,
+      failed: false,
+      meta: { recoveredEvidence: true, orderUnknown: true },
+    },
   ]);
 });

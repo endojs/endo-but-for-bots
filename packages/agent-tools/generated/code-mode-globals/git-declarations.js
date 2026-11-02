@@ -141,10 +141,18 @@ type GitBlobRef = {
     textRange: (startLine: number, endLine: number) => Promise<GitBlobRef>;
     help: (method?: string) => string;
 };
+type GitStreamEndpointClose = {
+    close: () => Promise<void>;
+};
+type GitPassableBytesWriter<TWriteReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
+};
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
     atEnd: boolean;
 };
+type GitCloseablePassableReader<TRead = unknown, TReadReturn = unknown> = GitPassableReader<TRead, TReadReturn> & GitStreamEndpointClose;
 type GitDirectoryEntry = {
     name: string;
     kind: 'file';
@@ -257,7 +265,7 @@ type GitExtendedFile = {
 };
 type GitCursor = {
     read: (limit?: bigint) => Promise<GitDirectoryPage>;
-    stream: () => GitERef<GitPassableReader<GitDirectoryEntry>>;
+    stream: () => GitERef<GitCloseablePassableReader<GitDirectoryEntry>>;
     toArray: () => Promise<GitDirectoryEntry[]>;
     skip: (n: bigint) => Promise<void>;
     rewind: () => Promise<void>;
@@ -272,8 +280,8 @@ type GitOpenFileOptions = {
     append?: boolean;
 };
 type GitOpenFile = {
-    read: (offset?: bigint, length?: bigint) => GitERef<GitPassableBytesReader>;
-    write: (offset?: bigint) => GitERef<GitPassableBytesWriter>;
+    read: (offset?: bigint, length?: bigint) => GitERef<GitCloseablePassableBytesReader>;
+    write: (offset?: bigint) => GitERef<GitCloseablePassableBytesWriter>;
     truncate: (size: bigint) => Promise<void>;
     fsync: () => Promise<void>;
     lock: (opts: GitLockOpts) => GitERef<GitLock>;
@@ -287,10 +295,6 @@ type GitOpenFile = {
 type GitWatchFromResult = {
     cursor: GitCursor;
     watcher: GitNodeWatcher;
-};
-type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => unknown | undefined;
 };
 type GitFilesystemStats = {
     blockSize?: bigint;
@@ -344,6 +348,8 @@ type GitLitePathEntry = {
     help: (method?: string) => string;
 };
 type GitLockType = 'shared' | 'exclusive';
+type GitCloseablePassableBytesReader<TReadReturn = undefined> = GitPassableBytesReader<TReadReturn> & GitStreamEndpointClose;
+type GitCloseablePassableBytesWriter<TWriteReturn = undefined> = GitPassableBytesWriter<TWriteReturn> & GitStreamEndpointClose;
 type GitLockOpts = {
     type: GitLockType;
     start?: bigint;
@@ -519,15 +525,23 @@ type GitBlobRef = {
     textRange: (startLine: number, endLine: number) => Promise<GitBlobRef>;
     help: (method?: string) => string;
 };
-type GitDirectoryPage = {
-    entries: GitDirectoryEntry[];
-    atEnd: boolean;
+type GitStreamEndpointClose = {
+    close: () => Promise<void>;
+};
+type GitPassableBytesWriter<TWriteReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
 type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
     readPattern: () => unknown | undefined;
     readReturnPattern: () => unknown | undefined;
 };
+type GitDirectoryPage = {
+    entries: GitDirectoryEntry[];
+    atEnd: boolean;
+};
+type GitCloseablePassableReader<TRead = unknown, TReadReturn = unknown> = GitPassableReader<TRead, TReadReturn> & GitStreamEndpointClose;
 type GitDirectoryEntry = {
     name: string;
     kind: 'file';
@@ -614,7 +628,7 @@ type GitExtendedFile = {
 };
 type GitCursor = {
     read: (limit?: bigint) => Promise<GitDirectoryPage>;
-    stream: () => GitERef<GitPassableReader<GitDirectoryEntry>>;
+    stream: () => GitERef<GitCloseablePassableReader<GitDirectoryEntry>>;
     toArray: () => Promise<GitDirectoryEntry[]>;
     skip: (n: bigint) => Promise<void>;
     rewind: () => Promise<void>;
@@ -629,8 +643,8 @@ type GitOpenFileOptions = {
     append?: boolean;
 };
 type GitOpenFile = {
-    read: (offset?: bigint, length?: bigint) => GitERef<GitPassableBytesReader>;
-    write: (offset?: bigint) => GitERef<GitPassableBytesWriter>;
+    read: (offset?: bigint, length?: bigint) => GitERef<GitCloseablePassableBytesReader>;
+    write: (offset?: bigint) => GitERef<GitCloseablePassableBytesWriter>;
     truncate: (size: bigint) => Promise<void>;
     fsync: () => Promise<void>;
     lock: (opts: GitLockOpts) => GitERef<GitLock>;
@@ -644,10 +658,6 @@ type GitOpenFile = {
 type GitWatchFromResult = {
     cursor: GitCursor;
     watcher: GitNodeWatcher;
-};
-type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => unknown | undefined;
 };
 type GitFilesystemStats = {
     blockSize?: bigint;
@@ -681,6 +691,8 @@ type GitLitePathEntry = {
     help: (method?: string) => string;
 };
 type GitLockType = 'shared' | 'exclusive';
+type GitCloseablePassableBytesReader<TReadReturn = undefined> = GitPassableBytesReader<TReadReturn> & GitStreamEndpointClose;
+type GitCloseablePassableBytesWriter<TWriteReturn = undefined> = GitPassableBytesWriter<TWriteReturn> & GitStreamEndpointClose;
 type GitLockOpts = {
     type: GitLockType;
     start?: bigint;

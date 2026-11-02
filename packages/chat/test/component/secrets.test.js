@@ -98,7 +98,17 @@ test.serial(
         .textContent.includes('Release publishing'),
     );
     t.true($parent.textContent.includes('release-token'));
-    t.true($parent.textContent.includes('secrets/github-release'));
+    t.is($parent.querySelector('.secret-name').textContent, '/release-token');
+    t.is(
+      $parent.querySelector('.secret-aliases').textContent,
+      'Also known as: github-release',
+    );
+    t.true($parent.textContent.includes('github-release'));
+    t.false($parent.textContent.includes('secrets/github-release'));
+    t.false($parent.textContent.includes('Inventory paths'));
+    t.false($parent.textContent.includes(summary.secretId));
+    t.is($parent.querySelector('.secret-details dt').textContent, 'Status');
+    t.truthy($parent.querySelector('.secret-description-form button'));
 
     const $createPanel = $parent.querySelector('.secret-create-panel');
     const $danger = $parent.querySelector('.secret-danger');
@@ -349,7 +359,7 @@ test.serial('secret Space orders and deletes revoked records', async t => {
             {
               secretId: revokedSummary.secretId,
               summary: revokedSummary,
-              petNamePaths: [['secrets', 'retired']],
+              petNamePaths: [['secrets', 'alpha-retired']],
               admin: revokedAdmin,
             },
           ]
@@ -379,19 +389,19 @@ test.serial('secret Space orders and deletes revoked records', async t => {
   await waitFor(() => $parent.querySelectorAll('.secret-card').length === 2);
 
   const cards = [...$parent.querySelectorAll('.secret-card')];
-  t.true(cards[0].classList.contains('secret-active'));
-  t.true(cards[1].classList.contains('secret-revoked'));
+  t.true(cards[0].classList.contains('secret-revoked'));
+  t.true(cards[1].classList.contains('secret-active'));
   t.is(
-    cards[0].querySelector('.secret-replace-section h3').textContent,
+    cards[1].querySelector('.secret-replace-section h3').textContent,
     'Replace value',
   );
   t.is(
-    cards[0].querySelector('.secret-revoke-section h3').textContent,
+    cards[1].querySelector('.secret-revoke-section h3').textContent,
     'Revoke access',
   );
-  t.true(cards[1].textContent.includes('secrets/retired'));
+  t.is(cards[0].querySelector('.secret-name').textContent, 'alpha-retired');
 
-  cards[1].querySelector('.secret-delete').click();
+  cards[0].querySelector('.secret-delete').click();
   await waitFor(() => deleted.length === 1);
   await waitFor(() => $parent.querySelectorAll('.secret-card').length === 1);
   t.deepEqual(deleted, ['revoked-secret']);

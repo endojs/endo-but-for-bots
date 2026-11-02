@@ -473,6 +473,7 @@ export const wrapBackend = (backend, opts = {}) => {
         const off = offset === undefined ? cursor : BigInt(offset);
         /** @type {Uint8Array[]} */
         const chunks = [];
+        let settled = false;
         const sinkIterator = {
           /** @param {Uint8Array} chunk */
           async next(chunk) {
@@ -482,19 +483,31 @@ export const wrapBackend = (backend, opts = {}) => {
             return { done: false, value: undefined };
           },
           async return(value) {
-            let total = 0;
-            for (const c of chunks) total += c.length;
-            const merged = new Uint8Array(total);
-            let p = 0;
-            for (const c of chunks) {
-              merged.set(c, p);
-              p += c.length;
+            // The first return commits the admitted bytes. Its error belongs
+            // to that stream's outcome; cleanup must not retry the write (it
+            // could already have partially changed the backend). Once that
+            // attempt has settled, this endpoint owns no pending operation.
+            // exo-stream serializes release attempts and retains the original
+            // rejection for the consumer while permitting a separate close.
+            if (settled) return { done: true, value };
+            try {
+              let total = 0;
+              for (const c of chunks) total += c.length;
+              const merged = new Uint8Array(total);
+              let p = 0;
+              for (const c of chunks) {
+                merged.set(c, p);
+                p += c.length;
+              }
+              await backend.write(path, merged, off);
+              cursor = off + BigInt(merged.length);
+              // POSIX: writing updates mtime (and ctime via touch).
+              touch(path, { mtime: true });
+              return { done: true, value };
+            } finally {
+              settled = true;
+              chunks.length = 0;
             }
-            await backend.write(path, merged, off);
-            cursor = off + BigInt(merged.length);
-            // POSIX: writing updates mtime (and ctime via touch).
-            touch(path, { mtime: true });
-            return { done: true, value };
           },
           [Symbol.asyncIterator]() {
             return sinkIterator;

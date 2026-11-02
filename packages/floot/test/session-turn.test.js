@@ -4,6 +4,7 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeSessionTurn } from '../src/session-turn.js';
+import { usageCounts } from './helpers/usage.js';
 
 /**
  * A turn whose body is driven by the test: `writer` is handed out once
@@ -70,6 +71,35 @@ const untilStatus = async (turn, predicate) => {
   }
   throw Error('the turn never reached the expected state');
 };
+
+test('thinking survives live snapshots as a separate non-answer message', async t => {
+  const driven = makeDrivenTurn();
+  await null;
+  const writer = driven.writer();
+  writer.thinking({
+    id: 'thought-1',
+    text: 'Public thought',
+    startedAt: 1000,
+    truncated: false,
+  });
+  const status = await untilStatus(
+    driven.turn,
+    value => value.messages.length === 1,
+  );
+  t.is(status.streamingText, '');
+  t.is(status.messages[0].role, 'thinking');
+  writer.thinking({
+    id: 'thought-1',
+    text: '',
+    startedAt: 1000,
+    endedAt: 206_000,
+    truncated: false,
+  });
+  writer.end();
+  driven.settle();
+  const completed = await untilStatus(driven.turn, value => value.done);
+  t.is(completed.messages[0].thinking.endedAt, 206_000);
+});
 
 test('a closed view does not stop the turn', async t => {
   const driven = makeDrivenTurn();
@@ -311,6 +341,11 @@ test('tool calls pair with their results across a snapshot', async t => {
     ],
     done: true,
     error: null,
-    usage: { inputTokens: 11, outputTokens: 3, turns: 1 },
+    usage: usageCounts({
+      inputTokens: 11,
+      outputTokens: 3,
+      turns: 1,
+      incompleteTurns: 0,
+    }),
   });
 });

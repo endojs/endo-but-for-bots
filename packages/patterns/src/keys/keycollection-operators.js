@@ -4,7 +4,6 @@ import {
   assertRankSorted,
   compareAntiRank,
   makeFullOrderComparatorKit,
-  sortByRank,
 } from '@endo/marshal';
 import { makeIterator } from '@endo/common/make-iterator.js';
 import { makeArrayIterator } from '@endo/common/make-array-iterator.js';
@@ -28,50 +27,19 @@ import { q, Fail } from '@endo/errors';
  * @returns {IterableIterator<[Key, V]>}
  */
 const generateFullSortedEntries = (entries, rankCompare, fullCompare) => {
-  // @ts-expect-error XXX Key types
-  assertRankSorted(entries, rankCompare);
-  const { length } = entries;
-  let i = 0;
-  let sameRankIterator;
-  return makeIterator(() => {
-    if (sameRankIterator) {
-      const result = sameRankIterator.next();
-      if (!result.done) {
-        return result;
-      }
-      sameRankIterator = undefined;
-    }
-    if (i < length) {
-      const entry = entries[i];
-      // Look ahead for same-rank ties.
-      let j = i + 1;
-      while (j < length && rankCompare(entry[0], entries[j][0]) === 0) {
-        j += 1;
-      }
-      if (j === i + 1) {
-        // No ties found.
-        i = j;
-        return harden({ done: false, value: entry });
-      }
-      const ties = entries.slice(i, j);
-      i = j;
-
-      // Sort the ties by `fullCompare`, enforce key uniqueness, and delegate to
-      // a sub-iterator.
-      // @ts-expect-error XXX Key types
-      const sortedTies = sortByRank(ties, fullCompare);
-      for (let k = 1; k < sortedTies.length; k += 1) {
-        // @ts-expect-error XXX Key types
-        const [key0] = sortedTies[k - 1];
-        const [key1] = sortedTies[k];
-        Math.sign(fullCompare(key0, key1)) ||
-          Fail`Duplicate entry key: ${key0}`;
-      }
-      sameRankIterator = makeArrayIterator(sortedTies);
-      return sameRankIterator.next();
-    }
-    return harden({ done: true, value: undefined });
-  });
+  assertRankSorted(harden(entries.map(([key]) => key)), rankCompare);
+  // Rank ties are not transitive around nested remotables. Fully order the
+  // keys together instead of refining independent windows of tied entries.
+  const sorted = harden(
+    [...entries].sort(([left], [right]) => fullCompare(left, right)),
+  );
+  for (let i = 1; i < sorted.length; i += 1) {
+    const [previous] = sorted[i - 1];
+    const [key] = sorted[i];
+    Math.sign(fullCompare(previous, key)) ||
+      Fail`Duplicate entry key: ${previous}`;
+  }
+  return makeArrayIterator(sorted);
 };
 harden(generateFullSortedEntries);
 

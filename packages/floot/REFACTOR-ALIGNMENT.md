@@ -1,0 +1,1669 @@
+# Current repository alignment with the hosted sandbox refactor
+
+Date: 2026-09-24, revalidated 2026-09-25. Priority audit requested by the operator.
+Initial application snapshot: `61e5375288ce9772b31c9a4997efb5e3809b6bff`.
+Initial host snapshot: `60ee154`; the manifest integration was then uncommitted.
+Follow-up host `62a1077` completes it with reviewed dependency wiring and tests.
+The initial source audit did not deploy or inspect the live machine.
+Subsequent isolated Tokyo protocol probes are identified below; they do not
+constitute production deployment or current-release acceptance.
+
+## Verdict
+
+The main structural unification is implemented, but the refactor is not complete.
+The three native backends actually use common provisioning, lifecycle, grants,
+and execution-envelope code. Reimplementing those abstractions is not the next
+step. Simplicity and bounded context still need evidence or work.
+Protocol admission conformance is covered; generation 190 verifies the two
+October 1 correctness fixes and ordinary restart recall on all four backends.
+Its OpenCode full policy matrix stops on model command drift, as recorded below;
+generation 189 retains the preceding complete lifecycle-matrix evidence.
+Neither gate settles the remaining design questions.
+
+This audit evaluates the retained implementation against the design's
+[motivation and decisions](../../designs/hosted-agent-sandbox-unification.md#motivation),
+[factorization](../../designs/hosted-agent-sandbox-unification.md#factorization-and-adapter-responsibilities),
+and phase exit criteria. Historical commit coverage is not a completion gate.
+Older dated design/audit paragraphs are evidence of earlier states, not reliable
+descriptions of today's source. This summary takes precedence for current status;
+the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
+
+## Current work, 2026-10-01
+
+October 6 follow-up: shared direct-provider Fae compaction now selects completed
+protocol groups within a turn, including the first, instead of requiring three
+user messages and keeping two entire turns regardless of size.
+The current directive and recent complete native tool groups stay verbatim;
+summary-only older tool excerpts are explicitly bounded, with full originals
+retained in the existing journal/tree.
+Automatic first-turn, repeated compaction, cold reconstruction and failed
+publication fixtures pass. Tokyo generation 200 (app `69d7ef537`, host `04b95a7`)
+also passes live Luna first-turn acceptance: eight successful tool rounds,
+two automatic checkpoints, then cold daemon restart and context-only recall
+without new tools or summarization. Explicit native stop preceded restart;
+the disposable session/allocation were removed after private evidence export.
+The original eight sessions, Secrets and workspaces remain unchanged.
+The fresh unattended October 6 Luna test run also verifies all 115 non-daemon
+package test tasks and all 109 daemon test files at the deployed revision, with
+three automatic checkpoints across 48 settled calls/results in one user turn.
+Eleven distinct assertion/fixture failures remain; no tests or source were changed.
+The agent saved its report/ledger, but its final chat reply reached the existing
+48-tool-step cap. Its aggregate count and some failure labels also need correction
+against the retained independent audit. Execution is verified, not a green repo
+or clean end-to-end assistant completion. After verified export/archive, only this
+new disposable session/allocation was removed; the original eight were preserved.
+The direct-provider runaway-loop guard is now shared with standalone Fae at
+1024 rounds in source (formerly Floot 48/Fae 32), with local exact-exhaustion,
+override and normal-completion-after-48 fixtures passing. A fresh live run on
+this default remains pending; the historical generation-200 result is unchanged.
+The POSIX design also records nearby workload bounds: per-turn retained transcript,
+public-egress concurrency/traffic/tunnel lifetime, shell output/timeouts,
+OpenRouter request timeout and subagent budgets. No other limits were changed.
+The [durable POSIX design](../../designs/durable-posix-environments.md) records
+the policy and OpenCode comparison; older hold/no-producer statements below are
+historical and superseded for the direct Fae paths.
+
+FA-14 is fixed in source and locally validated through the existing journal,
+evidence reconciliation, provider context, stream fold and history presentation.
+Native explicit status and actual host rejection retain the canonical optional
+`failed` flag; unknown outcomes stay unknown and no text heuristic is used.
+Event replay, snapshots, archives, late results and checkpoint classification
+enrichment are covered without another durable owner or replay policy.
+Both fixes are deployed on Tokyo generation 190: app `9b888d1cc`, host `15fd7b1`.
+The initial Claude tool-seed capture fix is independently reviewed as a separate
+slice; its rebuilt image captures a native checkpoint in the initial tool-heavy
+probe, and ordinary restart recall passes with native checkpoints on both turns.
+The pinned CLI parents parallel results to individual assistant tool UUIDs within
+one API message group, rather than a strictly linear physical-row frontier.
+Capture and host coverage share one exact owner/source/tool/message predicate;
+ordinary coverage reuses the existing chain validator.
+The full Claude suite passes 540 tests, with 209 independently rerun.
+Signed/opaque bytes, prefix receipts, observed-frame coverage and restore/recapture
+validation remain enforced; arbitrary or cross-message branches remain refused.
+Intentional host rejection and successful mediated execution retain explicit
+classification in turns, canonical transcript and history on all four backends,
+including after daemon restart. Claude/Codex retain explicit native exit-7 failure.
+OpenCode reports its shell tool as completed even for that nonzero exit; we retain
+its explicit tool status rather than inferring failure from result text.
+Claude and Codex also pass public/off policy changes, private-address rejection
+and observed native cancellation. OpenCode's public request succeeds but its
+auto-free model quotes the URL, so the exact-command verifier correctly refuses
+that policy gate; no failed inference is replayed or full-matrix pass claimed.
+
+The requested [source-bulk audit](SOURCE-BULK-AUDIT.md) measures 42,786 lines
+across the four backend/shared packages: 56.5% in hosted-agent.
+It identifies small unused surfaces, legacy compatibility, local repetition and
+larger scope decisions, distinguishing them from justified parallel mechanisms.
+The operator confirms Tokyo is the only consumer, so unused exported surfaces
+need no external-compatibility bridge.
+SB-01 through SB-08 are removed in reviewed slices: unused setup and pool APIs,
+old broker/source compatibility, redundant acquisition conveniences, an unused
+version export, and Codex's identity-only persistence fallback.
+Current ownership and complete persistence contracts remain; no replacement
+framework or durable owner is added.
+SB-09 through SB-12 then consolidate local guest publication, delegated inference
+validation, bounded JSON reading and account/model projection.
+Their helpers stay with existing owners; the shared reader retains Codex's
+caller-owned cancellation contract.
+Scope item 3 then removes the unsupported delegated storage-bound extension.
+Limits require explicit `storage: 'unbounded'`; bounded requests refuse before
+setup publication or session-slot acquisition, rather than silently losing a bound.
+The retired descriptor flag is rejected; sharing/delegation itself remains.
+Scope item 4 moves the existing snapshot journal out of the account oracle into
+`snapshot-journal.js` as `makeSnapshotJournal`, without an old-name alias.
+The five callers keep identical persisted prefixes and separate state ownership.
+The move adds two source lines and is ontology clarification, not a size reduction.
+Scope item 5 corrects Claude's native-context versus acknowledgement documentation
+and help; `acknowledge()` remains an operational no-op, not the persistence hook.
+The final metric is 42,561, down 225 lines, across 161 files.
+The audit records each slice and its validation.
+For SB-01 through SB-12, full shared, Claude, Codex and OpenCode suites passed,
+along with shared/Claude/Codex type checks, scoped ESLint/formatting and root docs
+(warnings remain).
+Scope item 3 passes 67 focused runner/module/descriptor/setup tests; independent
+review passes 77 including backend setup, shared types, scoped lint and formatting.
+Root docs also passes for this slice; warnings remain.
+Scope item 4 passes 70 focused journal/account/module/pool tests and shared types;
+root docs passes with warnings.
+Its full shared suite passes 808 tests with one existing skip; independent review
+confirms unchanged storage mechanics and passes 54 focused tests and shared types.
+The composite declaration build fails on existing generated-file TS5055 conflicts
+outside the slice; that repository-wide gate is not green.
+For the complete scope-item 3–5 pass, fresh full suites pass: shared 808 (one
+existing skip), Claude 539, Codex 445 and OpenCode 298, totaling 2,090 passes.
+Shared/Claude/Codex types, four-package JavaScript ESLint and changed-file formatting
+pass; warnings remain.
+Root docs passes with 0 errors and 180 warnings.
+Ignored declarations were narrowly regenerated, not committed.
+Whole-repository lint remains unclean on unchanged formatting and other lint
+errors, including Chat project-resolution failures.
+The source audit records those limitations and suspected bucketing separately.
+Generation 190 was the live baseline for that source-only pass; the subsequent
+environment delivery below supersedes it.
+The smaller-combined-implementation target is still unproven.
+The requested scope items 3–5 are done.
+The operator has decided to keep sharing/delegation, including budgets, nested
+shares, delegated session allowances, and expiry/revocation policies.
+The inert pool-weight contract remains a decision before the cross-adapter
+SB-13 through SB-15 extractions.
+The recommended sequence remains deletion before abstraction.
+The subsequent environment investigation is recorded in
+[durable POSIX environments](../../designs/durable-posix-environments.md).
+Implementation has started with deletion of the sandbox's misleading dynamic
+mount/scratch/open/fork/reset methods; static mounts and owned process cleanup remain.
+Initial environment implementation and Tokyo acceptance are complete on generation
+194 (app `854a4c5aa`, host `1f2a4bd`). Fae/Codex Luna installed Rust and passed
+Cargo tests; OpenRouter `openrouter/free` passed the workspace pilot. Forced
+compaction, policy replacement, native/Floot cancellation, explicitly stopped
+restart/recall and scoped deletion/disposal passed. The portable Shell adapter
+also has CapTP byte-stream/failure tests and real two-daemon capability routing
+with a fixture runner, not live remote Podman acceptance. Automatic environment
+GC and daemon-wide native crash recovery remain deferred, without a second
+delegation platform. The linked design records exact evidence, defects fixed
+during testing and the explicit-stop restart limitation.
+This sandbox-package deletion does not change the four-package source metric above.
+
+Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
+and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
+The four September 30 cleanup slices are deployed: one Claude argument converter,
+obsolete broker constructors removed, explicit provider configuration, and no
+legacy public text-stream protocol. They remove 232 net runtime lines across
+the changed application packages without adding a replacement framework.
+All four backends pass lifecycle and ordinary restart acceptance; OpenCode's first
+seed chose JavaScript `exec` instead of native shell and failed correctly.
+A fresh auto-free run passes with an explicit tool distinction in the test prompt;
+the failed run was not replayed. Claude/Codex restoration has two native checkpoints
+each. Claude's initial tool-heavy seed still lacks one, so universal capture fidelity
+is not claimed. The newly recorded FA-14 tool-outcome classification gap remains open.
+Secrets, credential/renewal owners, host and workspaces are preserved.
+Detailed private manifests and acceptance scopes are recorded in endo-host
+`ops/explicit-journal-deployment-20260924.md`.
+
+Generation 188's earlier deployment ran app `5adeb4aa9`,
+host `934204f`, unchanged image pins, all four lifecycle/restoration scopes pass.
+It deploys setup/model/MCP cleanup and the explicit admission/dispatch journal
+boundary. Three old-format sessions were retired after workspace-root retention;
+Secrets and renewal owners remain intact. The new source passes 777 Floot tests.
+Claude/Codex retain native checkpoints on both restoration turns; Claude's
+initial tool-heavy lifecycle seed lacked one and remains a capture follow-up.
+Source cleanup `c3089ee18` removes duplicate Claude argument normalization from
+Floot context projection by reusing the adapter's conversion at composition.
+Journal evidence is unchanged; no durable/remote codec mechanism is added.
+The 784 Floot tests and 27 Claude transcript tests pass, including codec selection
+after journal reconstruction; types, lint, docs and independent review pass.
+This cleanup is deployed in generation 189.
+Detailed current evidence is in [the architecture audit](ARCHITECTURE-AUDIT.md)
+and endo-host `ops/explicit-journal-deployment-20260924.md`.
+
+Generation 187 ran application `a4c97588a`, host `a5a4a7d`.
+All image pins are unchanged from generation 186.
+Fresh lifecycle acceptance passes on Claude, Codex Luna and OpenCode auto-free;
+Fae auto-free passes tool use and pending-turn cancellation.
+All four pass ordinary daemon-restart recall; Claude and Codex have native
+checkpoints on both completed turns. No failed inference was replayed.
+All disposable lifecycle and restoration sessions are deleted; three unrelated
+sessions remain. The host cleanup helper was updated to recognize native-context
+records while retaining exact identity, two-turn and no-extra-evidence checks.
+The generation-186 cutover activated the Codex native-context cleanup image; Luna lifecycle and
+daemon-restart recall pass, with native checkpoints on both completed turns.
+All four backends passed seed/restart/recall on generation 185 (`59fe1a5bd`); Claude and Codex
+retain native checkpoints on both completed turns with the rebuilt images.
+The stopped-incarnation error did not recur.
+This is ordinary restart evidence, not proof of abrupt process-loss recovery
+or the precise source of the earlier race.
+
+The implemented change keeps journal and inbox revival passive with respect to
+native runtime acquisition.
+An actual UI or mail turn acquires the hosted client; explicit create, resume,
+policy change and rebind still provision immediately and report their failures.
+History and usage reads must not create a native sandbox.
+The acquisition must retain cancellation and cleanup ownership, forward the last
+acknowledged checkpoint, and resolve the current backend binding without changing
+the incarnation's context contract.
+This is an incarnation-local timing change, not a new durable owner or storage
+format, and does not implement the process-loss research in #1323.
+Implementation, independent adversarial review and deployment are complete.
+The Floot suite passes 732 tests; four real-daemon lifecycle/native-context tests
+pass, including cold restart and late native acquisition.
+Package lint reports no errors (278 warnings), and the root documentation gate
+passes.
+
+Generation 184's separate Claude tool failure was initialization ordering:
+`phase=observe/rate_limit_event, check=5` identifies the initialization guard,
+not metadata-schema validation. Capacity arrived before `system/init`.
+`59fe1a5bd` permits a strictly validated capacity event before initialization,
+without allowing it to establish dialogue or completion. Session/size/terminal
+fences and the event schema are unchanged. New tests reproduced the exact
+diagnostic before the fix; 516 Claude tests and 119 focused coverage tests pass.
+
+Generation 185 passes the full hosted matrix on all three adapters: seed/tool use,
+public-internet/off policy changes, private-destination rejection, cancellation,
+inspection and deletion.
+Cancellation retains unresolved outcomes rather than claiming effects settled.
+Fae passes its auto-free tool/pending-cancel/inspect/delete control.
+All four pass fresh seed/restart/recall on this exact release, with Claude/Codex
+native checkpoints observed before and after restart. No failed prompt was replayed.
+RA-05's current-release acceptance gate is satisfied under these recorded scopes;
+this does not close the separate long-context or process-loss questions.
+Host evidence: `ops/explicit-journal-deployment-20260924.md`, generation 185.
+
+The unused Codex restore hash and production test-only selector wrapper are now
+removed in source (429 package tests pass, independent review approved).
+They do not change durable ownership or publication semantics.
+The rebuilt Codex image is active and restoration-verified on generation 186.
+The cutover exposed a retirement gap: durable account-discovery capabilities
+revived the old broker despite removal of its pet names. Withdrawing that source
+before restart allowed setup to bind the new broker and republish both accounts.
+No credentials, renewal owners, account/reset journals or workspaces were removed.
+RA-04's protocol-conformance matrix is complete at `7d9a7b049` after independent
+review; its boundaries and deliberate backend differences are recorded below.
+Only Codex was rerun for generation 186; unchanged backends retain generation-185
+evidence. Test sessions are cleaned up, and the failed pre-retirement-fix creation
+manifest remains as evidence without replay.
+The like-for-like review now records concrete relocation and added contracts in
+the simplification inventory; it does not waive RA-01's numerical target.
+The collection retry fix now retains unfinished storage cleanup for later graph
+drains in the same daemon, while keeping failed cancellation fenced.
+It is deployed in generation 187 and does not address native process-loss recovery.
+Failed guest construction now has bounded key retirement for newly allocated,
+uninstantiated and unpublished identities after fully checked rollback.
+Instantiated/published identities, surviving state and uncertain cleanup retain
+their keys. This is also deployed in generation 187; it is not general identity collection.
+Fixture/declaration reconciliation through `f30317a6c` closes the recorded Codex,
+Floot and Claude type diagnostics. The clean root type build, 14 opted-in type
+contract tasks and documentation pass; repeat incremental builds still encounter
+generated-declaration collisions. OpenCode has no package typecheck config.
+These gates validate work; they are not the refactor's primary purpose.
+Operator priority reaffirmed: reduce duplicated code, remove dead code and make
+ontological boundaries clear. The next slices target competing model authorities
+and redundant adapter wrappers, not additional generic type/build machinery.
+RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
+compaction remains on hold.
+The older chronological entries and final sequence below are historical evidence,
+not the current work queue.
+
+## Status validation, 2026-09-25 (with subsequent deployment evidence)
+
+Revalidated against the plan at `4caded3fc` (deployed code `adf25f948`, Tokyo
+generation 180, host `688f5e3`), with the live acceptance recorded in
+endo-host `ops/explicit-journal-deployment-20260924.md`.
+
+| Item | Status | Evidence |
+|---|---|---|
+| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist, the record identity pattern and the transport limit that were repeated across the Claude helpers and validator are written once since `d2effd167`, the Codex envelope bound and identity pattern since `0385937c5`, and the Claude and OpenCode `setup-hosted.js` scripts run one shared sequence since `a26ae97da` (all 2026-09-30, below) |
+| RA-02 bounded context | Open | No whole-context bound, no Fae compaction producer, no policy. The portable fallback (`88f9deb23`) and non-fatal capture (`adf25f948`) reverse RA-02's "refuse rather than fall back" for Claude (the transcript-continuity backend with native checkpoints; OpenCode has none to refuse on): a failed, stopped or uncaptured turn now projects the checkpoint's portable context plus everything after it, so bounding relies on the CLI's own compaction until the next Claude checkpoint. Codex still refuses |
+| RA-03 account identity | Done in source; in the deployed code | Explicit bindings, exact-authority merging, reset pairing; not separately accepted live |
+| RA-04 admission conformance | Partial | The shared harness covers cancellation before/during preparation and during restoration on all three adapters. Cancel at the write, after dispatch, and failure-then-next-turn are per-adapter only; Codex's successor disposition deliberately differs |
+| RA-05 rebaseline and accept | Done on generation 182 (2026-09-30) | Paired deployment done. On generation 182 (`d06622804`) Claude, OpenCode and Codex pass the hosted matrix (create, tools, network policy, cancel, delete) and restart recall; Fae passes its matrix and restart recall; the Claude pin is restoration-verified. Codex's first pass since the generation-173 defects; the owner stop and opaque grant-admission refusal seen then did not recur, and stay listed until reproduced or retired. The generation-180 Claude capture failure ("Divergent or missing suffix ancestry") did not recur either and is still unexplained. Codex could not run before 12:05 JST: the pool kept the September 25 refusal marks over newer readings that showed capacity, fixed in `984e8c78b` (below). Generation 183 (`984e8c78b`, rebuilt Claude and Codex images) repeats the hosted matrix on all three; its restart recall for Claude and Codex hit the known eager-start race, so the new image pins stay `candidate` until the dormant-after-restart change lands |
+
+**Divergence: per-backend concurrent-session caps — resolved 2026-09-29.**
+Hosted Codex was capped at two concurrent sessions (endo-host
+`codexSandbox.maxSessions = 2`) while Claude and OpenCode ran at the listener
+runtime's default of 16 with no option, and no justification for two was
+recorded. Changing it also required retiring the Codex broker, because a
+broker's capacity, public-egress ceiling and admission trail were fixed at
+mint (Codex refused any changed setting; Claude and OpenCode silently kept
+the minted values). `85a473fc9` and `9fd9876c8` make those three operator
+settings, not identity: setup applies them to the retained broker at every
+start through an operator-only `configure()`, the broker saves the intent in
+its private directory before applying it so a revived incarnation never
+reopens what was closed, and turning public egress off stops live public
+listeners. Each backend now has the same host option (`maxSessions`, default
+16). Owner, directory, account, images and pool mode still require a
+retirement.
+
+**Duplicate implementations: the Claude native-context shape — merged
+2026-09-30.** The attachment allowlist existed twice (the host validator
+`claude-context-coverage.js` and the in-image helper
+`oci/capture-compaction.mjs`), and the record identity pattern and the 16 MiB
+transport limit five times each, across `claude-client.js`, the validator and
+the three `oci/` helpers, all synchronized by hand. `d2effd167` writes them
+once in `oci/native-context-shape.mjs`, a module that depends on nothing but
+the language, so the image carries it beside the helpers and the daemon
+imports it through the existing `src` → `oci` path (`claude-native-controller.js`
+already imported the projection that way). Behavior is unchanged at every call
+site; the pre-commit review checked both old predicates against the new one
+differentially. New tests fix the contract, prove the Containerfile copies
+every module a helper reaches by a relative reference, and fail if a shape
+token reappears in a second source file. Runtime source shrinks by 21 lines
+(143 removed, 122 added, 87 of them the module with its comments); the point is
+one definition, not the count. Deploying it is an image change: the
+Containerfile moves the Claude image digest, and images remain broker
+identity, so it rides the next Claude image redeploy (retire the broker name
+and the Claude sessions, as on September 25), not a daemon-only release.
+
+**Duplicate implementations, continued — 2026-09-30.** `0385937c5` does for
+Codex what `d2effd167` did for Claude: the 16 MiB envelope bound (declared in
+three in-image helpers and the host transport) and the record identity
+pattern (two helpers) are one module, `codex-sandbox/oci/native-context-shape.mjs`,
+copied into the image and guarded by the same two tests; the Codex image
+digest moves with it. `a26ae97da` replaces the 211 identical lines the Claude
+and OpenCode `setup-hosted.js` scripts shared with one sequence in
+`hosted-agent/src/hosted-backend-setup.js`: explicit steps (environment,
+provisioned services, storage roots, retained broker or minted identity,
+session roots, disjoint guest roots, broker mint-or-retain with its settings,
+backend caplet swap, Floot binding, account publication), parameterized by
+label, `ENDO_<PREFIX>` and pet-name directory. Each adapter's own code
+(Claude's credential kinds, pool, `anthropic-beta` profile and
+state-provider-backed storage owner; OpenCode's null-powers storage owner)
+sits between the steps as plain code, not behind hooks. Both adapter setup
+suites pass unchanged (10 and 19 tests), nine unit tests cover the steps, and
+the pre-commit review confirmed side-effect order, console text and the
+persisted broker profiles' key order identical, apart from four documented
+reorderings of pure checks. The scripts shrink from 527 and 414 lines to 388
+and 271. Codex's setup script (64 shared lines) stays separate: it requires
+both images, verifies retained powers identity, mints two services and
+orders its profile differently; `requireProvisioned` and `bindFlootBackend`
+would fit it as-is, `publishHostedAccount` would need `resetCredits`. The
+setup change is daemon-only and exercises the retained-broker path at the
+next start; the mint path runs when the brokers are next retired, which the
+two image changes above call for anyway.
+
+**Defect found by the Codex rerun — fixed 2026-09-30.** The subscription pool
+skips a member that refused with a 429 until the reset time that refusal's
+reading named, and keeps the mark across restarts in its pool state. It took
+the later of that mark and the member's current reading's block, so a reading
+taken since that showed the windows open (the provider had reset the account
+early; the settings UI showed full capacity) could not bring the member back:
+both Codex subscriptions stayed skipped until their September 25 reset times.
+`984e8c78b` records when a mark was set and whether the provider dated it; at
+selection and in the status view a dated mark yields to a reading observed
+after it that stands unblocked, and the mark is dropped and the change kept.
+The refusal's own reading, accepted before the refusal is marked, and a
+duplicate in-flight refusal cannot supersede the mark they came with; backoff
+marks for a member that could not be used at all are left to lapse; the
+account sources now stamp readings with the pool's clock. Deployed as
+generation 183 (below).
+
+**Image release — generation 183, 2026-09-30.** `984e8c78b` with the Claude
+and Codex images rebuilt from `d06622804` (the shared base reproduced
+`a2fbee0f…` exactly; the listener image is unchanged, so OpenCode kept its
+verified pin and its broker). The Claude and Codex brokers were retired with
+their sessions, as the operator approved. Retirement taught one thing: removing
+the broker's name is not enough. The account sources, the subscription and
+Codex's reset redeemers were minted over the broker formula as their powers,
+and Floot evaluates them by name at start, which re-incarnated the old broker
+under its owner label before setup could mint the new one; the sandbox refused
+the mint with "Native service owner is already live" and both hosted setups
+failed on the first start. Unbinding those dependents (endo-host
+`ops/redeploy-hosted-image-20260930.mjs`, `PHASE=dependents`) and restarting
+let setup construct both brokers on the new pins and re-make the dependents
+over them. On generation 183 all three hosted backends pass the matrix
+(create, tools, network policy, cancel, delete), and the restoration seeds
+write native-context checkpoints on the new images. The restart recall passed
+for OpenCode and Fae but failed for Claude and Codex on the eager-start race
+("Session incarnation is stopped" right after the restart, the turn ending
+`outcome-unknown`), which generation 182 had passed by timing; a follow-up
+turn is held by the queue-held-after-restart rule. That race is the
+dormant-after-restart change decided on September 25 and not yet built; the
+new image pins stay `candidate` in the ledger until a recall passes.
+
+## Requirements and current evidence (reconciled 2026-09-30)
+
+| Intended end state | Current evidence | Verdict |
+|---|---|---|
+| One provisioner, backend factory, supervisor and execution envelope | All three adapter factories/controllers delegate to `hosted-agent/src/session-provisioner.js`, `backend-factory-kit.js`, `session-supervisor.js`, and `execution-envelope.js`; shared provisioning conformance exercises each adapter | Structurally aligned; do not count thin declarative wrappers as duplicated lifecycle implementations |
+| Guest is one authority domain; credentials remain outside it; inference and egress are separate grants | Shared provider issuer/service and execution envelope retain these boundaries; native configuration carries placeholders and scoped listener endpoints | Source alignment, not a fresh kernel-containment or credential-isolation acceptance result |
+| Session-scoped revocable inference, no mandatory request/TTL lease, no ordinary per-turn sandbox replacement | Shared grant issuer and supervisor own session resources; Claude may spawn a native subprocess per turn inside the retained sandbox | Aligned in structure; provider access-token refresh is not a forbidden session lease; current long-run acceptance remains to be established |
+| Vendor adapters own genuine protocol differences | Claude JSONL/process protocol, Codex app-server/checkpoints, OpenCode fork/import/SSE remain distinct | Appropriate differences, not a reason to force all clients into an identical implementation |
+| One host-owned conversation/effect authority; native stores are projections | Floot journal feeds context/history; native restoration translates host-selected records; admission and possible dispatch are distinct durable states | Aligned ownership. The simplification inventory justifies native diagnostics separately from effect authority; Codex's redundant hash-chain/anchor machinery is removed. Process-loss guarantees remain deferred to #1323. |
+| Shared framing, admission and cancellation semantics | Shared turn channel and three protocol-specific state machines; RA-04's matrix covers preparation, restoration, dispatch, cancellation and failed successors | Bounded conformance complete. Retain actual protocol differences; extract further implementation only after identifying identical responsibilities. |
+| Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
+| Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; logical account bindings and exact reset identities | Session reports now select configured accounts by backend and subscription pin; automatic pools do not imply payer attribution or eligibility. Factory direct-provider reporting stays separate. |
+| Smaller common implementation; delete superseded paths | At `9b888d1cc`, the four backend/shared packages total 42,786 lines versus 25,463 at the design baseline. Vendors total 18,629 versus 21,165; hosted-agent totals 24,157 versus 4,298. The source-bulk audit records remaining deletion/repetition candidates and scope decisions. | Simplicity target not demonstrated. Real consolidation and deletions do not prove the overall target; added scope still needs justification. |
+| One current set of guarantees and final conformance | Generation 190 runs app `9b888d1cc` with host `15fd7b1`; both October 1 fixes pass live probes, and all four pass ordinary restart recall. Claude/Codex pass the new policy/cancel gates; OpenCode's exact-command policy verifier refuses model command drift. | FA-14 and initial Claude tool-heavy capture are fixed under the recorded scopes. RA-01 simplicity and RA-02 bounded context remain; the complete OpenCode lifecycle matrix has generation-189 evidence, not a new generation-190 pass. Historical status paragraphs below are not current completion claims. |
+
+## Priority findings
+
+### RA-01 — Demonstrate simplification, not merely relocation
+
+The design explicitly asks for a smaller combined implementation and rejects
+generalizing every old Codex protection. Measured tracked non-test JavaScript,
+MJS, and TypeScript source (excluding declaration files) in the four backend/shared
+packages grew from 25,463 lines at design baseline `4e2644c` to 39,713 at this
+snapshot. Vendor packages together fell from 21,165 to 16,718; hosted-agent grew
+from 4,298 to 22,995. Including sandbox, Floot, and daemon gives 87,053 to 112,657.
+
+These counts include comments and types; scope additions and movement between
+packages confound a causal complexity comparison. They do not prove that all
+growth is unnecessary. They do refute treating code reduction as already proven.
+The next review should list current owners and remaining parallel mechanisms,
+identify removable code, and justify retained complexity by the stated goals.
+Do not add another broad framework to satisfy a line-count target.
+
+Current-source follow-up at `2b8df7d23` (2026-09-30): the retained native-context
+and lifecycle mechanisms now have documented live callers and distinct ownership.
+The identified unused hash and selector wrapper are removed; this review found
+no further concrete deletion in that inspected scope.
+This does not demonstrate the original implementation-size target:
+
+| Package | Design baseline `4e2644c` | `2b8df7d23` | Current `9b888d1cc` |
+|---|---:|---:|---:|
+| hosted-agent | 4,298 | 24,227 | 24,157 |
+| claude-sandbox | 6,484 | 7,074 | 7,077 |
+| codex-sandbox | 7,901 | 6,945 | 6,892 |
+| opencode-sandbox | 6,780 | 4,763 | 4,660 |
+| Total | 25,463 | 43,009 | 42,786 |
+
+Method: enumerate committed paths with `git ls-tree -r --name-only REV`, include
+`.js`, `.mjs` and `.ts`, exclude `.d.ts`, test/tests/fixtures/test-types/test-fixtures
+directories and `.test.*`/`.test-d.*`, and count newlines in committed contents.
+These figures include comments and types, not generated files or uncommitted work.
+The September 30 count reconciles the committed non-test source delta from `2b8df7d23`:
+141 added and 438 removed lines, a net reduction of 297 in these four packages.
+The two October 1 correctness fixes add 74 lines, for a current net reduction
+of 223 from `2b8df7d23`; the detailed measurement and candidate inventory are in
+[the source-bulk audit](SOURCE-BULK-AUDIT.md).
+RA-01 remains open for a like-for-like scope analysis of the growth or an explicit
+design decision; green tests and the absence of another deletion candidate do not
+waive the size requirement.
+
+Current simplification pass (2026-09-24): the
+[mechanism inventory and decisions](SIMPLIFICATION-AUDIT.md) distinguish owners,
+record safe deletions and enumerate the remaining non-minimal contracts.
+This is a current-source audit, not a demand to review every superseded PR commit.
+The deletion slice removes 291 net lines of runtime JavaScript (comments included;
+tests and documentation excluded), without adding a replacement framework.
+Independent adversarial review approves the rootfs/registry, MCP, audit-reader and
+Floot preset/transcript changes.
+Full suites pass: hosted-agent 742 (one skipped), Claude 417, Codex 424,
+OpenCode 302 and Floot 708.
+Scoped lint has no errors; source type checks pass where separately configured.
+The root documentation/API gate passes against the current source surfaces.
+Test-inclusive type checks retain unrelated fixture errors, not a green overall gate.
+The full-suite run also exposed incomplete setup mocks from RA-03: the three backend
+fixtures now assert explicit account publications, rather than swallowing failed
+discovery or expecting retired account/admin aliases.
+The correction is a separate reviewed test-only commit.
+No deployment is claimed; remaining decisions are listed in the linked audit.
+
+Follow-up items 1, 2, 4 and 5 in that inventory are complete: session account
+selection is publication-based and passive, runtime credentials require Secrets,
+the unused Codex state locator is removed, and Codex diagnostics use the simpler
+V2 writer. Independent adversarial reviews approve each slice. Full suites pass
+Floot 713, Codex 423, and Fae 174 with two expected failures; two real-daemon
+durability regressions also pass. Scoped lint and the root documentation/API gate
+pass; unrelated test-fixture type errors remain. Old anchored Codex diagnostic
+layouts require deliberate session retirement before deployment.
+Item 3 now requires explicit journal storage at the streaming-agent boundary;
+the factory retains its existing private adapter and durable owner unchanged.
+Missing/null storage refuses before guest access, and standalone fixtures opt in
+explicitly. Fae compaction remains on hold.
+
+Concrete candidates and historical completion evidence:
+
+- Backward-compatibility cleanup is explicitly in scope (operator, 2026-09-24):
+  obsolete internal option/property names, state formats and old-image shims need
+  no compatibility layer. Keep genuine requirements of current vendor protocols.
+  Removed locally the OpenCode client rewrite from old bridge commentary events
+  to thinking events. Current bridge output names thinking explicitly; generic
+  commentary stays commentary. All 302 OpenCode tests pass and independent
+  review approves. Retire old images before activation; no deployment claimed.
+  Removed Claude's ambient state-root fallback: state providers now require the
+  root captured in their formula options, as current setup already supplies.
+  Missing or empty captured roots refuse rather than use process environment;
+  conflicting ambient configuration cannot retarget storage after restart.
+  No new durable owner or format is introduced. Independent review approves;
+  all 237 Claude tests pass, including eight focused storage tests. Scoped lint,
+  formatting and production-source types pass; the full test-inclusive typecheck
+  still has 25 pre-existing fixture errors. No deployment is claimed.
+  Removed Floot creation's `model` alias and colon-encoded backend inference;
+  the chat caller now sends canonical `backendId` and `modelId` only. Obsolete
+  `model` fields reject before registry load or resource acquisition, even when
+  empty, undefined or accompanied by canonical fields. Model IDs containing
+  colons remain intact, including current OpenRouter routes; they no longer
+  select a backend implicitly. All 674 Floot tests pass locally.
+  Removed Codex's per-turn `developerInstructions` alias at both the adapter and
+  direct client boundary. Presence rejects before turn reservation or transport
+  work; current callers use `systemPrompt`. The constructor configuration and
+  app-server wire field retain `developerInstructions`, which is current vendor
+  vocabulary. All 321 Codex tests pass, including 99 focused client/tool tests;
+  scoped lint passes with 13 warnings. Independent source review approves. No
+  durable state or owner changes, and no deployment, are claimed.
+  Removed preset-prompt version migration and missing-prompt reconstruction.
+  Registry recovery requires the captured nonblank prompt and does not rewrite
+  it from today's preset, creation metadata or deployment environment. Custom
+  and delegated prompts remain exact snapshots. The unused recovery-only
+  `FLOOT_SYSTEM_PROMPT` setup setting and migration markers are removed. Preset
+  catalog examples remain descriptive, not a recovery source. Creation rejects
+  blank custom prompts before registry work, preventing a new session from
+  violating the recovery contract. Full Floot tests pass (677 with the separate
+  cache cleanup); scoped lint has no errors. Independent review caught and
+  prompted correction of the initial creation/recovery mismatch.
+  The test-inclusive typecheck reports 99 fixture errors, none in changed
+  production source or the new registry regressions; it is not a green gate.
+  No deployment is claimed.
+- Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one
+  refusal facade and package export. Current setup neither imports nor mints it,
+  and the shared backend factory already rejects unsupported container mounts.
+  This deletes an obsolete entrypoint, not functional mount support. Repository
+  and local host-source checks do not prove absence of every external persisted
+  formula; obsolete instances require deliberate retirement before activation.
+  All 302 OpenCode package tests pass; independent source review approves the
+  deletion. No deployment or live formula inventory is claimed.
+- Retired locally with explicit operator approval (2026-09-24): the generic
+  sandbox `nativeProfile` mode, public export/types, old startup gate, profile-only
+  observations, helpers and exclusive tests. Stale fields, including an explicit
+  `undefined`, reject before resource acquisition. `makeResolved`, runtime scopes,
+  policy rootless/namespace/mount checks, network identity checks, admission and
+  common cleanup remain. Independent adversarial source review approves.
+  Focused tests: 135 passed; direct full AVA: 463 passed with exit zero; package
+  lint/types passed (28 warnings). An earlier wrapper printed 463 passes but
+  exited nonzero without a failure summary; its cause is not established.
+  This removes an intentionally retired public mode, not merely unreachable code.
+  External callers/retained formulas must be retired before activation; no live
+  inventory or deployment is claimed.
+- Codex now uses the V2 required diagnostic writer described in
+  [Codex's design](../codex-sandbox/DESIGN.md#journal-and-checkpoint-responsibilities).
+  Native identifiers, approval/denial observations and late-result diagnostics
+  remain; hash chains, independent anchors and prepared-head replay are removed.
+  The existing atomic file store publishes each complete entry.
+  Writes stay serialized and awaited; any rejected write permanently fences that
+  writer instance, including writes that landed without acknowledgement.
+  Reconstruction validates contiguous names and the last entry's binding/version,
+  not every historical payload.
+  Historical tamper and suffix-deletion detection are no longer promised.
+  Old layouts require deliberate session retirement rather than migration.
+  Floot's effects journal, the operational thread checkpoint, and the unrelated
+  runtime policy anchor are unchanged.
+  This introduces neither a new durable owner nor process-loss recovery (#1323).
+  The unused `locateSessionDirectory` API is also retired; current controllers
+  already prepare host records before reading their checkpoint.
+- Attachment-driven recreation in `floot/agent.js:2930` onward coordinates
+  declared mounts, live incarnation forwarding and cleanup retries. It is not
+  proven to be a duplicate durable owner. Its string-matched
+  old `unsettled Endo tool call` retry was a concrete cross-layer coupling.
+  The shared supervisor wraps this refusal in
+  `AggregateError('Codex native cleanup pending')`, so the top-level message
+  matcher missed it; the test's fake admin incorrectly threw an unwrapped error.
+  Removed the polling timer, retry limit and message matcher. Codex now drains
+  already-admitted calls in its existing termination path, and Floot awaits
+  ordinary termination. The previous actual-dispatch fence prevents late intent
+  audit continuations from starting new effects during this drain.
+  A real-supervisor test verifies independent grant fencing, sandbox closure and
+  revocation while the tool is held; stop completes only after settlement.
+  The attachment test holds termination and proves the tool can return before
+  the successor is created, avoiding a self-deadlock. Late audit failures remain
+  failures, and a genuinely hung call keeps completion pending, not containment.
+  Independent adversarial review approves; full Codex/Floot suites pass 325/677
+  tests, production Codex types pass, scoped lint has no errors (73 warnings).
+  No new owner or schema, no process-loss claim, and no deployment.
+
+### RA-02 — Finish the bounded-context requirement
+
+Operator priority clarification (2026-09-24): defer storage scaling and an
+unresolved-evidence admission budget until actual pressure warrants them; the
+system is still experimental. Preserve the limitations below, but do not add
+inference refusals or a paged-evidence storage redesign as speculative scaling.
+This does not establish bounded memory or resolve model-context compaction.
+
+`floot/src/context-transcript.js:41` accumulates active and exception groups;
+lines 75–129 reconstruct and flatten them. Its own read-view comment explicitly
+states that archive I/O and active output still grow with history. Checkpoints
+permit skipping superseded content, but do not create themselves or bound a long
+active tail. Direct Fae currently has no automatic compaction producer.
+
+Direct-provider implementation preparation (2026-09-24): use the existing
+portable compaction record and journal, not another conversation store.
+The producer belongs at Floot's settled provider-round boundary; summarization
+must disable tools, preserve whole tool pairs and unresolved/recovered evidence,
+record its usage, and durably publish before selecting the shorter context.
+The current pending turn is excluded from journal context reads and added through
+`stagedMessages`, so merely writing a checkpoint would not change the active loop.
+Threshold/output reserve, current-route capacity and pending-turn selection still
+need implementation. OpenRouter already reports the serving model's capacity,
+but merged usage intentionally retains old capacity when a new reading is unknown;
+that display aggregate cannot be an admission/compaction authority, especially
+for the auto-free route. This is a scoped implementation investigation, not an
+implemented compaction producer or a new evidence-storage budget.
+OpenCode has explicit checkpoint capture, while the current Claude/Codex event
+translators do not produce equivalent canonical compaction boundaries. Supporting
+restoration from a supplied checkpoint is not proof of capturing native changes.
+
+Protocol investigation (2026-09-24): the locally installed Codex CLI matches the
+image's `0.152.0` pin. Its generated experimental JSON schema exposes
+`ContextCompactionThreadItem` with only `id` and `type`; raw
+`CompactionResponseItem` carries encrypted content, not a portable plaintext
+summary. Reproduce with `codex app-server generate-json-schema --experimental
+--out <temporary-directory>`. Do not synthesize a canonical summary from these
+notifications. Faithful capture needs an authoritative replacement-context export
+or a deliberately designed opaque checkpoint contract.
+The subsequent isolated Codex 0.152.0 container probe now supplies runtime evidence:
+remote compaction sends a `compaction_trigger` through Responses and stores the
+opaque replacement in `payload.replacement_history` of a native `compacted` row.
+The original continuation consumes that opaque item; public `thread/read` still
+exposes only the compaction occurrence.
+Fresh-thread injection preserves the item but changes runtime-instruction placement,
+so the strict request-prefix comparison fails despite four completed native turns.
+Do not count injection success as faithful opaque-context restoration.
+The host reproduction and limitations are recorded in
+`endo-host/ops/codex-context-probe-20260924.md`; this uses a loopback synthetic
+provider, model `gpt-6-luna`, no credentials and no external network.
+No production Codex context implementation or deployment is claimed.
+
+A fresh-process native-rollout control now passes where injection fails.
+The isolated probe stops the original process, sets its home aside, and restores
+only session metadata plus the compaction row into an empty home at the same path.
+Four native turns complete; ordered model-visible input fields, instructions,
+model, tools and inference settings match the original continuation.
+No old database or live thread is reused. Dynamic transport metadata is excluded
+from this comparison; real encrypted-content acceptance is not established.
+The default injection experiment retains its failing assertion.
+
+Scope correction (2026-09-24): the earlier requirement for provider-authenticated
+capture exceeded the approved [guest-domain decisions](../../designs/hosted-agent-sandbox-unification.md#decisions).
+The guest may modify its own native transcript and exercise its session inference
+grant; the design does not distinguish trusted CLI code from guest tool processes.
+Preserving native context across an ordinary restart does not require proving that
+a hostile guest has not poisoned its own context.
+An encrypted item accepted by the provider would not, by itself, prove current-turn
+provenance or the completion of a host effect.
+Do not add a provider response witness as a prerequisite to this refactor.
+
+The remaining implementation gate is bounded, data-only capture and faithful
+restoration, not another history store or an additional guest integrity profile.
+Session metadata includes instructions/provider identity and must be constructed
+from host configuration, not used to accept guest-selected runtime authority.
+Preserve supported native payload bytes and ordering; validate format, context cut,
+session identity and supported completion transitions to detect ordinary stale or
+incomplete exports, without claiming these authenticate a hostile guest.
+The pinned stream still does not expose the original opaque compaction item;
+a bounded in-sandbox rollout export is the next implementation candidate.
+Reuse the existing native-context journal envelope and persist-before-terminal
+contract; retain the separate operational ledger and tool-catalog binding.
+Do not await a new app-server RPC inside its serial notification pump, which would
+block the response needed to complete that same RPC.
+
+Source review explains why a provider witness is not a small existing hook:
+
+- `hosted-agent/src/provider-grant-issuer.js` and `provider-scopes.js` expose
+  session/grant attestation and lifecycle, not a host-admitted turn witness.
+  The pinned model is a creation-time catalog admission, not an exact restriction
+  on every inference request; runtime side requests may use other listed models.
+- `provider-broker.js` screens local response chunks, but `dispatchWrapped`
+  forwards a subscription's byte reader without reading it locally.
+  A transport-only observer would silently miss that supported composition.
+- Existing audit notifications contain event/count only, and usage observations
+  contain accounting data. Neither is an existing content-evidence channel.
+  Adding one would expand the shared protocol and require separate analysis of
+  authority, stream backpressure, cancellation, retention and pool composition.
+
+Next bounded slice: capture successful same-tool-catalog Codex native context,
+restore only allowlisted context data with host-generated runtime metadata, and
+test ordinary and compacted continuation through the existing journal.
+Reject unsupported export shapes rather than silently falling back to portable
+history. Never import queued operations or let native tool-result claims settle
+host effects. Existing hosted-turn admission and context-projection reconciliation
+must remain unchanged: unresolved/recovered effects still prevent native restore.
+The journal is the sole durable context owner; exported rollout files are projections.
+This correction changes the implementation plan only, not runtime behavior.
+Independent source review agrees; no deployment or new fidelity result is claimed.
+The existing Claude coverage checks remain in place; this is not authorization to
+remove effect guards or a claim that every retained coverage check is necessary.
+
+Codex capture preparation (2026-09-24): a pure bounded selector now preserves
+the latest native compaction plus following context rows, or ordinary context
+before any compaction. It preserves exact JSONL bytes, opaque item fields and
+base instruction text, excludes operational event rows and session metadata,
+and requires the requested completed turn. Unsupported row/item/event kinds,
+interruptions, rollback, stale or torn cuts refuse rather than degrade silently.
+It is not yet wired into the client, OCI image or journal checkpoint producer.
+
+Pinned `0.152.0` probes disproved a response-items-only projection: ordinary
+restoration duplicates generated developer/environment instructions unless both
+`world_state` and `turn_context` baseline records are retained in order.
+Each baseline record alone also fails the strict comparison.
+These are native context data; production launch authority must remain host-bound.
+The actual selector now passes ordinary and post-compaction-suffix continuation
+with fresh native IDs in the same app-server process, including another capture
+after restoration. This avoids assuming that resuming an already cached ID
+reloads a replaced file. Pinned resumed rollouts omit ordinals on appended rows;
+the selector validates supplied ordinals without requiring their presence.
+Host probe source and evidence scope are in
+`endo-host/ops/codex-context-probe-20260924.{mjs,md}`.
+All inference is synthetic Luna on loopback in disposable, network-disabled,
+credential-free containers without host mounts. Equality covers ordered native
+input type/role/content/encrypted-content and the previously listed request
+settings, not real provider validity, native tool execution or Endo effects.
+Twenty-nine focused selector tests pass; independent review caught and corrected
+silent acceptance of unknown operational events. The full Codex suite passes
+354 tests; production types, scoped lint, formatting and root docs pass.
+The original injection negative control still fails exact prefix equality;
+the final container inventory is empty. Full client integration still
+needs bounded in-sandbox file I/O, host-configured metadata, ledger reconciliation,
+cancel-during-capture handling, journal-before-terminal wiring and acceptance.
+No production deployment, automatic/repeated native compaction or completed
+RA-02 claim follows from this selector/probe slice.
+
+Codex export/import preparation (2026-09-24): the pure renderer now constructs a
+fresh native identity and provider/tool metadata from explicit host configuration,
+while preserving the captured base instruction text and exact context row bytes.
+The sandbox-only I/O helper reads one explicit rollout, never discovers a newest
+session, rejects nonregular/final-symlink files, bounds fatal UTF-8 decoding and
+checks for concurrent mutation. It publishes rendered projections with an
+exclusive temporary file and no-clobber hard link, not an overwrite of a loaded
+native thread. Existing files/symlinks remain untouched, including concurrent
+publication attempts. Parent realpath checks are diagnostics, not race-safe host
+confinement: this I/O module must run inside the existing sandbox.
+
+The actual renderer and file helpers pass pinned-runtime ordinary and
+post-compaction-suffix probes with a host-selected synthetic dynamic tool,
+using fresh native identities in the same app-server process.
+The handler runs once before restoration, never again; ordinary restored context
+retains its function call and output. Equality now also covers tool call IDs,
+names, arguments and outputs. Both cases permit another native context capture.
+This is a no-effect synthetic handler, not Endo-tool settlement or real provider
+acceptance. All 381 Codex tests pass, including 56 focused selector/render/I/O
+tests; production types and scoped lint pass. Independent source review approves.
+These helpers remain unwired to the client, OCI image and journal producer.
+
+Codex integration in progress (2026-09-24): capture now streams the physical
+rollout, bounding each row and the selected current context rather than refusing
+a small compacted context because discarded history exceeds 16 MiB.
+Unknown earlier rows still refuse; compaction is not permission to skip validation.
+The native envelope may use an empty portable `context` array: the opaque payload
+is retained atomically, while ordinary conversation and tool evidence continue
+to be journaled independently. A focused Floot regression confirms that this
+does not conceal unresolved or host-recovered effects.
+Pinned fresh-ID restoration has different operational baselines: ordinary
+context yields no native turns, whereas a compacted context plus suffix yields
+the synthetic completed turn `rollout-1`. The client must query and persist that
+baseline instead of inferring it from fresh identity. Both isolated probes
+preserve the modeled request prefix, invoke the synthetic tool exactly once and
+permit re-export. Helper transport and production client wiring are in progress;
+this is not deployed acceptance or completion of RA-02.
+The former 16 MiB physical-file cap is removed. Current rows and retained context
+remain bounded, and the helper's separate 16 MiB serialized JSON limit can refuse
+a smaller raw context after escaping; it never truncates a capture.
+Sixty-six selector/render/I/O tests and 21 Floot context-projection tests pass.
+This is not proof of indefinitely bounded healthy continuation.
+Next is helper transport and client integration with the existing catalog binding,
+operational reconciliation, cancellation fence and journal-before-terminal rule.
+No production deployment is claimed.
+
+Codex helper transport (2026-09-24): the OCI image now includes a one-shot,
+sandbox-only JSON command for capture/restore. Its controller-side transport
+uses the already-owned slice, fixed home/environment, bounded serialized I/O
+and sanitized diagnostics. Cancel/close retain late-spawn custody through
+kill/reap and every pending reader/writer settlement; cleanup failures remain
+retryable. Twenty focused helper tests pass, and independent review approves.
+The full Floot suite passes 700 tests; production Codex types and the root
+documentation gate pass after quarantining a stale ignored generated declaration.
+Client wiring remains a separate in-progress slice, not production acceptance.
+
+Codex client integration (2026-09-24): successful native completion now launches
+capture outside the serial notification pump, emits the native journal envelope
+before the terminal event, and settles through the existing operational ledger.
+Capture failure/cancellation cannot publish a successful terminal checkpoint.
+Restoration checks model, system prompt, tool-catalog identity, workspace and
+pinned protocol bindings before native operations, reconciles the old ledger,
+then imports into a fresh native identity and records its queried baseline.
+The prior committed checkpoint remains recognizable across a crash between
+restoration and the next dispatch, including nonempty synthetic baselines.
+The factory now declares the required native format; unsupported suffixes and
+native event kinds refuse rather than silently use portable history.
+Independent adversarial review caught a completion/cancellation race during
+terminal audit; it is fixed with an owned-turn check and aborted settlement.
+Full Codex passes 421 tests, and client/controller tests independently pass 117.
+This is bounded source integration, not deployed or full native-tool acceptance.
+Follow-up pinned-runtime ordinary and post-compaction-suffix probes execute the
+built-in `exec_command` once, retain the ordinary call/output, preserve modeled
+request equality and permit re-export. Its persisted `item_completed` observation
+is already supported; no unknown-event guard was loosened. Capture uses the
+explicit path returned by `thread/read` with `includeTurns: false`.
+Other native tools, real-provider continuation and end-to-end Floot restart
+acceptance remain gates; Secrets and the live daemon have not been changed.
+
+Caller-contract follow-up (2026-09-24): fresh native-state restoration now records
+the journal's acknowledged checkpoint lineage before importing/persisting its new
+baseline, not only when rotating an inherited native thread. Without this, a
+crash after saving the new baseline but before dispatch made the next incarnation
+reject Floot's still-current checkpoint. Regressions reconstruct both empty and
+`rollout-1` baseline markers after that boundary. All 111 client tests pass;
+independent client/Floot-context review passes 132 tests, and production types
+and scoped lint pass. This covers recreated native state, not loss of only the
+guest rollout while retaining an old host ledger; that case is being checked
+separately without bypassing unresolved recovery markers.
+
+Disposable-projection recovery (2026-09-24): an inherited Codex thread no longer
+has to resume before the exact journal checkpoint can acknowledge its completed
+ledger marker. When no recovery remains, restoration builds from the journal
+without opening the old guest rollout. Missing native history with an outstanding
+marker still refuses; there is no catch-and-ignore recovery fallback.
+All 114 client tests pass, with 122 client/controller tests independently passing.
+The full Codex suite passes 426 tests; production types and scoped lint pass.
+This changes ordinary acknowledged restoration, not process-loss guarantees.
+
+Actual-client daemon regression (2026-09-24): a new fixture runs the production
+Codex client, tool/prompt adapters, Floot agent and private journal across two cold
+daemon restarts. It checks that a complete native transcript and finished turn
+precede checkpoint acknowledgement, exact externalized native payloads reach
+restoration, the synthetic `rollout-1` baseline is persisted, and a mediated tool
+effect happens only once. The restored turn captures another checkpoint; the
+next restart preserves history, transcript and turns without startup inference.
+Independent review and the focused test pass; daemon package types pass.
+The combined serial Floot daemon durability/lifecycle suite passes 11 tests.
+The app-server/helper are deterministic mocks: this verifies the client/journal
+seam and real daemon durability, not CLI parsing or live provider acceptance.
+
+Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
+loopback synthetic API in a disposable, network-disabled container, without
+credentials or host mounts. Manual compaction emits a boundary with retained
+UUIDs, then a separate synthetic user summary matching its anchor UUID. The next
+request demonstrably uses the summary plus an older retained assistant message;
+that message precedes the boundary in the physical transcript. A suffix-only or
+summary-only capture would therefore lose context. Stream and file metadata use
+different field spelling. See endo-host's
+`ops/claude-compaction-probe-20260924.md` and companion reproduction script.
+Both containers were removed; no daemon deployment or session mutation occurred.
+A subsequent seeded synthetic auto-compaction probe retained a native Bash
+tool-use/result pair plus a runtime token-reminder attachment; the next request
+consumed the intact pair with the reminder folded into the result. Native JSONL
+can repeat retained UUIDs with identical context payloads but changed metadata.
+Production projection must account for attachments and distinguish such repeats
+from conflicting payloads. One automatic native-tool fixture is not proof of
+Endo-effect reconciliation, repeated/interrupted capture or durable replay.
+The former host-side `makeTranscriptResume` helper was not a symlink-race-safe
+reader of guest-writable content and is now removed with the ambient resume path.
+Checkpoint ingestion uses in-sandbox data-only capture over the existing process
+transport, not a new durable storage/lifecycle owner.
+
+Implementation in progress: an image-baked helper reads the native JSONL inside
+the sandbox after the CLI exits and returns a complete summary/retained-tail
+projection through the existing process transport.
+The client validates the whole capture before emitting a canonical checkpoint;
+failure or cancellation publishes none.
+Independent review found that failed capture could otherwise leave unrecorded
+native compaction resumable on the next turn.
+The implementation now invalidates live resume after every observed boundary,
+including successful capture: the next turn restores host-selected records,
+because reader delivery alone does not acknowledge durable journal storage.
+Success/failure-to-next-turn regressions pass and independent review approves
+this live-resume invalidation.
+The first helper draft omitted token-budget reminders and refused signed thinking.
+Following the operator decision below, the helper now also emits selected raw
+native JSONL, retaining signed/redacted thinking, grouping and token attachments.
+Only the portable projection omits these backend-specific blocks.
+Duplicate comparison includes native content/signatures, not just projected text.
+Twenty-four helper tests pass; targeted types and lint pass (one warning).
+This native envelope is not yet threaded through the client, journal or writer;
+the worktree must not be deployed as if native preservation were complete.
+This work is uncommitted and undeployed; production acceptance remains outstanding.
+
+Operator decision (2026-09-24): preserve backend-specific signed/opaque context;
+do not deliberately omit reasoning to fit the current portable transcript.
+The existing Claude writer splits message blocks into separate envelopes and
+reconstructs tool adjacency, while `splitAtLastCompaction` expands the portable
+tail and discards its original grouping.
+Adding a thinking-text field would not preserve native continuation semantics.
+Anthropic's [preserved-thinking documentation](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)
+and [compaction binding rules](https://platform.claude.com/docs/en/build-with-claude/compaction-thinking-blocks)
+also distinguish preserving bytes from preserving the prefix to which they bind.
+The API rules are research evidence, not proof that our pinned CLI uses that
+particular API compaction mechanism.
+
+Next implementation contract to review:
+
+- Keep one durable owner: store a data-only native context envelope in the
+  existing Floot transcript journal, alongside the portable context projection.
+  No filesystem path, executable operation, credential, or capability belongs
+  in that envelope; backend context must never settle host effect evidence.
+- Identify the format and producing runtime explicitly, and preserve native
+  message grouping, signed/redacted blocks, ordered attachments, and the exact
+  context cut represented by the envelope.
+  Native restoration replaces only that covered context span; subsequent host
+  records and unresolved effect evidence still have to be included exactly once.
+  Repeated projection must preserve this coverage rather than expanding it twice.
+- A matching adapter validates the envelope and restores it without rewriting
+  its signed payloads.
+  An incompatible adapter/format must report the incompatibility explicitly;
+  silently falling back to a reasoning-free projection is not this decision.
+- Determine which pinned-CLI envelope metadata and request-prefix inputs must
+  survive restoration before selecting the serialized schema.
+  System/tool changes can invalidate signed blocks even if their bytes survive;
+  do not claim fidelity from a JSON round trip or a synthetic signature alone.
+- Cover ordinary completed turns as well as compaction, cancellation and
+  restart: preserving native context only at compaction leaves the same loss
+  on a restart before the first checkpoint.
+  Test journal reconstruction and actual pinned-CLI subsequent requests, then
+  provider acceptance of real signed context where applicable.
+
+The original helper's reasoning refusal and token-reminder omission were
+temporary implementation limitations, not the selected final contract.
+Independent review additionally found unchecked suffix ancestry.
+The helper now validates a strict boundary/summary/suffix parent chain, rejects
+divergent or missing ancestors and conflicting duplicate ancestry, and preserves
+benign pre-boundary native metadata rewrites.
+Independent review and 21 helper tests approve this limited supported shape.
+An added generic hosted-turn test proves retained tool/answer context survives
+same-journal reconstruction exactly once, without re-executing the tool.
+It does not establish native signed-context fidelity or an actual daemon restart.
+The full Claude suite passed 262 tests before the additional ancestry cases;
+production types and root documentation gate pass, scoped lint has no errors.
+
+Host probe commit `0417193` adds synthetic signed-thinking restoration evidence.
+An isolated pinned-CLI run copied the full native JSONL into a fresh configuration
+and resumed both copies with distinct prompts.
+Assertions required fresh requests with those prompts and identical historical
+message prefixes; two synthetic signed-thinking blocks and a retained tool pair
+survived restoration.
+This is evidence for preserving native grouping, not cryptographic validity:
+the loopback fake API does not check signatures, the comparison excludes system
+and tool headers, and the restored file still includes superseded history.
+Host probe commit `be2e8ee` then exercised a pruned native copy: 60 rows became
+11 retained-UUID/boundary/suffix rows, with identical historical request messages
+and both synthetic thinking blocks preserved.
+The experimental selector is not the production ancestry/duplicate validator.
+The production journal/restore path and real signature acceptance remain untested.
+The capture helper now preserves a native JSONL envelope alongside the portable
+projection rather than dropping signed/opaque blocks.
+Keep the envelope paired with its covered host context as one journal unit;
+do not use a bare count of following flattened records as its coverage contract.
+Ordinary-turn capture and incompatible-runtime refusal remain required work.
+Further review excluded operational queue/progress/file-history/last-prompt
+records from the native payload; last-prompt leaf metadata is validated but not
+imported.
+The helper suite now passes 25 cases, including metadata canaries.
+A context-only pinned-CLI rerun reduced 58 rows to 8 while preserving the same
+historical request messages and two synthetic thinking blocks.
+An isolated on-disk counter verified one native Bash execution across both
+original and restored runs, not a replay of the retained tool call.
+This does not establish Endo-effect reconciliation or real signature acceptance.
+
+Native-context wiring WIP (2026-09-24, uncommitted): the shared record now pairs
+`format`, `payload` and a flat portable `context` in one immutable journal value.
+`selectActiveTranscript` replaces the compaction-only selector and preserves an
+atomic native snapshot plus its suffix across repeated selection.
+The Claude client and translator pass the native capture through to hosted-turn
+journaling; the native payload is not copied into UI segments or treated as a
+tool execution.
+Archive checkpoint indexing and context selection recognize this record.
+Generic Responses, direct-provider and OpenCode restoration refuse unsupported
+native context explicitly.
+The Claude portable writer also refuses it until the sandbox-native importer is
+implemented; this is intentionally not a deployable candidate yet.
+
+Recovery now refuses ambiguous native restoration when prior, same-turn or later
+selected turns contain unresolved/recovered effects or incomplete transcripts.
+It preserves the journal evidence rather than rewriting signed tool IDs.
+New regressions cover later-turn ambiguity and atomic hosted-turn journaling.
+The initial combined schema/client/translation/index suite passed 123 tests;
+the expanded suite passes 150 tests.
+Shared declaration regeneration encountered TS5055 stale generated declaration
+inputs; downstream type validation remains outstanding until those artifacts
+are regenerated safely.
+Independent review agents stopped on usage limits during this slice, so none of
+these schema/storage/wiring changes has received final review or been committed.
+Remaining implementation includes the sandbox-native importer, ordinary-turn
+capture, runtime/account/prefix binding validation and actual journal-to-CLI
+restoration acceptance.
+
+Follow-up verification: regenerated the shared transcript declaration into a
+temporary output directory and replaced only its ignored generated declaration;
+the Claude downstream production typecheck now passes.
+Hosted-turn now refuses native-context events when no durable transcript recorder
+is supplied, instead of silently consuming and discarding their native payload.
+Regressions verify both missing-recording and failed-write paths never seal a
+completed transcript and interrupt the producer.
+The full Floot runtime suite passes 685 tests; scoped wiring lint reports zero
+errors and 48 warnings.
+Floot's full TypeScript configuration still reports 99 errors in test files;
+this is not a green full-package type gate, and no baseline attribution is
+claimed here.
+The separate source-only check attempted from a temporary config could not resolve
+the Node type library, so it is not counted as successful verification.
+The application work remains uncommitted, unreviewed as a whole and undeployed.
+
+Sandbox importer WIP: `claude-sandbox/oci/restore-context.mjs` accepts one bounded
+native-context value on stdin, checks the pinned version, session and current
+workspace, and stages its bytes in an invocation-private sandbox directory.
+It reruns the existing capture validator there and requires exact native-byte
+and portable-context agreement before publishing to the sandbox configuration.
+This reuses ancestry/block validation instead of introducing a second parser.
+Operational queue/progress/file-history rows are refused, not imported.
+Publication uses an exclusive temporary file and atomic rename; a leaf symlink
+is replaced rather than followed.
+No transcript-provided path determines an I/O destination.
+The journal remains the durable owner; this output is a native projection.
+The helper initially accepted only the observed compacted format; ordinary-turn
+support was subsequently added as described below.
+Appended portable suffix restoration remains unsupported.
+
+Capture/import suites pass 34 tests, including exact-byte import, mismatched
+format/projection/version/workspace, torn or divergent ancestry, queued-action
+refusal, and an unchanged symlink target.
+Claude production typechecking passes with the helper included.
+The importer is now wired into the session client's non-live restoration path:
+it runs in the existing slice, receives the atomic checkpoint only on stdin,
+and must exit successfully with a validated session UUID before the client can
+spawn Claude with the new prompt.
+Its process is registered with the current turn's cancellation/termination
+tracking; admission checks follow slice acquisition, helper acquisition, stdin
+acquisition and helper completion.
+Turn cleanup now runs even when preparation fails, not only after inference.
+The portable host writer remains unused for native snapshots.
+Native snapshots with subsequent records are explicitly refused pending suffix
+restoration, rather than silently dropping those records.
+Client tests cover ordering, failed import and cancellation during stdin
+acquisition; combined client/importer tests pass 67 cases.
+Claude production types pass; client scoped lint has zero errors (18 warnings).
+The integration and importer safety/lifecycle changes still need independent
+review and real sandbox acceptance before deployment.
+Account/system/tool-prefix binding and real-signature acceptance remain separate
+requirements; these local tests do not prove them.
+
+Ordinary-turn capture WIP: the client records the main session's validated native
+UUID from its init event and captures context after each successful native turn,
+not only after a compaction notification.
+The helper's generic capture mode scans boundary metadata with bounded frames,
+then validates the selected native context on a separate pass.
+When no compaction exists, it requires a complete parent chain rooted at null,
+preserves signed/redacted native blocks, and emits portable dialogue without an
+invented summary.
+When a prior boundary exists, it resolves that boundary's retained IDs and suffix.
+The importer uses the same generic validator, so ordinary context is importable.
+Every observed native turn invalidates live resume at completion or failure;
+the following turn selects host-journal context rather than trusting an
+unacknowledged native store.
+
+The combined client/capture/import suite passed 96 tests before the additional
+ordinary-import round-trip case; Claude production typechecking passes.
+Tests cover ordinary signed-block retention, boundary rediscovery, refusal of
+an orphan suffix, and capture without a compaction event.
+These fixtures do not replace actual pinned-runtime acceptance of the helpers.
+Native suffix handling, prefix/account bindings, independent review and deployment
+remain outstanding.
+
+Actual helper acceptance (2026-09-24): isolated Tokyo runs used the candidate
+capture/import sources with the pinned Claude image and a loopback fake API.
+Automatic compaction selected 8 of 58 native rows, preserved two synthetic signed
+thinking blocks, and produced identical historical request messages after import.
+The native Bash counter remained one across original and restored continuations.
+An ordinary first-turn round-trip selected 4 of 7 rows, preserved one synthetic
+thinking block, and also produced identical historical messages.
+Both disposable containers were removed; no production deployment occurred.
+This validates helper transport, not real signature acceptance, account/prefix
+compatibility, or complete journal-to-client recovery.
+See `endo-host/ops/claude-compaction-probe-20260924.md` for the reproducible probe.
+
+Independent review resumed and identified explicit deployment blockers:
+
+- Failed/cancelled turns after a native snapshot currently prevent continuation,
+  even without tool effects. Safe suffix/recovery handling is not implemented.
+- Portable restoration writes `version: 'endo-restored'`, but native import
+  requires the pinned CLI version. A newly portable-restored history must not
+  publish a checkpoint that its next turn cannot consume.
+- Runtime/model/system/tool/account binding compatibility remains unproved.
+
+Review fixes in the working tree now reject missing journal context on subsequent
+native sends instead of silently starting a new conversation, pass only bounded
+session/boundary identities to capture instead of large metadata in argv, and
+keep forensic transcript reads available after a failed checkpoint turn.
+Model-context selection still refuses unresolved/recovered evidence; the forensic
+fix does not authorize inference or settle any effect.
+These fixes require the final review/test pass before application commits.
+
+Scoped re-review approved those three corrective changes, not the whole candidate.
+The focused Claude client/capture/import suites pass 99 tests; the forensic/context
+selection suites pass 50 tests. Scoped ESLint reports zero errors and 26 warnings,
+and the repository documentation gate passes.
+The full Claude package typecheck reports 41 errors in test files (no baseline
+attribution claimed); it is not a green full-package gate.
+The reviewed helper probe is committed in endo-host as `a60b2ae`.
+Application changes remain uncommitted and undeployed pending the blockers above.
+
+Portable/native continuation follow-up: the importer now recognizes the current
+portable writer's `endo-restored` provenance for text/tool dialogue only.
+It does not relabel that data as CLI-authored, and signed/redacted blocks still
+require the pinned native version.
+A mixed-history test uses the actual portable writer, includes a settled tool
+pair, appends signed native context, and verifies exact-byte restoration and
+unchanged destination bytes after refusing forged portable provenance.
+The pinned-runtime probe initially failed despite the unit round-trip: resuming
+the portable seed appends a `mode` record after the context leaf.
+Capture now excludes that operational metadata rather than restoring it.
+The rerun selected 6 of 10 rows and preserved the identical historical messages
+and one synthetic thinking block across fresh import.
+Real signature acceptance remains untested.
+
+Failed-turn continuation design constraint, established by current-code review:
+the journal records host dispatch, terminal status and effects, but no durable
+backend prompt-admission receipt.
+The hosted runner's volatile `delivered` flag and absence of tool rows cannot
+prove that no signed context was produced.
+Do not fix retries by dropping failed turns or treating missing events as proof.
+The next implementation needs two distinct cases:
+
+- After confirmed producer exit, capture and journal a complete native checkpoint
+  even if the turn failed; context completeness is distinct from terminal success.
+  Require exact reconciled tool evidence, preserve the failure notice, and append
+  any synthetic suffix without rewriting the native prefix.
+- For a host-provable pre-send refusal, record non-admission/context-unchanged
+  evidence durably before reusing the prior checkpoint.
+
+Cancellation currently closes the reader before a final capture could be
+delivered. It therefore needs an explicit post-stop checkpoint result path;
+sending a checkpoint to the closed reader is not durability.
+Incomplete capture or unknown effects must remain explicit restoration failures.
+Required regressions include success/pre-send-failure/retry, signed-thinking
+failure/retry, cancellation/restart/retry, unchanged native prefix bytes, one
+failure notice, and continued refusal of unresolved tool effects.
+
+Standalone helper slice: independent adversarial review approves committing the
+two sandbox parser/importer helpers, their synthetic fixtures/tests, and OCI
+source typechecking separately from runtime wiring.
+The latest helper suites pass 41 tests, production Claude types pass, and scoped
+lint reports zero errors and three warnings.
+The final mixed-history Tokyo probe also asserts consumption of both portable
+seed messages before capture/import; containers were removed afterward.
+This slice does not add the helpers to an image or activate them in production.
+Containerfile/client/shared-record/journal wiring remains uncommitted work;
+the open continuation and signed-prefix gates above still block deployment.
+
+Dialogue-suffix implementation WIP: the native importer now takes an explicit
+`{checkpoint, suffix}` request, rather than accepting alternate legacy shapes.
+It appends only message records using deterministic IDs chained to the capture
+validator's leaf, preserves every original native byte, and revalidates the
+combined projection before atomic publication.
+Tool calls/results and opaque reasoning cannot be introduced through this suffix.
+The first pinned-runtime test rejected synthetic rows lacking loader metadata;
+the writer now includes the native envelope fields and uses the context leaf's
+timestamp as the stable projection cut, not an invented new event time.
+The rerun consumed exactly one separate assistant failure notice while retaining
+the original complete API message prefix and synthetic signed-thinking block.
+Real provider signature acceptance is still not established.
+
+Adversarial review rejected the proposed failed-exit capture shortcut.
+Producer exit plus structural validity is not a covered cut: the file may omit
+the admitted prompt or streamed output that did not reach a complete native row.
+Matching only the last complete frame also fails if a subsequent response streams
+partial text before the process dies.
+That enabling change was removed; nonzero exit and native `is_error` results
+(including exit zero) do not publish replacement checkpoints.
+The client tests assert no capture helper is spawned on those paths.
+Recovery needs positive evidence of the admitted prompt after the pre-turn leaf,
+all observed mainline complete frames, and no unmatched partial stream content.
+Current-turn compaction needs its own tested coverage rule, not a guessed match.
+The tentative journal complete-checkpoint/abort sealing tests are not evidence
+that the real client can yet supply a certified failed-turn checkpoint.
+
+Scoped suffix review approves the unwired helper/probe slice.
+The strict auto-compaction probe selected 9 of 60 rows including the one synthetic
+assistant notice, preserved two signed-thinking fixtures in unchanged API messages,
+and verified one native tool execution across both continuations.
+The combined Claude client/helper suite passes 105 tests and production types pass.
+The bounded hosted-turn/projection slice passes 87 focused tests but remains
+uncommitted integration work; its mock producer contract is not real capture proof.
+
+Coverage-proof implementation WIP: a standalone Claude observer checks the pinned
+partial-stream protocol against helper-validated native JSONL.
+It requires the admitted prompt after an explicit pre-turn leaf, every observed
+mainline complete frame in order, and no unmatched streamed block.
+It rejects current-turn compaction, unknown framing and inconsistent identities;
+a sticky refusal never becomes a truncated/partial proof.
+The cumulative observation limit is 16 MiB, matching the existing capture transport
+profile rather than limiting the lifetime journal.
+The importer now returns the exact published leaf UUID for the caller's pre-turn
+cut; it is derived again on restoration, not a second durable state owner.
+This observer is not wired into failed-turn admission yet.
+Its caller must still establish producer stop, immutable prior-prefix identity,
+trusted pre-turn cut, runtime/account binding and reconciled effect evidence.
+
+The probe now matches production `--include-partial-messages` and exercises an
+actual CLI `error_max_turns` with exit 1 after one synthetic native tool.
+Its native context includes a `max_turns_reached` attachment, now explicitly
+validated and preserved by capture.
+Exact restoration without a suffix selected 9 of 13 rows, preserved one synthetic
+thinking block, yielded identical historical API messages and executed the tool
+only once. The checked-in failed-turn fixture records only that first turn.
+The failure-plus-notice comparison exposed native loader-generated padding:
+without an appended assistant notice, the CLI synthesizes a continuation prompt
+and `No response requested.` placeholder. Failed-turn notice semantics are not
+certified by the successful-turn suffix test.
+
+Independent review caught a grouping identity gap in the observer: native
+`message.id` cannot be omitted merely because UUID, role and content agree.
+The capture helper now also refuses duplicate rows that change message ID,
+message type or model while retaining identical portable content.
+These fields influence native interpretation; checking only text/signatures was
+insufficient. No production failed-turn certification or deployment is claimed.
+
+The coverage slice now binds assistant message ID, type and model across stream
+start, complete frame and native record; exact redacted-thinking blocks are
+supported without accepting deltas that could rewrite opaque data.
+Independent adversarial re-review approves the standalone observer/helper/fixture
+slice only. The combined suites pass 72 tests, production types and repository
+documentation gates pass, and scoped lint has no errors.
+The real pinned failure fixture is a reproducible positive case; mutation tests
+cover missing/altered prompt, stale cut, native grouping changes, unmatched partial
+text/thinking, missing frames, changed order and observation overflow.
+The observer does not by itself certify a failed turn or authorize restoration.
+
+The standalone coverage observer now binds the pre-turn cut to the exact restored bytes,
+not just a leaf UUID that a guest-writable file could retain while changing history.
+The importer returns a SHA-256 fingerprint of the published prefix alongside
+its session and leaf identity; the coverage observer compares that fingerprint
+before checking the admitted prompt and observed output.
+This receipt is incarnation-local validation evidence, reconstructed on restore,
+not a new journal or durable owner.
+The host must supply the hash operation and retain the receipt before admitting
+the prompt; taking either from the post-turn file would defeat the check.
+
+Production integration remains gated: portable restoration must supply the same
+receipt contract, successful and failed capture must both check coverage, and
+current-turn compaction needs a separate tested rule because it replaces the
+prefix rather than preserving it byte for byte.
+No fallback may certify a stale native file merely because the CLI exited zero.
+Cancellation still needs a post-stop delivery contract, not an event pushed into
+an already closed reader.
+Runtime/account/system/tool-prefix bindings and real signature acceptance remain
+open; this fingerprint does not establish any of those properties.
+
+Independent adversarial review approves this standalone receipt slice only.
+The receipt/coverage suites pass 48 tests; scoped lint, source types, formatting,
+and the repository documentation gate pass.
+The broader in-progress client/event/writer tests pass 101 cases and the focused
+Floot journal/context tests pass 146 cases; those results do not certify integration.
+The isolated Tokyo pinned-CLI failed-tool probe with the updated importer preserved
+historical API messages and executed the tool once across restoration.
+It used only synthetic credentials/signatures, left no containers behind, and did
+not change the deployed daemon or existing sessions.
+
+Latest integration status (2026-09-24): ordinary Claude checkpoint publication is
+now wired through the trusted restoration receipt and stream-coverage checker.
+Portable restoration returns the same exact-byte receipt as native restoration;
+the controller supplies SHA-256, and the client retains the cut before admitting
+the next prompt.
+Publication requires a confirmed zero exit without a signal, successful helper
+completion, matching session identity, unchanged historical bytes, the admitted
+prompt, and every observed mainline frame without unmatched partial output.
+Unobserved post-cut loader summary/visibility/meta flags are refused.
+Missing receipts, unknown process status, stale files and unsupported framing
+cannot publish a replacement checkpoint.
+
+Review also found a first-turn durability gap: a failed native capture left only
+portable dialogue, which could silently lose reasoning on restoration.
+Claude now declares its required native context format in its backend descriptor;
+delegation preserves that requirement and Floot records it in dispatch before
+calling the backend.
+Model-context selection requires a complete matching native checkpoint and safe
+effect evidence, including after journal reconstruction and archival.
+History remains readable even when restoration refuses.
+Pre-send failures conservatively retain this requirement; there is not yet a
+separate durable proof that no native context was admitted.
+These tests exercise reconstruction from stored journal data, not a real daemon
+restart or current-release Tokyo acceptance.
+
+Independent reviewers approved the shared schema/selection, client verification,
+durable dispatch requirement, forensic recovery and terminal checkpoint sealing.
+The full Claude suite passes 360 tests, Floot passes 698, and shared hosted-agent passes 740
+(one skipped); OpenCode transcript conformance passes 18 tests.
+Source-only checks pass for Claude, hosted-agent and Floot; this is not a claim
+that the existing test-inclusive typecheck errors have been eliminated.
+Stale ignored declarations were moved to recoverable temporary backups so these
+checks inspect current source rather than outdated generated contracts.
+The repository documentation gate passes; scoped lint has no errors (147 warnings)
+and formatting passes.
+
+This integration is not RA-02 completion or deployment approval.
+Current-turn compaction initially refused checkpoint publication; the subsequent
+single-boundary coverage implementation is described below.
+Cancelled capture remains disabled, and real signature/account/runtime/system/tool
+binding remains open.
+Verified terminal failure capture is now enabled as described below; an arbitrary
+failed exit or a partially written native file is not sufficient.
+The obsolete no-init standalone live-continuation branch is now removed.
+Every continuation uses supplied journal records; no `--continue`, newest-file
+selection, detector/resolver fallback, or host-side diagnostic scanner remains.
+The client fences context-free repeats when prompt admission starts, even if no
+native init event arrives; retired constructor hooks reject before acquisition.
+Independent review approves the deletion; the full Claude suite passes 361 tests,
+source types, formatting and documentation gates pass, and scoped lint has no errors.
+The deleted scanner remains recoverable from Git history; no daemon state was removed.
+
+Failed-turn notice conformance now has an explicit pinned-loader contract in the
+isolated host probe: the Floot failure notice replaces only the exact native
+continuation-text/`No response requested.` padding observed after a tool result.
+All earlier request messages and tool-result fields remain exact; four mutations
+of signature/result/notice/padding refuse.
+The probe reports a semantic difference, not identical full request prefixes.
+One synthetic thinking block survived and the tool executed once across resumes.
+This probe alone does not establish production failure recovery or real signature
+acceptance.
+The subsequent client implementation now certifies a mainline terminal failure in
+the observer, not just a loose raw `is_error` flag, and retains the producer's
+diagnostics if the capture helper fails.
+Both successful and failed capture require an explicit matching terminal outcome;
+EOF with complete-looking frames is insufficient.
+Failure capture permits a known numeric exit (including zero with a native error
+result), exact prefix/current-turn coverage and reconciled tool evidence.
+It publishes the verified checkpoint before an abort, never converting failure
+to success; unknown status, signals and cancellation cannot seal a replacement
+checkpoint through this path.
+
+Independent adversarial review approves this bounded extension.
+The real client and translator, with simulated process/helper transport, now have
+an integration regression through the Floot agent and journal: the turn remains
+failed, original diagnostics survive, the native checkpoint seals, and a rebuilt
+agent receives the exact payload plus failure notice without replaying history.
+This is journal reconstruction, not a real daemon restart or live-provider test.
+The full Claude suite passes 378 tests; source types and scoped lint pass.
+The full Floot suite passes 699 tests, and the repository documentation gate passes.
+
+Compaction remains the next coverage problem: a digest of the whole pre-turn
+prefix cannot authenticate an arbitrary retained subset after legitimate pruning.
+The bounded direction is an incarnation-local row index derived from the exact
+host-owned checkpoint plus a deterministically constructed dialogue suffix,
+verified against the import receipt before prompt admission.
+No additional durable owner is needed.
+Retained UUIDs must resolve to that index or complete observed current-turn frames;
+the boundary, summary anchor, post-boundary order and permitted metadata rewrites
+need pinned-runtime conformance tests.
+The current implementation shares one deterministic native renderer between
+the importer and host controller, and verifies its receipt before admitting a prompt.
+An isolated pinned-runtime probe confirms that automatic compaction can discard
+the current prompt, which is not echoed on the live stream.
+The capture helper therefore offers a bounded, transient pre-boundary witness:
+the current prompt and native rows after the trusted pre-turn leaf.
+The observer must compare these against the admitted prompt and complete live
+frames, and authenticate retained older rows against the host-owned projection.
+The witness is not a second journal or part of the persisted checkpoint.
+This proves a native compaction transition, not semantic faithfulness of its summary
+or unchanged bytes in discarded history.
+Multiple/interrupted compactions, real provider signature acceptance and broader
+durable restart acceptance remain outside this narrow single-boundary work.
+The full Claude suite passes 415 tests, including missing/tampered witness,
+pre-admission receipt mutations and duplicate-tail prefix coverage.
+The full Floot suite passes 699 tests; source types and the repository
+documentation gate pass, and scoped lint has no errors.
+The isolated Tokyo helper probe restores identical historical request messages,
+preserves two synthetic thinking blocks, and executes its native tool once across
+continuations.
+No production daemon activation or new durable storage owner is involved.
+Post-compaction authentication covers the explicit model-message identity,
+grouping, content and known loader flags, not every arbitrary native JSON field.
+The obsolete digest-only ordinary-coverage fallback is now removed: every cut
+requires the exact host-projected `beforePayload`, including an empty string for
+a fresh turn. The one production caller already supplies it before admission.
+Missing payloads refuse rather than locating the cut in candidate guest rows;
+hash, unique-leaf, byte-prefix, prompt and frame checks remain.
+Independent review approves; 173 focused coverage/client tests pass, with source
+types and scoped lint passing. The full Claude suite passes 418 tests and the
+repository documentation gate passes. No new durable owner or format is introduced.
+
+The journal durability check now includes an actual daemon/worker formula restart,
+not only local object reconstruction. A test-only hosted backend emits a large
+synthetic opaque checkpoint through the production Floot agent after a real
+mediated test-tool execution. The payload is externalized into private immutable
+storage; a completed checkpoint is archived through the normal journal threshold.
+After restart, exact transcript, history and turn records survive; the backend
+receives the same native bytes, and the test effect is not repeated.
+A sealed failed turn retains its native checkpoint and failure notice.
+A turn with no required checkpoint remains readable for inspection but refuses
+inference even when the new incarnation omits `nativeContextFormat` from its options.
+This covers the existing journal/formula boundary, not real native signatures,
+Podman restoration, abrupt process loss or current-release Tokyo acceptance.
+No runtime ownership or storage schema changes are needed for this regression.
+The test repeats daemon stop/start after continuation and verifies the new dialogue
+and failed restoration attempt remain durable, again with zero reconstruction-time
+backend sends and unchanged effect counts.
+Independent adversarial review approves; the new daemon regression and nine existing
+Floot daemon lifecycle/journal regressions pass. The daemon's test-inclusive
+TypeScript project, scoped lint, formatting and repository documentation gate pass.
+
+There is a second bound to address: `turn-journal.js:451` deliberately excludes
+unresolved outcomes from archival. Repeated unresolved turns can exceed the
+settled-turn window. The module header's earlier unconditional bounded-memory
+claim is now corrected. Preserve that evidence; storage/read redesign is
+deferred rather than deleting uncertainty to meet a numerical limit.
+
+The journal also retains every event/content/archive name in a lifetime Set.
+Its private storage wrapper separately retained a copy of all factory host names
+per open session. The latter duplicate cache is now removed locally: serialized
+scoped existence checks enforce immutability, while explicit listings fetch and
+filter current names. The same owner, namespace and failed-write poison remain;
+no schema or inference policy changes. Independent review approves; 21 focused
+tests and 676 full Floot tests pass, scoped lint has no errors (nine warnings).
+Transient full listings, the journal's own name Set and the daemon's pet-name
+index remain; this is simplification, not a claim of globally bounded memory.
+
+This is the existing FA-01/FA-02 requirement, not a new historical-audit task.
+Define the context/compaction policy and prove bounded assembly on long sessions,
+while retaining unresolved effects and keeping full-history UI reads separate.
+Do not silently truncate durable evidence or reintroduce arbitrary session expiry.
+
+### RA-03 — Finish account identity at the discovery/presentation boundary
+
+`floot/agent.js:2663–2761` derives account/admin capability names and quota keys
+from backend names. One provider account exposed through multiple runtimes can
+therefore appear as distinct accounts. Explicit account authority in hosted plans
+does not resolve this application-facing coupling.
+
+Expose account-authority/member identity and status capabilities explicitly from
+discovery, without creating another credential owner. Runtime-specific model
+admission remains separate. This extends FA-07's current ontology work.
+
+Implemented boundary (2026-09-24): each trusted setup
+producer atomically publishes one complete source record in the existing profile's
+`account-bindings` directory. Records carry the existing oracle identity and
+capability, provider metadata, explicit runtime/member uses, and an optional
+paired reset-admin identity/capability. No new credential or renewal owner is
+introduced. Deduplicate only identical account authorities, never matching
+labels, provider names or pool-member strings. Failed source discovery may keep
+old display data but must not authorize reset actions. Reset actions must bind
+both account and admin identity so a stale UI cannot target a replacement admin.
+The direct provider uses the same publication contract; backend descriptions
+remain capability-free model/runtime metadata.
+
+The operator approved completing this slice on 2026-09-24 and explicitly put
+direct-Fae compaction on hold.
+Logical account IDs use the declared provider, account authority and optional pool
+member, not the observer formula ID: separate runtimes can have separate observers
+of one account.
+Setup withdraws discovery authority before rebinding observers or administrators;
+failed setup leaves an unavailable source, not old reset controls.
+Consumers merge explicit runtime uses and select one read-only observer, while
+conflicting administrators refuse discovery rather than guessing ownership.
+The UI uses account identity for cards and an exact account/admin pair for actions.
+Independent adversarial reviews approved the publishers, discovery/watch/reset
+boundary, UI and tests.
+Validation passes: 745 hosted-agent tests (one skipped), 708 Floot tests, 54 UI
+tests, 61 chat component tests, hosted-agent and UI types, scoped lint and root docs.
+The changed Floot source and tests have no type errors; the whole Floot type suite
+still reports unrelated existing test errors.
+A real daemon restart regression with GC enabled preserves exact published
+capabilities after their old pet names are replaced or removed.
+This proves publication durability, not provider credential validity or live Tokyo
+acceptance; deployment is still pending.
+Direct-Fae oracle setup now requires `FLOOT_ACCOUNT_AUTHORITY` when an oracle is
+configured, and old inferred discovery names are no longer consumed.
+
+Follow-up: session `getAccount()` and its `accountStatus` tool now read current
+explicit account bindings, matching backend and optional subscription on the same
+use record.
+Automatic pools report configured candidates, not actual routing or past billing.
+Session usage is reported separately, without attributing it to a direct-provider
+rate card.
+Account reads use an already loaded agent for usage; otherwise usage is explicitly
+unavailable, rather than acquiring a backend just to answer a status query.
+Unknown publications mark discovery incomplete, and returned observations must be
+copy data: no nested observer or reset capabilities may reach the session.
+The factory's direct-provider oracle API is unchanged.
+There is no new durable state owner; each read observes the current session record
+and existing profile publication.
+
+### RA-04 — Verify common turn-admission behavior
+
+The recent cancellation regressions demonstrate drift at a shared behavioral
+boundary: preparation may finish after the caller cancels, but must not admit the
+canceled prompt. Keep adapter-specific protocols; introduce a common conformance
+matrix covering cancellation before preparation, during restoration, before
+dispatch, and after dispatch, including failure/next-turn behavior.
+Only factor implementation after the identical responsibilities are established.
+
+Protocol-conformance completion assessment, 2026-09-30 at `7d9a7b049`:
+the required observable boundaries now have coverage on all three native adapters.
+The shared preparation/restoration harness and failed-successor helper are paired
+with protocol-specific tests rather than another runtime abstraction.
+
+| Obligation | Claude | OpenCode | Codex |
+|---|---|---|---|
+| Earliest public cancellation | Queued reader closes before its restoration; A unaffected, C completes | Queued reader omits its command; A unaffected, C completes | Immediate send/interrupt before reader return; no native turn, terminated successor refused |
+| Held preparation/restoration | Provision/restore gates, reader and explicit interrupt | Startup/import gates, accepted and refused import | Held thread/start and thread/inject_items; native helper cancellation |
+| Admission boundary | Canceled preparation cannot reach argv-bearing spawn | Held command writer rechecks before dispatch | Held ledger write exercises final beforeSend guard; zero turn/start |
+| Already admitted work | Late spawn handle and kill acknowledgement remain owned; successor completes | Interrupt is a terminal barrier; writer test completes successor | Reservation held until terminal confirmation; late completion cannot end successor; missing confirmation poisons |
+| Failed turn and successor | Supplied context restored; exactly one terminal per turn | Same native session retained; exactly one terminal per turn | Failed turn reverts then succeeds; unconfirmed interruption refuses successor |
+
+Evidence is in each backend's `test/*-client.test.js`; the immediately following
+entries describe the new cases and validation results.
+RA-04's protocol-conformance requirement is satisfied within this scope.
+This does not prove native quiescence, process-loss recovery, live provider-error
+injection or current-release deployment acceptance; those are separate contracts.
+
+Current-source recheck, 2026-09-30: shared preparation/restoration tests cancel
+after entering a held preparation gate; they do not prove cancellation before
+preparation begins. OpenCode separately tests its actual command-write boundary
+and successful queued successor. Codex's held ledger write does not isolate the
+last transport-send microtask. The held-ledger regression nevertheless exercises
+the final admission guard: after `ledger.begin()` there is no intervening
+prompt-admission guard before `sendMessage` invokes `beforeSend`,
+immediately followed by `transport.send`.
+It observes zero `turn/start` writes and successor refusal.
+The public fixture has no hook at that internal microtask; adding one solely for
+a timing-specific test is not justified. Retain this behavioral evidence rather
+than claiming exact microtask isolation or adding an arbitrary microtask count.
+Early cancellation now has public-boundary regressions rather than a promise of
+zero incidental setup. Claude and OpenCode hold active A, cancel queued B through
+B's reader, complete A and then complete C. Only A/C prompts are admitted; A is
+not interrupted. Claude also proves that B's otherwise-eligible context is never
+restored. OpenCode proves command omission, not import suppression (a live native
+conversation already skips later imports).
+Codex has no queued-turn API: immediate `send()` followed by `interrupt()` before
+awaiting the reader admits no `turn/start` and explicitly refuses a successor on
+the terminated incarnation. It does not promise zero transport/thread setup.
+Focused client suites pass: Claude 104, Codex 115, OpenCode 38; scoped lint has
+zero errors and 39 warnings. These test-only changes introduce no durable owner
+or runtime behavior and do not claim native quiescence.
+
+Claude's pending subprocess acquisition now has a separate regression: the prompt
+has already crossed the spawn boundary in argv, but its process handle is late.
+Interruption waits for that handle and its kill acknowledgement, never reads its
+output, and does not replay the prompt. The closed reader cannot report success;
+an explicit successor completes once with supplied context.
+This proves handle ownership, not native process quiescence or zero dispatch.
+The change is test-only; no durable owner or runtime behavior changes.
+
+A test-only follow-up now covers a confirmed failed inference followed by a
+successful successor in Claude and OpenCode, using a small common assertion helper.
+Both require exactly one terminal per turn, one admission per prompt and no replay.
+Claude restores explicitly supplied context with a coherent native prefix;
+OpenCode retains its native session and process. Codex's existing failure/revert/
+successful-successor test supplies the third adapter's evidence without duplication.
+Focused client suites pass: Claude 102, Codex 114, OpenCode 37.
+No runtime, durable owner or storage format changes; these are simulated protocol
+tests, not live provider-error injection or process-loss recovery.
+
+The shared cancellation test work reproduced a further Codex defect: interrupting
+a held `thread/inject_items` restoration marked the active turn interrupted but
+waited for a native turn announcement; once import completed, the client still
+sent the canceled prompt through `turn/start`. The regression observes that
+forbidden prompt, rather than treating a timeout alone as proof. A local fix
+distinguishes prompt admission from preparation, checks cancellation at the actual
+transport write, and waits for already-owned preparation/persistence before
+settling the turn. It fences successors before releasing the turn reservation.
+Independent adversarial review approves. Full package suites pass: Claude 237,
+Codex 323 and OpenCode 302; focused client suites pass 47, 97 and 35 respectively.
+Codex production-source types, scoped lint and formatting pass. The shared
+test-only harness covers held preparation/restoration, canceled-prompt admission
+and each adapter's declared successor disposition. Codex additionally holds its
+write-ahead save and attempts a successor in the interrupt-completion microtask.
+No new durable owner or schema is introduced. Existing native post-admission
+interrupt tests remain; this is not an exhaustive cross-backend lifecycle matrix.
+The follow-up held OpenCode command-writer test now covers both reader closure
+and explicit interruption, with a successor queued immediately after cancellation.
+Neither the canceled prompt nor its successor can bypass the held writer; after
+release only the first and successor prompts execute.
+The implementation already satisfies this case, so this is additional conformance
+evidence, not a production bug fix.
+All three focused client suites pass: Claude 98, Codex 99 and OpenCode 36.
+Scoped lint and formatting pass; no durable owner or storage format changes.
+Not deployed. Persistence drain is not claimed to have a deadline, interrupt
+completion alone is not proof of native quiescence, and this does not solve
+process loss.
+
+A further held-intent regression reproduced an Endo tool executing after shutdown:
+the client checked admission before its asynchronous intent audit, but not at the
+actual tool dispatch. The local fix checks closing/terminated in the dispatch
+microtask, with no await before the effect. The test uses the real shared
+supervisor and proves independent fencing, pending stop during the held write,
+and zero tool calls after release. No storage schema or durable owner changes;
+an intent alone is still not evidence of execution or success. This does not yet
+by itself change the separate termination/refusal contract described under RA-01;
+the subsequent drain cleanup there builds on this fence.
+The full Codex package passes 324 tests and the client suite passes 98;
+production-source types and scoped lint pass (15 warnings, no errors).
+The regression failed before the fix with an observed `lookup` execution.
+Not deployed; Tokyo's prepared `63aa1a8c4` candidate predates this fix.
+
+### RA-05 — Rebaseline and accept the actual candidate
+
+(2026-09-25: `endo.rev` now pins the deployed `adf25f948`; see the status
+validation above for what acceptance remains.) At the audit, `endo-host/endo.rev:1`
+pinned `d5d943d`, not this application snapshot. Historical
+generations and prior green tests cannot certify the current branch. Before
+deploying, reconcile retirement/preservation gates and unfinished host acceptance
+runner changes. Preserve Secrets, renewal owners, host, and workspaces.
+
+Then push/pin/deploy the paired repositories and test create, tools, cancellation,
+restart/restore, network-policy changes and deletion across the supported backends.
+Use Codex Luna and the auto-free route for Fae/OpenCode live tests. Native import
+HTTP success is not enough: check actual subsequent context consumption.
+
+Follow-up: host `62a1077` completes the acceptance runner's manifest safety
+correction. It reuses the existing owner, adds no new storage format, and passes
+54 Node tests plus five inert shell-wrapper tests with independent review.
+This removes that local integration obstacle, not the remaining preservation,
+paired-deployment, or live acceptance gates.
+
+## Boundaries, not extra scope
+
+- Native crash recovery/producer-quiescence redesign remains the explicit #1323
+  follow-up. It must not be silently implemented here or counted as proved.
+- Local-development storage FA-09 retains its recorded operator deferral.
+- Direct Fae's inference loop still lives in `floot/agent.js`, unlike the hosted
+  delegation path. Extracting it may improve separation, but this alone is not a
+  failure of the three-native-backend unification goal or authorization to put
+  Fae behind native sandbox machinery.
+- Credential refresh, native protocol translation, distinct image overlays, and
+  multiple physical records with genuinely different evidence roles are not
+  automatically redundant.
+
+## Validation and next sequence
+
+Fresh targeted checks passed 100 tests: all three provisioning conformance suites,
+the shared execution envelope, Floot runtime configuration and context projection.
+Independent source reviews covered Floot ontology, daemon/journal ownership, and
+native adapter/host integration. These are not live Podman, long-run memory, or
+current-release deployment results.
+
+After the prompt/configuration and private-cache cleanup, nine daemon-backed
+regressions pass: Floot factory lifecycle, journal retirement, direct-provider
+journaling and archived context across cold restart. They exercise the committed
+cleanup on the local daemon; they do not validate the pending account-binding
+draft or replace Tokyo acceptance.
+
+Current sequence (2026-10-01; the test counts above are historical evidence):
+
+1. Continue RA-01 against current callers: delete unused/compatibility paths and
+   justify remaining parallel mechanisms without creating another framework.
+2. Keep RA-02's bounded-context gap explicit; Fae compaction and evidence paging
+   remain deferred by the operator, not silently completed.
+3. Deploy and verify FA-14's reviewed shared outcome/journal/projection fix,
+   retaining explicit failure classification without another journal.
+4. Finish the initial Claude tool-heavy seed's native checkpoint fix;
+   successful ordinary restart recall does not prove universal capture fidelity.
+5. Generation 189 deploys the reviewed source cleanups and passes the affected
+   acceptance scopes. Preserve Secrets, renewal owners, host and workspaces on
+   subsequent slices; RA-03's dedicated live
+   account-identity matrix is not implied by ordinary inference acceptance.
+6. Maintain this current-state map and the main audit as evidence changes.
