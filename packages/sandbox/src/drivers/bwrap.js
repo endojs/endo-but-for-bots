@@ -974,6 +974,10 @@ export const makeBwrapDriver = ({
         child.exitCode === null &&
         child.signalCode === null;
       if (!isLive()) return;
+      // The group kill is the primary guarantee, so a failed init kill
+      // is reported only after the group has been signalled.
+      /** @type {unknown} */
+      let initKillError;
       if (signal === 'SIGKILL' || signal === 'SIGTERM') {
         const initPid = await raceSandboxInitPid();
         // bwrap holds the init as its child until it reaps it, so while
@@ -983,11 +987,12 @@ export const makeBwrapDriver = ({
             process.kill(initPid, 'SIGKILL');
           } catch (e) {
             const error = /** @type {Error & { code?: string }} */ (e);
-            if (error.code !== 'ESRCH') throw error;
+            if (error.code !== 'ESRCH') initKillError = error;
           }
         }
       }
       killProcessGroup(child, signal);
+      if (initKillError !== undefined) throw initKillError;
     };
     let killSequence = Promise.resolve();
     /** @param {NodeJS.Signals | number} signal */
