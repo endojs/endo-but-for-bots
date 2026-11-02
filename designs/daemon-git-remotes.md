@@ -549,19 +549,23 @@ The endpoint supplies the URL, credential and transport; the remote is always na
 `origin` carries the remote's `provideGitRemote`-shaped policy plus an optional `petName` for storing the remote: a single pet name in the host's own pet store, which must differ from `petName`.
 The `origin` remote defaults to fetch-only, so a caller that pushes must grant push explicitly, for example `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
 Both names are stored only once the clone and both capabilities exist.
-Other holders of the destination mount can write to it throughout, so the clone never takes the mount's contents as its own on the strength of a name:
+Other holders of the destination mount can write to it throughout, so the clone never takes the mount's contents as its own on the strength of a name.
+A concurrent holder is inside the contract because a mount is a shareable capability: its writes never pass through `provideGitClone`, so per-mount serialization in the host cannot order them, and Git's refusal of a non-empty target holds only at the instant it runs.
+The one decision that requires the mechanism below is that a failed clone must not destroy what another holder wrote.
+Staging records persist because a staging directory is beyond every capability's reach, so after a daemon stops only a record can prove who owns it and reclaim it:
 
 - The clone is built in daemon-private staging beside the destination, recorded with its device, inode, and birth time in daemon state, and its entries are moved into place without replacing anything at the target, including an entry created concurrently.
 - A failure discards each entry the call published, and the staging directory, only while it is still the recorded object: the entry is first renamed aside, which takes whatever object holds the name at that instant, and then its identity is checked.  An object another holder put under the name is renamed back.
-- A later clone into the same mount discards a staging directory that a stopped daemon recorded, under the same identity check.  An entry the daemon did not record is never removed, whatever its name, so the mount is then not empty and the clone refuses.
+- A later clone into the same mount discards a staging directory that a stopped daemon recorded, under the same identity check, and a removal that fails keeps the record for the next attempt.  An entry the daemon did not record is never removed, whatever its name, so the mount is then not empty and the clone refuses.
 - A name that `origin.petName` replaced is restored only while the name still holds the origin; the check and the restore run in one turn of the host's pet store, so a concurrent rebind wins.
 
 Simpler shapes were considered and do not hold the contract.
 Cloning straight into the mount, as `git clone` would, leaves a failed clone's files mixed with a concurrent holder's, with nothing to tell them apart at cleanup.
 Requiring the caller to hold the mount exclusively is not checkable: a mount is a shareable capability with no holder count or lease.
 Cloning into a fresh child directory, or exposing the staging directory itself as the Git's mount, would put the repository somewhere other than the mount the caller named, and every caller expects the worktree at that mount's root.
-Publishing therefore refuses on collision, as `git clone` refuses a non-empty target, and the recorded identities exist only so cleanup can tell the clone's own entries from a holder's.
 Identity is the device, inode, and birth time, because a filesystem may give a deleted entry's inode to its replacement at once; only where the filesystem records no birth time can such a replacement pass for the original; staging directories lie outside every mount, so their recorded identity is only a defensive check.
+
+Cloning is out of scope on the XS manager, and is refused there before anything is cloned: its host has no rename that refuses an existing target and no hard link, so it cannot publish without risking a concurrent entry.
 
 ## Security Model
 

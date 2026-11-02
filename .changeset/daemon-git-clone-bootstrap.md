@@ -1,12 +1,6 @@
 ---
-'@endo/daemon': major
+'@endo/daemon': minor
 ---
 
-Migration: replace `provideGitClone({ destMount, endpoint, identity })` with `provideGitClone(destMount, petName, { endpoint, identity, origin })`; the result is now `{ git, remote }`.
-
-`petName` names the cloned `Git`, and `origin.petName` optionally names its `GitRemote`.
-The endpoint supplies the URL, credential, and transport, while the remote is named `origin`.
-The `origin` remote defaults to fetch-only; callers that push must opt in, for example with `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
-A failed clone can be retried into the same mount.
-The `origin` option's type is exported as `GitCloneOriginOptions`.
-Alternate `FilePowers` implementations must now provide `renameNoReplace`, `removeEmptyDirectory`, and `entryIdentity`; the XS powers refuse `renameNoReplace`, so cloning is unavailable on XS.
+- `provideGitClone` now takes `(destMount, petName, { endpoint, identity, origin })` and returns `{ git, remote }`, storing the `Git` under `petName` and optionally the `GitRemote` under `origin.petName`; the one-object form never shipped in a release. The `origin` remote is fetch-only unless the caller grants push. A failed clone can be retried into the same mount. Cloning is unavailable on XS and is refused before anything is cloned.
+- Alternate `FilePowers` implementations must now provide `renameNoReplace`, `supportsRenameNoReplace`, `removeEmptyDirectory`, and `entryIdentity`.
