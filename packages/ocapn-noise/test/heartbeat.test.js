@@ -80,13 +80,13 @@ for (const [codecName, codec] of /** @type {const} */ ([
     t.is(livenessA.epoch, 0n);
     // Each side has decrypted the peer's identity greeting plus many
     // heartbeats, and has heard the peer acknowledge some of its own.
-    t.true(/** @type {bigint} */ (livenessA.lastAckedRecvNonce) > 4n);
-    t.true(/** @type {bigint} */ (livenessB.lastAckedRecvNonce) > 4n);
+    t.true(livenessA.lastAckedRecvNonce > 4n);
+    t.true(livenessB.lastAckedRecvNonce > 4n);
     t.not(livenessA.peerLastAckedRecvNonce, undefined);
     t.not(livenessB.peerLastAckedRecvNonce, undefined);
     t.true(
       /** @type {bigint} */ (livenessA.peerLastAckedRecvNonce) <=
-        /** @type {bigint} */ (livenessB.lastAckedRecvNonce),
+        livenessB.lastAckedRecvNonce,
     );
   });
 }
@@ -243,7 +243,7 @@ for (const [how, end] of /** @type {const} */ ([
   );
 }
 
-test('getLiveness reports the received nonce once the peer has spoken', async t => {
+test('getLiveness starts at the nonce of the peer identity greeting', async t => {
   const { sessionA } = await connectPair(
     t,
     { codec: cborCodec, heartbeat },
@@ -432,6 +432,11 @@ const connectFaultyPair = async (t, options) => {
     write: undefined,
     /** @type {Error | undefined} */
     writerReturn: undefined,
+    /** @type {Promise<void> | undefined} */
+    writerReturnHold: undefined,
+    /** @type {Error | undefined} */
+    writerThrow: undefined,
+    writes: 0,
   };
   await netA.addTransport(
     harden({
@@ -447,14 +452,21 @@ const connectFaultyPair = async (t, options) => {
         });
         const writer = harden({
           ...stream.writer,
-          next: (/** @type {Uint8Array} */ value) =>
-            faults.write
+          next: (/** @type {Uint8Array} */ value) => {
+            faults.writes += 1;
+            return faults.write
               ? Promise.reject(faults.write)
-              : stream.writer.next(value),
-          return: () =>
-            faults.writerReturn
-              ? Promise.reject(faults.writerReturn)
-              : stream.writer.return(undefined),
+              : stream.writer.next(value);
+          },
+          return: async () => {
+            await faults.writerReturnHold;
+            if (faults.writerReturn) throw faults.writerReturn;
+            return stream.writer.return(undefined);
+          },
+          throw: (/** @type {Error} */ error) =>
+            faults.writerThrow
+              ? Promise.reject(faults.writerThrow)
+              : stream.writer.throw(error),
         });
         return harden({ reader, writer });
       },
@@ -505,16 +517,105 @@ test.serial(
   },
 );
 
-test('a rejecting writer.return still forgets the session', async t => {
-  const { netA, locationB, sessionA, sessionB, faults } =
-    await connectFaultyPair(t, { codec: cborCodec });
-  sessionB.close();
-  faults.writerReturn = Error('already closed');
-  await t.throwsAsync(() => sessionA.writer.return(undefined), {
-    message: 'already closed',
+for (const [how, fault, end] of /** @type {const} */ ([
+  [
+    'writer.return',
+    'writerReturn',
+    (/** @type {any} */ session) => session.writer.return(undefined),
+  ],
+  [
+    'reader.return',
+    'writerReturn',
+    (/** @type {any} */ session) => session.reader.return(undefined),
+  ],
+  [
+    'writer.throw',
+    'writerThrow',
+    (/** @type {any} */ session) => session.writer.throw(Error('cause')),
+  ],
+  [
+    'reader.throw',
+    'writerThrow',
+    (/** @type {any} */ session) => session.reader.throw(Error('cause')),
+  ],
+])) {
+  test(`a rejecting ${how} still forgets the session`, async t => {
+    const { netA, locationB, sessionA, sessionB, faults } =
+      await connectFaultyPair(t, { codec: cborCodec });
+    sessionB.close();
+    faults[fault] = Error('already closed');
+    await t.throwsAsync(() => end(sessionA), { message: 'already closed' });
+    faults[fault] = undefined;
+    const replacement = await netA.provideSession(locationB);
+    t.not(replacement, sessionA);
+    replacement.close();
   });
-  faults.writerReturn = undefined;
-  const replacement = await netA.provideSession(locationB);
-  t.not(replacement, sessionA);
-  replacement.close();
+}
+
+for (const side of /** @type {const} */ (['reader', 'writer'])) {
+  test(`${side}.throw closes the writer and reports its cause to the peer`, async t => {
+    const { sessionA, sessionB } = await connectFaultyPair(t, {
+      codec: cborCodec,
+    });
+    const peerRead = t.throwsAsync(() => sessionB.reader.next(undefined), {
+      message: 'cause',
+    });
+    await t.throwsAsync(() => sessionA[side].throw(Error('cause')), {
+      message: 'cause',
+    });
+    await peerRead;
+    t.deepEqual(await sessionA.writer.next(Uint8Array.of(1)), {
+      done: true,
+      value: undefined,
+    });
+    // Already closed, so the transport is not consulted again.
+    await t.throwsAsync(() => sessionA[side].throw(Error('again')), {
+      message: 'again',
+    });
+  });
+}
+
+test.serial(
+  'a heartbeat that cannot be encoded closes the session and stops its heartbeat',
+  async t => {
+    const timers = watchSessionTimers(t);
+    /** @type {Error | undefined} */
+    let encodeFailure;
+    const codec = harden({
+      ...cborCodec,
+      makeWriter: () => {
+        if (encodeFailure) throw encodeFailure;
+        return cborCodec.makeWriter();
+      },
+    });
+    const { sessionA } = await connectFaultyPair(t, {
+      codec,
+      heartbeat,
+    });
+    encodeFailure = Error('cannot encode');
+    await t.throwsAsync(() => sessionA.reader.next(undefined), {
+      message: 'cannot encode',
+    });
+    t.deepEqual(timers.live(), []);
+  },
+);
+
+test('a closing session writes no heartbeat while its transport closes', async t => {
+  const { sessionA, faults } = await connectFaultyPair(t, {
+    codec: cborCodec,
+    heartbeat,
+  });
+  /** @type {() => void} */
+  let release = () => {};
+  faults.writerReturnHold = new Promise(resolve => {
+    release = resolve;
+  });
+  // The heartbeat stops only once the transport's return settles, so
+  // its interval keeps firing on a session that is already closed.
+  const closed = sessionA.writer.return(undefined);
+  const writesAtClose = faults.writes;
+  await delay(heartbeat.intervalMs * 3);
+  t.is(faults.writes, writesAtClose);
+  release();
+  await closed;
 });

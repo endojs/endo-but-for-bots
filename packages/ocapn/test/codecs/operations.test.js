@@ -13,6 +13,10 @@ import { decodeHex } from '@endo/hex';
 
 import { makeSelector } from '../../src/selector.js';
 import {
+  readOcapnHeartbeatMessage,
+  writeOcapnHeartbeatMessage,
+} from '../../src/codecs/operations.js';
+import {
   exampleSigParamBytes,
   examplePubKeyQBytes,
   runTableTestsAllCodecs,
@@ -497,6 +501,27 @@ runTableTestsAllCodecs(
 
 // Error validation tests run with all codec formats
 for (const codec of AllCodecs) {
+  for (const message of [
+    { type: 'op:ping', epoch: 2n, sequence: 3n },
+    { type: 'op:pong', epoch: 2n, sequence: 3n, lastAckedRecvNonce: 2n ** 64n },
+  ]) {
+    test(`${message.type} round-trips as a heartbeat [${codec.name}]`, t => {
+      const bytes = writeOcapnHeartbeatMessage(harden(message), codec);
+      t.deepEqual(readOcapnHeartbeatMessage(codec.makeReader(bytes)), message);
+    });
+  }
+
+  test(`a heartbeat read rejects another operation [${codec.name}]`, t => {
+    const writer = codec.makeWriter({ name: 'not a heartbeat' });
+    writer.enterRecord(1);
+    writer.writeSelectorFromString('op:abort');
+    writer.exitRecord();
+    t.throws(
+      () => readOcapnHeartbeatMessage(codec.makeReader(writer.getBytes())),
+      { message: /OcapnHeartbeatOperations: read failed/ },
+    );
+  });
+
   test(`op:get rejects integer fieldName [${codec.name}]`, t => {
     const testKit = makeCodecTestKit();
     const writer = codec.makeWriter({
