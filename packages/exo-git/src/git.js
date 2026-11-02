@@ -685,8 +685,9 @@ async function diff(options = {}) {
   // - `base` and `head` accept GitRef-or-string; collapse to a string
   //   name the backend forwards to git unchanged.
   // - `entries` (PathEntry[]) get resolved to repo-relative paths with
-  //   the same lineage check `add` uses. `paths` (string[]) passes
-  //   through (callers can use either).
+  //   the same lineage check `add` uses. `paths` (string[]) resolve through
+  //   this worktree's mount first, so neither form hands git a path the mount
+  //   did not confine.
   const opts =
     /** @type {{ cached?: boolean, base?: unknown, head?: unknown, entries?: readonly object[], paths?: string[] }} */ (
       options
@@ -709,7 +710,7 @@ async function diff(options = {}) {
   if (Array.isArray(opts.entries) && opts.entries.length > 0) {
     resolved.paths = await entriesToRepoPaths(state, opts.entries);
   } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
-    resolved.paths = [...opts.paths];
+    resolved.paths = await designatorsToRepoPaths(state, opts.paths);
   }
   return state.backend.diff(resolved);
 }
@@ -925,7 +926,7 @@ async function stashPush(options = {}) {
   if (Array.isArray(opts.entries) && opts.entries.length > 0) {
     resolved.paths = await entriesToRepoPaths(state, opts.entries);
   } else if (Array.isArray(opts.paths) && opts.paths.length > 0) {
-    resolved.paths = [...opts.paths];
+    resolved.paths = await designatorsToRepoPaths(state, opts.paths);
   }
   return state.backend.stashPush(resolved);
 }

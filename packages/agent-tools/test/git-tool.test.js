@@ -305,6 +305,23 @@ test('the schemas advertise real, declarative property names', t => {
   t.deepEqual(propsOf('diff'), ['options']);
 });
 
+test('the diff schema documents the options a JSON caller can use', async t => {
+  const calls = [];
+  const [diff] = makeGitTool(makeStubGit(calls)).filter(
+    record => record.name === 'diff',
+  );
+  const { options } = diff.parameters.properties;
+  t.deepEqual(Object.keys(options.properties), [
+    'cached',
+    'base',
+    'head',
+    'paths',
+  ]);
+
+  await diff.invoke({ options: { cached: true, paths: ['src/a.js'] } });
+  t.deepEqual(calls, [['diff', { cached: true, paths: ['src/a.js'] }]]);
+});
+
 test('makeGitHistoryTool preserves its four-tool order from the canonical rewriter catalog', t => {
   const git = makeStubGit([]);
   const historyTools = makeGitHistoryTool(git);

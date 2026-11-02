@@ -63,7 +63,8 @@ List the repository's branches as refs.
 
 Render a textual diff.
 Options are `cached`, `base`, `head`, and either `entries` (PathEntry
-capabilities minted for this worktree) or `paths`.
+capabilities minted for this worktree) or `paths` (worktree-relative strings
+resolved through this worktree's mount; the worktree root is not a path).
 
 ## log(options?) -> Promise<GitCommit[]>
 
@@ -185,7 +186,8 @@ Merge a revision into the current branch.
 
 Stash worktree changes and return the resulting stash reference.
 Options are `message`, `includeUntracked`, and either `entries` or
-`paths`.
+`paths` (worktree-relative strings resolved through this worktree's mount; the
+worktree root is not a path).
 
 ## stashApply(index?) -> Promise<void>
 
