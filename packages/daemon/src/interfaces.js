@@ -772,8 +772,7 @@ const PathArgumentShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 // `write` accepts a remotable,
 // while the public type narrows that to the portable `DirectoryWriteSource`
 // semantic union.
-// `makeFile` is a mount-specific constructor: it accepts UTF-8 text or a
-// ReadableBlob source and returns the live mount file capability.
+// `makeFile` is mount-specific: `EndoMountFile` is not a platform `File`.
 export const MountInterface = M.interface('EndoMount', {
   ...pathEntryIssuerMethodGuards,
   // A lookup result can be classified without probing its whole surface.

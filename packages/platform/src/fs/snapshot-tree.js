@@ -111,9 +111,7 @@ export const snapshotTreeMethods = (store, sha256) => {
         /** @type {any} */ (child),
       );
     },
-    // D6 of the filesystem-interface reconciliation requires immutable CAS
-    // trees to expose a uniform observation surface. A closed reader states
-    // that no change can ever occur through this snapshot.
+    // See designs/fs-interface-reconciliation.md § D6.
     followNameChanges: () => readerFromIterator(harden([])),
     /** @param {string} [method] */
     help: method =>

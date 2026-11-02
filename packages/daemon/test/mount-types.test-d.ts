@@ -7,6 +7,7 @@ import type {
   DirectoryWriteSource,
   PathEntry,
   PathEntryIssuer,
+  ReadableBlobSource,
   SnapshotTree,
 } from '@endo/platform/fs/lite/types';
 
@@ -73,7 +74,7 @@ expectTypeOf<
   Parameters<EndoMount['write']>[1]
 >().toEqualTypeOf<DirectoryWriteSource>();
 expectTypeOf<Parameters<EndoMount['makeFile']>[1]>().toEqualTypeOf<
-  import('@endo/platform/fs/lite/types').ReadableBlobSource | string | undefined
+  ReadableBlobSource | string | undefined
 >();
 
 // Runtime patterns cannot encode the semantic payload of a promise, but each

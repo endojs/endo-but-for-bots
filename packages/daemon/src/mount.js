@@ -1126,8 +1126,6 @@ const makeMountExo = ctx => {
       await filePowers.writeFileText(target, content);
       return openExisting(target, targetSegments);
     }
-    // `write` streams the validated blob through a scratch file before
-    // atomically replacing the target.
     await write(pathArgument, content);
     return openExisting(target, targetSegments);
   };

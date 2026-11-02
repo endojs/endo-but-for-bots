@@ -4,7 +4,11 @@ import type { ERef } from '@endo/eventual-send';
 import type { FarRef } from '@endo/eventual-send';
 import type { CapTPOptions } from '@endo/captp';
 import type { Reader, Writer, Stream } from '@endo/stream';
-import type { PassableBytesReader, StreamNode } from '@endo/exo-stream';
+import type {
+  PassableBytesReader,
+  PassableReader,
+  StreamNode,
+} from '@endo/exo-stream';
 import type {
   EndoGit,
   GitRemote,
@@ -1421,10 +1425,7 @@ export interface EndoReadableTree {
   lookup(
     path: string | readonly string[],
   ): Promise<EndoReadableTree | EndoReadable>;
-  followNameChanges(): import('@endo/exo-stream').PassableReader<
-    never,
-    undefined
-  >;
+  followNameChanges(): PassableReader<never, undefined>;
   help(method?: string): string;
 }
 
@@ -1648,6 +1649,7 @@ export interface EndoMount extends PathEntryIssuer {
     content: string,
   ): Promise<void>;
   makeDirectory(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
+  /** The guard admits any remotable `content`; the body rejects a non-blob. */
   makeFile(
     path: string | string[] | EndoMountEntry,
     content?: ReadableBlobSource | string,
