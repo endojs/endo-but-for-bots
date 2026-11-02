@@ -200,9 +200,8 @@ const network = makeOcapnNoiseNetwork({
 
 Each session then sends `op:ping` inside the Noise channel every
 `intervalMs`.
-Once it has received a frame from the peer, each tick also sends an
-`op:pong` that acknowledges the frames received so far; it does not
-answer a particular `op:ping`.
+Each tick also sends an `op:pong` that acknowledges the frames received
+so far; it does not answer a particular `op:ping`.
 When `heartbeat` is set, the session reader skips heartbeat frames, so
 the consumer never sees them.
 A call to `session.reader.next()` that waits `sessionTimeoutMs` without

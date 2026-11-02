@@ -121,10 +121,10 @@ export interface SessionLiveness {
   /** The transport epoch carried in heartbeats; `0n` until reconnect. */
   epoch: bigint;
   /**
-   * The highest Noise nonce this side has decrypted, or `undefined`
-   * before the first transport message from the peer.
+   * The highest Noise nonce this side has decrypted. A session starts
+   * with the peer's identity greeting decrypted, at nonce 0.
    */
-  lastAckedRecvNonce: bigint | undefined;
+  lastAckedRecvNonce: bigint;
   /**
    * The highest of this side's send nonces the peer has acknowledged
    * by `op:pong`, or `undefined` before the first `op:pong`.

@@ -259,9 +259,9 @@ const countNonces = (encrypt, decrypt) => {
 };
 
 /**
- * Start a session's heartbeat: an interval that sends `op:ping` and,
- * once the peer has spoken, `op:pong`, plus a reader that absorbs the
- * peer's heartbeats and times out a read that waits too long.
+ * Start a session's heartbeat: an interval that sends `op:ping` and
+ * `op:pong`, plus a reader that absorbs the peer's heartbeats and times
+ * out a read that waits too long.
  *
  * @param {object} params
  * @param {OcapnCodec} params.codec
@@ -270,7 +270,7 @@ const countNonces = (encrypt, decrypt) => {
  * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
  * @param {bigint} params.epoch
  * @param {() => bigint} params.getSentCount
- * @param {() => bigint | undefined} params.getLastReceivedNonce
+ * @param {() => bigint} params.getLastReceivedNonce
  * @param {() => boolean} params.isClosed
  * @param {(failure?: Error) => void} params.close - Ends the session;
  *   a `failure` is reported by the consumer's next read.
@@ -300,7 +300,6 @@ const makeHeartbeat = ({
 
   /** @param {Uint8Array} plainText */
   const sendFrame = plainText => {
-    if (isClosed()) return;
     // Encrypt and enqueue in the same turn so frames reach the
     // transport in nonce order.
     Promise.resolve(stream.writer.next(encrypt(plainText))).catch(error =>
@@ -316,17 +315,13 @@ const makeHeartbeat = ({
       ),
     );
     pingSequence += 1n;
-    const lastAckedRecvNonce = getLastReceivedNonce();
-    // Until the peer's first frame arrives there is no nonce to
-    // acknowledge, so the tick carries only the `op:ping`.
-    if (lastAckedRecvNonce === undefined) return;
     sendFrame(
       writeOcapnHeartbeatMessage(
         {
           type: 'op:pong',
           epoch,
           sequence: pongSequence,
-          lastAckedRecvNonce,
+          lastAckedRecvNonce: getLastReceivedNonce(),
         },
         codec,
       ),
@@ -1092,11 +1087,9 @@ export const makeOcapnNoiseNetwork = ({
     /** @type {ReturnType<typeof makeHeartbeat> | undefined} */
     let sessionHeartbeat;
 
-    /** @returns {bigint | undefined} */
-    const getLastReceivedNonce = () => {
-      const receivedCount = getReceivedCount();
-      return receivedCount === 0n ? undefined : receivedCount - 1n;
-    };
+    // `exchangeIdentity` decrypts the peer's greeting before a session
+    // exists, so the count is at least one.
+    const getLastReceivedNonce = () => getReceivedCount() - 1n;
 
     const fireOnClose = () => {
       if (sessionHeartbeat !== undefined) sessionHeartbeat.stop();
