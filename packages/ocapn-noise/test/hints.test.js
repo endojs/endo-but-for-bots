@@ -178,3 +178,29 @@ test('hint components must carry a key and a non-empty value', t => {
   t.throws(() => formatHint('tcp+cbor', ''));
   t.throws(() => formatHint('tcp', '127.0.0.1:3469'));
 });
+
+test('parsers reject non-string inputs', t => {
+  for (const value of [undefined, null, 3469]) {
+    t.throws(() => parseHintKey(/** @type {any} */ (value)), {
+      message: /key must be a string/,
+    });
+    t.throws(() => parseHint(/** @type {any} */ (value)), {
+      message: /component must be a string/,
+    });
+    t.throws(() => parseAuthority(/** @type {any} */ (value)), {
+      message: /authority must be a string/,
+    });
+    t.throws(() => parseAuthorityPath(/** @type {any} */ (value)), {
+      message: /value must be a string/,
+    });
+  }
+  t.throws(() => formatAuthority({ host: /** @type {any} */ (1), port: 1 }), {
+    message: /invalid host/,
+  });
+});
+
+test('an unterminated IPv6 literal in a WebSocket value is rejected', t => {
+  t.throws(() => parseAuthorityPath('[::1:443/a'), {
+    message: /unterminated IPv6 literal/,
+  });
+});
