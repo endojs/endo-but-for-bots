@@ -445,6 +445,11 @@ thread_local! {
 
 static HOOK_INIT: Once = Once::new();
 
+/// `fxArrayBuffer`'s `maxByteLength` for a fixed-length buffer. Any other
+/// value makes the buffer resizable, and XS then refuses to harden a view of it
+/// (`TypeError: extensible object`).
+const FIXED_LENGTH: i32 = -1;
+
 /// Install (once, process-wide) a panic hook that records a guarded panic's
 /// source location into a thread-local. It chains to the previously-installed
 /// hook for every panic *not* inside `guard_ffi`, so ordinary panic reporting
@@ -857,7 +862,7 @@ pub unsafe extern "C" fn host_get_pending_envelope(the: *mut XsMachine) {
                 &mut (*the).scratch,
                 data.as_mut_ptr() as *mut std::ffi::c_void,
                 data.len() as i32,
-                data.len() as i32,
+                FIXED_LENGTH,
             );
             *(*the).frame.add(1) = (*the).scratch;
         }
@@ -883,7 +888,7 @@ pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
                     &mut (*the).scratch,
                     data.as_mut_ptr() as *mut std::ffi::c_void,
                     data.len() as i32,
-                    data.len() as i32,
+                    FIXED_LENGTH,
                 );
                 *(*the).frame.add(1) = (*the).scratch;
             }
@@ -953,7 +958,7 @@ pub unsafe extern "C" fn host_encode_utf8(the: *mut XsMachine) {
             &mut (*the).scratch,
             data.as_mut_ptr() as *mut std::ffi::c_void,
             len as i32,
-            len as i32,
+            FIXED_LENGTH,
         );
         *(*the).frame.add(1) = (*the).scratch;
     });

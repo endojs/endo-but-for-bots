@@ -222,10 +222,22 @@ if (!globalThis.assert) {
 // all downstream harden calls will be shallow.
 if (!globalThis.harden) {
   const visited = new WeakSet();
+  const typedArrayTag = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(Uint8Array.prototype),
+    Symbol.toStringTag,
+  ).get;
   const deepFreeze = (obj) => {
     if (Object(obj) !== obj) return obj; // primitive
     if (visited.has(obj)) return obj;
     visited.add(obj);
+    if (Reflect.apply(typedArrayTag, obj, []) !== undefined) {
+      // Object.freeze throws on a non-empty typed array, whose elements stay
+      // writable. Enumerating its keys would make one string per byte, too
+      // slow for a large blob chunk, so unlike @endo/harden this leaves any
+      // named expando property mutable.
+      Object.preventExtensions(obj);
+      return obj;
+    }
     Object.freeze(obj);
     const descs = Object.getOwnPropertyDescriptors(obj);
     for (const name of Reflect.ownKeys(descs)) {

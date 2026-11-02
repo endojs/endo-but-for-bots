@@ -103,3 +103,29 @@ fn panic_from_a_real_xs_callback_is_confined_to_its_worker() {
     panicked_tx.send(()).unwrap();
     sibling.join().unwrap();
 }
+
+#[test]
+fn host_array_buffers_are_fixed_length_and_their_views_harden() {
+    xsnap::ensure_shared_cluster();
+    let machine = Machine::new(&DEFAULT_CREATION, "host array buffers").unwrap();
+    machine.eval(xsnap::POLYFILLS).expect("polyfills evaluate");
+    machine.define_function("hostBase64Decode", worker_io::host_base64_decode, 1);
+    machine.define_function("hostEncodeUtf8", worker_io::host_encode_utf8, 1);
+    machine.define_function(
+        "getPendingEnvelope",
+        worker_io::host_get_pending_envelope,
+        0,
+    );
+    worker_io::set_pending_envelope(vec![1, 2, 3]);
+    let observed = machine
+        .eval_to_string(
+            "[hostBase64Decode('AAEC'), hostEncodeUtf8('abc'), getPendingEnvelope()]
+               .map(buffer => {
+                 const { value } = harden({ value: new Uint8Array(buffer) });
+                 return [buffer.resizable, Object.isExtensible(value), value.length];
+               })
+               .join()",
+        )
+        .expect("a record holding a view of each host buffer hardens");
+    assert_eq!(observed, "false,false,3,false,false,3,false,false,3");
+}
