@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-07-11 |
+| **Updated** | 2026-11-02 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538; Phases 6-7 open) |
+| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538, its `(destMount, petName, { origin })` form via #1538; Phases 6-7 open) |
 
 > **Read in order.**
 > This is doc 3 of 3.
@@ -541,9 +541,21 @@ For the MVP there are two legitimate product flows:
 The second flow is product-relevant when an agent starts from only a remote repository, but it should remain host-mediated.
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.
 
-**Landed (2026-07-11 reconciliation note).**
-The second flow shipped host-mediated via #538 as `EndoHost.provideGitClone(opts)`: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
-The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half; the residual bootstrap gap is the **commit-identity boundary**, pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ identity: { authorName, authorEmail } }` construction option on `provideGit` / `provideGitClone`, guest-immutable).
+The second flow is host-mediated: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
+`provideGit` and `provideGitClone` take a formula-owned, guest-immutable `identity` construction option.
+
+The method is `EndoHost.provideGitClone(destMount, petName, { endpoint, identity, origin })`, in the argument order of `provideGit` and `provideGitRemote`, and returns `{ git, remote }`: the writable `Git` over the clone, stored under `petName`, and its `GitRemote`.
+The endpoint supplies the URL, credential and transport, and the remote's Git name is always `origin`.
+The `origin` option carries the remote's `provideGitRemote`-shaped policy.
+The clone stores no pet name for the remote; a caller that wants one binds a remote with `provideGitRemote` over the returned `git`.
+The `origin` remote defaults to fetch-only, so a caller that pushes must grant push explicitly, for example `{ allowedDirections: ['fetch', 'push'], allowedBranches: ['refs/heads/agent/*'] }`.
+`petName` is stored only once the clone and both capabilities exist.
+The destination is exclusive: `provideGitClone` assumes that nothing else writes to the mount while the clone runs, and a host that hands the mount to another holder before the clone settles may lose that holder's writes.
+A second `provideGitClone` on a directory with a clone in progress is refused before it can discard anything.
+The clone refuses a non-empty mount, clones straight into it, and on failure removes what the clone created, which is everything under the mount's root, leaving the root directory itself, so a failed clone can be retried into the same mount.
+Removal unlinks a symbolic link the clone created and never follows it.
+
+Cloning is unavailable on the XS manager, whose supervisor supplies no host Git tools, and is refused there before anything is cloned.
 
 ## Security Model
 
@@ -839,7 +851,7 @@ Each gets a one-line follow-up deliverable.
   Deliverable: a one-page note in `designs/` confirming or revising the HTTPS-only Phase 1.
 - **Bootstrap / clone API.**
   Resolved: `provideGitClone` landed host-mediated via #538 (see § Repository Bootstrap and `clone`), without a separate `daemon-git-clone.md`.
-  The residual identity boundary is Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan.
+  The identity boundary, Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan, shipped via #706.
 - **Telemetry to distinguish CapTP control-plane time from remote transport data-plane time.**
   During Phase 2, add structured timing fields to `GitFetchResult` and `GitPushResult` (initial shape: `{ captpMs: number; transportMs: number }` augmenting the existing result types) and iterate based on what debug sessions actually need.
   The shape may change after the spike; the principle (timing is observable) is decision 12.

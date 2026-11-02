@@ -237,18 +237,56 @@ test('scratch-mount backing directory is reclaimed when its formula is collected
 
   const scratchId = await E(host).identify('throwaway-scratch');
   const { number: formulaNumber } = parseId(scratchId);
-  const dirPath = mountPathOf(config.statePath, formulaNumber);
-  t.true(fs.existsSync(dirPath), 'scratch backing dir created');
+  const directoryPath = mountPathOf(config.statePath, formulaNumber);
+  t.true(fs.existsSync(directoryPath), 'scratch backing dir created');
 
   await E(host).remove('throwaway-scratch');
 
-  await waitForCondition(async () => !fs.existsSync(dirPath), {
-    message: `${dirPath} to be removed`,
+  await waitForCondition(async () => !fs.existsSync(directoryPath), {
+    message: `${directoryPath} to be removed`,
   });
   t.false(
-    fs.existsSync(dirPath),
+    fs.existsSync(directoryPath),
     'scratch backing dir pruned after formula collection',
   );
+});
+
+// Under `yarn test:rust` this would exercise the XS `removeDirectory` on native
+// host globals, but no daemon starts there yet and no CI lane runs it; job
+// `ebfb-xs-daemon-start-without-fetch` tracks both.  Under Node it covers the
+// Node manager.
+test('scratch-mount reclamation unlinks symlinks without following them', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const victimPath = await fs.promises.mkdtemp(
+    path.join(tmpdir(), 'endo-gc-victim-'),
+  );
+  t.teardown(() =>
+    fs.promises.rm(victimPath, { recursive: true, force: true }),
+  );
+  const keptPath = path.join(victimPath, 'kept.txt');
+  await fs.promises.writeFile(keptPath, 'kept');
+
+  await E(host).provideScratchMount('symlink-scratch');
+  const scratch = await E(host).lookup(['symlink-scratch']);
+  await E(scratch).writeText(['nested', 'draft.txt'], 'pending');
+
+  const scratchId = await E(host).identify('symlink-scratch');
+  const { number: formulaNumber } = parseId(scratchId);
+  const directoryPath = mountPathOf(config.statePath, formulaNumber);
+  await fs.promises.symlink(victimPath, path.join(directoryPath, 'root-link'));
+  await fs.promises.symlink(
+    victimPath,
+    path.join(directoryPath, 'nested', 'child-link'),
+  );
+
+  await E(host).remove('symlink-scratch');
+
+  await waitForCondition(async () => !fs.existsSync(directoryPath), {
+    message: `${directoryPath} to be removed`,
+  });
+  t.is(await fs.promises.readFile(keptPath, 'utf8'), 'kept');
 });
 
 test('content-store blob from a readable-tree formula is reclaimed when the tree is collected', async t => {

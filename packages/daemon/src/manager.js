@@ -8744,6 +8744,39 @@ const makeDaemonCore = async (
   };
 
   /**
+   * List the entry names directly under a mount's host path.  A missing
+   * directory lists as empty, the same as `gitClone` treats it.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @returns {Promise<string[]>}
+   */
+  const listMountHostEntries = async mountId => {
+    const mountPath = getMountHostPath(mountId);
+    const present = await filePowers.exists(mountPath);
+    if (!present) {
+      return [];
+    }
+    return filePowers.readDirectory(mountPath);
+  };
+
+  /**
+   * Remove every entry directly under a mount's host path, leaving the
+   * mount's own directory in place.  Symbolic links are unlinked, never
+   * followed.  Only for a caller that holds the mount exclusively, so that
+   * every entry is its own.
+   *
+   * @param {FormulaIdentifier} mountId
+   * @returns {Promise<void>}
+   */
+  const clearMountHostEntries = async mountId => {
+    const mountPath = getMountHostPath(mountId);
+    const names = await listMountHostEntries(mountId);
+    for (const name of names) {
+      await filePowers.removeDirectory(filePowers.joinPath(mountPath, name));
+    }
+  };
+
+  /**
    * Back-compat alias for callers that only operate on scratch mounts
    * (see `host.js` `makeUnconfinedFromTree`).  Asserts the formula is
    * specifically a `scratch-mount`, then delegates to
@@ -8816,6 +8849,8 @@ const makeDaemonCore = async (
     followRetentionPaths,
     getScratchMountPath,
     getMountHostPath,
+    listMountHostEntries,
+    clearMountHostEntries,
     getIdForRef,
     traceAggregator,
     secretManager,

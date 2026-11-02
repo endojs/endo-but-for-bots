@@ -666,6 +666,80 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
   t.is(stat.atime, stat.mtime);
 });
 
+const xsHostGlobalNames = [
+  'hostExists',
+  'hostStat',
+  'hostReadDir',
+  'hostRemove',
+  'hostJoinPath',
+];
+// Under a native XS host these globals are real, and mocking them would pass
+// a shim-shaped assertion off as native conformance, so skip there.
+const nativeXsHostPresent = xsHostGlobalNames.some(
+  name => /** @type {any} */ (globalThis)[name] !== undefined,
+);
+
+(nativeXsHostPresent ? test.serial.skip : test.serial)(
+  'XS removeDirectory walks in the right order over shim-only host globals',
+  async t => {
+    // Shim-only: these mocks follow the `stat` JSON shape and the
+    // non-following `remove` of `rust/endo/xsnap/src/powers/fs.rs`, but they
+    // prove the walk's order and its refusal to recurse through a link, not
+    // the native host's behavior, which no CI job runs under endor.
+    const globalObject = /** @type {any} */ (globalThis);
+    const names = xsHostGlobalNames;
+    const originals = Object.fromEntries(
+      names.map(name => [name, globalObject[name]]),
+    );
+    t.teardown(() => {
+      for (const name of names) globalObject[name] = originals[name];
+    });
+
+    const kinds = new Map([
+      ['tree', 'directory'],
+      ['tree/link', 'symlink'],
+      ['victim', 'directory'],
+      ['loose', 'file'],
+      ['rootlink', 'symlink'],
+    ]);
+    const removed = [];
+    globalObject.hostExists = (_token, targetPath) => kinds.has(targetPath);
+    globalObject.hostStat = (_token, targetPath) =>
+      JSON.stringify({
+        kind: kinds.get(targetPath),
+        sizeBytes: 0,
+        modifiedMs: 0,
+        dev: 1,
+        ino: 1,
+      });
+    globalObject.hostReadDir = (_token, targetPath) =>
+      JSON.stringify(targetPath === 'tree' ? ['link'] : []);
+    globalObject.hostRemove = (_token, targetPath) => {
+      removed.push(targetPath);
+      kinds.delete(targetPath);
+    };
+    globalObject.hostJoinPath = (...components) => components.join('/');
+
+    const xsPowers = makeXsFilePowers();
+    await xsPowers.removeDirectory('/tree');
+    t.deepEqual(removed, ['tree/link', 'tree']);
+    t.true(
+      kinds.has('victim'),
+      'the symlink target survives recursive removal',
+    );
+
+    removed.length = 0;
+    await xsPowers.removeDirectory('/loose');
+    await xsPowers.removeDirectory('/rootlink');
+    t.deepEqual(removed, ['loose', 'rootlink']);
+    t.true(kinds.has('victim'), 'a symlink root is unlinked, not followed');
+
+    removed.length = 0;
+    await xsPowers.removeDirectory('/missing');
+    t.deepEqual(removed, [], 'a missing directory is not an error');
+  },
+);
+
 // Suppress unused-import warnings for the platform interfaces; their
 // presence in this file documents the conformance target.
 void PlatformDirectoryInterface;

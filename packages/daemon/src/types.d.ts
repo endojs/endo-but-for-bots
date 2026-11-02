@@ -346,6 +346,25 @@ export type GitCommitIdentity = {
   committerEmail?: string;
 };
 
+/**
+ * Host-chosen policy for the `origin` GitRemote that `provideGitClone`
+ * mints.  These are the `provideGitRemote` policy fields minus `name`
+ * (always `origin`), `url` and `credential` (both from the clone
+ * endpoint), and `allowLocalFileTransport` (inherited from the endpoint).
+ * `allowedDirections` defaults to `['fetch']` and `fetchRefspecs` to
+ * `+refs/heads/*:refs/remotes/origin/*`.
+ */
+export type GitCloneOriginOptions = {
+  allowedDirections?: Array<'fetch' | 'push'>;
+  fetchRefspecs?: string[];
+  pushRefspecs?: string[];
+  allowedBranches?: string[];
+  defaultPullRef?: string;
+  allowForcePush?: boolean;
+  allowTags?: boolean;
+  allowDelete?: boolean;
+};
+
 export type GitProvisionOptions = {
   allowHistoryRewrite?: boolean;
   /**
@@ -2074,26 +2093,30 @@ export interface EndoHost extends EndoAgent {
     },
   ): Promise<GitRemote>;
   /**
-   * Host-only constructive clone. Composes a repo-less remote endpoint
-   * with an empty destination mount, returning a fresh Git cap and an
-   * origin-pre-bound GitRemote. The returned origin remote is bound
-   * for fetch and push over `refs/heads/*` only. This leaves the later
-   * guest-held GitCloner facet as an additive delegate.
+   * Host-only constructive clone into an empty mount that nothing else
+   * writes to, returning a fresh Git cap bound to `petName` and a GitRemote
+   * whose Git name is `origin` (fetch-only by default, with no pet name; bind
+   * one with `provideGitRemote`).  Contract:
+   * `designs/daemon-git-remotes.md` § clone.
    */
-  provideGitClone(opts: {
-    destMount: EndoMount;
-    endpoint: {
-      url: string;
-      credential?: unknown;
-      allowLocalFileTransport?: boolean;
-    };
-    /**
-     * Formula-owned, guest-immutable commit author/committer identity for the
-     * cloned repository's `Git` cap.  Omitted, commits default to
-     * `Endo <endo@invalid.local>`.
-     */
-    identity?: GitCommitIdentity;
-  }): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
+  provideGitClone(
+    destMount: EndoMount,
+    petName: string | string[],
+    options: {
+      endpoint: {
+        url: string;
+        credential?: unknown;
+        allowLocalFileTransport?: boolean;
+      };
+      /**
+       * Formula-owned, guest-immutable commit author/committer identity for
+       * the cloned repository's `Git` cap.  Omitted, commits default to
+       * `Endo <endo@invalid.local>`.  The `origin` remote carries none.
+       */
+      identity?: GitCommitIdentity;
+      origin?: GitCloneOriginOptions;
+    },
+  ): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
   /**
    * Mint a bearer-token `GitCredential` capability scoped to
    * `audience` (a URL origin) and bind it to `petName`.  Material
@@ -3256,6 +3279,20 @@ export interface DaemonCore {
    * public surface.
    */
   getMountHostPath: (id: FormulaIdentifier) => string;
+
+  /**
+   * List the entry names directly under a `mount` or `scratch-mount`
+   * formula's host path.  A missing directory lists as empty.
+   */
+  listMountHostEntries: (id: FormulaIdentifier) => Promise<string[]>;
+
+  /**
+   * Remove every entry directly under a `mount` or `scratch-mount`
+   * formula's host path, leaving the directory itself.  Symbolic links are
+   * unlinked, never followed.  For a caller that holds the mount
+   * exclusively, such as `provideGitClone` discarding a failed clone.
+   */
+  clearMountHostEntries: (id: FormulaIdentifier) => Promise<void>;
 
   getTypeForId: (id: FormulaIdentifier) => Promise<string>;
 

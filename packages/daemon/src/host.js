@@ -20,6 +20,7 @@ import {
   isGitReadOnly,
   makeGitCloner,
   makeGitRemoteEndpoint,
+  normalizeGitRemotePolicy,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
@@ -291,64 +292,66 @@ export const normalizeHttpClientPolicy = policy => {
 harden(normalizeHttpClientPolicy);
 
 /**
- * @param {object} args
- * @param {DaemonCore['provide']} args.provide
- * @param {DaemonCore['provideController']} args.provideController
- * @param {DaemonCore['provideStoreController']} args.provideStoreController
- * @param {DaemonCore['cancelValue']} args.cancelValue
- * @param {DaemonCore['formulateWorker']} args.formulateWorker
- * @param {DaemonCore['formulateHost']} args.formulateHost
- * @param {DaemonCore['formulateGuest']} args.formulateGuest
- * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulateEval']} args.formulateEval
- * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateArchive']} args.formulateArchive
- * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
- * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
- * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
- * @param {HostToolPowers['gitClone']} [args.gitClone]
- * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['checkinTree']} args.checkinTree
- * @param {DaemonCore['formulateMount']} args.formulateMount
- * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
- * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
- * @param {DaemonCore['formulateGit']} args.formulateGit
- * @param {DaemonCore['formulateShell']} args.formulateShell
- * @param {DaemonCore['formulateEnvironment']} args.formulateEnvironment
- * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
- * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
+ * @param {object} powers
+ * @param {DaemonCore['provide']} powers.provide
+ * @param {DaemonCore['provideController']} powers.provideController
+ * @param {DaemonCore['provideStoreController']} powers.provideStoreController
+ * @param {DaemonCore['cancelValue']} powers.cancelValue
+ * @param {DaemonCore['formulateWorker']} powers.formulateWorker
+ * @param {DaemonCore['formulateHost']} powers.formulateHost
+ * @param {DaemonCore['formulateGuest']} powers.formulateGuest
+ * @param {DaemonCore['formulateMarshalValue']} powers.formulateMarshalValue
+ * @param {DaemonCore['formulateEval']} powers.formulateEval
+ * @param {DaemonCore['formulateUnconfined']} powers.formulateUnconfined
+ * @param {DaemonCore['formulateArchive']} powers.formulateArchive
+ * @param {DaemonCore['formulateFromTree']} powers.formulateFromTree
+ * @param {(id: FormulaIdentifier) => string} powers.getScratchMountPath
+ * @param {(id: FormulaIdentifier) => string} powers.getMountHostPath
+ * @param {DaemonCore['listMountHostEntries']} [powers.listMountHostEntries]
+ * @param {DaemonCore['clearMountHostEntries']} [powers.clearMountHostEntries]
+ * @param {HostToolPowers['gitClone']} [powers.gitClone]
+ * @param {(ref: unknown) => FormulaIdentifier | undefined} powers.getIdForRef
+ * @param {DaemonCore['formulateReadableBlob']} powers.formulateReadableBlob
+ * @param {DaemonCore['checkinTree']} powers.checkinTree
+ * @param {DaemonCore['formulateMount']} powers.formulateMount
+ * @param {DaemonCore['formulateScratchMount']} powers.formulateScratchMount
+ * @param {DaemonCore['formulateSubMount']} powers.formulateSubMount
+ * @param {DaemonCore['formulateGit']} powers.formulateGit
+ * @param {DaemonCore['formulateShell']} powers.formulateShell
+ * @param {DaemonCore['formulateEnvironment']} powers.formulateEnvironment
+ * @param {DaemonCore['formulateHttpClient']} powers.formulateHttpClient
+ * @param {(client: unknown) => unknown} powers.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
  *   retained `HttpClientControl`, populated by the `http-client` maker.
- * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
- * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
- * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
- * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
- * @param {DaemonCore['formulateChannel']} args.formulateChannel
- * @param {DaemonCore['formulateTimer']} args.formulateTimer
- * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
- * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
- * @param {ContentLoadable['loadContent']} args.loadContent
- * @param {DaemonCore['getTypeForId']} args.getTypeForId
- * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
- * @param {DaemonCore['getActiveContext']} args.getActiveContext
- * @param {MakeMailbox} args.makeMailbox
- * @param {MakeDirectoryNode} args.makeDirectoryNode
- * @param {NodeNumber} args.localNodeNumber
- * @param {(node: string) => boolean} args.isLocalKey
- * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
- * @param {DaemonCore['pinTransient']} [args.pinTransient]
- * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
- * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
- * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
- * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
- * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
+ * @param {DaemonCore['formulateGitCredential']} powers.formulateGitCredential
+ * @param {DaemonCore['formulateGitRemote']} powers.formulateGitRemote
+ * @param {DaemonCore['formulateInvitation']} powers.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} powers.acceptInvitation
+ * @param {DaemonCore['getPeerIdForNodeIdentifier']} powers.getPeerIdForNodeIdentifier
+ * @param {DaemonCore['formulateChannel']} powers.formulateChannel
+ * @param {DaemonCore['formulateTimer']} powers.formulateTimer
+ * @param {DaemonCore['getAllNetworkAddresses']} powers.getAllNetworkAddresses
+ * @param {DaemonCore['getAllContentSources']} powers.getAllContentSources
+ * @param {ContentLoadable['loadContent']} powers.loadContent
+ * @param {DaemonCore['getTypeForId']} powers.getTypeForId
+ * @param {DaemonCore['getFormulaForId']} powers.getFormulaForId
+ * @param {DaemonCore['getActiveContext']} powers.getActiveContext
+ * @param {MakeMailbox} powers.makeMailbox
+ * @param {MakeDirectoryNode} powers.makeDirectoryNode
+ * @param {NodeNumber} powers.localNodeNumber
+ * @param {(node: string) => boolean} powers.isLocalKey
+ * @param {DaemonCore['getAgentIdForHandleId']} powers.getAgentIdForHandleId
+ * @param {DaemonCore['pinTransient']} [powers.pinTransient]
+ * @param {DaemonCore['unpinTransient']} [powers.unpinTransient]
+ * @param {DaemonCore['getFormulaGraphSnapshot']} [powers.getFormulaGraphSnapshot]
+ * @param {DaemonCore['listRetentionPaths']} [powers.listRetentionPaths]
+ * @param {DaemonCore['followRetentionPaths']} [powers.followRetentionPaths]
+ * @param {ReturnType<typeof makeTraceAggregator>} [powers.traceAggregator]
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
- * @param {ReturnType<typeof makeSecretManager>} args.secretManager
- * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
+ * @param {ReturnType<typeof makeSecretManager>} powers.secretManager
+ * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} powers.formulateSecretLookup
  */
 export const makeHostMaker = ({
   provide,
@@ -399,7 +402,13 @@ export const makeHostMaker = ({
   // injected from the daemon core's host tool powers rather than
   // imported here: a static `@endo/git` import would put nine `node:`
   // builtins on the XS daemon bundle's compartment graph.
-  gitClone = /** @param {...any} _args */ (..._args) => {
+  listMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`listMountHostEntries not wired into makeHostMaker`);
+  },
+  clearMountHostEntries = /** @param {FormulaIdentifier} _id */ async _id => {
+    throw makeError(X`clearMountHostEntries not wired into makeHostMaker`);
+  },
+  gitClone = /** @param {...any} _arguments */ (..._arguments) => {
     throw makeError(X`gitClone not wired into makeHostMaker`);
   },
   getIdForRef = /** @param {unknown} _ref */ _ref => undefined,
@@ -459,6 +468,13 @@ export const makeHostMaker = ({
    * @param {{[name: string]: FormulaIdentifier}} platformNames
    * @param {Context} context
    */
+  /**
+   * Destination directories of the `provideGitClone` calls in progress.
+   *
+   * @type {Set<string>}
+   */
+  const gitClonesInProgress = new Set();
+
   const makeHost = async (
     hostId,
     handleId,
@@ -1588,8 +1604,53 @@ export const makeHostMaker = ({
       return controller;
     };
 
+    /**
+     * Build the persisted `git-remote` policy record from
+     * `provideGitRemote`-shaped options.
+     *
+     * @param {{
+     *   url: string,
+     *   allowedDirections?: Array<'fetch' | 'push'>,
+     *   fetchRefspecs?: string[],
+     *   pushRefspecs?: string[],
+     *   defaultPullRef?: string,
+     *   allowedBranches?: string[],
+     *   allowForcePush?: boolean,
+     *   allowTags?: boolean,
+     *   allowDelete?: boolean,
+     *   allowLocalFileTransport?: boolean,
+     * }} options
+     */
+    const makeGitRemotePolicyRecord = options =>
+      harden({
+        url: options.url,
+        allowedDirections: harden([
+          ...(options.allowedDirections || ['fetch']),
+        ]),
+        fetchRefspecs: harden([...(options.fetchRefspecs || [])]),
+        pushRefspecs: harden([...(options.pushRefspecs || [])]),
+        ...(options.defaultPullRef !== undefined
+          ? { defaultPullRef: options.defaultPullRef }
+          : {}),
+        ...(options.allowedBranches !== undefined
+          ? { allowedBranches: harden([...options.allowedBranches]) }
+          : {}),
+        ...(options.allowForcePush !== undefined
+          ? { allowForcePush: options.allowForcePush }
+          : {}),
+        ...(options.allowTags !== undefined
+          ? { allowTags: options.allowTags }
+          : {}),
+        ...(options.allowDelete !== undefined
+          ? { allowDelete: options.allowDelete }
+          : {}),
+        ...(options.allowLocalFileTransport !== undefined
+          ? { allowLocalFileTransport: options.allowLocalFileTransport }
+          : {}),
+      });
+
     /** @type {EndoHost['provideGitRemote']} */
-    const provideGitRemote = async (gitCap, petName, opts) => {
+    const provideGitRemote = async (gitCap, petName, options) => {
       const { namePath } = petNamePathFrom(petName);
       const gitId = getIdForRef(gitCap);
       if (gitId === undefined) {
@@ -1603,10 +1664,10 @@ export const makeHostMaker = ({
         );
       }
       if (
-        !opts ||
-        typeof opts !== 'object' ||
-        typeof opts.name !== 'string' ||
-        typeof opts.url !== 'string'
+        !options ||
+        typeof options !== 'object' ||
+        typeof options.name !== 'string' ||
+        typeof options.url !== 'string'
       ) {
         throw makeError(
           X`provideGitRemote: options must include a string name and url`,
@@ -1614,36 +1675,15 @@ export const makeHostMaker = ({
       }
       /** @type {FormulaIdentifier | undefined} */
       let credentialId;
-      if (opts.credential !== undefined) {
-        credentialId = getIdForRef(opts.credential);
+      if (options.credential !== undefined) {
+        credentialId = getIdForRef(options.credential);
         if (credentialId === undefined) {
           throw makeError(
             X`provideGitRemote: credential must be a daemon-minted Git credential cap`,
           );
         }
       }
-      const policy = harden({
-        url: opts.url,
-        allowedDirections: harden([...(opts.allowedDirections || ['fetch'])]),
-        fetchRefspecs: harden([...(opts.fetchRefspecs || [])]),
-        pushRefspecs: harden([...(opts.pushRefspecs || [])]),
-        ...(opts.defaultPullRef !== undefined
-          ? { defaultPullRef: opts.defaultPullRef }
-          : {}),
-        ...(opts.allowedBranches !== undefined
-          ? { allowedBranches: harden([...opts.allowedBranches]) }
-          : {}),
-        ...(opts.allowForcePush !== undefined
-          ? { allowForcePush: opts.allowForcePush }
-          : {}),
-        ...(opts.allowTags !== undefined ? { allowTags: opts.allowTags } : {}),
-        ...(opts.allowDelete !== undefined
-          ? { allowDelete: opts.allowDelete }
-          : {}),
-        ...(opts.allowLocalFileTransport !== undefined
-          ? { allowLocalFileTransport: opts.allowLocalFileTransport }
-          : {}),
-      });
+      const policy = makeGitRemotePolicyRecord(options);
 
       /** @type {DeferredTasks<GitRemoteDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -1654,23 +1694,48 @@ export const makeHostMaker = ({
       const { value } = await formulateGitRemote(
         gitId,
         credentialId,
-        opts.name,
+        options.name,
         policy,
         tasks,
       );
       return value;
     };
 
+    const gitCloneOriginKeys = harden([
+      'allowedDirections',
+      'fetchRefspecs',
+      'pushRefspecs',
+      'allowedBranches',
+      'defaultPullRef',
+      'allowForcePush',
+      'allowTags',
+      'allowDelete',
+    ]);
+
     /** @type {EndoHost['provideGitClone']} */
-    const provideGitClone = async opts => {
-      if (!opts || typeof opts !== 'object') {
+    const provideGitClone = async (destMount, petName, options) => {
+      const { namePath } = petNamePathFrom(petName);
+      if (!options || typeof options !== 'object') {
         throw makeError(X`provideGitClone: options must be an object`);
       }
-      if (typeof opts.endpoint !== 'object' || opts.endpoint === null) {
+      if (typeof options.endpoint !== 'object' || options.endpoint === null) {
         throw makeError(X`provideGitClone: endpoint must be an object`);
       }
-      const { destMount, endpoint: endpointOptions } = opts;
-      const identity = normalizeGitIdentity(opts.identity, 'provideGitClone');
+      const { endpoint: endpointOptions, origin = {} } = options;
+      const identity = normalizeGitIdentity(
+        options.identity,
+        'provideGitClone',
+      );
+      if (typeof origin !== 'object' || origin === null) {
+        throw makeError(X`provideGitClone: origin must be an object`);
+      }
+      for (const key of Object.keys(origin)) {
+        if (!gitCloneOriginKeys.includes(key)) {
+          throw makeError(
+            X`provideGitClone: origin.${q(key)} is not an origin policy field; the clone fixes the remote name, url, credential and transport from the endpoint`,
+          );
+        }
+      }
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
         throw makeError(
@@ -1724,61 +1789,115 @@ export const makeHostMaker = ({
             ? false
             : endpointRecord.allowLocalFileTransport,
       });
+      const policy = makeGitRemotePolicyRecord({
+        fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+        ...origin,
+        url: endpoint.url,
+        allowLocalFileTransport: endpoint.allowLocalFileTransport,
+      });
+      // Reject before cloning a policy the `git-remote` maker would reject
+      // at incarnation, the same check `provideGitRemote` gets there.
+      normalizeGitRemotePolicy({ name: 'origin', policy });
+
       const destPath = await getMountHostPath(
         /** @type {FormulaIdentifier} */ (destMountId),
       );
-      /** @type {FormulaIdentifier | undefined} */
-      let clonedGitId;
-      const cloner = makeGitCloner({
-        endpoint,
-        clone: gitClone,
-        makeGit: async () => {
-          /** @type {DeferredTasks<GitDeferredTaskParams>} */
-          const tasks = makeDeferredTasks();
-          const { value, id } = await formulateGit(
-            destMountId,
-            false,
-            identity,
-            tasks,
-          );
-          clonedGitId = id;
-          return value;
-        },
-        makeRemote: async ({ endpoint: remoteEndpoint }) => {
-          await null;
-          if (clonedGitId === undefined) {
-            throw makeError(X`provideGitClone: cloned Git id was not minted`);
-          }
-          const policy = harden({
-            url: remoteEndpoint.url,
-            allowedDirections: harden(
-              /** @type {Array<'fetch' | 'push'>} */ (['fetch', 'push']),
-            ),
-            fetchRefspecs: harden(['+refs/heads/*:refs/remotes/origin/*']),
-            pushRefspecs: harden(['refs/heads/*:refs/heads/*']),
-            allowLocalFileTransport: remoteEndpoint.allowLocalFileTransport,
+      // Discarding a failed clone empties the mount, which is safe only while
+      // this call holds the directory alone and found it empty.
+      if (gitClonesInProgress.has(destPath)) {
+        throw makeError(
+          X`provideGitClone: destMount already has a clone in progress`,
+        );
+      }
+      gitClonesInProgress.add(destPath);
+      try {
+        if ((await listMountHostEntries(destMountId)).length > 0) {
+          throw makeError(X`provideGitClone: destMount must be empty`);
+        }
+        // Formulas minted during the composition stay transiently pinned
+        // until the Git's name is stored, or until discard releases them.
+        /** @type {FormulaIdentifier[]} */
+        const pinned = [];
+        /** @type {FormulaIdentifier | undefined} */
+        let clonedGitId;
+        const cloner = makeGitCloner({
+          endpoint,
+          clone: gitClone,
+          makeGit: async () => {
+            const { value, id } = await formulateGit(
+              destMountId,
+              false,
+              identity,
+              makeDeferredTasks(),
+            );
+            pinTransient(id);
+            pinned.push(id);
+            clonedGitId = id;
+            return value;
+          },
+          makeRemote: async () => {
+            await null;
+            if (clonedGitId === undefined) {
+              throw makeError(X`provideGitClone: cloned Git id was not minted`);
+            }
+            const { value, id } = await formulateGitRemote(
+              clonedGitId,
+              credentialId,
+              'origin',
+              policy,
+              makeDeferredTasks(),
+            );
+            pinTransient(id);
+            pinned.push(id);
+            return value;
+          },
+        });
+        try {
+          const { git, remote } = await cloner.clone({
+            destMount,
+            destPath,
           });
-          /** @type {DeferredTasks<GitRemoteDeferredTaskParams>} */
-          const tasks = makeDeferredTasks();
-          const { value } = await formulateGitRemote(
-            clonedGitId,
-            credentialId,
-            'origin',
-            policy,
-            tasks,
+          // Naming is the last step, so a failure anywhere above leaves no
+          // name bound.
+          await E(directory).storeIdentifier(
+            namePath,
+            /** @type {FormulaIdentifier} */ (clonedGitId),
           );
-          return value;
-        },
-      });
-      const { git, remote } = await cloner.clone({
-        destMount,
-        destPath,
-      });
-      const gitCap = /** @type {ReadWriteEndoGit} */ (git);
-      return harden({
-        git: gitCap,
-        remote,
-      });
+          return harden({
+            git: /** @type {ReadWriteEndoGit} */ (git),
+            remote,
+          });
+        } catch (error) {
+          const cleanupErrors = [];
+          await Promise.all(pinned.splice(0).map(unpinTransient)).catch(
+            cleanupError => cleanupErrors.push(cleanupError),
+          );
+          await clearMountHostEntries(
+            /** @type {FormulaIdentifier} */ (destMountId),
+          ).catch(cleanupError => cleanupErrors.push(cleanupError));
+          if (cleanupErrors.length > 0) {
+            throw makeError(
+              X`provideGitClone failed and could not discard the partial clone`,
+              AggregateError,
+              {
+                cause: /** @type {Error} */ (error),
+                errors: [error, ...cleanupErrors],
+              },
+            );
+          }
+          throw error;
+        } finally {
+          // The name is bound by now, so a failed unpin must not report a
+          // published clone as failed.  The catch path has already unpinned.
+          await Promise.all(pinned.map(unpinTransient)).catch(error =>
+            console.warn(
+              `provideGitClone: could not release transient pins: ${/** @type {Error} */ (error).message}`,
+            ),
+          );
+        }
+      } finally {
+        gitClonesInProgress.delete(destPath);
+      }
     };
 
     /** @type {EndoHost['storeValue']} */

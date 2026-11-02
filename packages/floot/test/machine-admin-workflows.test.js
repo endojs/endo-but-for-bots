@@ -158,9 +158,9 @@ test('machine-admin prompt sets up a remote this tree can construct and push thr
   t.true(
     systemPrompt.includes("createBranch('agent', { switchAfterCreate: true })"),
   );
-  // The git the session commits through is minted separately from the clone
-  // and takes its own identity; without it commits are attributed to Endo.
-  t.true(systemPrompt.includes("provideGit(mount, 'endo-work', { identity })"));
+  t.true(systemPrompt.includes("provideGitClone(mount, 'endo-work', {"));
+  t.true(systemPrompt.includes("provideGitRemote(git, 'endo-work-origin', {"));
+  t.false(systemPrompt.includes("provideGit(mount, 'endo-work'"));
   // The clone's own capabilities can be stored by name; the prompt must not
   // claim otherwise.
   t.false(systemPrompt.includes('cannot store by name'));
