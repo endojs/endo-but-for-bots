@@ -1592,6 +1592,7 @@ __metadata:
     "@endo/platform": "workspace:^"
     "@endo/preact-container": "workspace:^"
     "@endo/promise-kit": "workspace:^"
+    "@endo/prompt-templates": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/sha256": "workspace:^"
     "@endo/space-channel": "workspace:^"
@@ -3274,6 +3275,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/prompt-templates@workspace:^, @endo/prompt-templates@workspace:packages/prompt-templates":
+  version: 0.0.0-use.local
+  resolution: "@endo/prompt-templates@workspace:packages/prompt-templates"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/pubsub@workspace:^, @endo/pubsub@workspace:packages/pubsub":
   version: 0.0.0-use.local
   resolution: "@endo/pubsub@workspace:packages/pubsub"
@@ -3596,6 +3610,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/preact-container": "workspace:^"
+    "@endo/prompt-templates": "workspace:^"
     eslint: "catalog:dev"
     marked: "npm:^18.1.1"
     preact: "npm:^10.29.8"
