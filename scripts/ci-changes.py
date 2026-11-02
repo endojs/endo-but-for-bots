@@ -19,7 +19,7 @@ import tomllib
 
 JOBS = (
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
-    "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
+    "test-async-hooks", "test-hermes", "test-xs", "build-xsnap", "test-daemon-xs",
     "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
@@ -29,12 +29,12 @@ JOBS = (
 )
 JS_JOBS = {
     "test", "cover", "lint", "familiar-bundle", "sandbox-drivers",
-    "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
+    "test-async-hooks", "test-hermes", "test-xs", "build-xsnap", "test-daemon-xs",
     "test-thixotrope-ironhorse", "test-ocapn-python", "browser-tests",
     "guile-interop", "viable-release", "depcheck", "check-action-pins", "package-uniformity",
 }
 RUST_JOBS = {
-    "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
+    "build-xsnap", "test-daemon-xs", "test-thixotrope-ironhorse", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
     "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
     "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
@@ -268,6 +268,7 @@ def classify(paths, graphs, all_jobs=False):
             "guile-interop": {"@endo/goblin-chat", "@endo/ocapn"},
             "test-thixotrope-ironhorse": {"@endo/thixotrope"},
             "build-xsnap": {"@endo/thixotrope", "@endo/daemon"},
+            "test-daemon-xs": {"@endo/daemon"},
         }.items():
             jobs[job] |= bool(packages & roots)
         jobs["test-xs"] |= any(
@@ -275,6 +276,7 @@ def classify(paths, graphs, all_jobs=False):
             for name, manifest in graph.js.items() if name in packages
         )
         jobs["build-xsnap"] |= bool(core_crates & {"endo", "xsnap"})
+        jobs["test-daemon-xs"] |= bool(core_crates & {"endo", "xsnap"})
         jobs["test-thixotrope-ironhorse"] |= "thixotrope-ironhorse-worker" in core_crates
         jobs["test-ironhorse"] |= bool(core_crates & CORE)
         jobs["test-ironhorse-calibration"] |= "ironhorse-vm" in core_crates
@@ -346,7 +348,7 @@ def classify(paths, graphs, all_jobs=False):
             jobs["test-ironhorse-oracle"] = jobs["oracle-sanitizers"] = True
             jobs["test-xs"] = True
             if not under(path, "packages/test262-runner/test262"):
-                jobs["build-xsnap"] = True
+                jobs["build-xsnap"] = jobs["test-daemon-xs"] = True
         # The daemon boot bundles the oracle lane dual-runs. `polyfills.js`
         # and `host_aliases.js` are read by `ironhorse-262`'s `include_str!`;
         # `bus-worker-xs-ses-boot.js` and its bundler generate `ses_boot.js`,

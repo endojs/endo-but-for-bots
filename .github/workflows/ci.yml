@@ -726,6 +726,78 @@ jobs:
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
+  test-daemon-xs:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-daemon-xs']) }}
+    name: test-daemon-xs
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Cache Cargo + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-endor-release-${{ hashFiles('Cargo.lock', 'rust/endo/**', 'c/moddable/**') }}
+          restore-keys: |
+            ${{ runner.os }}-endor-release-
+
+      - name: Generate XS bootstraps
+        run: |
+          yarn workspace @endo/thixotrope run build:xs-bundles
+          yarn bundle:xs
+
+      - name: Build endor
+        run: cargo build --locked --release -p endo --bin endor
+
+      - name: Test host ArrayBuffers and harden on XS
+        run: cargo test --locked -p xsnap --test ffi_wiring
+
+      - name: Test the daemon on the XS manager
+        working-directory: packages/daemon
+        # Every daemon-starting test file that passes in full under endor. The
+        # rest of `test:rust` is not green yet: `makeUnconfined` and host tool
+        # powers are absent from the XS worker (designs/worker-rust-xs.md
+        # § Known Gaps), and endo.test.js hangs on its session-record test. Add
+        # a file here once it passes.
+        run: |
+          yarn test:rust \
+            test/channel.test.js \
+            test/content-store-gc.test.js \
+            test/cross-supervisor.test.js \
+            test/error-trace.test.js \
+            test/floot-attachments.test.js \
+            test/gateway.test.js \
+            test/mail-lifecycle-help.test.js \
+            test/marshal-publication.test.js \
+            test/request-result.test.js \
+            test/retention-paths.test.js
+
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
     needs: changes

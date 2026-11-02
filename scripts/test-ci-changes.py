@@ -172,6 +172,17 @@ class Repository(unittest.TestCase):
         self.assertTrue(selected["test-thixotrope-ironhorse"])
         self.assertTrue(selected["build-xsnap"])
 
+    def test_daemon_xs_lane_follows_its_daemon_and_engine_inputs(self):
+        for path in [
+            "packages/daemon/src/manager.js",
+            "rust/endo/xsnap/src/polyfills.js",
+            "rust/endo/src/lib.rs",
+            "c/moddable",
+        ]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["test-daemon-xs"])
+        self.assertFalse(self.selected("packages/familiar/package.json")["test-daemon-xs"])
+
     def test_nonmanifest_bundle_inputs(self):
         self.assertTrue(self.selected("packages/lal/agent.js")["familiar-bundle"])
         self.assertTrue(self.selected("scripts/pack-all.mjs")["viable-release"])
