@@ -11,6 +11,7 @@ import { makeGit, makeGitOperations } from '@endo/exo-git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
+/** @import { ExecutionContext } from 'ava' */
 /** @import { ReadWriteEndoGit, GitOperations } from '@endo/exo-git' */
 
 const execFileAsync = promisify(execFile);
@@ -44,7 +45,7 @@ export const composeGitOverWorktree = async (root, { identity } = {}) => {
  * commit on `main`, then compose a `mount -> Git` over it. Used by the
  * push/fetch round-trip that pushes from a freshly initialized local repo.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @returns {Promise<{ git: ReadWriteEndoGit, operations: GitOperations, mount: ReturnType<typeof makeMount>, root: string }>}
  */
 export const provisionGitContext = async t => {
@@ -71,7 +72,7 @@ export const provisionGitContext = async t => {
 /**
  * Clone an existing source working tree into a bare `file://` remote.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} sourceRepo absolute path to a non-bare source repository
  * @returns {Promise<string>} absolute path to the bare remote
  */
@@ -93,7 +94,7 @@ export const provisionBareRemote = async (t, sourceRepo) => {
  * by the clone-loop test, which needs material content (not just an empty
  * commit) on the remote so a host clone has a file to edit.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @returns {Promise<string>} absolute path to the bare remote
  */
 export const seedBareRemote = async t => {
@@ -127,7 +128,7 @@ export const seedBareRemote = async t => {
  * reports the oid the remote now points at, so a fetch/pull round-trip can
  * assert against it.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} remoteRoot absolute path to a bare remote
  * @param {string} branch the remote branch to advance
  * @returns {Promise<string>} the branch's new head oid
@@ -165,7 +166,7 @@ export const advanceRemoteBranch = async (t, remoteRoot, branch) => {
  * Advance the bare remote's `main` by one real commit, returning the new head
  * oid.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} remoteRoot absolute path to a bare remote
  * @returns {Promise<string>} the new `main` head oid
  */

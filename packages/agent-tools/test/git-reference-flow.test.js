@@ -38,6 +38,8 @@ import {
   provisionHistoryTools,
 } from '../src/workspace.js';
 
+/** @import { ExecutionContext } from 'ava' */
+
 const execFileAsync = promisify(execFile);
 
 const BASE = 'llm';
@@ -147,7 +149,7 @@ const makeScriptedStreamFn = turns => {
  * Seed a bare remote whose only branch is `llm`, holding a README with a
  * greeting, the way the bot fork's integration branch looks to an agent.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  */
 const seedLlmRemote = async t => {
   const parent = await fs.promises.mkdtemp(
