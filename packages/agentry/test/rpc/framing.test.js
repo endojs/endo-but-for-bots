@@ -1,4 +1,6 @@
 // @ts-check
+// prefer-endo-primitives-exempt: these tests feed raw UTF-8 bytes to the
+// streaming decoder, and `@endo/bytes` has no UTF-8 encoder.
 
 /**
  * Tests for the strict LF-delimited JSON framing codec.

@@ -1,4 +1,6 @@
 // @ts-check
+// prefer-endo-primitives-exempt: `@endo/bytes` has no streaming UTF-8
+// decoder, and a chunk may split a multibyte sequence.
 /// <reference types="ses"/>
 
 /**
