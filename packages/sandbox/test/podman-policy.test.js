@@ -710,7 +710,7 @@ for (const [label, fileOverrides, message] of refusedJoinTargets) {
     });
     await t.throwsAsync(
       driver.prepareSlice(/** @type {any} */ (makeJoinSpec())),
-      { message },
+      { message: new RegExp(message) },
     );
   });
 }

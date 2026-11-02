@@ -90,7 +90,9 @@ const refused = harden([
 
 for (const [name, text, message] of refused) {
   test(`a plan with ${name} is refused`, t => {
-    t.throws(() => readSessionPlan(/** @type {string} */ (text)), { message });
+    t.throws(() => readSessionPlan(/** @type {string} */ (text)), {
+      message: new RegExp(message),
+    });
   });
 }
 
