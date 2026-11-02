@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { encodeBase64 } from '@endo/base64';
 import { decodeHex } from '@endo/hex';
 
@@ -110,10 +111,12 @@ export const snapshotTreeMethods = (store, sha256) => {
         /** @type {any} */ (child),
       );
     },
+    // See designs/fs-interface-reconciliation.md § D6.
+    followNameChanges: () => readerFromIterator(harden([])),
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup).'
+        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup, followNameChanges).'
         : `No documentation for method ${method}.`,
   });
 };

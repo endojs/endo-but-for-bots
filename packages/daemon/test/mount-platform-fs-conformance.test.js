@@ -12,14 +12,17 @@ import url from 'url';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
+import { getInterfaceMethodKeys } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 import {
   DirectoryInterface as PlatformDirectoryInterface,
   FileInterface as PlatformFileInterface,
   ReadableTreeInterface,
+  SnapshotTreeInterface,
   checkinTree,
 } from '@endo/platform/fs/lite';
 
@@ -67,45 +70,13 @@ const makeTempRoot = t => {
 };
 
 /**
- * Extract a method-name set from an `M.interface` guard.  The interface
- * is a Pattern record; the method shapes live under its `methodGuards`
- * iface descriptor.  We probe via Reflect.ownKeys on the call-args
- * record indirectly: M.interface stores method guards on a hidden
- * property accessible via getMethodNames().
- *
- * @param {any} iface
+ * Method names the platform `Directory` contract requires, read from the
+ * guard itself so a change to `PlatformDirectoryInterface` is pinned here
+ * without a hand-maintained copy.
  */
-const interfaceMethodNames = iface => {
-  // M.interface returns an InterfaceGuard whose payload includes the
-  // method-guard record under symbol-keyed slot.  The public API
-  // exposes the method names via `getInterfaceMethodKeys`.
-  // We deduce by introspection rather than depend on internal API:
-  // every M.interface guard records the method names accessible via
-  // its serialized payload at `.methodGuards`.
-  const payload = /** @type {any} */ (iface).interfaceName ?? null;
-  // Fallback: scan with `M.toPattern` to read out the methodGuards.
-  // We provide an explicit list to avoid depending on @endo/patterns
-  // internals.  Each interface lists the expected names below.
-  return payload;
-};
-// Silence linter: helper above documents the indirect path even though
-// the tests below use explicit lists.
-void interfaceMethodNames;
-
-/** Method names the platform `Directory` contract requires. */
-const PLATFORM_DIRECTORY_METHODS = [
-  'help',
-  'has',
-  'list',
-  'lookup',
-  'write',
-  'remove',
-  'move',
-  'copy',
-  'makeDirectory',
-  'readOnly',
-  'snapshot',
-];
+const PLATFORM_DIRECTORY_METHODS = harden(
+  getInterfaceMethodKeys(PlatformDirectoryInterface).map(String),
+);
 
 /** Method names the platform `File` contract requires. */
 const PLATFORM_FILE_METHODS = [
@@ -121,13 +92,9 @@ const PLATFORM_FILE_METHODS = [
 ];
 
 /** Method names the platform `ReadableTree` contract requires. */
-const PLATFORM_READABLE_TREE_METHODS = [
-  'has',
-  'list',
-  'listTree',
-  'lookup',
-  'help',
-];
+const PLATFORM_READABLE_TREE_METHODS = harden(
+  getInterfaceMethodKeys(ReadableTreeInterface).map(String),
+);
 
 /**
  * Method names the rich `ReadableBlob` view exposes: the whole-value surface
@@ -227,12 +194,11 @@ test('EndoMount exposes every method on PlatformDirectoryInterface', async t => 
  * `entry` / `stat` / `readText` / `maybeReadText` / `writeText` / `makeFile`
  * are mount-specific shortcuts. `subView` is the catalog confined-sub-root
  * method (shared with the extended `Directory`, not strictly mount-specific);
- * it is listed here only because the minimal `lite` `Directory` vocabulary does
- * not yet carry it — see designs/fs-interface-consolidation.md (C2/C5) for
- * whether the vocabulary should grow to include it. `maybeLookup` is the
- * `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the lite
- * `Directory` vocabulary. (`help` is now part of the platform contract, so it
- * is not an extension.)
+ * it stays out of the minimal `lite` `Directory` vocabulary until its public
+ * name is settled (designs/fs-interface-reconciliation.md). `maybeLookup`
+ * is the `ReadableNameHub` lookup-or-undefined primitive (C1), not part of the
+ * lite `Directory` vocabulary. (`help` is now part of the platform contract,
+ * so it is not an extension.)
  */
 const ENDOMOUNT_EXTENSIONS = [
   'entry',
@@ -629,6 +595,24 @@ test('EndoMount.snapshot returns a SnapshotTree-shaped capability', async t => {
   t.true(methods.includes('lookup'));
   t.true(methods.includes('sha256'));
   t.true(methods.includes('size'));
+  // Every method the portable guard requires is reachable on the guarded Exo.
+  const missing = getInterfaceMethodKeys(SnapshotTreeInterface)
+    .map(String)
+    .filter(name => !methods.includes(name));
+  t.deepEqual(missing, []);
+});
+
+test('EndoMount.snapshot exposes an immediately-terminating followNameChanges', async t => {
+  const { mount } = makeConfiguredMount(t);
+  await E(mount).writeText(['s.txt'], 'snap');
+  const snapshot = await E(mount).snapshot();
+  const changes = [];
+  for await (const change of iterateReader(
+    await E(/** @type {any} */ (snapshot)).followNameChanges(),
+  )) {
+    changes.push(change);
+  }
+  t.deepEqual(changes, []);
 });
 
 // --- XS file-powers / Node file-powers contract conformance ---

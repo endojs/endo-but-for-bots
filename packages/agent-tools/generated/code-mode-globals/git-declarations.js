@@ -180,7 +180,7 @@ type GitQid<K = GitNodeKind> = {
     version: bigint;
 };
 type GitReadableBlobSource = {
-    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+    streamBase64: (...streamArguments: any[]) => PromiseLike<unknown>;
 };
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
@@ -338,6 +338,7 @@ type GitStatusEntry = {
 type GitReadableTree = GitLiteReadableTree;
 type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;
 type GitSnapshotTree = GitLiteReadableTree & {
+    followNameChanges: () => GitPassableReader<never, undefined>;
     sha256: () => string;
     size: () => Promise<bigint>;
 };

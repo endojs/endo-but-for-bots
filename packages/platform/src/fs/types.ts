@@ -2,6 +2,8 @@
 // TypeScript resolves existing `./types.js` type imports to this module and
 // composite declaration emit produces the corresponding `types.d.ts` artifact.
 
+import type { PassableReader } from '@endo/exo-stream';
+
 /** An async iterator of Uint8Array chunks. */
 export type ReadableStream = AsyncIterator<Uint8Array>;
 
@@ -87,7 +89,7 @@ export interface ReadableTree {
  * such as `readReturnPattern` is not part of the materialization contract.
  */
 export type ReadableBlobSource = {
-  streamBase64: (...args: any[]) => PromiseLike<unknown>;
+  streamBase64: (...streamArguments: any[]) => PromiseLike<unknown>;
 };
 
 /** Portable semantic payload accepted by `Directory.write()`. */
@@ -97,9 +99,11 @@ export type DirectoryWriteSource = ReadableBlobSource | ReadableTree;
  * A SnapshotTree is a ReadableTree with a content-addressed identity.
  * `sha256()` returns the digest as base64 (the canonical public hash encoding);
  * the hex form is the internal content-store address. `size()` returns the
- * manifest byte length.
+ * manifest byte length. `followNameChanges()` returns a reader that is already
+ * closed, because no change can occur through a snapshot.
  */
 export type SnapshotTree = ReadableTree & {
+  followNameChanges: () => PassableReader<never, undefined>;
   sha256: () => string;
   size: () => Promise<bigint>;
 };

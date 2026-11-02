@@ -868,6 +868,11 @@ Returns EndoReadable for files, ReadableTree for subdirectories.
 Example: lookup("index.html") -> EndoReadable
 Example: lookup(["assets", "style.css"]) -> EndoReadable
 
+## followNameChanges() -> PassableReader
+
+Return a reader of entry-name changes. A snapshot never changes, so the reader
+ends immediately without yielding any record.
+
 # EndoMount - Live mutable access to a filesystem directory.
 
 Paths: an array is a sequence of segments (["src", "foo.js"]); a plain
@@ -1027,12 +1032,12 @@ First yields existing entries in alphabetical order as
 Shallow (immediate children only) and confinement-filtered.
 Releases the underlying OS watcher when the iterator is dropped.
 
-## makeFile(path, content?) -> Promise<void>
+## makeFile(path, content?) -> Promise<EndoMountFile>
 
-Create a file at the given path, with optional initial text content.
+Create a file at the given path and return its live file capability.
 path: string | string[] | EndoMountEntry — One segment, an array of segments,
 or a mount entry; a string containing a slash is rejected.
-content: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.
+content: string | ReadableBlob (optional) — Initial UTF-8 text or a ReadableBlob whose bytes become the file's content. An existing file is replaced when content is provided and left unchanged otherwise. A ReadableTree is rejected; use `write(path, tree)` to materialize a directory.
 
 ## write(path, value) -> Promise<void>
 
