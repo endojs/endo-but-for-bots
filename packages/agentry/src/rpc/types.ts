@@ -1,25 +1,12 @@
 // spell-out-exempt: `args` is the tool-call field name fixed by
 // `pi-agent-core` events and the RPC wire vocabulary; it cannot be renamed.
 
-/**
- * Shape definitions for the stdio JSONL RPC bridge: the language-agnostic
- * wire vocabulary from `designs/endopi-stdio-rpc-bridge.md`. Commands arrive
- * from an embedding host as LF-delimited JSON; events flow back the same way.
- * These types are the single source of truth the bridge, framing,
- * protocol, session, and serve modules share.
- */
-
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 
 /**
  * A decoded RPC command record. The bridge's `handleLine` checks only that
- * `type` is a string (and `id`, when present); every payload field is validated by the dispatcher
- * before use, so they are declared optional here.
- *
- * The command set (per the design): `prompt` and `steer` carry a `message`;
- * `set_model` carries `provider` and `model`; `abort`, `list_models`, and
- * `get_status` carry no payload. An optional `id` on any command is echoed
- * on every event that command produces, for correlation.
+ * `type` is a string (and `id`, when present); every payload field is
+ * validated by the dispatcher before use, so they are declared optional here.
  */
 export type RpcCommand = {
   type: string;
@@ -75,12 +62,15 @@ export type RpcEvent = (
 ) & { id?: string };
 
 /**
- * The narrow seam the bridge drives, adapting a live `PiAgent` to the
+ * The narrow interface the bridge drives, adapting a live `PiAgent` to the
  * command surface. `makeRpcSession` supplies the agent-backed
  * implementation; the tests supply a scripted fake.
  */
 export type Session = {
-  /** register a raw-event listener; returns an unsubscribe function */
+  /**
+   * register a raw-event listener; returns an unsubscribe function. Both are
+   * host-local closures, so `makeRpcSession`'s guard passes them raw.
+   */
   subscribe: (listener: (event: AgentEvent) => void) => () => void;
   prompt: (message: string) => Promise<void>;
   abort: () => void;
@@ -95,12 +85,19 @@ export type Session = {
   setModel: (selection: { provider: string; model: string }) => Promise<void>;
 };
 
-/**
- * The stateful strict-`\n` line decoder from `framing.js`. `push` absorbs a
- * text or byte chunk and returns whatever complete lines it now closes;
- * `flush` surfaces any buffered unterminated trailing line at end of input.
- */
 export type JsonlDecoder = {
   push: (chunk: string | Uint8Array) => string[];
   flush: () => string[];
+};
+
+/**
+ * The dispatcher `makeRpcBridge` returns.
+ */
+export type RpcBridge = {
+  /** parse and dispatch one input line */
+  handleLine: (line: string) => Promise<void>;
+  /** resolves once no prompt round is in flight */
+  idle: () => Promise<void>;
+  /** stop relaying the session's events */
+  close: () => void;
 };

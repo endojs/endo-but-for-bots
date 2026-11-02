@@ -15,10 +15,6 @@
  * the internal book-keeping events (`agent_start`, `turn_*`,
  * `tool_execution_update`) that the wire surface does not expose, and
  * tags every event with the in-flight command's `id` for correlation.
- *
- * Assistant text deltas become `message_update` events carrying just the
- * `delta`; reasoning deltas become `endo:thinking` events, following the
- * design's posture of namespacing Endo-only affordances.
  */
 
 /** @import { AgentEvent } from '@earendil-works/pi-agent-core' */
