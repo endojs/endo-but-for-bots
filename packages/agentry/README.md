@@ -14,9 +14,9 @@ Each surface is opt-in via its own subpath export.
   function: the powerless definition is the closure, and calling the returned
   maker with a powers handle is the powered stage.
 - `@endo/agentry/harness` — the code-mode-independent primitives the harness is
-  built from: `toolResultToSmallcaps` + the SmallCaps codec, `makeEnvCredentials`
-  (the single reader of `process.env`), `resolveModel`/`defineModels`, and
-  `makePiAgent`. `@endo/lal` imports these directly.
+  built from: `makeEnvCredentials` (the single reader of `process.env`),
+  `resolveModel`/`defineModels`, and `makePiAgent`. `@endo/lal` imports these
+  directly.
 - `@endo/agentry/code-mode` — the complete Pi code-mode preset and prompt
   assembly (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`), built on
   `defineAgent` and `@endo/agent-tools`.
@@ -25,9 +25,7 @@ Each surface is opt-in via its own subpath export.
   global descriptors, and non-secret reconstruction data.
 - `@endo/agentry/endo-code-mode-pi-extension` — a directly loadable Pi extension that binds
   one retained daemon guest to each Pi session and exposes only `evaluate`.
-- `@endo/agentry/rpc` — the stdio JSONL RPC bridge: a language-agnostic,
-  LF-delimited JSON surface that lets a spawned child drive a `PiAgent` over
-  stdin and stdout.
+- `@endo/agentry/rpc` — the stdio JSONL RPC bridge; see below.
 
 ## defineAgent
 
@@ -494,13 +492,10 @@ always runs through a daemon guest.
 an embedding host (an IDE plug-in, a CI runner, a Familiar pane) drives a
 `PiAgent` by writing one JSON command per line and reading one JSON event per
 line back. Diagnostics stay on a separate error stream, so the protocol stream
-carries only records. A host that embeds the bridge composes the exported
-building blocks.
+carries only records.
 
-The framing follows Pi's rule exactly: records are separated by `\n` and
-nothing else. A strict decoder is used rather than Node's `readline`, which
-also splits on `\r`, `U+2028`, and `U+2029`; a host in another language must
-not, so neither does the bridge.
+Records are separated by `\n` and nothing else: a bare `\r` stays in the line,
+and `U+2028` / `U+2029` are ordinary characters inside a record.
 
 Commands the bridge accepts (the optional `id` is echoed on every event a
 command produces, for correlation):
@@ -528,14 +523,31 @@ Events the bridge emits during a round:
 
 The streaming events mirror the daemon agent's own event stream.
 `endo:`-namespaced events carry Endo-only affordances the base Pi surface does
-not define, per the design's posture on namespacing. The `tool_execution_*`
-events appear only for a tool-bearing session; the protocol layer relays them
-whenever the session has tools.
+not define. The bridge relays whatever `tool_execution_*` events the agent
+emits; an agent without tools emits none.
 
-The session is single-flight: a `prompt` received while a round is still
-running is rejected, and mid-round control arrives as separate `steer` and
-`abort` commands. Concurrent sessions over one process (a channel id per
-record) are the design's later multiplexing phase.
+Replies to the other commands:
+
+```json
+{"type": "endo:ack", "command": "steer", "id": "2"}
+{"type": "models", "providers": ["anthropic", …], "models": [{"provider": "anthropic", "id": "…", "name": "…"}], "id": "3"}
+{"type": "status", "model": "…", "busy": false, "id": "4"}
+{"type": "error", "message": "…", "id": "5"}
+```
+
+`steer`, `abort`, and a successful `set_model` reply with `endo:ack`;
+`list_models` replies with `models`; `get_status` replies with `status`.
+Any rejected or failed command replies with `error`.
+
+The session is single-flight: a `prompt` or `set_model` received while a round
+is still running is rejected, and mid-round control arrives as separate `steer`
+and `abort` commands.
+A `steer` sent while no round is running is queued by the agent and delivered
+into the next round.
+When the input ends, `serveRpc` waits for an in-flight round to finish before
+returning.
+The decoder buffers a partial line without a length limit, so the host on the
+other end of the pipe is trusted.
 
 The exported building blocks: `makeJsonlDecoder` and `encodeRecord` (framing),
 `translateAgentEvent` (event mapping), `makeRpcSession` (a session over a
