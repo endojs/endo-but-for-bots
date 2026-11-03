@@ -301,6 +301,15 @@ test('context tokens use the newest reading plus trailing estimates', t => {
   );
 });
 
+test('a reading with missing cache fields is still a reading', t => {
+  const { input, output } = usageOf(500);
+  const message = {
+    ...assistant('short'),
+    usage: { input, output },
+  };
+  t.is(estimateContextTokens(/** @type {any} */ ([message])), 500);
+});
+
 test('estimates count every kind of content', t => {
   const estimate = (/** @type {any} */ content) =>
     estimateContextTokens(
@@ -540,6 +549,155 @@ test('a failed or partial summary leaves the transcript alone', async t => {
     t.is(piAgent.state.messages.at(-1), messages.at(-1));
     t.is(piAgent.state.messages[1], messages[0]);
   }
+});
+
+/**
+ * A stream whose first response waits for the returned release.
+ *
+ * @param {string} text
+ */
+const makeGatedStream = text => {
+  /** @type {() => void} */
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  /** @type {any} */
+  const streamFn = async () => {
+    await gate;
+    const stream = createAssistantMessageEventStream();
+    /** @type {any} */
+    const message = assistant(text);
+    stream.push({ type: 'start', partial: message });
+    stream.push({ type: 'done', reason: 'stop', message });
+    stream.end(message);
+    return stream;
+  };
+  return { streamFn, release };
+};
+
+test('a concurrent compaction is refused and the first still lands', async t => {
+  const messages = longHistory();
+  const { streamFn, release } = makeGatedStream('the summary');
+  const piAgent = makePiAgent({
+    systemPrompt: 'system',
+    model: stubModel,
+    tools: [],
+    messages,
+    streamFn,
+    getApiKey: () => 'key',
+  });
+  const compactor = makeCompactor({ piAgent, streamFn, settings });
+  const first = compactor.compact();
+  await t.throwsAsync(() => compactor.compact(), {
+    message: /already running/,
+  });
+  t.is(await compactor.compactIfNeeded(), undefined);
+  release();
+  const record = await first;
+  t.is(record?.summary, 'the summary');
+  await t.notThrowsAsync(() => compactor.compact());
+});
+
+test('a failed compaction clears the concurrency guard', async t => {
+  const { compactor } = makeHarness({
+    messages: longHistory(),
+    script: [{ content: [], stopReason: 'error', errorMessage: 'down' }],
+  });
+  await t.throwsAsync(() => compactor.compact());
+  t.truthy(await compactor.compact());
+});
+
+test('a message appended during the summary request is retained', async t => {
+  const messages = longHistory();
+  const { streamFn, release } = makeGatedStream('the summary');
+  const piAgent = makePiAgent({
+    systemPrompt: 'system',
+    model: stubModel,
+    tools: [],
+    messages,
+    streamFn,
+    getApiKey: () => 'key',
+  });
+  const compactor = makeCompactor({ piAgent, streamFn, settings });
+  const pending = compactor.compact();
+  /** @type {any} */
+  const late = toolResult('late', 'arrived during the summary');
+  piAgent.state.messages = [...piAgent.state.messages, late];
+  release();
+  const record = await pending;
+  t.is(piAgent.state.messages.at(-1), late);
+  t.is(piAgent.state.messages.at(-2), messages.at(-1));
+  t.is(record?.retainedMessages, 2);
+});
+
+test('compaction fails if the cut message left the transcript', async t => {
+  const messages = longHistory();
+  const { streamFn, release } = makeGatedStream('the summary');
+  const piAgent = makePiAgent({
+    systemPrompt: 'system',
+    model: stubModel,
+    tools: [],
+    messages,
+    streamFn,
+    getApiKey: () => 'key',
+  });
+  const compactor = makeCompactor({ piAgent, streamFn, settings });
+  const pending = compactor.compact();
+  /** @type {any[]} */
+  const replacement = [user('replaced')];
+  piAgent.state.messages = replacement;
+  release();
+  await t.throwsAsync(() => pending, { message: /changed during compaction/ });
+  t.is(piAgent.state.messages[0], replacement[0]);
+});
+
+test('the public entry points stay out of a running round', async t => {
+  const { streamFn, requests } = makeScriptedStream([
+    toolCall('call', 'probe', {}),
+    assistant('finished'),
+  ]);
+  /** @type {any} */
+  let compactor;
+  /** @type {unknown} */
+  let manualError;
+  /** @type {unknown} */
+  let automaticRecord = 'not called';
+  const piAgent = makePiAgent({
+    systemPrompt: 'system',
+    model: stubModel,
+    tools: [
+      /** @type {any} */ ({
+        name: 'probe',
+        label: 'probe',
+        description: 'probe',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => {
+          manualError = await compactor.compact().catch(error => error);
+          automaticRecord = await compactor.compactIfNeeded();
+          return {
+            content: [{ type: 'text', text: 'ok' }],
+            details: undefined,
+          };
+        },
+      }),
+    ],
+    messages: longHistory(99_500),
+    streamFn,
+    getApiKey: () => 'key',
+  });
+  compactor = makeCompactor({
+    piAgent,
+    streamFn,
+    settings: {
+      ...settings,
+      enabled: false,
+    },
+  });
+  await runRound(piAgent, 'You have new mail.');
+  t.regex(/** @type {Error} */ (manualError).message, /during a round/);
+  t.is(automaticRecord, undefined);
+  t.is(requests.length, 2, 'no summary request was made');
 });
 
 test('an automatic failure does not stop the round', async t => {

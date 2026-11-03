@@ -146,7 +146,13 @@ const reportedTokens = message => {
     !message.usage
   )
     return 0;
-  const { totalTokens, input, output, cacheRead, cacheWrite } = message.usage;
+  const {
+    totalTokens,
+    input = 0,
+    output = 0,
+    cacheRead = 0,
+    cacheWrite = 0,
+  } = message.usage;
   return totalTokens || input + output + cacheRead + cacheWrite;
 };
 
@@ -402,6 +408,7 @@ export const makeCompactor = ({
   const readFiles = new Set();
   const modifiedFiles = new Set();
   const staleReadings = new WeakSet();
+  let compacting = false;
 
   /**
    * @param {string} prompt
@@ -444,8 +451,14 @@ export const makeCompactor = ({
     return text;
   };
 
-  /** @type {Compactor['compact']} */
-  const compact = async ({ instructions, signal } = {}) => {
+  /**
+   * The caller must exclude a concurrent run, and must either hold the agent
+   * idle or be the agent's own between-turns hook, which the round awaits.
+   *
+   * @param {{ instructions?: string, signal?: AbortSignal }} options
+   * @returns {Promise<CompactionRecord | undefined>}
+   */
+  const summarizeAndReplace = async ({ instructions, signal }) => {
     const { messages, model } = piAgent.state;
     let start = 0;
     while (
@@ -457,15 +470,10 @@ export const makeCompactor = ({
     const limits = fitCompactionLimits(model.contextWindow, settings);
     const cut = findCutPoint(messages, start, limits.keepRecentTokens);
     if (cut <= start) return undefined;
-    // The transcript carries the system prompt and tool declarations as system
-    // messages, so eliding one would change what the model is told.
-    const systemMessages = messages
-      .slice(0, cut)
-      .filter(({ role }) => role === 'system');
+    const firstRetained = messages[cut];
     const elided = messages
       .slice(start, cut)
       .filter(({ role }) => role !== 'system');
-    const retained = messages.slice(cut);
     const tokensBefore = estimateContextTokens(messages, staleReadings);
     const focus = [settings.customInstructions, instructions]
       .filter(Boolean)
@@ -480,6 +488,17 @@ export const makeCompactor = ({
       limits.summaryTokens,
       signal,
     );
+    // A message appended during the summary request belongs to the retained
+    // tail, so the tail comes from the transcript as it stands now.
+    const current = piAgent.state.messages;
+    const currentCut = current.indexOf(firstRetained);
+    currentCut >= 0 || Fail`Transcript changed during compaction`;
+    // The transcript carries the system prompt and tool declarations as system
+    // messages, so eliding one would change what the model is told.
+    const systemMessages = current
+      .slice(0, currentCut)
+      .filter(({ role }) => role === 'system');
+    const retained = current.slice(currentCut);
     trackFiles(elided, readFiles, modifiedFiles);
     previousSummary = summary;
     summaryMessage = {
@@ -505,9 +524,34 @@ export const makeCompactor = ({
     });
   };
 
-  /** @type {Compactor['compactIfNeeded']} */
-  const compactIfNeeded = async signal => {
-    if (!settings.enabled) return undefined;
+  /**
+   * @param {{ instructions?: string, signal?: AbortSignal }} options
+   * @returns {Promise<CompactionRecord | undefined>}
+   */
+  const compactExclusively = async options => {
+    !compacting || Fail`Compaction is already running`;
+    compacting = true;
+    try {
+      return await summarizeAndReplace(options);
+    } finally {
+      compacting = false;
+    }
+  };
+
+  /** @type {Compactor['compact']} */
+  const compact = async (options = {}) => {
+    // A running round holds its own copy of the context, which replacing the
+    // transcript would not reach.
+    !piAgent.state.isStreaming || Fail`Cannot compact during a round`;
+    return compactExclusively(options);
+  };
+
+  /**
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<CompactionRecord | undefined>}
+   */
+  const compactOverThreshold = async signal => {
+    if (!settings.enabled || compacting) return undefined;
     const { messages, model } = piAgent.state;
     const { thresholdTokens } = fitCompactionLimits(
       model.contextWindow,
@@ -517,7 +561,7 @@ export const makeCompactor = ({
       return undefined;
     }
     try {
-      return await compact({ signal });
+      return await compactExclusively({ signal });
     } catch (error) {
       // The context may still fit; a real overflow is recovered or reported by
       // the round itself.
@@ -526,9 +570,13 @@ export const makeCompactor = ({
     }
   };
 
+  /** @type {Compactor['compactIfNeeded']} */
+  const compactIfNeeded = async signal =>
+    piAgent.state.isStreaming ? undefined : compactOverThreshold(signal);
+
   // A round can run many tool calls, so the check before a round is not enough.
   piAgent.prepareNextTurnWithContext = async ({ context }, signal) => {
-    const record = await compactIfNeeded(signal);
+    const record = await compactOverThreshold(signal);
     return record
       ? { context: { ...context, messages: piAgent.state.messages.slice() } }
       : undefined;
@@ -540,8 +588,10 @@ harden(makeCompactor);
 
 /**
  * Wrap a round with the threshold check and one compact-and-retry on a context
- * overflow. Retrying repeats the round's prompt, which is safe because a Lal
- * prompt only tells the LLM to check its mail.
+ * overflow. Retrying repeats the round's prompt, which only tells the LLM to
+ * check its mail. Tool calls from the failed attempt are not rolled back: their
+ * results stay in the transcript or its summary, and the retried LLM can repeat
+ * a call, so this assumes that doing so is harmless.
  *
  * @param {object} args
  * @param {PiAgent} args.piAgent
