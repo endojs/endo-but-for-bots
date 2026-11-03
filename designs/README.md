@@ -505,7 +505,7 @@ LLM-agent stack).*
 | [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-07-10 | In Progress |
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | In Progress |
 | [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | In Progress |
-| [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
+| [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-11-03 | In Progress |
 | [endopi-prompt-templates](endopi-prompt-templates.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-iterative-compaction](endopi-iterative-compaction.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | 2026-05-15 | 2026-05-15 | In Progress |

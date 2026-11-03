@@ -3430,6 +3430,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/skills@workspace:packages/skills":
+  version: 0.0.0-use.local
+  resolution: "@endo/skills@workspace:packages/skills"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/space-channel@workspace:^, @endo/space-channel@workspace:packages/space-channel":
   version: 0.0.0-use.local
   resolution: "@endo/space-channel@workspace:packages/space-channel"
