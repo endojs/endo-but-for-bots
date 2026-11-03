@@ -93,7 +93,11 @@ const makeMockContext = () => {
  * @param {string} label
  * @param {{ publicKey: Uint8Array, privateKey: Uint8Array }} [keypair]
  */
-const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
+const makeMockPowers = (
+  label,
+  keypair = generateEd25519Keypair(),
+  /** @type {Record<string, string>} */ names = {},
+) => {
   const helloCalls = [];
   const storedValues = [];
   const nodeId = toHex(keypair.publicKey);
@@ -113,9 +117,10 @@ const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
     gateway: () => gateway,
     sign: hexBytes =>
       toHex(ed25519SignBytes(keypair.privateKey, fromHex(hexBytes))),
-    // No stored listen address — the transport falls back to an
+    // By default no stored listen address — the transport falls back to an
     // ephemeral local port.
     lookup: name => {
+      if (Object.hasOwn(names, name)) return names[name];
       throw Error(`no such name ${name}`);
     },
     storeValue: (value, name) => {
@@ -241,6 +246,65 @@ test('OCapN-Noise transport carries a peer connection end to end', async t => {
   // call on it round-trips to B and back.
   const result = await E(remoteGateway).provide('formula-x');
   t.is(result, 'B:value-for:formula-x');
+});
+
+test('ocapn-advertise-addr replaces the bind host in the advertised address', async t => {
+  t.timeout(60_000);
+  const contextA = makeMockContext();
+  const contextB = makeMockContext();
+  t.teardown(() => contextA.cancel());
+  t.teardown(() => contextB.cancel());
+
+  const a = makeMockPowers('A');
+  // B binds 127.0.0.1 but advertises `localhost`, standing in for a daemon
+  // that binds 0.0.0.0 and is dialed by a public name.
+  const b = makeMockPowers('B', undefined, {
+    'ocapn-advertise-addr': 'localhost',
+  });
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB = await makeOcapnNetwork(b.powers, contextB);
+
+  const [addressB] = await E(serviceB).addresses();
+  const url = new URL(addressB);
+  t.is(url.hostname, 'localhost');
+  const location = JSON.parse(
+    /** @type {string} */ (url.searchParams.get('loc')),
+  );
+  t.is(location.hints['tcp:host'], 'localhost');
+  t.is(location.hints['tcp:port'], url.port);
+  // The persisted listen address is still the bound one.
+  t.regex(b.storedValues[0].value, /^127\.0\.0\.1:\d+$/);
+
+  // A dials the advertised name and completes the handshake.
+  const remoteGateway = await E(serviceA).connect(addressB, makeMockContext());
+  t.deepEqual(b.helloCalls, [a.nodeId]);
+  t.is(await E(remoteGateway).provide('formula-y'), 'B:value-for:formula-y');
+});
+
+test('ocapn-advertise-addr rejects a malformed address or a mismatched port', async t => {
+  t.timeout(60_000);
+  for (const [names, pattern] of [
+    [
+      { 'ocapn-advertise-addr': 'minion.town/path' },
+      /must be host or host:port/,
+    ],
+    [
+      {
+        'ocapn-listen-addr': '127.0.0.1:0',
+        'ocapn-advertise-addr': 'minion.town:8940',
+      },
+      /port must equal/,
+    ],
+  ]) {
+    // The network throws before it listens, so there is nothing to cancel.
+    const context = makeMockContext();
+    const { powers } = makeMockPowers('A', undefined, names);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => makeOcapnNetwork(powers, context), {
+      message: pattern,
+    });
+  }
 });
 
 test('OCapN-Noise transport rejects a peer whose identity does not match the address', async t => {

@@ -71,6 +71,12 @@ const protocol = 'ocapn+noise+tcp';
 // is read, mirroring `tcp-netstring.js`'s `tcp-listen-addr`.
 const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 
+// Optional pet name under which a stored `host` or `host:port` advertised
+// address is read. Peers dial this host instead of the bind host, so a daemon
+// listening on `0.0.0.0` can advertise a public name. The advertised port is
+// always the bound port; a stored port must match the configured listen port.
+const ADVERTISE_ADDR_NAME = 'ocapn-advertise-addr';
+
 // Domain-separation prefix for the agent-binding signature. Mixed into
 // the signed material so a signature produced for this binding cannot
 // be replayed as a signature on any other message the agent might be
@@ -203,6 +209,39 @@ export const make = async (powers, context) => {
     // No stored listen address; fall back to an ephemeral local port.
   }
 
+  /** @type {string | undefined} */
+  let advertiseHost;
+  /** @type {string | undefined} */
+  let configuredAdvertiseAddr;
+  try {
+    configuredAdvertiseAddr = /** @type {string} */ (
+      await E(powers).lookup(ADVERTISE_ADDR_NAME)
+    );
+  } catch {
+    // No stored advertised address; advertise the bound address.
+  }
+  if (configuredAdvertiseAddr !== undefined) {
+    // Unlike the listen address, a malformed advertised address is an error:
+    // falling back would silently advertise an address no peer can dial.
+    const advertiseUrl = new URL(`tcp://${configuredAdvertiseAddr}`);
+    if (
+      advertiseUrl.hostname === '' ||
+      advertiseUrl.pathname !== '' ||
+      advertiseUrl.search !== '' ||
+      advertiseUrl.username !== ''
+    ) {
+      throw Error(
+        `${ADVERTISE_ADDR_NAME} must be host or host:port, got ${JSON.stringify(configuredAdvertiseAddr)}`,
+      );
+    }
+    if (advertiseUrl.port !== '' && Number(advertiseUrl.port) !== port) {
+      throw Error(
+        `${ADVERTISE_ADDR_NAME} port must equal the ${LISTEN_ADDR_NAME} port, got ${JSON.stringify(configuredAdvertiseAddr)}`,
+      );
+    }
+    advertiseHost = advertiseUrl.hostname.replace(/^\[|\]$/g, '');
+  }
+
   const codec = cborCodec;
   const network = makeOcapnNoiseNetwork({ codec });
 
@@ -259,7 +298,7 @@ export const make = async (powers, context) => {
   const locator = new Map();
   locator.set(PEER_ENTRY_SWISSNUM, peerEntry);
 
-  const tcpTransport = makeTcpTransport({ host, port });
+  const tcpTransport = makeTcpTransport({ host, port, advertiseHost });
   await network.addTransport(tcpTransport);
 
   const client = await makeOcapn({
@@ -274,7 +313,7 @@ export const make = async (powers, context) => {
   });
 
   // Our advertised OCapN location, including the transport hints
-  // (bound host and port) a peer needs in order to dial us.
+  // (advertised or bound host, bound port) a peer needs in order to dial us.
   const localLocation = network.locationFor(keyId);
   const localHints = localLocation.hints || {};
   const boundPort = String(localHints['tcp:port'] || port);
