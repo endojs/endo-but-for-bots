@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-23 |
-| **Updated** | 2026-10-27 |
+| **Updated** | 2026-11-03 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 | **Parent** | [Course correction: retire subscription credentials under `claude --bare`](claude-bare-course-correction.md) |
@@ -400,7 +400,7 @@ with current state:
 type InferenceProviderDescriptor = {
   version: 1;
   providerId: string;       // random object designator, unique per owner
-  ownerId: string;          // owning principal's guest formula id
+  ownerId: string;          // owning principal's owner key (§ Ownership and cross-principal denial)
   displayName: string;
   kind: 'anthropic';        // closed set; later phases add kinds
   baseUrl?: string;         // absent for 'anthropic'; reserved for later kinds
@@ -428,8 +428,8 @@ usage ledger.
 
 The provider's facets are separate:
 
-- `InferenceProviderDirectory`, one per owner, minted when the owner's guest is
-  provisioned and held by that owner's signed-in UI capability. It lists, looks
+- `InferenceProviderDirectory`, one per owner key, obtained for the signed-in
+  owner on each request (§ Ownership and cross-principal denial). It lists, looks
   up, and creates providers whose `ownerId` is that owner, and nothing else.
   It also reads and sets that owner's owner-wide cap (§ Cost and abuse
   controls).
@@ -495,12 +495,23 @@ extension.
 - **Owner binding.** `ownerId` is set from the directory that runs creation and
   is never taken from a request field. No API changes it; **Replace key** creates the
   superseding provider in the same owner's directory.
+- **Owner key.** `ownerId` is the opaque hash of the signed-in identity,
+  `guestNameForIdentity(iss, sub)` (`g-<32 hex>`), and not the owner guest's
+  formula id. A formula id has 129 characters where the registry's owner pattern
+  allows 128, and using it would put the guest's bearer locator in the registry.
+  The provider UI (kriscendobot/minion.town#229) and the agent factory must derive
+  the same key. It follows the sign-in rather than the guest, with two
+  consequences. Two sign-ins bonded to one guest get separate directories. And
+  deleting an account's guest and bonds leaves its providers, so account deletion
+  must retire them before the provider surface is enabled.
 - **Selection is capability lookup.** A provider id is a name inside one owner's
   directory, not a global designator. The app resolves it as
-  `E(directoryOfSignedInPrincipal).lookup(providerId)`; it never calls a
-  root-wide registry lookup on a request's behalf. The root-private registry
-  facet that can see every owner is held only by the directories and the
-  recovery reconciler.
+  `E(directoryOfSignedInPrincipal).lookup(providerId)`. The web tier obtains that
+  directory per request with `directoryFor(ownerKey)` from a registry capability,
+  using only the owner key the account gate establishes, and never takes an owner
+  from a request field. Directories are not minted at guest provisioning, because
+  the owner key needs no guest. The registry's other root methods stay out of any
+  browser-reachable route.
 - **Denial semantics.** Lookup of an id that is unknown or owned by another
   principal returns the same fixed
   `provider-not-found` error with the same timing class, so a caller cannot use
@@ -508,7 +519,7 @@ extension.
   and audit rows are readable only through the owner's admin facets.
 - **Agent binding.** Authority checks for an agent use its principal-owner
   binding, never the agent guest's identity. The binding is
-  `AgentRecord.ownerId`: the owner guest formula id of the directory that ran
+  `AgentRecord.ownerId`: the owner key of the directory that ran
   the creation operation, written at intent, copied into the agent's grant
   records, and never changed by any API (reattachment and recovery included).
   The agent guest is created with no owner field to inherit and no edge to
@@ -736,7 +747,7 @@ provider ever changes.
   every mutation is appended to the audit log (§ Provider and secret model).
 - **Replace key** creates a new secret and provider descriptor whose
   `supersedes` points to the prior provider; agents move only by an explicit
-  reattachment.
+  reattachment. Caps the request omits default to the prior provider's.
 - Retirement marks the provider `retiring`, revokes the old `SecretBlob`, then
   marks it `retired` (§ Creation and retirement operations). New and queued
   turns fail closed from the first step. The old provider id and audit rows
@@ -1025,8 +1036,8 @@ tokens) keep deployment defaults. The owner may lower any cap at any time
 without confirmation, and the change takes effect at the next admission.
 Raising any cap above its current value, whether on a provider, an agent, or
 the owner-wide cap below, requires an explicit confirmation naming each raised
-cap with its old and new values. The `setLimits` operations enforce this, not
-only the UI: a request that raises a cap without the confirmation flag is
+cap with its old and new values. The `setLimits` and `supersede` operations
+enforce this, not only the UI: a request that raises a cap without the confirmation flag is
 refused with `limit-raise-unconfirmed` and changes nothing. Deployment
 ceilings bound every raise.
 
