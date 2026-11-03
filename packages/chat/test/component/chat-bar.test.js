@@ -1,9 +1,13 @@
 // @ts-nocheck - Component test with happy-dom
+// prefer-endo-primitives-exempt: the template trees are stubs of daemon mounts,
+// so an interface guard here would check nothing the code under test relies on.
 
 import '@endo/init/debug.js';
 
 import test from 'ava';
+import { Far } from '@endo/far';
 import { chatBarComponent } from '@endo/spaces-util/chat-bar-component.js';
+import { PROMPT_TEMPLATES_PET_NAME } from '@endo/spaces-util/prompt-template-catalog.js';
 import {
   getCategories,
   getCommandsByCategory,
@@ -1306,5 +1310,262 @@ test.serial(
       'none',
       'the empty form-body mount is collapsed in /js mode',
     );
+  },
+);
+
+/**
+ * Build a chat bar whose agent holds one template tree.
+ * @param {Record<string, string>} files
+ */
+const setupTemplateChatBar = async files => {
+  const tree = Far('Tree', {
+    list: () => Object.keys(files),
+    readText: name => files[name],
+  });
+  const directory = Far('Directory', {
+    list: () => ['source-000'],
+    lookup: () => tree,
+  });
+  const context = await setupChatBar({
+    powersOptions: {
+      values: new Map([[PROMPT_TEMPLATES_PET_NAME, directory]]),
+    },
+  });
+  const $input = context.$parent.querySelector('#chat-message');
+  const $menu = context.$parent.querySelector('#command-menu');
+  const $error = context.$parent.querySelector('#chat-error');
+  const setText = text => {
+    $input.textContent = text;
+    $input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+  };
+  const press = key => {
+    $input.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  };
+  const menuNames = () =>
+    [...$menu.querySelectorAll('.token-menu-item')].map(
+      $item => $item.querySelectorAll('span')[1].textContent,
+    );
+  // Open the menu, then wait for the templates to appear in it. Nothing has
+  // typed past the slash yet, so the unfiltered list includes every template.
+  const openMenu = async () => {
+    setText('/');
+    const [first] = Object.keys(files);
+    await waitFor(() => menuNames().includes(first.replace(/\.md$/, '')));
+  };
+  return {
+    ...context,
+    $input,
+    $menu,
+    $error,
+    setText,
+    press,
+    menuNames,
+    openMenu,
+  };
+};
+
+test.serial('templates appear in the / menu among built-ins', async t => {
+  const context = await setupTemplateChatBar({ 'zeta-review.md': 'Hello' });
+  await context.openMenu();
+  t.true(context.menuNames().includes('zeta-review'));
+  t.true(context.menuNames().includes('help'));
+
+  context.setText('/zeta');
+  await waitFor(() => context.menuNames().length === 1);
+  t.deepEqual(context.menuNames(), ['zeta-review']);
+  context.api.dispose();
+});
+
+test.serial(
+  'a template without variables expands into the editor and sends nothing',
+  async t => {
+    const context = await setupTemplateChatBar({
+      'plain.md': 'Line 1\nLine 2\n',
+    });
+    await context.openMenu();
+    context.setText('/plain');
+    await waitFor(() => context.menuNames().length === 1);
+    context.press('Enter');
+
+    t.is(context.$input.textContent, 'Line 1\nLine 2');
+    t.false(context.$chatBar.classList.contains('command-mode'));
+    t.deepEqual(context.mock.sentMessages, []);
+    context.api.dispose();
+  },
+);
+
+test.serial(
+  'space completes a name, then arguments fill variables',
+  async t => {
+    const context = await setupTemplateChatBar({
+      'review.md': 'Review {{what}} for {{focus}}.',
+    });
+    await context.openMenu();
+    context.setText('/rev');
+    await waitFor(() => context.menuNames().length === 1);
+
+    context.press(' ');
+    t.is(context.$input.textContent, '/review ');
+    t.deepEqual(context.menuNames(), ['review']);
+
+    context.setText('/review parser "memory safety"');
+    // A space between arguments is ordinary text, so the key is not consumed.
+    const space = new testWindow.KeyboardEvent('keydown', {
+      key: ' ',
+      bubbles: true,
+      cancelable: true,
+    });
+    context.$input.dispatchEvent(space);
+    t.false(space.defaultPrevented);
+    t.deepEqual(context.menuNames(), ['review']);
+
+    context.press('Enter');
+    t.is(context.$input.textContent, 'Review parser for memory safety.');
+    t.false(context.$chatBar.classList.contains('command-mode'));
+    t.deepEqual(context.mock.sentMessages, []);
+    context.api.dispose();
+  },
+);
+
+test.serial('missing variables open the form; submit expands it', async t => {
+  const context = await setupTemplateChatBar({
+    'review.md': 'Review {{what}} for {{focus}}.',
+  });
+  await context.openMenu();
+  context.setText('/review parser');
+  await waitFor(() => context.menuNames().length === 1);
+  context.press('Enter');
+
+  t.true(context.$chatBar.classList.contains('command-mode'));
+  const inputsReady = () =>
+    context.$parent.querySelectorAll('#inline-form-container input');
+  await waitFor(() => inputsReady().length === 2);
+  const [$what, $focus] = inputsReady();
+  t.is($what.value, 'parser');
+  t.is($focus.value, '');
+
+  // The form is invalid until every variable has a value.
+  const $submit = context.$parent.querySelector('.command-footer button');
+  await waitFor(() => $submit && $submit.textContent === 'Expand');
+  t.is($submit.textContent, 'Expand');
+  t.true($submit.disabled);
+
+  $focus.value = 'bugs';
+  $focus.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+  await waitFor(() => !$submit.disabled);
+  $submit.click();
+  await waitFor(() => !context.$chatBar.classList.contains('command-mode'));
+
+  t.is(context.$input.textContent, 'Review parser for bugs.');
+  t.deepEqual(context.mock.sentMessages, []);
+  context.api.dispose();
+});
+
+test.serial(
+  'too many arguments stay on the slash line with an error',
+  async t => {
+    const context = await setupTemplateChatBar({ 'one.md': 'Only {{x}}' });
+    await context.openMenu();
+    context.setText('/one a b');
+    await waitFor(() => context.menuNames().length === 1);
+    context.press('Enter');
+
+    t.is(context.$input.textContent, '/one a b');
+    t.regex(
+      context.$error.textContent,
+      /\/one takes 1 argument\(s\); 1 too many/,
+    );
+    t.false(context.$chatBar.classList.contains('command-mode'));
+
+    // Correcting the line and pressing Enter again expands it.
+    context.setText('/one "a b"');
+    await waitFor(() => context.menuNames().length === 1);
+    context.press('Enter');
+    t.is(context.$input.textContent, 'Only a b');
+    context.api.dispose();
+  },
+);
+
+test.serial('a built-in command still confirms on space', async t => {
+  const context = await setupTemplateChatBar({ 'plain.md': 'Hello' });
+  await context.openMenu();
+  context.setText('/help');
+  await waitFor(() => context.menuNames().length === 1);
+  context.press(' ');
+  t.true(context.$chatBar.classList.contains('command-mode'));
+  // The form focuses its first field on a timer, which must not outlive the DOM.
+  await tick(100);
+  context.api.dispose();
+});
+
+test.serial('a template file cannot replace a built-in command', async t => {
+  const context = await setupTemplateChatBar({
+    'help.md': 'spoof',
+    'plain.md': 'Hello',
+  });
+  await context.openMenu();
+  context.setText('/help');
+  await waitFor(() => context.menuNames().length === 1);
+  context.press('Enter');
+  t.true(context.$chatBar.classList.contains('command-mode'));
+  t.not(context.$input.textContent, 'spoof');
+  // The form focuses its first field on a timer, which must not outlive the DOM.
+  await tick(100);
+  context.api.dispose();
+});
+
+test.serial(
+  'the command popover lists templates under their own heading',
+  async t => {
+    const context = await setupTemplateChatBar({ 'plain.md': 'Hello' });
+    await context.openMenu();
+    context.setText('');
+    context.$menuButton.click();
+    await waitFor(() => /Prompt templates/.test(context.$popover.textContent));
+    t.regex(context.$popover.textContent, /Prompt templates/);
+    t.regex(context.$popover.textContent, /plain/);
+    context.api.dispose();
+  },
+);
+
+test.serial('a slash line with no arguments opens an empty form', async t => {
+  const context = await setupTemplateChatBar({ 'one.md': 'Only {{x}}' });
+  await context.openMenu();
+  context.setText('/one');
+  await waitFor(() => context.menuNames().length === 1);
+  context.press('Enter');
+
+  t.true(context.$chatBar.classList.contains('command-mode'));
+  const inputsReady = () =>
+    context.$parent.querySelectorAll('#inline-form-container input');
+  await waitFor(() => inputsReady().length === 1);
+  t.is(inputsReady()[0].value, '');
+  // The form focuses its first field on a timer, which must not outlive the DOM.
+  await tick(100);
+  context.api.dispose();
+});
+
+test.serial(
+  'choosing a template from the popover expands it and sends nothing',
+  async t => {
+    const context = await setupTemplateChatBar({ 'plain.md': 'Hello' });
+    await context.openMenu();
+    context.setText('');
+    context.$menuButton.click();
+    await waitFor(() =>
+      context.$popover.querySelector('[data-command="plain"]'),
+    );
+    context.$popover.querySelector('[data-command="plain"]').click();
+
+    t.is(context.$input.textContent, 'Hello');
+    t.false(context.$chatBar.classList.contains('command-mode'));
+    t.deepEqual(context.mock.sentMessages, []);
+    context.api.dispose();
   },
 );

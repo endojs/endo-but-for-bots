@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-02 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation
@@ -83,6 +83,34 @@ processes any slash command in a user message.
 2. **Slash-command registration.** Templates appear in autocomplete.
 3. **Variable substitution + argument prompts.** Form UI for missing
    variables.
+
+## Implementation notes
+
+All three phases are built, in the new `@endo/prompt-templates` package and in
+`@endo/spaces-util`'s chat bar. See that package's README for usage. The build
+settles what this design left open and departs from it where noted:
+
+- **Reaching the disk.** The browser has no filesystem, so
+  `packages/chat/setup-prompt-templates.js` runs the discovery paths and grants
+  Chat one read-only mount per directory that exists, under the pet name
+  `prompt-templates`. Chat holds no new authority.
+- **The walker is this package's own.** The skills walker this design planned to
+  share is not built yet, so the template paths are scanned here;
+  [endopi-skills-markdown-format](endopi-skills-markdown-format.md) can move the
+  walk to a shared module when it lands.
+- **The variable form is the chat bar's inline command form**, not the form from
+  [lal-fae-form-provisioning](lal-fae-form-provisioning.md). That one renders a
+  form request delivered as a message, and an editor expansion has no message or
+  recipient; the inline form is the chat bar's surface for a command's fields.
+- **Precedence.** Later directories override earlier ones: `~/.pi/agent/prompts`,
+  `~/.agents/prompts`, `.agents/prompts` from the repository root down to the
+  working directory, then `.pi/prompts`. A built-in command or alias always keeps
+  its name, so a project file cannot redefine `/clear`.
+- **Arguments.** Variables take positional arguments in order of first
+  appearance. Too many arguments is an error, not a silent drop; quoting groups
+  words into one argument.
+- **Pi's `$1` and `$@` are not substituted.** This design specifies `{{name}}`,
+  so a template written for Pi with those placeholders expands with them intact.
 
 ## Out of scope
 
