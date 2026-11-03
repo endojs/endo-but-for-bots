@@ -43,8 +43,8 @@ at worker spawn time into a pi-ai `provider/modelId` string:
 | `:11434` (default Ollama port)                  | `ollama` (OpenAI-compatible local endpoint)  |
 | anything else with `/v1`                        | `openai` (OpenAI-compatible, e.g. llama.cpp) |
 
-`LAL_AUTH_TOKEN` is forwarded into `process.env.<PROVIDER>_API_KEY` so
-pi-ai's adaptor finds it.
+`LAL_AUTH_TOKEN` reaches pi-ai through a `getApiKey` callback, unless the
+environment already has a `<PROVIDER>_API_KEY`.
 
 | Variable         | Description                          | Default                  |
 | ---------------- | ------------------------------------ | ------------------------ |
@@ -75,3 +75,27 @@ The agent will:
 - On submission, create a guest profile and start monitoring its inbox
 - Respond to messages using LLM-driven tool calls
 - Send replies back to message senders
+
+## Switching models mid-session
+
+The host can change a worker's model between rounds by sending it a message
+that contains only a `/model` command:
+
+```text
+/model                          reports the current model
+/model anthropic/<model-id>     switches to a model in pi-ai's registry
+/model ollama/<model-id>        switches to a model on the local Ollama
+```
+
+The conversation carries forward, and pi-ai adapts earlier turns for the new
+provider.
+The command does not start an LLM round and is dismissed after the reply.
+From any sender other than the worker's host, `/model` is ordinary mail.
+
+The worker's API auth token is only ever sent to the provider and base URL it
+was configured for.
+A model elsewhere needs its own credential in the daemon's environment, such as
+`ANTHROPIC_API_KEY`; without one the switch is refused and the current model
+stays selected.
+The selection lasts as long as the worker's in-memory transcript, so neither
+survives a restart.

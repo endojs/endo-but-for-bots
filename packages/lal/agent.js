@@ -16,10 +16,13 @@ import {
   resolveModelString,
   resolveModel,
   makeWorkerCredentials,
-  makeWorkerGetApiKey,
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
+import {
+  makeModelCommandHandler,
+  makeModelKeyResolver,
+} from './model-switch.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 /** @import { GuestPowers, LalContext } from './agent.types.js' */
@@ -96,25 +99,20 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   );
 
   const resolvedModel = await resolveModel(model);
-  const isOllama = resolvedModel.name?.startsWith('ollama/');
 
-  // The worker's API key is resolved through the read-only `Credentials` seam
-  // and handed to pi-agent-core via a `getApiKey` callback — no ambient-env
-  // mutation. An ollama model keeps the harmless 'ollama' sentinel; any other
-  // provider takes a pre-existing real `<PROVIDER>_API_KEY` over the worker's
-  // LAL_AUTH_TOKEN (see `makeWorkerGetApiKey`).
-  const credentials = makeWorkerCredentials();
-  const getApiKey = makeWorkerGetApiKey(
-    credentials,
+  // The key follows the current model, which `/model` can change, and
+  // LAL_AUTH_TOKEN stays with the endpoint it was configured for.
+  const keyForModel = makeModelKeyResolver(
+    makeWorkerCredentials(),
     workerEnv.LAL_AUTH_TOKEN,
-    isOllama,
+    resolvedModel,
   );
 
   const piAgent = makePiAgent({
     systemPrompt,
     model: resolvedModel,
     tools: agentTools,
-    getApiKey,
+    getApiKey: () => keyForModel(piAgent.state.model),
   });
 
   /**
@@ -125,7 +123,12 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
    */
   const runOneRound = prompt => runRound(piAgent, prompt);
 
-  await runInboxLoop({ powers, getCancelled, runOneRound });
+  await runInboxLoop({
+    powers,
+    getCancelled,
+    runOneRound,
+    handleModelCommand: makeModelCommandHandler({ piAgent, keyForModel }),
+  });
 };
 harden(spawnWorkerLoop);
 
