@@ -302,6 +302,60 @@ test('/model with no argument reports the current model', async t => {
   t.regex(replies[0].strings[0], /Using alpha\/one/);
 });
 
+test('a failing /model replies with the error and skips the round', async t => {
+  /** @type {any} */
+  const piAgent = makePiAgent({
+    systemPrompt: 'system',
+    model: alpha,
+    tools: [],
+    streamFn: makeRecordingStreamFn([]),
+  });
+  const { powers, replies, dismissed } = makeInboxPowers({
+    messages: [mail(1n, '/model beta/one')],
+  });
+  let rounds = 0;
+  await runInboxLoop({
+    powers,
+    getCancelled: async () => null,
+    runOneRound: async () => {
+      rounds += 1;
+    },
+    handleModelCommand: makeModelCommandHandler({
+      piAgent,
+      keyForModel: () => undefined,
+      resolve: async () => {
+        throw Error('catalog unavailable');
+      },
+    }),
+  });
+  t.is(rounds, 0);
+  t.deepEqual(replies, [
+    { number: 1n, strings: ['/model failed: catalog unavailable'] },
+  ]);
+  t.deepEqual(dismissed, [1n]);
+  t.is(piAgent.state.model, alpha);
+});
+
+test('/model accepts a provider with only an ambient credential', async t => {
+  /** @type {any} */
+  const piAgent = makePiAgent({
+    systemPrompt: 'system',
+    model: alpha,
+    tools: [],
+    streamFn: makeRecordingStreamFn([]),
+  });
+  const handle = makeModelCommandHandler({
+    piAgent,
+    keyForModel: () => undefined,
+    resolve: async () => beta,
+    hasAmbientKey: provider => provider === 'beta',
+  });
+  const reply = await handle({ argument: 'beta/one' });
+  t.regex(reply, /Now using beta\/one/);
+  t.is(piAgent.state.model, beta);
+  t.is(piAgent.state.thinkingLevel, 'medium');
+});
+
 test.serial('spawnWorkerLoop applies /model to real requests', async t => {
   /** @type {Array<{ body: any, authorization: unknown }>} */
   const requests = [];
