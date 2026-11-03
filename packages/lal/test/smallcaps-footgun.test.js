@@ -144,6 +144,7 @@ const buildAgent = script => {
     convertToLlm: msgs =>
       msgs.filter(
         m =>
+          m.role === 'system' ||
           m.role === 'user' ||
           m.role === 'assistant' ||
           m.role === 'toolResult',
@@ -229,6 +230,7 @@ test('dismiss: powers boundary sees BigInt for "+5" messageNumber', async t => {
     convertToLlm: msgs =>
       msgs.filter(
         m =>
+          m.role === 'system' ||
           m.role === 'user' ||
           m.role === 'assistant' ||
           m.role === 'toolResult',
@@ -277,6 +279,7 @@ test('reply: messageNumber "+3" decodes to BigInt 3n', async t => {
     convertToLlm: msgs =>
       msgs.filter(
         m =>
+          m.role === 'system' ||
           m.role === 'user' ||
           m.role === 'assistant' ||
           m.role === 'toolResult',
@@ -479,6 +482,7 @@ test('evaluate: "#undefined" workerName decodes to undefined', async t => {
     convertToLlm: msgs =>
       msgs.filter(
         m =>
+          m.role === 'system' ||
           m.role === 'user' ||
           m.role === 'assistant' ||
           m.role === 'toolResult',
