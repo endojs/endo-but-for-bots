@@ -942,7 +942,46 @@ test('an undeliverable /compact reply does not stop the inbox', async t => {
     handleCompactCommand: async () => 'compacted',
   });
   t.is(rounds.length, 1, 'the next message still runs');
-  t.deepEqual(dismissed, []);
+  t.deepEqual(dismissed, [1n], 'the command does not stay in the inbox');
+});
+
+test('an undeliverable failure reply still dismisses /compact', async t => {
+  const { powers, dismissed } = makeInboxPowers({
+    messages: [mail(1n, '/compact')],
+    failReply: true,
+  });
+  await runInboxLoop({
+    powers,
+    getCancelled: async () => null,
+    runOneRound: async () => t.fail('a command is not a round'),
+    handleCompactCommand: async () => {
+      throw Error('provider down');
+    },
+  });
+  t.deepEqual(dismissed, [1n]);
+});
+
+test('a failed dismissal reports neither failure nor a stopped inbox', async t => {
+  /** @type {string[]} */
+  const rounds = [];
+  const { powers, replies } = makeInboxPowers({
+    messages: [mail(1n, '/compact'), mail(2n, 'hello')],
+  });
+  await runInboxLoop({
+    powers: harden({
+      ...powers,
+      dismiss: async () => {
+        throw Error('dismiss refused');
+      },
+    }),
+    getCancelled: async () => null,
+    runOneRound: async prompt => {
+      rounds.push(prompt);
+    },
+    handleCompactCommand: async () => 'compacted',
+  });
+  t.deepEqual(replies, [{ number: 1n, strings: ['compacted'] }]);
+  t.is(rounds.length, 1, 'the next message still runs');
 });
 
 test.serial('a worker compacts through its real provider path', async t => {

@@ -163,29 +163,29 @@ export const runInboxLoop = async ({
       seenInboundNumbers.add(number);
       // Only the host spends the worker's credentials on a summary or steers
       // what it keeps, so from any other sender `/compact` is ordinary mail.
-      // The command is dismissed so that the LLM does not take it for a request
-      // on its next `listMessages()`, and so that a restart does not replay it.
       const compactCommand = isFromHost(fromLocator)
         ? parseCompactCommand(inboxMessage)
         : undefined;
       if (compactCommand) {
+        let text;
         try {
-          const text = await handleCompactCommand(compactCommand);
-          await E(powers).reply(number, [text], [], []);
-          await E(powers).dismiss(number);
+          text = await handleCompactCommand(compactCommand);
         } catch (error) {
           console.error('[agent] /compact failed:', error);
-          try {
-            await E(powers).reply(
-              number,
-              [`/compact failed: ${error?.message ?? error}`],
-              [],
-              [],
-            );
-            await E(powers).dismiss(number);
-          } catch (replyError) {
-            console.error('[agent] Failed to notify sender:', replyError);
-          }
+          text = `/compact failed: ${error?.message ?? error}`;
+        }
+        try {
+          await E(powers).reply(number, [text], [], []);
+        } catch (replyError) {
+          console.error('[agent] Failed to notify sender:', replyError);
+        }
+        // Dismissal does not depend on the reply: a command left in the inbox
+        // would read as a request on the LLM's next `listMessages()`, and a
+        // restart would replay it.
+        try {
+          await E(powers).dismiss(number);
+        } catch (dismissError) {
+          console.error('[agent] Failed to dismiss /compact:', dismissError);
         }
         // eslint-disable-next-line no-continue
         continue;
