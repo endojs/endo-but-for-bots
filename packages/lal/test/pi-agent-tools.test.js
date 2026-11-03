@@ -196,6 +196,7 @@ test('PiAgent + lal tools: normal arg dispatch + decodeToolArgs JSON-string retr
     convertToLlm: msgs =>
       msgs.filter(
         m =>
+          m.role === 'system' ||
           m.role === 'user' ||
           m.role === 'assistant' ||
           m.role === 'toolResult',

@@ -9,31 +9,10 @@ import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 
 /**
- * Default `convertToLlm`: keep only the message roles the LLM transcript reads
- * (user, assistant, tool results). The same filter both the code-mode path and
- * lal's worker loop install.
- *
- * @param {AgentMessage[]} messages
- * @returns {Message[]}
- */
-const defaultConvertToLlm = messages =>
-  /** @type {Message[]} */ (
-    /** @type {unknown} */ (
-      messages.filter(
-        m =>
-          m.role === 'user' ||
-          m.role === 'assistant' ||
-          m.role === 'toolResult',
-      )
-    )
-  );
-
-/**
  * Construct a pi-agent-core `Agent` from harness-level inputs. This is the one
  * place the harness builds a `PiAgent`: it owns the `initialState` shape, the
- * default `convertToLlm` filter, the default thinking level
- * (`reasoning ? 'medium' : 'off'`), the default `streamFn`
- * (`streamFn ?? streamSimple`), and `toolExecution: 'sequential'`. A
+ * default thinking level (`reasoning ? 'medium' : 'off'`), the default
+ * `streamFn` (`streamFn ?? streamSimple`), and `toolExecution: 'sequential'`. A
  * `getApiKey` is included in the constructor options only when one is supplied,
  * matching the conditional-spread the callers relied on (pi-agent-core may
  * distinguish an absent hook from an explicit `undefined`).
@@ -47,7 +26,10 @@ const defaultConvertToLlm = messages =>
  *   `Agent`. Defaults to `streamSimple` from `@earendil-works/pi-ai/compat`
  *   when omitted; two callers (`@endo/lal`'s worker loop and
  *   `define-agent.js`) rely on this default rather than passing one.
- * @param {(messages: AgentMessage[]) => Message[] | Promise<Message[]>} [options.convertToLlm]
+ * @param {(messages: AgentMessage[]) => Message[] | Promise<Message[]>} [options.convertToLlm] -
+ *   Defaults to pi-agent-core's own filter. A replacement must keep `system`
+ *   messages: they are the only carrier of the system prompt and the tool
+ *   declarations in the request.
  * @param {GetApiKey} [options.getApiKey]
  * @param {ThinkingLevel} [options.thinkingLevel]
  * @param {'sequential' | 'parallel'} [options.toolExecution]
@@ -59,7 +41,7 @@ export const makePiAgent = ({
   systemPrompt,
   messages = [],
   streamFn,
-  convertToLlm = defaultConvertToLlm,
+  convertToLlm,
   getApiKey,
   thinkingLevel = model?.reasoning ? 'medium' : 'off',
   toolExecution = 'sequential',
