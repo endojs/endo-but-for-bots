@@ -394,11 +394,17 @@ test('filterCommands merges additional commands in name order', t => {
     mode: /** @type {const} */ ('inline'),
     fields: [],
   });
-  const names = filterCommands('', undefined, [additional]).map(c => c.name);
+  const names = filterCommands('', undefined, [additional]).map(
+    command => command.name,
+  );
   t.is(names.indexOf('hello'), names.indexOf('help') - 1);
   t.deepEqual(
-    filterCommands('hell', undefined, [additional]).map(c => c.name),
+    filterCommands('hell', undefined, [additional]).map(
+      command => command.name,
+    ),
     ['hello'],
   );
-  t.false(filterCommands('', undefined).some(c => c.name === 'hello'));
+  t.false(
+    filterCommands('', undefined).some(command => command.name === 'hello'),
+  );
 });

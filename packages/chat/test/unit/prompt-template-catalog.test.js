@@ -1,4 +1,6 @@
 // @ts-nocheck - Unit test with a stubbed daemon surface
+// prefer-endo-primitives-exempt: the template trees are stubs of daemon mounts,
+// so an interface guard here would check nothing the code under test relies on.
 
 import '@endo/init/debug.js';
 

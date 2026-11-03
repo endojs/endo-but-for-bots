@@ -1,3 +1,5 @@
+/** @import { ExecutionContext } from 'ava' */
+
 import '@endo/init/debug.js';
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -11,7 +13,7 @@ import {
   listPromptTemplateDirectories,
 } from '../src/node.js';
 
-/** @param {import('ava').ExecutionContext} t */
+/** @param {ExecutionContext} t */
 const makeRoot = async t => {
   const root = await mkdtemp(join(tmpdir(), 'prompt-templates-'));
   t.teardown(() => rm(root, { recursive: true, force: true }));

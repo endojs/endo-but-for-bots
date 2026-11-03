@@ -991,15 +991,17 @@ export const filterCommands = (prefix, context, additionalCommands = []) => {
   const commands = [...getCommandList(), ...additionalCommands].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
-  return commands.filter(cmd => {
+  return commands.filter(command => {
     // Filter by context if specified
     if (context) {
-      const cmdContext = cmd.context || 'both';
-      if (cmdContext !== 'both' && cmdContext !== context) return false;
+      const commandContext = command.context || 'both';
+      if (commandContext !== 'both' && commandContext !== context) return false;
     }
-    if (cmd.name.toLowerCase().startsWith(lower)) return true;
-    if (cmd.aliases) {
-      return cmd.aliases.some(alias => alias.toLowerCase().startsWith(lower));
+    if (command.name.toLowerCase().startsWith(lower)) return true;
+    if (command.aliases) {
+      return command.aliases.some(alias =>
+        alias.toLowerCase().startsWith(lower),
+      );
     }
     return false;
   });
