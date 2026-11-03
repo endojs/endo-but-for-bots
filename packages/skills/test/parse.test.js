@@ -80,6 +80,21 @@ test('block scalars fold or keep lines', t => {
   );
 });
 
+test('lines that are not keys are skipped with anything indented under them', t => {
+  t.deepEqual(
+    parseFrontmatter(
+      [
+        '# a comment',
+        'name: kept',
+        '- list item',
+        '  nested: ignored',
+        'description: also kept',
+      ].join('\n'),
+    ),
+    { name: 'kept', description: 'also kept' },
+  );
+});
+
 test('a skill without a description does not load', t => {
   const { skill, diagnostics } = parse('---\nname: my-skill\n---\nBody');
   t.is(skill, undefined);

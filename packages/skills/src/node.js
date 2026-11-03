@@ -67,7 +67,9 @@ const listProjectDirectories = async (workingDirectory, homeDirectory) => {
  * unless an Endo or Pi directory defines the same name. Then come the user's
  * `~/.pi/agent/skills` and `~/.agents/skills`, then `.agents/skills` from the
  * repository root down to the working directory, then the working directory's
- * `.claude/skills` (cross-harness) and `.pi/skills`.
+ * `.claude/skills` (cross-harness) and `.pi/skills`. A directory named twice
+ * keeps its first place, so a skill in it is not reported as overriding itself
+ * when the working directory is the home directory.
  *
  * @param {object} options
  * @param {string} options.homeDirectory
@@ -84,7 +86,7 @@ export const listSkillDirectories = async ({
     workingDirectory,
     homeDirectory,
   );
-  return harden([
+  const directories = [
     ...(crossHarness
       ? [
           join(homeDirectory, '.claude', 'skills'),
@@ -98,7 +100,8 @@ export const listSkillDirectories = async ({
       .reverse(),
     ...(crossHarness ? [join(workingDirectory, '.claude', 'skills')] : []),
     join(workingDirectory, '.pi', 'skills'),
-  ]);
+  ];
+  return harden([...new Set(directories)]);
 };
 harden(listSkillDirectories);
 

@@ -2,7 +2,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 
-import { loadSkills } from '../src/load.js';
+import { loadSkills, MAX_SKILL_FILE_LENGTH } from '../src/load.js';
 
 /**
  * @param {string} label
@@ -86,5 +86,38 @@ test('a failing source or file is a diagnostic, not a failure', async t => {
       ['broken', undefined, 'Error: no listing'],
       ['flaky', 'bad', 'Error: unreadable'],
     ],
+  );
+});
+
+test('skills sort by name regardless of source order', async t => {
+  const { skills } = await loadSkills([
+    makeSource('first', { zebra: skillText('zebra', 'z') }),
+    makeSource('second', { apple: skillText('apple', 'a') }),
+  ]);
+  t.deepEqual(
+    skills.map(({ name }) => name),
+    ['apple', 'zebra'],
+  );
+});
+
+test('an oversized SKILL.md is rejected and its neighbors still load', async t => {
+  const atLimit = skillText('at-limit', 'fits');
+  const { skills, diagnostics } = await loadSkills([
+    makeSource('user', {
+      'at-limit': atLimit.padEnd(MAX_SKILL_FILE_LENGTH, 'x'),
+      huge: skillText('huge', 'too big').padEnd(MAX_SKILL_FILE_LENGTH + 1, 'x'),
+    }),
+  ]);
+  t.deepEqual(
+    skills.map(({ name }) => name),
+    ['at-limit'],
+  );
+  t.deepEqual(
+    diagnostics.map(({ severity, entryName, message }) => [
+      severity,
+      entryName,
+      message,
+    ]),
+    [['error', 'huge', `SKILL.md exceeds ${MAX_SKILL_FILE_LENGTH} characters`]],
   );
 });

@@ -125,3 +125,84 @@ test('discovery with no directories finds nothing', async t => {
     { skills: [], diagnostics: [] },
   );
 });
+
+test('the home directory as working directory lists each directory once', async t => {
+  const home = await makeRoot(t);
+  const expected = [
+    join(home, '.claude/skills'),
+    join(home, '.codex/skills'),
+    join(home, '.pi/agent/skills'),
+    join(home, '.agents/skills'),
+    join(home, '.pi/skills'),
+  ];
+  t.deepEqual(
+    await listSkillDirectories({
+      homeDirectory: home,
+      workingDirectory: home,
+    }),
+    expected,
+  );
+
+  await writeSkill(join(home, '.claude/skills/once'), 'loaded once');
+  const { skills, diagnostics } = await discoverSkills({
+    homeDirectory: home,
+    workingDirectory: home,
+  });
+  t.deepEqual(
+    skills.map(({ name }) => name),
+    ['once'],
+  );
+  t.deepEqual(diagnostics, []);
+});
+
+test('an unreadable directory or SKILL.md is a diagnostic, not a failure', async t => {
+  const root = await makeRoot(t);
+  // A path component over the file system's limit fails with ENAMETOOLONG,
+  // which unlike a permissions error also holds when the tests run as root.
+  const home = join(root, 'x'.repeat(300));
+  const project = join(root, 'project');
+  await mkdir(join(project, '.git'), { recursive: true });
+  await writeSkill(join(project, '.agents/skills/good'), 'still loads');
+  await mkdir(join(project, '.agents/skills/bad/SKILL.md'), {
+    recursive: true,
+  });
+
+  const { skills, diagnostics } = await discoverSkills({
+    homeDirectory: home,
+    workingDirectory: project,
+  });
+  t.deepEqual(
+    skills.map(({ name }) => name),
+    ['good'],
+  );
+  // Sources load concurrently, so diagnostics arrive in completion order.
+  t.deepEqual(
+    diagnostics
+      .map(({ severity, source, entryName, message }) => [
+        severity,
+        source,
+        entryName,
+        /ENAMETOOLONG|EISDIR/.exec(message)?.[0],
+      ])
+      .sort(),
+    [
+      ['error', join(project, '.agents/skills'), 'bad', 'EISDIR'],
+      ['error', join(home, '.agents/skills'), undefined, 'ENAMETOOLONG'],
+      ['error', join(home, '.claude/skills'), undefined, 'ENAMETOOLONG'],
+      ['error', join(home, '.codex/skills'), undefined, 'ENAMETOOLONG'],
+      ['error', join(home, '.pi/agent/skills'), undefined, 'ENAMETOOLONG'],
+    ],
+  );
+});
+
+test('a working directory that cannot be examined rejects', async t => {
+  const root = await makeRoot(t);
+  await t.throwsAsync(
+    () =>
+      listSkillDirectories({
+        homeDirectory: join(root, 'home'),
+        workingDirectory: join(root, 'x'.repeat(300)),
+      }),
+    { code: 'ENAMETOOLONG' },
+  );
+});
