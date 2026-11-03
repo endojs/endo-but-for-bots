@@ -17,7 +17,12 @@ const makeSource = (label, files) => ({
 
 test('loads markdown entries sorted by name and ignores others', async t => {
   const { templates, diagnostics } = await loadPromptTemplates([
-    makeSource('a', { 'z.md': 'Z', 'b.md': 'B', 'notes.txt': 'N', c: 'C' }),
+    makeSource('a', {
+      'z.md': 'Z',
+      'b.md': 'B',
+      'notes.txt': 'N',
+      extensionless: 'C',
+    }),
   ]);
   t.deepEqual(
     templates.map(({ name, source }) => [name, source]),
