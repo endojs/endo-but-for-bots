@@ -88,7 +88,8 @@ context to at most half of what remains, so that compaction can free space.
 
 Compaction is lossy, and elided messages are not yet saved anywhere: the
 transcript lives only in the worker's memory. The mail itself remains in the
-daemon, where `messageHistory` can read it.
+daemon, where `messageHistory` can read it. The design is
+[endopi-iterative-compaction](../../designs/endopi-iterative-compaction.md).
 
 ## Usage
 
