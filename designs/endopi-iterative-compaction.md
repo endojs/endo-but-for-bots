@@ -3,37 +3,36 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-03 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed (partially satisfied) |
 | **Parent** | [endopi](endopi.md) |
 
 ## Status
 
-`packages/genie` already ships an iterative-compaction substrate that
-implements a sibling shape to Pi's:
+`packages/genie`, whose observer and reflector subagents this section used to
+cite as the existing substrate, was retired in `42bc7d516`. Its markdown memory
+files never fed a Lal transcript, so nothing here builds on them.
 
-- An observer subagent (`packages/genie/src/observer/index.js`)
-  compresses chat into prioritised observations (`memory/observations.md`)
-  on a token-threshold (default 30k) plus idle-timer trigger. Runs as a
-  background `PiAgent` with a focused tool set.
-- A reflector subagent (`packages/genie/src/reflector/index.js`)
-  consolidates observations into long-term knowledge
-  (`memory/reflections.md`, `memory/profile.md`) on a 40k-token threshold
-  plus daily heartbeat trigger; prunes stale low-priority entries; merges
-  related observations.
-- Both subagents are gated by `tool-gate.js` to ensure they actually call
-  the memory-write tools they were dispatched for.
+`packages/lal/compaction.js` implements this design over the worker's
+`piAgent.state.messages`: the trigger, `/compact`, the cut point, iterative
+structured summaries, cumulative file tracking, and the settings.
 
-This satisfies the "iterative summary feeds next" axis of Pi's compaction
-shape and the trigger-condition split (token threshold + idle). What
-remains for this design is to harmonise that shipped implementation with
-the Lal/Fae transcript graph: today the observer/reflector pair writes to
-markdown files on disk, while Lal's transcripts are an in-memory graph.
-The remaining work is the projection layer (run observer/reflector over
-Lal transcripts; surface their output back into Lal's transcript graph
-rather than to disk), plus the `keepRecentTokens` / `reserveTokens`
-knobs and the structured-summary format pi-mono uses.
+Three points differ from the text below:
+
+- **Step 4 waits on the JSONL writer.** Lal has no session file yet, and its
+  messages have no entry ids for `firstKeptEntryId` to name. Writing the
+  `compaction` entry is phase 4 of
+  [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md). Until
+  then, elided messages are not retained anywhere in the worker.
+- **Settings are environment variables.** No per-host settings store exists, so
+  they are the `LAL_COMPACTION_*` variables in the daemon's environment.
+- **Files touched is rendered by code, not by the model.** The list then survives
+  even if a summary omits it. It covers the `readText`, `writeText`, and
+  `editText` tools.
+
+Fae has its own compaction in `packages/lal/providers/context-compaction.js`,
+over the provider-shaped messages Fae stores.
 
 ## Motivation
 

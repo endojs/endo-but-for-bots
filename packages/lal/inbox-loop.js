@@ -15,8 +15,11 @@
  * and the cancellation accessor.
  */
 
+import { parseLocator } from '@endo/daemon/locator.js';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+
+import { parseCompactCommand } from './compaction.js';
 
 /** @import { InboxMessage } from './agent.types.js' */
 
@@ -31,9 +34,16 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  *   cancellation surface is configured).
  * @param {(prompt: string) => Promise<void>} args.runOneRound
  *   Per-round runner, bound to this worker's `PiAgent`.
+ * @param {(command: { instructions: string | undefined }) => Promise<string>} args.handleCompactCommand
+ *   Applies a `/compact` command from `@host` and returns the reply text.
  * @returns {Promise<void>}
  */
-export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
+export const runInboxLoop = async ({
+  powers,
+  getCancelled,
+  runOneRound,
+  handleCompactCommand,
+}) => {
   /**
    * Build the user-role content for an inbound message. lal's prompt is
    * intentionally minimal: the LLM is expected to call listMessages() to
@@ -62,6 +72,23 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
 
   /** @type {string | undefined} */
   const selfLocator = await E(powers).locate('@self');
+  const hostLocator = await E(powers).locate('@host');
+  /**
+   * Compares formula identity because `locate` adds connection hints that a
+   * message's `from` locator lacks.
+   *
+   * @param {string} locator
+   * @returns {boolean}
+   */
+  const isFromHost = locator => {
+    try {
+      const from = parseLocator(locator);
+      const host = parseLocator(hostLocator);
+      return from.number === host.number && from.node === host.node;
+    } catch {
+      return false;
+    }
+  };
   const cancelled = await getCancelled();
   const cancelledSignal = cancelled
     ? cancelled.then(
@@ -134,6 +161,35 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
         continue;
       }
       seenInboundNumbers.add(number);
+      // Only the host spends the worker's credentials on a summary or steers
+      // what it keeps, so from any other sender `/compact` is ordinary mail.
+      // The command is dismissed so that the LLM does not take it for a request
+      // on its next `listMessages()`, and so that a restart does not replay it.
+      const compactCommand = isFromHost(fromLocator)
+        ? parseCompactCommand(inboxMessage)
+        : undefined;
+      if (compactCommand) {
+        try {
+          const text = await handleCompactCommand(compactCommand);
+          await E(powers).reply(number, [text], [], []);
+          await E(powers).dismiss(number);
+        } catch (error) {
+          console.error('[agent] /compact failed:', error);
+          try {
+            await E(powers).reply(
+              number,
+              [`/compact failed: ${error?.message ?? error}`],
+              [],
+              [],
+            );
+            await E(powers).dismiss(number);
+          } catch (replyError) {
+            console.error('[agent] Failed to notify sender:', replyError);
+          }
+        }
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       console.log(`[mail] New message #${number} (type: ${type || 'package'})`);
       try {
         await runOneRound(formatInboundMessage());

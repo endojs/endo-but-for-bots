@@ -59,6 +59,37 @@ Example configuration files are provided:
 - `openai.env.example` - OpenAI API
 - `opus.env.example` - Anthropic Claude (Opus)
 
+## Context compaction
+
+A long conversation would eventually outgrow the model's context window, so a
+worker compacts it: older messages are replaced by one structured summary, and
+recent messages stay verbatim. Each summary builds on the previous one, so a long
+session holds a single summary.
+
+Compaction runs automatically when the context comes within `reserveTokens` of
+the window, both before a round and between the tool calls of a long one. If the
+provider still reports a context overflow, the worker compacts and retries the
+round once.
+
+The host can also send the worker `/compact`, optionally followed by instructions
+that focus the summary, such as `/compact preserve the bug hunt`. From any other
+sender, `/compact` is ordinary mail for the LLM.
+
+| Variable                            | Description                                 | Default |
+| ----------------------------------- | ------------------------------------------- | ------- |
+| `LAL_COMPACTION_ENABLED`            | Compact automatically (`true` or `false`)   | `true`  |
+| `LAL_COMPACTION_RESERVE_TOKENS`     | Reserved for the model's response           | `16384` |
+| `LAL_COMPACTION_KEEP_RECENT_TOKENS` | Recent context kept verbatim                | `20000` |
+| `LAL_COMPACTION_INSTRUCTIONS`       | Instructions added to every summary request | -       |
+
+These are read from the daemon's environment when a worker starts. On a small
+window, the worker reduces the reserve to at most half the window and the kept
+context to at most half of what remains, so that compaction can free space.
+
+Compaction is lossy, and elided messages are not yet saved anywhere: the
+transcript lives only in the worker's memory. The mail itself remains in the
+daemon, where `messageHistory` can read it.
+
 ## Usage
 
 ```bash
