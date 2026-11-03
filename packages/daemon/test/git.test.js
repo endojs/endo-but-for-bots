@@ -4516,11 +4516,55 @@ test('Git.stashPush accepts repo-relative paths in lieu of mount entries', async
   await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'changed-a\n');
   await fs.promises.writeFile(path.join(repoRoot, 'b.txt'), 'changed-b\n');
 
-  // `paths` (string[]) bypasses the PathEntry lineage resolution
-  // and lands at the backend directly.  Only `a.txt` is stashed; `b.txt`
-  // must stay dirty.
+  // `paths` (string[]) resolves through the mount like `entries`.  Only
+  // `a.txt` is stashed; `b.txt` must stay dirty.
   await E(git).stashPush({ message: 'subset', paths: ['a.txt'] });
 
+  t.is(
+    await fs.promises.readFile(path.join(repoRoot, 'a.txt'), 'utf8'),
+    'orig-a\n',
+  );
+  t.is(
+    await fs.promises.readFile(path.join(repoRoot, 'b.txt'), 'utf8'),
+    'changed-b\n',
+  );
+  await E(git).stashDrop(0);
+});
+
+test('Git.diff and Git.stashPush resolve string paths through the mount', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'orig-a\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'b.txt'), 'orig-b\n');
+  await execFileAsync('git', ['add', 'a.txt', 'b.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'two files'],
+    { cwd: repoRoot },
+  );
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await fs.promises.writeFile(path.join(repoRoot, 'a.txt'), 'changed-a\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'b.txt'), 'changed-b\n');
+
+  const entry = await E(mount).entry(['a.txt']);
+  const entryDiff = await E(git).diff({ entries: [entry] });
+  t.is(await E(git).diff({ paths: ['a.txt'] }), entryDiff);
+  // `..` clamps at the worktree root, so git never sees a path beyond it.
+  t.is(await E(git).diff({ paths: ['../a.txt'] }), entryDiff);
+  await t.throwsAsync(() => E(git).diff({ paths: ['.'] }), {
+    message: /must not resolve to the Git worktree root/,
+  });
+
+  await t.throwsAsync(() => E(git).stashPush({ paths: ['.'] }), {
+    message: /must not resolve to the Git worktree root/,
+  });
+  t.deepEqual(await E(git).stashList(), []);
+
+  await E(git).stashPush({ message: 'clamped', paths: ['../a.txt'] });
   t.is(
     await fs.promises.readFile(path.join(repoRoot, 'a.txt'), 'utf8'),
     'orig-a\n',
