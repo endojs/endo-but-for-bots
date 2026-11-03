@@ -43,6 +43,13 @@ const commonOptions = {
   ],
 };
 
+const packageOptions = {
+  project: [
+    '--project',
+    'Use the .agents directory of the current directory instead of the home directory',
+  ],
+};
+
 const parseOptionAsMapping = (optionValueString, obj) => {
   // arguments can be provided as "a:b" or just "a"
   // eslint-disable-next-line prefer-const
@@ -394,7 +401,9 @@ export const main = async rawArgs => {
   program
     .command('list [directory]')
     .alias('ls')
-    .description('show names known to the current or specified directory')
+    .description(
+      'show names known to the current or specified directory; "list packages" shows installed packages',
+    )
     .option('-f,--follow', 'Follow updates')
     .option('-j,--json', 'JSON format output')
     .option('-v,--verbose', 'Provide more detailed output')
@@ -406,8 +415,13 @@ export const main = async rawArgs => {
       '-t,--type <formulaType>',
       'Show only names whose formula type matches (e.g. handle, eval, readable-blob)',
     )
+    .option(...packageOptions.project)
     .action(async (directory, options) => {
-      const { follow, json, verbose, grouped, type } = options;
+      const { follow, json, verbose, grouped, type, project } = options;
+      if (directory === 'packages') {
+        const { listPackages } = await import('./commands/packages.js');
+        return listPackages({ project, json });
+      }
       const { list } = await import('./commands/list.js');
       return list({ directory, follow, json, verbose, grouped, type });
     });
@@ -415,10 +429,23 @@ export const main = async rawArgs => {
   program
     .command('remove [names...]')
     .alias('rm')
-    .description('forget a named value')
+    .description(
+      'forget a named value, or uninstall a package named npm:, git:, or file:',
+    )
     .option(...commonOptions.as)
-    .action(async (petNamePaths, options) => {
-      const { as: agentNames } = options;
+    .option(...packageOptions.project)
+    .action(async (names, options) => {
+      const { as: agentNames, project } = options;
+      const { isPackageSource } = await import('./packages/manifest.js');
+      const sourceTexts = names.filter(isPackageSource);
+      if (sourceTexts.length) {
+        const { removePackages } = await import('./commands/packages.js');
+        await removePackages({ sourceTexts, project });
+      }
+      const petNamePaths = names.filter(name => !isPackageSource(name));
+      if (sourceTexts.length && !petNamePaths.length) {
+        return undefined;
+      }
       const { remove } = await import('./commands/remove.js');
       return remove({ petNamePaths, agentNames });
     });
@@ -796,6 +823,54 @@ export const main = async rawArgs => {
       return cancelCommand({ name, agentNames, reason });
     });
 
+  program
+    .command('install <source>')
+    .description(
+      'install the skills and prompts of a package from npm:<name>[@version], git:<host>/<path>[@reference], or a local path',
+    )
+    .option(...packageOptions.project)
+    .action(async (sourceText, options) => {
+      const { project } = options;
+      const { installPackage } = await import('./commands/packages.js');
+      return installPackage({ sourceText, project });
+    });
+
+  program
+    .command('update [sources...]')
+    .description('fetch installed packages again, leaving pinned ones alone')
+    .option(...packageOptions.project)
+    .action(async (sourceTexts, options) => {
+      const { project } = options;
+      const { updatePackages } = await import('./commands/packages.js');
+      return updatePackages({ sourceTexts, project });
+    });
+
+  const config = program
+    .command('config')
+    .description('show installed packages, or enable or disable one')
+    .option(...packageOptions.project)
+    .option('-j,--json', 'JSON format output')
+    .action(async options => {
+      const { project, json } = options;
+      const { listPackages } = await import('./commands/packages.js');
+      return listPackages({ project, json });
+    });
+
+  for (const [verb, enabled] of [
+    ['enable', true],
+    ['disable', false],
+  ]) {
+    config
+      .command(`${verb} <source>`)
+      .description(`${verb} an installed package without reinstalling it`)
+      .option(...packageOptions.project)
+      .action(async (sourceText, _options, command) => {
+        const { project } = command.optsWithGlobals();
+        const { configurePackage } = await import('./commands/packages.js');
+        return configurePackage({ sourceText, enabled, project });
+      });
+  }
+
   const where = program
     .command('where')
     .option('-j,--json', 'Output as JOSN rather than simple text')
@@ -1019,7 +1094,12 @@ export const main = async rawArgs => {
 
     {
       title: 'Execution',
-      commands: ['run', 'make', 'eval', 'spawn', 'archive', 'install', 'open'],
+      commands: ['run', 'make', 'eval', 'spawn', 'archive', 'open'],
+    },
+
+    {
+      title: 'Packages',
+      commands: ['install', 'update', 'config'],
     },
 
     {

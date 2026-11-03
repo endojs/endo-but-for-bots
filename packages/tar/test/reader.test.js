@@ -236,6 +236,26 @@ test('readTarEntries yields files, directories, and symlinks', async t => {
   t.is(entries[2].linkname, 'file.txt');
 });
 
+test('readTarEntries reports the permission bits of the header', async t => {
+  const executable = tarEntry('run.sh', new Uint8Array(0));
+  executable.set(utf8.encode('0000755\0'), 100);
+  // The header checksum covers the mode field, and the reader does not check
+  // it, so overwriting the field in place is enough.
+  const archive = concatBytes([
+    executable,
+    tarEntry('notes.md', new Uint8Array(0)),
+    new Uint8Array(TAR_BLOCK_SIZE * 2),
+  ]);
+  const modes = [];
+  for await (const entry of readTarEntries(single(archive))) {
+    for await (const _ of entry.content) {
+      // Draining keeps the reader block-aligned.
+    }
+    modes.push(entry.mode);
+  }
+  t.deepEqual(modes, [0o755, 0o644]);
+});
+
 test('readTarEntries terminates at the first zero block', async t => {
   const archive = concatBytes([
     tarEntry('a.txt', utf8.encode('a')),

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-02 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation
@@ -71,6 +71,12 @@ manifest, and:
    [endopi-prompt-templates](endopi-prompt-templates.md)).
 4. Registers `providers/` contents with the LLM provider registry (per
    [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md)).
+
+The first of these has no destination today.
+Commit `8a1f07d38` removed the weblet-era `endo install` and its guest
+store, so the verb now exists only for this manifest.
+The providers step likewise waits on the provider registry.
+The CLI reports both kinds as declared but not installed.
 
 ### Security posture
 

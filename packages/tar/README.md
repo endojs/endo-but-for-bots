@@ -29,7 +29,7 @@ streamed chunk-by-chunk.
 import { readTarEntries, tarPathSegments } from '@endo/tar';
 
 for await (const entry of readTarEntries(byteSource)) {
-  // entry: { type: 'file' | 'directory' | 'symlink', path, size, linkname, content }
+  // entry: { type: 'file' | 'directory' | 'symlink', path, size, mode, linkname, content }
   const segments = tarPathSegments(entry.path);
   if (entry.type === 'file') {
     for await (const chunk of entry.content) {

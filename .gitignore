@@ -102,6 +102,7 @@ api-docs
 # legacy exceptions to the above rule
 !packages/bundle-source/src/exports.d.ts
 !packages/captp/src/ts-types.d.ts
+!packages/cli/src/packages/types.d.ts
 !packages/cli/test/_types.d.ts
 !packages/compartment-mapper/src/types-external.d.ts
 !packages/compartment-mapper/src/types.d.ts
@@ -137,6 +138,7 @@ api-docs
 !packages/ses/src/reporting-types.d.ts
 !packages/ses/types.d.ts
 !packages/stream/types.d.ts
+!packages/tar/src/types.d.ts
 !packages/trampoline/types.d.ts
 !packages/where/types.d.ts
 !packages/ocapn/src/codec-interface.d.ts
