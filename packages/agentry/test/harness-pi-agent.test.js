@@ -226,15 +226,14 @@ const startFakeProvider = async (t, script) => {
  * pool once its sockets disconnect; the `ClientDestroyedError` it builds then
  * assigns `message` over SES's frozen `Error.prototype`, which surfaces as a
  * fatal unhandled rejection. Each request here owns and closes its socket.
+ * The adapter only passes a URL string and a plain init, never a `Request`.
  *
- * @param {string | URL} url
- * @param {RequestInit} [init]
- * @returns {Promise<Response>}
+ * @type {typeof fetch}
  */
 const httpFetch = (url, init = {}) =>
   new Promise((resolve, reject) => {
     const req = httpRequest(
-      url,
+      /** @type {string | URL} */ (url),
       {
         agent: false,
         method: init.method,
