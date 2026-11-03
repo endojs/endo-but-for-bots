@@ -191,7 +191,14 @@ const startFakeProvider = async (t, script) => {
     request.on('end', () => {
       const { delta, finishReason } = script[requests.length];
       requests.push(JSON.parse(body));
-      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      // Refuse keep-alive: the adapter's fetch (undici) would otherwise
+      // pool the socket, and closing the server in teardown rejects it
+      // with a `ClientDestroyedError` that SES surfaces as a fatal
+      // unhandled rejection on Node 24.
+      response.writeHead(200, {
+        'content-type': 'text/event-stream',
+        connection: 'close',
+      });
       /** @param {object} choice */
       const writeChunk = choice =>
         response.write(
