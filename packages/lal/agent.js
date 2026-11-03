@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
-import { makePiAgent } from '@endo/agentry/harness';
+import { getAmbientEnv, makePiAgent } from '@endo/agentry/harness';
 
 import { systemPrompt } from './prompts/system.js';
 import { tools } from './tools/index.js';
@@ -20,6 +20,12 @@ import {
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
+import {
+  makeCompactCommandHandler,
+  makeCompactingRound,
+  makeCompactor,
+  readCompactionSettings,
+} from './compaction.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 /** @import { GuestPowers, LalContext } from './agent.types.js' */
@@ -125,7 +131,20 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
    */
   const runOneRound = prompt => runRound(piAgent, prompt);
 
-  await runInboxLoop({ powers, getCancelled, runOneRound });
+  const compactionSettings = readCompactionSettings(getAmbientEnv());
+  const compactor = makeCompactor({ piAgent, settings: compactionSettings });
+
+  await runInboxLoop({
+    powers,
+    getCancelled,
+    runOneRound: makeCompactingRound({
+      piAgent,
+      compactor,
+      settings: compactionSettings,
+      runRound: runOneRound,
+    }),
+    handleCompactCommand: makeCompactCommandHandler(compactor),
+  });
 };
 harden(spawnWorkerLoop);
 
