@@ -2,7 +2,7 @@ import '@endo/init/debug.js';
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, parse } from 'node:path';
 
 import test from 'ava';
 
@@ -124,4 +124,63 @@ test('discovery with no directories finds nothing', async t => {
     }),
     { templates: [], diagnostics: [] },
   );
+});
+
+test('with neither home nor a repository above it, only the working directory counts', async t => {
+  // A path that does not exist walks to the filesystem root without finding a
+  // repository, wherever the test's temporary directory happens to live.
+  const workingDirectory = join(
+    parse(tmpdir()).root,
+    'nonexistent-prompt-templates-test',
+    'a',
+  );
+  const home = await makeRoot(t);
+
+  t.deepEqual(
+    await listPromptTemplateDirectories({
+      homeDirectory: home,
+      workingDirectory,
+    }),
+    [
+      join(home, '.pi/agent/prompts'),
+      join(home, '.agents/prompts'),
+      join(workingDirectory, '.agents/prompts'),
+      join(workingDirectory, '.pi/prompts'),
+    ],
+  );
+});
+
+test('a repository search that fails for another reason than absence rejects', async t => {
+  const root = await makeRoot(t);
+  const file = join(root, 'file');
+  await writeFile(file, '');
+
+  await t.throwsAsync(
+    listPromptTemplateDirectories({
+      homeDirectory: join(root, 'home'),
+      workingDirectory: join(file, 'below'),
+    }),
+    { code: 'ENOTDIR' },
+  );
+});
+
+test('an unreadable directory yields a diagnostic and the others still load', async t => {
+  const root = await makeRoot(t);
+  const home = join(root, 'home');
+  const unreadable = join(home, '.agents/prompts');
+  await writeTemplate(join(home, '.pi/agent/prompts/kept.md'), 'Kept');
+  await writeTemplate(unreadable, 'a file where a directory belongs');
+
+  const { templates, diagnostics } = await discoverPromptTemplates({
+    homeDirectory: home,
+    workingDirectory: join(root, 'project'),
+  });
+
+  t.deepEqual(
+    templates.map(({ name }) => name),
+    ['kept'],
+  );
+  t.is(diagnostics.length, 1);
+  t.is(diagnostics[0].source, unreadable);
+  t.regex(diagnostics[0].message, /ENOTDIR/);
 });

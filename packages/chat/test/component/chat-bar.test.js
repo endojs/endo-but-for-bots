@@ -1517,3 +1517,37 @@ test.serial(
     ctx.api.dispose();
   },
 );
+
+test.serial('a slash line with no arguments opens an empty form', async t => {
+  const ctx = await setupTemplateChatBar({ 'one.md': 'Only {{x}}' });
+  await ctx.openMenu();
+  ctx.setText('/one');
+  await waitFor(() => ctx.menuNames().length === 1);
+  ctx.press('Enter');
+
+  t.true(ctx.$chatBar.classList.contains('command-mode'));
+  const inputsReady = () =>
+    ctx.$parent.querySelectorAll('#inline-form-container input');
+  await waitFor(() => inputsReady().length === 1);
+  t.is(inputsReady()[0].value, '');
+  // The form focuses its first field on a timer, which must not outlive the DOM.
+  await tick(100);
+  ctx.api.dispose();
+});
+
+test.serial(
+  'choosing a template from the popover expands it and sends nothing',
+  async t => {
+    const ctx = await setupTemplateChatBar({ 'plain.md': 'Hello' });
+    await ctx.openMenu();
+    ctx.setText('');
+    ctx.$menuButton.click();
+    await waitFor(() => ctx.$popover.querySelector('[data-command="plain"]'));
+    ctx.$popover.querySelector('[data-command="plain"]').click();
+
+    t.is(ctx.$input.textContent, 'Hello');
+    t.false(ctx.$chatBar.classList.contains('command-mode'));
+    t.deepEqual(ctx.mock.sentMessages, []);
+    ctx.api.dispose();
+  },
+);
