@@ -1,8 +1,10 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
+import { Readable } from 'node:stream';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { streamSimple } from '@earendil-works/pi-ai/compat';
 
 import { defineAgent, makeEnvCredentials } from '../src/define-agent.js';
 import { makePiAgent } from '../src/harness/pi-agent.js';
@@ -191,14 +193,7 @@ const startFakeProvider = async (t, script) => {
     request.on('end', () => {
       const { delta, finishReason } = script[requests.length];
       requests.push(JSON.parse(body));
-      // Refuse keep-alive: the adapter's fetch (undici) would otherwise
-      // pool the socket, and closing the server in teardown rejects it
-      // with a `ClientDestroyedError` that SES surfaces as a fatal
-      // unhandled rejection on Node 24.
-      response.writeHead(200, {
-        'content-type': 'text/event-stream',
-        connection: 'close',
-      });
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
       /** @param {object} choice */
       const writeChunk = choice =>
         response.write(
@@ -224,6 +219,44 @@ const startFakeProvider = async (t, script) => {
   const address = /** @type {AddressInfo} */ (server.address());
   return { origin: `http://127.0.0.1:${address.port}`, requests };
 };
+
+/**
+ * A `fetch` over `node:http` with keep-alive disabled (`agent: false`). The
+ * global `fetch` (undici) pools sockets per origin and, on Node 24, closes the
+ * pool once its sockets disconnect; the `ClientDestroyedError` it builds then
+ * assigns `message` over SES's frozen `Error.prototype`, which surfaces as a
+ * fatal unhandled rejection. Each request here owns and closes its socket.
+ *
+ * @param {string | URL} url
+ * @param {RequestInit} [init]
+ * @returns {Promise<Response>}
+ */
+const httpFetch = (url, init = {}) =>
+  new Promise((resolve, reject) => {
+    const req = httpRequest(
+      url,
+      {
+        agent: false,
+        method: init.method,
+        headers: Object.fromEntries(new Headers(init.headers)),
+        signal: init.signal ?? undefined,
+      },
+      res => {
+        resolve(
+          new Response(/** @type {ReadableStream} */ (Readable.toWeb(res)), {
+            status: res.statusCode,
+            headers: /** @type {Record<string, string>} */ (res.headers),
+          }),
+        );
+      },
+    );
+    req.on('error', reject);
+    req.end(init.body);
+  });
+
+/** @type {StreamFn} */
+const streamOverHttp = (model, context, options) =>
+  streamSimple(model, context, { ...options, fetch: httpFetch });
 
 test('makePiAgent declares the system prompt and tools to a real provider adapter', async t => {
   const { origin, requests } = await startFakeProvider(t, [
@@ -258,6 +291,7 @@ test('makePiAgent declares the system prompt and tools to a real provider adapte
       }),
     ],
     systemPrompt: 'SYS',
+    streamFn: streamOverHttp,
     getApiKey: async () => 'ollama',
   });
 
