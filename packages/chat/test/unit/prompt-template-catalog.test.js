@@ -170,3 +170,33 @@ test('an older refresh finishing last does not replace a newer one', async t => 
   await older;
   t.is(catalog.getTemplate('a').body, 'new');
 });
+
+test('skipped files and unreadable sources warn, and the rest still load', async t => {
+  const { catalog, warnings } = makeCatalog({
+    'source-000': makeTree({ 'kept.md': 'Kept', 'bad name.md': 'Skipped' }),
+    'source-001': Far('Tree', {
+      list: () => {
+        throw Error('unreadable');
+      },
+      readText: () => '',
+    }),
+  });
+  await catalog.refresh();
+  t.deepEqual(
+    catalog.getCommands().map(({ name }) => name),
+    ['kept'],
+  );
+  t.is(warnings.length, 2);
+  t.true(
+    warnings.some(warning =>
+      warning.startsWith('Skipped prompt template source-000/bad name.md: '),
+    ),
+  );
+  t.true(
+    warnings.some(
+      warning =>
+        warning.startsWith('Skipped prompt template source-001/: ') &&
+        warning.includes('unreadable'),
+    ),
+  );
+});
