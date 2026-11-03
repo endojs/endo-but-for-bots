@@ -238,7 +238,7 @@ const trackFiles = (messages, readFiles, modifiedFiles) => {
           ['readText', 'writeText', 'editText'].includes(block.name) &&
           !failedCalls.has(block.id)
         ) {
-          const { petNameOrPath, fileName } = block.arguments ?? {};
+          const { petNameOrPath, fileName } = block.arguments;
           const directory = nameOrPathText(petNameOrPath);
           if (directory !== undefined && typeof fileName === 'string') {
             (block.name === 'readText' ? readFiles : modifiedFiles).add(
