@@ -109,9 +109,8 @@ export const loadSkills = async sources => {
   }
 
   return harden({
-    skills: [...skills.values()].sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    ),
+    // Map keys are unique, so no two names compare equal.
+    skills: [...skills.values()].sort((a, b) => (a.name < b.name ? -1 : 1)),
     diagnostics,
   });
 };
