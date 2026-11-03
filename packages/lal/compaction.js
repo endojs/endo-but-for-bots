@@ -11,7 +11,7 @@
 
 import { isContextOverflow, normalizeContext } from '@earendil-works/pi-ai';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 
 /** @import { AgentMessage, Agent as PiAgent, StreamFn } from '@earendil-works/pi-agent-core' */
 /** @import { CompactionRecord, CompactionSettings, Compactor } from './compaction.types.js' */
@@ -442,8 +442,11 @@ export const makeCompactor = ({
       )
     ).result();
     // A length stop is partial text, which must not replace the history.
+    // The quotes keep these values in the error's message, which is all the
+    // host's `/compact failed:` reply carries: a bare substitution reads
+    // "(a string)" under production lockdown.
     response.stopReason === 'stop' ||
-      Fail`Compaction summary stopped with ${response.stopReason}: ${response.errorMessage}`;
+      Fail`Compaction summary stopped with ${q(response.stopReason)}: ${q(response.errorMessage ?? 'no error message')}`;
     !response.content.some(({ type }) => type === 'toolCall') ||
       Fail`Compaction summary attempted to call a tool`;
     const text = contentText(response.content);
