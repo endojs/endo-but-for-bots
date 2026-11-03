@@ -204,6 +204,7 @@ const summaryReply = (/** @type {string} */ text) => ({
 /**
  * A long enough history: two turns past the keep-recent budget.
  * @param lastUsage
+ * @returns {any[]}
  */
 const longHistory = (lastUsage = 0) => [
   user(`first ${tokens(200)}`),
@@ -297,6 +298,21 @@ test('context tokens use the newest reading plus trailing estimates', t => {
     ),
     7000,
     'a failed response is not a reading',
+  );
+});
+
+test('estimates count every kind of content', t => {
+  const estimate = (/** @type {any} */ content) =>
+    estimateContextTokens(
+      /** @type {any[]} */ ([{ role: 'user', content, timestamp: 0 }]),
+    );
+  t.is(estimate(tokens(10)), 10, 'plain string content');
+  t.is(estimate(undefined), 0, 'absent content');
+  t.is(estimate([{ type: 'image', data: 'ignored' }]), 1200, 'an image');
+  t.is(
+    estimate([{ type: 'thinking', thinking: tokens(10) }]),
+    10,
+    'thinking text',
   );
 });
 
@@ -459,6 +475,57 @@ test('files touched survive every later compaction', async t => {
   t.false(summary.includes('failed.js'));
 });
 
+test('unusable tool paths are not reported as touched files', async t => {
+  const { compactor } = makeHarness({
+    messages: /** @type {any[]} */ ([
+      user('go'),
+      toolCall('number', 'readText', { petNameOrPath: 42, fileName: 'a.js' }),
+      toolResult('number', 'ok'),
+      toolCall('mixed', 'readText', {
+        petNameOrPath: ['workspace', 7],
+        fileName: 'b.js',
+      }),
+      toolResult('mixed', 'ok'),
+      toolCall('unnamed', 'writeText', { petNameOrPath: 'workspace' }),
+      toolResult('unnamed', 'ok'),
+      ...longHistory(),
+    ]),
+    script: [summaryReply('summary')],
+  });
+  const record = await compactor.compact();
+  t.deepEqual(record?.readFiles, []);
+  t.deepEqual(record?.modifiedFiles, []);
+});
+
+test('string content reaches the summary prompt', async t => {
+  const { compactor, requests } = makeHarness({
+    messages: /** @type {any[]} */ ([
+      { role: 'user', content: 'plain string request', timestamp: 0 },
+      assistant('reply'),
+      ...longHistory(),
+    ]),
+    script: [summaryReply('summary')],
+  });
+  t.truthy(await compactor.compact());
+  t.regex(requests[0].prompt, /plain string request/);
+});
+
+test('the summary budget respects the model output limit', async t => {
+  const budgetFor = async (/** @type {number} */ maxTokens) => {
+    const { compactor, requests } = makeHarness({
+      model: { ...stubModel, maxTokens },
+      messages: longHistory(),
+      script: [summaryReply('summary')],
+    });
+    await compactor.compact();
+    return requests[0].options.maxTokens;
+  };
+  const budget = await budgetFor(1_000_000);
+  t.not(budget, 10);
+  t.is(await budgetFor(10), 10, 'a smaller model limit wins');
+  t.is(await budgetFor(0), budget, 'an unknown model limit is no limit');
+});
+
 test('a failed or partial summary leaves the transcript alone', async t => {
   for (const reply of [
     { content: [{ type: 'text', text: 'partial' }], stopReason: 'length' },
@@ -545,7 +612,10 @@ test('a long round compacts between its tool calls', async t => {
         }),
       }),
     ],
-    messages: [user(`old ${tokens(500)}`), assistant(`older ${tokens(500)}`)],
+    messages: /** @type {any[]} */ ([
+      user(`old ${tokens(500)}`),
+      assistant(`older ${tokens(500)}`),
+    ]),
     streamFn,
     getApiKey: () => 'key',
   });
@@ -612,6 +682,28 @@ test('an overflow with nothing to summarize reaches the sender', async t => {
     message: /prompt is too long/,
   });
   t.is(requests.length, 1);
+});
+
+test('a failed overflow recovery reports the overflow to the sender', async t => {
+  const messages = longHistory();
+  const { piAgent, round, requests } = makeHarness({
+    messages,
+    script: [
+      overflow,
+      { content: [], stopReason: 'error', errorMessage: 'provider down' },
+    ],
+  });
+  await t.throwsAsync(() => round('You have new mail.'), {
+    message: /prompt is too long/,
+  });
+  t.is(requests.length, 2, 'the round is not retried without a summary');
+  t.is(piAgent.state.messages[1], messages[0], 'the history is not elided');
+  t.false(
+    piAgent.state.messages.some(
+      (/** @type {any} */ { stopReason }) => stopReason === 'error',
+    ),
+    'the failed response is not replayed',
+  );
 });
 
 test('an ordinary provider error is not an overflow', async t => {
@@ -704,8 +796,9 @@ test('mail cannot close the history section of the summary prompt', async t => {
 /**
  * @param {object} args
  * @param {object[]} args.messages Inbound mail, delivered in order.
+ * @param {boolean} [args.failReply] Whether a reply rejects.
  */
-const makeInboxPowers = ({ messages }) => {
+const makeInboxPowers = ({ messages, failReply = false }) => {
   /** @type {Array<{ number: unknown, strings: string[] }>} */
   const replies = [];
   /** @type {unknown[]} */
@@ -726,6 +819,7 @@ const makeInboxPowers = ({ messages }) => {
       /** @type {unknown} */ messageNumber,
       /** @type {string[]} */ strings,
     ) => {
+      if (failReply) throw Error('reply refused');
       replies.push({ number: messageNumber, strings });
     },
     dismiss: async (/** @type {unknown} */ messageNumber) => {
@@ -811,6 +905,44 @@ test('a failed /compact is reported to the host', async t => {
     { number: 1n, strings: ['/compact failed: provider down'] },
   ]);
   t.deepEqual(dismissed, [1n]);
+});
+
+test('/compact from an unparseable sender is ordinary mail', async t => {
+  /** @type {string[]} */
+  const rounds = [];
+  const { powers, replies, dismissed } = makeInboxPowers({
+    messages: [mail(1n, '/compact', 'not a locator')],
+  });
+  await runInboxLoop({
+    powers,
+    getCancelled: async () => null,
+    runOneRound: async prompt => {
+      rounds.push(prompt);
+    },
+    handleCompactCommand: async () => t.fail('only the host may compact'),
+  });
+  t.is(rounds.length, 1);
+  t.deepEqual(replies, []);
+  t.deepEqual(dismissed, []);
+});
+
+test('an undeliverable /compact reply does not stop the inbox', async t => {
+  /** @type {string[]} */
+  const rounds = [];
+  const { powers, dismissed } = makeInboxPowers({
+    messages: [mail(1n, '/compact'), mail(2n, 'hello')],
+    failReply: true,
+  });
+  await runInboxLoop({
+    powers,
+    getCancelled: async () => null,
+    runOneRound: async prompt => {
+      rounds.push(prompt);
+    },
+    handleCompactCommand: async () => 'compacted',
+  });
+  t.is(rounds.length, 1, 'the next message still runs');
+  t.deepEqual(dismissed, []);
 });
 
 test.serial('a worker compacts through its real provider path', async t => {
