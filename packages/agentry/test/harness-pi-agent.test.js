@@ -232,7 +232,7 @@ const startFakeProvider = async (t, script) => {
  */
 const httpFetch = (url, init = {}) =>
   new Promise((resolve, reject) => {
-    const req = httpRequest(
+    const request = httpRequest(
       /** @type {string | URL} */ (url),
       {
         agent: false,
@@ -240,17 +240,20 @@ const httpFetch = (url, init = {}) =>
         headers: Object.fromEntries(new Headers(init.headers)),
         signal: init.signal ?? undefined,
       },
-      res => {
+      response => {
         resolve(
-          new Response(/** @type {ReadableStream} */ (Readable.toWeb(res)), {
-            status: res.statusCode,
-            headers: /** @type {Record<string, string>} */ (res.headers),
-          }),
+          new Response(
+            /** @type {ReadableStream} */ (Readable.toWeb(response)),
+            {
+              status: response.statusCode,
+              headers: /** @type {Record<string, string>} */ (response.headers),
+            },
+          ),
         );
       },
     );
-    req.on('error', reject);
-    req.end(init.body);
+    request.on('error', reject);
+    request.end(init.body);
   });
 
 /** @type {StreamFn} */
