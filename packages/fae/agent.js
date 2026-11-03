@@ -12,6 +12,8 @@ import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 import {
   planContextCompaction,
   summarizeContext,
+  getEmptyResponsesOutput,
+  getEmptyMessagesOutput,
 } from '@endo/lal/providers/index.js';
 import {
   makeConversationTree,
@@ -22,6 +24,8 @@ import {
   decodeImageResult,
   imageResultText,
 } from '@endo/hosted-agent/image-result.js';
+import { provideAgentLocator } from './src/provide-agent-locator.js';
+import { stableModuleSpecifier } from './src/module-specifier.js';
 import { makeProviderOwner } from './src/provider-owner.js';
 import { restoreInboxConversation } from './src/inbox-conversation.js';
 import { discoverTools, executeTool } from './src/tools.js';
@@ -89,8 +93,17 @@ const m = makeMarshal(undefined, undefined, {
 const decodeSmallcaps = jsonString =>
   m.unserialize({ body: jsonString, slots: [] });
 
+// Factories sharing an owner must not race provisioning or its cleanup.
+const factoryCreationJobs = new WeakMap();
+
 const FaeFactoryInterface = M.interface('FaeFactory', {
   createAgent: M.callWhen(M.string()).optional(M.record()).returns(M.string()),
+  createAgentLocator: M.callWhen(M.string())
+    .optional(M.record())
+    .returns(M.string()),
+  provideAgentLocator: M.callWhen(M.string())
+    .optional(M.record())
+    .returns(M.string()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -192,7 +205,7 @@ Example: if a message says "Here is @counter for you", adopt it:
 
 /**
  * @typedef {object} SubscriptionProviderConfig
- * @property {'subscription-responses'} kind
+ * @property {'subscription-responses' | 'subscription-messages'} kind
  * @property {any} subscription - Existing subscription, never credentials.
  * @property {string} model
  * @property {string} [reasoningEffort]
@@ -382,21 +395,42 @@ export const spawnWorkerLoop = async (
   // Wrap the reply tool to track whether a reply was sent during
   // the current agentic loop iteration, so we can auto-reply if
   // the LLM outputs content without calling the tool.
-  const replyTracker = { sent: false };
+  const replyTracker = {
+    sent: false,
+    dismissed: false,
+    messageNumber: undefined,
+  };
   const baseReplyTool = makeReplyTool(powers);
   localTools.set(
     'reply',
     harden({
       schema: () => baseReplyTool.schema(),
       async execute(/** @type {any} */ args) {
-        replyTracker.sent = true;
-        return baseReplyTool.execute(args);
+        const result = await baseReplyTool.execute(args);
+        if (BigInt(args.messageNumber) === replyTracker.messageNumber) {
+          replyTracker.sent = true;
+        }
+        return result;
       },
       help: () => baseReplyTool.help(),
     }),
   );
   localTools.set('listMessages', makeListMessagesTool(powers));
-  localTools.set('dismiss', makeDismissTool(powers));
+  const baseDismissTool = makeDismissTool(powers);
+  localTools.set(
+    'dismiss',
+    harden({
+      schema: () => baseDismissTool.schema(),
+      async execute(/** @type {any} */ args) {
+        const result = await baseDismissTool.execute(args);
+        if (BigInt(args.messageNumber) === replyTracker.messageNumber) {
+          replyTracker.dismissed = true;
+        }
+        return result;
+      },
+      help: () => baseDismissTool.help(),
+    }),
+  );
   localTools.set('editMessage', makeEditMessageTool(powers));
   localTools.set('messageHistory', makeMessageHistoryTool(powers));
   localTools.set('exec', makeExecTool(powers));
@@ -568,7 +602,18 @@ export const spawnWorkerLoop = async (
         return harden({ leafId: currentLeafId, messages: providerContext });
       },
       invoke: async (providerContext, tools) => {
-        const response = await chat(providerContext, tools.schemas);
+        let response;
+        try {
+          response = await chat(providerContext, tools.schemas);
+        } catch (error) {
+          // Some providers finish silently after an explicit mailbox reply.
+          // Accept only a validated completion and a successful reply to this
+          // inbound message. Persist its opaque context and usage normally.
+          const empty =
+            getEmptyResponsesOutput(error) ?? getEmptyMessagesOutput(error);
+          if (!empty || !replyTracker.sent) throw error;
+          response = empty;
+        }
         unseenImages = false;
         loopAbort.signal.throwIfAborted();
         responseUsage = response.usage;
@@ -577,6 +622,7 @@ export const spawnWorkerLoop = async (
           const rm = /** @type {any} */ (responseMessage);
           if (
             !rm.responsesOutput &&
+            !rm.messagesOutput &&
             (!rm.tool_calls || rm.tool_calls.length === 0) &&
             rm.content
           ) {
@@ -848,6 +894,9 @@ export const spawnWorkerLoop = async (
       } = message;
 
       console.error(`[fae] New message #${number} from ${fromId}`);
+      replyTracker.sent = false;
+      replyTracker.dismissed = false;
+      replyTracker.messageNumber = number;
 
       let textContent;
       if (type === 'package' && Array.isArray(strings)) {
@@ -903,12 +952,16 @@ export const spawnWorkerLoop = async (
           '[fae] provider unavailable:',
           error instanceof Error ? error.message : String(error),
         );
-        await E(powers).reply(
-          number,
-          ['This agent cannot reach its language model right now.'],
-          [],
-          [],
-        );
+        try {
+          await E(powers).reply(
+            number,
+            ['This agent cannot reach its language model right now.'],
+            [],
+            [],
+          );
+        } catch (deliveryError) {
+          console.error('[fae] error reply failed:', deliveryError);
+        }
         return;
       }
 
@@ -919,7 +972,6 @@ export const spawnWorkerLoop = async (
           localTools,
         );
         loopAbort.signal.throwIfAborted();
-        replyTracker.sent = false;
         const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
         loopAbort.signal.throwIfAborted();
         if (!outcome.answered) {
@@ -953,16 +1005,24 @@ export const spawnWorkerLoop = async (
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         console.error('[fae] turn failed:', errorMessage);
-        await E(powers).reply(
-          number,
-          [
-            error instanceof Error && senderVisibleErrors.has(error)
-              ? errorMessage
-              : 'This agent could not complete that request. The reason is in its log.',
-          ],
-          [],
-          [],
-        );
+        if (!replyTracker.sent && !replyTracker.dismissed) {
+          try {
+            await E(powers).reply(
+              number,
+              [
+                error instanceof Error && senderVisibleErrors.has(error)
+                  ? errorMessage
+                  : 'This agent could not complete that request. The reason is in its log.',
+              ],
+              [],
+              [],
+            );
+          } catch (deliveryError) {
+            // A sender may dismiss or remove the message independently. A
+            // failed diagnostic delivery must not poison the durable fence.
+            console.error('[fae] error reply failed:', deliveryError);
+          }
+        }
       }
     };
 
@@ -1197,8 +1257,11 @@ harden(spawnWorkerLoop);
 // Fae Factory — Entry Point
 // ============================================================================
 
-const driverSpecifier = new URL('driver.js', import.meta.url).href;
-const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
+const driverSpecifier = stableModuleSpecifier('driver.js', import.meta.url);
+const spawnerSpecifier = stableModuleSpecifier(
+  'subagent-spawner.js',
+  import.meta.url,
+);
 
 /**
  * Creates a Fae factory that provisions and manages agent instances.
@@ -1223,6 +1286,101 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
 
   const hostAgent = await E(powers).lookup('host-agent');
 
+  const create = async (name, options = {}) => {
+    const { systemPrompt, pin, maxSubagentDepth } =
+      /** @type {{ systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number }} */ (
+        options
+      );
+    // Root and subagent names land in one flat host namespace and must parse
+    // the same way. In particular a root name may carry no dot, which is
+    // what keeps `SUBAGENT_INFIX` a delimiter nobody can forge — two root
+    // agents `p` and `p-sub` would otherwise both claim `p-sub-sub-x`, and
+    // either could enumerate and tear down the other's subagent.
+    assertAgentName(name);
+    const maxDepth =
+      maxSubagentDepth === undefined ? defaultMaxDepth : maxSubagentDepth;
+    if (!Number.isInteger(maxDepth) || maxDepth < 0) {
+      throw new Error('maxSubagentDepth must be a non-negative integer.');
+    }
+
+    // The auth token travels as a capability, not as a value: when the
+    // factory holds a SecretBlob, every agent it creates gets the same one,
+    // so a rotation or revocation reaches all of them at once.
+    const hasAuthSecret = await E(powers).has(AUTH_SECRET_PETNAME);
+    const result = await provisionFaeAgent({
+      hostAgent,
+      name,
+      providerLocator: /** @type {string} */ (
+        await E(powers).locate('llm-provider')
+      ),
+      hostAgentLocator: /** @type {string} */ (
+        await E(powers).locate('host-agent')
+      ),
+      ...(hasAuthSecret
+        ? {
+            authSecretLocator: /** @type {string} */ (
+              await E(powers).locate(AUTH_SECRET_PETNAME)
+            ),
+          }
+        : {}),
+      driverSpecifier,
+      spawnerSpecifier,
+      depth: 0,
+      maxDepth,
+      maxSubagents,
+      workloadEnv,
+      systemPrompt,
+      pin,
+    });
+
+    console.error(`[fae-factory] Created agent "${name}"`);
+    return result;
+  };
+
+  const createSerial = (name, options, provide = false) => {
+    assertAgentName(name);
+    const normalized = harden({
+      systemPrompt: options.systemPrompt,
+      pin: options.pin ?? false,
+      maxSubagentDepth: options.maxSubagentDepth ?? defaultMaxDepth,
+    });
+    if (
+      Object.keys(options).some(key => !Object.hasOwn(normalized, key)) ||
+      (normalized.systemPrompt !== undefined &&
+        typeof normalized.systemPrompt !== 'string') ||
+      typeof normalized.pin !== 'boolean' ||
+      typeof normalized.maxSubagentDepth !== 'number' ||
+      !Number.isInteger(normalized.maxSubagentDepth) ||
+      normalized.maxSubagentDepth < 0
+    )
+      throw Error('Invalid Fae agent creation options');
+    const previous = factoryCreationJobs.get(hostAgent) || Promise.resolve();
+    const job = previous
+      .catch(() => {})
+      .then(() =>
+        provide
+          ? provideAgentLocator({
+              powers,
+              host: hostAgent,
+              name,
+              options: normalized,
+              create,
+              driverSpecifier,
+              spawnerSpecifier,
+              workloadEnv,
+              maxSubagents,
+            })
+          : create(name, normalized),
+      );
+    factoryCreationJobs.set(hostAgent, job);
+    const release = () => {
+      if (factoryCreationJobs.get(hostAgent) === job)
+        factoryCreationJobs.delete(hostAgent);
+    };
+    void job.then(release, release);
+    return job;
+  };
+
   return makeExo('FaeFactory', FaeFactoryInterface, {
     /**
      * Create a new agent instance with its own guest, driver caplet,
@@ -1242,54 +1400,13 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
      * @returns {Promise<string>} The agent's profile petname
      */
     async createAgent(name, options = {}) {
-      const { systemPrompt, pin, maxSubagentDepth } =
-        /** @type {{ systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number }} */ (
-          options
-        );
-      // Root and subagent names land in one flat host namespace and must parse
-      // the same way. In particular a root name may carry no dot, which is
-      // what keeps `SUBAGENT_INFIX` a delimiter nobody can forge — two root
-      // agents `p` and `p-sub` would otherwise both claim `p-sub-sub-x`, and
-      // either could enumerate and tear down the other's subagent.
-      assertAgentName(name);
-      const maxDepth =
-        maxSubagentDepth === undefined ? defaultMaxDepth : maxSubagentDepth;
-      if (!Number.isInteger(maxDepth) || maxDepth < 0) {
-        throw new Error('maxSubagentDepth must be a non-negative integer.');
-      }
-
-      // The auth token travels as a capability, not as a value: when the
-      // factory holds a SecretBlob, every agent it creates gets the same one,
-      // so a rotation or revocation reaches all of them at once.
-      const hasAuthSecret = await E(powers).has(AUTH_SECRET_PETNAME);
-      const { profileName } = await provisionFaeAgent({
-        hostAgent,
-        name,
-        providerLocator: /** @type {string} */ (
-          await E(powers).locate('llm-provider')
-        ),
-        hostAgentLocator: /** @type {string} */ (
-          await E(powers).locate('host-agent')
-        ),
-        ...(hasAuthSecret
-          ? {
-              authSecretLocator: /** @type {string} */ (
-                await E(powers).locate(AUTH_SECRET_PETNAME)
-              ),
-            }
-          : {}),
-        driverSpecifier,
-        spawnerSpecifier,
-        depth: 0,
-        maxDepth,
-        maxSubagents,
-        workloadEnv,
-        systemPrompt,
-        pin,
-      });
-
-      console.error(`[fae-factory] Created agent "${name}"`);
-      return profileName;
+      return (await createSerial(name, options)).profileName;
+    },
+    async createAgentLocator(name, options = {}) {
+      return (await createSerial(name, options)).locator;
+    },
+    async provideAgentLocator(name, options = {}) {
+      return createSerial(name, options, true);
     },
 
     /**
@@ -1299,6 +1416,12 @@ export const make = async (guestPowers, _context, { env = {} } = {}) => {
     help(methodName) {
       if (methodName === undefined) {
         return 'Fae factory: creates LLM agent instances bound to a configured LLM provider. Use createAgent(name, { systemPrompt, pin }) to create a new agent.';
+      }
+      if (methodName === 'createAgentLocator') {
+        return 'createAgentLocator(name, { systemPrompt?, pin?, maxSubagentDepth? }) — Create the same ordinary Fae agent as createAgent, returning its portable mail-handle locator. Use this when the factory owns a private host: its relative profile names do not resolve in your inventory. The call creates a new agent and rejects name collisions.';
+      }
+      if (methodName === 'provideAgentLocator') {
+        return 'provideAgentLocator(name, { systemPrompt?, pin?, maxSubagentDepth? }) — Create or recover the same agent after a lost response. Repeated calls must use identical options and provider authority. Rejects unrelated existing agents, changed dependencies, and incomplete publications; never silently replaces an agent.';
       }
       if (methodName === 'createAgent') {
         return 'createAgent(name, { systemPrompt?, pin? }) — Create a new agent with its own guest, driver caplet, and inbox loop. Pass pin: true to survive daemon restarts. Returns the profile petname.';

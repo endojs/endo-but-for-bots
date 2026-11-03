@@ -1,121 +1,107 @@
 // @ts-check
 /* global process */
-// endo run --UNCONFINED setup-forgejo-credential.js --powers @agent
-//
-// Mints the Git credential the machine-admin agent pushes to the local Forgejo
-// with, and files it in the host's inventory as `forgejo-credential`. Intended
-// to be listed in the daemon's ENDO_EXTRA so it re-provisions on every start
-// for installations that use Forgejo as their local configuration forge.
-// @endo/floot's factory setup, listed after this one, grants the result to
-// its factory host under the same name, as a locator, so a machine-admin
-// session pushes with the credential this script keeps alive.
-//
-// This is what closes the self-update loop: a revision the agent authors exists
-// only on the forge, and `services.endo.mirrorUrl` fetches it from there, so the
-// agent needs push authority to the forge to get a commit the host can pin.
-//
-// The secret never reaches a session. A guest holding the resulting capability
-// sees `audience()` and nothing else; the password stays daemon-side and is fed
-// to git through askpass at transport time.
-//
-// Credential material is daemon-process-local: a restart keeps the formula but
-// leaves the material unavailable and the record revoked, so re-provisioning on
-// every start is the point of this setup. It ROTATES the credential when the
-// name is already bound rather than re-minting it. A GitRemote holds the
-// credential *cap*, not its name, so re-minting binds the name to a fresh
-// formula and strands every remote configured in an earlier process; the
-// stranding is invisible until the next push fails with "has been revoked".
-// Rotating restores the material in place, which brings those remotes back.
-
+// Import bootstrap material once; subsequent transport reads use Secrets.
+// Keep the credential identity so existing GitRemote capabilities still work.
+import { btoa } from 'node:buffer';
 import { E } from '@endo/far';
 
-const CREDENTIAL_NAME = 'forgejo-credential';
+const CREDENTIAL_PATH = harden([
+  '@pins',
+  'installations',
+  'nixos',
+  'forgejo-credential',
+]);
+const SECRET_NAME = 'forgejo-password';
 
 /**
- * The controller for an already-bound credential, or undefined when the name is
- * free, holds something that is not a credential, or speaks for a different
- * audience or kind than this host is now configured for. In each of those cases
- * the caller should mint a fresh credential rather than rotate the old one.
- *
  * @param {any} agent
- * @param {string} audience
+ * @param {Record<string, string | undefined>} [env]
  */
-const existingCredentialController = async (agent, audience) => {
-  await null;
-  let controller;
-  try {
-    const credential = await E(agent).lookup(CREDENTIAL_NAME);
-    controller = await E(agent).getGitCredentialController(credential);
-  } catch {
-    return undefined;
-  }
-  const info = await E(controller).inspect();
-  if (info.audience !== audience || info.kind !== 'basic') {
-    return undefined;
-  }
-  return controller;
-};
-
-export const main = async agent => {
-  const { env } = process;
-  const password = env.ENDO_FORGEJO_FLOOT_PW || '';
-  if (!password) {
-    // No forge configured on this host; machine-admin sessions still work, they
-    // just cannot publish a revision.
-    console.error(
-      'No ENDO_FORGEJO_FLOOT_PW; skipping Forgejo credential provisioning.',
-    );
-    return;
-  }
-
-  // The loopback origin rather than the public hostname: the daemon reaches
-  // Forgejo directly, and `services.endo.mirrorUrl` fetches the pinned revision
-  // over the same origin, so both halves of the loop agree on the audience.
+export const main = async (agent, env = process.env) => {
   const configuredUrl = env.ENDO_FORGEJO_URL || 'http://127.0.0.1:3000';
-  let forgejoUrl;
+  let url;
   try {
-    forgejoUrl = new URL(configuredUrl);
+    url = new URL(configuredUrl);
   } catch {
-    throw new Error(
-      'Invalid ENDO_FORGEJO_URL; expected an absolute HTTP(S) URL.',
-    );
+    throw Error('Invalid ENDO_FORGEJO_URL; expected an absolute HTTP(S) URL.');
   }
-  if (forgejoUrl.protocol !== 'http:' && forgejoUrl.protocol !== 'https:') {
-    throw new Error(
-      'Invalid ENDO_FORGEJO_URL; expected an absolute HTTP(S) URL.',
-    );
-  }
-  // An origin deliberately excludes paths, queries, fragments, and userinfo,
-  // matching the Git remote audience comparison without logging credentials.
-  const { origin: audience } = forgejoUrl;
+  if (!['https:', 'http:'].includes(url.protocol))
+    throw Error('Invalid ENDO_FORGEJO_URL; expected an absolute HTTP(S) URL.');
   const username = env.ENDO_FORGEJO_USER || 'floot';
-  if (forgejoUrl.protocol !== 'https:') {
-    // The daemon's Git remotes speak https only, and a credential is accepted
-    // only on an https remote, so an http audience is a credential nothing
-    // can use. Provision it anyway — the host may be mid-migration — but say
-    // so where the operator reads boot diagnostics.
-    console.error(
-      `Forgejo credential audience ${audience} is not https; Git remotes here require https, so no remote can use this credential until ENDO_FORGEJO_URL names an https origin.`,
-    );
-  }
-
-  const controller = await existingCredentialController(agent, audience);
-  if (controller !== undefined) {
-    await E(controller).rotate({ username, password });
-    console.error(
-      `Forgejo credential ${CREDENTIAL_NAME} rotated for ${username} at ${audience}.`,
-    );
-    return;
-  }
-
-  await E(agent).provideBasicCredential(CREDENTIAL_NAME, {
-    audience,
-    username,
-    password,
-  });
-
-  console.error(
-    `Forgejo credential provisioned as ${CREDENTIAL_NAME} for ${username} at ${audience}.`,
+  const catalog = await E(agent).lookup(['@secrets', 'catalog']);
+  const entries = await E(catalog).list();
+  let entry = entries.find(row =>
+    row.petNamePaths.some(
+      path =>
+        path.length === 2 && path[0] === 'secrets' && path[1] === SECRET_NAME,
+    ),
   );
+  const installed = await E(agent).has('@pins', 'installations');
+  const hasOwner =
+    installed && (await E(agent).has('@pins', 'installations', 'nixos'));
+  const hasCredential = hasOwner && (await E(agent).has(...CREDENTIAL_PATH));
+  const hasLegacy = await E(agent).has('forgejo-credential');
+  const existingCredential = hasCredential
+    ? await E(agent).lookup(CREDENTIAL_PATH)
+    : hasLegacy
+      ? await E(agent).lookup('forgejo-credential')
+      : undefined;
+  if (
+    hasCredential &&
+    hasLegacy &&
+    (await E(agent).identify(...CREDENTIAL_PATH)) !==
+      (await E(agent).identify('forgejo-credential'))
+  )
+    throw Error('Conflicting Forgejo credential bindings');
+  if (!entry) {
+    if (hasCredential)
+      throw Error(
+        'Installed Forgejo secret is missing; restore it explicitly in Secrets',
+      );
+    const password = env.ENDO_FORGEJO_FLOOT_PW || '';
+    if (!password) return;
+    const bytes = new TextEncoder().encode(password);
+    if (!bytes.length || bytes.length > 8192 || password.includes('\0'))
+      throw Error('Invalid Forgejo bootstrap password');
+    const importer = await E(agent).lookup(['@secrets', 'create']);
+    try {
+      await E(importer).createBase64(
+        SECRET_NAME,
+        'Forgejo Git password',
+        btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join('')),
+      );
+    } finally {
+      bytes.fill(0);
+    }
+    entry = (await E(catalog).list()).find(row =>
+      row.petNamePaths.some(
+        path =>
+          path.length === 2 && path[0] === 'secrets' && path[1] === SECRET_NAME,
+      ),
+    );
+  }
+  if (entry?.summary.state !== 'active')
+    throw Error('Forgejo secret is revoked or unavailable');
+  for (let n = 2; n < CREDENTIAL_PATH.length; n += 1) {
+    const path = CREDENTIAL_PATH.slice(0, n);
+    // Ancestors must exist before children can be named.
+    // eslint-disable-next-line no-await-in-loop
+    await E(agent).provideDirectory(path);
+  }
+  const secret = await E(agent).lookup(['secrets', SECRET_NAME]);
+  await E(agent).provideSecretBasicCredential(CREDENTIAL_PATH, {
+    audience: url.origin,
+    username,
+    secret,
+    ...(existingCredential === undefined ? {} : { existingCredential }),
+  });
+  if (hasLegacy) {
+    if (
+      (await E(agent).identify(...CREDENTIAL_PATH)) !==
+      (await E(agent).identify('forgejo-credential'))
+    )
+      throw Error('Forgejo credential migration changed identity');
+    await E(agent).remove('forgejo-credential');
+  }
 };
 harden(main);

@@ -105,8 +105,11 @@ test('the broker service is read by its verified entrypoint with its persisted p
     credentialKind: 'oauthToken',
   };
   const bindings = new Map([
-    [key('claude-sandbox', 'broker-service'), 'broker-id'],
-    [key('claude-sandbox', 'other'), 'other-id'],
+    [
+      key('@pins', 'installations', 'claude-sandbox', 'broker-service'),
+      'broker-id',
+    ],
+    [key('@pins', 'installations', 'claude-sandbox', 'other'), 'other-id'],
   ]);
   const environments = new Map([
     ['broker-id', harden({ CLAUDE_BROKER_CONFIG: JSON.stringify(config) })],
@@ -170,11 +173,16 @@ test('the broker service is read by its verified entrypoint with its persisted p
   await t.throwsAsync(readBrokerService(host), {
     message: /Invalid Claude broker configuration: anthropicBeta/,
   });
-  bindings.set(key('claude-sandbox', 'broker-service'), 'other-id');
+  bindings.set(
+    key('@pins', 'installations', 'claude-sandbox', 'broker-service'),
+    'other-id',
+  );
   await t.throwsAsync(readBrokerService(host), {
     message: /Claude broker-service has an unsupported entrypoint/,
   });
-  bindings.delete(key('claude-sandbox', 'broker-service'));
+  bindings.delete(
+    key('@pins', 'installations', 'claude-sandbox', 'broker-service'),
+  );
   await t.throwsAsync(readBrokerService(host), {
     message: /Cannot identify Claude "broker-service"/,
   });

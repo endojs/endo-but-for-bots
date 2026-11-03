@@ -13,7 +13,10 @@
  */
 
 import { Fail } from '@endo/errors';
-import { messageFromResponsesOutput } from '@endo/lal/providers/index.js';
+import {
+  messageFromResponsesOutput,
+  messageFromMessagesOutput,
+} from '@endo/lal/providers/index.js';
 import {
   assertTranscriptRecord,
   pairToolCalls,
@@ -106,18 +109,27 @@ export const projectTranscript = path => {
     // `system` is the harness's and is not replayed; anything else is not
     // dialogue this stream knows how to carry.
     if (role !== 'user' && role !== 'assistant') return;
+    !(message.responsesOutput && message.messagesOutput) ||
+      Fail`Conflicting provider output`;
+    const retainedOutput = message.messagesOutput ?? message.responsesOutput;
+    const restoreOutput = message.messagesOutput
+      ? messageFromMessagesOutput
+      : messageFromResponsesOutput;
     const providerContext =
-      message.responsesOutput === undefined
+      retainedOutput === undefined
         ? undefined
         : {
-            format: 'responses-output-v1',
+            format: message.messagesOutput
+              ? 'messages-output-v1'
+              : 'responses-output-v1',
             payload: JSON.stringify(
-              messageFromResponsesOutput(message.responsesOutput)
-                .responsesOutput,
+              message.messagesOutput
+                ? messageFromMessagesOutput(retainedOutput).messagesOutput
+                : messageFromResponsesOutput(retainedOutput).responsesOutput,
             ),
           };
     if (providerContext) {
-      const retained = messageFromResponsesOutput(message.responsesOutput);
+      const retained = restoreOutput(retainedOutput);
       (role === 'assistant' &&
         retained.content === (content ?? '') &&
         JSON.stringify(retained.tool_calls ?? []) ===
@@ -183,12 +195,16 @@ export const transcriptToProviderMessages = (records, providerFormat) => {
     if (record.kind === 'message') {
       nativeCalls.size === 0 || Fail`Missing canonical Responses calls`;
       if (record.providerContext) {
-        (record.providerContext.format === 'responses-output-v1' &&
+        (['responses-output-v1', 'messages-output-v1'].includes(
+          record.providerContext.format,
+        ) &&
           providerFormat === record.providerContext.format) ||
           Fail`Incompatible per-message provider context`;
-        const message = messageFromResponsesOutput(
-          JSON.parse(record.providerContext.payload),
-        );
+        const message = (
+          providerFormat === 'messages-output-v1'
+            ? messageFromMessagesOutput
+            : messageFromResponsesOutput
+        )(JSON.parse(record.providerContext.payload));
         message.content === record.content ||
           Fail`Responses dialogue differs from retained output`;
         messages.push(message);

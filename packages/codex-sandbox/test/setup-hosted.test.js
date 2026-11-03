@@ -40,6 +40,8 @@ const makeFakeHost = ({
   nativeEnv = {},
 } = {}) => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   /** @type {any[]} */
   const mints = [];
   /** @type {any[]} */
@@ -79,7 +81,7 @@ const makeFakeHost = ({
     environments.set(id, harden(env));
   };
   bind(
-    ['codex-sandbox', 'native-sandbox'],
+    ['@pins', 'installations', 'codex-sandbox', 'native-sandbox'],
     'native-id',
     nativeSandboxSpecifier,
     {
@@ -94,7 +96,7 @@ const makeFakeHost = ({
     },
   );
   bind(
-    ['codex-sandbox', 'state-provider'],
+    ['@pins', 'installations', 'codex-sandbox', 'state-provider'],
     'state-id',
     stateProviderSpecifier,
     {
@@ -103,9 +105,14 @@ const makeFakeHost = ({
   );
   bindings.set(key('floot', 'controller-profile'), 'dir');
   if (backendConfig) {
-    bind(['codex-sandbox', 'backend'], 'backend-id', backendSpecifier, {
-      CODEX_HOST_CONFIG: JSON.stringify(backendConfig),
-    });
+    bind(
+      ['@pins', 'installations', 'codex-sandbox', 'backend'],
+      'backend-id',
+      backendSpecifier,
+      {
+        CODEX_HOST_CONFIG: JSON.stringify(backendConfig),
+      },
+    );
   }
   const credential = harden({
     readBase64WithGeneration: async () =>
@@ -187,13 +194,17 @@ const makeFakeHost = ({
         });
       }
       if (parts[0] === 'secrets') return secretFor(parts[1]);
-      if (key(...parts) === key('codex-sandbox', 'credential'))
+      if (
+        key(...parts) ===
+        key('@pins', 'installations', 'codex-sandbox', 'credential')
+      )
         return credential;
       const id = bindings.get(key(...parts));
       if (!capabilities.has(id)) {
         capabilities.set(
           id,
-          key(...parts) === key('codex-sandbox', 'broker-service')
+          key(...parts) ===
+            key('@pins', 'installations', 'codex-sandbox', 'broker-service')
             ? Far(`Formula ${id}`, {
                 configure: async settings => {
                   if (configureFails) throw Error('broker unavailable');
@@ -556,7 +567,7 @@ test.serial(
     await main(fake.host, { exec: noExec });
     const before = fake.mints.length;
     fake.bind(
-      ['codex-sandbox', 'state-provider'],
+      ['@pins', 'installations', 'codex-sandbox', 'state-provider'],
       'replacement-state-id',
       stateProviderSpecifier,
       { ENDO_CODEX_STATE_DIR: '/var/lib/endo/replacement-state' },
@@ -672,8 +683,8 @@ const makePooledHost = accounts => {
         });
       }
       if (
-        parts[0] === 'codex-sandbox' &&
-        `${parts[1]}`.startsWith('credential-')
+        parts[2] === 'codex-sandbox' &&
+        `${parts[3]}`.startsWith('credential-')
       ) {
         return credentialFor(accounts[secretOfCredential(name)]);
       }
@@ -769,7 +780,9 @@ test.serial(
     // The pool is the account authority; no single account is named.
     t.is(config.accountAuthority, 'codex-main');
     t.false(Object.hasOwn(config, 'accountRef'));
-    const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
+    const powers = fake.guests.get(
+      key('@pins', 'installations', 'codex-sandbox', 'broker-powers'),
+    );
     t.truthy(powers);
     assert(powers);
     // Each member's credential under its secret name, and the set, with the
@@ -828,15 +841,30 @@ test.serial(
         ]);
         t.is(
           entry.oracle,
-          await fake.host.lookup(['codex-sandbox', `account-oracle-${id}`]),
+          await fake.host.lookup([
+            '@pins',
+            'installations',
+            'codex-sandbox',
+            `account-oracle-${id}`,
+          ]),
         );
         t.is(
           entry.admin,
-          await fake.host.lookup(['codex-sandbox', `subscription-admin-${id}`]),
+          await fake.host.lookup([
+            '@pins',
+            'installations',
+            'codex-sandbox',
+            `subscription-admin-${id}`,
+          ]),
         );
         t.is(
           entry.adminId,
-          await fake.host.identify('codex-sandbox', `subscription-admin-${id}`),
+          await fake.host.identify(
+            '@pins',
+            'installations',
+            'codex-sandbox',
+            `subscription-admin-${id}`,
+          ),
         );
       }),
     );
@@ -849,7 +877,7 @@ test.serial(
       `${[mint.options.resultName].flat().at(-1)}`.startsWith('credential-'),
     ).length;
     fake.bind(
-      ['codex-sandbox', 'broker-service'],
+      ['@pins', 'installations', 'codex-sandbox', 'broker-service'],
       'broker-service-id',
       brokerSpecifierForTest(fake),
       JSON.parse(JSON.stringify(broker.options.env)),
@@ -891,7 +919,10 @@ test.serial(
     await baseEnv(t);
     const fake = makePooledHost({ 'codex-work': 'account-work' });
     // The single-credential deployment as it stands.
-    fake.bindings.set(key('codex-sandbox', 'broker-service'), 'old-broker-id');
+    fake.bindings.set(
+      key('@pins', 'installations', 'codex-sandbox', 'broker-service'),
+      'old-broker-id',
+    );
     withEnv(t, {
       ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
         { id: 'work', credsName: 'codex-work' },
@@ -952,7 +983,9 @@ test.serial(
     const fake = makePooledHost({ 'codex-work': 'account-work' });
     fake.bindings.set(key('from-carol'), 'carols-share-id');
     await main(fake.host, { exec: noExec });
-    const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
+    const powers = fake.guests.get(
+      key('@pins', 'installations', 'codex-sandbox', 'broker-powers'),
+    );
     assert(powers);
     t.deepEqual([...powers.keys()].sort(), [
       'secret-work',

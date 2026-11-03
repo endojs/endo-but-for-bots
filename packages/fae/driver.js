@@ -60,7 +60,11 @@ export const make = async (powers, context, { env } = {}) => {
     // the inference session. Preserve both fixed-width components without a
     // delimiter to fit the subscription endpoint's 128-character identity.
     let sessionId;
-    if (storedConfig.kind === 'subscription-responses') {
+    if (
+      ['subscription-responses', 'subscription-messages'].includes(
+        storedConfig.kind,
+      )
+    ) {
       const { number, node } = parseLocator(await E(powers).locate('agent'));
       sessionId = `${number}${node}`;
     }

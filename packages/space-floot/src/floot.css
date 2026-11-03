@@ -714,8 +714,8 @@
 
 .floot-tool {
   max-width: 80%;
-  background: #1a1a2e;
-  border: 1px solid #2a2a3e;
+  background: var(--fl-surface);
+  border: 1px solid var(--fl-border);
   border-radius: 10px;
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;
@@ -727,14 +727,14 @@
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #7c6fbf;
+  color: var(--fl-text-muted);
   margin-bottom: 0.25rem;
 }
 .floot-tool-pre {
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;
-  color: #c4b5fd;
+  color: var(--fl-text);
   max-height: 150px;
   overflow-y: auto;
 }
@@ -748,12 +748,12 @@
    so the transcript reads as conversation, with the machinery one click away. */
 .floot-actions {
   max-width: 80%;
-  background: #16162a;
-  border: 1px solid #2a2a3e;
+  background: var(--fl-surface);
+  border: 1px solid var(--fl-border);
   border-radius: 10px;
   font-size: 0.8rem;
   font-family: 'SF Mono', 'Fira Code', monospace;
-  color: var(--fl-tool);
+  color: var(--fl-text);
   overflow: hidden;
   animation: floot-fade 0.15s ease;
 }
@@ -773,15 +773,15 @@
 }
 .floot-actions-head:hover,
 .floot-action-head:hover {
-  background: #1e1e36;
+  background: var(--fl-surface3);
 }
 .floot-caret {
   flex: none;
-  color: #7c6fbf;
+  color: var(--fl-text-muted);
 }
 .floot-actions-count {
   flex: none;
-  color: #c4b5fd;
+  color: var(--fl-text);
   font-weight: 600;
 }
 .floot-actions-detail,
@@ -789,27 +789,26 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #7c6fbf;
+  color: var(--fl-text-muted);
 }
 .floot-action-preview {
   min-width: 0;
   flex: 1;
-  color: #6b6b8c;
 }
 .floot-actions-body {
-  border-top: 1px solid #2a2a3e;
+  border-top: 1px solid var(--fl-border);
 }
 .floot-action + .floot-action {
-  border-top: 1px solid #23233a;
+  border-top: 1px solid var(--fl-border);
 }
 .floot-action-name {
   flex: none;
-  color: #a5b4fc;
+  color: var(--accent-primary, var(--fl-text));
 }
 .floot-action-running {
   flex: none;
   margin-left: auto;
-  color: var(--fl-green);
+  color: var(--success, var(--fl-green));
 }
 .floot-action-body {
   padding: 0 0.7rem 0.6rem 1.5rem;
@@ -818,37 +817,37 @@
   margin-top: 0.5rem;
 }
 .floot-action-section.result .floot-tool-label {
-  color: #4ade80;
+  color: var(--success, var(--fl-green));
 }
 .floot-action-section.result .floot-tool-pre {
-  color: #bbf7d0;
+  color: var(--fl-text);
 }
 
 /* JavaScript tokens for the exec-family entries. */
 .floot-code {
-  color: #d8d8f0;
+  color: var(--code-fg, var(--fl-text));
 }
 .floot-tok-keyword {
-  color: #c792ea;
+  color: var(--code-keyword, var(--fl-text));
 }
 .floot-tok-literal,
 .floot-tok-number {
-  color: #f78c6c;
+  color: var(--code-number, var(--fl-text));
 }
 .floot-tok-string,
 .floot-tok-template {
-  color: #c3e88d;
+  color: var(--code-string, var(--fl-text));
 }
 .floot-tok-regexp,
 .floot-tok-punctuation {
-  color: #89ddff;
+  color: var(--code-fg, var(--fl-text));
 }
 .floot-tok-comment {
-  color: #676e95;
+  color: var(--code-comment, var(--fl-text-muted));
   font-style: italic;
 }
 .floot-tok-identifier {
-  color: #d8d8f0;
+  color: var(--code-fg, var(--fl-text));
 }
 
 /* ── Pending submissions ───────────────────────────────────────────────────
@@ -1029,7 +1028,7 @@
 /* A thought inside an action group reads as prose, not code: the app's face
    rather than the group's monospace, whole words, and no scroll box. */
 .floot-action.thought .floot-action-name {
-  color: #c4b5fd;
+  color: var(--fl-text);
 }
 .floot-thought-text {
   margin: 0;

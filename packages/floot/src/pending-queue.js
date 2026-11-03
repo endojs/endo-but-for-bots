@@ -183,6 +183,18 @@ export const makePendingQueue = ({
   const ordered = operation => {
     const result = chain.then(async () => {
       await load();
+      // Idle queues also expire receipts. Keep message entries untouched: an
+      // old interrupted submission still needs an explicit recovery decision.
+      if (receipts.length > 0) {
+        const cutoff = now() - retryWindow;
+        const retained = receipts.filter(
+          receipt => Number(receipt.requestId.slice(0, 13)) > cutoff,
+        );
+        if (retained.length !== receipts.length) {
+          receipts = retained;
+          await persist();
+        }
+      }
       return operation();
     });
     chain = result.then(

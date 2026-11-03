@@ -8,6 +8,7 @@
  * @module
  */
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import {
   assertRuntimePlacement as assertHostedRuntimePlacement,
   prepareRuntimeEnv as prepareHostedRuntimeEnv,
@@ -59,7 +60,7 @@ export const backendSpecifier = assertCurrentSpecifier(
 harden(backendSpecifier);
 
 /**
- * Read one immutable formula under `codex-sandbox/` by its verified
+ * Read one immutable formula under `@pins/installations/codex-sandbox/` by its verified
  * entrypoint; see `@endo/hosted-agent/hosted-setup.js`.
  * @param {any} host The `@agent` host powers.
  * @param {string} name
@@ -68,7 +69,7 @@ harden(backendSpecifier);
 export const readProvisionedEnvironment = (host, name, expectedSpecifier) =>
   readHostedProvisionedEnvironment(host, {
     label: LABEL,
-    namePath: ['codex-sandbox', name],
+    namePath: installationPath('codex-sandbox', name),
     expectedSpecifier,
   });
 harden(readProvisionedEnvironment);

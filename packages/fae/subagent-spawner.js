@@ -1,6 +1,7 @@
 // @ts-check
 
 import { E } from '@endo/eventual-send';
+import { stableModuleSpecifier } from './src/module-specifier.js';
 
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 import { selectFaeWorkloadEnv } from './src/subagent.js';
@@ -62,8 +63,11 @@ export const make = async (powers, _context, { env } = {}) => {
   // this spawner creates.
   const systemPrompt = env?.SUBAGENT_SYSTEM_PROMPT || undefined;
 
-  const driverSpecifier = new URL('driver.js', import.meta.url).href;
-  const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
+  const driverSpecifier = stableModuleSpecifier('driver.js', import.meta.url);
+  const spawnerSpecifier = stableModuleSpecifier(
+    'subagent-spawner.js',
+    import.meta.url,
+  );
 
   // Resolved on first use, not here: this formula is reincarnated by the very
   // lookup a reviving driver performs, and awaiting our own guest inside

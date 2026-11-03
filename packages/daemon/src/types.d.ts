@@ -491,6 +491,9 @@ export type GitCredentialFormula = {
   type: 'git-credential';
   kind: 'bearer' | 'basic';
   audience: string;
+  secretId?: FormulaIdentifier;
+  username?: string;
+  revoked?: boolean;
 };
 
 export type GitRemoteFormula = {
@@ -2127,6 +2130,16 @@ export interface EndoHost extends EndoAgent {
    * `provideBasicCredential`.
    */
   getGitCredentialController(credential: unknown): Promise<unknown>;
+  /** Read password from Secrets for each transport. Existing credentials retain identity. */
+  provideSecretBasicCredential(
+    petName: string | string[],
+    options: {
+      audience: string;
+      username: string;
+      secret: SecretBlob;
+      existingCredential?: unknown;
+    },
+  ): Promise<unknown>;
   /**
    * Privileged accessor: return the host-side controller paired with
    * a daemon-minted `GitRemote` exo.  The controller exposes policy
@@ -2154,6 +2167,11 @@ export interface EndoHost extends EndoAgent {
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   /** Create a directory without returning its collectible capability to the caller. */
   createDirectory(petNamePath: string | string[]): Promise<void>;
+  /** Serialize directory initialization across local hosts and clients; optionally adopt an existing directory by identity. */
+  provideDirectory(
+    petNamePath: string | string[],
+    options?: { adoptFrom?: string | string[]; keepSource?: boolean },
+  ): Promise<EndoDirectory>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
   evaluate(
     workerPetName: string | string[] | undefined,
@@ -3176,6 +3194,14 @@ export interface DaemonCore {
     policy: HttpClientPolicy,
     deferredTasks: DeferredTasks<HttpClientDeferredTaskParams>,
   ) => FormulateResult<HttpClient>;
+
+  formulateSecretBasicCredential: (
+    audience: string,
+    username: string,
+    secret: SecretBlob,
+    existingCredential: unknown,
+    deferredTasks: DeferredTasks<GitCredentialDeferredTaskParams>,
+  ) => Promise<{ value: unknown }>;
 
   formulateGitCredential: (
     kind: GitCredentialFormula['kind'],

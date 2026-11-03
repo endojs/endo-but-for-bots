@@ -55,6 +55,7 @@
 // with the Claude adapter; what is OpenCode's own (the OpenRouter API key, the
 // storage owner minted over null powers) is the code between its steps here.
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { E } from '@endo/eventual-send';
 import { readBrokerWorkloadEnv } from '@endo/hosted-agent/provider-broker-service.js';
 import {
@@ -159,7 +160,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   if (retained) {
     await assertRetainedBrokerImages({
       label: LABEL,
-      serviceName: `${SANDBOX_DIR}/broker-service`,
+      serviceName: `${installationPath(SANDBOX_DIR).join('/')}/broker-service`,
       retained,
       rootfs,
       listenerImageRef,
@@ -238,7 +239,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     try {
       await E(hostAgent).makeUnconfined('@main', sessionStorageSpecifier, {
         powersName,
-        resultName: [SANDBOX_DIR, 'session-storage'],
+        resultName: installationPath(SANDBOX_DIR, 'session-storage'),
         env: harden({
           OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
           OPENCODE_MCP_DIR: mcpDir,
@@ -247,10 +248,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     } finally {
       await E(hostAgent).remove(powersName);
     }
-    console.log(`Minted ${SANDBOX_DIR}/session-storage`);
+    console.log(
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/session-storage`,
+    );
   }
 
-  // Sessions are records under `opencode-sandbox/session-records`, owned by
+  // Sessions are records under `@pins/installations/opencode-sandbox/session-records`, owned by
   // the daemon; the factory itself holds nothing durable.
   const backendPath = await provideBackendCaplet(hostAgent, {
     label: LABEL,

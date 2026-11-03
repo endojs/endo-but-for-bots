@@ -96,3 +96,21 @@ Example: `Hello! Here is @my-file for you.`
 - `@endo/pass-style` - Value rendering based on pass style
 - `@endo/daemon` - Endo daemon (dev dependency)
 - `ses` - Secure ECMAScript (HardenedJS)
+
+
+## Saved-space storage
+
+Saved spaces and Home preferences live in
+`@pins/installations/chat/<self-handle-number>/spaces`.
+The stable `@self` handle distinguishes hosts that inherit the same `@pins`
+directory; `@host` can refer to a parent and is not used as the storage owner.
+Chat uses the host's atomic `provideDirectory` operation to adopt an existing root
+`spaces` directory while preserving its identity, records, and live subscriptions.
+The stored `profilePath` continues to identify the space's service or persona;
+changing the configuration directory does not change that reference.
+
+Update the daemon and Chat together, then reload existing browser clients.
+Older cached clients can recreate a root `spaces` directory after migration.
+If both locations refer to different directories, new Chat refuses initialization
+or configuration changes rather than overwriting either set of saved spaces.
+Inspect and reconcile such a conflict before removing either directory.

@@ -510,6 +510,23 @@ Prefer endowing a formula with a secret capability instead of calling its
 
 Use help("methodName") for details on specific methods.
 
+## provideDirectory(petNamePath, options?) -> Promise<EndoDirectory>
+
+Get or create a local built-in directory without replacing an existing binding.
+Parent directories are created as needed.
+Initialization is serialized across local hosts and clients, including hosts that share
+parent directories.
+Use this for shared application storage instead of a has/makeDirectory sequence.
+With `{ adoptFrom: oldPath }`, retain the old directory's identity at the new path,
+verify the copy, then remove the old alias.
+Set `keepSource: true` to retain both aliases during a staged upgrade; a later call
+without that option completes the move.
+Different existing source and destination identities, overlapping paths, and non-directory
+bindings are refused.
+Retrying after a lost acknowledgement returns the same directory.
+This serializes provisioning calls; it does not lock out an administrator explicitly
+replacing or removing names through other methods.
+
 ## createDirectory(petNamePath) -> Promise<void>
 
 Host only. Create a directory at the given name or array of path segments.

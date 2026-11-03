@@ -56,6 +56,8 @@ const makeTmp = async t => {
 
 const makeFakeHost = () => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   const formulas = new Map();
   const environments = new Map();
   /** @type {any[]} */
@@ -607,7 +609,7 @@ for (const { name, stem, provide } of [
 
 test('an account oracle is made once, keeps its identity, and follows a re-minted broker', async t => {
   const world = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   const options = {
@@ -628,7 +630,12 @@ test('an account oracle is made once, keeps its identity, and follows a re-minte
       made.specifier.endsWith('/account-source-module.js'),
     );
   t.is(oracles().length, 1);
-  t.deepEqual(oracles()[0].resultName, ['codex-sandbox', 'account-oracle']);
+  t.deepEqual(oracles()[0].resultName, [
+    '@pins',
+    'installations',
+    'codex-sandbox',
+    'account-oracle',
+  ]);
   t.deepEqual(oracles()[0].env, { ACCOUNT_PROVIDER_ID: 'codex' });
   // The source formula's powers are the broker service; the oracle's
   // namespace holds that source and never the broker.
@@ -639,9 +646,14 @@ test('an account oracle is made once, keeps its identity, and follows a re-minte
   // The names used while making it are tucked under the adapter's directory.
   t.false(world.names.has('codex-sandbox.account-oracle-powers'));
   t.false(world.names.has('codex-sandbox.account-source-powers'));
-  t.true(world.names.has('codex-sandbox/account-oracle-powers'));
+  t.true(
+    world.names.has('@pins/installations/codex-sandbox/account-oracle-powers'),
+  );
   const original = world.publication('codex-sandbox').accounts[0];
-  t.is(original.oracle, world.names.get('codex-sandbox/account-oracle'));
+  t.is(
+    original.oracle,
+    world.names.get('@pins/installations/codex-sandbox/account-oracle'),
+  );
   t.is(
     original.accountId,
     makeAccountId({ providerId: 'codex', accountAuthority: 'shared-account' }),
@@ -652,7 +664,10 @@ test('an account oracle is made once, keeps its identity, and follows a re-minte
   // A deploy re-mints the broker. The oracle is not made again; the source
   // is, over the new broker, and the name inside the namespace moves to it.
   const before = powers.get('account-source');
-  world.names.set('codex-sandbox/broker-service', 'broker-2');
+  world.names.set(
+    '@pins/installations/codex-sandbox/broker-service',
+    'broker-2',
+  );
   await publishAccountOracle(world.host, options);
   t.is(oracles().length, 1);
   t.is(sources().length, 2);
@@ -736,7 +751,7 @@ test('explicit account authority and member identity survive different runtime o
 
 test('a failed pool member preparation leaves discovery unavailable, never partially republished', async t => {
   const world = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   const options = {
@@ -794,12 +809,14 @@ test('a failed pool member preparation leaves discovery unavailable, never parti
     sources.map(made => made.env),
     [{ ACCOUNT_SUBSCRIPTION_ID: 'work' }],
   );
-  t.true(world.names.has('codex-sandbox/account-oracle-work'));
+  t.true(
+    world.names.has('@pins/installations/codex-sandbox/account-oracle-work'),
+  );
 });
 
 test('failed discovery invalidation prevents account owner rebinding', async t => {
   const world = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   const options = {
@@ -814,7 +831,9 @@ test('failed discovery invalidation prevents account owner rebinding', async t =
   await publishAccountOracle(world.host, options);
   const original = world.publication('codex-sandbox');
   const minted = world.made.length;
-  const source = world.names.get('codex-sandbox/account-source');
+  const source = world.names.get(
+    '@pins/installations/codex-sandbox/account-source',
+  );
   const profile = world.names.get('floot/controller-profile');
   world.names.set(
     'floot/controller-profile',
@@ -828,12 +847,15 @@ test('failed discovery invalidation prevents account owner rebinding', async t =
   await publishAccountOracle(world.host, options);
   t.is(world.publication('codex-sandbox'), original);
   t.is(world.made.length, minted);
-  t.is(world.names.get('codex-sandbox/account-source'), source);
+  t.is(
+    world.names.get('@pins/installations/codex-sandbox/account-source'),
+    source,
+  );
 });
 
 test('a subscription admin is made once, holds only the redeemer and the source, and keeps its store across a re-minted broker', async t => {
   const world = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   const options = {
@@ -850,6 +872,8 @@ test('a subscription admin is made once, holds only the redeemer and the source,
     world.made.filter(made => made.specifier.endsWith(suffix));
   t.is(of('/subscription-admin-module.js').length, 1);
   t.deepEqual(of('/subscription-admin-module.js')[0].resultName, [
+    '@pins',
+    'installations',
     'codex-sandbox',
     'subscription-admin',
   ]);
@@ -867,19 +891,34 @@ test('a subscription admin is made once, holds only the redeemer and the source,
   );
   t.false(world.names.has('codex-sandbox.subscription-admin-powers'));
   t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
-  t.true(world.names.has('codex-sandbox/subscription-admin-powers'));
+  t.true(
+    world.names.has(
+      '@pins/installations/codex-sandbox/subscription-admin-powers',
+    ),
+  );
   const original = world.publication('codex-sandbox').accounts[0];
-  t.is(original.admin, world.names.get('codex-sandbox/subscription-admin'));
+  t.is(
+    original.admin,
+    world.names.get('@pins/installations/codex-sandbox/subscription-admin'),
+  );
   t.is(
     original.adminId,
-    await world.host.identify('codex-sandbox', 'subscription-admin'),
+    await world.host.identify(
+      '@pins',
+      'installations',
+      'codex-sandbox',
+      'subscription-admin',
+    ),
   );
   t.false(world.names.has('floot/controller-profile/codex-admin'));
 
   // A deploy re-mints the broker: the admin, and so its stored intent, stays;
   // the redeemer is minted again and the names inside the namespace move.
   const before = powers.get('reset-redeemer');
-  world.names.set('codex-sandbox/broker-service', 'broker-2');
+  world.names.set(
+    '@pins/installations/codex-sandbox/broker-service',
+    'broker-2',
+  );
   await publishAccountOracle(world.host, options);
   t.is(of('/subscription-admin-module.js').length, 1);
   t.is(of('/reset-redeemer-module.js').length, 2);
@@ -894,7 +933,7 @@ test('a subscription admin is made once, holds only the redeemer and the source,
 
 test('no admin is provided unless asked, nor for a broker with no redeemer; several subscriptions get one each', async t => {
   const plain = makeNamingHost({
-    'claude-sandbox/broker-service': 'broker-1',
+    '@pins/installations/claude-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   await publishAccountOracle(plain.host, {
@@ -915,7 +954,7 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
   );
 
   const none = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   const options = {
@@ -948,11 +987,13 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
   // offer a button over an admin whose redeemer is gone.
   t.false(Object.hasOwn(replacement.accounts[0], 'admin'));
   t.false(Object.hasOwn(replacement.accounts[0], 'adminId'));
-  t.false(none.names.has('codex-sandbox/reset-redeemer'));
-  t.true(none.names.has('codex-sandbox/subscription-admin'));
+  t.false(none.names.has('@pins/installations/codex-sandbox/reset-redeemer'));
+  t.true(
+    none.names.has('@pins/installations/codex-sandbox/subscription-admin'),
+  );
 
   const pooled = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   await publishAccountOracle(pooled.host, {
@@ -970,7 +1011,9 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
   for (const [index, member] of ['work', 'home'].entries()) {
     t.is(
       published[index].admin,
-      pooled.names.get(`codex-sandbox/subscription-admin-${member}`),
+      pooled.names.get(
+        `@pins/installations/codex-sandbox/subscription-admin-${member}`,
+      ),
     );
     t.deepEqual(published[index].uses, [
       { backendId: 'codex', subscriptionId: member },
@@ -986,7 +1029,7 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
 
 test('a rejected redeemer leaves no name and refuses a partial discovery publication', async t => {
   const world = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
   // As the daemon does: the name is written, then the value's rejection
@@ -1016,15 +1059,19 @@ test('a rejected redeemer leaves no name and refuses a partial discovery publica
     accounts: [],
     unavailable: true,
   });
-  t.true(world.names.has('codex-sandbox/account-oracle'));
-  t.false(world.names.has('codex-sandbox/reset-redeemer'));
+  t.true(world.names.has('@pins/installations/codex-sandbox/account-oracle'));
+  t.false(world.names.has('@pins/installations/codex-sandbox/reset-redeemer'));
   t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
-  t.false(world.names.has('codex-sandbox/subscription-admin'));
+  t.false(
+    world.names.has('@pins/installations/codex-sandbox/subscription-admin'),
+  );
   t.false(world.names.has('floot/controller-profile/codex-admin'));
 });
 
 test('a share is a namespace, a kit and the name that is handed out; made once, its limits rewritten, and it follows a re-minted broker', async t => {
-  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const world = makeNamingHost({
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
+  });
   const dir = { label: 'Codex', dir: 'codex-sandbox' };
   // No subscription yet: a share has nothing to be made over.
   await t.throwsAsync(
@@ -1049,8 +1096,8 @@ test('a share is a namespace, a kit and the name that is handed out; made once, 
     now: () => '2026-09-20T00:00:00.000Z',
   });
   t.deepEqual(result, {
-    sharePath: ['codex-sandbox', 'share-alice'],
-    kitPath: ['codex-sandbox', 'share-alice-kit'],
+    sharePath: ['@pins', 'installations', 'codex-sandbox', 'share-alice'],
+    kitPath: ['@pins', 'installations', 'codex-sandbox', 'share-alice-kit'],
     created: true,
   });
   const powers = world.guests.get('codex-sandbox.share-alice-powers');
@@ -1062,13 +1109,28 @@ test('a share is a namespace, a kit and the name that is handed out; made once, 
   // The kit's powers are the namespace; the share's are the kit, and only it.
   const kit = of('/subscription-share-module.js')[0];
   t.deepEqual(kit.env, { SHARE_ID: 'alice' });
-  t.deepEqual(kit.resultName, ['codex-sandbox', 'share-alice-kit']);
+  t.deepEqual(kit.resultName, [
+    '@pins',
+    'installations',
+    'codex-sandbox',
+    'share-alice-kit',
+  ]);
   const facet = of('/subscription-share-facet-module.js')[0];
-  t.is(facet.powers, world.names.get('codex-sandbox/share-alice-kit'));
-  t.deepEqual(facet.resultName, ['codex-sandbox', 'share-alice']);
+  t.is(
+    facet.powers,
+    world.names.get('@pins/installations/codex-sandbox/share-alice-kit'),
+  );
+  t.deepEqual(facet.resultName, [
+    '@pins',
+    'installations',
+    'codex-sandbox',
+    'share-alice',
+  ]);
   t.false(world.names.has('codex-sandbox.share-alice-powers'));
   t.false(world.names.has('codex-sandbox.share-alice-kit-powers'));
-  t.true(world.names.has('codex-sandbox/share-alice-powers'));
+  t.true(
+    world.names.has('@pins/installations/codex-sandbox/share-alice-powers'),
+  );
 
   // Again, with other limits: a write of a value. Nothing is minted, and
   // the anchor of the budget's periods does not move.
@@ -1090,7 +1152,10 @@ test('a share is a namespace, a kit and the name that is handed out; made once, 
   // A deploy re-mints the broker: the share is not made again, and the name
   // inside its namespace moves to the new broker's subscription.
   const before = powers.get('subscription');
-  world.names.set('codex-sandbox/broker-service', 'broker-2');
+  world.names.set(
+    '@pins/installations/codex-sandbox/broker-service',
+    'broker-2',
+  );
   await publishBrokerSubscription(world.host, dir);
   t.is(of('/subscription-module.js')[1].powers, 'broker-2');
   t.not(powers.get('subscription'), before);
@@ -1114,12 +1179,12 @@ test('a share is a namespace, a kit and the name that is handed out; made once, 
     () => provideSubscriptionShare(world.host, { ...dir, shareId: 'bob' }),
     { message: /needs limits/ },
   );
-  t.false(world.names.has('codex-sandbox/share-bob-kit'));
+  t.false(world.names.has('@pins/installations/codex-sandbox/share-bob-kit'));
 });
 
 test('a share narrowed from somebody else’s is not re-pointed at this adapter’s broker', async t => {
   const world = makeNamingHost({
-    'codex-sandbox/broker-service': 'broker-1',
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
     'from-carol': 'carols-share',
   });
   const dir = { label: 'Codex', dir: 'codex-sandbox' };
@@ -1137,7 +1202,9 @@ test('a share narrowed from somebody else’s is not re-pointed at this adapter�
 });
 
 test('a broker with no subscription to offer is reported, and leaves no name', async t => {
-  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const world = makeNamingHost({
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
+  });
   const old = harden({
     ...world.host,
     makeUnconfined: async (worker, specifier, options) => {
@@ -1148,12 +1215,14 @@ test('a broker with no subscription to offer is reported, and leaves no name', a
   await t.notThrowsAsync(() =>
     publishBrokerSubscription(old, { label: 'Codex', dir: 'codex-sandbox' }),
   );
-  t.false(world.names.has('codex-sandbox/subscription'));
+  t.false(world.names.has('@pins/installations/codex-sandbox/subscription'));
   t.false(world.names.has('codex-sandbox.subscription-powers'));
 });
 
 test('a share whose kit is gone is made again over the namespace it had, not beside it', async t => {
-  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const world = makeNamingHost({
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
+  });
   const dir = { label: 'Codex', dir: 'codex-sandbox' };
   await publishBrokerSubscription(world.host, dir);
   await provideSubscriptionShare(world.host, {
@@ -1162,11 +1231,13 @@ test('a share whose kit is gone is made again over the namespace it had, not bes
     limits: { budget: { tokens: 1000, periodSeconds: 3600 } },
     now: () => '2026-09-20T00:00:00.000Z',
   });
-  const namespace = world.names.get('codex-sandbox/share-alice-powers');
+  const namespace = world.names.get(
+    '@pins/installations/codex-sandbox/share-alice-powers',
+  );
   // The kit and the name handed out are lost; the namespace (the limits,
   // the meter, the revocation) is still there.
-  world.names.delete('codex-sandbox/share-alice-kit');
-  world.names.delete('codex-sandbox/share-alice');
+  world.names.delete('@pins/installations/codex-sandbox/share-alice-kit');
+  world.names.delete('@pins/installations/codex-sandbox/share-alice');
   const again = await provideSubscriptionShare(world.host, {
     ...dir,
     shareId: 'alice',
@@ -1178,17 +1249,22 @@ test('a share whose kit is gone is made again over the namespace it had, not bes
   t.is(kits.length, 2);
   t.is(kits[1].powers, namespace, 'over the same namespace');
   t.deepEqual(kits[1].env, { SHARE_ID: 'alice' });
-  t.is(world.names.get('codex-sandbox/share-alice-powers'), namespace);
+  t.is(
+    world.names.get('@pins/installations/codex-sandbox/share-alice-powers'),
+    namespace,
+  );
   // Nothing was left at the top level.
   t.deepEqual(
     [...world.names.keys()].filter(name => name.startsWith('codex-sandbox.')),
     [],
   );
-  t.true(world.names.has('codex-sandbox/share-alice'));
+  t.true(world.names.has('@pins/installations/codex-sandbox/share-alice'));
 });
 
 test('a kit is not made twice over one namespace while the share is still handed out', async t => {
-  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const world = makeNamingHost({
+    '@pins/installations/codex-sandbox/broker-service': 'broker-1',
+  });
   const dir = { label: 'Codex', dir: 'codex-sandbox' };
   await publishBrokerSubscription(world.host, dir);
   await provideSubscriptionShare(world.host, {
@@ -1198,7 +1274,7 @@ test('a kit is not made twice over one namespace while the share is still handed
   });
   // Only the kit's name is lost. The share that was handed out still runs
   // the old kit, its meter and its writes.
-  world.names.delete('codex-sandbox/share-alice-kit');
+  world.names.delete('@pins/installations/codex-sandbox/share-alice-kit');
   const mints = world.made.length;
   await t.throwsAsync(
     () => provideSubscriptionShare(world.host, { ...dir, shareId: 'alice' }),
@@ -1236,7 +1312,7 @@ const withPool = world => {
     ],
   ]);
   world.names.set(
-    'codex-sandbox/broker-powers',
+    '@pins/installations/codex-sandbox/broker-powers',
     Far('broker powers', {
       has: async name => stored.has(name),
       lookup: async name => stored.get(name),
@@ -1245,7 +1321,9 @@ const withPool = world => {
 };
 
 test('a delegated runner is a namespace, a kit and the name that is handed out, and follows a re-minted backend', async t => {
-  const world = makeNamingHost({ 'codex-sandbox/backend': 'backend-1' });
+  const world = makeNamingHost({
+    '@pins/installations/codex-sandbox/backend': 'backend-1',
+  });
   withPool(world);
   const dir = { label: 'Codex', dir: 'codex-sandbox' };
   const limits = {
@@ -1301,8 +1379,8 @@ test('a delegated runner is a namespace, a kit and the name that is handed out, 
     limits,
   });
   t.deepEqual(result, {
-    runnerPath: ['codex-sandbox', 'runner-alice'],
-    kitPath: ['codex-sandbox', 'runner-alice-kit'],
+    runnerPath: ['@pins', 'installations', 'codex-sandbox', 'runner-alice'],
+    kitPath: ['@pins', 'installations', 'codex-sandbox', 'runner-alice-kit'],
     created: true,
   });
   const powers = world.guests.get('codex-sandbox.runner-alice-powers');
@@ -1320,7 +1398,7 @@ test('a delegated runner is a namespace, a kit and the name that is handed out, 
   // What is handed out has the kit for its powers, and only the kit.
   t.is(
     of('/delegated-runner-facet-module.js')[0].powers,
-    world.names.get('codex-sandbox/runner-alice-kit'),
+    world.names.get('@pins/installations/codex-sandbox/runner-alice-kit'),
   );
   t.deepEqual(
     [...world.names.keys()].filter(name => name.startsWith('codex-sandbox.')),
@@ -1328,7 +1406,7 @@ test('a delegated runner is a namespace, a kit and the name that is handed out, 
   );
 
   // A deploy mints the backend again: the runner is not made again.
-  world.names.set('codex-sandbox/backend', 'backend-2');
+  world.names.set('@pins/installations/codex-sandbox/backend', 'backend-2');
   await republishDelegatedRunners(world.host, dir);
   t.is(powers.get('backend'), 'locator:backend-2');
   t.is(of('/delegated-runner-module.js').length, 1);

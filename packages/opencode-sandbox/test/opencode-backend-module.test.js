@@ -121,10 +121,12 @@ const fixture = async t => {
   });
   const { owner, records, log, facet, knobs } = makeFakeOwner();
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   const formulas = new Map();
   const environments = new Map();
   const seed = (name, id, specifier, env) => {
-    bindings.set(key('opencode-sandbox', name), id);
+    bindings.set(key('@pins', 'installations', 'opencode-sandbox', name), id);
     formulas.set(
       id,
       harden({
@@ -320,7 +322,9 @@ test('make() configures the owner on the records path over verified service iden
     { message: /must equal the recorded session storage owner's roots/ },
   );
   // A missing service is refused by its reader, before any owner is provided.
-  f.bindings.delete(key('opencode-sandbox', 'broker-service'));
+  f.bindings.delete(
+    key('@pins', 'installations', 'opencode-sandbox', 'broker-service'),
+  );
   await t.throwsAsync(make(f.host, undefined, { env: f.env }), {
     message: /Cannot identify OpenCode "broker-service"/,
   });

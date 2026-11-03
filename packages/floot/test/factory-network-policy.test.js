@@ -166,7 +166,8 @@ const makeWorld = async (
   });
   const hostStore = new Map(
     /** @type {[string, unknown][]} */ ([
-      ['session-agent-one', guest],
+      ['floot-private-sessions/one/guest', guest],
+      ['floot-private-sessions/one/handle', harden({})],
       ['codex-backend', backend],
       [
         'floot-private-sessions/one/schema',
@@ -214,7 +215,10 @@ const makeWorld = async (
         }
       },
     }),
-    provideGuest: (_name, { agentName }) => {
+    provideGuest: (_name, { agentName: agentPath }) => {
+      const agentName = agentPath.join('/');
+      if (!hostStore.has(_name.join('/')))
+        hostStore.set(_name.join('/'), harden({}));
       hostStore.set(agentName, guest);
     },
   });
@@ -654,7 +658,7 @@ test('failed stopped-observer guest lookup retries without losing journal histor
   await E(world.session).emergencyStop();
   let failGuestLookup = true;
   world.beforeLookup(name => {
-    if (failGuestLookup && name === 'session-agent-one')
+    if (failGuestLookup && name === 'floot-private-sessions/one/guest')
       return Promise.reject(Error('guest lookup temporarily unavailable'));
     return Promise.resolve();
   });

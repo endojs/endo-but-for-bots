@@ -91,136 +91,108 @@ test('bounds outstanding grants', async t => {
   });
 });
 
-test('setup imports into the catalog and delegates only SecretBlob, never the token or admin', async t => {
+const wrapperPath = '@pins/installations/credentials/openrouter-auth';
+const setupFixture = ({ legacy = false, hasSecret = false } = {}) => {
+  const secret = {};
+  const wrapper = make(secret, null, {
+    env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
+  });
   const bindings = new Map();
-  const calls = [];
+  if (legacy) bindings.set('openrouter-auth', wrapper);
+  const entries = hasSecret
+    ? [{ petNamePaths: [['secrets', 'openrouter-auth']] }]
+    : [];
+  const calls = { imports: [], mints: [] };
+  const key = (...names) => names.flat().join('/');
   const host = {
-    has: async name => bindings.has(name),
-    lookup: async path => {
-      if (path[1] === 'catalog') return harden({ list: async () => [] });
-      return harden({
-        createBase64: async (...args) => {
-          calls.push(args);
-        },
-      });
-    },
-    copy: async (from, to) => {
-      t.deepEqual(from, ['secrets', 'openrouter-auth']);
-      bindings.set(to[0], true);
-    },
-    remove: async name => {
-      bindings.delete(name);
-    },
-    makeUnconfined: async (_worker, url, options) => {
-      t.true(url.endsWith('/hosted-agent/src/managed-credentials-module.js'));
-      t.deepEqual(options, {
-        powersName: 'openrouter-auth-secret-read',
-        resultName: 'openrouter-auth',
-        env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
-      });
-      bindings.set(options.resultName, true);
-    },
-  };
-  await provideManagedCredentials(host, {
-    name: 'openrouter-auth',
-    apiKey: 'test-token',
-    kind: 'apiKey',
-  });
-  t.deepEqual(calls, [
-    ['openrouter-auth', 'OpenRouter apiKey', btoa('test-token')],
-  ]);
-  t.false(bindings.has('openrouter-auth-secret-read'));
-  t.true(bindings.has('openrouter-auth'));
-});
-
-test('startup never reimports a managed credential, even if its catalog entry was deleted', async t => {
-  let lookups = 0;
-  const host = {
-    has: async () => true,
-    lookup: async name => {
-      lookups += 1;
-      t.is(name, 'openrouter-auth');
-      return make({}, null, {
-        env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
-      });
-    },
-  };
-  await provideManagedCredentials(host, {
-    name: 'openrouter-auth',
-    apiKey: 'stale-env-token',
-    kind: 'apiKey',
-  });
-  t.is(lookups, 1);
-});
-
-test('setup skips createBase64 when the catalog already administers the secret', async t => {
-  const bindings = new Map([['openrouter-auth-secret-read', true]]);
-  let creates = 0;
-  const host = {
-    has: async name => bindings.has(name),
-    lookup: async path => {
-      if (path[1] === 'catalog') {
-        return harden({
-          list: async () => [
-            {
-              petNamePaths: [['other'], ['secrets', 'openrouter-auth']],
-            },
-          ],
-        });
+    has: (...names) => bindings.has(key(...names)),
+    identify: (...names) => bindings.get(key(...names)),
+    /** @param {string[]} names */
+    provideDirectory: names => {
+      for (let n = 1; n <= names.length; n += 1) {
+        const prefix = key(names.slice(0, n));
+        if (!bindings.has(prefix)) bindings.set(prefix, {});
       }
-      return harden({
-        createBase64: async () => {
-          creates += 1;
-        },
-      });
     },
-    copy: async (from, to) => {
-      t.deepEqual(from, ['secrets', 'openrouter-auth']);
-      bindings.set(to[0], true);
+    lookup: names => {
+      if (key(names) === '@secrets/catalog')
+        return harden({ list: async () => entries });
+      if (key(names) === '@secrets/create')
+        return harden({
+          createBase64: async (...args) => {
+            calls.imports.push(args);
+            entries.push({ petNamePaths: [['secrets', 'openrouter-auth']] });
+          },
+        });
+      return bindings.get(key(names));
     },
-    remove: async name => {
-      bindings.delete(name);
-    },
-    makeUnconfined: async (_worker, _url, options) => {
-      bindings.set(options.resultName, true);
+    copy: (from, to) => bindings.set(key(to), bindings.get(key(from))),
+    remove: (...names) => bindings.delete(key(...names)),
+    makeUnconfined: (_worker, _module, options) => {
+      calls.mints.push(options);
+      bindings.set(key(options.resultName), wrapper);
     },
   };
-  await provideManagedCredentials(host, {
-    name: 'openrouter-auth',
-    apiKey: 'stale-env-token',
-    kind: 'apiKey',
-  });
-  t.is(creates, 0);
-  t.true(bindings.has('openrouter-auth'));
-  t.false(bindings.has('openrouter-auth-secret-read'));
+  return { host, calls, entries, bindings, wrapper };
+};
+const spec = harden({
+  name: 'openrouter-auth',
+  apiKey: 'bootstrap',
+  kind: 'apiKey',
 });
-
-test('refuses a credential name bound to a non-managed object', async t => {
-  const impostor = makeExo(
+test('fresh setup delegates only SecretBlob and leaves no root helper names', async t => {
+  const w = setupFixture();
+  await provideManagedCredentials(w.host, spec);
+  t.is(w.calls.imports.length, 1);
+  t.deepEqual(w.calls.mints[0].powersName, ['secrets', 'openrouter-auth']);
+  t.deepEqual(w.calls.mints[0].env, {
+    CREDENTIALS_KIND: 'apiKey',
+    CREDENTIALS_LABEL: 'OpenRouter',
+  });
+  t.is(w.bindings.get(wrapperPath), w.wrapper);
+  t.false(
+    [...w.bindings.keys()].some(
+      name => name !== '@pins' && !name.startsWith('@pins/'),
+    ),
+  );
+  const size = w.bindings.size;
+  w.entries.length = 0;
+  await provideManagedCredentials(w.host, spec);
+  t.is(w.bindings.size, size);
+  t.is(w.calls.imports.length, 1);
+  t.is(w.calls.mints.length, 1);
+});
+test('legacy wrapper migration preserves identity without importing or minting', async t => {
+  const w = setupFixture({ legacy: true });
+  await provideManagedCredentials(w.host, spec);
+  t.is(w.bindings.get(wrapperPath), w.wrapper);
+  t.false(w.bindings.has('openrouter-auth'));
+  t.deepEqual(w.calls, { imports: [], mints: [] });
+});
+test('existing secret is never overwritten from bootstrap environment', async t => {
+  const w = setupFixture({ hasSecret: true });
+  await provideManagedCredentials(w.host, spec);
+  t.is(w.calls.imports.length, 0);
+  t.is(w.calls.mints.length, 1);
+});
+test('conflicting or invalid legacy objects are not removed', async t => {
+  const w = setupFixture({ legacy: true });
+  w.bindings.set(wrapperPath, {});
+  await t.throwsAsync(provideManagedCredentials(w.host, spec), {
+    message: /Conflicting/,
+  });
+  t.is(w.bindings.get('openrouter-auth'), w.wrapper);
+  w.bindings.delete(wrapperPath);
+  const bad = makeExo(
     'Impostor',
-    M.interface('Impostor', {
-      storage: M.call().returns(M.string()),
-      kind: M.call().returns(M.string()),
-    }),
-    {
-      storage: () => 'secrets-manager',
-      kind: () => 'apiKey',
-    },
+    M.interface('Impostor', { storage: M.call().returns(M.string()) }),
+    { storage: () => 'secrets-manager' },
   );
-  const removed = [];
-  const host = {
-    has: async () => true,
-    lookup: async () => impostor,
-    remove: async name => removed.push(name),
-  };
-  await t.throwsAsync(
-    provideManagedCredentials(host, {
-      name: 'openrouter-auth',
-      kind: 'apiKey',
-    }),
-    { message: /not a managed credential/ },
-  );
-  t.deepEqual(removed, []);
+  w.bindings.set('openrouter-auth', bad);
+  await t.throwsAsync(provideManagedCredentials(w.host, spec), {
+    message: /not a managed credential/,
+  });
+  t.is(w.bindings.get('openrouter-auth'), bad);
 });
 
 test('rejects reserved credential names', async t => {

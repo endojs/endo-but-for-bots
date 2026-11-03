@@ -320,6 +320,7 @@ harden(normalizeHttpClientPolicy);
  * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
  *   retained `HttpClientControl`, populated by the `http-client` maker.
+ * @param {DaemonCore['formulateSecretBasicCredential']} args.formulateSecretBasicCredential
  * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
@@ -375,6 +376,7 @@ export const makeHostMaker = ({
   formulateHttpClient,
   getHttpClientControlForClient,
   formulateGitCredential,
+  formulateSecretBasicCredential,
   formulateGitRemote,
   formulateInvitation,
   acceptInvitation,
@@ -438,6 +440,9 @@ export const makeHostMaker = ({
   // cancellation alone does not establish that its native cleanup completed.
   /** @type {Map<FormulaIdentifier, {hostId: FormulaIdentifier, context: Context}>} */
   const sessionDirectoryHosts = new Map();
+  // Hosts may inherit or alias the same directories (notably @pins).
+  // Serialize local administrative provisioning across the entire daemon.
+  const directoryProvisionJobs = makeSerialJobs();
   /**
    * @param {FormulaIdentifier} hostId
    * @param {FormulaIdentifier} handleId
@@ -577,39 +582,45 @@ export const makeHostMaker = ({
         // the same missing parent, and makeDirectory replaces existing names.
         pending = sessionOwnerJobs.enqueue(async () => {
           assertSessionOwnersActive();
-          let identifier;
-          for (let length = 1; length <= namePath.length; length += 1) {
-            const prefix = namePath.slice(0, length);
-            // eslint-disable-next-line no-await-in-loop
-            identifier = await E(directory).identify(...prefix);
-            assertSessionOwnersActive();
-            if (identifier === undefined) {
-              // The returned directory stays here; it must not cross CapTP
-              // into a worker merely because it initiated this operation.
+          // Only built-in directory provisioning holds the cross-host queue.
+          // Marker text is application-controlled and must remain host-local.
+          const identifier = await directoryProvisionJobs.enqueue(async () => {
+            let directoryId;
+            for (let length = 1; length <= namePath.length; length += 1) {
+              const prefix = namePath.slice(0, length);
               // eslint-disable-next-line no-await-in-loop
-              await E(directory).makeDirectory(prefix);
+              directoryId = await E(directory).identify(...prefix);
               assertSessionOwnersActive();
+              if (directoryId === undefined) {
+                // The returned directory stays here; it must not cross CapTP
+                // into a worker merely because it initiated this operation.
+                // eslint-disable-next-line no-await-in-loop
+                await E(directory).makeDirectory(prefix);
+                assertSessionOwnersActive();
+                // eslint-disable-next-line no-await-in-loop
+                directoryId = await E(directory).identify(...prefix);
+                assertSessionOwnersActive();
+              }
+              if (directoryId === undefined) {
+                throw makeError(X`Missing session owner directory`);
+              }
+              assertValidId(directoryId);
+              isLocalKey(parseId(directoryId).node) ||
+                Fail`Session owner storage must be a local directory`;
+              // Validate each parent before using it to traverse or create the
+              // next segment; an arbitrary NameHub is not administrative storage.
               // eslint-disable-next-line no-await-in-loop
-              identifier = await E(directory).identify(...prefix);
+              const formula = await getFormulaForId(directoryId);
               assertSessionOwnersActive();
+              formula.type === 'directory' ||
+                Fail`Session owner storage must be a local directory`;
             }
-            if (identifier === undefined) {
+            if (directoryId === undefined) {
               throw makeError(X`Missing session owner directory`);
             }
-            assertValidId(identifier);
-            isLocalKey(parseId(identifier).node) ||
-              Fail`Session owner storage must be a local directory`;
-            // Validate each parent before using it to traverse or create the
-            // next segment; an arbitrary NameHub is not administrative storage.
-            // eslint-disable-next-line no-await-in-loop
-            const formula = await getFormulaForId(identifier);
-            assertSessionOwnersActive();
-            formula.type === 'directory' ||
-              Fail`Session owner storage must be a local directory`;
-          }
-          if (identifier === undefined) {
-            throw makeError(X`Missing session owner directory`);
-          }
+            return directoryId;
+          });
+          assertSessionOwnersActive();
           const claimedHost = sessionDirectoryHosts.get(identifier);
           claimedHost === undefined ||
             claimedHost.hostId === hostId ||
@@ -1559,6 +1570,32 @@ export const makeHostMaker = ({
         'basic',
         audience,
         harden({ username, password }),
+        tasks,
+      );
+      return value;
+    };
+
+    /** @type {EndoHost['provideSecretBasicCredential']} */
+    const provideSecretBasicCredential = async (petName, options) => {
+      const { namePath } = petNamePathFrom(petName);
+      const audience = requireGitCredentialString(
+        options.audience,
+        'Credential audience',
+      );
+      const username = requireGitCredentialString(
+        options.username,
+        'Credential username',
+      );
+      /** @type {DeferredTasks<GitCredentialDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(ids =>
+        E(directory).storeIdentifier(namePath, ids.gitCredentialId),
+      );
+      const { value } = await formulateSecretBasicCredential(
+        audience,
+        username,
+        options.secret,
+        options.existingCredential,
         tasks,
       );
       return value;
@@ -2903,6 +2940,99 @@ export const makeHostMaker = ({
       const namePath = namePathFrom(petNameOrPath);
       return makeDirectoryLocal(namePath);
     };
+    /** @type {EndoHost['provideDirectory']} */
+    const provideDirectory = (
+      petNameOrPath,
+      { adoptFrom, keepSource = false } = {},
+    ) => {
+      const target = namePathFrom(petNameOrPath);
+      const source =
+        adoptFrom === undefined ? undefined : namePathFrom(adoptFrom);
+      if (
+        source &&
+        (source.every((name, i) => name === target[i]) ||
+          target.every((name, i) => name === source[i]))
+      )
+        throw makeError(X`Directory adoption paths must not overlap`);
+      // Shared with session-owner parent creation across all local hosts.
+      // Different hosts can inherit or alias the same parent directory.
+      return directoryProvisionJobs.enqueue(async () => {
+        assertSessionOwnersActive();
+        /** @param {string[]} path */
+        const inspect = async path => {
+          let id;
+          for (let n = 1; n <= path.length; n += 1) {
+            const prefix = path.slice(0, n);
+            // eslint-disable-next-line no-await-in-loop
+            if (!(await E(directory).has(...prefix))) return undefined;
+            // eslint-disable-next-line no-await-in-loop
+            id = await E(directory).identify(...prefix);
+            if (!id) throw makeError(X`Directory binding disappeared`);
+            assertValidId(id);
+            isLocalKey(parseId(id).node) || Fail`Expected a local directory`;
+            // eslint-disable-next-line no-await-in-loop
+            (await getFormulaForId(id)).type === 'directory' ||
+              Fail`Expected a local directory`;
+            assertSessionOwnersActive();
+          }
+          return id;
+        };
+        let targetId = await inspect(target);
+        const sourceId = source ? await inspect(source) : undefined;
+        if (targetId && sourceId && targetId !== sourceId)
+          throw makeError(X`Conflicting directory adoption bindings`);
+        if (sourceId && source) {
+          // Textually distinct paths can traverse aliases of the same directory.
+          // Never remove the destination through an alternate name for its parent,
+          // or move a directory into itself through an aliased ancestor.
+          for (let n = 1; n < target.length; n += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            if ((await inspect(target.slice(0, n))) === sourceId)
+              throw makeError(X`Directory adoption paths overlap by identity`);
+          }
+          for (let n = 1; targetId && n < source.length; n += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            if ((await inspect(source.slice(0, n))) === targetId)
+              throw makeError(X`Directory adoption paths overlap by identity`);
+          }
+          const sourceParent =
+            source.length === 1 ? hostId : await inspect(source.slice(0, -1));
+          const targetParent =
+            target.length === 1 ? hostId : await inspect(target.slice(0, -1));
+          if (sourceParent === targetParent && source.at(-1) === target.at(-1))
+            return /** @type {Promise<EndoDirectory>} */ (provide(sourceId));
+        }
+        for (let n = 1; n < target.length; n += 1) {
+          const prefix = target.slice(0, n);
+          // eslint-disable-next-line no-await-in-loop
+          if (!(await inspect(prefix))) {
+            // eslint-disable-next-line no-await-in-loop
+            await E(directory).makeDirectory(prefix);
+            assertSessionOwnersActive();
+          }
+        }
+        if (!targetId) {
+          if (sourceId && source) {
+            if ((await inspect(source)) !== sourceId)
+              throw makeError(X`Directory adoption source changed`);
+            await E(directory).copy(source, target);
+          } else await E(directory).makeDirectory(target);
+          assertSessionOwnersActive();
+          targetId = await inspect(target);
+        }
+        if (sourceId && source) {
+          if (targetId !== sourceId || (await inspect(source)) !== sourceId)
+            throw makeError(X`Directory adoption changed during copy`);
+          if (!keepSource) {
+            await E(directory).remove(...source);
+            assertSessionOwnersActive();
+          }
+        }
+        if (!targetId) throw makeError(X`Directory binding disappeared`);
+        // Resolve the validated identity, not a name an administrator can rebind.
+        return /** @type {Promise<EndoDirectory>} */ (provide(targetId));
+      });
+    };
     /** @type {EndoHost['createDirectory']} */
     const createDirectory = async petNameOrPath => {
       // A supervisor must be able to own storage without receiving its formula
@@ -3154,6 +3284,7 @@ export const makeHostMaker = ({
       copy,
       makeDirectory,
       createDirectory,
+      provideDirectory,
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
@@ -3189,6 +3320,7 @@ export const makeHostMaker = ({
       provideGitClone,
       provideBearerCredential,
       provideBasicCredential,
+      provideSecretBasicCredential,
       getGitCredentialController,
       getGitRemoteController,
       provideHostPath,

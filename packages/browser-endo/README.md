@@ -91,7 +91,12 @@ agent identity. Chat obtains its migration route from its authenticated agent.
 ## Shared counter
 
 The `counter-app/` example uses the same connector as Chat.
-Provision `src/counter.js` as a daemon unconfined worker and share its locator.
+Provision `src/counter.js` as a daemon unconfined worker at
+`projects/shared-browser-counter/counter` and share its locator. Create the
+project directory with `provideDirectory(['projects', 'shared-browser-counter'])`
+and pass that full counter path as `resultName`; keep future project objects
+inside the same directory. Existing objects can be copied there and their old
+alias removed without replacing the formula or restarting its worker.
 The counter lives in that worker, so page reloads preserve its value; worker or
 daemon restart resets it.
 This example does not claim durable application storage.

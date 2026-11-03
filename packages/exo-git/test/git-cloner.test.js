@@ -23,7 +23,7 @@ const fakeRemote = value =>
   /** @type {GitRemote} */ (/** @type {unknown} */ (harden(value)));
 harden(fakeRemote);
 
-test('makeGitRemoteEndpoint factors URL transport and credential authority', t => {
+test('makeGitRemoteEndpoint factors URL transport and credential authority', async t => {
   const credential = exampleCredential();
   const endpoint = makeGitRemoteEndpoint({
     url: 'https://github.com/example/repo.git',
@@ -36,7 +36,7 @@ test('makeGitRemoteEndpoint factors URL transport and credential authority', t =
     requiresCredential: true,
     allowLocalFileTransport: false,
   });
-  t.deepEqual(endpoint.ensureCredentialUsable(), {
+  t.deepEqual(await endpoint.ensureCredentialUsable(), {
     kind: 'bearer',
     material: { token: 'test-token' },
   });
@@ -48,7 +48,7 @@ test('makeGitRemoteEndpoint factors URL transport and credential authority', t =
       password: 'test-password',
     }),
   });
-  t.deepEqual(basicEndpoint.ensureCredentialUsable(), {
+  t.deepEqual(await basicEndpoint.ensureCredentialUsable(), {
     kind: 'basic',
     material: { username: 'test-user', password: 'test-password' },
   });
@@ -58,7 +58,7 @@ test('makeGitRemoteEndpoint factors URL transport and credential authority', t =
     allowLocalFileTransport: true,
   });
   t.false(fileEndpoint.requiresCredential);
-  t.is(fileEndpoint.ensureCredentialUsable(), undefined);
+  t.is(await fileEndpoint.ensureCredentialUsable(), undefined);
   t.throws(
     () => makeGitRemoteEndpoint({ url: 'https://github.com/example/repo.git' }),
     {

@@ -10849,3 +10849,203 @@ test.serial(
     }
   },
 );
+
+test.serial(
+  'provideDirectory shares storage across clients and safely adopts legacy directories',
+  async t => {
+    t.timeout(120_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const { host } = await makeHost(config, cancelled);
+    const { host: second } = await makeHost(config, cancelled);
+    const paths = Array.from({ length: 12 }, (_, i) => [
+      '@pins',
+      'installations',
+      'test-ui',
+      `tab-${i % 3}`,
+    ]);
+    const directories = await Promise.all(
+      paths.map((p, i) => E(i % 2 ? host : second).provideDirectory(p)),
+    );
+    await Promise.all(
+      directories.map((directory, i) =>
+        E(directory).writeText(`sentinel-${i}`, `value-${i}`),
+      ),
+    );
+    for (let i = 0; i < directories.length; i += 1) {
+      if (i >= 6) t.is(directories[i], directories[i - 6]);
+      t.is(
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).readText([...paths[i], `sentinel-${i}`]),
+        `value-${i}`,
+      );
+    }
+    t.deepEqual(
+      [...(await E(host).list('@pins', 'installations', 'test-ui'))].sort(),
+      ['tab-0', 'tab-1', 'tab-2'],
+    );
+    await E(host).makeDirectory('old-spaces');
+    await E(host).storeValue('retained', ['old-spaces', 'one']);
+    const original = await E(host).identify('old-spaces');
+    const target = ['@pins', 'installations', 'chat', 'spaces'];
+    await E(host).provideDirectory(target, {
+      adoptFrom: ['old-spaces'],
+      keepSource: true,
+    });
+    t.is(await E(host).identify('old-spaces'), original);
+    t.is(await E(host).identify(...target), original);
+    await Promise.all(
+      [host, second].map(h =>
+        E(h).provideDirectory(target, { adoptFrom: ['old-spaces'] }),
+      ),
+    );
+    t.is(await E(host).identify(...target), original);
+    t.is(await E(host).lookup([...target, 'one']), 'retained');
+    t.false(await E(host).has('old-spaces'));
+    await E(host).copy(target, ['old-spaces']);
+    await E(host).provideDirectory(target, { adoptFrom: ['old-spaces'] });
+    t.false(await E(host).has('old-spaces'));
+    await E(host).makeDirectory('old-spaces');
+    const conflict = await E(host).identify('old-spaces');
+    await t.throwsAsync(
+      E(host).provideDirectory(target, { adoptFrom: ['old-spaces'] }),
+      { message: /Conflicting/ },
+    );
+    t.is(await E(host).identify('old-spaces'), conflict);
+    t.is(await E(host).identify(...target), original);
+    await E(host).storeValue('not-directory', 'invalid-storage');
+    await t.throwsAsync(
+      E(host).provideDirectory(['invalid-storage', 'child']),
+      { message: /local directory/ },
+    );
+    await t.throwsAsync(
+      E(host).provideDirectory(['old-spaces', 'nested'], {
+        adoptFrom: 'old-spaces',
+      }),
+      { message: /overlap/ },
+    );
+  },
+);
+
+test.serial(
+  'provideDirectory refuses identity-based cycles and preserves aliased identical bindings',
+  async t => {
+    const { host } = await prepareHost(t);
+    await E(host).provideDirectory(['parent', 'spaces']);
+    await E(host).copy(['parent'], ['alias']);
+    const original = await E(host).identify('parent', 'spaces');
+    await E(host).provideDirectory(['alias', 'spaces'], {
+      adoptFrom: ['parent', 'spaces'],
+    });
+    t.is(await E(host).identify('parent', 'spaces'), original);
+    t.is(await E(host).identify('alias', 'spaces'), original);
+    await t.throwsAsync(
+      E(host).provideDirectory(['alias', 'spaces', 'nested'], {
+        adoptFrom: ['parent', 'spaces'],
+      }),
+      { message: /overlap/ },
+    );
+    t.is(await E(host).identify('parent', 'spaces'), original);
+    t.false(await E(host).has('parent', 'spaces', 'nested'));
+  },
+);
+
+test.serial(
+  'Chat saved spaces stay host-specific when root and child inherit shared pins',
+  async t => {
+    t.timeout(120_000);
+    const { provideSpacesStorage, spacesStoragePath } =
+      // Integration-only browser fixture, not a daemon runtime dependency.
+      // eslint-disable-next-line import/no-relative-packages
+      await import('../../chat/spaces-storage.js');
+    const { host } = await prepareHost(t);
+    const child = await E(host).provideHost('chat-child', {
+      agentName: 'chat-child-agent',
+    });
+    t.is(await E(host).identify('@pins'), await E(child).identify('@pins'));
+    t.is(await E(host).identify('@self'), await E(child).identify('@host'));
+    await Promise.all(
+      [host, child].map(async (agent, index) => {
+        await E(agent).makeDirectory('spaces');
+        await E(agent).storeValue(
+          harden({ name: `saved-${index}`, profilePath: ['own-service'] }),
+          ['spaces', '1'],
+        );
+      }),
+    );
+    const originals = await Promise.all(
+      [host, child].map(agent => E(agent).identify('spaces')),
+    );
+    const [rootPath, childPath] = await Promise.all(
+      [host, child].map(spacesStoragePath),
+    );
+    t.notDeepEqual(rootPath, childPath);
+    await Promise.all([host, child, host, child].map(provideSpacesStorage));
+    for (const [index, agent] of [host, child].entries()) {
+      const storagePath = index === 0 ? rootPath : childPath;
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(agent).identify(...storagePath), originals[index]);
+      // eslint-disable-next-line no-await-in-loop
+      t.deepEqual(await E(agent).lookup([...storagePath, '1']), {
+        name: `saved-${index}`,
+        profilePath: ['own-service'],
+      });
+      // eslint-disable-next-line no-await-in-loop
+      t.false(await E(agent).has('spaces'));
+    }
+    await E(host).storeValue('root-only', [...rootPath, '2']);
+    t.false(await E(child).has(...childPath, '2'));
+    await Promise.all([host, child].map(provideSpacesStorage));
+    t.is((await E(host).list('@pins', 'installations', 'chat')).length, 2);
+    t.is(await E(host).identify(...rootPath), originals[0]);
+    t.is(await E(child).identify(...childPath), originals[1]);
+  },
+);
+
+test.serial(
+  'a stalled session marker in one host does not block another host directory provisioning',
+  async t => {
+    t.timeout(60_000);
+    const { host } = await prepareHost(t);
+    const child = await E(host).provideHost('stalled-marker-child');
+    await E(child).makeDirectory('records');
+    const marker = await E(child).evaluate(
+      '@main',
+      `(() => {
+        let enter;
+        let resume;
+        const entered = new Promise(resolve => { enter = resolve; });
+        const gate = new Promise(resolve => { resume = resolve; });
+        return makeExo('HeldMarker', M.interface('HeldMarker', {
+          text: M.callWhen().returns(M.undefined()),
+          whenEntered: M.callWhen().returns(M.undefined()),
+          release: M.callWhen().returns(M.undefined()),
+        }), {
+          text: async () => { enter(); await gate; },
+          whenEntered: () => entered,
+          release: () => resume(),
+        });
+      })()`,
+      [],
+      [],
+      ['records', 'controller-owner'],
+    );
+    t.teardown(() =>
+      E(marker)
+        .release()
+        .catch(() => {}),
+    );
+    const owner = E(child).provideSessionOwner('records');
+    void owner.catch(() => {});
+    // The child is definitely holding marker I/O before testing the other host.
+    await E(marker).whenEntered();
+    const directory = await E(host).provideDirectory([
+      '@pins',
+      'installations',
+      'other-host-ready',
+    ]);
+    t.truthy(directory);
+    t.true(await E(host).has('@pins', 'installations', 'other-host-ready'));
+    await E(marker).release();
+    t.truthy(await owner);
+  },
+);

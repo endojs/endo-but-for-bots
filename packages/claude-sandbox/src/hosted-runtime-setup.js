@@ -4,12 +4,13 @@
  * The Claude adapter's host-setup bindings over
  * `@endo/hosted-agent/hosted-setup.js`: the pinned specifiers of the
  * daemon-owned services and controller, the verified readers of each
- * provisioned formula under `claude-sandbox/`, the storage roots, and the
+ * provisioned formula under `@pins/installations/claude-sandbox/`, the storage roots, and the
  * native runtime placement.
  *
  * @module
  */
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { Fail } from '@endo/errors';
 import {
   assertNoRuntimeLeftovers,
@@ -96,7 +97,7 @@ const readProvisionedEnvironment = (host, namePath, expectedSpecifier) =>
 export const readNativeSandbox = async host => {
   const { identifier, env } = await readProvisionedEnvironment(
     host,
-    [SANDBOX_DIR, 'native-sandbox'],
+    installationPath(SANDBOX_DIR, 'native-sandbox'),
     nativeSandboxSpecifier,
   );
   return harden({ identifier, config: readRuntimeConfig(env) });
@@ -107,7 +108,7 @@ harden(readNativeSandbox);
 export const readStateProvider = async host => {
   const { identifier, env } = await readProvisionedEnvironment(
     host,
-    [SANDBOX_DIR, 'state-provider'],
+    installationPath(SANDBOX_DIR, 'state-provider'),
     stateProviderSpecifier,
   );
   const stateDir = env.ENDO_CLAUDE_STATE_DIR;
@@ -127,7 +128,7 @@ export const readSessionStorage = async (host, stateProviderIdentifier) => {
     Fail`Claude storage requires an explicit state provider identity`;
   const { identifier, env } = await readHostedProvisionedEnvironment(host, {
     label: LABEL,
-    namePath: [SANDBOX_DIR, 'session-storage'],
+    namePath: installationPath(SANDBOX_DIR, 'session-storage'),
     expectedSpecifier: sessionStorageSpecifier,
     expectedPowersIdentifier: stateProviderIdentifier,
   });
@@ -146,7 +147,7 @@ harden(readSessionStorage);
 export const readBrokerService = async host => {
   const { identifier, env } = await readProvisionedEnvironment(
     host,
-    [SANDBOX_DIR, 'broker-service'],
+    installationPath(SANDBOX_DIR, 'broker-service'),
     brokerServiceSpecifier,
   );
   return harden({ identifier, config: readClaudeBrokerConfig(env) });

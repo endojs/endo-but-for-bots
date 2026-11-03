@@ -6,6 +6,12 @@
 // Both formulas retain slot-free null powers. Quota and volume configuration
 // are obsolete; the session owner records placement and owns native cleanup.
 
+import {
+  installationPath,
+  migrateBackendInstallation,
+  hasInstallationPath,
+  provideInstallationDirectory,
+} from '@endo/hosted-agent/installation-path.js';
 import { createHash } from 'node:crypto';
 
 import { Fail } from '@endo/errors';
@@ -42,6 +48,7 @@ harden(deriveCodexOwnerId);
 export const main = async hostAgent => {
   await null;
   const { env } = process;
+  await migrateBackendInstallation(hostAgent, SANDBOX_DIR);
 
   // `has` on a path resolves its parent, so probing a name inside SANDBOX_DIR
   // throws `Unknown pet name` on a daemon that has no Codex state yet. An
@@ -52,9 +59,13 @@ export const main = async hostAgent => {
   const hasInSandbox = async name => {
     await null;
     try {
-      return await E(hostAgent).has(SANDBOX_DIR, name);
+      return await hasInstallationPath(
+        hostAgent,
+        installationPath(SANDBOX_DIR, name),
+      );
     } catch (error) {
-      if (await E(hostAgent).has(SANDBOX_DIR)) throw error;
+      if (await hasInstallationPath(hostAgent, installationPath(SANDBOX_DIR)))
+        throw error;
       return false;
     }
   };
@@ -91,8 +102,8 @@ export const main = async hostAgent => {
     );
   }
 
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  if (!(await hasInstallationPath(hostAgent, installationPath(SANDBOX_DIR)))) {
+    await provideInstallationDirectory(hostAgent, SANDBOX_DIR);
   }
 
   if (nativeEnv) {
@@ -107,13 +118,15 @@ export const main = async hostAgent => {
     try {
       await E(hostAgent).makeUnconfined('@main', nativeSandboxSpecifier, {
         powersName,
-        resultName: [SANDBOX_DIR, 'native-sandbox'],
+        resultName: installationPath(SANDBOX_DIR, 'native-sandbox'),
         env: nativeEnv,
       });
     } finally {
       await E(hostAgent).remove(powersName);
     }
-    console.log(`Minted ${SANDBOX_DIR}/native-sandbox`);
+    console.log(
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/native-sandbox`,
+    );
   }
 
   if (!existingState) {
@@ -125,14 +138,14 @@ export const main = async hostAgent => {
     try {
       await E(hostAgent).makeUnconfined('@main', stateProviderSpecifier, {
         powersName,
-        resultName: [SANDBOX_DIR, 'state-provider'],
+        resultName: installationPath(SANDBOX_DIR, 'state-provider'),
         env: harden({ ENDO_CODEX_STATE_DIR: stateDir }),
       });
     } finally {
       await E(hostAgent).remove(powersName);
     }
     console.log(
-      `Minted ${SANDBOX_DIR}/state-provider (state under ${stateDir})`,
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/state-provider (state under ${stateDir})`,
     );
   } else {
     console.log(

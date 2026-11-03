@@ -36,6 +36,16 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
   const properties = {};
 
   switch (formula.type) {
+    case 'git-credential': {
+      properties.kind = { kind: 'literal', value: formula.kind };
+      properties.audience = { kind: 'literal', value: formula.audience };
+      if (formula.secretId)
+        properties.secret = { kind: 'reference', identifier: formula.secretId };
+      if (formula.username)
+        properties.username = { kind: 'literal', value: formula.username };
+      properties.revoked = { kind: 'literal', value: formula.revoked || false };
+      break;
+    }
     case 'environment': {
       properties.runner = { kind: 'reference', identifier: formula.runner };
       properties.workspace = {

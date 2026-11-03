@@ -285,10 +285,16 @@ test('a machine-admin deploy runs through the granted connection', async t => {
   const credential = Far('BasicCredential', {
     audience: async () => 'https://forge.example',
   });
-  root.bind('workflow-service', h1.service);
+  root.bind('@pins', Far('Pins'));
+  root.bind('@pins/installations', Far('Installations'));
+  root.bind('@pins/installations/workflow', Far('Workflow installation'));
+  root.bind('@pins/installations/workflow/service', h1.service);
   root.bind('controller-for-nixos-admin', performer);
   root.bind('@self', operator);
-  root.bind('forgejo-credential', credential);
+  root.bind('@pins', Far('Pins'));
+  root.bind('@pins/installations', Far('Installations'));
+  root.bind('@pins/installations/nixos', Far('Nixos installation'));
+  root.bind('@pins/installations/nixos/forgejo-credential', credential);
   const factoryHost = makeFactoryHost();
 
   await provision(root, factoryHost);
@@ -450,7 +456,10 @@ test('a crash between minting the powers guest and tucking it away heals on the 
 
   const root = makeFakeRoot();
   const { performer } = makePerformer();
-  root.bind('workflow-service', h1.service);
+  root.bind('@pins', Far('Pins'));
+  root.bind('@pins/installations', Far('Installations'));
+  root.bind('@pins/installations/workflow', Far('Workflow installation'));
+  root.bind('@pins/installations/workflow/service', h1.service);
   root.bind('controller-for-nixos-admin', performer);
   root.bind('@self', Far('OperatorHandle', {}));
   const factoryHost = makeFactoryHost();
@@ -495,7 +504,10 @@ test('stray names from a crash inside guest provisioning are cleared before mint
 
   const root = makeFakeRoot();
   const { performer } = makePerformer();
-  root.bind('workflow-service', h1.service);
+  root.bind('@pins', Far('Pins'));
+  root.bind('@pins/installations', Far('Installations'));
+  root.bind('@pins/installations/workflow', Far('Workflow installation'));
+  root.bind('@pins/installations/workflow/service', h1.service);
   root.bind('controller-for-nixos-admin', performer);
   root.bind('@self', Far('OperatorHandle', {}));
   // A handle name with nothing behind it: `provideGuest` would hand it back
@@ -541,7 +553,10 @@ test('a transient service failure skips the grant for one boot instead of mintin
   });
   const root = makeFakeRoot();
   const { performer } = makePerformer();
-  root.bind('workflow-service', service);
+  root.bind('@pins', Far('Pins'));
+  root.bind('@pins/installations', Far('Installations'));
+  root.bind('@pins/installations/workflow', Far('Workflow installation'));
+  root.bind('@pins/installations/workflow/service', service);
   root.bind('controller-for-nixos-admin', performer);
   root.bind('@self', Far('OperatorHandle', {}));
   const factoryHost = makeFactoryHost();

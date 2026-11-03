@@ -337,17 +337,17 @@ Throws once the remote has been revoked.
 ## credentialHealth() -> Promise<RemoteCredentialHealth>
 
 Report whether the credential this remote would push with is usable,
-without using it.
-A credential holds its material in process memory, so a daemon restart
-leaves the record unavailable and the next push would otherwise be the
-first thing to say so.
+without making a Git network request.
+Legacy credentials keep material in process memory and become unavailable after
+daemon restart. Secrets-backed credentials read current secret material and
+remain usable across restart unless the secret or credential has been revoked.
+The health check may perform an audited secret read.
 `required: false` is the whole answer for a remote that needs no
 credential; otherwise the result carries `kind`, `audience`, `available`,
 and `revoked`.
-`revoked: true` means "unusable until rotated", not "an operator
-deliberately revoked this": a credential rebuilt after a restart starts out
-revoked too, so this reports whether the credential works and never why it
-does not.
+`revoked: true` means access is denied. It can reflect an unavailable legacy
+credential, a revoked credential, or a revoked/deleted secret. Bootstrap setup
+does not revive a revoked Secrets-backed credential.
 This reports health only and never the credential material, which is why
 it is separate from inspect(), whose snapshot is policy alone.
 Throws once the remote has been revoked.

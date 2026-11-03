@@ -9,7 +9,7 @@
 //
 // HOST-side provisioning for the Claude sandbox stack. Run this on the
 // machine that runs the containers (Linux + podman). Idempotent. Mints,
-// nested under `claude-sandbox/` so the host root stays clean:
+// nested under `@pins/installations/claude-sandbox/` so the host root stays clean:
 //
 //   native-sandbox   — the owned `@endo/sandbox` native Podman runtime that
 //                      daemon-owned Floot session controllers acquire scopes
@@ -28,6 +28,12 @@
 // setup-hosted.js mints. No inbox-form factories or credentials are provisioned.
 // Existing legacy resources are left for explicit retirement, never swept here.
 
+import {
+  installationPath,
+  migrateBackendInstallation,
+  hasInstallationPath,
+  provideInstallationDirectory,
+} from '@endo/hosted-agent/installation-path.js';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
@@ -70,6 +76,7 @@ const assertStateDir = value => {
  */
 export const main = async hostAgent => {
   const { env } = process;
+  await migrateBackendInstallation(hostAgent, SANDBOX_DIR);
 
   // Podman crash reconciliation must only touch this host's Claude slices.
   // Persist the identity with each runtime so every incarnation uses the same
@@ -98,10 +105,14 @@ export const main = async hostAgent => {
   const hasInSandbox = async name => {
     await null;
     try {
-      return await E(hostAgent).has(SANDBOX_DIR, name);
+      return await hasInstallationPath(
+        hostAgent,
+        installationPath(SANDBOX_DIR, name),
+      );
     } catch (error) {
       // Only an absent directory excuses the failure; anything else is real.
-      if (await E(hostAgent).has(SANDBOX_DIR)) throw error;
+      if (await hasInstallationPath(hostAgent, installationPath(SANDBOX_DIR)))
+        throw error;
       return false;
     }
   };
@@ -133,8 +144,8 @@ export const main = async hostAgent => {
     );
   }
 
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  if (!(await hasInstallationPath(hostAgent, installationPath(SANDBOX_DIR)))) {
+    await provideInstallationDirectory(hostAgent, SANDBOX_DIR);
   }
 
   // Native sandbox service — the host-only runtime daemon-owned session
@@ -153,13 +164,15 @@ export const main = async hostAgent => {
     try {
       await E(hostAgent).makeUnconfined('@main', nativeSandboxSpecifier, {
         powersName,
-        resultName: [SANDBOX_DIR, 'native-sandbox'],
+        resultName: installationPath(SANDBOX_DIR, 'native-sandbox'),
         env: nativeEnv,
       });
     } finally {
       await E(hostAgent).remove(powersName);
     }
-    console.log(`Minted ${SANDBOX_DIR}/native-sandbox`);
+    console.log(
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/native-sandbox`,
+    );
   }
 
   // State provider — `@none`; it ignores its powers and returns host paths
@@ -169,11 +182,11 @@ export const main = async hostAgent => {
     await providePrivateDirectory('ENDO_CLAUDE_STATE_DIR', stateDir);
     await E(hostAgent).makeUnconfined('@main', stateProviderSpecifier, {
       powersName: '@none',
-      resultName: [SANDBOX_DIR, 'state-provider'],
+      resultName: installationPath(SANDBOX_DIR, 'state-provider'),
       env: harden({ ENDO_CLAUDE_STATE_DIR: stateDir }),
     });
     console.log(
-      `Minted ${SANDBOX_DIR}/state-provider (state under ${stateDir})`,
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/state-provider (state under ${stateDir})`,
     );
   }
 

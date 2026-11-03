@@ -386,7 +386,7 @@ Charts are saved in factories and runs, so changing this setup option applies to
 newly provisioned workflows, not existing factories or runs.
 
 The participants here are guest **controls** used only during setup. A Floot
-factory host holds them under `session-agent-<session-id>`; the public session
+factory host holds them under `floot-private-sessions/<session-id>/guest`; the public session
 facet returned by `createSession` is not a guest control. Create dedicated
 implementation/reviewer sessions with `userInitiated: false`, obtain their guest
 controls through the provisioning host, and pass those to setup. Use a dedicated implementation
@@ -463,7 +463,7 @@ the factory caplet, and a session re-copies it on revival. List the
 providers in `ENDO_EXTRA` ahead of the Floot setup:
 
 ```
-@endo/workflow/setup.js                             # pinned workflow-service
+@endo/workflow/setup.js                             # privately retained workflow service
 @endo/space-nixos-admin/setup.js                    # controller-for-nixos-admin
 @endo/space-nixos-admin/setup-forgejo-credential.js # forgejo-credential
 @endo/floot/floot-factory-setup.js
@@ -563,3 +563,9 @@ silently rewritten.
 Floot and Fae can return local interactive widgets using an `endowidget` fence.
 See [the widget protocol](../spaces-util/INTERACTIVE-WIDGETS.md) for examples,
 confinement, lifecycle, and tests.
+
+
+Session controls, pending submissions, and private journals share one owned
+session directory.
+See [factory-owned session storage](designs/session-storage-layout.md) for the
+inventory layout, upgrade behavior, and recovery constraints.
