@@ -310,7 +310,7 @@ test('the diff schema documents the options a JSON caller can use', async t => {
   const [diff] = makeGitTool(makeStubGit(calls)).filter(
     record => record.name === 'diff',
   );
-  const { options } = diff.parameters.properties;
+  const { options } = /** @type {any} */ (diff.parameters).properties;
   t.deepEqual(Object.keys(options.properties), [
     'cached',
     'base',

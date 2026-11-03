@@ -357,7 +357,7 @@ test('diff paths resolve through the mount at every Git facet', async t => {
 
   const diff = byNameOf(makeGitTool(git))('diff');
   const diffPaths = (/** @type {string[]} */ ...paths) =>
-    diff.invoke({ options: { paths } });
+    /** @type {Promise<string>} */ (diff.invoke({ options: { paths } }));
 
   const kept = await diffPaths('kept.txt');
   t.regex(kept, /^diff --git a\/kept\.txt b\/kept\.txt$/m);
