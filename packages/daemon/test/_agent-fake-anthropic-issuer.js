@@ -30,6 +30,7 @@ export const make = async () => {
   let holding = false;
   /** @type {Array<() => void>} */
   let releases = [];
+  /** @type {{ requests: number, prompts: string[], aborted: number, keys: string[] }} */
   const seen = { requests: 0, prompts: [], aborted: 0, keys: [] };
 
   const streamOf = text => {
