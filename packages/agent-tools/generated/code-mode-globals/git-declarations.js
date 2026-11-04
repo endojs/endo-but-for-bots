@@ -48,11 +48,11 @@ type GitFilesystem = GitExtendedFilesystem;
 type GitFollowRootOptions = {
     cancelled?: Promise<never>;
 };
-type GitERef<T = unknown> = PromiseLike<T> | T;
-type GitPassableReader<TRead = GitPassable, TReadReturn = GitPassable> = {
+type GitERef<T> = T | Promise<T>;
+type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern: () => GitPattern | undefined;
-    readReturnPattern: () => GitPattern | undefined;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitRootSnapshot = {
     type: 'snapshot';
@@ -127,9 +127,9 @@ type GitWorktreeEntry = {
     prunable: boolean;
 };
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    stream?: (synPromise: GitERef<GitStreamNode<GitPassable, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
-    streamBase64: (synPromise: GitERef<GitStreamNode<GitPassable, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => GitPattern | undefined;
+    stream?: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitBlobRef = {
     sha256: () => Promise<string>;
@@ -146,18 +146,13 @@ type GitStreamEndpointClose = {
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
     streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => GitPattern | undefined;
-};
-type GitPassable<PC = GitPassableCap, E = Error> = void | GitAtom | (GitCopyArrayInterface<PC, E> | GitCopyRecordInterface<PC, E> | GitCopyTaggedInterface<PC, E>) | PC | E;
-type GitPassStyled<S = unknown, I = unknown> = {
-    "Symbol(passStyle)": S;
-    [Symbol.toStringTag]: I;
+    writeReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
     atEnd: boolean;
 };
-type GitCloseablePassableReader<TRead = GitPassable, TReadReturn = GitPassable> = GitPassableReader<TRead, TReadReturn> & GitStreamEndpointClose;
+type GitCloseablePassableReader<TRead = unknown, TReadReturn = unknown> = GitPassableReader<TRead, TReadReturn> & GitStreamEndpointClose;
 type GitDirectoryEntry = {
     name: string;
     kind: 'file';
@@ -322,7 +317,7 @@ type GitTreeRef = {
     algorithm: string;
     hash: string;
 };
-type GitRemotableFilesystem = GitFilesystem & GitRemotableObject;
+type GitRemotableFilesystem = GitFilesystem & unknown;
 type GitRootTransition = {
     type: 'transition';
     fromRevision: bigint;
@@ -369,14 +364,10 @@ type GitLockState = {
     start: bigint;
     length: bigint;
 };
-type GitPassableCap = Promise<any> | GitRemotableObject | unknown;
-type GitAtom = undefined | null | boolean | number | bigint | string | Uint8Array | symbol;
 type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | {
     value: R;
     promise: null;
 };
-type GitPattern = Exclude<GitPassable, Error | Promise<any>>;
-type GitRemotableObject<I = string> = GitPassStyled<'remotable', I>;
 type GitLitePathEntryIssuer = {
     entry: (path: string | string[]) => GitLitePathEntry;
 };
@@ -387,18 +378,7 @@ type GitStreamYieldNode<Y = unknown, R = undefined> = {
     promise: Promise<GitStreamNode<Y, R>>;
 };
 type GitDirectory = GitLiteDirectory;
-type GitPathEntryIssuer = GitLitePathEntryIssuer;
-type GitCopyArray<T = any> = readonly T[];
-type GitCopyRecord<T = any> = Record<string, T>;
-type GitCopyTagged<Tag = string, Payload = any> = GitPassStyled<'tagged', Tag> & {
-    payload: Payload;
-};
-interface GitCopyArrayInterface<PC = unknown, E = unknown> extends GitCopyArray<GitPassable<PC, E>> {
-}
-interface GitCopyRecordInterface<PC = unknown, E = unknown> extends GitCopyRecord<GitPassable<PC, E>> {
-}
-interface GitCopyTaggedInterface<PC = unknown, E = unknown> extends GitCopyTagged<string, GitPassable<PC, E>> {
-}`,
+type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
     body: `{
     add: (designators: GitPathDesignator[]) => Promise<void>;
     branches: () => Promise<GitRef[]>;
@@ -529,11 +509,11 @@ type GitWorktreeEntry = {
     locked: boolean;
     prunable: boolean;
 };
-type GitERef<T = unknown> = PromiseLike<T> | T;
+type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    stream?: (synPromise: GitERef<GitStreamNode<GitPassable, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
-    streamBase64: (synPromise: GitERef<GitStreamNode<GitPassable, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => GitPattern | undefined;
+    stream?: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitBlobRef = {
     sha256: () => Promise<string>;
@@ -550,23 +530,18 @@ type GitStreamEndpointClose = {
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
     streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => GitPattern | undefined;
+    writeReturnPattern: () => unknown | undefined;
 };
-type GitPassable<PC = GitPassableCap, E = Error> = void | GitAtom | (GitCopyArrayInterface<PC, E> | GitCopyRecordInterface<PC, E> | GitCopyTaggedInterface<PC, E>) | PC | E;
-type GitPassableReader<TRead = GitPassable, TReadReturn = GitPassable> = {
+type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern: () => GitPattern | undefined;
-    readReturnPattern: () => GitPattern | undefined;
-};
-type GitPassStyled<S = unknown, I = unknown> = {
-    "Symbol(passStyle)": S;
-    [Symbol.toStringTag]: I;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
     atEnd: boolean;
 };
-type GitCloseablePassableReader<TRead = GitPassable, TReadReturn = GitPassable> = GitPassableReader<TRead, TReadReturn> & GitStreamEndpointClose;
+type GitCloseablePassableReader<TRead = unknown, TReadReturn = unknown> = GitPassableReader<TRead, TReadReturn> & GitStreamEndpointClose;
 type GitDirectoryEntry = {
     name: string;
     kind: 'file';
@@ -732,14 +707,10 @@ type GitLockState = {
     start: bigint;
     length: bigint;
 };
-type GitPassableCap = Promise<any> | GitRemotableObject | unknown;
-type GitAtom = undefined | null | boolean | number | bigint | string | Uint8Array | symbol;
 type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | {
     value: R;
     promise: null;
 };
-type GitPattern = Exclude<GitPassable, Error | Promise<any>>;
-type GitRemotableObject<I = string> = GitPassStyled<'remotable', I>;
 type GitNodeKind = 'file' | 'directory';
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
@@ -755,18 +726,7 @@ type GitLiteReadableTree = {
 type GitStreamYieldNode<Y = unknown, R = undefined> = {
     value: Y;
     promise: Promise<GitStreamNode<Y, R>>;
-};
-type GitCopyArray<T = any> = readonly T[];
-type GitCopyRecord<T = any> = Record<string, T>;
-type GitCopyTagged<Tag = string, Payload = any> = GitPassStyled<'tagged', Tag> & {
-    payload: Payload;
-};
-interface GitCopyArrayInterface<PC = unknown, E = unknown> extends GitCopyArray<GitPassable<PC, E>> {
-}
-interface GitCopyRecordInterface<PC = unknown, E = unknown> extends GitCopyRecord<GitPassable<PC, E>> {
-}
-interface GitCopyTaggedInterface<PC = unknown, E = unknown> extends GitCopyTagged<string, GitPassable<PC, E>> {
-}`,
+};`,
     body: `{
     branches: () => Promise<GitRef[]>;
     currentBranch: () => Promise<GitRef | undefined>;
