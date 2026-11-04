@@ -765,7 +765,7 @@ test('a permanent failure before commit leaves no residue, even across a crash i
       `grant ${crashAt}`,
     );
     t.is(
-      crashed.mustGet(world.inventories, OWNER).helper,
+      mustGet(crashed.world.inventories, OWNER).helper,
       'handle-of-something-else',
       'the abort leaves a name this operation did not write',
     );
