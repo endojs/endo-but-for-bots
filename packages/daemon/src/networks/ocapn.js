@@ -75,7 +75,7 @@ const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 // address is read. Peers dial this host instead of the bind host, so a daemon
 // listening on `0.0.0.0` can advertise a public name. The advertised port is
 // always the bound port; a stored port must match the configured listen port.
-const ADVERTISE_ADDR_NAME = 'ocapn-advertise-addr';
+const ADVERTISE_ADDRESS_NAME = 'ocapn-advertise-addr';
 
 // Domain-separation prefix for the agent-binding signature. Mixed into
 // the signed material so a signature produced for this binding cannot
@@ -212,18 +212,18 @@ export const make = async (powers, context) => {
   /** @type {string | undefined} */
   let advertiseHost;
   /** @type {string | undefined} */
-  let configuredAdvertiseAddr;
+  let configuredAdvertiseAddress;
   try {
-    configuredAdvertiseAddr = /** @type {string} */ (
-      await E(powers).lookup(ADVERTISE_ADDR_NAME)
+    configuredAdvertiseAddress = /** @type {string} */ (
+      await E(powers).lookup(ADVERTISE_ADDRESS_NAME)
     );
   } catch {
     // No stored advertised address; advertise the bound address.
   }
-  if (configuredAdvertiseAddr !== undefined) {
+  if (configuredAdvertiseAddress !== undefined) {
     // Unlike the listen address, a malformed advertised address is an error:
     // falling back would silently advertise an address no peer can dial.
-    const advertiseUrl = new URL(`tcp://${configuredAdvertiseAddr}`);
+    const advertiseUrl = new URL(`tcp://${configuredAdvertiseAddress}`);
     if (
       advertiseUrl.hostname === '' ||
       advertiseUrl.pathname !== '' ||
@@ -231,12 +231,12 @@ export const make = async (powers, context) => {
       advertiseUrl.username !== ''
     ) {
       throw Error(
-        `${ADVERTISE_ADDR_NAME} must be host or host:port, got ${JSON.stringify(configuredAdvertiseAddr)}`,
+        `${ADVERTISE_ADDRESS_NAME} must be host or host:port, got ${JSON.stringify(configuredAdvertiseAddress)}`,
       );
     }
     if (advertiseUrl.port !== '' && Number(advertiseUrl.port) !== port) {
       throw Error(
-        `${ADVERTISE_ADDR_NAME} port must equal the ${LISTEN_ADDR_NAME} port, got ${JSON.stringify(configuredAdvertiseAddr)}`,
+        `${ADVERTISE_ADDRESS_NAME} port must equal the ${LISTEN_ADDR_NAME} port, got ${JSON.stringify(configuredAdvertiseAddress)}`,
       );
     }
     advertiseHost = advertiseUrl.hostname.replace(/^\[|\]$/g, '');

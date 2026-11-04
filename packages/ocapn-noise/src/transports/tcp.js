@@ -141,15 +141,15 @@ export const makeTcpTransport = ({
           resolve(undefined);
         });
       });
-      const addr = srv.address();
-      if (!addr || typeof addr === 'string') {
-        throw Error(`tcp transport: unexpected address ${addr}`);
+      const boundAddress = srv.address();
+      if (!boundAddress || typeof boundAddress === 'string') {
+        throw Error(`tcp transport: unexpected address ${boundAddress}`);
       }
       /** @type {TransportListener} */
       const listener = harden({
         hints: {
-          host: advertiseHost ?? addr.address,
-          port: addr.port.toString(),
+          host: advertiseHost ?? boundAddress.address,
+          port: boundAddress.port.toString(),
         },
         close: () => {
           srv.close();
