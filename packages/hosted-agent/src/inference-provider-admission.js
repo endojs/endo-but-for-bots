@@ -67,9 +67,7 @@ export const foldInferenceTurnEvents = (
         admittedAtMs: event.admittedAtMs,
         state: 'reserved',
         reservedTokens: event.reservedTokens,
-        ...(event.reservedCostMicros === undefined
-          ? {}
-          : { reservedCostMicros: event.reservedCostMicros }),
+        reservedCostMicros: event.reservedCostMicros,
       });
     } else if (
       Number(occurredAtMilliseconds) <= asOfMilliseconds &&
@@ -83,9 +81,7 @@ export const foldInferenceTurnEvents = (
         disposition: event.disposition,
         usage: event.usage,
         chargedTokens: event.chargedTokens,
-        ...(event.chargedCostMicros === undefined
-          ? {}
-          : { chargedCostMicros: event.chargedCostMicros }),
+        chargedCostMicros: event.chargedCostMicros,
         overrun: event.overrun,
         settledAt: event.settledAt,
         settledAtMs: event.settledAtMs,

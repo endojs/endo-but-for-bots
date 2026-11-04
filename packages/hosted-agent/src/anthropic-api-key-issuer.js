@@ -122,7 +122,7 @@ export const makeAnthropicApiKeyIssuerFactory = ({
 
   return harden({
     factory,
-    async close() {
+    async dispose() {
       const open = [...issuers.values()];
       issuers.clear();
       await Promise.all(open.map(({ issuer }) => issuer.dispose()));
@@ -137,7 +137,7 @@ export const make = async (_powers, context) => {
   const made = makeAnthropicApiKeyIssuerFactory();
   if (context !== undefined) {
     await E(context).addDisposalHook(
-      Far('Dispose Anthropic API-key issuer factory', () => made.close()),
+      Far('Dispose Anthropic API-key issuer factory', () => made.dispose()),
     );
   }
   return made.factory;

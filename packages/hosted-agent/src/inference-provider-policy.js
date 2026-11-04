@@ -1,6 +1,6 @@
 // @ts-check
 
-import { Fail } from '@endo/errors';
+import { Fail, X, makeError } from '@endo/errors';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 const LIMIT_FIELDS = harden([
@@ -168,8 +168,8 @@ export const validateAnthropicInferenceRequest = (message, policy) => {
   let body;
   try {
     body = JSON.parse(message.body);
-  } catch {
-    throw Fail`inference-request-refused`;
+  } catch (cause) {
+    throw makeError(X`inference-request-refused`, undefined, { cause });
   }
   (body && typeof body === 'object' && !Array.isArray(body)) ||
     Fail`inference-request-refused`;

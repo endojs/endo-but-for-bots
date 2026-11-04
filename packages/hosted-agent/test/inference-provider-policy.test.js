@@ -1,6 +1,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import {
   DEFAULT_PROVIDER_LIMITS,
+  validateAnthropicInferenceRequest,
   validateInferenceLimits,
 } from '../src/inference-provider-policy.js';
 
@@ -38,4 +39,15 @@ test('a token budget cannot escape a dollar-only deployment ceiling', t => {
     ),
     { dailyTokens: 1000 },
   );
+});
+
+test('a request body that is not JSON is refused with its parse error as cause', t => {
+  const error = t.throws(() =>
+    validateAnthropicInferenceRequest(
+      { method: 'POST', path: '/v1/messages', body: 'not json' },
+      { model: 'claude-test', maxOutputTokens: 1, maxRequestBytes: 1024 },
+    ),
+  );
+  t.regex(error.message, /inference-request-refused/);
+  t.true(error.cause instanceof SyntaxError);
 });

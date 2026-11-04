@@ -109,9 +109,7 @@ const makeIssuerFactory =
                 status: behavior.status?.(message) ?? 200,
                 headers: {},
                 body: 'ok',
-                ...(behavior.usage === undefined
-                  ? {}
-                  : { usage: behavior.usage(message) }),
+                usage: behavior.usage?.(message),
               });
             },
             requestByteStream: async message => {
@@ -164,18 +162,10 @@ const makeRegistry = (backing, options = {}) => {
           outputPerMillion: 1_000_000,
         },
       }),
-    ...(options.nowMillis === undefined
-      ? {}
-      : { nowMillis: options.nowMillis }),
-    ...(options.discoverModels === undefined
-      ? {}
-      : { discoverModels: options.discoverModels }),
-    ...(options.afterCommit === undefined
-      ? {}
-      : { afterCommit: options.afterCommit }),
-    ...(options.intentExpiryMs === undefined
-      ? {}
-      : { intentExpiryMs: options.intentExpiryMs }),
+    nowMillis: options.nowMillis,
+    discoverModels: options.discoverModels,
+    afterCommit: options.afterCommit,
+    intentExpiryMs: options.intentExpiryMs,
   });
 };
 

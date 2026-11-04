@@ -47,7 +47,7 @@ test('Anthropic issuer injects its key and version behind an InferenceEndpoint',
     readBase64: async () => encodeBase64(encodeUtf8('anthropic-canary')),
   });
   const made = makeAnthropicApiKeyIssuerFactory({ fetch });
-  t.teardown(() => made.close());
+  t.teardown(() => made.dispose());
   const provider = harden({
     providerId: 'provider-one',
     kind: 'anthropic',
@@ -90,7 +90,7 @@ test('a provider keeps one issuer and refuses a changed secret', async t => {
       throw Error('no network in this test');
     },
   });
-  t.teardown(() => made.close());
+  t.teardown(() => made.dispose());
   const provider = harden({
     providerId: 'provider-one',
     kind: 'anthropic',
@@ -110,7 +110,7 @@ test('a provider keeps one issuer and refuses a changed secret', async t => {
       }),
     { message: /Anthropic provider secret changed/ },
   );
-  await made.close();
+  await made.dispose();
   const message = harden({
     method: 'POST',
     path: '/v1/messages',
