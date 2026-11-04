@@ -525,6 +525,9 @@ export const makeProviderFetchTransport = ({
           if (subscriptionExhausted) {
             return Fail`Provider subscription exhausted`;
           }
+          // And these `isUpstreamRefusal`: statuses only, never the body.
+          if (status === 429) return Fail`Provider rate limited`;
+          if (status === 404) return Fail`Provider model not found`;
           // And this one `isResponseLost`: the deadline passed with the
           // request out.
           if (timedOut) return Fail`Provider response lost`;

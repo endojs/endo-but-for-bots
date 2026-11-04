@@ -113,6 +113,8 @@ harden(withDeadline);
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and grant over it.
  * @param {ProviderRequestAdapter} [options.adaptRequest] Trusted provider translation.
+ * @param {boolean} [options.revealUpstreamRefusal] Whether a grant over this
+ * one credential tells its holder which refusal the upstream answered with.
  * @param {(model: string) => Promise<boolean> | boolean} [options.admits]
  * Whether the one account lists a model now, from its catalog owner
  * (`model-catalog.js`); required without a pool, whose members each carry
@@ -149,6 +151,7 @@ export const makeProviderBrokerGrantIssuer = ({
   onReading,
   credential,
   adaptRequest,
+  revealUpstreamRefusal = false,
   admits,
   catalogState,
   makePublicNetwork,
@@ -276,6 +279,7 @@ export const makeProviderBrokerGrantIssuer = ({
         admits,
         ...(catalogState === undefined ? {} : { catalogState }),
         revealExhaustion,
+        revealUpstreamRefusal,
       });
       return { core, transport, memberTransports: [] };
     }

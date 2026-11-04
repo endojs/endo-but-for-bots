@@ -116,6 +116,24 @@ export const isResponseLost = error =>
   error instanceof Error && error.message === 'Provider response lost';
 harden(isResponseLost);
 
+const UPSTREAM_REFUSALS = harden([
+  'Provider credential rejected',
+  'Provider subscription exhausted',
+  'Provider rate limited',
+  'Provider model not found',
+]);
+
+/**
+ * The messages a transport uses to report which refusal an upstream answered
+ * with. They are bare classifications of a status: no upstream body, header,
+ * or wording crosses this seam.
+ *
+ * @param {unknown} error
+ */
+export const isUpstreamRefusal = error =>
+  error instanceof Error && UPSTREAM_REFUSALS.includes(error.message);
+harden(isUpstreamRefusal);
+
 /**
  * Whether a rotation was refused because the record moved under it, as opposed
  * to failing outright.
@@ -746,6 +764,9 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  * of a refused attempt reached the caller, so the caller sees one response.
  * At most one attempt per member per request, beside the one refresh retry
  * within a member. See designs/hosted-agent-subscriptions.md, "Handover".
+ * @param {boolean} [powers.revealUpstreamRefusal]
+ * Lets the caller see the bare `isUpstreamRefusal` classification in place of
+ * `Provider request failed`, for a holder that reports each refusal apart.
  * @param {boolean} [powers.revealExhaustion]
  * Every failure of a request reaches the caller as `Provider request failed`.
  * With this, one more bare classification does: `Provider subscription
@@ -768,6 +789,7 @@ export const makeProviderBrokerGrant = (
     catalogState,
     pool,
     revealExhaustion = false,
+    revealUpstreamRefusal = false,
   },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
@@ -1776,6 +1798,9 @@ export const makeProviderBrokerGrant = (
               responseBytes: 0,
             },
       );
+      if (revealUpstreamRefusal && isUpstreamRefusal(error)) {
+        throw Error(/** @type {Error} */ (error).message);
+      }
       if (
         revealExhaustion &&
         (isSubscriptionExhaustion(error) ||

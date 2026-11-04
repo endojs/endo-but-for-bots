@@ -84,6 +84,8 @@ export const makeAnthropicApiKeyIssuerFactory = ({
       accountRef: provider.providerId,
       audit,
       onReading,
+      // The registry reports each upstream refusal apart, by a fixed code.
+      revealUpstreamRefusal: true,
       // The durable grant is the exact model allowlist. The registry validates
       // it before this inner defense and supports well-shaped typed fallback.
       admits: model =>
