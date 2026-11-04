@@ -8,11 +8,13 @@ import path from 'node:path';
 
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
+/** @import { Config } from '../src/types.js' */
+
 test('secret metadata survives updates without invalidating grants', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-db-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,
@@ -46,11 +48,51 @@ test('secret metadata survives updates without invalidating grants', async t => 
   t.is(database.getSecretIdForGrant('grant-id'), undefined);
 });
 
+test('a record and its grant can be written together', async t => {
+  const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-pair-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  const database = makeDaemonDatabase(
+    /** @type {Config} */ ({
+      statePath,
+      ephemeralStatePath: statePath,
+      cachePath: statePath,
+      sockPath: path.join(statePath, 'endo.sock'),
+      registryUrl: 'https://invalid.example',
+    }),
+  );
+  t.teardown(() => database.close());
+  const record = harden({
+    secretId: 'secret-id',
+    backendRef: '',
+    description: 'Provider key',
+    state: /** @type {'provisioning'} */ ('provisioning'),
+    generation: 1n,
+    createdAt: '2026-10-30T00:00:00.000Z',
+    updatedAt: '2026-10-30T00:00:00.000Z',
+  });
+  database.writeSecretRecordWithGrant(record, 'grant-id');
+  t.is(database.getSecretRecord(record.secretId)?.state, 'provisioning');
+  t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
+
+  const other = harden({ ...record, secretId: 'other-secret-id' });
+  // `SqliteError` is not an `Error` that ava's `t.throws` recognizes.
+  /** @type {{ code?: string } | undefined} */
+  let refusal;
+  try {
+    database.writeSecretRecordWithGrant(other, 'grant-id');
+  } catch (error) {
+    refusal = /** @type {{ code?: string }} */ (error);
+  }
+  t.is(refusal?.code, 'SQLITE_CONSTRAINT_PRIMARYKEY');
+  t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
+  t.is(database.getSecretRecord(other.secretId), undefined);
+});
+
 test('audit events never carry a redeemable grant identifier', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-audit-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,
@@ -107,7 +149,7 @@ test('audit events are ordered by insertion, not by timestamp', async t => {
   const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-seq-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
   const database = makeDaemonDatabase(
-    /** @type {import('../src/types.js').Config} */ ({
+    /** @type {Config} */ ({
       statePath,
       ephemeralStatePath: statePath,
       cachePath: statePath,

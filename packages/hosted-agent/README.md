@@ -2,7 +2,7 @@
 
 The provider-neutral seam a hosted agent backend plugs into.
 
-A *hosted backend* runs a conversation somewhere Endo does not: a Codex
+A _hosted backend_ runs a conversation somewhere Endo does not: a Codex
 app-server in a sandbox slice, a Claude Code CLI, a future adapter for something
 else. Floot drives all of them the same way, so what they share belongs here —
 the contracts they satisfy, the data shapes that cross the boundary, and the
@@ -16,12 +16,12 @@ turn, how to read the latest checkpoint, how to revert.
 `src/hosted-backend.js` holds the interfaces and the exact projectors for the
 capability-free records that cross the seam:
 
-| | |
-|---|---|
-| `HostedBackendFactoryInterface` | provision and destroy sessions |
-| `HostedTurnBackendInterface` | run a turn, interrupt it, acknowledge it |
-| `HostedTurnBackendAdminInterface` | tear a session down |
-| `HostedToolSetInterface` | the only Endo authority a backend receives |
+|                                                                   |                                             |
+| ----------------------------------------------------------------- | ------------------------------------------- |
+| `HostedBackendFactoryInterface`                                   | provision and destroy sessions              |
+| `HostedTurnBackendInterface`                                      | run a turn, interrupt it, acknowledge it    |
+| `HostedTurnBackendAdminInterface`                                 | tear a session down                         |
+| `HostedToolSetInterface`                                          | the only Endo authority a backend receives  |
 | `assertHostedBackendDescriptor`, `normalizeHostedModelDescriptor` | project the two catalogs Floot selects from |
 
 The projectors match on an exact key set and rebuild the record from validated
@@ -56,14 +56,14 @@ acknowledging it. A hosted turn is not durable because the provider says it
 finished: Floot commits its own conversation on the terminal event and
 acknowledges afterwards, so in between the backend owes three things.
 
-1. **Write-ahead.** Record what is about to be dispatched *before* dispatching
+1. **Write-ahead.** Record what is about to be dispatched _before_ dispatching
    it, so a crash leaves a marker naming the checkpoint the provider's history
    must be rolled back to.
 2. **Exactly one terminal outcome.** A provider that keeps talking after a
    failure — a `completed` notification already in flight when the session was
    quarantined — must not be able to rewrite a settled turn's marker or hand
    the consumer a second terminal event. The ledger latches the first outcome
-   *synchronously*, before its first `await`, and reports a later one as a
+   _synchronously_, before its first `await`, and reports a later one as a
    duplicate carrying the outcome that won, so the caller declines to deliver
    it.
 3. **Reconciliation.** Until the consumer acknowledges, the recorded turn is
@@ -74,12 +74,14 @@ acknowledges afterwards, so in between the backend owes three things.
 ```js
 const ledger = makeTurnLedger({ persist, audit, recovery: savedRecovery });
 
-const turn = await ledger.begin({ baseCheckpoint: await readLatestCheckpoint() });
-await turn.observe(providerTurnId);          // once the provider names it
+const turn = await ledger.begin({
+  baseCheckpoint: await readLatestCheckpoint(),
+});
+await turn.observe(providerTurnId); // once the provider names it
 const { accepted } = await turn.settle({ type: 'completed', checkpoint });
-if (accepted) deliverTerminalEvent();        // a loser never reaches here
+if (accepted) deliverTerminalEvent(); // a loser never reaches here
 
-await ledger.acknowledge(checkpoint);        // the consumer committed
+await ledger.acknowledge(checkpoint); // the consumer committed
 await ledger.reconcile({ readLatestCheckpoint, revertBefore });
 ```
 
@@ -165,6 +167,20 @@ is still available; see the Claude package's
 `account.js` and `account-oracle.js` answer what plan a credential is on, how
 much of the rate limit is left, and what a token count costs — without holding
 the credential. See [ACCOUNT-ORACLE.md](./ACCOUNT-ORACLE.md).
+
+## Inference provider registry
+
+`inference-provider-registry.js` (`makeInferenceProviderRegistry`) is a durable,
+owner-scoped registry of inference providers; `inference-provider-registry-module.js`
+is its root-private caplet. Provider keys live only in the root host's `@secrets`,
+imported through `SecretImporter.provideBase64` under registry-assigned stable
+identifiers (`makeEndoSecretParticipant`), so a lost response or a crash never
+imports a key twice. Registry records and the snapshot journal hold those
+identifiers, never key bytes; a grant identifier is still redeemable read
+authority, so registry state is confidential.
+Only the issuer factory, resolved by name after each restart, receives the
+`SecretBlob`; owners receive attenuated directory, use, and inference facets.
+The registry admits only the `anthropic` provider and no custom base URLs.
 
 ## Session inference grants
 
