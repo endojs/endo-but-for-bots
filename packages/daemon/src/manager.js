@@ -5663,6 +5663,11 @@ const makeDaemonCore = async (
       throw Error('Expected a local SecretBlob');
     return withFormulaGraphLock(async () => {
       if (existingCredential !== undefined) {
+        if (
+          existingCredential === null ||
+          typeof existingCredential !== 'object'
+        )
+          throw Error('Expected a local Git credential');
         const id = getIdForRef(existingCredential);
         if (!id || !isLocalId(id))
           throw Error('Expected a local Git credential');

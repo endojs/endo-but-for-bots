@@ -2351,6 +2351,14 @@ test.serial(
       secret,
       existingCredential: legacy,
     });
+    await t.throwsAsync(
+      E(host).provideSecretBasicCredential('invalid-credential', {
+        ...options,
+        existingCredential: null,
+      }),
+      { message: new RegExp('Expected a local Git credential') },
+    );
+    t.false(await E(host).has('invalid-credential'));
     await E(host).provideSecretBasicCredential('git-credential', options);
     t.is(await E(host).identify('git-credential'), before);
     const diag = await E(host).diagnostics();
