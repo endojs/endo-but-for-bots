@@ -45,6 +45,9 @@
       "path": "../platform/tsconfig.composite.json"
     },
     {
+      "path": "../promise-kit/tsconfig.composite.json"
+    },
+    {
       "path": "../sandbox/tsconfig.composite.json"
     },
     {
