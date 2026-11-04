@@ -184,7 +184,13 @@ testNode(
     const names = await E(powers).list();
     t.false(names.includes('owner-private'));
     t.false(names.includes(ownerKey));
-    for (const name of ['@host', '@endo', '@secrets', ownerKey, 'owner-private']) {
+    for (const name of [
+      '@host',
+      '@endo',
+      '@secrets',
+      ownerKey,
+      'owner-private',
+    ]) {
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(E(powers).lookup(name));
     }

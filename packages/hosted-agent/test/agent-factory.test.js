@@ -70,6 +70,7 @@ const makeWorld = () => {
   };
 
   /** @type {Map<string, { handleId: string, mail: any[], provideCount: number }>} */
+  /** @type {Map<string, any>} */
   const guestRecords = new Map();
   const events = [];
   const failures = {};
@@ -136,6 +137,7 @@ const makeWorld = () => {
   };
 
   /** @type {Map<string, Record<string, any>>} */
+  /** @type {Map<string, any>} */
   const inventories = new Map();
   const inventory = {
     write: async (ownerId, name, handleId) => {
@@ -153,6 +155,7 @@ const makeWorld = () => {
   };
 
   /** @type {Map<string, { name: string, paused: boolean, startAfter?: string, starts: number }>} */
+  /** @type {Map<string, any>} */
   const responderRecords = new Map();
   const responders = {
     has: async name => responderRecords.has(name),
@@ -193,7 +196,7 @@ const makeWorld = () => {
     responders,
     events,
     failures,
-    catalog: { value: undefined },
+    catalog: { value: /** @type {any} */ (undefined) },
     ids: { next: 0 },
   };
 };
@@ -386,14 +389,20 @@ test('creation validates its closed request', async t => {
     [{ endowments: undefined }, 'invalid-request'],
     [{ endowments: ['root-host'] }, 'invalid-request'],
     [{ ownerId: OTHER_OWNER }, 'invalid-request'],
-    [{ harnessConfig: { authSecretName: 'k' } }, 'invalid-harness-configuration'],
+    [
+      { harnessConfig: { authSecretName: 'k' } },
+      'invalid-harness-configuration',
+    ],
     [
       {
         harnessConfig: { provider: 'brokered-messages', authToken: 'k' },
       },
       'invalid-harness-configuration',
     ],
-    [{ harnessConfig: { provider: 'anthropic' } }, 'invalid-harness-configuration'],
+    [
+      { harnessConfig: { provider: 'anthropic' } },
+      'invalid-harness-configuration',
+    ],
   ];
   for (const [overrides, code] of cases) {
     await t.throwsAsync(
@@ -581,8 +590,14 @@ test('powers profiles hold exactly their methods and no root, secret or sibling 
       .filter(name => !name.startsWith('__'))
       .sort();
 
-  t.deepEqual(await methodsOf(lalPowers), [...AGENT_POWERS_PROFILES.lal].sort());
-  t.deepEqual(await methodsOf(faePowers), [...AGENT_POWERS_PROFILES.fae].sort());
+  t.deepEqual(
+    await methodsOf(lalPowers),
+    [...AGENT_POWERS_PROFILES.lal].sort(),
+  );
+  t.deepEqual(
+    await methodsOf(faePowers),
+    [...AGENT_POWERS_PROFILES.fae].sort(),
+  );
   for (const method of ['request', 'form', 'define', 'submit']) {
     t.true((await methodsOf(lalPowers)).includes(method), method);
     t.false((await methodsOf(faePowers)).includes(method), method);
@@ -668,12 +683,12 @@ test('a crash at each creation boundary converges on one guest, grant and respon
       const restarted = await boot(world);
       const directory = restarted.factory.directoryFor(OWNER);
       if (recovery === 'retry') {
-          const agent = await E(directory).create(
+        const agent = await E(directory).create(
           createRequest(provider.providerId),
         );
         t.is(agent.status, 'awake', label);
       } else {
-          await restarted.factory.reconcile();
+        await restarted.factory.reconcile();
       }
       await assertOneOfEach(t, world, restarted.registry);
       const [responder] = world.responderRecords.values();
@@ -695,10 +710,9 @@ test('a crash at each creation boundary converges on one guest, grant and respon
 test('no success returns before activation, and a failed activation shows waking', async t => {
   const { world, directory, provider, factory } = await setup();
   world.failures.responder = Error('responder failed to start');
-  await t.throwsAsync(
-    E(directory).create(createRequest(provider.providerId)),
-    { message: /responder failed to start/ },
-  );
+  await t.throwsAsync(E(directory).create(createRequest(provider.providerId)), {
+    message: /responder failed to start/,
+  });
   const [record] = Object.values(factory.inspect().agents);
   const before = await E(directory).get(record.agentId);
   t.is(before.status, 'waking');
@@ -720,9 +734,7 @@ test('a permanent failure before commit leaves no residue, even across a crash i
     E(clean.directory).create(createRequest(clean.provider.providerId)),
     refusalFor('agent-name-conflict'),
   );
-  const boundaries = clean.boundaries.filter(name =>
-    /abort/.test(name),
-  );
+  const boundaries = clean.boundaries.filter(name => /abort/.test(name));
   t.true(boundaries.includes('create-aborting'));
   t.true(boundaries.includes('create-aborted'));
 
@@ -736,7 +748,11 @@ test('a permanent failure before commit leaves no residue, even across a crash i
     await restarted.factory.reconcile();
     t.is(crashed.world.guestRecords.size, 0, `guest ${crashAt}`);
     t.is(crashed.world.responderRecords.size, 0, `responder ${crashAt}`);
-    t.is((await activeGrants(restarted.registry)).length, 0, `grant ${crashAt}`);
+    t.is(
+      (await activeGrants(restarted.registry)).length,
+      0,
+      `grant ${crashAt}`,
+    );
     t.is(
       crashed.world.inventories.get(OWNER).helper,
       'handle-of-something-else',
@@ -762,8 +778,7 @@ test('an abort after naming removes the name this operation wrote', async t => {
   const wrapRegistry = registry =>
     harden({
       ...registry,
-      listGrants: async () =>
-        hideGrants ? harden([]) : registry.listGrants(),
+      listGrants: async () => (hideGrants ? harden([]) : registry.listGrants()),
     });
   const { registry, factory } = await boot(world, { wrapRegistry });
   const provider = await addProvider(registry, OWNER, 'a');
@@ -791,10 +806,9 @@ test('a guest refusal aborts with its fixed code', async t => {
 test('a transient participant failure stays resumable', async t => {
   const { world, directory, provider, factory } = await setup();
   world.failures.guest = Error('daemon busy');
-  await t.throwsAsync(
-    E(directory).create(createRequest(provider.providerId)),
-    { message: /daemon busy/ },
-  );
+  await t.throwsAsync(E(directory).create(createRequest(provider.providerId)), {
+    message: /daemon busy/,
+  });
   const listed = await E(directory).list();
   t.is(listed[0].status, 'creating');
   delete world.failures.guest;
@@ -805,9 +819,7 @@ test('a transient participant failure stays resumable', async t => {
 
 test('wake toggles survive a crash at each boundary', async t => {
   const toggle = async ({ directory, provider }) => {
-    const agent = await E(directory).create(
-      createRequest(provider.providerId),
-    );
+    const agent = await E(directory).create(createRequest(provider.providerId));
     await E(directory).setWake(agent.agentId, {
       idempotencyKey: 'wake-off',
       wake: false,
@@ -945,9 +957,7 @@ test('limit changes reach the grant, gate raises, and apply one operation', asyn
 test('a crash at each deletion boundary converges and usage rows remain', async t => {
   const run = async context => {
     const { directory, provider, factory } = context;
-    const agent = await E(directory).create(
-      createRequest(provider.providerId),
-    );
+    const agent = await E(directory).create(createRequest(provider.providerId));
     const { inference } = await factory.endowmentFor(agent.agentId);
     await E(inference).request(turn());
     await E(directory).delete(agent.agentId, { idempotencyKey: 'delete-1' });
@@ -992,7 +1002,10 @@ test('deleting frees the name and refuses further changes', async t => {
   const { directory, provider } = await setup();
   const agent = await E(directory).create(createRequest(provider.providerId));
   await E(directory).delete(agent.agentId, { idempotencyKey: 'delete-1' });
-  await t.throwsAsync(E(directory).get(agent.agentId), refusalFor('agent-deleted'));
+  await t.throwsAsync(
+    E(directory).get(agent.agentId),
+    refusalFor('agent-deleted'),
+  );
   await t.throwsAsync(
     E(directory).setWake(agent.agentId, {
       idempotencyKey: 'wake-after',
@@ -1192,7 +1205,10 @@ test('the owner binding attaches the owner provider at creation, reattachment an
 test('another principal cannot see or change an owner agent', async t => {
   const { factory, agent } = await setupReattach();
   const other = factory.directoryFor(OTHER_OWNER);
-  await t.throwsAsync(E(other).get(agent.agentId), refusalFor('agent-not-found'));
+  await t.throwsAsync(
+    E(other).get(agent.agentId),
+    refusalFor('agent-not-found'),
+  );
   await t.throwsAsync(
     E(other).delete(agent.agentId, { idempotencyKey: 'stolen-delete' }),
     refusalFor('agent-not-found'),
@@ -1203,10 +1219,7 @@ test('another principal cannot see or change an owner agent', async t => {
 test('a foreign provider capability is refused at creation and reattachment before any effect', async t => {
   const { world, factory, registry, provider, agent } = await setupReattach();
   const foreign = await addProvider(registry, OTHER_OWNER, 'foreign');
-  const foreignUse = await E(registry).useFor(
-    OTHER_OWNER,
-    foreign.providerId,
-  );
+  const foreignUse = await E(registry).useFor(OTHER_OWNER, foreign.providerId);
   const guestsBefore = world.guestRecords.size;
   await t.throwsAsync(
     factory.createWithUse(
@@ -1241,7 +1254,7 @@ test('a foreign provider capability is refused at creation and reattachment befo
     }),
     ownUse,
   );
-  t.is(accepted.providerId, provider.providerId);
+  t.is(/** @type {any} */ (accepted).providerId, provider.providerId);
 });
 
 test('recovery revokes and reports a grant recorded against another owner provider', async t => {
@@ -1275,7 +1288,11 @@ test('recovery revokes and reports a grant recorded against another owner provid
     agentId: agent.agentId,
     grantId: grant.grantId,
   });
-  t.is(factory.inspect().agents[agent.agentId].ownerId, OWNER, 'never repaired');
+  t.is(
+    factory.inspect().agents[agent.agentId].ownerId,
+    OWNER,
+    'never repaired',
+  );
   await t.throwsAsync(
     E(factory.inferenceFor(agent.agentId)).request(turn()),
     refusalFor('agent-deleted'),
