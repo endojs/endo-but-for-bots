@@ -57,12 +57,16 @@ const MAX_FRAME_LENGTH = 65_551;
  * @param {object} [options]
  * @param {number} [options.port] - Listen port. `0` = OS-assigned.
  * @param {string} [options.host] - Listen host. Default `'127.0.0.1'`.
+ * @param {string} [options.advertiseHost] - Host to put in the listener's
+ *   hints instead of the bound address. Set it when the bind address is not
+ *   the one peers dial, such as `0.0.0.0` behind a public DNS name.
  * @param {'netstring' | 'none'} [options.framing] - Default `'netstring'`.
  * @returns {OcapnNoiseTransport}
  */
 export const makeTcpTransport = ({
   port = 0,
   host = '127.0.0.1',
+  advertiseHost = undefined,
   framing = 'netstring',
 } = {}) => {
   if (framing !== 'netstring' && framing !== 'none') {
@@ -137,15 +141,15 @@ export const makeTcpTransport = ({
           resolve(undefined);
         });
       });
-      const addr = srv.address();
-      if (!addr || typeof addr === 'string') {
-        throw Error(`tcp transport: unexpected address ${addr}`);
+      const boundAddress = srv.address();
+      if (!boundAddress || typeof boundAddress === 'string') {
+        throw Error(`tcp transport: unexpected address ${boundAddress}`);
       }
       /** @type {TransportListener} */
       const listener = harden({
         hints: {
-          host: addr.address,
-          port: addr.port.toString(),
+          host: advertiseHost ?? boundAddress.address,
+          port: boundAddress.port.toString(),
         },
         close: () => {
           srv.close();
