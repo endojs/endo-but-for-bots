@@ -129,7 +129,7 @@ export const make = async (powers, _context, { env = {} } = {}) => {
       (await has([RESPONDERS, name])) &&
       (await has([POWERS, name, 'guest'])) &&
       (await has(['@pins', name])) &&
-      /** @type {boolean} */ (await has([POWERS, name, 'guest', '@pins', name]))
+      Boolean(await has([POWERS, name, 'guest', '@pins', name]))
     );
   };
 
