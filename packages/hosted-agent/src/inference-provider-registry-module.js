@@ -23,6 +23,7 @@ const RegistryRootInterface = M.interface('InferenceProviderRegistry', {
   useFor: M.call(M.string(), M.string()).returns(M.remotable()),
   inferenceFor: M.call(M.string()).returns(M.remotable()),
   revokeGrant: M.callWhen(M.string()).returns(M.undefined()),
+  listGrants: M.callWhen().returns(M.arrayOf(M.record())),
 });
 // eslint-disable-next-line @endo/no-harden-pattern-maker
 harden(RegistryRootInterface);
@@ -93,6 +94,7 @@ export const make = async (powers, context, { env } = {}) => {
     useFor: (ownerId, providerId) => registry.useFor(ownerId, providerId),
     inferenceFor: grantId => registry.inferenceFor(grantId),
     revokeGrant: grantId => registry.revokeGrant(grantId),
+    listGrants: () => registry.listGrants(),
   });
 };
 harden(make);

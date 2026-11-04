@@ -191,3 +191,20 @@ Two subpaths support API-key providers:
 `{ inputPerMillion, outputPerMillion, cacheReadPerMillion?, cacheWritePerMillion? }`
 record of integer micro-dollar prices per million tokens. A free price is zero; a non-zero price below 1,000 micro-dollars
 is refused as a likely unit error.
+
+## Agent factory
+
+`src/agent-factory.js` is the root-private coordinator of API-key agents: the
+catalog of offered harnesses (Lal, then Fae), the validated creation request, and
+idempotent operations that create an agent, change its wake state or limits,
+reattach it to another provider, and delete it. It owns the `AgentRecord` and an
+operation record per change, and its reconciler resumes each one after a crash.
+The guest, the registry grant, the responder and the owner's inventory are
+participants that each make one effect keyed by a preallocated name.
+
+`src/agent-guest-powers.js` holds the exact guest methods each harness receives,
+and `src/agent-factory-module.js` is the daemon caplet over a root host. The
+caplet needs a responder launcher, named by `AGENT_FACTORY_RESPONDER_LAUNCHER`,
+and fills the subagent-creation slot only from one named by
+`AGENT_FACTORY_SUBAGENT_SPAWNER`; without one, a request naming that endowment is
+refused.
