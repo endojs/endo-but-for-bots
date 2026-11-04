@@ -2,7 +2,9 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { makeExo } from '@endo/exo';
 import { Far } from '@endo/far';
+import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeProviderOwner } from '../src/provider-owner.js';
@@ -176,6 +178,41 @@ test('a subscription cannot carry ambient host, secret or injected provider opti
     () => makeProviderOwner({ config: { subscription: config.subscription } }),
     { message: /requires/ },
   );
+});
+
+test('brokered Messages retains only AgentInference and never accepts a Secret resolver', async t => {
+  const inference = makeExo(
+    'AgentInference',
+    M.interface('AgentInference', {}),
+    {},
+  );
+  const config = {
+    kind: 'brokered-messages',
+    inference,
+    model: 'claude-test',
+  };
+  const owner = makeProviderOwner({ config });
+  t.teardown(() => owner.dispose());
+  const first = await owner.forTurn();
+  t.is(await owner.forTurn(), first);
+  t.throws(
+    () =>
+      makeProviderOwner({
+        config,
+        provideAuthToken: async () => 'must-not-be-read',
+      }),
+    { message: /cannot receive a credential resolver/ },
+  );
+  for (const fields of [
+    { authSecretName: 'key' },
+    { host: 'https://api.anthropic.com' },
+    { provider: {} },
+    { apiKey: 'secret' },
+  ]) {
+    t.throws(() => makeProviderOwner({ config: { ...config, ...fields } }), {
+      message: /Invalid brokered Messages recipe/,
+    });
+  }
 });
 
 test('disposal fences a provider construction waiting for a Secret', async t => {
