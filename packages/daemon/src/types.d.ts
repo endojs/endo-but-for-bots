@@ -1656,12 +1656,37 @@ export interface EndoGateway {
   >;
 }
 
+export interface AgentBinding {
+  agentPublicKey: string;
+  signature: string;
+}
+
+export interface ConnectionCanceller {
+  cancel: (error: Error) => void;
+}
+
 export interface EndoGreeter {
+  makeGateway: (
+    remoteNodeKey: string,
+    canceller: ERef<ConnectionCanceller>,
+  ) => Promise<EndoGateway>;
   hello: (
     remoteNodeKey: string,
     remoteGateway: Promise<EndoGateway>,
     cancel: (error: Error) => void,
     cancelled: Promise<never>,
+  ) => Promise<EndoGateway>;
+  /**
+   * Accept a peer over a session the network already settled and
+   * authenticated. A hello that crosses this daemon's own dial shares that
+   * dial's session, so it replaces the dial only when `dialIsStale`.
+   */
+  acceptSession: (
+    remoteNodeKey: string,
+    remoteGateway: Promise<EndoGateway>,
+    canceller: ERef<ConnectionCanceller>,
+    cancelled: Promise<never>,
+    dialIsStale: boolean,
   ) => Promise<EndoGateway>;
 }
 

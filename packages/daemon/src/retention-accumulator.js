@@ -27,12 +27,16 @@ import { makeChangeTopic } from './pubsub.js';
  *
  * @param {object} opts
  * @param {string[]} opts.snapshot - The initial set of retained formulas.
+ * @param {boolean} [opts.emitEmptySnapshot] - Emit an empty first delta when
+ *   the snapshot has no formulas. Retention-set protocols use this to
+ *   distinguish an authoritative empty snapshot from a stalled stream.
  * @param {(flush: () => void) => void} [opts.scheduleBatch] - Schedules a
  *   flush. Defaults to `queueMicrotask`. Injected for testing.
  * @returns {RetentionAccumulator}
  */
 export const makeRetentionAccumulator = ({
   snapshot,
+  emitEmptySnapshot = false,
   scheduleBatch = fn => void Promise.resolve().then(fn),
 }) => {
   /** @type {import('./types.js').Topic<RetentionDelta>} */
@@ -99,7 +103,7 @@ export const makeRetentionAccumulator = ({
     const subscription = topic.subscribe();
 
     return (async function* retentionDeltas() {
-      if (snapshot.length > 0) {
+      if (emitEmptySnapshot || snapshot.length > 0) {
         yield harden({ add: snapshot, remove: [] });
       }
 

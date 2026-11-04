@@ -230,18 +230,27 @@ listen address, store it under `ocapn-listen-addr` before installing:
 yarn exec endo store --text "127.0.0.1:8950" --name ocapn-listen-addr
 ```
 
+For a listener behind NAT or a reverse tunnel, keep the local bind address in
+`ocapn-listen-addr` and store the externally dialable `host:port` separately:
+
+```bash
+yarn exec endo store --text "0.0.0.0:8950" --name ocapn-listen-addr
+yarn exec endo store --text "public.example:443" --name ocapn-advertise-addr
+```
+
+`ocapn-advertise-addr` changes only the `tcp:host` and `tcp:port` fields in the
+advertised OCapN location and the authority of its connection hint. It does not
+change the TCP bind address.
+
 After this step, each daemon advertises an `ocapn+noise+tcp://`
 connection hint in the locators produced by `invite()`,
 `locateForSharing()`, and `getPeerInfo()`. When the accepting daemon
 connects, the session is established over OCapN-Noise.
 
-> **Known limitation.** Until the
-> [`daemon-agent-network-identity`](../../designs/daemon-agent-network-identity.md)
-> work lands, the OCapN-Noise transport mints a fresh signing key per
-> network rather than reusing the daemon agent's `@keypair`. The
-> connection hint carries the full OCapN location so dialing still
-> works, but the OCapN session identity is not yet bound to the
-> daemon node number.
+The transport mints a fresh Noise signing key per installation and mutually
+binds it to each daemon agent's persistent key during the peer handshake. Each
+side receives a gateway bound to that authenticated agent, so a peer cannot
+select another node's retention set.
 
 ## Step 2: Create and Accept an Invitation
 
@@ -434,7 +443,7 @@ the bytes-and-handshake layer differs.
    transport stack for `libp2p`.
 2. **Invitation URL**: Encodes the inviter's node id, inviting handle id,
    and one or more connection-hint addresses (TCP `at=tcp+netstring+
-   json+captp0://…`, OCapN `at=ocapn+noise+tcp://…`, or libp2p
+   json+captp0://...`, OCapN `at=ocapn+noise+tcp://...`, or libp2p
    multiaddrs). The inviter is either a host (`EndoHost.invite`) or a
    guest (`EndoGuest.invite`); the locator's `from` names that inviting
    agent's handle, not necessarily a host handle.
