@@ -23,10 +23,17 @@ The Endo capability tool surface (the `help`, `list`, `lookup`, `send`,
 are SmallCaps-decoded per call so BigInt-shaped strings (`"+5"`) and
 `"#undefined"` continue to round-trip correctly.
 
-`packages/lal/providers/` remains in place as a stable surface for downstream
-consumers (jaine, fae).
-It is no longer used by lal's own agent loop, which now goes through pi-ai's
-multi-provider registry.
+Two `providers/` subpaths are exported for downstream consumers (jaine, fae):
+
+| Subpath | Exports |
+|---|---|
+| `@endo/lal/providers/index.js` | `createProvider` and the per-backend provider factories it re-exports |
+| `@endo/lal/providers/brokered-messages.js` | `makeBrokeredMessagesProvider`, `makeBrokeredMessagesStream`, and `assertBrokeredMessagesRecipe` for the credential-free Anthropic Messages path over an inference grant |
+
+`brokered-messages.js` is its own subpath, not a `createProvider` backend,
+because it takes an inference grant rather than a host and key.
+Lal's own agent loop goes through pi-ai's multi-provider registry, except for
+the brokered Anthropic path, which uses `providers/brokered-messages.js`.
 
 ## Configuration
 
@@ -51,6 +58,20 @@ pi-ai's adaptor finds it.
 | `LAL_HOST`       | API base URL                         | `http://localhost:11434` |
 | `LAL_MODEL`      | Model identifier within the provider | provider-specific        |
 | `LAL_AUTH_TOKEN` | API key                              | -                        |
+
+In brokered mode, the worker environment carries `LAL_INFERENCE`, an
+inference grant from the `@endo/hosted-agent` inference provider registry,
+instead of a host and key.
+Lal then sends Anthropic Messages requests through that grant, so the worker
+never holds an API key, and the registry applies its request policy and limits.
+A brokered configuration that also sets `LAL_HOST` or `LAL_AUTH_TOKEN` is
+rejected.
+
+| Variable         | Description                                     | Default |
+| ---------------- | ----------------------------------------------- | ------- |
+| `LAL_INFERENCE`  | Inference grant; selects brokered mode          | -       |
+| `LAL_MODEL`      | Anthropic model identifier the grant admits     | -       |
+| `LAL_MAX_TOKENS` | `max_tokens` for each brokered Messages request | `4096`  |
 
 Example configuration files are provided:
 
