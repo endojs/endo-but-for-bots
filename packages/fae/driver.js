@@ -13,7 +13,8 @@ import { resolveAuthToken } from './src/credentials.js';
  * A brokered recipe carries no credential because the registry grant holds it.
  *
  * @param {object} options
- * @param {ERef<object>} options.powers
+ * @param {ERef<object>} options.powers - The caplet's powers, which
+ *   `resolveAuthToken` consults as the namespace that may hold the secret.
  * @param {{ kind?: string }} options.storedConfig
  * @param {string} [options.sessionId]
  * @returns {{ sessionId?: string, provideAuthToken?: () => Promise<string> }}

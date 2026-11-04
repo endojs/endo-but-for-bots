@@ -90,12 +90,8 @@ export const makeProviderOwner = ({
         sessionId: /** @type {string} */ (sessionId),
         model: config.model || '',
         log: line => console.error(line),
-        ...(config.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: config.reasoningEffort }),
-        ...(config.contextLength === undefined
-          ? {}
-          : { contextLength: config.contextLength }),
+        reasoningEffort: config.reasoningEffort,
+        contextLength: config.contextLength,
       });
       return cachedProvider;
     }
@@ -103,9 +99,7 @@ export const makeProviderOwner = ({
       cachedProvider ??= makeBrokeredMessagesProvider({
         inference: config.inference,
         model: /** @type {string} */ (config.model),
-        ...(config.maxTokens === undefined
-          ? {}
-          : { maxTokens: config.maxTokens }),
+        maxTokens: config.maxTokens,
       });
       return cachedProvider;
     }

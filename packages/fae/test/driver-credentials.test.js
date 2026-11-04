@@ -6,10 +6,10 @@ import { M } from '@endo/patterns';
 
 import { providerCredentialOptions } from '../driver.js';
 
-const noSecretPowers = () =>
+const makeEmptyNamespace = () =>
   makeExo(
-    'NoSecretPowers',
-    M.interface('NoSecretPowers', {
+    'EmptyNamespace',
+    M.interface('EmptyNamespace', {
       has: M.call().rest(M.any()).returns(M.promise()),
     }),
     {
@@ -19,7 +19,7 @@ const noSecretPowers = () =>
 
 test('a brokered recipe receives no credential resolver or session', t => {
   const options = providerCredentialOptions({
-    powers: noSecretPowers(),
+    powers: makeEmptyNamespace(),
     storedConfig: { kind: 'brokered-messages' },
   });
   t.deepEqual(Object.keys(options), []);
@@ -27,7 +27,7 @@ test('a brokered recipe receives no credential resolver or session', t => {
 
 test('a subscription session carries its identity and no credential resolver', t => {
   const options = providerCredentialOptions({
-    powers: noSecretPowers(),
+    powers: makeEmptyNamespace(),
     storedConfig: { kind: 'subscription-responses' },
     sessionId: '12abc',
   });
@@ -36,7 +36,7 @@ test('a subscription session carries its identity and no credential resolver', t
 
 test('any other provider reads its token through the resolver', t => {
   const options = providerCredentialOptions({
-    powers: noSecretPowers(),
+    powers: makeEmptyNamespace(),
     storedConfig: {},
   });
   t.deepEqual(Object.keys(options), ['provideAuthToken']);
