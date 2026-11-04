@@ -17,6 +17,10 @@ export const make = host => {
   });
   let nativeEnabled = false;
   const guests = new Map();
+  // CapTP copies path arrays, and host methods accept both a path and spread
+  // segments. Index the simulated guests by path value, as the daemon does.
+  /** @param {...(string | string[])} names */
+  const pathKey = (...names) => JSON.stringify(names.flat());
   let terminated = 0;
   const backend = Far('LifecycleBackend', {
     describe: () =>
@@ -71,12 +75,13 @@ export const make = host => {
   return Far('FactoryLifecyclePowers', {
     list: (...args) => E(host).list(...args),
     has: (...args) =>
-      guests.has(args[0]) || (nativeEnabled && args[0] === 'codex-backend')
+      guests.has(pathKey(...args)) ||
+      (nativeEnabled && args[0] === 'codex-backend')
         ? true
         : E(host).has(...args),
     lookup: (...args) =>
-      guests.has(args[0])
-        ? guests.get(args[0])
+      guests.has(pathKey(...args))
+        ? guests.get(pathKey(...args))
         : nativeEnabled && args[0] === 'codex-backend'
           ? backend
           : E(host).lookup(...args),
@@ -88,10 +93,11 @@ export const make = host => {
       // Isolate late backend acquisition/disposal from guest collection's
       // worker termination, exercised by floot-journal-retirement.test.js.
       const { agentName } = args[1];
-      if (guests.has(agentName)) return undefined;
+      const key = pathKey(agentName);
+      if (guests.has(key)) return undefined;
       const store = new Map([['user', harden({})]]);
       guests.set(
-        agentName,
+        key,
         Far('LifecycleGuest', {
           has: name => store.has(name),
           lookup: name => store.get(name),
@@ -109,7 +115,7 @@ export const make = host => {
       return undefined;
     },
     remove: (...args) =>
-      guests.delete(args[0]) ? undefined : E(host).remove(...args),
+      guests.delete(pathKey(...args)) ? undefined : E(host).remove(...args),
     storeValue: async (value, name) => {
       let fail = false;
       if (armed) {

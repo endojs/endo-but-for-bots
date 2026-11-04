@@ -39,7 +39,9 @@
     "./src/mount.js": "./src/mount.js",
     "./src/hashline.js": "./src/hashline.js",
     "./src/manager-node-powers.js": "./src/manager-node-powers.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./connection.js": "./src/connection.js",
+    "./remote-control.js": "./src/remote-control.js"
   },
   "scripts": {
     "build": "exit 0",

@@ -89,7 +89,10 @@ const makeBridgeHarness = (options = {}) => {
     },
   });
   if (resolveFsMounterByName) {
-    names.set(keyFor(['claude-sandbox', 'fs-mounter']), fsMounter);
+    names.set(
+      keyFor(['@pins', 'installations', 'claude-sandbox', 'fs-mounter']),
+      fsMounter,
+    );
   }
   const provider = makeContainerMountBridgeProvider(
     hostAgent,

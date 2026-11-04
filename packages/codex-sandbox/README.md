@@ -116,3 +116,21 @@ Read [SECURITY-MODEL.md](./SECURITY-MODEL.md),
 [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) and
 [DEPLOYMENT-ACCEPTANCE.md](./DEPLOYMENT-ACCEPTANCE.md) before enabling hosted
 sessions; [MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) is the historical PR gate.
+
+## Installation storage
+
+Host setup retains `codex-sandbox` under
+`@pins/installations/codex-sandbox/`.
+On upgrade, setup moves the existing directory binding intact; it refuses
+conflicting destinations and resumes an interrupted copy without replacing
+native owners, session records, credentials, or account facets.
+The adapter ID `codex-sandbox` in account publications remains unchanged.
+Floot receives its existing backend grant; installation machinery stays out of
+the ordinary root inventory.
+
+For a live rollout, copy the legacy directory to its private destination before
+restarting with the new code, retaining the legacy alias until restart.
+This lets old running backends and newly revived backends resolve their services.
+Startup verifies both names identify the same directory before removing the old
+alias.
+Do not recreate `session-records` or change its `controller-owner` marker.

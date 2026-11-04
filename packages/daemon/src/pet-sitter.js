@@ -88,31 +88,44 @@ export const makePetSitter = (controller, specialNames) => {
     );
 
   /** @type {StoreController['followIdNameChanges']} */
-  const followIdNameChanges = async function* currentAndSubsequentIds(id) {
-    const subscription = controller.followIdNameChanges(id);
+  const followIdNameChanges = id =>
+    makeCancelableIterator(
+      async function* currentAndSubsequentIds(setCancelPending) {
+        const subscription = controller.followIdNameChanges(id);
+        try {
+          const cancellation = setCancelPending(() =>
+            cancelPendingIterator(subscription),
+          );
+          if (cancellation !== undefined) await cancellation;
+          const idSpecialNames = Object.entries(specialNames)
+            .filter(([_, specialId]) => specialId === id)
+            .map(
+              ([specialName, _]) => /** @type {SpecialName} */ (specialName),
+            );
+          if (
+            idSpecialNames.includes(/** @type {SpecialName} */ ('@self')) &&
+            idSpecialNames.includes(/** @type {SpecialName} */ ('@host'))
+          ) {
+            const filtered = idSpecialNames.filter(name => name !== '@host');
+            idSpecialNames.length = 0;
+            idSpecialNames.push(...filtered);
+          }
 
-    const idSpecialNames = Object.entries(specialNames)
-      .filter(([_, specialId]) => specialId === id)
-      .map(([specialName, _]) => /** @type {SpecialName} */ (specialName));
-    if (
-      idSpecialNames.includes(/** @type {SpecialName} */ ('@self')) &&
-      idSpecialNames.includes(/** @type {SpecialName} */ ('@host'))
-    ) {
-      const filtered = idSpecialNames.filter(name => name !== '@host');
-      idSpecialNames.length = 0;
-      idSpecialNames.push(...filtered);
-    }
+          // The first published event contains the existing names for the id, if any.
+          const { value: existingNames } = await subscription.next();
+          if (existingNames?.names) {
+            existingNames.names.unshift(...idSpecialNames);
+          }
+          existingNames?.names?.sort();
+          yield /** @type {PetStoreIdNameChange} */ (existingNames);
 
-    // The first published event contains the existing names for the id, if any.
-    const { value: existingNames } = await subscription.next();
-    if (existingNames?.names) {
-      existingNames.names.unshift(...idSpecialNames);
-    }
-    existingNames?.names?.sort();
-    yield /** @type {PetStoreIdNameChange} */ (existingNames);
-
-    yield* subscription;
-  };
+          yield* subscription;
+        } finally {
+          await subscription.return(undefined);
+        }
+        return undefined;
+      },
+    );
 
   /** @type {StoreController['reverseIdentify']} */
   const reverseIdentify = id => {

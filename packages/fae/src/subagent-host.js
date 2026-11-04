@@ -268,6 +268,12 @@ export const provisionFaeAgent = async ({
 
     if (pin) {
       await E(hostAgent).copy([driverResultName], ['@pins', driverResultName]);
+      // Mail delivery revives the recipient's own pins. The owner's pins can
+      // be private and therefore outside the daemon's startup pin directory.
+      await E(hostAgent).copy(
+        [driverResultName],
+        [profileName, '@pins', driverResultName],
+      );
     }
 
     return harden({
@@ -390,6 +396,13 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
     try {
       if (await E(hostAgent).has('@pins', driverResultName)) {
         await E(hostAgent).remove('@pins', driverResultName);
+      }
+      const profileName = profileNameFor(name);
+      if (
+        (await E(hostAgent).has(profileName)) &&
+        (await E(hostAgent).has(profileName, '@pins', driverResultName))
+      ) {
+        await E(hostAgent).remove(profileName, '@pins', driverResultName);
       }
     } catch (error) {
       failures.push(error);

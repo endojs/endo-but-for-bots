@@ -87,7 +87,8 @@
     "./managed-credentials-module.js": "./src/managed-credentials-module.js",
     "./managed-renewable-credentials.js": "./src/managed-renewable-credentials.js",
     "./managed-renewable-credentials-module.js": "./src/managed-renewable-credentials-module.js",
-    "./provider-broker-service.js": "./src/provider-broker-service.js"
+    "./provider-broker-service.js": "./src/provider-broker-service.js",
+    "./installation-path.js": "./src/installation-path.js"
   },
   "scripts": {
     "build": "exit 0",

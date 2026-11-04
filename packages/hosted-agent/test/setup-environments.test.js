@@ -14,6 +14,7 @@ test('environment setup persists null powers and bounded operator env, retains f
   await mkdir(runtime, { mode: 0o700 });
   const store = new Map();
   const mints = [];
+  let interruptRemoval = false;
   /** @type {{ specifier: string, options: any } | undefined} */
   let stored;
   const key = names => names.flat().join('/');
@@ -32,17 +33,35 @@ test('environment setup persists null powers and bounded operator env, retains f
           }),
       }),
     getFormulaEnvironment: () => defined(stored).options.env,
-    makeDirectory: names => {
-      store.set(key(names), Far('Directory'));
+    /** @param {string[]} names */
+    provideDirectory: names => {
+      for (let n = 1; n <= names.length; n += 1) {
+        const prefix = key(names.slice(0, n));
+        if (!store.has(prefix)) store.set(prefix, Far('Directory'));
+      }
     },
     storeValue: (value, name) => {
-      store.set(name, value);
+      store.set(key([name]), value);
     },
-    remove: name => {
-      store.delete(name);
+    copy: (from, to) => {
+      const source = key([from]);
+      const destination = key([to]);
+      for (const [name, value] of [...store]) {
+        if (name === source || name.startsWith(`${source}/`))
+          store.set(`${destination}${name.slice(source.length)}`, value);
+      }
+    },
+    remove: (...names) => {
+      const target = key(names);
+      if (target === 'environments' && interruptRemoval)
+        throw Error('Interrupted migration');
+      for (const name of [...store.keys()]) {
+        if (name === target || name.startsWith(`${target}/`))
+          store.delete(name);
+      }
     },
     makeUnconfined: (_worker, specifier, options) => {
-      t.is(store.get(options.powersName), null);
+      t.is(store.get(key([options.powersName])), null);
       stored = { specifier, options };
       mints.push(stored);
       store.set(key(options.resultName), Far('Runner'));
@@ -70,12 +89,33 @@ test('environment setup persists null powers and bounded operator env, retains f
   });
   await main(host, env);
   await main(host, env);
+  // Simulate an older installation and a crash after copying its directory.
+  const retainedRunner = store.get('@pins/installations/environments/runner');
+  for (const [name, value] of [...store]) {
+    if (name.startsWith('@pins/installations/environments')) {
+      store.set(name.replace('@pins/installations/', ''), value);
+      store.delete(name);
+    }
+  }
+  interruptRemoval = true;
+  await t.throwsAsync(main(host, env), { message: /Interrupted migration/ });
+  t.true(store.has('environments'));
+  interruptRemoval = false;
+  await main(host, env);
+  t.is(store.get('@pins/installations/environments/runner'), retainedRunner);
+  t.false(store.has('environments'));
   await t.throwsAsync(
     main(host, { ...env, ENDO_ENVIRONMENT_PUBLIC_INTERNET: '0' }),
     { message: /configuration changed/ },
   );
   t.is(mints.length, 1);
   t.false(store.has('environment.null-powers'));
+  t.false(store.has('environments'));
+  t.true(
+    [...store.keys()].every(
+      name => name === '@pins' || name.startsWith('@pins/installations'),
+    ),
+  );
   t.false('ANTHROPIC_API_KEY' in defined(stored).options.env);
   t.false('CODEX_TOKEN' in defined(stored).options.env);
   t.false('HTTP_PROXY' in defined(stored).options.env);
@@ -108,7 +148,7 @@ test('environment setup persists null powers and bounded operator env, retains f
     }),
     { message: /normalized absolute/ },
   );
-  store.delete('environments/runner');
+  store.delete('@pins/installations/environments/runner');
   await writeFile(
     join(runtime, `${defined(stored).options.env.ENDO_SANDBOX_OWNER_ID}.owner`),
     'stale',

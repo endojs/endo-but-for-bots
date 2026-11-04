@@ -650,6 +650,10 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
   await t.throwsAsync(() => agent.shutdown(), {
     message: /terminal barrier failed/,
   });
+  t.true(
+    (await agent.getActivity()).needsRecovery,
+    'current containment failures still require recovery',
+  );
   // Factory teardown may proceed to the separately held backend admin facet,
   // whose termination is the authoritative slice-reap barrier.
   await agent.shutdown(true);
@@ -980,4 +984,95 @@ test('hosted delegation executes the Endo spawner inside the parent journal turn
   t.is(turn.tools[0].name, 'spawnSubagent');
   t.true(turn.tools[0].settled);
   t.false(turn.tools[0].failed);
+});
+
+test('historical uncertainty stays in recovery context without marking a working session broken', async t => {
+  const powers = makeFakePowers();
+  const { makeTurnJournal } = await import('../src/turn-journal.js');
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin({
+    input: 'old turn',
+    backendId: 'test',
+    modelId: 'test',
+  });
+  await journal.dispatch(id);
+  await journal.append(id, {
+    type: 'tool-intent',
+    callId: 'old',
+    name: 'exec',
+    args: 'publish()',
+  });
+  await journal.append(id, { type: 'finish', state: 'outcome-unknown' });
+  const sent = [];
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: () =>
+        harden({
+          async send(text) {
+            sent.push(text);
+            const channel = makeBufferedReader();
+            channel.push({ type: 'text-delta', text: 'New answer' });
+            channel.push({ type: 'end' });
+            return channel.reader;
+          },
+        }),
+    },
+    'test prompt',
+    { journalPowers: powers },
+  );
+  t.teardown(() => agent.shutdown());
+  t.false((await agent.getActivity()).needsRecovery);
+  await agent.converse('new request', makeReplyChannel().writer);
+  t.true(sent[0].includes('publish()'));
+  t.true(sent[0].includes('Handle recovery quietly'));
+  t.true(sent[0].includes('requires their decision or access'));
+  t.false((await agent.getActivity()).needsRecovery);
+  const recovered = (await agent.getTurns()).find(turn => turn.turnId === id);
+  if (!recovered) throw Error('Missing recovered turn');
+  t.falsy(recovered.resolution);
+});
+
+test('read-only history leaves undispatched evidence intact; writable startup repairs without acquiring a backend', async t => {
+  const powers = makeFakePowers();
+  const { makeTurnJournal } = await import('../src/turn-journal.js');
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin({
+    input: 'not sent',
+    backendId: 'test',
+    modelId: 'test',
+  });
+  const before = await powers.list();
+  const reader = await makeStreamingAgent(
+    powers,
+    undefined,
+    { kind: 'records-only' },
+    'test',
+    { journalPowers: powers },
+  );
+  t.teardown(() => reader.shutdown());
+  t.is((await reader.getTurns())[0].state, 'outcome-unknown');
+  t.deepEqual(await powers.list(), before);
+  await reader.shutdown();
+  let acquired = 0;
+  const writer = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: () => {
+        acquired += 1;
+        throw Error('Unexpected backend');
+      },
+    },
+    'test',
+    { journalPowers: powers },
+  );
+  t.teardown(() => writer.shutdown());
+  const repaired = (await writer.getTurns()).find(turn => turn.turnId === id);
+  if (!repaired) throw Error('Missing repaired turn');
+  t.is(repaired.state, 'cancelled');
+  t.is(acquired, 0);
 });

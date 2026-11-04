@@ -20,10 +20,21 @@ import { E } from '@endo/eventual-send';
 
 import { endoReleaseChart, nixosConfigChangeChart } from './deploy-charts.js';
 
-// Root-inventory names the companion setups bind.
-const WORKFLOW_SERVICE_NAME = 'workflow-service';
+// Public service names and private installation paths bound by companion setups.
+const WORKFLOW_SERVICE_PATH = harden([
+  '@pins',
+  'installations',
+  'workflow',
+  'service',
+]);
 const NIXOS_CONTROLLER_NAME = 'controller-for-nixos-admin';
 const FORGEJO_CREDENTIAL_NAME = 'forgejo-credential';
+const FORGEJO_CREDENTIAL_PATH = harden([
+  '@pins',
+  'installations',
+  'nixos',
+  FORGEJO_CREDENTIAL_NAME,
+]);
 
 // Factory-host names the preset copies from.
 const NIXOS_GRANT_NAME = 'nixos-admin';
@@ -104,7 +115,7 @@ const retractGrant = async (factoryHost, grantName) => {
  *
  * @param {any} agent - the root host running setup
  * @param {any} factoryHost - the Floot factory's host profile
- * @param {string} sourceName - the root-inventory name
+ * @param {string | string[]} sourceName - the installation path
  * @param {string} grantName - the factory-host name
  * @param {string} what - for diagnostics
  * @returns {Promise<boolean>} whether the grant is in place
@@ -118,14 +129,26 @@ const grantLocator = async (
 ) => {
   await null;
   try {
-    if (!(await E(agent).has(sourceName))) {
+    const sourcePath = Array.isArray(sourceName) ? sourceName : [sourceName];
+    let present = true;
+    for (let n = 1; n <= sourcePath.length; n += 1) {
+      // Stop before a missing ancestor; has() cannot traverse an absent hub.
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await E(agent).has(...sourcePath.slice(0, n)))) {
+        present = false;
+        break;
+      }
+    }
+    if (!present) {
       console.error(
         `Floot: no ${sourceName} in this inventory; ${what} is not granted to the factory.`,
       );
       await retractGrant(factoryHost, grantName);
       return false;
     }
-    const locator = await E(agent).locate(sourceName);
+    const locator = await E(agent).locate(
+      ...(Array.isArray(sourceName) ? sourceName : [sourceName]),
+    );
     await E(factoryHost).storeLocator(grantName, locator);
     console.error(`Floot: granted ${grantName} to the factory host.`);
     return true;
@@ -156,18 +179,14 @@ export const grantNixosAdmin = (agent, factoryHost) =>
 harden(grantNixosAdmin);
 
 /**
- * Grant the Forgejo push credential (`forgejo-credential`, provisioned and
- * rotated on every start by
+ * Grant the Forgejo push credential (retained under the NixOS installation by
  * `@endo/space-nixos-admin/setup-forgejo-credential.js`) to the factory host
  * under the same name, so a machine-admin session pushes with a credential
  * that is alive.
  *
- * Credential material is daemon-process-local, so without this grant a
- * session would hold its own credential that nothing re-provisions: every
- * restart would leave it revoked and the next push would fail with "has been
- * revoked". A GitRemote holds the credential CAP rather than its name, so a
- * remote wired to the granted one comes back to life when the seeder rotates
- * it, instead of needing to be rebuilt by hand.
+ * The credential is Secrets-backed and retains its identity across migration
+ * and restart. Sessions receive the use facet, never the password or secret
+ * administration. Existing Git remotes continue to use the same capability.
  *
  * @param {any} agent
  * @param {any} factoryHost
@@ -176,7 +195,7 @@ export const grantForgejoCredential = (agent, factoryHost) =>
   grantLocator(
     agent,
     factoryHost,
-    FORGEJO_CREDENTIAL_NAME,
+    FORGEJO_CREDENTIAL_PATH,
     FORGEJO_CREDENTIAL_NAME,
     'the Forgejo push credential',
   );
@@ -370,11 +389,18 @@ export const grantDeployFactories = async (agent, { dir, factoryHost }) => {
   let service;
   let endowments;
   try {
-    for (const name of [WORKFLOW_SERVICE_NAME, NIXOS_CONTROLLER_NAME]) {
-      // eslint-disable-next-line no-await-in-loop
-      if (!(await E(agent).has(name))) {
+    for (const path of [WORKFLOW_SERVICE_PATH, [NIXOS_CONTROLLER_NAME]]) {
+      let present = true;
+      for (let n = 1; n <= path.length; n += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        if (!(await E(agent).has(...path.slice(0, n)))) {
+          present = false;
+          break;
+        }
+      }
+      if (!present) {
         console.error(
-          `Floot: no ${name} in this inventory; deploy-workflow factories are not granted to the factory.`,
+          `Floot: no ${path.join('/')} in this inventory; deploy-workflow factories are not granted to the factory.`,
         );
         for (const { grantName } of DEPLOY_FACTORY_GRANTS) {
           // eslint-disable-next-line no-await-in-loop
@@ -383,7 +409,7 @@ export const grantDeployFactories = async (agent, { dir, factoryHost }) => {
         return false;
       }
     }
-    service = await E(agent).lookup(WORKFLOW_SERVICE_NAME);
+    service = await E(agent).lookup(WORKFLOW_SERVICE_PATH);
     endowments = harden({
       performer: await E(agent).lookup(NIXOS_CONTROLLER_NAME),
       operator: await E(agent).lookup('@self'),

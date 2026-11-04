@@ -13,6 +13,7 @@ import { makePromiseKit } from './_promise-kit.js';
 /**
  * @param {import('ava').ExecutionContext} t
  * @param {object} [options]
+ * @param {boolean} [options.claude]
  * @param {string} [options.catalogState]
  * @param {Promise<unknown>} [options.endpointGate]
  * @param {boolean} [options.forceCompaction]
@@ -31,6 +32,7 @@ import { makePromiseKit } from './_promise-kit.js';
 const world = (
   t,
   {
+    claude = false,
     catalogState = 'current',
     endpointGate = undefined,
     forceCompaction = false,
@@ -59,7 +61,8 @@ const world = (
   let guestCreates = 0;
   let checkpointRefusals = 0;
   const subscription = Far('Pool', {
-    describe: () => harden({ models: ['luna'] }),
+    describe: () =>
+      harden({ models: catalogState === 'current' ? ['luna'] : [] }),
     openEndpoint: async spec => {
       const state = { spec, revoked: false };
       endpoints.push(state);
@@ -82,8 +85,57 @@ const world = (
               content: [{ type: 'output_text', text: 'ok' }],
             },
           ];
+          const blocks = output.map(item =>
+            item.type === 'reasoning'
+              ? {
+                  type: 'thinking',
+                  thinking: '',
+                  signature: item.encrypted_content,
+                }
+              : item.type === 'function_call'
+                ? {
+                    type: 'tool_use',
+                    id: item.call_id,
+                    name: item.name,
+                    input: JSON.parse(item.arguments),
+                  }
+                : {
+                    type: 'text',
+                    text: item.content.map(part => part.text).join(''),
+                  },
+          );
+          const events = claude
+            ? [
+                {
+                  type: 'message_start',
+                  message: { type: 'message', role: 'assistant', content: [] },
+                },
+                ...blocks.flatMap((block, index) => [
+                  { type: 'content_block_start', index, content_block: block },
+                  { type: 'content_block_stop', index },
+                ]),
+                {
+                  type: 'message_delta',
+                  delta: {
+                    stop_reason: blocks.some(block => block.type === 'tool_use')
+                      ? 'tool_use'
+                      : 'end_turn',
+                  },
+                },
+                { type: 'message_stop' },
+              ]
+            : [
+                {
+                  type: 'response.completed',
+                  response: {
+                    status: 'completed',
+                    output,
+                    ...(responseUsage ? { usage: responseUsage(body) } : {}),
+                  },
+                },
+              ];
           const bytes = new TextEncoder().encode(
-            `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output, ...(responseUsage ? { usage: responseUsage(body) } : {}) } })}\n\n`,
+            events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''),
           );
           return harden({
             status: responseStatus(requests.length),
@@ -132,7 +184,7 @@ const world = (
   /** @type {Map<string, any>} */
   const store = new Map(
     /** @type {Array<[string, any]>} */ ([
-      ['codex-inference', subscription],
+      [claude ? 'claude-inference' : 'codex-inference', subscription],
       ['codex-backend', backend],
     ]),
   );
@@ -157,7 +209,10 @@ const world = (
         }
       },
     }),
-    copy: ([from], [guestName, name]) => {
+    copy: (fromPath, targetPath) => {
+      const from = fromPath.join('/');
+      const guestName = targetPath.slice(0, -1).join('/');
+      const name = targetPath.at(-1);
       if (guests.has(guestName))
         guests.get(guestName)?.set(name, store.get(from));
     },
@@ -165,7 +220,7 @@ const world = (
       environmentPolicies.push(recipe.networkPolicy);
       environments += 1;
       store.set(
-        adminName,
+        adminName.join('/'),
         Far('EnvironmentAdmin', {
           dispose: () => {
             if (refuseDisposal) throw Error('Environment disposal refused');
@@ -181,7 +236,7 @@ const world = (
         }),
       );
       store.set(
-        shellName,
+        shellName.join('/'),
         Far('Shell', {
           exec: (...args) => {
             shellCalls.push(args);
@@ -205,7 +260,9 @@ const world = (
         }),
       );
     },
-    provideGuest: (_name, { agentName }) => {
+    provideGuest: (_name, { agentName: agentPath }) => {
+      const agentName = agentPath.join('/');
+      if (!store.has(_name.join('/'))) store.set(_name.join('/'), harden({}));
       guestCreates += 1;
       if (store.has(agentName)) return;
       /** @type {Map<string, any>} */
@@ -423,7 +480,7 @@ test('development factory revival refuses a public Shell with missing private ad
   await E(await E(session).startTurn('seed')).whenFinished();
   t.is(subject.environments(), 1);
   const restoredFactory = await subject.restart();
-  subject.store.delete(`floot-environment-admin-${id}`);
+  subject.store.delete(`floot-private-sessions/${id}/environment-admin`);
   // Incarnations are lazy after restart; the retained public Shell must not
   // bypass private cleanup-authority validation before new inference.
   const restored = await E(restoredFactory).getSession(id);
@@ -849,13 +906,22 @@ for (const catalogState of ['unavailable', 'unsupported']) {
   });
 }
 
-test('creating cleanup retains the captured inference recipe', async t => {
-  const subject = world(t);
+test('creating recovery preserves inference recipe, guest, workspace and native environment', async t => {
+  const subject = world(t, { development: true });
   const session = await E(subject.factory).createSession({
+    presetId: 'development',
     backendId: 'fae-codex',
     modelId: 'luna',
   });
   const { id } = await E(session).getInfo();
+  const guest = subject.store.get(`floot-private-sessions/${id}/guest`);
+  const handle = subject.store.get(`floot-private-sessions/${id}/handle`);
+  const admin = subject.store.get(
+    `floot-private-sessions/${id}/environment-admin`,
+  );
+  const workspace = await E(guest).lookup('workspace');
+  const shell = await E(guest).lookup('shell');
+  t.is(subject.environments(), 1);
   await subject.close();
   const key = [...subject.store.keys()]
     .filter(name => name.startsWith('floot-sessions-v1-'))
@@ -880,11 +946,26 @@ test('creating cleanup retains the captured inference recipe', async t => {
     i += 1
   )
     await new Promise(resolve => setImmediate(resolve));
+  t.is(subject.store.get(`floot-private-sessions/${id}/guest`), guest);
+  t.is(subject.store.get(`floot-private-sessions/${id}/handle`), handle);
+  t.is(
+    subject.store.get(`floot-private-sessions/${id}/environment-admin`),
+    admin,
+  );
+  t.is(await E(guest).lookup('workspace'), workspace);
+  t.is(await E(guest).lookup('shell'), shell);
+  t.is(
+    subject.environments(),
+    1,
+    'recovery must not allocate replacement native storage',
+  );
   const restored = await E(factory).getSession(id);
   const turn = await E(restored).startTurn('after interrupted creation');
   await E(turn).whenFinished();
   t.is(subject.requests.length, 1);
   await E(factory).deleteSession(id);
+  t.is(subject.disposals(), 1);
+  t.false([...subject.store.keys()].some(name => name.includes(id)));
   await subject.close();
 });
 
@@ -901,7 +982,7 @@ test('repeated session deletion releases private journals, network audit and env
     const { id } = await E(session).getInfo();
     const turn = await E(session).startTurn('hello');
     await E(turn).whenFinished();
-    t.true(subject.store.has(`floot-environment-admin-${id}`));
+    t.true(subject.store.has(`floot-private-sessions/${id}/environment-admin`));
     t.true(
       [...subject.store.keys()].some(name =>
         name.startsWith(`floot-private-sessions/${id}/floot-network-`),
@@ -940,7 +1021,7 @@ test('failed environment disposal retains its administrator and journal until de
     message: /Environment disposal refused/,
   });
   t.is((await E(subject.factory).listSessions())[0].lifecycle, 'error');
-  t.true(subject.store.has(`floot-environment-admin-${id}`));
+  t.true(subject.store.has(`floot-private-sessions/${id}/environment-admin`));
   t.true(subject.store.has(`floot-private-sessions/${id}/schema`));
   subject.refuseDisposal(false);
   await E(subject.factory).deleteSession(id);
@@ -1024,3 +1105,80 @@ for (const downgrade of [false, true]) {
     await E(factory).deleteSession(id);
   });
 }
+
+test('direct Claude uses Fae tools, retains signed thinking through restart and delegates through Endo', async t => {
+  let spawned = false;
+  const subject = world(t, {
+    claude: true,
+    responseOutput: request => {
+      if (spawned) return undefined;
+      spawned = true;
+      t.true(request.tools.some(tool => tool.name === 'spawnSubagent'));
+      return [
+        { type: 'reasoning', encrypted_content: 'signed-thinking' },
+        {
+          type: 'function_call',
+          call_id: 'spawn',
+          name: 'spawnSubagent',
+          arguments: JSON.stringify({ name: 'helper' }),
+        },
+      ];
+    },
+  });
+  t.teardown(() => subject.close());
+  const factory = await subject.factory;
+  t.true((await E(factory).listBackends()).some(b => b.id === 'fae-claude'));
+  const models = await E(factory).listModels('fae-claude');
+  t.deepEqual(
+    models[0].reasoningEfforts,
+    [],
+    'unknown models do not inherit CLI effort knobs',
+  );
+  const session = await E(factory).createSession({
+    backendId: 'fae-claude',
+    modelId: 'luna',
+  });
+  const { id } = await E(session).getInfo();
+  await E(await E(session).startTurn('delegate')).whenFinished();
+  const sessions = await E(factory).listSessions();
+  const child = sessions.find(s => s.parentSessionId === id);
+  t.truthy(child);
+  t.is(child.backendId, 'fae-claude');
+  t.is(subject.cliCreates(), 0);
+  const revived = await subject.restart();
+  const restored = await E(revived).getSession(id);
+  await E(await E(restored).startTurn('continue')).whenFinished();
+  t.true(
+    subject.requests
+      .at(-1)
+      .messages.some(m =>
+        m.content.some(
+          b => b.type === 'thinking' && b.signature === 'signed-thinking',
+        ),
+      ),
+  );
+  t.true(subject.endpoints.every(endpoint => endpoint.revoked));
+  t.is(subject.cliCreates(), 0);
+});
+
+test('direct Claude catalog and turns work with a broken native backend', async t => {
+  const subject = world(t, { claude: true });
+  t.teardown(() => subject.close());
+  subject.store.set(
+    'claude-backend',
+    Far('BrokenNativeBackend', {
+      describe: () => {
+        throw Error('native backend must not be consulted');
+      },
+    }),
+  );
+  const models = await E(subject.factory).listModels('fae-claude');
+  t.is(models[0].modelId, 'luna');
+  const session = await E(subject.factory).createSession({
+    backendId: 'fae-claude',
+    modelId: 'luna',
+  });
+  await E(await E(session).startTurn('hello')).whenFinished();
+  t.is(subject.requests.length, 1);
+  t.is(subject.cliCreates(), 0);
+});

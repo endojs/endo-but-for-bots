@@ -42,7 +42,8 @@ export const main = async (host, env = process.env) => {
     'ENDO_ENVIRONMENT_PROCESS_OUTPUT_BYTES',
     DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT,
   );
-  const namePath = ['environments', 'runner'];
+  const ownerPath = ['@pins', 'installations', 'environments'];
+  const namePath = [...ownerPath, 'runner'];
   const required = key => {
     env[key] || Fail`Missing environment setup configuration ${key}`;
     return /** @type {string} */ (env[key]);
@@ -89,7 +90,28 @@ export const main = async (host, env = process.env) => {
   ]) {
     if (env[key]) nativeEnv[key] = env[key];
   }
-  if ((await E(host).has('environments')) && (await E(host).has(...namePath))) {
+  await E(host).provideDirectory(['@pins', 'installations']);
+  if (await E(host).has('environments')) {
+    await readProvisionedEnvironment(host, {
+      label: 'Legacy environment runner',
+      namePath: ['environments', 'runner'],
+      expectedSpecifier: specifier,
+    });
+    if (await E(host).has(...ownerPath)) {
+      if (
+        (await E(host).identify('environments')) !==
+        (await E(host).identify(...ownerPath))
+      )
+        throw Error('Conflicting environment owner directories');
+    } else await E(host).copy(['environments'], ownerPath);
+    if (
+      (await E(host).identify('environments')) !==
+      (await E(host).identify(...ownerPath))
+    )
+      throw Error('Environment migration changed identity');
+    await E(host).remove('environments');
+  } else await E(host).provideDirectory(ownerPath);
+  if (await E(host).has(...namePath)) {
     const retained = await readProvisionedEnvironment(host, {
       label: 'Environment runner',
       namePath,
@@ -113,10 +135,8 @@ export const main = async (host, env = process.env) => {
   await assertNoRuntimeLeftovers(runtime.ENDO_SANDBOX_RUNTIME_DIR, ownerId);
   await providePrivateDirectory('Environment storage', roots.stateRoot);
   await providePrivateDirectory('Environment network', roots.networkDirectory);
-  if (!(await E(host).has('environments')))
-    await E(host).makeDirectory(['environments']);
-  const temporary = 'environment.null-powers';
-  if (await E(host).has(temporary)) await E(host).remove(temporary);
+  const temporary = [...ownerPath, 'null-powers'];
+  if (await E(host).has(...temporary)) await E(host).remove(...temporary);
   await E(host).storeValue(null, temporary);
   try {
     await E(host).makeUnconfined('@main', specifier, {
@@ -125,7 +145,7 @@ export const main = async (host, env = process.env) => {
       env: harden(nativeEnv),
     });
   } finally {
-    await E(host).remove(temporary);
+    await E(host).remove(...temporary);
   }
 };
 harden(main);

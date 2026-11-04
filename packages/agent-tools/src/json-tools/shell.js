@@ -77,7 +77,12 @@ const shellToolSchemas = harden({
     description:
       'Run an allowlisted command with a structured argv (no shell string, ' +
       'no interpolation). Returns { stdout, stderr, exitCode, signal, ' +
-      'truncated }; a non-zero exitCode is data, not an error.',
+      'truncated }; a non-zero exitCode is data, not an error. Inspect stderr ' +
+      'as well: pipelines may mask a failed command. Output is a bounded preview; ' +
+      'save full logs to a file and return a short excerpt. Background processes ' +
+      'have no persistence guarantee. Run a local test server and its browser ' +
+      'check in the same invocation and clean up on exit. A timeout or rejection ' +
+      'does not prove the command had no effects: inspect state before retrying.',
     parameters: {
       type: 'object',
       properties: {

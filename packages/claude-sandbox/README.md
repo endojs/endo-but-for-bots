@@ -96,3 +96,63 @@ Native-controller and shared-supervisor tests cover acquisition, cancellation, r
 confinement, failed-cleanup retry, and reconstruction.
 Generic dependency identity/GC and remote-capability adoption tests now belong to the
 daemon package, not the retired form topology.
+
+## Installation storage
+
+Host setup retains `claude-sandbox` under
+`@pins/installations/claude-sandbox/`.
+On upgrade, setup moves the existing directory binding intact; it refuses
+conflicting destinations and resumes an interrupted copy without replacing
+native owners, session records, credentials, or account facets.
+The adapter ID `claude-sandbox` in account publications remains unchanged.
+Floot receives its existing backend grant; installation machinery stays out of
+the ordinary root inventory.
+
+For a live rollout, copy the legacy directory to its private destination before
+restarting with the new code, retaining the legacy alias until restart.
+This lets old running backends and newly revived backends resolve their services.
+Startup verifies both names identify the same directory before removing the old
+alias.
+Do not recreate `session-records` or change its `controller-owner` marker.
+
+## Direct Fae subscription backend
+
+`Fae · Claude subscription` (`fae-claude`) runs the ordinary Fae tool loop against
+Anthropic's Messages API through the existing subscription pool.
+It does not run Claude Code, its native tools, or its native subagent machinery.
+Fae owns tools, built-in delegation, journals, shell endowments, and images.
+The broker owns account selection, renewal, metering, and credentials.
+Each session retains pool affinity; delegated sessions have their own identities.
+
+Hosted setup now publishes the pool's `Subscription` capability as
+`floot/controller-profile/claude-inference`.
+To expose an already-provisioned broker without creating a CLI backend, run
+`yarn workspace @endo/claude-sandbox setup:direct` on that daemon.
+This entrypoint requires the existing private Claude broker subscription and Floot
+controller profile; it does not provision native sandbox infrastructure.
+No new root inventory names or credential-bearing recipes are created.
+
+For browser OAuth without Claude Code, run:
+
+```sh
+node packages/claude-sandbox/login.js /private/tmp/claude-login.json primary-oauth
+```
+
+Open the printed authorization link, sign in to the intended account, and paste
+its `code#state` into that terminal.
+The command creates an exclusive, owner-only file containing renewal authority.
+Import that JSON into the corresponding pool member's Secret using Secrets,
+then securely remove the temporary file.
+Repeat with a different output filename and `secondary-oauth` for another account.
+Never paste the credential JSON into chat, configuration files, or shell arguments.
+A pending renewal marker requires a fresh login, not deletion of the marker or
+retrying a possibly consumed refresh token.
+
+The browser flow and subscription headers were compared with
+[ycc's direct Anthropic OAuth implementation](https://github.com/whyrusleeping/ycc/tree/5aa14e81ce0a0fb2b1a87bdd0a3eca512b54e66c/internal/anthropicauth).
+Fae identifies itself as `endo-fae`, rather than impersonating Claude Code.
+The provider currently requires the `claude-code-20250219` subscription beta header;
+that header does not load or execute Claude Code.
+Signed thinking and tool IDs are retained with the journal's assistant messages.
+Truncated streams never dispatch tools; cancellation retains endpoint revocation
+obligations until disposal completes.

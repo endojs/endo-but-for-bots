@@ -13,7 +13,7 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 /**
  * Mount the workflow space, replacing the parent content. Resolves
  * powers from the profilePath, looks up the workflow service capability
- * by pet-name path (default `workflow`), and renders the
+ * by pet-name path (default `@pins/installations/workflow/service`), and renders the
  * `@endo/space-workflow` package's pure `WorkflowApp` through the
  * project's CONFINED renderer, so the whole tree is sanitized exactly
  * like every other surface in the app.
@@ -36,7 +36,7 @@ export const workflowComponent = (
   rootPowers,
   profilePath,
   _onProfileChange,
-  workflowPath = ['workflow'],
+  workflowPath = ['@pins', 'installations', 'workflow', 'service'],
 ) => {
   $parent.replaceChildren();
 

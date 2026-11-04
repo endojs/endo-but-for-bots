@@ -5,6 +5,8 @@
 // dependencies so it can be imported from both the standalone relay
 // server and the SES-locked daemon caplet.
 
+export { makeChannelIdAllocator } from './channel-ids.js';
+
 // --- Message types ---
 
 // Phase 1: Authentication

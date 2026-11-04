@@ -8,7 +8,7 @@
 //
 // HOST-side provisioning for the opencode sandbox stack. Run this on the
 // machine that runs the containers (Linux + podman). Idempotent. Mints,
-// nested under `opencode-sandbox/` so the host root stays clean:
+// nested under `@pins/installations/opencode-sandbox/` so the host root stays clean:
 //
 //   native-sandbox   — the owned `@endo/sandbox` native Podman runtime that
 //                      daemon-owned session controllers acquire scopes from.
@@ -34,6 +34,12 @@
 // The hosted backend itself (credentials + `opencode-backend`) belongs on the
 // same machine — see setup-hosted.js.
 
+import {
+  installationPath,
+  migrateBackendInstallation,
+  hasInstallationPath,
+  provideInstallationDirectory,
+} from '@endo/hosted-agent/installation-path.js';
 import { createHash } from 'node:crypto';
 
 import { E } from '@endo/eventual-send';
@@ -59,6 +65,7 @@ const SANDBOX_DIR = 'opencode-sandbox';
 export const main = async hostAgent => {
   await null;
   const { env } = process;
+  await migrateBackendInstallation(hostAgent, SANDBOX_DIR);
 
   // `has` on a path resolves its parent, so probing a name inside SANDBOX_DIR
   // throws `Unknown pet name` on a daemon that has no sandbox state yet — the
@@ -70,10 +77,14 @@ export const main = async hostAgent => {
   const hasInSandbox = async name => {
     await null;
     try {
-      return await E(hostAgent).has(SANDBOX_DIR, name);
+      return await hasInstallationPath(
+        hostAgent,
+        installationPath(SANDBOX_DIR, name),
+      );
     } catch (error) {
       // Only an absent directory excuses the failure; anything else is real.
-      if (await E(hostAgent).has(SANDBOX_DIR)) throw error;
+      if (await hasInstallationPath(hostAgent, installationPath(SANDBOX_DIR)))
+        throw error;
       return false;
     }
   };
@@ -105,7 +116,7 @@ export const main = async hostAgent => {
     // label and marker. Refuse before any mint; the marker probe below is
     // the separate check.
     if (legacyFactory) {
-      throw Fail`${SANDBOX_DIR}/sandbox-factory is still bound: retire the old runtime (establish that its processes have stopped, then remove the name) before the native runtime takes the primary runtime directory.`;
+      throw Fail`${installationPath(SANDBOX_DIR).join('/')}/sandbox-factory is still bound: retire the old runtime (establish that its processes have stopped, then remove the name) before the native runtime takes the primary runtime directory.`;
     }
     // Podman crash reconciliation must only touch this host's opencode
     // slices. Persist the identity with the runtime so every incarnation uses
@@ -129,8 +140,8 @@ export const main = async hostAgent => {
     );
   }
 
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  if (!(await hasInstallationPath(hostAgent, installationPath(SANDBOX_DIR)))) {
+    await provideInstallationDirectory(hostAgent, SANDBOX_DIR);
   }
 
   if (nativeEnv) {
@@ -142,13 +153,15 @@ export const main = async hostAgent => {
     try {
       await E(hostAgent).makeUnconfined('@main', nativeSandboxSpecifier, {
         powersName,
-        resultName: [SANDBOX_DIR, 'native-sandbox'],
+        resultName: installationPath(SANDBOX_DIR, 'native-sandbox'),
         env: nativeEnv,
       });
     } finally {
       await E(hostAgent).remove(powersName);
     }
-    console.log(`Minted ${SANDBOX_DIR}/native-sandbox`);
+    console.log(
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/native-sandbox`,
+    );
   }
   for (const [name, bound] of [
     ['sandbox-factory', legacyFactory],
@@ -156,7 +169,7 @@ export const main = async hostAgent => {
   ]) {
     if (bound) {
       console.warn(
-        `${SANDBOX_DIR}/${name} is bound but no longer minted or used by sessions; remove it once its processes have stopped.`,
+        `${installationPath(SANDBOX_DIR).join('/')}/${name} is bound but no longer minted or used by sessions; remove it once its processes have stopped.`,
       );
     }
   }

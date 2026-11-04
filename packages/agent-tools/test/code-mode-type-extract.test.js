@@ -13,9 +13,9 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -49,6 +49,7 @@ const writeModules = (t, files) => {
   const directory = mkdtempSync(join(tmpdir(), 'code-mode-type-extract-'));
   t.teardown(() => rmSync(directory, { recursive: true, force: true }));
   for (const [name, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(directory, name)), { recursive: true });
     writeFileSync(join(directory, name), text);
   }
   return name => join(directory, name);
@@ -341,6 +342,39 @@ test('a name a published index only re-exports resolves through the index', t =>
   ]);
   t.is(auxText(ir, 'Leaf'), '{\n    value: () => string;\n}');
   t.is(auxText(ir, 'Starred'), "{\n    tag: () => 'starred';\n}");
+});
+
+test('unpublished build declarations do not change package extraction', t => {
+  const pathTo = writeModules(t, {
+    'node_modules/@endo/extraction-fixture/package.json': JSON.stringify({
+      name: '@endo/extraction-fixture',
+      exports: { '.': './index.js', './package.json': './package.json' },
+    }),
+    'node_modules/@endo/extraction-fixture/index.js': 'export {};',
+  });
+  const source = `export interface Root {
+    value(): import('@endo/extraction-fixture').Value;
+  }`;
+  const options = { fileName: pathTo('root.ts') };
+  const clean = extract(source, options);
+  t.deepEqual(clean.members, [{ name: 'value', signature: '() => unknown' }]);
+  writeFileSync(
+    pathTo('node_modules/@endo/extraction-fixture/index.d.ts'),
+    'export type Value = string;',
+  );
+  t.deepEqual(extract(source, options), clean);
+});
+
+test('checked relative source takes precedence over emitted declarations', t => {
+  const pathTo = writeModules(t, {
+    'leaf.ts': 'export type Value = string;',
+    'leaf.d.ts': 'export type Value = number;',
+  });
+  const ir = extract(
+    `export interface Root { value(): import('./leaf.js').Value; }`,
+    { fileName: pathTo('root.ts') },
+  );
+  t.is(auxText(ir, 'Value'), 'string');
 });
 
 test('a root reached through a re-export prints self-references as the root', t => {

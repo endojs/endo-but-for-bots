@@ -2855,13 +2855,14 @@ testNeedsNodeManager(
     }
     const digest = `sha256:${'a'.repeat(64)}`;
     const { host } = await makeHost(config, cancelled);
-    await E(host).makeDirectory('opencode-sandbox');
+    const installation = ['@pins', 'installations', 'opencode-sandbox'];
+    await E(host).provideDirectory(installation);
     // The same services setup-host.js and setup-hosted.js mint, over the
     // same powers shapes: host powers, a stored null, and a SecretBlob.
     await E(host).storeValue(null, 'opencode.null-powers');
     await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
       powersName: 'opencode.null-powers',
-      resultName: ['opencode-sandbox', 'native-sandbox'],
+      resultName: [...installation, 'native-sandbox'],
       env: {
         ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
         ENDO_SANDBOX_OWNER_ID: 'opencode-acceptance-native',
@@ -2890,7 +2891,7 @@ testNeedsNodeManager(
           new URL('./opencode-catalog-shim.js', import.meta.url).href,
         ],
         powersName: 'opencode-auth.broker-read',
-        resultName: ['opencode-sandbox', 'broker-service'],
+        resultName: [...installation, 'broker-service'],
         env: {
           OPENCODE_BROKER_CONFIG: JSON.stringify({
             ownerId: 'opencode-acceptance',
@@ -2904,10 +2905,7 @@ testNeedsNodeManager(
       },
     );
     await E(host).remove('opencode-auth.broker-read');
-    const brokerId = await E(host).identify(
-      'opencode-sandbox',
-      'broker-service',
-    );
+    const brokerId = await E(host).identify(...installation, 'broker-service');
     const brokerFormula = readFormulaFromDb(config.statePath, brokerId);
     t.not(brokerFormula.worker, await E(host).identify('@node'));
     await E(host).storeValue(null, 'opencode.storage-null-powers');
@@ -2916,7 +2914,7 @@ testNeedsNodeManager(
       spec('opencode-sandbox/src/opencode-session-storage-module.js'),
       {
         powersName: 'opencode.storage-null-powers',
-        resultName: ['opencode-sandbox', 'session-storage'],
+        resultName: [...installation, 'session-storage'],
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           OPENCODE_MCP_DIR: roots.mcpDir,
@@ -2929,13 +2927,14 @@ testNeedsNodeManager(
       spec('opencode-sandbox/src/opencode-backend-module.js'),
       {
         powersName: '@agent',
-        resultName: ['opencode-sandbox', 'backend'],
+        resultName: [...installation, 'backend'],
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           OPENCODE_MCP_DIR: roots.mcpDir,
         },
       },
     );
+    t.false(await E(host).has('opencode-sandbox'));
     t.is((await E(backend).describe()).id, 'opencode');
     const tools = Far('HostedToolSet', {
       describe: async () =>
@@ -2976,12 +2975,7 @@ testNeedsNodeManager(
       ),
       { message: refused },
     );
-    const recordPath = [
-      'opencode-sandbox',
-      'session-records',
-      'sessions',
-      'one',
-    ];
+    const recordPath = [...installation, 'session-records', 'sessions', 'one'];
     const record = await E(host).lookup(recordPath);
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
@@ -2998,7 +2992,7 @@ testNeedsNodeManager(
     ]);
     t.is(
       await E(host).identify(...recordPath, 'references', 'sandboxService'),
-      await E(host).identify('opencode-sandbox', 'native-sandbox'),
+      await E(host).identify(...installation, 'native-sandbox'),
     );
     for (const directory of [
       plan.workspaceDir,
@@ -3053,7 +3047,8 @@ testNeedsNodeManager(
     }
     const digest = `sha256:${'a'.repeat(64)}`;
     const { host } = await makeHost(config, cancelled);
-    await E(host).makeDirectory('claude-sandbox');
+    const installation = ['@pins', 'installations', 'claude-sandbox'];
+    await E(host).provideDirectory(installation);
     // The same services setup-host.js and setup-hosted.js mint, over the
     // same powers shapes: no powers, a stored null, a SecretBlob, the state
     // provider, and host powers for the backend.
@@ -3062,14 +3057,14 @@ testNeedsNodeManager(
       spec('claude-sandbox/src/claude-state-provider-module.js'),
       {
         powersName: '@none',
-        resultName: ['claude-sandbox', 'state-provider'],
+        resultName: [...installation, 'state-provider'],
         env: { ENDO_CLAUDE_STATE_DIR: stateDir },
       },
     );
     await E(host).storeValue(null, 'claude.null-powers');
     await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
       powersName: 'claude.null-powers',
-      resultName: ['claude-sandbox', 'native-sandbox'],
+      resultName: [...installation, 'native-sandbox'],
       env: {
         ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
         ENDO_SANDBOX_OWNER_ID: 'claude-acceptance-native',
@@ -3096,7 +3091,7 @@ testNeedsNodeManager(
           new URL('./claude-catalog-shim.js', import.meta.url).href,
         ],
         powersName: 'claude-creds.broker-read',
-        resultName: ['claude-sandbox', 'broker-service'],
+        resultName: [...installation, 'broker-service'],
         env: {
           CLAUDE_BROKER_CONFIG: JSON.stringify({
             ownerId: 'claude-acceptance',
@@ -3112,7 +3107,7 @@ testNeedsNodeManager(
     );
     await E(host).remove('claude-creds.broker-read');
     await E(host).copy(
-      ['claude-sandbox', 'state-provider'],
+      [...installation, 'state-provider'],
       ['claude.state-provider-powers'],
     );
     await E(host).makeUnconfined(
@@ -3120,7 +3115,7 @@ testNeedsNodeManager(
       spec('claude-sandbox/src/claude-session-storage-module.js'),
       {
         powersName: 'claude.state-provider-powers',
-        resultName: ['claude-sandbox', 'session-storage'],
+        resultName: [...installation, 'session-storage'],
         env: {
           CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           CLAUDE_MCP_DIR: roots.mcpDir,
@@ -3133,13 +3128,14 @@ testNeedsNodeManager(
       spec('claude-sandbox/src/claude-backend-module.js'),
       {
         powersName: '@agent',
-        resultName: ['claude-sandbox', 'backend'],
+        resultName: [...installation, 'backend'],
         env: {
           CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           CLAUDE_MCP_DIR: roots.mcpDir,
         },
       },
     );
+    t.false(await E(host).has('claude-sandbox'));
     t.is((await E(backend).describe()).id, 'claude');
     const tools = Far('HostedToolSet', {
       describe: async () =>
@@ -3166,7 +3162,7 @@ testNeedsNodeManager(
       E(backend).create(harden({ sessionId: 'one' }), tools),
       { message: refused },
     );
-    const recordPath = ['claude-sandbox', 'session-records', 'sessions', 'one'];
+    const recordPath = [...installation, 'session-records', 'sessions', 'one'];
     const record = await E(host).lookup(recordPath);
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
@@ -3188,7 +3184,7 @@ testNeedsNodeManager(
     ]);
     t.is(
       await E(host).identify(...recordPath, 'references', 'brokerService'),
-      await E(host).identify('claude-sandbox', 'broker-service'),
+      await E(host).identify(...installation, 'broker-service'),
     );
     for (const directory of [
       plan.workspaceDir,
@@ -10847,5 +10843,205 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       t.true(Array.isArray(await E(directory).list()));
     }
+  },
+);
+
+test.serial(
+  'provideDirectory shares storage across clients and safely adopts legacy directories',
+  async t => {
+    t.timeout(120_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const { host } = await makeHost(config, cancelled);
+    const { host: second } = await makeHost(config, cancelled);
+    const paths = Array.from({ length: 12 }, (_, i) => [
+      '@pins',
+      'installations',
+      'test-ui',
+      `tab-${i % 3}`,
+    ]);
+    const directories = await Promise.all(
+      paths.map((p, i) => E(i % 2 ? host : second).provideDirectory(p)),
+    );
+    await Promise.all(
+      directories.map((directory, i) =>
+        E(directory).writeText(`sentinel-${i}`, `value-${i}`),
+      ),
+    );
+    for (let i = 0; i < directories.length; i += 1) {
+      if (i >= 6) t.is(directories[i], directories[i - 6]);
+      t.is(
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).readText([...paths[i], `sentinel-${i}`]),
+        `value-${i}`,
+      );
+    }
+    t.deepEqual(
+      [...(await E(host).list('@pins', 'installations', 'test-ui'))].sort(),
+      ['tab-0', 'tab-1', 'tab-2'],
+    );
+    await E(host).makeDirectory('old-spaces');
+    await E(host).storeValue('retained', ['old-spaces', 'one']);
+    const original = await E(host).identify('old-spaces');
+    const target = ['@pins', 'installations', 'chat', 'spaces'];
+    await E(host).provideDirectory(target, {
+      adoptFrom: ['old-spaces'],
+      keepSource: true,
+    });
+    t.is(await E(host).identify('old-spaces'), original);
+    t.is(await E(host).identify(...target), original);
+    await Promise.all(
+      [host, second].map(h =>
+        E(h).provideDirectory(target, { adoptFrom: ['old-spaces'] }),
+      ),
+    );
+    t.is(await E(host).identify(...target), original);
+    t.is(await E(host).lookup([...target, 'one']), 'retained');
+    t.false(await E(host).has('old-spaces'));
+    await E(host).copy(target, ['old-spaces']);
+    await E(host).provideDirectory(target, { adoptFrom: ['old-spaces'] });
+    t.false(await E(host).has('old-spaces'));
+    await E(host).makeDirectory('old-spaces');
+    const conflict = await E(host).identify('old-spaces');
+    await t.throwsAsync(
+      E(host).provideDirectory(target, { adoptFrom: ['old-spaces'] }),
+      { message: /Conflicting/ },
+    );
+    t.is(await E(host).identify('old-spaces'), conflict);
+    t.is(await E(host).identify(...target), original);
+    await E(host).storeValue('not-directory', 'invalid-storage');
+    await t.throwsAsync(
+      E(host).provideDirectory(['invalid-storage', 'child']),
+      { message: /local directory/ },
+    );
+    await t.throwsAsync(
+      E(host).provideDirectory(['old-spaces', 'nested'], {
+        adoptFrom: 'old-spaces',
+      }),
+      { message: /overlap/ },
+    );
+  },
+);
+
+test.serial(
+  'provideDirectory refuses identity-based cycles and preserves aliased identical bindings',
+  async t => {
+    const { host } = await prepareHost(t);
+    await E(host).provideDirectory(['parent', 'spaces']);
+    await E(host).copy(['parent'], ['alias']);
+    const original = await E(host).identify('parent', 'spaces');
+    await E(host).provideDirectory(['alias', 'spaces'], {
+      adoptFrom: ['parent', 'spaces'],
+    });
+    t.is(await E(host).identify('parent', 'spaces'), original);
+    t.is(await E(host).identify('alias', 'spaces'), original);
+    await t.throwsAsync(
+      E(host).provideDirectory(['alias', 'spaces', 'nested'], {
+        adoptFrom: ['parent', 'spaces'],
+      }),
+      { message: /overlap/ },
+    );
+    t.is(await E(host).identify('parent', 'spaces'), original);
+    t.false(await E(host).has('parent', 'spaces', 'nested'));
+  },
+);
+
+test.serial(
+  'Chat saved spaces stay host-specific when root and child inherit shared pins',
+  async t => {
+    t.timeout(120_000);
+    const { provideSpacesStorage, spacesStoragePath } =
+      // Integration-only browser fixture, not a daemon runtime dependency.
+      // eslint-disable-next-line import/no-relative-packages
+      await import('../../chat/spaces-storage.js');
+    const { host } = await prepareHost(t);
+    const child = await E(host).provideHost('chat-child', {
+      agentName: 'chat-child-agent',
+    });
+    t.is(await E(host).identify('@pins'), await E(child).identify('@pins'));
+    t.is(await E(host).identify('@self'), await E(child).identify('@host'));
+    await Promise.all(
+      [host, child].map(async (agent, index) => {
+        await E(agent).makeDirectory('spaces');
+        await E(agent).storeValue(
+          harden({ name: `saved-${index}`, profilePath: ['own-service'] }),
+          ['spaces', '1'],
+        );
+      }),
+    );
+    const originals = await Promise.all(
+      [host, child].map(agent => E(agent).identify('spaces')),
+    );
+    const [rootPath, childPath] = await Promise.all(
+      [host, child].map(spacesStoragePath),
+    );
+    t.notDeepEqual(rootPath, childPath);
+    await Promise.all([host, child, host, child].map(provideSpacesStorage));
+    for (const [index, agent] of [host, child].entries()) {
+      const storagePath = index === 0 ? rootPath : childPath;
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(agent).identify(...storagePath), originals[index]);
+      // eslint-disable-next-line no-await-in-loop
+      t.deepEqual(await E(agent).lookup([...storagePath, '1']), {
+        name: `saved-${index}`,
+        profilePath: ['own-service'],
+      });
+      // eslint-disable-next-line no-await-in-loop
+      t.false(await E(agent).has('spaces'));
+    }
+    await E(host).storeValue('root-only', [...rootPath, '2']);
+    t.false(await E(child).has(...childPath, '2'));
+    await Promise.all([host, child].map(provideSpacesStorage));
+    t.is((await E(host).list('@pins', 'installations', 'chat')).length, 2);
+    t.is(await E(host).identify(...rootPath), originals[0]);
+    t.is(await E(child).identify(...childPath), originals[1]);
+  },
+);
+
+test.serial(
+  'a stalled session marker in one host does not block another host directory provisioning',
+  async t => {
+    t.timeout(60_000);
+    const { host } = await prepareHost(t);
+    const child = await E(host).provideHost('stalled-marker-child');
+    await E(child).makeDirectory('records');
+    const marker = await E(child).evaluate(
+      '@main',
+      `(() => {
+        let enter;
+        let resume;
+        const entered = new Promise(resolve => { enter = resolve; });
+        const gate = new Promise(resolve => { resume = resolve; });
+        return makeExo('HeldMarker', M.interface('HeldMarker', {
+          text: M.callWhen().returns(M.undefined()),
+          whenEntered: M.callWhen().returns(M.undefined()),
+          release: M.callWhen().returns(M.undefined()),
+        }), {
+          text: async () => { enter(); await gate; },
+          whenEntered: () => entered,
+          release: () => resume(),
+        });
+      })()`,
+      [],
+      [],
+      ['records', 'controller-owner'],
+    );
+    t.teardown(() =>
+      E(marker)
+        .release()
+        .catch(() => {}),
+    );
+    const owner = E(child).provideSessionOwner('records');
+    void owner.catch(() => {});
+    // The child is definitely holding marker I/O before testing the other host.
+    await E(marker).whenEntered();
+    const directory = await E(host).provideDirectory([
+      '@pins',
+      'installations',
+      'other-host-ready',
+    ]);
+    t.truthy(directory);
+    t.true(await E(host).has('@pins', 'installations', 'other-host-ready'));
+    await E(marker).release();
+    t.truthy(await owner);
   },
 );

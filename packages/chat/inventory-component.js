@@ -80,8 +80,8 @@ export const inventoryComponent = async (
   // wrapper reads each button's live `aria-pressed` state and re-renders on
   // change, passing plain props in:
   //   - show-special: whether `@`-prefixed system names are revealed.
-  //   - group-by-type: whether the grouped view (the default) or the prior flat
-  //     view is rendered.
+  //   - group-by-type: whether to group by formula type instead of showing
+  //     the default directory layout.
   // Reading `aria-pressed` (set by the button's click handler before the
   // dispatched `change` event fires) is order-independent of the sibling
   // listener that toggles the `.show-special` class on the list.
@@ -96,10 +96,10 @@ export const inventoryComponent = async (
     const showSpecial = $specialToggle
       ? $specialToggle.getAttribute('aria-pressed') === 'true'
       : $list.classList.contains('show-special');
-    // Grouping is the default view; absent the toggle the grouped layout holds.
+    // Show the directory layout unless grouping is explicitly selected.
     const grouped = $groupToggle
       ? $groupToggle.getAttribute('aria-pressed') === 'true'
-      : true;
+      : false;
     renderConfined(
       h(InventoryList, {
         powers,

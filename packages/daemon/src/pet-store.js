@@ -160,21 +160,28 @@ export const makePetStoreMaker = daemonDb => {
       );
 
     /** @type {PetStore['followIdNameChanges']} */
-    const followIdNameChanges = async function* currentAndSubsequentIds(id) {
-      if (!idsToTopics.has(id)) {
-        idsToTopics.set(id, makeIdChangeTopic());
-      }
-      const idTopic = /** @type {IdChangesTopic} */ (idsToTopics.get(id));
-      const subscription = idTopic.subscribe();
-
-      const existingNames = idsToPetNames.getAllFor(id).sort();
-      yield {
-        add: parseId(id),
-        names: existingNames,
-      };
-
-      yield* subscription;
-    };
+    const followIdNameChanges = id =>
+      makeCancelableIterator(
+        async function* currentAndSubsequentIds(setCancelPending) {
+          if (!idsToTopics.has(id)) idsToTopics.set(id, makeIdChangeTopic());
+          const idTopic = /** @type {IdChangesTopic} */ (idsToTopics.get(id));
+          const subscription = idTopic.subscribe();
+          try {
+            const cancellation = setCancelPending(() =>
+              cancelPendingIterator(subscription),
+            );
+            if (cancellation !== undefined) await cancellation;
+            yield {
+              add: parseId(id),
+              names: idsToPetNames.getAllFor(id).sort(),
+            };
+            yield* subscription;
+          } finally {
+            await subscription.return(undefined);
+          }
+          return undefined;
+        },
+      );
 
     /** @type {PetStore['remove']} */
     const remove = async petName => {

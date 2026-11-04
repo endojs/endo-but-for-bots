@@ -36,7 +36,10 @@ const key = (...parts) => JSON.stringify(parts.flat());
 const digest = `sha256:${'a'.repeat(64)}`;
 const imageRef = `localhost/claude@${digest}`;
 const rootfs = `oci:${imageRef}`;
-/** The persisted broker profile a session takes its image and kind from. */
+/**
+ * The persisted broker profile a session takes its image and kind from.
+ * @param overrides
+ */
 const brokerConfig = (overrides = {}) =>
   JSON.stringify({
     ownerId: 'claude-broker',
@@ -133,6 +136,8 @@ const fixture = async t => {
   });
   const { owner, records, log, facet, knobs } = makeFakeOwner();
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   const formulas = new Map();
   const environments = new Map();
   const seed = (namePath, id, specifier, env) => {
@@ -152,7 +157,7 @@ const fixture = async t => {
     environments.set(id, harden(env));
   };
   seed(
-    ['claude-sandbox', 'native-sandbox'],
+    ['@pins', 'installations', 'claude-sandbox', 'native-sandbox'],
     'native-id',
     nativeSandboxSpecifier,
     {
@@ -163,7 +168,7 @@ const fixture = async t => {
     },
   );
   seed(
-    ['claude-sandbox', 'state-provider'],
+    ['@pins', 'installations', 'claude-sandbox', 'state-provider'],
     'state-id',
     stateProviderSpecifier,
     {
@@ -171,7 +176,7 @@ const fixture = async t => {
     },
   );
   seed(
-    ['claude-sandbox', 'session-storage'],
+    ['@pins', 'installations', 'claude-sandbox', 'session-storage'],
     'storage-id',
     sessionStorageSpecifier,
     {
@@ -180,7 +185,7 @@ const fixture = async t => {
     },
   );
   seed(
-    ['claude-sandbox', 'broker-service'],
+    ['@pins', 'installations', 'claude-sandbox', 'broker-service'],
     'broker-id',
     brokerServiceSpecifier,
     { CLAUDE_BROKER_CONFIG: brokerConfig() },
@@ -403,7 +408,9 @@ test('make() configures the owner on the records path over verified service iden
     message: /Invalid Claude broker configuration/,
   });
   // A missing or foreign broker formula is refused before any record.
-  f.bindings.delete(key('claude-sandbox', 'broker-service'));
+  f.bindings.delete(
+    key('@pins', 'installations', 'claude-sandbox', 'broker-service'),
+  );
   await t.throwsAsync(make(f.host, undefined, { env: f.env }), {
     message: /Cannot identify Claude "broker-service"/,
   });

@@ -5,7 +5,8 @@
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 
-import { ShellInterface } from './interfaces.js';
+import { MAX_SHELL_OUTPUT_BYTES, ShellInterface } from './interfaces.js';
+import { shellHelp } from './help.js';
 
 /**
  * @import { EndoShell, ShellPolicy, Spawner } from './types.js'
@@ -147,6 +148,7 @@ export const makeShell = ({
     throw makeError(X`makeShell: killGraceMs must be a positive integer`);
   }
 
+  const outputBytes = Math.min(maxOutputBytes, MAX_SHELL_OUTPUT_BYTES);
   const allowed = new Set(allowedCommands);
   // Frozen copies, so a later mutation of the caller's arrays cannot widen
   // the allowlist or alter the child env after construction.
@@ -154,6 +156,7 @@ export const makeShell = ({
   const childEnv = harden({ ...env });
 
   const exo = makeExo('Shell', ShellInterface, {
+    help: shellHelp,
     /**
      * Reveal only the policy the design's `ShellPolicy` names — never `cwd`,
      * `env`, or the baked `searchPath`, all of which carry host paths.
@@ -162,7 +165,7 @@ export const makeShell = ({
       return harden({
         allowedCommands: allowedList,
         timeoutMs: defaultTimeoutMs,
-        maxOutputBytes,
+        maxOutputBytes: outputBytes,
       });
     },
 
@@ -260,8 +263,8 @@ export const makeShell = ({
         const proc = await Promise.race([procPromise, abandoned]);
         const [outRes, errRes, status] = await Promise.race([
           Promise.all([
-            drainBounded(proc.stdout, maxOutputBytes, stop),
-            drainBounded(proc.stderr, maxOutputBytes, stop),
+            drainBounded(proc.stdout, outputBytes, stop),
+            drainBounded(proc.stderr, outputBytes, stop),
             proc.wait().catch(error => {
               stop(error);
               return undefined;

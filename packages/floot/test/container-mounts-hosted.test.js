@@ -206,7 +206,8 @@ const makeWorld = ({ terminateGate } = {}) => {
   );
   hostStore.set('codex-backend', backend);
   hostStore.set('container-mount-bridge', bridgeProvider);
-  hostStore.set('session-agent-one', guest);
+  hostStore.set('floot-private-sessions/one/guest', guest);
+  hostStore.set('floot-private-sessions/one/handle', harden({}));
   const host = Far('TestHost', {
     ...directoryHost(hostStore, {
       beforeStore: (_value, name) => {

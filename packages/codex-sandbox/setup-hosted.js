@@ -15,6 +15,7 @@
  * internet, diagnostics) are applied to it at every start instead.
  * @module
  */
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { Fail, q } from '@endo/errors';
 import { readBrokerWorkloadEnv } from '@endo/hosted-agent/provider-broker-service.js';
 import { E } from '@endo/eventual-send';
@@ -97,8 +98,8 @@ const required = (env, name) => {
  * @param {any} host
  */
 const provideBrokerPowers = async host => {
-  const powersPath = [SANDBOX_DIR, 'broker-powers'];
-  const handlePath = [SANDBOX_DIR, 'broker-powers-handle'];
+  const powersPath = installationPath(SANDBOX_DIR, 'broker-powers');
+  const handlePath = installationPath(SANDBOX_DIR, 'broker-powers-handle');
   const handleName = `${SANDBOX_DIR}.broker-powers-handle`;
   const powersName = `${SANDBOX_DIR}.broker-powers`;
   if (!(await E(host).has(...powersPath))) {
@@ -237,8 +238,8 @@ export const main = async (host, { exec } = {}) => {
     'Codex',
   );
   const brokerPowersPath = pooled
-    ? [SANDBOX_DIR, 'broker-powers']
-    : [SANDBOX_DIR, 'credential'];
+    ? installationPath(SANDBOX_DIR, 'broker-powers')
+    : installationPath(SANDBOX_DIR, 'credential');
   let accountRef;
   /** @type {string[] | undefined} */
   let subscriptionIds;
@@ -248,7 +249,7 @@ export const main = async (host, { exec } = {}) => {
   // credential formulas, guest or stored set behind it.
   if (
     pooled &&
-    (await E(host).has(SANDBOX_DIR, 'broker-service')) &&
+    (await E(host).has(...installationPath(SANDBOX_DIR, 'broker-service'))) &&
     !(await E(host).has(...brokerPowersPath))
   ) {
     throw Fail`The retained Codex broker holds one credential. Declaring several subscriptions changes what it holds: retire it deliberately first. Its sessions are bound to that account and do not carry over.`;
@@ -258,7 +259,7 @@ export const main = async (host, { exec } = {}) => {
   // is written, as a change of pool mode is; the byte-for-byte comparison of
   // the retained service further down would catch it too, but only after the
   // stored set had been rewritten under the new id.
-  if (await E(host).has(SANDBOX_DIR, 'broker-service')) {
+  if (await E(host).has(...installationPath(SANDBOX_DIR, 'broker-service'))) {
     const retained = await readProvisionedEnvironment(
       host,
       'broker-service',
@@ -274,10 +275,10 @@ export const main = async (host, { exec } = {}) => {
       retainedAuthority = undefined;
     }
     if (retainedAuthority === undefined) {
-      throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} names no account authority, which this release records into every session plan; retire it deliberately`;
+      throw Fail`The retained ${q(`${installationPath(SANDBOX_DIR).join('/')}/broker-service`)} names no account authority, which this release records into every session plan; retire it deliberately`;
     }
     retainedAuthority === accountAuthority ||
-      Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} serves account authority ${q(retainedAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
+      Fail`The retained ${q(`${installationPath(SANDBOX_DIR).join('/')}/broker-service`)} serves account authority ${q(retainedAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
   }
   if (pooled) {
     // What the set said before this run, to refuse an account change under
@@ -350,7 +351,7 @@ export const main = async (host, { exec } = {}) => {
       const [member] = normalizeSubscriptionSet({ members: [rest] }).members;
       // eslint-disable-next-line no-await-in-loop
       const memberAccount = await provideSubscriptionCredential(
-        [SANDBOX_DIR, `credential-${member.id}`],
+        installationPath(SANDBOX_DIR, `credential-${member.id}`),
         memberCreds,
         declaredAccount,
       );
@@ -397,7 +398,9 @@ export const main = async (host, { exec } = {}) => {
         await E(powers).storeLocator(
           member.secretName,
           // eslint-disable-next-line no-await-in-loop
-          await E(host).locate(SANDBOX_DIR, `credential-${member.id}`),
+          await E(host).locate(
+            ...installationPath(SANDBOX_DIR, `credential-${member.id}`),
+          ),
         );
       }
     }
@@ -409,7 +412,7 @@ export const main = async (host, { exec } = {}) => {
     subscriptionIds = set.members.map(member => member.id);
   } else {
     accountRef = await provideSubscriptionCredential(
-      [SANDBOX_DIR, 'credential'],
+      installationPath(SANDBOX_DIR, 'credential'),
       env.ENDO_CODEX_CREDS_NAME || 'codex-subscription-auth',
       env.ENDO_CODEX_ACCOUNT_REF,
     );
@@ -443,12 +446,12 @@ export const main = async (host, { exec } = {}) => {
       'session-storage',
       storageSpecifier,
       storageEnv,
-      [SANDBOX_DIR, 'state-provider'],
+      installationPath(SANDBOX_DIR, 'state-provider'),
     ],
   ];
   for (const [name, specifier, formulaEnv, powersPath] of services) {
     // eslint-disable-next-line no-await-in-loop
-    if (await E(host).has(SANDBOX_DIR, name)) {
+    if (await E(host).has(...installationPath(SANDBOX_DIR, name))) {
       // eslint-disable-next-line no-await-in-loop
       const existing = await readProvisionedEnvironment(host, name, specifier);
       // eslint-disable-next-line no-await-in-loop
@@ -473,19 +476,19 @@ export const main = async (host, { exec } = {}) => {
         powersPath,
         temporary: `codex.${name}-powers`,
         specifier,
-        resultName: [SANDBOX_DIR, name],
+        resultName: installationPath(SANDBOX_DIR, name),
         env: formulaEnv,
       });
     }
   }
   await configureBroker(
     host,
-    [SANDBOX_DIR, 'broker-service'],
+    installationPath(SANDBOX_DIR, 'broker-service'),
     brokerSettings,
     'Codex',
   );
-  const next = [SANDBOX_DIR, 'backend-next'];
-  const backend = [SANDBOX_DIR, 'backend'];
+  const next = installationPath(SANDBOX_DIR, 'backend-next');
+  const backend = installationPath(SANDBOX_DIR, 'backend');
   if (await E(host).has(...next)) await E(host).remove(...next);
   await E(host).makeUnconfined('@main', backendSpecifier, {
     powersName: '@agent',
@@ -519,10 +522,11 @@ export const main = async (host, { exec } = {}) => {
   // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
   await publishBrokerSubscription(host, { label: 'Codex', dir: SANDBOX_DIR });
   if (await E(host).has(flootDir, 'controller-profile')) {
-    await E(host).copy(
-      [SANDBOX_DIR, 'subscription'],
-      [flootDir, 'controller-profile', 'codex-inference'],
-    );
+    await E(host).copy(installationPath(SANDBOX_DIR, 'subscription'), [
+      flootDir,
+      'controller-profile',
+      'codex-inference',
+    ]);
   }
   // Delegated runners (`provideDelegatedRunner`) follow the backend that was
   // bound above.

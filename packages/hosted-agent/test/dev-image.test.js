@@ -40,9 +40,13 @@ test('all CLI runtime overlays use the shared base, without extra apt installs',
     'python3-venv',
     'openssl',
     'tar',
+    'chromium',
+    'fonts-liberation',
+    'procps',
   ]) {
     t.true(base.includes(tool));
   }
+  t.true(base.includes('RUN node /opt/endo-browser-smoke.mjs'));
 });
 
 test('shared builder rejects mutable overrides before invoking the engine', async t => {
@@ -110,4 +114,13 @@ test('the Docker base build omits Podman-only flags and keeps stdout machine-rea
     ),
   );
   for (const result of results) t.true(result.stdout.includes('build output'));
+});
+
+test('browser smoke rejects blank and missing-text screenshot pixels', async t => {
+  t.timeout(5000);
+  await exec(process.execPath, [
+    fileURLToPath(new URL('../oci/dev/browser-smoke.mjs', import.meta.url)),
+    '--self-test',
+  ]);
+  t.pass();
 });

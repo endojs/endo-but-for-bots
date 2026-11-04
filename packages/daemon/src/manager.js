@@ -33,6 +33,7 @@ import {
   makeGitRemote,
   makeUnavailableGitCredential,
 } from '@endo/exo-git';
+import { bindGitCredentialSource } from '@endo/exo-git/src/git-credential.js';
 import { makeShell } from '@endo/exo-shell';
 import { makeHttpClientAndControl } from '@endo/exo-http-client';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -57,6 +58,7 @@ import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { makeEncryptedFileSecretBackend } from './secret-backend.js';
 import { makeSecretManager } from './secret-manager.js';
+import { makeSecretGitCredentialSource } from './secret-git-credential.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
@@ -931,7 +933,7 @@ const makeDaemonCore = async (
         // or any other daemon-minted capability, so it has no formula deps.
         return [];
       case 'git-credential':
-        return [];
+        return formula.secretId ? [['secret', formula.secretId]] : [];
       case 'git-remote': {
         /** @type {Array<[string, FormulaIdentifier]>} */
         const deps = [['git', formula.gitId]];
@@ -2013,10 +2015,14 @@ const makeDaemonCore = async (
 
       // Follow retention set changes in the background.
       const consumeRetention = async () => {
-        const iter = await E(remoteGateway).followRetentionSet(localNodeNumber);
         // Resolve the local agent formula ID for this peer so
         // retention edges land in the right place in the graph.
         const agentKeyRecord = persistencePowers.getAgentKey(remoteNodeId);
+        // Ephemeral peers (including browser tabs) have no registered agent
+        // root. Their retention rows cannot create GC edges, and persisting
+        // them would leave a new orphan set behind on every page reload.
+        if (agentKeyRecord === undefined) return;
+        const iter = await E(remoteGateway).followRetentionSet(localNodeNumber);
         const agentIdStr = agentKeyRecord
           ? /** @type {FormulaIdentifier} */ (agentKeyRecord.agentId)
           : undefined;
@@ -4027,7 +4033,18 @@ const makeDaemonCore = async (
       httpClientControlForClient.set(client, control);
       return client;
     },
-    'git-credential': ({ kind, audience }, _context, id) => {
+    'git-credential': async (formula, context, id) => {
+      const { kind, audience, secretId } = formula;
+      if (secretId) {
+        context.thisDiesIfThatDies(secretId);
+        const secret = await provide(secretId);
+        const credential = makeUnavailableGitCredential({ kind, audience });
+        bindGitCredentialSource(
+          credential,
+          secretCredentialSource(id, formula, secret),
+        );
+        return credential;
+      }
       const material = gitCredentialMaterialForId.get(id);
       const onRotate = rotated =>
         rememberGitCredentialMaterial(
@@ -5608,6 +5625,97 @@ const makeDaemonCore = async (
         return formulate(formulaNumber, formula);
       })
     );
+  };
+
+  const secretCredentialSource = (id, formula, secret) =>
+    makeSecretGitCredentialSource({
+      audience: formula.audience,
+      username: formula.username,
+      revoked: formula.revoked || false,
+      secretSource: secretManager.sourceForBlob(secret),
+      onRevoke: () =>
+        withFormulaGraphLock(async () => {
+          const latest = await getFormulaForId(id);
+          if (
+            latest.type !== 'git-credential' ||
+            latest.secretId !== formula.secretId
+          )
+            throw Error('Credential backing changed');
+          const next = harden({ ...latest, revoked: true });
+          const { number, node } = parseId(id);
+          await persistencePowers.writeFormula(number, node, next);
+          formulaForId.set(id, next);
+        }),
+    });
+
+  /** @type {DaemonCore['formulateSecretBasicCredential']} */
+  const formulateSecretBasicCredential = async (
+    audience,
+    username,
+    secret,
+    existingCredential,
+    tasks,
+  ) => {
+    // Validate an exact local Secrets Manager facet before any publication.
+    secretManager.sourceForBlob(secret);
+    const secretId = getIdForRef(secret);
+    if (!secretId || !isLocalId(secretId))
+      throw Error('Expected a local SecretBlob');
+    return withFormulaGraphLock(async () => {
+      if (existingCredential !== undefined) {
+        if (
+          existingCredential === null ||
+          typeof existingCredential !== 'object'
+        )
+          throw Error('Expected a local Git credential');
+        const id = getIdForRef(existingCredential);
+        if (!id || !isLocalId(id))
+          throw Error('Expected a local Git credential');
+        const old = await getFormulaForId(id);
+        if (
+          old.type !== 'git-credential' ||
+          old.kind !== 'basic' ||
+          old.audience !== audience
+        )
+          throw Error('Git credential kind or audience mismatch');
+        if (
+          old.secretId &&
+          (old.secretId !== secretId || old.username !== username)
+        )
+          throw Error(
+            'Credential secret backing cannot be replaced during setup',
+          );
+        const next = harden({ ...old, secretId, username });
+        if (!old.secretId) {
+          const { number, node } = parseId(id);
+          await persistencePowers.writeFormula(number, node, next);
+          formulaForId.set(id, next);
+          // One-time additive dependency; existing retention is untouched.
+          formulaGraph.onFormulaAdded(id, next);
+        }
+        bindGitCredentialSource(
+          existingCredential,
+          secretCredentialSource(id, next, secret),
+        );
+        gitCredentialMaterialForId.delete(id);
+        await tasks.execute({ gitCredentialId: id });
+        return { value: existingCredential };
+      }
+      const number = /** @type {FormulaNumber} */ (await randomHex256());
+      const id = formatId({ number, node: localNodeNumber });
+      const result = await formulate(
+        number,
+        harden({
+          type: 'git-credential',
+          kind: 'basic',
+          audience,
+          username,
+          secretId,
+        }),
+      );
+      await tasks.execute({ gitCredentialId: id });
+      return result;
+    });
   };
 
   /** @type {DaemonCore['formulateGitCredential']} */
@@ -7473,8 +7581,12 @@ const makeDaemonCore = async (
     (async () => {
       try {
         const gateway = await currentGatewayP;
-        const iter = await E(gateway).followRetentionSet(localNodeNumber);
         const peerAgentKeyRecord = persistencePowers.getAgentKey(nodeId);
+        // Match inbound retention admission: only registered agent roots
+        // have durable retention ownership. Outbound browser peers are also
+        // ephemeral and must not leave persistent orphan rows.
+        if (peerAgentKeyRecord === undefined) return;
+        const iter = await E(gateway).followRetentionSet(localNodeNumber);
         const peerAgentIdStr = peerAgentKeyRecord
           ? /** @type {FormulaIdentifier} */ (peerAgentKeyRecord.agentId)
           : undefined;
@@ -8793,6 +8905,7 @@ const makeDaemonCore = async (
     formulateHttpClient,
     getHttpClientControlForClient,
     formulateGitCredential,
+    formulateSecretBasicCredential,
     formulateGitRemote,
     formulateInvitation,
     acceptInvitation,

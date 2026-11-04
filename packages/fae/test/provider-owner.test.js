@@ -198,3 +198,27 @@ test('disposal fences a provider construction waiting for a Secret', async t => 
   await rejected;
   t.is(built, 0);
 });
+
+test('direct Claude owner needs a stable identity and never reads a raw token', async t => {
+  const subscription = Far('Subscription', {});
+  const config = {
+    kind: 'subscription-messages',
+    subscription,
+    model: 'claude-sonnet-4-6',
+  };
+  t.throws(() => makeProviderOwner({ config }), {
+    message: /Stable inference session identity/,
+  });
+  const owner = makeProviderOwner({
+    config,
+    sessionId: 'fae-stable',
+    provideAuthToken: async () => {
+      t.fail('direct inference must not read credentials');
+      return '';
+    },
+  });
+  t.teardown(() => owner.dispose());
+  t.is(await owner.forTurn(), await owner.forTurn());
+  await owner.dispose();
+  await t.throwsAsync(owner.forTurn(), { message: /disposed/ });
+});

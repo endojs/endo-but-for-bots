@@ -49,6 +49,7 @@ export const assertRuntimeConfig = config => {
   if (kind === 'provider') {
     config.providerFormat === undefined ||
       config.providerFormat === 'responses-output-v1' ||
+      config.providerFormat === 'messages-output-v1' ||
       Fail`Unknown direct provider context format`;
     config.disposeProvider === undefined ||
       typeof config.disposeProvider === 'function' ||

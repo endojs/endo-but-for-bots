@@ -132,6 +132,47 @@ await E(factory).createAgent('poet', {
 });
 ```
 
+`createAgent` returns a profile name relative to the factory's owner. For a
+factory in a private host, use `createAgentLocator` to obtain its portable mail
+address. Both creation methods reject existing names. `provideAgentLocator`
+supports retrying a lost response: it records the request privately and returns
+the same completed agent for identical options and provider authority. It
+rejects unrelated names, changed configuration, and incomplete publications.
+
+Pinned agents retain their driver in both the owner's pins and the recipient's
+mailbox pins. Mail delivery can therefore wake a privately owned agent after a
+restart without first looking up its factory. Unpinned subagents remain
+ephemeral.
+
+### Whylip
+
+Run `setup-whylip.js` after Floot setup. It uses the ordinary Fae factory and
+Floot's existing `fae-codex` inference capability, with the shared model catalog
+and no separate credentials or inference backend. Setup defaults to
+`gpt-5.6-sol` with low reasoning effort; an existing recipe retains its identity
+and configuration across startup so conversation recovery stays compatible.
+
+The installation and book provisioning service live under
+`@pins/installations/whylip/`. The service serializes book creation and keeps
+handles, recovery records, workers, and factory powers private. User-facing
+books live at `whylip/<book>`. Chat's Whylip picker uses this installed service.
+The picker checks the installation's owning host before creating a book or
+saving its view; inheriting another host's pins does not redirect sidebar data
+into that host.
+Illustrations use sanitized semantic HTML; executable scripts and external
+resources are unavailable.
+
+Do not use worker cancellation as a shortcut for reloading an installation with
+a failed turn. Dependent disposal hooks can lose their worker before cleanup
+finishes, leaving a failed disposal that blocks revival. A reviewed recovery
+can archive an unpublished failed installation's exact runtime bindings and
+book privately, remove both driver pins, and run standard setup with fresh
+private workers while retaining the existing provider recipe. Preserve the
+old conversation and admission evidence; do not clear its turn fence to retry
+unknown effects. The archived workers remain idle diagnostic state until an
+orderly daemon restart. This is bounded recovery for an identified fixture,
+not the normal installation-update procedure.
+
 ## Tools
 
 ### Built-in tools

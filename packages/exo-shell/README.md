@@ -68,3 +68,20 @@ interpreter (`node -e`, `python -c`, `bash -c`, `sh`), an exec-forwarder (`env`,
 `find ... -exec`, `xargs`), or `git` (`-c core.sshCommand=...`) collapses the
 allowlist to arbitrary code execution with the host user's authority. Allowlist
 only non-delegating commands, or rely on the sandbox spawner.
+
+## Output previews and lifecycle guidance
+
+`inspect().maxOutputBytes` reports the effective per-stream preview cap: the
+smaller of the configured policy and 65,536 bytes.
+This bounds the buffered record below the interface string limit, including when
+an older persisted recipe requests a larger value.
+Excess output is drained and discarded, with `truncated: true`.
+Save full logs to a file or use a byte stream when the full output is needed.
+A truncated successful command keeps its shell usable; it is not a containment
+failure and must not cause the command to be replayed.
+
+`help()` and `help("exec")` explain the command and recovery contract.
+Background processes have no persistence guarantee across calls or turns.
+Keep a local test server and browser test in the same invocation, with cleanup.
+A retained daemon object does not make a shell child into a persistent service.
+After a timeout, inspect effects and wait for cleanup before retrying a mutation.

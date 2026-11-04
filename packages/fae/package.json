@@ -24,6 +24,7 @@
     "./src/subagent-host.js": "./src/subagent-host.js",
     "./src/subagent.js": "./src/subagent.js",
     "./src/tool-makers.js": "./src/tool-makers.js",
+    "./src/widget-prompt.js": "./src/widget-prompt.js",
     "./src/tools.js": "./src/tools.js",
     "./src/turn-engine.js": "./src/turn-engine.js",
     "./package.json": "./package.json"

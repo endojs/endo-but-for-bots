@@ -14,6 +14,7 @@ import { makePromiseKit } from './_promise-kit.js';
  *   beforeStore?: (value: any, name: string) => Promise<void>,
  *   afterStore?: (value: any, name: string) => Promise<void>,
  *   beforeRemove?: (name: string) => Promise<void>,
+ *   afterRemove?: (name: string) => Promise<void>,
  *   extraHas?: (name: string) => boolean }} [options]
  */
 const makeWorld = (
@@ -26,6 +27,7 @@ const makeWorld = (
     beforeStore = async () => {},
     afterStore = async () => {},
     beforeRemove = async () => {},
+    afterRemove = async () => {},
     extraHas = () => false,
   } = {},
 ) => {
@@ -49,6 +51,8 @@ const makeWorld = (
   });
   let sends = 0;
   let creates = 0;
+  let nativeStops = 0;
+  let nativeDestroys = 0;
   const backend = Far('PrivateJournalBackend', {
     describe: () =>
       harden({
@@ -98,8 +102,12 @@ const makeWorld = (
         admin: Far('MigrationAdmin', { terminate: () => undefined }),
       });
     },
-    stop: () => undefined,
-    destroy: () => undefined,
+    stop: () => {
+      nativeStops += 1;
+    },
+    destroy: () => {
+      nativeDestroys += 1;
+    },
   });
   const hostStore = new Map(
     /** @type {[string, unknown][]} */ ([
@@ -139,11 +147,14 @@ const makeWorld = (
       beforeStore,
       afterStore,
       beforeRemove,
+      afterRemove,
       extraHas,
     }),
-    provideGuest: (name, { agentName }) => {
+    provideGuest: (path, { agentName: agentPath }) => {
+      const name = path.join('/');
+      const agentName = agentPath.join('/');
       guests += 1;
-      const id = name.slice('session-'.length);
+      const id = path[1];
       t.deepEqual(hostStore.get(`floot-private-sessions/${id}/schema`), {
         version: 2,
         sessionId: id,
@@ -163,6 +174,7 @@ const makeWorld = (
     guestStore,
     requests,
     counts: () => ({ sends, creates, guests }),
+    nativeCounts: () => ({ stops: nativeStops, destroys: nativeDestroys }),
   };
 };
 
@@ -386,9 +398,15 @@ for (const rejection of [
     const [entry] = await E(world.factory).listSessions();
     const prefix = `floot-private-sessions/${entry.id}/`;
     t.true(world.hostStore.has(`${prefix}schema`));
-    t.false(removed.some(name => name.startsWith(prefix)));
     t.false(
-      world.hostStore.has(`session-agent-${entry.id}`),
+      removed.some(
+        name =>
+          name === `${prefix}schema` || name.startsWith(`${prefix}floot-turn-`),
+      ),
+    );
+    t.false(removed.includes(prefix.slice(0, -1)));
+    t.false(
+      world.hostStore.has(`floot-private-sessions/${entry.id}/guest`),
       'failed publication must not skip ordinary cleanup',
     );
     const snapshots = [...world.hostStore.entries()].filter(([name]) =>
@@ -428,7 +446,11 @@ test('failed journal retirement keeps terminal intent and retries after factory 
   t.false(world.hostStore.has('floot-private-sessions/one/schema'));
 });
 
-for (const binding of [undefined, 'session-one', 'session-agent-one']) {
+for (const binding of [
+  undefined,
+  'session-one',
+  'floot-private-sessions/one/guest',
+]) {
   test(`factory refuses missing private schema with guest binding ${binding}`, async t => {
     const world = makeWorld(t, { schema: false });
     if (binding) world.hostStore.set(binding, harden({}));
@@ -710,4 +732,127 @@ test('journal refusal leaves queued inventory mentions ungranted and cancellable
   await E(session).cancelPending(id);
   t.is((await E(session).listPending()).entries.length, 0);
   t.is(world.counts().sends, 0);
+});
+
+/* eslint-disable no-await-in-loop -- Exercise ordered session lifecycle and cleanup. */
+test('retained sessions add no per-session bindings to the controller profile', async t => {
+  const world = makeWorld(t, { existing: false });
+  t.timeout(15_000);
+  const ids = [];
+  let expectedRoots;
+  for (let index = 0; index < 16; index += 1) {
+    const session = await E(world.factory).createSession({
+      backendId: 'test',
+      modelId: 'm',
+    });
+    const { id } = await E(session).getInfo();
+    ids.push(id);
+    const roots = [...world.hostStore.keys()]
+      .filter(
+        name => !name.includes('/') && !name.startsWith('floot-sessions-v1-'),
+      )
+      .sort();
+    if (expectedRoots) t.deepEqual(roots, expectedRoots);
+    else expectedRoots = roots;
+    t.true(world.hostStore.has(`floot-private-sessions/${id}/guest`));
+    t.true(world.hostStore.has(`floot-private-sessions/${id}/handle`));
+    t.false(roots.some(name => name.includes(id)));
+  }
+  t.is((await E(world.factory).listSessions()).length, 16);
+  for (const id of ids) await E(world.factory).deleteSession(id);
+  t.false(
+    [...world.hostStore.keys()].some(name =>
+      name.startsWith('floot-private-sessions/'),
+    ),
+  );
+});
+
+/* eslint-enable no-await-in-loop */
+
+test('lost private-directory unlink acknowledgement completes deletion on retry', async t => {
+  let fail = true;
+  const world = makeWorld(t, {
+    afterRemove: async name => {
+      if (name === 'floot-private-sessions/one' && fail) {
+        fail = false;
+        throw Error('unlink acknowledgement lost');
+      }
+    },
+  });
+  await t.throwsAsync(E(world.factory).deleteSession('one'), {
+    message: /unlink acknowledgement lost/,
+  });
+  t.false(world.hostStore.has('floot-private-sessions/one'));
+  t.is((await E(world.factory).listSessions())[0].lifecycle, 'error');
+  await E(world.factory).deleteSession('one');
+  t.deepEqual(await E(world.factory).listSessions(), []);
+  t.false([...world.hostStore.keys()].some(name => name.includes('/one/')));
+});
+
+for (const [legacy, leaf] of [
+  ['session-one', 'handle'],
+  ['session-agent-one', 'guest'],
+]) {
+  test(`incomplete retained ${leaf} publication cannot remint guest but remains deletable`, async t => {
+    const world = makeWorld(t);
+    const original = Far('RetainedPartialPublication', {});
+    world.hostStore.set(legacy, original);
+    const session = await E(world.factory).getSession('one');
+    await t.throwsAsync(E(session).getTurns(), {
+      message: /publication is incomplete/,
+    });
+    t.is(world.hostStore.get(`floot-private-sessions/one/${leaf}`), original);
+    t.is(world.counts().guests, 0);
+    await E(world.factory).deleteSession('one');
+    t.deepEqual(await E(world.factory).listSessions(), []);
+    t.false(world.hostStore.has('floot-private-sessions/one'));
+  });
+}
+
+test('creating recovery stops hosted native state and retains guest until terminal deletion', async t => {
+  const world = makeWorld(t, { existing: false });
+  const session = await E(world.factory).createSession({
+    backendId: 'test',
+    modelId: 'm',
+  });
+  const { id } = await E(session).getInfo();
+  const guest = world.hostStore.get(`floot-private-sessions/${id}/guest`);
+  const handle = world.hostStore.get(`floot-private-sessions/${id}/handle`);
+  const key = [...world.hostStore.keys()]
+    .filter(name => name.startsWith('floot-sessions-v1-'))
+    .sort()
+    .at(-1);
+  if (!key) throw Error('Missing registry');
+  const snapshot = world.hostStore.get(key);
+  if (
+    !snapshot ||
+    typeof snapshot !== 'object' ||
+    !('sessions' in snapshot) ||
+    !Array.isArray(snapshot.sessions)
+  )
+    throw Error('Missing registry sessions');
+  world.hostStore.set(
+    key,
+    harden({
+      ...snapshot,
+      sessions: snapshot.sessions.map(entry => ({
+        ...entry,
+        lifecycle: 'creating',
+      })),
+    }),
+  );
+  const restored = make(world.host);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await E(restored).listSessions())[0].lifecycle === 'ready') break;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  t.is((await E(restored).listSessions())[0].lifecycle, 'ready');
+  t.deepEqual(world.nativeCounts(), { stops: 1, destroys: 0 });
+  t.is(world.hostStore.get(`floot-private-sessions/${id}/guest`), guest);
+  t.is(world.hostStore.get(`floot-private-sessions/${id}/handle`), handle);
+  await E(restored).deleteSession(id);
+  t.is(world.nativeCounts().destroys, 1);
+  t.false(world.hostStore.has(`floot-private-sessions/${id}`));
 });

@@ -44,6 +44,8 @@ const refuseInspect = async (file, args) => {
  */
 const makeFakeHost = ({ failMint } = {}) => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   /** @type {any[]} */
   const mints = [];
   /** @type {any[]} */
@@ -79,13 +81,23 @@ const makeFakeHost = ({ failMint } = {}) => {
     ['native-sandbox-id', nativeSandboxSpecifier],
   ]);
   for (const name of ['state-provider', 'native-sandbox']) {
-    bindings.set(key('claude-sandbox', name), `${name}-id`);
+    bindings.set(
+      key('@pins', 'installations', 'claude-sandbox', name),
+      `${name}-id`,
+    );
   }
   bindings.set(key('floot', 'controller-profile'), 'dir');
   const profileValues = new Map();
   const publications = [];
   const profile = Far('TestFlootProfile', {
     has: async name => profileValues.has(key(name)),
+    lookup: async name =>
+      name === 'account-bindings'
+        ? Far('Bindings', {
+            has: source => profileValues.has(key(name, source)),
+            lookup: source => profileValues.get(key(name, source)),
+          })
+        : profileValues.get(key(name)),
     makeDirectory: async name => {
       profileValues.set(key(name), 'dir');
     },
@@ -98,13 +110,25 @@ const makeFakeHost = ({ failMint } = {}) => {
   const oraclePowers = Far('TestOraclePowers', {
     storeLocator: async (name, locator) => {
       bindings.set(
-        key('claude-sandbox', 'account-oracle-powers', name),
+        key(
+          '@pins',
+          'installations',
+          'claude-sandbox',
+          'account-oracle-powers',
+          name,
+        ),
         locator,
       );
     },
   });
-  bindings.set(key('claude-sandbox', 'account-oracle'), oracle);
-  bindings.set(key('claude-sandbox', 'account-oracle-powers'), oraclePowers);
+  bindings.set(
+    key('@pins', 'installations', 'claude-sandbox', 'account-oracle'),
+    oracle,
+  );
+  bindings.set(
+    key('@pins', 'installations', 'claude-sandbox', 'account-oracle-powers'),
+    oraclePowers,
+  );
   const host = /** @type {EndoHost} */ (
     /** @type {unknown} */ ({
       async identify(...parts) {
@@ -139,6 +163,19 @@ const makeFakeHost = ({ failMint } = {}) => {
         reads.push(['env', id]);
         return environments.get(id);
       },
+      /** @param {string[]} namePath */
+      async provideDirectory(namePath) {
+        for (let n = 1; n <= namePath.length; n += 1) {
+          const prefix = key(namePath.slice(0, n));
+          if (!bindings.has(prefix)) bindings.set(prefix, 'dir');
+        }
+      },
+      async makeDirectory(namePath) {
+        bindings.set(key(namePath), 'directory');
+      },
+      async list() {
+        return [];
+      },
       async has(...parts) {
         return bindings.has(key(...parts));
       },
@@ -151,8 +188,8 @@ const makeFakeHost = ({ failMint } = {}) => {
         if (key(pathParts) === key('floot', 'controller-profile'))
           return profile;
         if (
-          pathParts[0] === 'claude-sandbox' &&
-          pathParts[1]?.startsWith('account-oracle')
+          pathParts[2] === 'claude-sandbox' &&
+          pathParts[3]?.startsWith('account-oracle')
         ) {
           return bindings.get(key(pathParts));
         }
@@ -172,15 +209,23 @@ const makeFakeHost = ({ failMint } = {}) => {
             },
           });
         }
-        if (key(pathParts) === key('claude-sandbox', 'broker-service')) {
+        if (
+          key(pathParts) ===
+          key('@pins', 'installations', 'claude-sandbox', 'broker-service')
+        ) {
           return harden({
             configure: async settings => {
               configured.push(settings);
             },
           });
         }
-        const kind = credentialKinds.get(pathParts[0]);
-        if (pathParts.length === 1 && kind !== undefined) {
+        if (
+          key(pathParts) ===
+          key('@pins', 'installations', 'claude-sandbox', 'subscription')
+        )
+          return harden({});
+        const kind = credentialKinds.get(pathParts.at(-1));
+        if (kind !== undefined) {
           return harden({
             __getMethodNames__: async () => ['storage', 'issue', 'revoke'],
             storage: async () => 'secrets-manager',
@@ -228,7 +273,10 @@ const makeFakeHost = ({ failMint } = {}) => {
    * @param config
    */
   const seedBroker = config => {
-    bindings.set(key('claude-sandbox', 'broker-service'), 'broker-service-id');
+    bindings.set(
+      key('@pins', 'installations', 'claude-sandbox', 'broker-service'),
+      'broker-service-id',
+    );
     specifiers.set('broker-service-id', brokerServiceSpecifier);
     environments.set(
       'broker-service-id',
@@ -377,11 +425,16 @@ test.serial(
     // Retained per-member observation owners are re-pointed at fresh sources.
     for (const id of ['first', 'second']) {
       f.bindings.set(
-        key('claude-sandbox', `account-oracle-${id}`),
+        key('@pins', 'installations', 'claude-sandbox', `account-oracle-${id}`),
         Far(`Oracle ${id}`, {}),
       );
       f.bindings.set(
-        key('claude-sandbox', `account-oracle-${id}-powers`),
+        key(
+          '@pins',
+          'installations',
+          'claude-sandbox',
+          `account-oracle-${id}-powers`,
+        ),
         Far(`Oracle powers ${id}`, {
           storeLocator: async (name, locator) => {
             entries.set(`${id}/${name}`, locator);
@@ -463,7 +516,10 @@ test.serial(
             const pathParts = parts.flat();
             if (pathParts[0] === 'secrets' && secretFacets.has(pathParts[1]))
               return secretFacets.get(pathParts[1]);
-            if (key(...parts) === key('claude-sandbox', 'broker-powers'))
+            if (
+              key(...parts) ===
+              key('@pins', 'installations', 'claude-sandbox', 'broker-powers')
+            )
               return namespace;
             if (key(...parts) === key('@secrets', 'catalog'))
               return harden({
@@ -507,11 +563,21 @@ test.serial(
     for (const [index, id] of ['first', 'second'].entries()) {
       t.like(publication.accounts[index], {
         accountId: JSON.stringify(['anthropic', 'claude-main', id]),
-        uses: [{ backendId: 'claude', subscriptionId: id }],
+        uses: [
+          { backendId: 'claude', subscriptionId: id },
+          { backendId: 'fae-claude', subscriptionId: id },
+        ],
       });
       t.is(
         publication.accounts[index].oracle,
-        f.bindings.get(key('claude-sandbox', `account-oracle-${id}`)),
+        f.bindings.get(
+          key(
+            '@pins',
+            'installations',
+            'claude-sandbox',
+            `account-oracle-${id}`,
+          ),
+        ),
       );
       t.true(entries.has(`${id}/account-source`));
     }
@@ -521,7 +587,9 @@ test.serial(
     });
     t.true(
       f.copies.some(
-        copy => key(...copy.from) === key('claude-sandbox', 'broker-powers'),
+        copy =>
+          key(...copy.from) ===
+          key('@pins', 'installations', 'claude-sandbox', 'broker-powers'),
       ),
     );
     t.is(credentialMint(f.mints), undefined);
@@ -555,10 +623,14 @@ test('inferCredentialKind reads the token prefix and nothing else', t => {
 test.serial('requires setup-host.js artifacts before any mint', async t => {
   await baseEnv(t);
   const noProvider = makeFakeHost();
-  noProvider.bindings.delete(key('claude-sandbox', 'state-provider'));
+  noProvider.bindings.delete(
+    key('@pins', 'installations', 'claude-sandbox', 'state-provider'),
+  );
   await t.throwsAsync(main(noProvider.host), { message: /state-provider/ });
   const noNative = makeFakeHost();
-  noNative.bindings.delete(key('claude-sandbox', 'native-sandbox'));
+  noNative.bindings.delete(
+    key('@pins', 'installations', 'claude-sandbox', 'native-sandbox'),
+  );
   await t.throwsAsync(main(noNative.host), { message: /native-sandbox/ });
   t.deepEqual(noNative.mints, []);
   const generic = makeFakeHost();
@@ -717,18 +789,20 @@ test.serial(
     });
     t.is(
       publication.accounts[0].oracle,
-      fake.bindings.get(key('claude-sandbox', 'account-oracle')),
+      fake.bindings.get(
+        key('@pins', 'installations', 'claude-sandbox', 'account-oracle'),
+      ),
     );
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().join('/')),
       [
-        'test-creds',
-        'claude-sandbox/broker-service',
-        'claude-sandbox/session-storage',
-        'claude-sandbox/backend-next',
+        '@pins/installations/credentials/test-creds',
+        '@pins/installations/claude-sandbox/broker-service',
+        '@pins/installations/claude-sandbox/session-storage',
+        '@pins/installations/claude-sandbox/backend-next',
         // The broker's read-only account source, for the account oracle.
-        'claude-sandbox/account-source',
-        'claude-sandbox/subscription',
+        '@pins/installations/claude-sandbox/account-source',
+        '@pins/installations/claude-sandbox/subscription',
       ],
     );
     // The seed entered the secrets manager once; the credential caplet reads
@@ -741,7 +815,7 @@ test.serial(
       },
     ]);
     const credential = credentialMint(fake.mints);
-    t.is(credential?.options.powersName, 'test-creds-secret-read');
+    t.deepEqual(credential?.options.powersName, ['secrets', 'test-creds']);
     t.deepEqual(credential?.options.env, {
       CREDENTIALS_KIND: 'apiKey',
       CREDENTIALS_LABEL: 'Anthropic',
@@ -799,12 +873,20 @@ test.serial(
       }),
     });
     // The backend is minted under a temporary name and swapped in.
-    t.true(fake.bindings.has(key('claude-sandbox', 'backend')));
-    t.false(fake.bindings.has(key('claude-sandbox', 'backend-next')));
+    t.true(
+      fake.bindings.has(
+        key('@pins', 'installations', 'claude-sandbox', 'backend'),
+      ),
+    );
+    t.false(
+      fake.bindings.has(
+        key('@pins', 'installations', 'claude-sandbox', 'backend-next'),
+      ),
+    );
     t.true(
       fake.copies.some(
         ({ from, to }) =>
-          from.join('/') === 'claude-sandbox/backend' &&
+          from.join('/') === '@pins/installations/claude-sandbox/backend' &&
           to.join('/') === 'floot/controller-profile/claude-backend',
       ),
     );
@@ -886,7 +968,7 @@ test.serial(
     fake.seedCredential('test-creds', 'oauthToken');
     fake.seedBroker(retainedBrokerConfig({ credentialKind: 'oauthToken' }));
     fake.bindings.set(
-      key('claude-sandbox', 'session-storage'),
+      key('@pins', 'installations', 'claude-sandbox', 'session-storage'),
       'session-storage-id',
     );
     fake.specifiers.set('session-storage-id', sessionStorageSpecifier);
@@ -902,9 +984,9 @@ test.serial(
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().join('/')),
       [
-        'claude-sandbox/backend-next',
-        'claude-sandbox/account-source',
-        'claude-sandbox/subscription',
+        '@pins/installations/claude-sandbox/backend-next',
+        '@pins/installations/claude-sandbox/account-source',
+        '@pins/installations/claude-sandbox/subscription',
       ],
     );
     t.deepEqual(fake.secrets.length, 1, 'no second secret');
@@ -962,7 +1044,7 @@ test.serial(
     bumped.seedBroker(retainedBrokerConfig());
     await t.throwsAsync(main(bumped.host, { exec: refuseInspect }), {
       message: new RegExp(
-        `pins Claude sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "claude-sandbox/broker-service" when no session depends on it, then rerun setup`,
+        `pins Claude sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "@pins/installations/claude-sandbox/broker-service" when no session depends on it, then rerun setup`,
       ),
     });
     t.deepEqual(bumped.mints, [], 'refused before the credential mint');
@@ -985,10 +1067,10 @@ test.serial(
     t.deepEqual(
       resolved.mints.map(mint => [mint.options.resultName].flat().join('/')),
       [
-        'claude-sandbox/session-storage',
-        'claude-sandbox/backend-next',
-        'claude-sandbox/account-source',
-        'claude-sandbox/subscription',
+        '@pins/installations/claude-sandbox/session-storage',
+        '@pins/installations/claude-sandbox/backend-next',
+        '@pins/installations/claude-sandbox/account-source',
+        '@pins/installations/claude-sandbox/subscription',
       ],
       'the broker is retained, not re-minted',
     );
@@ -1016,7 +1098,10 @@ test.serial(
     const fake = makeFakeHost({
       failMint: specifier => /claude-backend-module\.js$/.test(specifier),
     });
-    fake.bindings.set(key('claude-sandbox', 'backend'), 'old-backend');
+    fake.bindings.set(
+      key('@pins', 'installations', 'claude-sandbox', 'backend'),
+      'old-backend',
+    );
     fake.bindings.set(
       key('floot', 'controller-profile', 'claude-backend'),
       'old-backend',
@@ -1024,7 +1109,12 @@ test.serial(
     await t.throwsAsync(main(fake.host, { exec: refuseInspect }), {
       message: /mint failed/,
     });
-    t.is(fake.bindings.get(key('claude-sandbox', 'backend')), 'old-backend');
+    t.is(
+      fake.bindings.get(
+        key('@pins', 'installations', 'claude-sandbox', 'backend'),
+      ),
+      'old-backend',
+    );
     t.is(
       fake.bindings.get(key('floot', 'controller-profile', 'claude-backend')),
       'old-backend',

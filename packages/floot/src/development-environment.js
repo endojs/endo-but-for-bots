@@ -1,23 +1,34 @@
 // @ts-check
 import { E } from '@endo/eventual-send';
+
 import { makeShellTool } from '@endo/agent-tools/json-tools/shell.js';
 import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
 
+import {
+  sessionStoragePath,
+  prepareSessionStorage,
+} from './session-storage-layout.js';
+
 export const DEVELOPMENT_PRESET_ID = 'development';
 harden(DEVELOPMENT_PRESET_ID);
-export const DEVELOPMENT_BACKENDS = harden(['provider', 'fae-codex']);
+export const DEVELOPMENT_BACKENDS = harden([
+  'provider',
+  'fae-codex',
+  'fae-claude',
+]);
 harden(DEVELOPMENT_BACKENDS);
 export const DEVELOPMENT_NETWORK_POLICIES = harden(['off', 'public-internet']);
 harden(DEVELOPMENT_NETWORK_POLICIES);
 /** @param {string} id */
-export const environmentAdminName = id => `floot-environment-admin-${id}`;
+export const environmentAdminName = id =>
+  sessionStoragePath(id, 'environment-admin');
 harden(environmentAdminName);
 
 /**
  * Keep private admin rooted before publishing only Shell in the model's
  * inventory. A failed/partial publication remains manually inspectable; do
  * not replace its recipe, replay commands, or delete an unknown allocation.
- * @param {{host:any,guest:any,agentName:string,id:string,networkPolicy:string,shellTimeoutMs?:number,shellOutputBytes?:number}} options
+ * @param {{host:any,guest:any,agentName:string[],id:string,networkPolicy:string,shellTimeoutMs?:number,shellOutputBytes?:number}} options
  */
 export const provideDevelopmentEnvironment = async ({
   host,
@@ -28,14 +39,15 @@ export const provideDevelopmentEnvironment = async ({
   shellTimeoutMs = DEFAULT_WORKLOAD_LIMITS.shellTimeoutMs,
   shellOutputBytes = DEFAULT_WORKLOAD_LIMITS.shellOutputBytes,
 }) => {
+  await prepareSessionStorage(host, id);
   if (await E(guest).has('shell')) {
     await lookupEnvironmentAdmin(host, id, { required: true });
     return;
   }
   const adminName = environmentAdminName(id);
-  const shellName = `floot-environment-shell-${id}`;
-  if (!(await E(host).has(adminName))) {
-    if (await E(host).has(shellName))
+  const shellName = sessionStoragePath(id, 'environment-shell');
+  if (!(await E(host).has(...adminName))) {
+    if (await E(host).has(...shellName))
       throw Error(
         'Development environment publication is incomplete; inspect its retained Shell before retrying',
       );
@@ -68,12 +80,12 @@ export const provideDevelopmentEnvironment = async ({
       }),
     );
   }
-  if (!(await E(host).has(shellName)))
+  if (!(await E(host).has(...shellName)))
     throw Error(
       'Development environment publication is incomplete; retain its admin for manual cleanup',
     );
-  await E(host).copy([shellName], [agentName, 'shell']);
-  await E(host).remove(shellName);
+  await E(host).copy(shellName, [...agentName, 'shell']);
+  await E(host).remove(...shellName);
 };
 harden(provideDevelopmentEnvironment);
 
@@ -83,11 +95,12 @@ harden(provideDevelopmentEnvironment);
  * @param options
  */
 export const lookupEnvironmentAdmin = async (host, id, options = {}) => {
+  if (!(await prepareSessionStorage(host, id))) return undefined;
   const name = environmentAdminName(id);
-  if (await E(host).has(name)) return E(host).lookup(name);
+  if (await E(host).has(...name)) return E(host).lookup(name);
   let provisioned = options.required;
-  const guestName = `session-agent-${id}`;
-  if (options.checkGuest && (await E(host).has(guestName))) {
+  const guestName = sessionStoragePath(id, 'guest');
+  if (options.checkGuest && (await E(host).has(...guestName))) {
     const guest = await E(host).lookup(guestName);
     provisioned ||= await E(guest).has('shell');
   }

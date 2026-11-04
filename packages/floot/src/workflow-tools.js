@@ -3,6 +3,14 @@
 import { E } from '@endo/eventual-send';
 import { matches, mustMatch } from '@endo/patterns';
 
+export const REVIEW_TOOL_NAMES = harden([
+  'handoffDesign',
+  'reviewStatus',
+  'setReviewBudget',
+  'cancelReview',
+]);
+harden(REVIEW_TOOL_NAMES);
+
 /**
  * Typed mail settlements and the design handoff surface. Authority comes from
  * the guest's mail and an explicitly installed workflow factory, never from a
@@ -132,6 +140,13 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
         if (!/^[1-9][0-9]*$/.test(rounds) || BigInt(rounds) > 0xffff_ffffn)
           throw Error('Invalid review budget');
         if (!design.trim()) throw Error('The agreed design must not be empty');
+        if (!(await E(powers).has('dev-review'))) {
+          return JSON.stringify({
+            status: 'unavailable',
+            message:
+              'No review workflow is installed. Continue authorized implementation directly; report that automated review is unavailable. Do not claim review passed or retry until the workflow is installed.',
+          });
+        }
         const factory = await E(powers).lookup('dev-review');
         const result = await E(factory).start(
           harden({

@@ -131,11 +131,14 @@ const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
     ...directoryHost(hostStore),
     locate: name => `locator:${name}`,
     copy: () => undefined,
-    provideGuest: (_name, { agentName }) => {
+    provideGuest: (_name, { agentName: agentPath }) => {
+      const agentName = agentPath.join('/');
+      if (!hostStore.has(_name.join('/')))
+        hostStore.set(_name.join('/'), harden({}));
       hostStore.set(agentName, makeGuest());
     },
-    remove: name => {
-      hostStore.delete(name);
+    remove: (...path) => {
+      hostStore.delete(path.join('/'));
     },
   });
   const factory = make(host);

@@ -26,6 +26,10 @@ const makeHost = () => {
       if (failWrites) throw Error('petstore write failed');
       writes += 1;
       store.delete(name);
+      if (loseNextAck) {
+        loseNextAck = false;
+        throw Error('acknowledgement lost');
+      }
     },
   });
   return {
@@ -421,4 +425,76 @@ test('queued attachments must be explicitly cancelled and recomposed to edit', a
   t.deepEqual(queue.list(), []);
   const text = await queue.enqueue('Read @docs or @{docs}');
   t.false('mentions' in text);
+});
+
+for (const loseAcknowledgement of [false, true]) {
+  test(`idle receipt pruning recovers from ${loseAcknowledgement ? 'lost acknowledgement' : 'failed persistence'}`, async t => {
+    const f = makeHost();
+    let now = 1_800_000_000_000;
+    const requestId = `${now}-11111111-1111-4111-8111-111111111111`;
+    const first = makePendingQueue({ host: f.host, id: 'abc', now: () => now });
+    const accepted = await first.enqueue('one', { requestId });
+    await first.complete(accepted.id);
+    now += 24 * 60 * 60 * 1000;
+    if (loseAcknowledgement) f.loseNextAck();
+    else f.failWrites(true);
+    const restored = makePendingQueue({
+      host: f.host,
+      id: 'abc',
+      now: () => now,
+    });
+    await t.throwsAsync(() => restored.ready(), {
+      message: /petstore write failed|acknowledgement lost/,
+    });
+    f.failWrites(false);
+    await restored.ready();
+    t.false(f.store.has(NAME));
+    await t.throwsAsync(() => restored.enqueue('one', { requestId }), {
+      message: /retry window expired/,
+    });
+  });
+}
+
+test('ready prunes expired receipts while preserving recovery entries and valid duplicate receipts', async t => {
+  const f = makeHost();
+  let now = 1_800_000_000_000;
+  const oldId = `${now}-11111111-1111-4111-8111-111111111111`;
+  const first = makePendingQueue({ host: f.host, id: 'abc', now: () => now });
+  const old = await first.enqueue('interrupted', {
+    requestId: oldId,
+    claim: true,
+  });
+  now += 12 * 60 * 60 * 1000;
+  const validId = `${now}-22222222-2222-4222-8222-222222222222`;
+  const current = await first.enqueue('queued', { requestId: validId });
+  now += 12 * 60 * 60 * 1000;
+  const restored = makePendingQueue({
+    host: f.host,
+    id: 'abc',
+    now: () => now,
+  });
+  await restored.ready();
+  t.deepEqual(
+    restored.list().map(({ id, state }) => ({ id, state })),
+    [
+      { id: old.id, state: 'interrupted' },
+      { id: current.id, state: 'queued' },
+    ],
+  );
+  t.deepEqual(
+    f.store.get(NAME).receipts.map(({ requestId }) => requestId),
+    [validId],
+  );
+  t.is(
+    (await restored.enqueue('queued', { requestId: validId })).id,
+    current.id,
+  );
+  t.is(await restored.claim(), undefined);
+  await restored.cancel(old.id);
+  await restored.cancel(current.id);
+  now += 12 * 60 * 60 * 1000;
+  await restored.ready();
+  t.false(f.store.has(NAME), 'already loaded idle queues also expire receipts');
+  await restored.ready();
+  t.false(f.store.has(NAME), 'maintenance does not create empty records');
 });

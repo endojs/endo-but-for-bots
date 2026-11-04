@@ -9,6 +9,9 @@
       "path": "../base64/tsconfig.composite.json"
     },
     {
+      "path": "../browser-endo/tsconfig.composite.json"
+    },
+    {
       "path": "../captp/tsconfig.composite.json"
     },
     {

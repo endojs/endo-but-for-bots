@@ -12,7 +12,23 @@ import { Far } from '@endo/far';
  */
 export const directoryHost = (values, hooks = {}) => {
   const key = name => (Array.isArray(name) ? name.join('/') : name);
+  const ids = new Map();
+  let nextId = 0;
+  const identifyValue = value => {
+    if (!ids.has(value)) ids.set(value, `fixture-${(nextId += 1)}`);
+    return ids.get(value);
+  };
   const methods = (prefix = '') => ({
+    identify: (...segments) => {
+      const path = `${prefix}${segments.flat().join('/')}`;
+      return values.has(path) ? identifyValue(values.get(path)) : undefined;
+    },
+    copy: (from, to) => {
+      const source = `${prefix}${key(from)}`;
+      const target = `${prefix}${key(to)}`;
+      if (!values.has(source)) throw Error(`Unknown source: ${source}`);
+      values.set(target, values.get(source));
+    },
     list: (...segments) => {
       const scope = segments.length
         ? `${prefix}${segments.join('/')}/`

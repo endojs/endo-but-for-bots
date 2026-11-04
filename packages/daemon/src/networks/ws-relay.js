@@ -39,6 +39,8 @@ import {
   encodeClose as encodeCloseFrame,
 } from '@endo/relay-server/protocol.js';
 
+/** @import { EndoGateway, EndoGreeter } from '../types.js' */
+
 const protocol = 'ws-relay+captp0';
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -99,6 +101,25 @@ export const make = async (
   const localGreeter = E(powers).greeter();
   const localGateway = E(powers).gateway();
 
+  /**
+   * @param {string} peerNodeId
+   * @returns {EndoGateway}
+   */
+  const makePeerGateway = peerNodeId =>
+    Far('RelayPeerGateway', {
+      provide: id => E(localGateway).provide(id),
+      provideBlob: hash => E(localGateway).provideBlob(hash),
+      provideTree: hash => E(localGateway).provideTree(hash),
+      followRetentionSet: node => {
+        // Retained formula numbers are bearer capabilities together with the
+        // node identity. A peer may learn only what we retain from itself.
+        if (node !== peerNodeId) {
+          throw new Error('Cannot follow retention for another peer');
+        }
+        return E(localGateway).followRetentionSet(node);
+      },
+    });
+
   const relayUrl = env.WS_RELAY_URL;
   const relayDomain = env.WS_RELAY_DOMAIN;
   if (!relayUrl) {
@@ -125,7 +146,8 @@ export const make = async (
    */
   const channels = new Map();
 
-  let nextChannelId = 1;
+  // Relay-assigned incoming channels use the lower uint32 half.
+  let nextChannelId = 0x8000_0000;
   /** @type {WebSocket | null} */
   let currentWs = null;
   let reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
@@ -215,7 +237,9 @@ export const make = async (
 
   /** @param {Uint8Array} payload */
   const handleIncoming = payload => {
-    const { channelId, fromNodeId: _fromNodeId } = decodeIncoming(payload);
+    const { channelId, fromNodeId } = decodeIncoming(payload);
+    const authenticatedNodeId = toHex(fromNodeId);
+    const peerGateway = makePeerGateway(authenticatedNodeId);
     const { value: connectionNumber } = connectionNumbers.next();
 
     console.log(
@@ -236,12 +260,38 @@ export const make = async (
       }),
     );
 
+    // The relay authenticates the sender's public key. Bind the CapTP
+    // greeting to that identity before the greeter can update remote-control
+    // state or consume a retention stream on behalf of the claimed peer.
+    const channelGreeter = Far('RelayPeerGreeter', {
+      /** @type {EndoGreeter['hello']} */
+      hello: async (
+        remoteNodeId,
+        remoteGateway,
+        cancel,
+        connectionCancelled,
+      ) => {
+        if (remoteNodeId !== authenticatedNodeId) {
+          throw new Error(
+            'Relay peer greeting does not match authenticated sender',
+          );
+        }
+        await E(localGreeter).hello(
+          remoteNodeId,
+          remoteGateway,
+          cancel,
+          connectionCancelled,
+        );
+        return peerGateway;
+      },
+    });
+
     const { closed: capTpClosed, close: closeCapTp } = makeNetstringCapTP(
       'Endo',
       writer,
       reader,
       cancelled,
-      localGreeter,
+      channelGreeter,
     );
 
     closed.then(
@@ -463,6 +513,7 @@ export const make = async (
     const url = new URL(address);
     const targetNodeId = url.hostname;
     const targetNodeIdBytes = fromHex(targetNodeId);
+    const peerGateway = makePeerGateway(targetNodeId);
 
     const connectionCancelled = /** @type {Promise<never>} */ (
       E(connectionContext).whenCancelled()
@@ -473,6 +524,9 @@ export const make = async (
       throw new Error('Not connected to relay');
     }
 
+    if (nextChannelId > 0xffff_ffff) {
+      throw new Error('Relay channel identifiers exhausted');
+    }
     const channelId = nextChannelId;
     nextChannelId += 1;
 
@@ -528,7 +582,7 @@ export const make = async (
       closed: capTpClosed,
       getBootstrap,
       close: closeCapTp,
-    } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway);
+    } = makeNetstringCapTP('Endo', writer, reader, cancelled, peerGateway);
 
     closed.then(
       () => closeCapTp(new Error('Relay channel closed')),
@@ -546,7 +600,7 @@ export const make = async (
     const remoteGreeter = getBootstrap();
     return E(remoteGreeter).hello(
       localNodeId,
-      localGateway,
+      peerGateway,
       Far('Canceller', cancelConnection),
       connectionCancelled,
     );
@@ -555,7 +609,7 @@ export const make = async (
   return Far('WsRelayNetwork', {
     addresses: () =>
       harden([
-        `${protocol}://${localNodeId}?relay=${encodeURIComponent(relayUrl)}`,
+        `${protocol}://${localNodeId}?relay=${encodeURIComponent(relayUrl)}&domain=${encodeURIComponent(relayDomain)}`,
       ]),
     supports: address => {
       try {

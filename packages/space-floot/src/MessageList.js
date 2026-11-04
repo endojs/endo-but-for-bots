@@ -1,6 +1,10 @@
 // @ts-check
 
 import harden from '@endo/harden';
+import {
+  widgetMessageParts,
+  InteractiveWidget,
+} from '@endo/spaces-util/interactive-widget.js';
 import { h } from 'preact';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 
@@ -523,8 +527,7 @@ const ActionGroup = ({ actions }) => {
 const TURN_STATUS_TEXT = harden({
   failed: 'This turn did not finish.',
   cancelled: 'This turn was stopped.',
-  'outcome-unknown':
-    'This turn stopped with an unknown outcome. Check any tool results before retrying.',
+  'outcome-unknown': 'This turn was interrupted.',
 });
 
 /**
@@ -591,7 +594,14 @@ harden(TurnStatus);
 /** @param {FlootMessage} msg */
 const messageBody = msg => {
   const message = msg.role === 'user' && msg.meta?.message;
-  if (!message) return linkify(msg.text || '');
+  if (!message) {
+    if (msg.role !== 'assistant') return linkify(msg.text || '');
+    return widgetMessageParts(msg.text || '').flatMap((part, index) =>
+      part.source === undefined
+        ? linkify(part.text || '')
+        : [h(InteractiveWidget, { key: index, source: part.source })],
+    );
+  }
   return message.strings.flatMap((part, index) => [
     part,
     ...(index < message.names.length
@@ -1041,9 +1051,12 @@ export const MessageList = ({ state, controller, debug = false }) => {
           actions: row.actions,
         })
       : row.msg.meta?.turnStatus
-        ? h(TurnStatus, { key: `msg-${row.index}`, msg: row.msg })
+        ? h(TurnStatus, {
+            key: `${state.activeSessionId || ''}:msg-${row.index}`,
+            msg: row.msg,
+          })
         : h(Bubble, {
-            key: `msg-${row.index}`,
+            key: `${state.activeSessionId || ''}:msg-${row.index}`,
             msg: row.msg,
             canReplay,
             replaying: canReplay && replayingText === (row.msg.text || ''),

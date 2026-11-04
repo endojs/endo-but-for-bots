@@ -17,7 +17,7 @@ import { idFromLocator } from './locator.js';
 
 /** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
-import { guestHelp, mailHelp, makeHelp } from './help-text.js';
+import { directoryHelp, guestHelp, mailHelp, makeHelp } from './help-text.js';
 
 /**
  * @param {object} args
@@ -516,12 +516,23 @@ export const makeGuestMaker = ({
       'EndoGuest',
       GuestInterface,
       /** @type {any} */ ({
-        help: makeHelp(guestHelp, [mailHelp]),
+        help: makeHelp(guestHelp, [
+          harden(
+            Object.fromEntries(
+              Object.entries(directoryHelp).filter(([method]) =>
+                Object.hasOwn(guest, method),
+              ),
+            ),
+          ),
+          mailHelp,
+        ]),
         ...guest,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {
           const iterator = guest.followLocatorNameChanges(locator);
-          return readerFromIterator(iterator);
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followMessages: async () => {
           const iterator = guest.followMessages();
