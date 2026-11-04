@@ -126,7 +126,15 @@ const makeMessagesTransport = ({ inference, model, maxTokens = 4096 }) => {
     );
     void bytes.catch(() => undefined);
     try {
-      const response = await wait(requested);
+      const response = await wait(requested).catch(error => {
+        if (/provider-authentication-failed/.test(error?.message)) {
+          throw Error('Anthropic authentication failed');
+        }
+        if (/provider-rate-limited/.test(error?.message)) {
+          throw Error('Anthropic rate limit reached');
+        }
+        throw error;
+      });
       if (response.status === 401)
         throw Error('Anthropic authentication failed');
       if (response.status === 429) throw Error('Anthropic rate limit reached');

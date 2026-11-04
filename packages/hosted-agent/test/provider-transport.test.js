@@ -6,6 +6,7 @@ import { defined } from '../../../scripts/test/defined.js';
 import {
   isCredentialRejection,
   isSubscriptionExhaustion,
+  isUpstreamRefusal,
 } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
@@ -173,7 +174,7 @@ test('host diagnostics contain only fixed stages and bounded HTTP status', async
   );
   t.teardown(denied.dispose);
   await t.throwsAsync(() => E(denied.transport).request(request), {
-    message: 'Provider transport failed',
+    message: 'Provider rate limited',
   });
   const broken = setup(async () => {
     throw Error('exception-canary-secret');
@@ -816,3 +817,26 @@ test('an observer that throws, or headers that say nothing, change nothing', asy
   t.is((await E(plain.transport).request(request)).body, 'ok');
   t.deepEqual(silent, []);
 });
+
+for (const [path, send] of /** @type {const} */ ([
+  ['buffered', 'request'],
+  ['streaming', 'requestStream'],
+])) {
+  test(`a ${path} refusal is classified by its status alone`, async t => {
+    for (const [status, message] of /** @type {const} */ ([
+      [429, 'Provider rate limited'],
+      [404, 'Provider model not found'],
+      [500, 'Provider transport failed'],
+    ])) {
+      const { transport } = tapped(
+        async () => new Response('body-canary', { status }),
+        undefined,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const refusal = await t.throwsAsync(() => E(transport)[send](request), {
+        message,
+      });
+      t.is(isUpstreamRefusal(refusal), status !== 500);
+    }
+  });
+}

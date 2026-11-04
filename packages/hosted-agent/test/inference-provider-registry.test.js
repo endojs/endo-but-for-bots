@@ -1755,3 +1755,372 @@ test('the owner records an upstream-revocation assertion once', async t => {
   );
   await revived.close();
 });
+
+test('a discovery failure accepts only a well-shaped typed model, verified by its first turn', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing, {
+    discoverModels: async () => {
+      throw Error('upstream unavailable');
+    },
+    modelPrices: harden({}),
+    behavior: {
+      status: request => (request.body.includes('missing') ? 404 : 200),
+    },
+  });
+  const directory = registry.directoryFor('owner-alice');
+  await E(directory).setOwnerLimits(
+    harden({ dailyTokens: 100_000 }),
+    'owner-tokens-discovery',
+    true,
+  );
+  const provider = await E(directory).create(
+    providerRequest({
+      limits: { concurrentTurns: 2, dailyTokens: 20_000 },
+    }),
+  );
+  const admin = await E(directory).adminFor(provider.providerId);
+  t.like(await E(admin).discoverModels(), {
+    catalogState: 'unavailable',
+    models: [],
+  });
+  const use = registry.useFor('owner-alice', provider.providerId);
+  const typedGrant = (agentId, model) =>
+    E(use).grant(harden({ ownerId: 'owner-alice', agentId, model }));
+  await t.throwsAsync(() => typedGrant('agent-malformed', 'Not A Model!'), {
+    message: /invalid-model/,
+  });
+  const verification = () =>
+    registry.inspect().modelStates[provider.providerId].verification;
+  const typed = await typedGrant('agent-typed', 'claude-typed');
+  t.is(verification()['claude-typed'], 'unverified');
+  const typedMessage = text =>
+    harden({
+      ...message(text),
+      body: message(text).body.replace('claude-test', 'claude-typed'),
+    });
+  await t.throwsAsync(() => E(typed).request(typedMessage('missing')), {
+    message: /model-not-available/,
+  });
+  t.is(verification()['claude-typed'], 'unverified');
+  await E(typed).request(typedMessage('present'));
+  t.is(verification()['claude-typed'], 'verified');
+  await registry.close();
+});
+
+test('a model the catalog lists is selectable and already verified', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing, {
+    discoverModels: async () =>
+      harden({ models: [{ id: 'claude-catalog', title: 'Catalog Claude' }] }),
+    modelPrices: harden({}),
+  });
+  const directory = registry.directoryFor('owner-alice');
+  await E(directory).setOwnerLimits(
+    harden({ dailyTokens: 100_000 }),
+    'owner-tokens-catalog',
+    true,
+  );
+  const provider = await E(directory).create(
+    providerRequest({
+      limits: { concurrentTurns: 2, dailyTokens: 20_000 },
+    }),
+  );
+  await E(await E(directory).adminFor(provider.providerId)).discoverModels();
+  const inference = await E(
+    registry.useFor('owner-alice', provider.providerId),
+  ).grant(
+    harden({
+      ownerId: 'owner-alice',
+      agentId: 'agent-catalog',
+      model: 'claude-catalog',
+    }),
+  );
+  t.truthy(inference);
+  t.is(
+    registry.inspect().modelStates[provider.providerId].verification[
+      'claude-catalog'
+    ],
+    'verified',
+  );
+  await registry.close();
+});
+
+// Two providers of one owner, each with far more room than the owner, holding
+// one grant per agent so that only the owner's cap can refuse.
+const twoProviderGrants = async (registry, ownerLimits, turnsPerProvider) => {
+  const directory = registry.directoryFor('owner-alice');
+  await E(directory).setOwnerLimits(
+    harden(ownerLimits),
+    'owner-limits-two',
+    true,
+  );
+  const roomy = {
+    concurrentTurns: 50,
+    requestsPerMinute: 500,
+    dailyTokens: 1_000_000,
+  };
+  const inferences = [];
+  for (const side of ['a', 'b']) {
+    // eslint-disable-next-line no-await-in-loop
+    const provider = await E(directory).create(
+      providerRequest({
+        idempotencyKey: `create-two-providers-${side}`,
+        displayName: `Claude ${side}`,
+        limits: roomy,
+      }),
+    );
+    for (let turn = 0; turn < Number(turnsPerProvider); turn += 1) {
+      inferences.push(
+        // eslint-disable-next-line no-await-in-loop
+        await E(registry.useFor('owner-alice', provider.providerId)).grant(
+          harden({
+            ownerId: 'owner-alice',
+            agentId: `agent-${side}-${turn}`,
+            model: 'claude-test',
+          }),
+        ),
+      );
+    }
+  }
+  return { directory, inferences };
+};
+
+test('concurrent admissions on two providers never exceed the owner concurrency', async t => {
+  const backing = makeBacking();
+  const events = [];
+  const registry = await makeRegistry(backing, {
+    events,
+    modelPrices: harden({}),
+  });
+  const { directory, inferences } = await twoProviderGrants(
+    registry,
+    { concurrentTurns: 2, requestsPerMinute: 500, dailyTokens: 1_000_000 },
+    3,
+  );
+  const outcomes = inferences.map(inference =>
+    E(inference)
+      .request(message('wait'))
+      .then(
+        () => 'served',
+        error => error.message,
+      ),
+  );
+  const refusedCount = () =>
+    E(directory)
+      .getUsage()
+      .then(usage => usage.refusals.length);
+  for (let turn = 0; turn < 200; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await refusedCount()) === inferences.length - 2) break;
+  }
+  const usage = await E(directory).getUsage();
+  t.is(usage.turns.filter(row => row.state === 'reserved').length, 2);
+  t.is(
+    usage.refusals.filter(row => row.reason === 'owner-concurrency-exhausted')
+      .length,
+    inferences.length - 2,
+  );
+  t.is(events.filter(event => event[0] === 'request').length, 2);
+  await registry.close();
+  await Promise.all(outcomes);
+});
+
+test('concurrent admissions on two providers never exceed the owner budget', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing, { modelPrices: harden({}) });
+  // Find one turn's reservation, then allow the owner exactly two of them.
+  const probe = await twoProviderGrants(
+    registry,
+    { concurrentTurns: 50, requestsPerMinute: 500, dailyTokens: 1_000_000 },
+    3,
+  );
+  await E(probe.inferences[0]).request(message('turn'));
+  const [{ reservedTokens, chargedTokens }] = (
+    await E(probe.directory).getUsage()
+  ).turns;
+  t.true(Number(reservedTokens) > 0);
+  const budget = chargedTokens + 2 * reservedTokens;
+  await E(probe.directory).setOwnerLimits(
+    harden({ dailyTokens: budget }),
+    'owner-budget-two',
+    true,
+  );
+  const results = await Promise.allSettled(
+    probe.inferences.map(inference => E(inference).request(message('turn'))),
+  );
+  t.is(results.filter(result => result.status === 'fulfilled').length, 2);
+  const usage = await E(probe.directory).getUsage();
+  t.is(
+    usage.refusals.filter(row => row.reason === 'owner-budget-exhausted')
+      .length,
+    probe.inferences.length - 2,
+  );
+  t.true(
+    Number(usage.turns.reduce((total, row) => total + row.chargedTokens, 0)) <=
+      Number(budget),
+  );
+  await registry.close();
+});
+
+test('the request rate refuses at each scope and recovers after a minute', async t => {
+  const backing = makeBacking();
+  let clock = Date.parse('2026-10-27T00:00:00.000Z');
+  const registry = await makeRegistry(backing, {
+    modelPrices: harden({}),
+    nowMillis: () => clock,
+  });
+  const directory = registry.directoryFor('owner-alice');
+  await E(directory).setOwnerLimits(
+    harden({ concurrentTurns: 50, requestsPerMinute: 3, dailyTokens: 100_000 }),
+    'owner-rate-1',
+    true,
+  );
+  const provider = await E(directory).create(
+    providerRequest({
+      limits: {
+        concurrentTurns: 50,
+        requestsPerMinute: 2,
+        dailyTokens: 100_000,
+      },
+    }),
+  );
+  const second = await E(directory).create(
+    providerRequest({
+      idempotencyKey: 'create-rate-second',
+      displayName: 'Claude rate second',
+      limits: {
+        concurrentTurns: 50,
+        requestsPerMinute: 50,
+        dailyTokens: 100_000,
+      },
+    }),
+  );
+  const grant = async (providerId, agentId) => {
+    const use = registry.useFor('owner-alice', providerId);
+    const inference = await E(use).grant(
+      harden({
+        grantId: `grant-${agentId}`,
+        ownerId: 'owner-alice',
+        agentId,
+        model: 'claude-test',
+      }),
+    );
+    await E(use).setGrantLimits(
+      `grant-${agentId}`,
+      harden({ requestsPerMinute: 1 }),
+      `lower-${agentId}`,
+    );
+    return inference;
+  };
+  const refusalFor = async inference => {
+    await t.throwsAsync(() => E(inference).request(message('turn')), {
+      message: /inference-request-refused/,
+    });
+    const { refusals } = await E(directory).getUsage();
+    return refusals.at(-1).reason;
+  };
+  const first = await grant(provider.providerId, 'agent-rate-1');
+  await E(first).request(message('turn'));
+  t.is(await refusalFor(first), 'agent-rate-limited');
+  const sibling = await grant(provider.providerId, 'agent-rate-2');
+  await E(sibling).request(message('turn'));
+  const third = await grant(provider.providerId, 'agent-rate-3');
+  t.is(await refusalFor(third), 'provider-rate-limited');
+  const elsewhere = await grant(second.providerId, 'agent-rate-4');
+  await E(elsewhere).request(message('turn'));
+  const further = await grant(second.providerId, 'agent-rate-5');
+  t.is(await refusalFor(further), 'owner-rate-limited');
+  clock += 61_000;
+  await E(further).request(message('turn'));
+  await registry.close();
+});
+
+test('a stream cut short is charged its reservation, not its partial usage', async t => {
+  const backing = makeBacking();
+  const registry = await makeRegistry(backing, {
+    modelPrices: harden({}),
+    behavior: {
+      streamResponse: () => ({
+        status: 200,
+        headers: {},
+        body: makeExo('reader', TestReaderInterface, {}),
+        usage: Promise.resolve(
+          harden({
+            usage: { inputTokens: 1 },
+            began: true,
+            complete: false,
+            responseBytes: 1,
+          }),
+        ),
+      }),
+    },
+  });
+  const { directory, inference } = await tokenGrant(registry, 'agent-cut');
+  const stream = await E(inference).requestByteStream(message('cut'));
+  await stream.usage;
+  const { turns } = await E(directory).getUsage();
+  t.is(turns.length, 1);
+  t.like(turns[0], { state: 'settled', disposition: 'estimated' });
+  t.is(turns[0].chargedTokens, turns[0].reservedTokens);
+  await registry.close();
+});
+
+for (const [label, thrown] of /** @type {Array<[string, unknown]>} */ ([
+  ['an unclassified error', Error('Provider request failed')],
+  ['a rejection that is no error', 'not an error'],
+])) {
+  test(`${label} from the endpoint reaches the caller and refuses nothing`, async t => {
+    const backing = makeBacking();
+    const registry = await makeRegistry(backing, {
+      modelPrices: harden({}),
+      behavior: {
+        streamResponse: () => Promise.reject(thrown),
+      },
+    });
+    const { directory, inference } = await tokenGrant(
+      registry,
+      'agent-unclassified',
+    );
+    const failure = await E(inference)
+      .requestByteStream(message('no'))
+      .catch(error => error);
+    t.is(
+      failure instanceof Error ? failure.message : failure,
+      thrown instanceof Error ? thrown.message : thrown,
+    );
+    const { refusals, turns } = await E(directory).getUsage();
+    t.deepEqual(refusals, []);
+    t.is(turns[0].disposition, 'estimated');
+    await registry.close();
+  });
+}
+
+for (const [thrown, code] of /** @type {Array<[string, string]>} */ ([
+  ['Provider credential rejected', 'provider-authentication-failed'],
+  ['Provider rate limited', 'provider-rate-limited'],
+  ['Provider subscription exhausted', 'provider-rate-limited'],
+  ['Provider model not found', 'model-not-available'],
+])) {
+  test(`the upstream refusal "${thrown}" is reported as ${code}`, async t => {
+    const backing = makeBacking();
+    const registry = await makeRegistry(backing, {
+      modelPrices: harden({}),
+      behavior: {
+        streamResponse: () => {
+          throw Error(thrown);
+        },
+      },
+    });
+    const { directory, inference } = await tokenGrant(
+      registry,
+      `agent-${code}`,
+    );
+    await t.throwsAsync(() => E(inference).requestByteStream(message('no')), {
+      message: new RegExp(code),
+    });
+    const { refusals, turns } = await E(directory).getUsage();
+    t.true(refusals.some(row => row.reason === code));
+    t.is(turns[0].disposition, 'estimated');
+    await registry.close();
+  });
+}

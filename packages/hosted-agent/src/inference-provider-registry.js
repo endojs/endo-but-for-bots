@@ -32,6 +32,13 @@ const MODEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const fixedError = code =>
   makeError(X`Inference provider operation failed: ${q(code)}`);
 
+const UPSTREAM_REFUSAL_CODES = new Map([
+  ['Provider credential rejected', 'provider-authentication-failed'],
+  ['Provider subscription exhausted', 'provider-rate-limited'],
+  ['Provider rate limited', 'provider-rate-limited'],
+  ['Provider model not found', 'model-not-available'],
+]);
+
 const ProviderDirectoryInterface = M.interface('InferenceProviderDirectory', {
   list: M.callWhen().returns(M.arrayOf(M.record())),
   lookup: M.callWhen(M.string()).returns(M.record()),
@@ -928,13 +935,16 @@ export const makeInferenceProviderRegistry = async ({
         (total, count) => total + count,
         0,
       );
-      const known = observedTokens > 0;
+      // A response cut short said only part of what it cost, so what it said
+      // settles nothing: the reservation stands unless it was already passed.
+      const cutShort = settlement?.complete === false;
+      const known = observedTokens > 0 && !cutShort;
       const chargedTokens =
         disposition === 'released'
           ? 0
           : known
             ? observedTokens
-            : prior.reservedTokens;
+            : Math.max(Number(prior.reservedTokens), observedTokens);
       const observedCost = priceUsageMicros(
         counts.inputTokens,
         counts.outputTokens,
@@ -949,7 +959,10 @@ export const makeInferenceProviderRegistry = async ({
           ? 0
           : known && observedCost !== undefined
             ? observedCost
-            : prior.reservedCostMicros;
+            : observedCost !== undefined &&
+                prior.reservedCostMicros !== undefined
+              ? Math.max(Number(prior.reservedCostMicros), observedCost)
+              : prior.reservedCostMicros;
       const settledAtMs = nowMillis();
       const next = copyState(state);
       const settlementEvent = harden({
@@ -975,6 +988,24 @@ export const makeInferenceProviderRegistry = async ({
       );
       await commit(next);
     });
+
+  /**
+   * Only a fixed code crosses for an upstream refusal.
+   *
+   * @param {string} grantId
+   * @param {string} turnId
+   * @param {unknown} error
+   */
+  const failDispatch = async (grantId, turnId, error) => {
+    await settle(turnId, undefined, 'estimated');
+    const code =
+      error instanceof Error
+        ? UPSTREAM_REFUSAL_CODES.get(error.message)
+        : undefined;
+    if (code === undefined) throw error;
+    await refuse(grantId, code);
+    throw fixedError(code);
+  };
 
   /** @param {string} providerId @param {string} model */
   const markModelVerified = (providerId, model) =>
@@ -1118,8 +1149,7 @@ export const makeInferenceProviderRegistry = async ({
         } catch (error) {
           // Once dispatched, an unknown/cancelled turn is conservatively
           // charged its reservation even though its concurrency slot releases.
-          await settle(turnId, undefined, 'estimated');
-          throw error;
+          return failDispatch(grantId, turnId, error);
         }
         let observed;
         try {
@@ -1164,8 +1194,7 @@ export const makeInferenceProviderRegistry = async ({
         try {
           response = await E(endpoint).requestByteStream(checked.message);
         } catch (error) {
-          await settle(turnId, undefined, 'estimated');
-          throw error;
+          return failDispatch(grantId, turnId, error);
         }
         const usage = Promise.resolve(response.usage).then(
           async observed => {

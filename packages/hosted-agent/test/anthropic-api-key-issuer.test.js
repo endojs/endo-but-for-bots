@@ -79,6 +79,48 @@ test('Anthropic issuer injects its key and version behind an InferenceEndpoint',
   });
 });
 
+for (const send of /** @type {const} */ (['request', 'requestByteStream'])) {
+  test(`${send} tells each upstream refusal apart, and no more than that`, async t => {
+    for (const [status, message] of /** @type {const} */ ([
+      [401, 'Provider credential rejected'],
+      [429, 'Provider rate limited'],
+      [404, 'Provider model not found'],
+      [500, 'Provider request failed'],
+    ])) {
+      const made = makeAnthropicApiKeyIssuerFactory({
+        fetch: async () => new Response('body-canary', { status }),
+      });
+      t.teardown(() => made.dispose());
+      const secret = makeExo('IssuerTestSecret', SecretInterface, {
+        readBase64: async () => encodeBase64(encodeUtf8('anthropic-canary')),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      const endpoint = await made.factory.openEndpoint(
+        harden({
+          providerId: 'provider-one',
+          kind: 'anthropic',
+          defaultModel: 'claude-test',
+        }),
+        secret,
+        { sessionId: 'grant-one' },
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const refusal = await t.throwsAsync(
+        () =>
+          endpoint[send](
+            harden({
+              method: 'POST',
+              path: '/v1/messages',
+              body: '{"model":"claude-test","max_tokens":1,"messages":[]}',
+            }),
+          ),
+        { message },
+      );
+      t.false(String(refusal?.stack).includes('body-canary'));
+    }
+  });
+}
+
 test('a provider keeps one issuer and refuses a changed secret', async t => {
   const makeSecret = () =>
     makeExo('IssuerTestSecret', SecretInterface, {
