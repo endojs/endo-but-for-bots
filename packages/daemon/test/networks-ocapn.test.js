@@ -102,6 +102,7 @@ const makeMockPowers = (
   bindingKeypair = keypair,
 ) => {
   const helloCalls = [];
+  const dialIsStaleCalls = [];
   const storedValues = [];
   const nodeId = toHex(keypair.publicKey);
   const gateway = Far('Gateway', {
@@ -110,8 +111,15 @@ const makeMockPowers = (
   });
   const greeter = Far('Greeter', {
     makeGateway: () => gateway,
-    hello: (remoteNodeId, _remoteGateway, _canceller, _cancelled) => {
+    acceptSession: (
+      remoteNodeId,
+      _remoteGateway,
+      _canceller,
+      _cancelled,
+      dialIsStale,
+    ) => {
       helloCalls.push(remoteNodeId);
+      dialIsStaleCalls.push(dialIsStale);
       return gateway;
     },
   });
@@ -136,6 +144,7 @@ const makeMockPowers = (
     gateway,
     greeter,
     helloCalls,
+    dialIsStaleCalls,
     storedValues,
     keypair,
     nodeId,
@@ -453,9 +462,40 @@ test('crossed-hello: two transports dialling each other reuse one OCapN session'
   t.deepEqual(a.helloCalls, [b.nodeId]);
   t.deepEqual(b.helloCalls, [a.nodeId]);
 
+  // A hello on the session a dial shares does not supersede that dial.
+  t.deepEqual(a.dialIsStaleCalls, [false]);
+  t.deepEqual(b.dialIsStaleCalls, [false]);
+
   // Both gateways round-trip through their underlying session.
   t.is(await E(gatewayBFromA).provide('x'), 'B:value-for:x');
   t.is(await E(gatewayAFromB).provide('y'), 'A:value-for:y');
+});
+
+test('a hello under a rotated session key marks the prior dial stale', async t => {
+  t.timeout(60_000);
+  const contextA = makeMockContext();
+  const contextB1 = makeMockContext();
+  const contextB2 = makeMockContext();
+  t.teardown(() => contextA.cancel());
+  t.teardown(() => contextB2.cancel());
+
+  const a = makeMockPowers('A');
+  const keypairB = generateEd25519Keypair();
+  const b1 = makeMockPowers('B', keypairB);
+  const b2 = makeMockPowers('B', keypairB);
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB1 = await makeOcapnNetwork(b1.powers, contextB1);
+  const [addressA] = await E(serviceA).addresses();
+  const [addressB1] = await E(serviceB1).addresses();
+  await E(serviceA).connect(addressB1, makeMockContext());
+  contextB1.cancel();
+
+  const serviceB2 = await makeOcapnNetwork(b2.powers, contextB2);
+  await E(serviceB2).connect(addressA, makeMockContext());
+
+  t.deepEqual(a.helloCalls, [b2.nodeId]);
+  t.deepEqual(a.dialIsStaleCalls, [true]);
 });
 
 test('agent identity persists across transport restart, even though OCapN session key rotates', async t => {

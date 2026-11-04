@@ -1,6 +1,6 @@
 // @ts-check
 import harden from '@endo/harden';
-import { E, Far } from '@endo/far';
+import { E } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeOcapn } from '@endo/ocapn';
@@ -51,8 +51,7 @@ import { makeFormulaNonceLocator } from './formula-nonce-locator.js';
  * `EndoGateway.followRetentionSet` — rides on top of the OCapN session
  * unchanged, exactly as it rode on CapTP before. This module conforms
  * to the existing `EndoNetwork` interface (`addresses`, `supports`,
- * `connect`) and needs no daemon-core changes to be discovered through
- * `@nets`.
+ * `connect`), so it is discovered through `@nets`.
  */
 
 // The well-known OCapN swissnum under which a daemon publishes its peer
@@ -240,6 +239,20 @@ const EndoPeerEntryInterface = M.interface('EndoPeerEntry', {
   help: M.call().returns(M.string()),
 });
 
+const EndoSessionGreeterInterface = M.interface('EndoSessionGreeter', {
+  hello: M.call(M.string(), M.any(), M.any(), M.any()).returns(M.promise()),
+});
+
+const ConnectionCancellerInterface = M.interface('ConnectionCanceller', {
+  cancel: M.call().optional(M.any()).returns(M.any()),
+});
+
+const OcapnNoiseServiceInterface = M.interface('OcapnNoiseService', {
+  addresses: M.call().returns(M.arrayOf(M.string())),
+  supports: M.call(M.string()).returns(M.any()),
+  connect: M.call(M.string(), M.any()).returns(M.promise()),
+});
+
 /**
  * Compose an OCapN endpoint's per-session incoming locator: a fixed
  * table of well-known swissnums (such as the peer entry) answered first,
@@ -347,16 +360,21 @@ export const make = async (powers, context) => {
       help: () =>
         `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
     });
-  const peerEntry = makePeerEntry(localGreeter);
 
-  // The OCapN locator (a "nonce locator"): the table of local
-  // capabilities a remote peer may fetch by swissnum through the OCapN
-  // bootstrap's `fetch`. The peer entry point is the sole published
-  // entry; every other value is reached through the gateway that the
-  // greeter hands back from `hello`.
-  /** @type {Map<string, unknown>} */
-  const locator = new Map();
-  locator.set(PEER_ENTRY_SWISSNUM, peerEntry);
+  /** @param {() => unknown} cancel */
+  const makeConnectionCanceller = cancel =>
+    makeExo('ConnectionCanceller', ConnectionCancellerInterface, {
+      cancel: _error => {
+        cancel();
+      },
+    });
+
+  // The session key each dialed agent had when this daemon last dialed it.
+  // The OCapN session manager settles crossed hellos only between sessions
+  // with the same key. A peer that restarts mints a new key, so a hello under
+  // a different key means the dial's session is stale.
+  /** @type {Map<string, string>} */
+  const dialedSessionKeys = new Map();
 
   // Incoming `bootstrap.fetch` also redeems bearer formula identifiers
   // directly, so a peer that holds a shared `endo://` locator (for
@@ -379,60 +397,57 @@ export const make = async (powers, context) => {
     let authenticatedRemoteNodeId;
     /** @type {Promise<unknown> | undefined} */
     let sessionGateway;
-    const sessionGreeter = Far('Authenticated OCapN greeter', {
-      hello: async (
-        remoteNodeId,
-        remoteGateway,
-        _remoteCanceller,
-        connectionCancelled,
-        remoteAgentBinding,
-      ) => {
-        try {
-          assertAgentBinding(
-            cryptography,
-            remoteAgentBinding,
-            remoteNodeId,
-            sessionContext.peerPublicKey.bytes,
-          );
-        } catch {
-          sessionContext.abortSession();
-          throw Error('OCapN peer identity mismatch');
-        }
-        if (
-          authenticatedRemoteNodeId !== undefined &&
-          authenticatedRemoteNodeId !== remoteNodeId
-        ) {
-          sessionContext.abortSession();
-          throw Error('OCapN peer identity mismatch');
-        }
-        authenticatedRemoteNodeId = remoteNodeId;
-
-        // Repeated connect attempts over the same OCapN session get the same
-        // gateway. In particular, calling hello again cannot reset the miss
-        // counter or switch the authenticated node.
-        if (sessionGateway !== undefined) {
-          return sessionGateway;
-        }
-
-        // Do not trust the peer-supplied canceller for enforcement. The
-        // gateway's miss bound must tear down this authenticated session even
-        // when the peer is hostile and supplies a no-op capability.
-        const cancelSession = Far('OCapN session canceller', _error =>
-          sessionContext.abortSession(),
-        );
-        sessionGateway = E(localGreeter).hello(
+    const abortForIdentityMismatch = () => {
+      sessionContext.abortSession();
+      return Error('OCapN peer identity mismatch');
+    };
+    const sessionGreeter = makeExo(
+      'EndoSessionGreeter',
+      EndoSessionGreeterInterface,
+      {
+        hello: async (
           remoteNodeId,
           remoteGateway,
-          cancelSession,
           connectionCancelled,
-        );
-        return sessionGateway;
+          remoteAgentBinding,
+        ) => {
+          try {
+            assertAgentBinding(
+              cryptography,
+              remoteAgentBinding,
+              remoteNodeId,
+              sessionContext.peerPublicKey.bytes,
+            );
+          } catch {
+            throw abortForIdentityMismatch();
+          }
+          if (
+            authenticatedRemoteNodeId !== undefined &&
+            authenticatedRemoteNodeId !== remoteNodeId
+          ) {
+            throw abortForIdentityMismatch();
+          }
+          authenticatedRemoteNodeId = remoteNodeId;
+
+          // Repeated hellos on one session get the same gateway, so they
+          // cannot reset its miss budget or switch the authenticated node.
+          if (sessionGateway === undefined) {
+            const dialedSessionKey = dialedSessionKeys.get(remoteNodeId);
+            sessionGateway = E(localGreeter).acceptSession(
+              remoteNodeId,
+              remoteGateway,
+              makeConnectionCanceller(sessionContext.abortSession),
+              connectionCancelled,
+              dialedSessionKey !== undefined &&
+                dialedSessionKey !== sessionContext.remoteDesignator,
+            );
+          }
+          return sessionGateway;
+        },
       },
-    });
-    const sessionWellKnown = new Map(locator);
-    sessionWellKnown.set(PEER_ENTRY_SWISSNUM, makePeerEntry(sessionGreeter));
+    );
     return makeWellKnownLocatorForSession(
-      sessionWellKnown,
+      new Map([[PEER_ENTRY_SWISSNUM, makePeerEntry(sessionGreeter)]]),
       formulaLocator,
     )(sessionContext);
   };
@@ -447,7 +462,6 @@ export const make = async (powers, context) => {
     // unify with it; cast at this single boundary.
     // eslint-disable-next-line object-shorthand
     network: /** @type {any} */ (network),
-    locator,
     makeLocatorForSession,
     debugLabel: `endo-peer-${String(localNodeId).slice(0, 8)}`,
   });
@@ -615,24 +629,24 @@ export const make = async (powers, context) => {
       );
     }
 
+    dialedSessionKeys.set(binding.agentPublicKey, remoteLocation.designator);
+
     // Run the peer handshake. `hello` carries our gateway to the peer
-    // and returns the peer's gateway to us — the same handshake
-    // `tcp-netstring.js` ran over CapTP.
-    const connectionCanceller = Far('Canceller', cancelConnection);
+    // and returns the peer's gateway to us. Both directions share this one
+    // OCapN session, so neither side needs a canceller for the other.
     const localSessionGateway = E(localGreeter).makeGateway(
       binding.agentPublicKey,
-      connectionCanceller,
+      makeConnectionCanceller(cancelConnection),
     );
     return E(remoteGreeterP).hello(
       localNodeId,
       localSessionGateway,
-      connectionCanceller,
       connectionCancelled,
       agentBinding,
     );
   };
 
-  return Far('OcapnNoiseService', {
+  return makeExo('OcapnNoiseService', OcapnNoiseServiceInterface, {
     addresses: () => harden([address]),
     supports,
     connect,

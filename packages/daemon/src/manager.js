@@ -117,6 +117,8 @@ import {
   InspectorHubInterface,
   InspectorInterface,
   InvitationInterface,
+  EndoGatewayInterface,
+  EndoGreeterInterface,
   PeerGatewayInterface,
   ResponderInterface,
   WorkerInterface,
@@ -135,7 +137,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
 /** @import { RetentionDelta } from './retention-accumulator.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, ConnectionCanceller, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -1643,106 +1645,124 @@ const makeDaemonCore = async (
   // Gateway is equivalent to E's "nonce locator". This unrestricted local
   // facet is retained for daemon-internal use and loopback. A remote peer gets
   // a fresh, bound gateway from `makeGatewayForPeer` below.
-  const localGateway = Far('Gateway', {
-    /** @param {string} requestedId */
-    provide: async requestedId => {
-      assertValidId(requestedId);
-      if (!isLocalId(requestedId)) {
-        const { node } = parseId(requestedId);
-        throw new Error(
-          `Gateway can only provide local values. Got request for node ${q(
-            node,
-          )}`,
-        );
-      }
-      return provide(requestedId);
-    },
-    /**
-     * Stream a content-addressed blob for the HTTP web-seed route. The hash is
-     * a bearer read capability, but the HTTP receiver still treats these bytes
-     * as untrusted and verifies them against `xt` before using them.
-     *
-     * @param {string} hash
-     * @returns {Promise<PassableBytesReader>}
-     */
-    async provideBlob(hash) {
-      assertValidNumber(hash);
-      return bytesReaderFromIterator(contentStore.fetch(hash).makeFileReader());
-    },
-    /**
-     * Stream a canonical tar representation of a readable tree for the HTTP
-     * web-seed route. The hash is a bearer read capability, but the HTTP
-     * receiver still treats these bytes as untrusted and reassembles and
-     * verifies them against `xt` before using them. The tar-format encoding
-     * lives in `@endo/tar`'s writer; this method supplies the producer-side
-     * traversal of the content store's tree JSON.
-     *
-     * @param {string} hash
-     * @returns {Promise<PassableBytesReader>}
-     */
-    async provideTree(hash) {
-      assertValidNumber(hash);
-
-      async function* archiveTree(treeHash, prefix = '') {
-        const entries = await contentStore.fetch(treeHash).json();
-        if (!Array.isArray(entries)) {
-          throw makeError(`Invalid readable tree ${q(treeHash)}`);
-        }
-        for (const entry of entries) {
-          if (!Array.isArray(entry) || entry.length !== 3) {
-            throw makeError(`Invalid readable tree entry in ${q(treeHash)}`);
-          }
-          const [name, type, childHash] = entry;
-          if (
-            typeof name !== 'string' ||
-            typeof type !== 'string' ||
-            typeof childHash !== 'string'
-          ) {
-            throw makeError(`Invalid readable tree entry in ${q(treeHash)}`);
-          }
-          const path = `${prefix}${name}`;
-          if (type === 'tree') {
-            yield* archiveTree(childHash, `${path}/`);
-          } else if (type === 'blob') {
-            const blob = /** @type {DaemonContentStoreBlob} */ (
-              contentStore.fetch(childHash)
+  const localGateway = /** @type {EndoGateway} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'EndoGateway',
+        EndoGatewayInterface,
+        /** @type {any} */ ({
+          /** @param {string} requestedId */
+          provide: async requestedId => {
+            assertValidId(requestedId);
+            if (!isLocalId(requestedId)) {
+              const { node } = parseId(requestedId);
+              throw new Error(
+                `Gateway can only provide local values. Got request for node ${q(
+                  node,
+                )}`,
+              );
+            }
+            return provide(requestedId);
+          },
+          /**
+           * Stream a content-addressed blob for the HTTP web-seed route. The hash is
+           * a bearer read capability, but the HTTP receiver still treats these bytes
+           * as untrusted and verifies them against `xt` before using them.
+           *
+           * @param {string} hash
+           * @returns {Promise<PassableBytesReader>}
+           */
+          async provideBlob(hash) {
+            assertValidNumber(hash);
+            return bytesReaderFromIterator(
+              contentStore.fetch(hash).makeFileReader(),
             );
-            const size = Number(await blob.size());
-            if (!Number.isSafeInteger(size)) {
-              throw makeError(`Web-seed blob is too large for tar: ${q(path)}`);
-            }
-            yield tarFileHeader(path, size);
-            for await (const chunk of blob.makeFileReader()) {
-              yield chunk;
-            }
-            const padding = tarFilePadding(size);
-            if (padding.byteLength !== 0) yield padding;
-          } else {
-            throw makeError(`Invalid readable tree entry type ${q(type)}`);
-          }
-        }
-      }
+          },
+          /**
+           * Stream a canonical tar representation of a readable tree for the HTTP
+           * web-seed route. The hash is a bearer read capability, but the HTTP
+           * receiver still treats these bytes as untrusted and reassembles and
+           * verifies them against `xt` before using them. The tar-format encoding
+           * lives in `@endo/tar`'s writer; this method supplies the producer-side
+           * traversal of the content store's tree JSON.
+           *
+           * @param {string} hash
+           * @returns {Promise<PassableBytesReader>}
+           */
+          async provideTree(hash) {
+            assertValidNumber(hash);
 
-      async function* tar() {
-        yield* archiveTree(hash);
-        yield tarEndMarker();
-      }
-      return bytesReaderFromIterator(tar());
-    },
-    /**
-     * Return the formula numbers from `peerNodeNumber` that this
-     * daemon currently holds, followed by incremental updates.
-     * Each yielded value has shape `{ add: string[], remove: string[] }`.
-     * The first delta is the snapshot (all adds, no removes).
-     * Subsequent deltas are batched over microtasks.
-     *
-     * @param {string} peerNodeNumber
-     * @returns {Promise<import('@endo/exo-stream').PassableReader<import('./retention-accumulator.js').RetentionDelta, undefined>>}
-     */
-    followRetentionSet: async peerNodeNumber => {
-      return followRetentionSetForPeer(peerNodeNumber);
-    },
-  });
+            async function* archiveTree(treeHash, prefix = '') {
+              const entries = await contentStore.fetch(treeHash).json();
+              if (!Array.isArray(entries)) {
+                throw makeError(`Invalid readable tree ${q(treeHash)}`);
+              }
+              for (const entry of entries) {
+                if (!Array.isArray(entry) || entry.length !== 3) {
+                  throw makeError(
+                    `Invalid readable tree entry in ${q(treeHash)}`,
+                  );
+                }
+                const [name, type, childHash] = entry;
+                if (
+                  typeof name !== 'string' ||
+                  typeof type !== 'string' ||
+                  typeof childHash !== 'string'
+                ) {
+                  throw makeError(
+                    `Invalid readable tree entry in ${q(treeHash)}`,
+                  );
+                }
+                const path = `${prefix}${name}`;
+                if (type === 'tree') {
+                  yield* archiveTree(childHash, `${path}/`);
+                } else if (type === 'blob') {
+                  const blob = /** @type {DaemonContentStoreBlob} */ (
+                    contentStore.fetch(childHash)
+                  );
+                  const size = Number(await blob.size());
+                  if (!Number.isSafeInteger(size)) {
+                    throw makeError(
+                      `Web-seed blob is too large for tar: ${q(path)}`,
+                    );
+                  }
+                  yield tarFileHeader(path, size);
+                  for await (const chunk of blob.makeFileReader()) {
+                    yield chunk;
+                  }
+                  const padding = tarFilePadding(size);
+                  if (padding.byteLength !== 0) yield padding;
+                } else {
+                  throw makeError(
+                    `Invalid readable tree entry type ${q(type)}`,
+                  );
+                }
+              }
+            }
+
+            async function* tar() {
+              yield* archiveTree(hash);
+              yield tarEndMarker();
+            }
+            return bytesReaderFromIterator(tar());
+          },
+          /**
+           * Return the formula numbers from `peerNodeNumber` that this
+           * daemon currently holds, followed by incremental updates.
+           * Each yielded value has shape `{ add: string[], remove: string[] }`.
+           * The first delta is the snapshot (all adds, no removes).
+           * Subsequent deltas are batched over microtasks.
+           *
+           * @param {string} peerNodeNumber
+           * @returns {Promise<import('@endo/exo-stream').PassableReader<import('./retention-accumulator.js').RetentionDelta, undefined>>}
+           */
+          followRetentionSet: async peerNodeNumber => {
+            return followRetentionSetForPeer(peerNodeNumber);
+          },
+        }),
+      )
+    )
+  );
 
   // Match the direct OCapN formula locator's deliberately small per-session
   // miss budget. A bearer that knows an exact formula identifier succeeds;
@@ -1780,153 +1800,215 @@ const makeDaemonCore = async (
       ).catch(() => {});
     };
 
-    return Far('Gateway', {
-      /** @param {string} requestedId */
-      provide: async requestedId => {
-        if (cancelledForMisses || misses + inFlight >= gatewayMissBound) {
-          throw unavailable();
-        }
-        inFlight += 1;
-        try {
-          assertValidId(requestedId);
-          if (!isLocalId(requestedId)) {
-            throw unavailable();
+    return /** @type {EndoGateway} */ (
+      /** @type {unknown} */ (
+        makeExo(
+          'EndoGateway',
+          EndoGatewayInterface,
+          /** @type {any} */ ({
+            /** @param {string} requestedId */
+            provide: async requestedId => {
+              if (cancelledForMisses || misses + inFlight >= gatewayMissBound) {
+                throw unavailable();
+              }
+              inFlight += 1;
+              try {
+                assertValidId(requestedId);
+                if (!isLocalId(requestedId)) {
+                  throw unavailable();
+                }
+                // Establish existence before incarnation so a formula whose value is
+                // legitimately `undefined` is still a successful bearer redemption.
+                await getFormulaForId(
+                  /** @type {FormulaIdentifier} */ (requestedId),
+                );
+                return await provide(
+                  /** @type {FormulaIdentifier} */ (requestedId),
+                );
+              } catch {
+                misses += 1;
+                if (misses >= gatewayMissBound) {
+                  cancelForMisses();
+                }
+                throw unavailable();
+              } finally {
+                inFlight -= 1;
+              }
+            },
+            provideBlob: async hash => E(localGateway).provideBlob(hash),
+            provideTree: async hash => E(localGateway).provideTree(hash),
+            // Retain the argument for wire compatibility, but never trust it. The
+            // authenticated peer identity captured above is the sole selector.
+            followRetentionSet: async _allegedPeerNodeNumber =>
+              followRetentionSetForPeer(peerNodeNumber),
+          }),
+        )
+      )
+    );
+  };
+
+  /**
+   * Follow what an inbound peer retains from this daemon, in the background.
+   *
+   * @param {string} remoteNodeId
+   * @param {Promise<EndoGateway>} remoteGateway
+   */
+  const followInboundPeerRetention = (remoteNodeId, remoteGateway) => {
+    const consumeRetention = async () => {
+      const retentionReader =
+        await E(remoteGateway).followRetentionSet(localNodeNumber);
+      // Resolve the local agent formula ID for this peer so
+      // retention edges land in the right place in the graph.
+      const agentKeyRecord = persistencePowers.getAgentKey(remoteNodeId);
+      const agentIdentifier = agentKeyRecord
+        ? /** @type {FormulaIdentifier} */ (agentKeyRecord.agentId)
+        : undefined;
+
+      let isFirst = true;
+      for await (const rawDelta of iterateReader(
+        /** @type {any} */ (retentionReader),
+      )) {
+        const delta = /** @type {RetentionDelta} */ (
+          /** @type {any} */ (rawDelta)
+        );
+        if (isFirst) {
+          // First delta is the full snapshot.
+          persistencePowers.replaceRetention(remoteNodeId, delta.add);
+          if (agentIdentifier !== undefined) {
+            await withFormulaGraphLock(async () => {
+              formulaGraph.replaceRetention(
+                agentIdentifier,
+                delta.add.map(formulaNumber =>
+                  formatId({
+                    number: /** @type {FormulaNumber} */ (formulaNumber),
+                    node: localNodeNumber,
+                  }),
+                ),
+              );
+            });
           }
-          // Establish existence before incarnation so a formula whose value is
-          // legitimately `undefined` is still a successful bearer redemption.
-          await getFormulaForId(/** @type {FormulaIdentifier} */ (requestedId));
-          return await provide(/** @type {FormulaIdentifier} */ (requestedId));
-        } catch {
-          misses += 1;
-          if (misses >= gatewayMissBound) {
-            cancelForMisses();
+          isFirst = false;
+        } else {
+          for (const formulaNumber of delta.add) {
+            persistencePowers.writeRetention(remoteNodeId, formulaNumber);
           }
-          throw unavailable();
-        } finally {
-          inFlight -= 1;
+          for (const formulaNumber of delta.remove) {
+            persistencePowers.deleteRetention(remoteNodeId, formulaNumber);
+          }
+          if (agentIdentifier !== undefined) {
+            await withFormulaGraphLock(async () => {
+              for (const formulaNumber of delta.add) {
+                formulaGraph.addRetention(
+                  agentIdentifier,
+                  formatId({
+                    number: /** @type {FormulaNumber} */ (formulaNumber),
+                    node: localNodeNumber,
+                  }),
+                );
+              }
+              for (const formulaNumber of delta.remove) {
+                formulaGraph.removeRetention(
+                  agentIdentifier,
+                  formatId({
+                    number: /** @type {FormulaNumber} */ (formulaNumber),
+                    node: localNodeNumber,
+                  }),
+                );
+              }
+            });
+          }
         }
-      },
-      provideBlob: hash => E(localGateway).provideBlob(hash),
-      provideTree: hash => E(localGateway).provideTree(hash),
-      // Retain the argument for wire compatibility, but never trust it. The
-      // authenticated peer identity captured above is the sole selector.
-      followRetentionSet: _allegedPeerNodeNumber =>
-        followRetentionSetForPeer(peerNodeNumber),
+      }
+    };
+    consumeRetention().catch(error => {
+      console.log(
+        `Retention sync ended for inbound peer ${remoteNodeId.slice(0, 8)}: ${/** @type {Error} */ (error).message}`,
+      );
     });
   };
 
-  /** @type {EndoGreeter} */
-  const localGreeter = Far('Greeter', {
-    /**
-     * Build the local half of a peer handshake after the network has
-     * authenticated the remote node. This keeps the gateway sent as the
-     * `hello` argument subject to the same binding and miss budget as the
-     * gateway returned from `hello`.
-     *
-     * @param {string} remoteNodeId
-     * @param {ERef<(error: Error) => void>} cancelConnection
-     */
-    makeGateway: async (remoteNodeId, cancelConnection) => {
-      assertNodeNumber(remoteNodeId);
-      /** @param {Error} error */
-      const wrappedCancel = error => E(cancelConnection)(error);
-      return makeGatewayForPeer(remoteNodeId, wrappedCancel);
-    },
-    /**
-     * @param {string} remoteNodeId
-     * @param {Promise<EndoGateway>} remoteGateway
-     * @param {ERef<(error: Error) => void>} cancelConnection
-     * @param {Promise<never>} connectionCancelled
-     */
-    hello: async (
-      remoteNodeId,
-      remoteGateway,
-      cancelConnection,
-      connectionCancelled,
-    ) => {
-      assertNodeNumber(remoteNodeId);
-      console.log(
-        `Endo daemon received inbound peer connection from node ${remoteNodeId.slice(0, 8)}`,
-      );
-      const remoteControl = provideRemoteControl(remoteNodeId);
-      /** @param {Error} error */
-      const wrappedCancel = error => E(cancelConnection)(error);
-      remoteControl.accept(remoteGateway, wrappedCancel, connectionCancelled);
-
-      // Follow retention set changes in the background.
-      const consumeRetention = async () => {
-        const iter = await E(remoteGateway).followRetentionSet(localNodeNumber);
-        // Resolve the local agent formula ID for this peer so
-        // retention edges land in the right place in the graph.
-        const agentKeyRecord = persistencePowers.getAgentKey(remoteNodeId);
-        const agentIdStr = agentKeyRecord
-          ? /** @type {FormulaIdentifier} */ (agentKeyRecord.agentId)
-          : undefined;
-
-        let isFirst = true;
-        for await (const rawDelta of iterateReader(/** @type {any} */ (iter))) {
-          const delta =
-            /** @type {import('./retention-accumulator.js').RetentionDelta} */ (
-              /** @type {any} */ (rawDelta)
+  const localGreeter = /** @type {EndoGreeter} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'EndoGreeter',
+        EndoGreeterInterface,
+        /** @type {any} */ ({
+          /**
+           * Build the local half of a peer handshake after the network has
+           * authenticated the remote node. This keeps the gateway sent as the
+           * `hello` argument subject to the same binding and miss budget as the
+           * gateway returned from `hello`.
+           *
+           * @param {string} remoteNodeId
+           * @param {ERef<ConnectionCanceller>} canceller
+           */
+          makeGateway: async (remoteNodeId, canceller) => {
+            assertNodeNumber(remoteNodeId);
+            return makeGatewayForPeer(remoteNodeId, error =>
+              E(canceller).cancel(error),
             );
-          if (isFirst) {
-            // First delta is the full snapshot.
-            persistencePowers.replaceRetention(remoteNodeId, delta.add);
-            if (agentIdStr !== undefined) {
-              await withFormulaGraphLock(async () => {
-                formulaGraph.replaceRetention(
-                  agentIdStr,
-                  delta.add.map(num =>
-                    formatId({
-                      number: /** @type {FormulaNumber} */ (num),
-                      node: localNodeNumber,
-                    }),
-                  ),
-                );
-              });
+          },
+          /**
+           * @param {string} remoteNodeId
+           * @param {Promise<EndoGateway>} remoteGateway
+           * @param {ERef<(error: Error) => void>} cancelConnection
+           * @param {Promise<never>} connectionCancelled
+           */
+          hello: async (
+            remoteNodeId,
+            remoteGateway,
+            cancelConnection,
+            connectionCancelled,
+          ) => {
+            assertNodeNumber(remoteNodeId);
+            console.log(
+              `Endo daemon received inbound peer connection from node ${remoteNodeId.slice(0, 8)}`,
+            );
+            /** @param {Error} error */
+            const wrappedCancel = error => E(cancelConnection)(error);
+            provideRemoteControl(remoteNodeId).accept(
+              remoteGateway,
+              wrappedCancel,
+              connectionCancelled,
+            );
+            followInboundPeerRetention(remoteNodeId, remoteGateway);
+            return makeGatewayForPeer(remoteNodeId, wrappedCancel);
+          },
+          /**
+           * @param {string} remoteNodeId
+           * @param {Promise<EndoGateway>} remoteGateway
+           * @param {ERef<ConnectionCanceller>} canceller
+           * @param {Promise<never>} connectionCancelled
+           * @param {boolean} dialIsStale
+           */
+          acceptSession: async (
+            remoteNodeId,
+            remoteGateway,
+            canceller,
+            connectionCancelled,
+            dialIsStale,
+          ) => {
+            assertNodeNumber(remoteNodeId);
+            console.log(
+              `Endo daemon received inbound peer session from node ${remoteNodeId.slice(0, 8)}`,
+            );
+            /** @param {Error} error */
+            const cancelSession = error => E(canceller).cancel(error);
+            const remoteControl = provideRemoteControl(remoteNodeId);
+            if (dialIsStale || remoteControl.getStateName() !== 'connected') {
+              remoteControl.accept(
+                remoteGateway,
+                cancelSession,
+                connectionCancelled,
+              );
             }
-            isFirst = false;
-          } else {
-            for (const num of delta.add) {
-              persistencePowers.writeRetention(remoteNodeId, num);
-            }
-            for (const num of delta.remove) {
-              persistencePowers.deleteRetention(remoteNodeId, num);
-            }
-            if (agentIdStr !== undefined) {
-              await withFormulaGraphLock(async () => {
-                for (const num of delta.add) {
-                  formulaGraph.addRetention(
-                    agentIdStr,
-                    formatId({
-                      number: /** @type {FormulaNumber} */ (num),
-                      node: localNodeNumber,
-                    }),
-                  );
-                }
-                for (const num of delta.remove) {
-                  formulaGraph.removeRetention(
-                    agentIdStr,
-                    formatId({
-                      number: /** @type {FormulaNumber} */ (num),
-                      node: localNodeNumber,
-                    }),
-                  );
-                }
-              });
-            }
-          }
-        }
-      };
-      consumeRetention().catch(err => {
-        console.log(
-          `Retention sync ended for inbound peer ${remoteNodeId.slice(0, 8)}: ${/** @type {Error} */ (err).message}`,
-        );
-      });
-
-      return makeGatewayForPeer(remoteNodeId, wrappedCancel);
-    },
-  });
+            followInboundPeerRetention(remoteNodeId, remoteGateway);
+            return makeGatewayForPeer(remoteNodeId, cancelSession);
+          },
+        }),
+      )
+    )
+  );
 
   /**
    * @param {string} workerId512

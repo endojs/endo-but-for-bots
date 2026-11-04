@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-21 |
-| **Updated** | 2026-08-23 |
+| **Updated** | 2026-11-04 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 
@@ -65,6 +65,13 @@ Deviations from the design as first written, and why:
   OCapN's own session manager is a deeper refactor that depends on
   `ocapn-network-transport-separation` landing and on runtime
   verification; deleting working code on speculation was not done.
+  On the OCapN path, `RemoteControl` no longer settles a hello that
+  shares the session of this daemon's own dial: `EndoGreeter.acceptSession`
+  records no competing connection, because the session manager has already
+  settled that crossing and cancelling either side would abort the shared
+  session. `RemoteControl` still replaces a dial whose peer has restarted
+  under a new session key, which the session manager cannot see because it
+  keys sessions by that ephemeral key.
 - **`tcp-netstring.js` is retained, not removed.** See the blocker
   below — until the OCapN identity is bound to the daemon keypair,
   removing the CapTP transport would regress cross-daemon identity.

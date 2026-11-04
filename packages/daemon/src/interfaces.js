@@ -71,6 +71,26 @@ export const PeerGatewayInterface = M.interface('ResilientPeerGateway', {
   provide: M.callWhen(M.string()).returns(M.any()),
 });
 
+export const EndoGatewayInterface = M.interface('EndoGateway', {
+  // Accept any value so a malformed identifier reaches the uniform miss path.
+  provide: M.call(M.any()).returns(M.promise()),
+  provideBlob: M.call(M.any()).returns(M.promise()),
+  provideTree: M.call(M.any()).returns(M.promise()),
+  followRetentionSet: M.call().optional(M.any()).returns(M.promise()),
+});
+
+export const EndoGreeterInterface = M.interface('EndoGreeter', {
+  makeGateway: M.call(M.string(), M.any()).returns(M.promise()),
+  hello: M.call(M.string(), M.any(), M.any(), M.any()).returns(M.promise()),
+  acceptSession: M.call(
+    M.string(),
+    M.any(),
+    M.any(),
+    M.any(),
+    M.boolean(),
+  ).returns(M.promise()),
+});
+
 export const ResponderInterface = M.interface('EndoResponder', {
   resolveWithId: M.callWhen(M.or(IdShape, M.promise())).returns(),
 });

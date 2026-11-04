@@ -25,6 +25,9 @@ can follow only its own retention set, and failed formula presentations share
 one non-oracular error and a per-session miss bound. Exact formula identifiers
 remain bearer capabilities, including identifiers for host and guest agents.
 
+Two daemons that dial each other at once now keep the one OCapN session they
+share; previously the daemon settled that crossing again and aborted it.
+
 An optional `ocapn-advertise-addr` pet value overrides the public `host:port`
 in the advertised OCapN location and connection-hint authority without
 changing `ocapn-listen-addr` or the TCP bind address.

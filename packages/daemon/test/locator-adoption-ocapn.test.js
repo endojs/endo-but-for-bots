@@ -404,12 +404,10 @@ test.serial(
         throw Error('not following retention');
       },
     });
-    const cancelConnection = Far('Hostile canceller', () => {});
     const connectionCancelled = new Promise(() => {});
     const gateway = await E(greeter).hello(
       attackerNode,
       remoteGateway,
-      cancelConnection,
       connectionCancelled,
       agentBinding,
     );
@@ -448,7 +446,6 @@ test.serial(
     const repeatedGateway = await E(greeter).hello(
       attackerNode,
       remoteGateway,
-      cancelConnection,
       connectionCancelled,
       agentBinding,
     );
@@ -464,5 +461,28 @@ test.serial(
       E(gateway).provide(`${'f'.repeat(64)}:${victimNode}`),
     );
     await t.throwsAsync(() => E(gateway).provide(hostId));
+  },
+);
+
+test.serial(
+  'two daemons that dial each other at once keep their one OCapN session',
+  async t => {
+    t.timeout(60_000);
+    const { host: hostA } = await prepareDaemon(t);
+    const { host: hostB } = await prepareDaemon(t);
+    await E(hostA).storeValue('from A', 'shared');
+    await E(hostB).storeValue('from B', 'shared');
+    const [locatorA, locatorB] = await Promise.all([
+      E(hostA).locate('shared'),
+      E(hostB).locate('shared'),
+    ]);
+
+    await Promise.all([
+      E(hostA).adoptFromLocator(locatorB, 'remote'),
+      E(hostB).adoptFromLocator(locatorA, 'remote'),
+    ]);
+
+    t.is(await E(hostA).lookup('remote'), 'from B');
+    t.is(await E(hostB).lookup('remote'), 'from A');
   },
 );
