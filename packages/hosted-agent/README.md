@@ -177,4 +177,17 @@ model list, and an account without discovery admits nothing.
 Request and response size bounds and simultaneous request slots protect host resources;
 completed requests do not exhaust a lifetime budget.
 An open stream holds its slot until upstream EOF, cancellation, or failure.
-Token and dollar spending limits are future application policy, not implicit defaults.
+The grant layer itself imposes no token or dollar spending limits; the inference
+provider registry does, with defaults from `inference-provider-policy.js`.
+
+Two subpaths support API-key providers:
+
+| Subpath | Exports |
+|---|---|
+| `@endo/hosted-agent/anthropic-api-key-issuer.js` | `makeAnthropicApiKeyIssuerFactory` builds the registry's issuer factory for Anthropic API-key grants; `make` is its Endo module entry point |
+| `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`, the limits a consumer configures against |
+
+`INFERENCE_PROVIDER_MODEL_PRICES` supplies, per model, a
+`{ inputPerMillion, outputPerMillion, cacheReadPerMillion?, cacheWritePerMillion? }`
+record of integer micro-dollar prices per million tokens. A free price is zero; a non-zero price below 1,000 micro-dollars
+is refused as a likely unit error.
