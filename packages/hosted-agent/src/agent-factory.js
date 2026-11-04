@@ -31,6 +31,33 @@ const CREATE_FIELDS = harden([
   'harnessConfig',
 ]);
 
+/**
+ * @typedef {object} AgentCreateRequest
+ * @property {string} idempotencyKey
+ * @property {string} providerId
+ * @property {'lal' | 'fae'} harness
+ * @property {string} name
+ * @property {string} model
+ * @property {Record<string, unknown>} [limits]
+ * @property {boolean} [wake]
+ * @property {Array<unknown>} [endowments]
+ * @property {Record<string, unknown>} [harnessConfig]
+ */
+
+/**
+ * @typedef {object} AgentReattachRequest
+ * @property {string} idempotencyKey
+ * @property {string} providerId
+ * @property {string} [model]
+ */
+
+/**
+ * The part of an `InferenceProviderUse` the factory consults: the owner it
+ * was granted to.
+ *
+ * @typedef {{ describe(): Promise<{ ownerId: string }> }} ProviderUseOwner
+ */
+
 /** A harness configuration with one of these could reach key material. */
 const FORBIDDEN_HARNESS_CONFIG = harden([
   'authSecretName',
@@ -71,8 +98,8 @@ const fixedCodeOf = error =>
   /operation failed: "([a-z-]+)"/.exec(String(error?.message))?.[1];
 
 /**
- * @param {boolean} condition @param {string} code
- * @param code
+ * @param {boolean} condition
+ * @param {string} code
  */
 const refuseUnless = (condition, code) => {
   if (!condition) throw fixedError(code);
@@ -122,11 +149,20 @@ const copyState = state => ({
 });
 
 /**
- * @param {unknown} left @param {unknown} right
- * @param right
+ * @param {unknown} left
+ * @param {unknown} right
  */
 const sameData = (left, right) =>
   JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * Owner ids, idempotency keys, and agent names may all contain any character,
+ * so a delimiter would let one owner's key alias another's.
+ *
+ * @param {string} ownerId
+ * @param {string} key
+ */
+const ownerScopedKey = (ownerId, key) => JSON.stringify([ownerId, key]);
 
 /**
  * @param {string | undefined} left
@@ -236,7 +272,7 @@ export const makeAgentFactory = async ({
 }) => {
   await null;
   /** @type {ReturnType<typeof emptyState>} */
-  let state = (await journal.read()) || emptyState();
+  let state = harden((await journal.read()) || emptyState());
   /** @type {Promise<unknown>} */
   let mutationTail = Promise.resolve();
   /** @type {Map<string, any>} */
@@ -263,8 +299,8 @@ export const makeAgentFactory = async ({
   };
 
   /**
-   * @param {string} boundary @param {any} operation
-   * @param operation
+   * @param {string} boundary
+   * @param {any} operation
    */
   const boundaryReached = (boundary, operation) =>
     afterBoundary(boundary, harden({ operationId: operation.operationId }));
@@ -346,7 +382,7 @@ export const makeAgentFactory = async ({
     }
     return advance(key, 'aborted', {}, next => {
       if (operation.kind !== 'create') return;
-      const nameKey = `${ownerId}:${request.name}`;
+      const nameKey = ownerScopedKey(ownerId, request.name);
       if (next.names[nameKey] === operation.agentId) delete next.names[nameKey];
     });
   };
@@ -559,7 +595,7 @@ export const makeAgentFactory = async ({
             lifecycle: 'deleted',
             updatedAt: now(),
           });
-          const nameKey = `${ownerId}:${record.name}`;
+          const nameKey = ownerScopedKey(ownerId, record.name);
           if (next.names[nameKey] === agentId) delete next.names[nameKey];
         });
       },
@@ -618,7 +654,7 @@ export const makeAgentFactory = async ({
    * @param {any} request
    * @param {string} agentId
    * @param {any} [extra]
-   * @param alsoChange
+   * @param {(next: any) => void} [alsoChange]
    */
   const writeIntent = async (
     ownerId,
@@ -629,7 +665,7 @@ export const makeAgentFactory = async ({
     extra = {},
     alsoChange = _next => {},
   ) => {
-    const key = `${ownerId}:${idempotencyKey}`;
+    const key = ownerScopedKey(ownerId, idempotencyKey);
     const operationId = randomId();
     refuseUnless(
       GENERATED_ID_PATTERN.test(operationId),
@@ -667,18 +703,20 @@ export const makeAgentFactory = async ({
    * @param {any} request
    */
   const findRetry = (ownerId, idempotencyKey, kind, request) => {
-    const existing = state.operations[`${ownerId}:${idempotencyKey}`];
+    const existing = state.operations[ownerScopedKey(ownerId, idempotencyKey)];
     if (existing === undefined) return undefined;
     refuseUnless(
-      existing.kind === kind && sameData(existing.request, request),
+      existing.ownerId === ownerId &&
+        existing.kind === kind &&
+        sameData(existing.request, request),
       'idempotency-conflict',
     );
     return existing;
   };
 
   /**
-   * @param {string} ownerId @param {string} agentId
-   * @param agentId
+   * @param {string} ownerId
+   * @param {string} agentId
    */
   const requireOwnedAgent = (ownerId, agentId) => {
     const record = state.agents[agentId];
@@ -690,8 +728,8 @@ export const makeAgentFactory = async ({
   };
 
   /**
-   * @param {string} ownerId @param {string} agentId
-   * @param agentId
+   * @param {string} ownerId
+   * @param {string} agentId
    */
   const requireLiveAgent = (ownerId, agentId) => {
     const record = requireOwnedAgent(ownerId, agentId);
@@ -737,7 +775,7 @@ export const makeAgentFactory = async ({
    * rather than named by id in the owner's directory.
    *
    * @param {string} ownerId
-   * @param {any} use
+   * @param {ProviderUseOwner} use
    */
   const assertUseMatchesOwner = async (ownerId, use) => {
     const { ownerId: providerOwnerId } = await E(use).describe();
@@ -745,19 +783,26 @@ export const makeAgentFactory = async ({
   };
 
   /**
-   * @param {string} ownerId @param {any} request
-   * @param request
+   * @param {string} ownerId
+   * @param {any} request
    */
   const createAgent = async (ownerId, request) => {
     const safe = safeCreateRequest(request);
     const { idempotencyKey } = request;
     // Discovery may wait on the upstream, so it stays outside the queue. A
     // retry skips it because the operation already holds the decision.
-    const key = `${ownerId}:${idempotencyKey}`;
+    const key = ownerScopedKey(ownerId, idempotencyKey);
     if (state.operations[key] === undefined) {
-      const { directory } = await requireActiveProvider(
+      const { directory, provider } = await requireActiveProvider(
         ownerId,
         safe.providerId,
+      );
+      const harness = AGENT_HARNESS_CATALOG.find(
+        ({ id }) => id === safe.harness,
+      );
+      refuseUnless(
+        harness !== undefined && harness.providerKinds.includes(provider.kind),
+        'provider-kind-unsupported',
       );
       await assertModelOffered(directory, safe.providerId, safe.model);
       refuseUnless(
@@ -768,7 +813,7 @@ export const makeAgentFactory = async ({
     return inOrder(async () => {
       const retry = findRetry(ownerId, idempotencyKey, 'create', safe);
       if (retry === undefined) {
-        const nameKey = `${ownerId}:${safe.name}`;
+        const nameKey = ownerScopedKey(ownerId, safe.name);
         refuseUnless(state.names[nameKey] === undefined, 'agent-name-conflict');
         const operationSuffix = randomId();
         const agentId = `agent-${operationSuffix}`;
@@ -802,7 +847,7 @@ export const makeAgentFactory = async ({
 
   /**
    * @param {any} mail
-   * @param cursor
+   * @param {string | undefined} cursor
    */
   const queuedAfter = (mail, cursor) =>
     mail.filter(({ number }) => messageAfter(number, cursor));
@@ -912,8 +957,11 @@ export const makeAgentFactory = async ({
       queuedMail === 'process' || queuedMail === 'skip',
       'wake-confirmation-required',
     );
+    // The cursor must name queued mail the owner was shown; a cursor beyond it
+    // would silently skip mail that has not arrived yet.
     refuseUnless(
-      MESSAGE_NUMBER_PATTERN.test(confirmedCursor),
+      MESSAGE_NUMBER_PATTERN.test(confirmedCursor) &&
+        unread.some(({ number }) => number === confirmedCursor),
       'wake-confirmation-required',
     );
     return harden({
@@ -949,7 +997,7 @@ export const makeAgentFactory = async ({
       IDENTIFIER_PATTERN.test(idempotencyKey),
       'invalid-idempotency-key',
     );
-    const key = `${ownerId}:${idempotencyKey}`;
+    const key = ownerScopedKey(ownerId, idempotencyKey);
     // Preparing may wait on the upstream or the guest, so it stays outside the
     // queue. A retry skips it because the operation already holds the decision.
     const prepared =
@@ -1017,8 +1065,8 @@ export const makeAgentFactory = async ({
   };
 
   /**
-   * @param {string} ownerId @param {string} agentId
-   * @param agentId
+   * @param {string} ownerId
+   * @param {string} agentId
    */
   const reattachOptions = async (ownerId, agentId) => {
     const record = requireLiveAgent(ownerId, agentId);
@@ -1147,7 +1195,8 @@ export const makeAgentFactory = async ({
         ),
       getOperationStatus: async idempotencyKey => {
         await null;
-        const operation = state.operations[`${ownerId}:${idempotencyKey}`];
+        const operation =
+          state.operations[ownerScopedKey(ownerId, idempotencyKey)];
         if (operation === undefined) {
           return harden({ idempotencyKey, status: 'not-found' });
         }
@@ -1331,10 +1380,21 @@ export const makeAgentFactory = async ({
 
   return harden({
     directoryFor,
+    /**
+     * @param {string} ownerId
+     * @param {AgentCreateRequest} request
+     * @param {ProviderUseOwner} use
+     */
     createWithUse: async (ownerId, request, use) => {
       await assertUseMatchesOwner(ownerId, use);
       return createAgent(ownerId, request);
     },
+    /**
+     * @param {string} ownerId
+     * @param {string} agentId
+     * @param {AgentReattachRequest} request
+     * @param {ProviderUseOwner} use
+     */
     reattachWithUse: async (ownerId, agentId, request, use) => {
       await assertUseMatchesOwner(ownerId, use);
       return reattachAgent(ownerId, agentId, request);

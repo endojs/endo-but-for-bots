@@ -27,16 +27,17 @@ const assertOwnName = name => {
 /**
  * For each method, the positions of arguments that are pet names or paths.
  * `send` and `reply` also carry an array of pet names to attach; a name in any
- * of those positions is checked the same way.
+ * of those positions is checked the same way. `list`, `has`, and `remove` take
+ * a variadic name path, so every argument they receive is checked.
  *
- * @type {Record<string, { names?: number[], nameLists?: number[] }>}
+ * @type {Record<string, { names?: number[], nameLists?: number[], restNames?: boolean }>}
  */
 const METHOD_ARGUMENTS = harden({
-  list: {},
-  has: { names: [0] },
+  list: { restNames: true },
+  has: { restNames: true },
   lookup: { names: [0] },
   move: { names: [0, 1] },
-  remove: { names: [0] },
+  remove: { restNames: true },
   followMessages: {},
   listMessages: {},
   messageHistory: {},
@@ -103,10 +104,17 @@ export const makeAgentGuestPowers = (guest, harness) => {
   /** @type {Record<string, any>} */
   const methods = {};
   for (const method of profile) {
-    const { names = [], nameLists = [] } = METHOD_ARGUMENTS[method];
+    const {
+      names = [],
+      nameLists = [],
+      restNames = false,
+    } = METHOD_ARGUMENTS[method];
     guards[method] = M.callWhen().rest(M.any()).returns(M.any());
     methods[method] = async (...callArguments) => {
       await null;
+      if (restNames) {
+        for (const name of callArguments) assertOwnName(name);
+      }
       for (const position of names) {
         if (callArguments[position] !== undefined)
           assertOwnName(callArguments[position]);

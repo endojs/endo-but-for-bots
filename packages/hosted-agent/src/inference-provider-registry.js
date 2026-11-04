@@ -785,8 +785,8 @@ export const makeInferenceProviderRegistry = async ({
   };
 
   /**
-   * @param {any} grant @param {string} reason
-   * @param reason
+   * @param {any} grant
+   * @param {string} reason
    */
   const appendRefusal = async (grant, reason) => {
     const next = copyState(state);
@@ -805,8 +805,8 @@ export const makeInferenceProviderRegistry = async ({
   };
 
   /**
-   * @param {string} grantId @param {string} reason
-   * @param reason
+   * @param {string} grantId
+   * @param {string} reason
    */
   const refuse = (grantId, reason) =>
     inOrder(async () => {
@@ -984,8 +984,8 @@ export const makeInferenceProviderRegistry = async ({
     });
 
   /**
-   * @param {string} providerId @param {string} model
-   * @param model
+   * @param {string} providerId
+   * @param {string} model
    */
   const markModelVerified = (providerId, model) =>
     inOrder(async () => {

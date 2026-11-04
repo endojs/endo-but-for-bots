@@ -573,6 +573,22 @@ test('retrying an idempotency key returns the same agent and a changed request c
   );
 });
 
+test('an owner id and idempotency key containing colons cannot alias another owner', async t => {
+  const { factory, directory, provider } = await setup();
+  const created = await E(directory).create(
+    createRequest(provider.providerId, { idempotencyKey: 'team:create' }),
+  );
+  t.is(
+    (await E(directory).getOperationStatus('team:create')).agentId,
+    created.agentId,
+  );
+  const aliased = factory.directoryFor(`${OWNER}:team`);
+  t.deepEqual(await E(aliased).getOperationStatus('create'), {
+    idempotencyKey: 'create',
+    status: 'not-found',
+  });
+});
+
 test('powers profiles hold exactly their methods and no root, secret or sibling path', async t => {
   const { factory, directory, provider } = await setup();
   const lal = await E(directory).create(createRequest(provider.providerId));
@@ -637,6 +653,17 @@ test('powers profiles hold exactly their methods and no root, secret or sibling 
       E(powers).lookup(['friend', '@secrets']),
       refusalFor('powers-name-refused'),
     );
+    for (const callVariadic of [
+      () => E(powers).list('@host'),
+      () => E(powers).list('@secrets'),
+      () => E(powers).list('friend', '@protected'),
+      () => E(powers).has('friend', '@secrets'),
+      () => E(powers).has(['friend', '@host']),
+      () => E(powers).remove('friend', '@protected'),
+      () => E(powers).remove('@endo'),
+    ]) {
+      await t.throwsAsync(callVariadic(), refusalFor('powers-name-refused'));
+    }
   }
   const own = await E(lalPowers).lookup('own-note');
   t.is(own.resolvedIn, lal.agentId, 'names resolve only within this guest');
@@ -879,6 +906,24 @@ test('mail while wake is off stays unread and enabling needs a queued-mail decis
   );
   t.is(world.responderRecords.size, 0, 'nothing runs until confirmed');
   t.false(factory.inspect().agents[agent.agentId].wake);
+
+  // A cursor must name queued mail the owner was shown.
+  for (const confirmedCursor of ['0', '4', '9'.repeat(31)]) {
+    for (const queuedMail of ['skip', 'process']) {
+      await t.throwsAsync(
+        E(directory).setWake(agent.agentId, {
+          idempotencyKey: `wake-${queuedMail}-${confirmedCursor}`,
+          wake: true,
+          queuedMail,
+          confirmedCursor,
+        }),
+        refusalFor('wake-confirmation-required'),
+        confirmedCursor,
+      );
+    }
+  }
+  t.false(factory.inspect().agents[agent.agentId].wake);
+  t.is(factory.inspect().agents[agent.agentId].mailCursor, undefined);
 
   // Mail after the dialog opened is new mail, not part of the confirmed skip.
   world.deliver(agent.agentId, '3');
