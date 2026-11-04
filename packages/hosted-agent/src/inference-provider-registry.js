@@ -6,6 +6,23 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import { InferenceEndpointInterface } from './subscription-share.js';
+import {
+  compactInferenceTurnEvents,
+  effectiveInferenceLimits,
+  foldInferenceTurnEvents,
+  inferenceAdmissionRefusal,
+  inferenceUsageAt,
+} from './inference-provider-admission.js';
+import {
+  conservativeTokenReservation,
+  DEFAULT_AGENT_LIMITS,
+  DEFAULT_OWNER_INFERENCE_LIMITS,
+  DEFAULT_PROVIDER_LIMITS,
+  priceUsageMicros,
+  raisedInferenceLimits,
+  validateAnthropicInferenceRequest,
+  validateInferenceLimits,
+} from './inference-provider-policy.js';
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const GENERATED_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
@@ -20,17 +37,33 @@ const ProviderDirectoryInterface = M.interface('InferenceProviderDirectory', {
   lookup: M.callWhen(M.string()).returns(M.record()),
   create: M.callWhen(M.record()).returns(M.record()),
   adminFor: M.callWhen(M.string()).returns(M.remotable()),
+  getOwnerLimits: M.callWhen().returns(M.record()),
+  setOwnerLimits: M.callWhen(M.record(), M.string())
+    .optional(M.boolean())
+    .returns(M.record()),
+  getUsage: M.callWhen().returns(M.record()),
+  getOperationStatus: M.callWhen(M.string()).returns(M.record()),
+  listPendingOperations: M.callWhen().returns(M.arrayOf(M.record())),
+  cancelOperation: M.callWhen(M.string()).returns(M.record()),
+  reattach: M.callWhen(M.record()).returns(M.record()),
 });
 
 const ProviderAdminInterface = M.interface('InferenceProviderAdmin', {
   getSummary: M.callWhen().returns(M.record()),
-  setLimits: M.callWhen(M.record(), M.string()).returns(M.record()),
-  supersede: M.callWhen(M.record()).returns(M.record()),
+  setLimits: M.callWhen(M.record(), M.string())
+    .optional(M.boolean())
+    .returns(M.record()),
+  discoverModels: M.callWhen().returns(M.record()),
+  supersede: M.callWhen(M.record()).optional(M.boolean()).returns(M.record()),
   retire: M.callWhen(M.string()).returns(M.record()),
+  assertUpstreamRevoked: M.callWhen().returns(M.record()),
 });
 
 const ProviderUseInterface = M.interface('InferenceProviderUse', {
   grant: M.callWhen(M.record()).returns(M.remotable()),
+  setGrantLimits: M.callWhen(M.string(), M.record(), M.string())
+    .optional(M.boolean())
+    .returns(M.record()),
 });
 
 // eslint-disable-next-line @endo/no-harden-pattern-maker
@@ -40,6 +73,9 @@ harden(ProviderAdminInterface);
 // eslint-disable-next-line @endo/no-harden-pattern-maker
 harden(ProviderUseInterface);
 
+/** Refusal records kept for audit; older ones are dropped. */
+const MAX_REFUSALS = 1024;
+
 /** @returns {any} */
 const emptyState = () =>
   harden({
@@ -48,6 +84,10 @@ const emptyState = () =>
     lifecycles: {},
     operations: {},
     grants: {},
+    ownerLimits: {},
+    modelStates: {},
+    turnEvents: [],
+    refusals: [],
     audit: [],
   });
 
@@ -65,6 +105,10 @@ const copyState = state => ({
   lifecycles: { ...state.lifecycles },
   operations: { ...state.operations },
   grants: { ...state.grants },
+  ownerLimits: { ...(state.ownerLimits || {}) },
+  modelStates: { ...(state.modelStates || {}) },
+  turnEvents: [...(state.turnEvents || [])],
+  refusals: [...(state.refusals || [])],
   audit: [...state.audit],
 });
 
@@ -87,8 +131,94 @@ const summarize = (descriptor, lifecycle) =>
       : { supersedes: descriptor.supersedes }),
     state: lifecycle.state,
     limits: lifecycle.limits,
+    ...(lifecycle.upstreamRevocationAssertedAt === undefined
+      ? {}
+      : {
+          upstreamRevocationAssertedAt: lifecycle.upstreamRevocationAssertedAt,
+        }),
     updatedAt: lifecycle.updatedAt,
   });
+
+/**
+ * The owner-visible shape of a provider operation: safe fields only, never
+ * key bytes or registry-assigned secret names.
+ *
+ * @param {any} operation
+ * @param {string} status
+ * @param {number} intentExpiryMs
+ */
+const summarizeOperation = (operation, status, intentExpiryMs) =>
+  harden({
+    operationId: operation.operationId,
+    idempotencyKey: operation.idempotencyKey,
+    kind: operation.kind,
+    providerId: operation.providerId,
+    displayName: operation.request.displayName,
+    providerKind: operation.request.kind,
+    defaultModel: operation.request.defaultModel,
+    ...(operation.request.supersedes === undefined
+      ? {}
+      : { supersedes: operation.request.supersedes }),
+    state: operation.state,
+    status,
+    createdAt: operation.createdAt,
+    updatedAt: operation.updatedAt,
+    ...(operation.state === 'intent'
+      ? {
+          expiresAt: new Date(
+            Date.parse(operation.createdAt) + intentExpiryMs,
+          ).toISOString(),
+        }
+      : {}),
+  });
+
+/**
+ * Convert the prior mutable-turn snapshot shape to immutable facts.
+ *
+ * @param {Record<string, any>} turns
+ */
+const eventsFromLegacyTurns = turns => {
+  const events = [];
+  for (const turn of Object.values(turns || {})) {
+    events.push(
+      harden({
+        type: 'reserved',
+        version: turn.version,
+        turnId: turn.turnId,
+        ownerId: turn.ownerId,
+        providerId: turn.providerId,
+        grantId: turn.grantId,
+        agentId: turn.agentId,
+        model: turn.model,
+        day: turn.day,
+        admittedAt: turn.admittedAt,
+        admittedAtMs: turn.admittedAtMs,
+        reservedTokens: turn.reservedTokens,
+        ...(turn.reservedCostMicros === undefined
+          ? {}
+          : { reservedCostMicros: turn.reservedCostMicros }),
+      }),
+    );
+    if (turn.state === 'settled') {
+      events.push(
+        harden({
+          type: 'settled',
+          turnId: turn.turnId,
+          disposition: turn.disposition,
+          usage: turn.usage,
+          chargedTokens: turn.chargedTokens,
+          ...(turn.chargedCostMicros === undefined
+            ? {}
+            : { chargedCostMicros: turn.chargedCostMicros }),
+          overrun: turn.overrun,
+          settledAt: turn.settledAt,
+          settledAtMs: Date.parse(turn.settledAt),
+        }),
+      );
+    }
+  }
+  return harden(events);
+};
 
 /**
  * The durable, non-secret provider registry. The caller supplies one Endo
@@ -100,9 +230,13 @@ const summarize = (descriptor, lifecycle) =>
  * @param {{ read(): Promise<any>, write(value: any): Promise<void> }} options.journal
  * @param {{ has(name: string): Promise<boolean>, provide(name: string, description: string, bytesBase64?: string, stableIds?: { secretId: string, grantId: string, operationId: string }): Promise<any>, recover?(name: string, description: string, stableIds: { secretId: string, grantId: string, operationId: string }): Promise<boolean>, revoke(name: string): Promise<void>, revokeStable?(stableIds: { secretId: string, grantId: string, operationId: string }): Promise<void>, state(name: string): Promise<string>, listNames?(): Promise<string[]> }} options.secrets
  * @param {(details: { descriptor: any, lifecycle: any, secret: any }) => Promise<{ openEndpoint(spec: any): Promise<any>, dispose(): Promise<void> | void }> | { openEndpoint(spec: any): Promise<any>, dispose(): Promise<void> | void }} options.makeIssuer
- * @param {(limits: any) => any} options.validateLimits
+ * @param {(limits: any) => any} [options.validateLimits]
+ * @param {(details: { descriptor: any, secret: any }) => Promise<{ observedAt?: number, models: Array<{ id: string, title?: string }> }>} [options.discoverModels]
+ * @param {Record<string, { inputPerMillion: number, outputPerMillion: number, cacheReadPerMillion?: number, cacheWritePerMillion?: number }>} [options.modelPrices]
+ * @param {Record<string, number>} [options.deploymentCeilings]
  * @param {() => string} options.randomId
  * @param {() => string} [options.now]
+ * @param {() => number} [options.nowMillis]
  * @param {number} [options.intentExpiryMs]
  * @param {(boundary: string, details: any) => Promise<void> | void} [options.afterCommit]
  */
@@ -110,21 +244,71 @@ export const makeInferenceProviderRegistry = async ({
   journal,
   secrets,
   makeIssuer,
-  validateLimits,
+  validateLimits: validateLimitsHook,
+  discoverModels,
+  modelPrices = harden({}),
+  deploymentCeilings = harden({}),
   randomId,
   now = () => new Date().toISOString(),
+  nowMillis = () => Date.parse(now()),
   intentExpiryMs = 24 * 60 * 60 * 1000,
   afterCommit = () => {},
 }) => {
   await null;
-  /** @type {ReturnType<typeof emptyState>} */
   const restored = await journal.read();
   /** @type {ReturnType<typeof emptyState>} */
-  let state = restored || emptyState();
+  let state;
+  if (restored?.turns !== undefined && restored?.turnEvents === undefined) {
+    const { turns, ...withoutTurns } = restored;
+    state = harden({
+      ...emptyState(),
+      ...withoutTurns,
+      turnEvents: eventsFromLegacyTurns(turns),
+    });
+    await journal.write(state);
+  } else {
+    state = harden({ ...emptyState(), ...(restored || {}) });
+  }
   state.version === 1 ||
     (() => {
       throw fixedError('unsupported-version');
     })();
+  // A turn still reserved at restart lost its in-flight request with the
+  // prior incarnation.
+  const orphaned = Object.values(
+    foldInferenceTurnEvents(state.turnEvents || []),
+  ).filter(turn => turn.state === 'reserved');
+  if (orphaned.length > 0) {
+    const recoveredAtMs = nowMillis();
+    const turnEvents = [...state.turnEvents];
+    for (const turn of orphaned) {
+      turnEvents.push(
+        harden({
+          type: 'settled',
+          turnId: turn.turnId,
+          disposition: 'estimated',
+          usage: harden({
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          }),
+          chargedTokens: turn.reservedTokens,
+          ...(turn.reservedCostMicros === undefined
+            ? {}
+            : { chargedCostMicros: turn.reservedCostMicros }),
+          overrun: false,
+          settledAt: now(),
+          settledAtMs: recoveredAtMs,
+        }),
+      );
+    }
+    state = harden({
+      ...state,
+      turnEvents: compactInferenceTurnEvents(turnEvents, recoveredAtMs),
+    });
+    await journal.write(state);
+  }
 
   /** @type {Promise<void>} */
   let mutationTail = Promise.resolve();
@@ -140,6 +324,21 @@ export const makeInferenceProviderRegistry = async ({
   const issuers = new Map();
   /** @type {Map<string, Promise<any>>} */
   const endpoints = new Map();
+
+  /**
+   * @param {any} limits
+   * @param {Record<string, number>} defaults
+   */
+  const checkLimits = (limits, defaults) => {
+    const checked = validateInferenceLimits(
+      limits,
+      defaults,
+      deploymentCeilings,
+    );
+    return validateLimitsHook === undefined
+      ? checked
+      : harden(validateLimitsHook(checked));
+  };
 
   /**
    * @template T
@@ -195,8 +394,14 @@ export const makeInferenceProviderRegistry = async ({
    * @param {string} ownerId
    * @param {any} request
    * @param {string | undefined} supersedes
+   * @param {Record<string, number>} limitDefaults
    */
-  const safeCreateRequest = async (ownerId, request, supersedes) => {
+  const safeCreateRequest = async (
+    ownerId,
+    request,
+    supersedes,
+    limitDefaults,
+  ) => {
     await null;
     const { idempotencyKey, displayName, kind, baseUrl, defaultModel, limits } =
       request || {};
@@ -220,7 +425,7 @@ export const makeInferenceProviderRegistry = async ({
       (() => {
         throw fixedError('invalid-model');
       })();
-    const checkedLimits = validateLimits(limits);
+    const checkedLimits = checkLimits(limits || {}, limitDefaults);
     return harden({
       displayName,
       kind,
@@ -234,11 +439,23 @@ export const makeInferenceProviderRegistry = async ({
    * @param {string} ownerId
    * @param {any} request
    * @param {string | undefined} supersedes
+   * @param {boolean} [confirmed] whether the owner confirmed raising a cap
+   *   above the superseded provider's. A replay of a committed operation raises
+   *   nothing, so it needs no confirmation.
    */
-  const createProvider = (ownerId, request, supersedes) =>
+  const createProvider = (ownerId, request, supersedes, confirmed = false) =>
     inOrder(async () => {
       assertOwnerId(ownerId);
-      const safeRequest = await safeCreateRequest(ownerId, request, supersedes);
+      const priorLimits =
+        supersedes === undefined
+          ? undefined
+          : requireOwnedProvider(ownerId, supersedes).lifecycle.limits;
+      const safeRequest = await safeCreateRequest(
+        ownerId,
+        request,
+        supersedes,
+        priorLimits ?? DEFAULT_PROVIDER_LIMITS,
+      );
       const { idempotencyKey, keyBase64 } = request;
       const operationKey = `create:${ownerId}:${idempotencyKey}`;
       let operation = state.operations[operationKey];
@@ -252,7 +469,14 @@ export const makeInferenceProviderRegistry = async ({
         }
         if (operation.state === 'aborted')
           throw fixedError('operation-aborted');
-      } else {
+      }
+      priorLimits === undefined ||
+        confirmed ||
+        raisedInferenceLimits(priorLimits, safeRequest.limits).length === 0 ||
+        (() => {
+          throw fixedError('limit-raise-unconfirmed');
+        })();
+      if (operation === undefined) {
         const operationId = randomId();
         GENERATED_ID_PATTERN.test(operationId) ||
           (() => {
@@ -352,6 +576,13 @@ export const makeInferenceProviderRegistry = async ({
         const next = copyState(state);
         next.descriptors[operation.providerId] = descriptor;
         next.lifecycles[operation.providerId] = lifecycle;
+        next.modelStates[operation.providerId] = harden({
+          catalogState: 'unavailable',
+          observedAt: null,
+          models: [],
+          verification: harden({ [descriptor.defaultModel]: 'unverified' }),
+        });
+        next.ownerLimits[ownerId] ||= DEFAULT_OWNER_INFERENCE_LIMITS;
         operation = harden({
           ...operation,
           state: 'committed',
@@ -552,6 +783,290 @@ export const makeInferenceProviderRegistry = async ({
     return grant;
   };
 
+  /** @param {any} grant @param {string} reason */
+  const appendRefusal = async (grant, reason) => {
+    const next = copyState(state);
+    next.refusals = next.refusals.slice(-(MAX_REFUSALS - 1));
+    next.refusals.push(
+      harden({
+        ownerId: grant.ownerId,
+        providerId: grant.providerId,
+        grantId: grant.grantId,
+        agentId: grant.agentId,
+        reason,
+        occurredAt: now(),
+      }),
+    );
+    await commit(next);
+  };
+
+  /** @param {string} grantId @param {string} reason */
+  const refuse = (grantId, reason) =>
+    inOrder(async () => {
+      const grant = requireActiveGrant(grantId);
+      await appendRefusal(grant, reason);
+    });
+
+  /** @param {any} usage */
+  const usageCounts = usage => {
+    const observed = usage?.usage ?? usage;
+    const count = value =>
+      typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.trunc(value)
+        : 0;
+    return harden({
+      inputTokens: count(observed?.inputTokens),
+      outputTokens: count(observed?.outputTokens),
+      cacheReadTokens: count(
+        observed?.cacheReadTokens ?? observed?.cachedInputTokens,
+      ),
+      cacheWriteTokens: count(
+        observed?.cacheWriteTokens ?? observed?.cacheWriteInputTokens,
+      ),
+    });
+  };
+
+  /**
+   * Atomically reserve against the agent, provider, and owner scopes.
+   * @param {string} grantId
+   * @param {{ inputBytes: number, maxOutputTokens: number }} request
+   */
+  const admit = (grantId, request) =>
+    inOrder(async () => {
+      await null;
+      const grant = requireActiveGrant(grantId);
+      const { lifecycle } = requireProvider(grant.providerId);
+      const ownerLimits =
+        state.ownerLimits?.[grant.ownerId] || DEFAULT_OWNER_INFERENCE_LIMITS;
+      const providerLimits = lifecycle.limits;
+      const agentLimits = effectiveInferenceLimits(grant.caps, providerLimits);
+      const admittedAtMs = nowMillis();
+      Number.isFinite(admittedAtMs) ||
+        (() => {
+          throw fixedError('invalid-clock');
+        })();
+      const day = new Date(admittedAtMs).toISOString().slice(0, 10);
+      const scopes = [
+        {
+          name: 'agent',
+          limits: agentLimits,
+          field: 'grantId',
+          value: grantId,
+        },
+        {
+          name: 'provider',
+          limits: providerLimits,
+          field: 'providerId',
+          value: grant.providerId,
+        },
+        {
+          name: 'owner',
+          limits: ownerLimits,
+          field: 'ownerId',
+          value: grant.ownerId,
+        },
+      ];
+      const reservedTokens = conservativeTokenReservation(request);
+      const price = Object.hasOwn(modelPrices, grant.models[0])
+        ? modelPrices[grant.models[0]]
+        : undefined;
+      const reservedCostMicros = priceUsageMicros(
+        request.inputBytes * 2,
+        request.maxOutputTokens,
+        0,
+        0,
+        price,
+      );
+      // Per-turn enforcers and post-result usage sinks cannot protect this
+      // boundary: admission spans grants and owners and must happen before the
+      // endpoint reads the API key. Policy therefore decides from a pure value
+      // snapshot; this layer only records the resulting fact.
+      const refusal = inferenceAdmissionRefusal({
+        usage: inferenceUsageAt(state.turnEvents, admittedAtMs),
+        scopes,
+        reservedTokens,
+        reservedCostMicros,
+      });
+      if (refusal !== undefined) {
+        await appendRefusal(grant, refusal);
+        throw fixedError('inference-request-refused');
+      }
+      const turnId = randomId();
+      const next = copyState(state);
+      next.turnEvents.push(
+        harden({
+          type: 'reserved',
+          version: 1,
+          turnId,
+          ownerId: grant.ownerId,
+          providerId: grant.providerId,
+          grantId,
+          agentId: grant.agentId,
+          model: grant.models[0],
+          day,
+          admittedAt: now(),
+          admittedAtMs,
+          reservedTokens,
+          ...(reservedCostMicros === undefined ? {} : { reservedCostMicros }),
+        }),
+      );
+      await commit(next);
+      return turnId;
+    });
+
+  /**
+   * @param {string} turnId
+   * @param {any} settlement
+   * @param {'settled' | 'estimated' | 'released'} disposition
+   */
+  const settle = (turnId, settlement, disposition) =>
+    inOrder(async () => {
+      const prior = foldInferenceTurnEvents(state.turnEvents)[turnId];
+      if (prior === undefined || prior.state !== 'reserved') return;
+      const counts = usageCounts(settlement);
+      const observedTokens = Object.values(counts).reduce(
+        (total, count) => total + count,
+        0,
+      );
+      const known = observedTokens > 0;
+      const chargedTokens =
+        disposition === 'released'
+          ? 0
+          : known
+            ? observedTokens
+            : prior.reservedTokens;
+      const observedCost = priceUsageMicros(
+        counts.inputTokens,
+        counts.outputTokens,
+        counts.cacheReadTokens,
+        counts.cacheWriteTokens,
+        Object.hasOwn(modelPrices, prior.model)
+          ? modelPrices[prior.model]
+          : undefined,
+      );
+      const chargedCostMicros =
+        disposition === 'released'
+          ? 0
+          : known && observedCost !== undefined
+            ? observedCost
+            : prior.reservedCostMicros;
+      const settledAtMs = nowMillis();
+      const next = copyState(state);
+      const settlementEvent = harden({
+        type: 'settled',
+        turnId,
+        disposition: known ? 'reported' : disposition,
+        usage: counts,
+        chargedTokens,
+        ...(chargedCostMicros === undefined ? {} : { chargedCostMicros }),
+        // Reported usage is charged in full even above the reservation, so a
+        // day's spend can pass its budget by the overrun of turns already in
+        // flight; later admissions that day are then refused.
+        overrun:
+          Number(chargedTokens) > Number(prior.reservedTokens) ||
+          Number(chargedCostMicros ?? 0) >
+            Number(prior.reservedCostMicros ?? Infinity),
+        settledAt: now(),
+        settledAtMs,
+      });
+      next.turnEvents = compactInferenceTurnEvents(
+        [...next.turnEvents, settlementEvent],
+        settledAtMs,
+      );
+      await commit(next);
+    });
+
+  /** @param {string} providerId @param {string} model */
+  const markModelVerified = (providerId, model) =>
+    inOrder(async () => {
+      const current = state.modelStates?.[providerId] || {
+        catalogState: 'unavailable',
+        observedAt: null,
+        models: [],
+        verification: {},
+      };
+      if (current.verification?.[model] === 'verified') return;
+      const next = copyState(state);
+      next.modelStates[providerId] = harden({
+        ...current,
+        verification: harden({
+          ...(current.verification || {}),
+          [model]: 'verified',
+        }),
+      });
+      await commit(next);
+    });
+
+  /** @param {string} providerId */
+  const refreshModels = async providerId => {
+    const { descriptor, lifecycle } = requireProvider(providerId);
+    lifecycle.state === 'active' ||
+      (() => {
+        throw fixedError('provider-retired');
+      })();
+    if (discoverModels === undefined) {
+      return (
+        state.modelStates?.[providerId] ||
+        harden({
+          catalogState: 'unsupported',
+          observedAt: null,
+          models: [],
+          verification: {},
+        })
+      );
+    }
+    let observation;
+    try {
+      const secret = await secrets.provide(
+        descriptor.secretGrantFormulaId,
+        `Inference provider ${providerId}`,
+        undefined,
+        undefined,
+      );
+      observation = await discoverModels({ descriptor, secret });
+      (observation && Array.isArray(observation.models)) ||
+        (() => {
+          throw Error('invalid model catalog');
+        })();
+    } catch (_error) {
+      const unavailable = harden({
+        ...(state.modelStates?.[providerId] || {}),
+        catalogState: 'unavailable',
+        observedAt: null,
+        models: [],
+      });
+      await inOrder(async () => {
+        const next = copyState(state);
+        next.modelStates[providerId] = unavailable;
+        await commit(next);
+      });
+      return unavailable;
+    }
+    const models = observation.models.map(model => {
+      (model && MODEL_PATTERN.test(model.id)) ||
+        (() => {
+          throw fixedError('invalid-model-catalog');
+        })();
+      return harden({ id: model.id, title: model.title || model.id });
+    });
+    const verification = {
+      ...(state.modelStates?.[providerId]?.verification || {}),
+    };
+    for (const model of models) verification[model.id] = 'verified';
+    const available = harden({
+      catalogState: 'current',
+      observedAt: observation.observedAt ?? nowMillis(),
+      models: harden(models),
+      verification: harden(verification),
+    });
+    await inOrder(async () => {
+      const next = copyState(state);
+      next.modelStates[providerId] = available;
+      await commit(next);
+    });
+    return available;
+  };
+
   /** @param {string} grantId */
   const provideEndpoint = grantId => {
     requireActiveGrant(grantId);
@@ -577,11 +1092,104 @@ export const makeInferenceProviderRegistry = async ({
     inference = makeExo('AgentInference', InferenceEndpointInterface, {
       request: async message => {
         await null;
-        return E(await provideEndpoint(grantId)).request(message);
+        const grant = requireActiveGrant(grantId);
+        let checked;
+        try {
+          checked = validateAnthropicInferenceRequest(message, {
+            model: grant.models[0],
+            maxOutputTokens: grant.caps.maxOutputTokens,
+            maxRequestBytes: grant.caps.maxRequestBytes,
+          });
+        } catch (_error) {
+          await refuse(grantId, 'inference-request-refused');
+          throw fixedError('inference-request-refused');
+        }
+        const turnId = await admit(grantId, checked);
+        let endpoint;
+        try {
+          endpoint = await provideEndpoint(grantId);
+        } catch (error) {
+          await settle(turnId, undefined, 'released');
+          throw error;
+        }
+        let response;
+        try {
+          response = await E(endpoint).request(checked.message);
+        } catch (error) {
+          // Once dispatched, an unknown/cancelled turn is conservatively
+          // charged its reservation even though its concurrency slot releases.
+          await settle(turnId, undefined, 'estimated');
+          throw error;
+        }
+        let observed;
+        try {
+          observed = await response.usage;
+        } catch (error) {
+          await settle(turnId, undefined, 'estimated');
+          throw error;
+        }
+        await settle(turnId, observed, 'estimated');
+        if (response.status === 404) {
+          await refuse(grantId, 'model-not-available');
+          throw fixedError('model-not-available');
+        }
+        if (Number(response.status) >= 200 && Number(response.status) < 300) {
+          await markModelVerified(grant.providerId, grant.models[0]);
+        }
+        return response;
       },
       requestByteStream: async message => {
         await null;
-        return E(await provideEndpoint(grantId)).requestByteStream(message);
+        const grant = requireActiveGrant(grantId);
+        let checked;
+        try {
+          checked = validateAnthropicInferenceRequest(message, {
+            model: grant.models[0],
+            maxOutputTokens: grant.caps.maxOutputTokens,
+            maxRequestBytes: grant.caps.maxRequestBytes,
+          });
+        } catch (_error) {
+          await refuse(grantId, 'inference-request-refused');
+          throw fixedError('inference-request-refused');
+        }
+        const turnId = await admit(grantId, checked);
+        let endpoint;
+        try {
+          endpoint = await provideEndpoint(grantId);
+        } catch (error) {
+          await settle(turnId, undefined, 'released');
+          throw error;
+        }
+        let response;
+        try {
+          response = await E(endpoint).requestByteStream(checked.message);
+        } catch (error) {
+          await settle(turnId, undefined, 'estimated');
+          throw error;
+        }
+        const usage = Promise.resolve(response.usage).then(
+          async observed => {
+            await settle(turnId, observed, 'estimated');
+            if (
+              Number(response.status) >= 200 &&
+              Number(response.status) < 300
+            ) {
+              await markModelVerified(grant.providerId, grant.models[0]);
+            }
+            return observed;
+          },
+          async error => {
+            await settle(turnId, undefined, 'estimated');
+            throw error;
+          },
+        );
+        usage.catch(() => {});
+        if (response.status === 404) {
+          await usage.catch(() => {});
+          await refuse(grantId, 'model-not-available');
+          throw fixedError('model-not-available');
+        }
+        return harden({ ...response, usage });
       },
       attestation: async () => {
         const grant = requireActiveGrant(grantId);
@@ -632,6 +1240,58 @@ export const makeInferenceProviderRegistry = async ({
     let use = uses.get(cacheKey);
     if (use !== undefined) return use;
     use = makeExo('InferenceProviderUse', ProviderUseInterface, {
+      setGrantLimits: (grantId, limits, operationId, confirmed = false) =>
+        inOrder(async () => {
+          IDENTIFIER_PATTERN.test(operationId) ||
+            (() => {
+              throw fixedError('invalid-operation-id');
+            })();
+          const grant = state.grants[grantId];
+          (grant !== undefined &&
+            grant.ownerId === ownerId &&
+            grant.providerId === providerId) ||
+            (() => {
+              throw fixedError('agent-not-found');
+            })();
+          grant.state === 'active' ||
+            (() => {
+              throw fixedError('agent-deleted');
+            })();
+          const { lifecycle } = requireOwnedProvider(ownerId, providerId);
+          const checked = checkLimits(limits, grant.caps);
+          sameData(
+            checked,
+            effectiveInferenceLimits(checked, lifecycle.limits),
+          ) ||
+            (() => {
+              throw fixedError('invalid-agent-limits');
+            })();
+          confirmed ||
+            raisedInferenceLimits(grant.caps, checked).length === 0 ||
+            (() => {
+              throw fixedError('limit-raise-unconfirmed');
+            })();
+          const updatedAt = now();
+          const next = copyState(state);
+          next.grants[grantId] = harden({
+            ...grant,
+            caps: checked,
+            updatedAt,
+          });
+          next.audit.push(
+            harden({
+              providerId,
+              grantId,
+              operationId,
+              change: 'agent-limits',
+              oldValue: grant.caps,
+              newValue: checked,
+              occurredAt: updatedAt,
+            }),
+          );
+          await commit(next);
+          return harden({ grantId, caps: checked, updatedAt });
+        }),
       grant: request =>
         inOrder(async () => {
           const { descriptor, lifecycle } = requireProvider(providerId);
@@ -650,9 +1310,14 @@ export const makeInferenceProviderRegistry = async ({
             (() => {
               throw fixedError('invalid-model');
             })();
-          request.model === descriptor.defaultModel ||
+          const agentDefaults = effectiveInferenceLimits(
+            DEFAULT_AGENT_LIMITS,
+            lifecycle.limits,
+          );
+          const caps = checkLimits(request.caps || {}, agentDefaults);
+          sameData(caps, effectiveInferenceLimits(caps, lifecycle.limits)) ||
             (() => {
-              throw fixedError('invalid-model');
+              throw fixedError('invalid-agent-limits');
             })();
           const grantId = request.grantId || randomId();
           IDENTIFIER_PATTERN.test(grantId) ||
@@ -667,7 +1332,7 @@ export const makeInferenceProviderRegistry = async ({
             providerId,
             agentId: request.agentId,
             models: [request.model],
-            caps: request.caps || {},
+            caps,
           });
           if (existing !== undefined) {
             sameData(
@@ -693,6 +1358,20 @@ export const makeInferenceProviderRegistry = async ({
           }
           const changedAt = now();
           const next = copyState(state);
+          const providerModels = state.modelStates?.[providerId] || {
+            catalogState: 'unavailable',
+            observedAt: null,
+            models: [],
+            verification: {},
+          };
+          next.modelStates[providerId] = harden({
+            ...providerModels,
+            verification: harden({
+              ...(providerModels.verification || {}),
+              [request.model]:
+                providerModels.verification?.[request.model] || 'unverified',
+            }),
+          });
           next.grants[grantId] = harden({
             ...desired,
             state: 'active',
@@ -722,7 +1401,7 @@ export const makeInferenceProviderRegistry = async ({
         const found = requireOwnedProvider(ownerId, providerId);
         return summarize(found.descriptor, found.lifecycle);
       },
-      setLimits: (limits, operationId) =>
+      setLimits: (limits, operationId, confirmed = false) =>
         inOrder(async () => {
           IDENTIFIER_PATTERN.test(operationId) ||
             (() => {
@@ -733,9 +1412,16 @@ export const makeInferenceProviderRegistry = async ({
             (() => {
               throw fixedError('provider-retired');
             })();
+          const checkedLimits = checkLimits(limits, found.lifecycle.limits);
+          confirmed ||
+            raisedInferenceLimits(found.lifecycle.limits, checkedLimits)
+              .length === 0 ||
+            (() => {
+              throw fixedError('limit-raise-unconfirmed');
+            })();
           const changed = harden({
             ...found.lifecycle,
-            limits: validateLimits(limits),
+            limits: checkedLimits,
             updatedAt: now(),
           });
           const next = copyState(state);
@@ -753,20 +1439,344 @@ export const makeInferenceProviderRegistry = async ({
           await commit(next);
           return summarize(found.descriptor, changed);
         }),
-      supersede: request => {
+      discoverModels: async () => refreshModels(providerId),
+      supersede: (request, confirmed = false) => {
         const found = requireOwnedProvider(ownerId, providerId);
         found.lifecycle.state === 'active' ||
           (() => {
             throw fixedError('provider-retired');
           })();
-        return createProvider(ownerId, request, providerId);
+        return createProvider(ownerId, request, providerId, confirmed);
       },
       retire: idempotencyKey =>
         retireProvider(ownerId, providerId, idempotencyKey),
+      assertUpstreamRevoked: () =>
+        inOrder(async () => {
+          const found = requireOwnedProvider(ownerId, providerId);
+          if (found.lifecycle.upstreamRevocationAssertedAt !== undefined) {
+            return summarize(found.descriptor, found.lifecycle);
+          }
+          const operationId = randomId();
+          const assertedAt = now();
+          const changed = harden({
+            ...found.lifecycle,
+            upstreamRevocationAssertedAt: assertedAt,
+            updatedAt: assertedAt,
+          });
+          const next = copyState(state);
+          next.lifecycles[providerId] = changed;
+          next.audit.push(
+            harden({
+              providerId,
+              operationId,
+              change: 'upstream-revocation-asserted',
+              oldValue: found.lifecycle,
+              newValue: changed,
+              occurredAt: assertedAt,
+            }),
+          );
+          await commit(next);
+          return summarize(found.descriptor, changed);
+        }),
     });
     admins.set(cacheKey, admin);
     return admin;
   };
+
+  /**
+   * The owner's view of a create (or supersede) operation, answering the
+   * dialog's Check status after a lost response.
+   *
+   * @param {any} operation
+   */
+  const createOperationStatus = async operation => {
+    await null;
+    if (operation.state === 'committed') return 'committed';
+    if (operation.state === 'aborted') return 'aborted';
+    if (operation.state === 'secret-created') return 'in-progress';
+    // At intent, a stored secret means a retry or the reconciler commits
+    // without key bytes; otherwise the owner must re-enter the key.
+    return (await secrets.has(operation.secretName))
+      ? 'in-progress'
+      : 'key-needed';
+  };
+
+  /**
+   * @param {string} ownerId
+   * @param {string} idempotencyKey
+   */
+  const requireCreateOperation = (ownerId, idempotencyKey) => {
+    IDENTIFIER_PATTERN.test(idempotencyKey) ||
+      (() => {
+        throw fixedError('invalid-idempotency-key');
+      })();
+    return state.operations[`create:${ownerId}:${idempotencyKey}`];
+  };
+
+  /**
+   * @param {string} ownerId
+   * @param {string} idempotencyKey
+   */
+  const cancelCreateOperation = (ownerId, idempotencyKey) =>
+    inOrder(async () => {
+      await null;
+      const operationKey = `create:${ownerId}:${idempotencyKey}`;
+      const operation = requireCreateOperation(ownerId, idempotencyKey);
+      if (operation === undefined) throw fixedError('operation-not-found');
+      if (operation.state === 'aborted') {
+        return summarizeOperation(operation, 'aborted', intentExpiryMs);
+      }
+      if (operation.state === 'committed') {
+        throw fixedError('operation-committed');
+      }
+      if (
+        operation.state !== 'intent' ||
+        (await secrets.has(operation.secretName))
+      ) {
+        throw fixedError('operation-in-progress');
+      }
+      // Fence the preallocated ids before recording the abort, so a crash
+      // between the two leaves an intent that a retried cancel repeats.
+      if (secrets.revokeStable !== undefined) {
+        await secrets.revokeStable(operation.secretIds);
+      }
+      await afterCommit(
+        'cancel-secret-fenced',
+        harden({ operationId: operation.operationId }),
+      );
+      const aborted = harden({
+        ...operation,
+        state: 'aborted',
+        updatedAt: now(),
+      });
+      const next = copyState(state);
+      next.operations[operationKey] = aborted;
+      await commit(next);
+      return summarizeOperation(aborted, 'aborted', intentExpiryMs);
+    });
+
+  /**
+   * The result of a committed reattachment, shared by the first response and
+   * every retry with the same idempotency key.
+   *
+   * @param {any} operation
+   */
+  const reattachResult = operation =>
+    harden({
+      operationId: operation.operationId,
+      agentId: operation.agentId,
+      priorGrantId: operation.priorGrantId,
+      grantId: operation.grantId,
+      providerId: operation.request.providerId,
+      model: operation.request.model,
+      caps: state.grants[operation.grantId].caps,
+      inference: provideInference(operation.grantId),
+    });
+
+  /**
+   * Drive a reattach intent to commit in one registry transaction: the new
+   * grant becomes active and the prior grant stops admitting turns. A turn
+   * already admitted on the prior grant finishes there. A target or prior
+   * grant that is no longer eligible aborts the operation, leaving the agent
+   * on its prior grant unchanged.
+   *
+   * @param {string} operationKey
+   */
+  const finishReattach = async operationKey => {
+    await null;
+    const operation = state.operations[operationKey];
+    const prior = state.grants[operation.priorGrantId];
+    const target = state.lifecycles[operation.request.providerId];
+    const priorProvider = state.descriptors[prior?.providerId];
+    const targetProvider = state.descriptors[operation.request.providerId];
+    let refusal;
+    if (prior === undefined || prior.state !== 'active') {
+      refusal = 'agent-deleted';
+    } else if (
+      target === undefined ||
+      targetProvider?.ownerId !== operation.ownerId ||
+      target.state !== 'active'
+    ) {
+      refusal = 'provider-not-found';
+    } else if (targetProvider.kind !== priorProvider?.kind) {
+      refusal = 'provider-kind-unsupported';
+    }
+    const changedAt = now();
+    const next = copyState(state);
+    if (refusal !== undefined) {
+      next.operations[operationKey] = harden({
+        ...operation,
+        state: 'aborted',
+        refusal,
+        updatedAt: changedAt,
+      });
+      await commit(next);
+      throw fixedError(refusal);
+    }
+    const providerId = operation.request.providerId;
+    const caps = effectiveInferenceLimits(prior.caps, target.limits);
+    const providerModels = state.modelStates?.[providerId] || {
+      catalogState: 'unavailable',
+      observedAt: null,
+      models: [],
+      verification: {},
+    };
+    next.modelStates[providerId] = harden({
+      ...providerModels,
+      verification: harden({
+        ...(providerModels.verification || {}),
+        [operation.request.model]:
+          providerModels.verification?.[operation.request.model] ||
+          'unverified',
+      }),
+    });
+    next.grants[operation.grantId] = harden({
+      version: 1,
+      grantId: operation.grantId,
+      ownerId: operation.ownerId,
+      providerId,
+      agentId: operation.agentId,
+      models: [operation.request.model],
+      caps,
+      state: 'active',
+      generation: 1,
+      createdAt: changedAt,
+      updatedAt: changedAt,
+    });
+    next.grants[operation.priorGrantId] = harden({
+      ...prior,
+      state: 'reattached',
+      reattachedTo: operation.grantId,
+      generation: prior.generation + 1,
+      updatedAt: changedAt,
+    });
+    next.operations[operationKey] = harden({
+      ...operation,
+      state: 'committed',
+      updatedAt: changedAt,
+    });
+    next.audit.push(
+      harden({
+        providerId,
+        operationId: operation.operationId,
+        change: 'reattached',
+        oldValue: harden({
+          grantId: prior.grantId,
+          providerId: prior.providerId,
+          models: prior.models,
+        }),
+        newValue: harden({
+          grantId: operation.grantId,
+          providerId,
+          models: [operation.request.model],
+        }),
+        occurredAt: changedAt,
+      }),
+    );
+    await commit(next);
+    await afterCommit(
+      'reattach-committed',
+      harden({ operationId: operation.operationId }),
+    );
+  };
+
+  /**
+   * Move an agent's inference from its current grant to a new grant on
+   * another of the owner's providers of the same kind. The agent id, and
+   * with it the guest's name, mail, wake state, and conversation, are kept;
+   * only the AgentInference facet changes.
+   *
+   * @param {string} ownerId
+   * @param {any} request
+   */
+  const reattachAgent = (ownerId, request) =>
+    inOrder(async () => {
+      await null;
+      const { idempotencyKey, grantId, providerId } = request || {};
+      IDENTIFIER_PATTERN.test(idempotencyKey) ||
+        (() => {
+          throw fixedError('invalid-idempotency-key');
+        })();
+      IDENTIFIER_PATTERN.test(grantId) ||
+        (() => {
+          throw fixedError('invalid-grant');
+        })();
+      const operationKey = `reattach:${ownerId}:${idempotencyKey}`;
+      let operation = state.operations[operationKey];
+      if (operation === undefined) {
+        const prior = state.grants[grantId];
+        if (prior === undefined || prior.ownerId !== ownerId) {
+          throw fixedError('agent-not-found');
+        }
+        prior.state === 'active' ||
+          (() => {
+            throw fixedError('agent-deleted');
+          })();
+        const model = request.model ?? prior.models[0];
+        MODEL_PATTERN.test(model) ||
+          (() => {
+            throw fixedError('invalid-model');
+          })();
+        const target = requireOwnedProvider(ownerId, providerId);
+        target.lifecycle.state === 'active' ||
+          (() => {
+            throw fixedError('provider-not-found');
+          })();
+        target.descriptor.kind === state.descriptors[prior.providerId]?.kind ||
+          (() => {
+            throw fixedError('provider-kind-unsupported');
+          })();
+        const operationId = randomId();
+        const newGrantId = randomId();
+        [operationId, newGrantId].every(value =>
+          GENERATED_ID_PATTERN.test(value),
+        ) ||
+          (() => {
+            throw fixedError('invalid-generated-id');
+          })();
+        const createdAt = now();
+        operation = harden({
+          version: 1,
+          operationId,
+          ownerId,
+          idempotencyKey,
+          kind: 'reattach',
+          agentId: prior.agentId,
+          priorGrantId: grantId,
+          grantId: newGrantId,
+          request: harden({ grantId, providerId, model }),
+          state: 'intent',
+          createdAt,
+          updatedAt: createdAt,
+        });
+        const next = copyState(state);
+        next.operations[operationKey] = operation;
+        await commit(next);
+        await afterCommit('reattach-intent', harden({ operationId }));
+      } else {
+        const asked = harden({
+          grantId,
+          providerId,
+          model: request.model ?? operation.request.model,
+        });
+        sameData(asked, operation.request) ||
+          (() => {
+            throw fixedError('idempotency-conflict');
+          })();
+        if (operation.state === 'aborted') {
+          throw fixedError(operation.refusal || 'operation-aborted');
+        }
+      }
+      if (operation.state === 'intent') {
+        await finishReattach(operationKey);
+        operation = state.operations[operationKey];
+      }
+      await afterCommit(
+        'reattach-response',
+        harden({ operationId: operation.operationId }),
+      );
+      return reattachResult(operation);
+    });
 
   /** @param {string} ownerId */
   const directoryFor = ownerId => {
@@ -794,6 +1804,89 @@ export const makeInferenceProviderRegistry = async ({
         },
         create: request => createProvider(ownerId, request, undefined),
         adminFor: async providerId => provideAdmin(ownerId, providerId),
+        getOwnerLimits: async () =>
+          state.ownerLimits?.[ownerId] || DEFAULT_OWNER_INFERENCE_LIMITS,
+        setOwnerLimits: (limits, operationId, confirmed = false) =>
+          inOrder(async () => {
+            IDENTIFIER_PATTERN.test(operationId) ||
+              (() => {
+                throw fixedError('invalid-operation-id');
+              })();
+            const prior =
+              state.ownerLimits?.[ownerId] || DEFAULT_OWNER_INFERENCE_LIMITS;
+            const checked = checkLimits(limits, prior);
+            confirmed ||
+              raisedInferenceLimits(prior, checked).length === 0 ||
+              (() => {
+                throw fixedError('limit-raise-unconfirmed');
+              })();
+            const next = copyState(state);
+            next.ownerLimits[ownerId] = checked;
+            next.audit.push(
+              harden({
+                ownerId,
+                operationId,
+                change: 'owner-limits',
+                oldValue: prior,
+                newValue: checked,
+                occurredAt: now(),
+              }),
+            );
+            await commit(next);
+            return checked;
+          }),
+        getUsage: async () => {
+          const turns = Object.values(
+            foldInferenceTurnEvents(state.turnEvents),
+          ).filter(turn => turn.ownerId === ownerId);
+          const refusals = (state.refusals || []).filter(
+            refusal => refusal.ownerId === ownerId,
+          );
+          return harden({ turns: harden(turns), refusals: harden(refusals) });
+        },
+        getOperationStatus: async idempotencyKey => {
+          await null;
+          const operation = requireCreateOperation(ownerId, idempotencyKey);
+          if (operation === undefined) {
+            return harden({ idempotencyKey, status: 'not-found' });
+          }
+          return summarizeOperation(
+            operation,
+            await createOperationStatus(operation),
+            intentExpiryMs,
+          );
+        },
+        listPendingOperations: async () => {
+          await null;
+          const pending = Object.values(state.operations)
+            .filter(
+              operation =>
+                operation.ownerId === ownerId &&
+                operation.kind === 'create' &&
+                (operation.state === 'intent' ||
+                  operation.state === 'secret-created'),
+            )
+            .sort((left, right) =>
+              left.createdAt === right.createdAt
+                ? left.operationId.localeCompare(right.operationId)
+                : left.createdAt.localeCompare(right.createdAt),
+            );
+          const summaries = [];
+          for (const operation of pending) {
+            summaries.push(
+              summarizeOperation(
+                operation,
+                // eslint-disable-next-line no-await-in-loop
+                await createOperationStatus(operation),
+                intentExpiryMs,
+              ),
+            );
+          }
+          return harden(summaries);
+        },
+        cancelOperation: idempotencyKey =>
+          cancelCreateOperation(ownerId, idempotencyKey),
+        reattach: request => reattachAgent(ownerId, request),
       },
     );
     directories.set(ownerId, directory);
@@ -802,10 +1895,23 @@ export const makeInferenceProviderRegistry = async ({
 
   const reconcile = () =>
     inOrder(async () => {
+      await null;
       for (const [operationKey, initial] of Object.entries(state.operations)) {
         let operation = initial;
         if (operation.state === 'committed' || operation.state === 'aborted') {
           // Finished operations have no recovery work.
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        if (operation.kind === 'reattach') {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await finishReattach(operationKey);
+          } catch (error) {
+            // A refused reattachment is recorded as aborted; the agent stays
+            // on its prior grant.
+            if (state.operations[operationKey].state !== 'aborted') throw error;
+          }
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -885,6 +1991,14 @@ export const makeInferenceProviderRegistry = async ({
             const next = copyState(state);
             next.descriptors[operation.providerId] = descriptor;
             next.lifecycles[operation.providerId] = lifecycle;
+            next.modelStates[operation.providerId] ||= harden({
+              catalogState: 'unavailable',
+              observedAt: null,
+              models: [],
+              verification: harden({ [descriptor.defaultModel]: 'unverified' }),
+            });
+            next.ownerLimits[operation.ownerId] ||=
+              DEFAULT_OWNER_INFERENCE_LIMITS;
             next.operations[operationKey] = harden({
               ...operation,
               state: 'committed',
@@ -974,7 +2088,11 @@ export const makeInferenceProviderRegistry = async ({
     inferenceFor: provideInference,
     revokeGrant,
     reconcile,
-    inspect: () => state,
+    inspect: () =>
+      harden({
+        ...state,
+        turns: foldInferenceTurnEvents(state.turnEvents),
+      }),
     close: async () => {
       await Promise.allSettled(
         [...issuers.values()].map(async issuer => (await issuer).dispose()),

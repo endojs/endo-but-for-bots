@@ -158,7 +158,7 @@ Key behaviors:
 
 - **Tool call extraction.** Some models embed tool calls as
   `<tool_call>JSON</tool_call>` in content. `extractToolCallsFromContent()`
-  parses these and strips `<think>…</think>` blocks.
+  parses these and strips `<think>...</think>` blocks.
 - **Direct evaluation.** The `evaluate` tool executes code directly and
   returns the result synchronously within the tool-call round-trip.
 - **No max-iteration guard.** The loop relies on the LLM to stop calling tools
@@ -413,7 +413,7 @@ common structure.
 | `LAL_HOST` | API base URL | `http://localhost:11434` |
 | `LAL_MODEL` | Model name | `qwen3` or `claude-opus-4-5-20251101` |
 | `LAL_AUTH_TOKEN` | API key | (optional for local) |
-| `LAL_MAX_TOKENS` | Max completion tokens (llama.cpp only) | `4096` |
+| `LAL_MAX_TOKENS` | Max completion tokens (llama.cpp and the brokered Anthropic path, `LAL_INFERENCE`) | `4096` |
 | `LAL_MAX_MESSAGES` | Truncate to last N messages (llama.cpp only) | (none) |
 
 ---

@@ -15,6 +15,7 @@ import {
   makeEndoSecretParticipant,
   makeInferenceProviderRegistry,
 } from './inference-provider-registry.js';
+import { parseInferenceProviderModelPrices } from './inference-provider-model-prices.js';
 import { makeSnapshotJournal } from './snapshot-journal.js';
 
 const RegistryRootInterface = M.interface('InferenceProviderRegistry', {
@@ -62,6 +63,19 @@ export const make = async (powers, context, { env } = {}) => {
         dispose: () => E(factory).disposeProvider(descriptor.providerId),
       });
     },
+    discoverModels: async ({ descriptor, secret }) => {
+      const factory = await E(powers).lookup(issuerFactoryName);
+      return E(factory).discoverModels(
+        harden({
+          providerId: descriptor.providerId,
+          kind: descriptor.kind,
+        }),
+        secret,
+      );
+    },
+    modelPrices: parseInferenceProviderModelPrices(
+      env?.INFERENCE_PROVIDER_MODEL_PRICES,
+    ),
     validateLimits: limits => {
       (limits && typeof limits === 'object' && !Array.isArray(limits)) ||
         Fail`Invalid provider limits`;
