@@ -9,6 +9,7 @@ import {
   isCredentialRejection,
   isResponseLost,
   isSubscriptionExhaustion,
+  isUpstreamRefusal,
 } from './provider-broker.js';
 import {
   isSubscriptionExhausted,
@@ -166,10 +167,11 @@ export const makeProviderFetchTransport = ({
           }
           return harden({ status: response.status, body: parts.join('') });
         } catch (error) {
-          // The two classifications are the detail worth preserving across
-          // the buffering wrapper; everything else collapses.
+          // The classifications are the detail worth preserving across the
+          // buffering wrapper; everything else collapses.
           if (isCredentialRejection(error)) throw error;
           if (isSubscriptionExhaustion(error)) throw error;
+          if (isUpstreamRefusal(error)) throw error;
           // A third, for whoever charges for the request: the provider had
           // begun to answer, or was given the whole deadline to, so the work
           // may well have been done though nothing of it arrived.

@@ -1657,3 +1657,31 @@ test('a single-credential issuer asks its one account, and refuses without an ad
     { message: /Invalid provider grant issuer policy/ },
   );
 });
+
+test('a grant reports an upstream refusal apart only when its issuer opts in', async t => {
+  for (const [revealUpstreamRefusal, status, message] of /** @type {const} */ ([
+    [false, 429, 'Provider request failed'],
+    [false, 404, 'Provider request failed'],
+    [true, 429, 'Provider rate limited'],
+    [true, 404, 'Provider model not found'],
+    [true, 500, 'Provider request failed'],
+  ])) {
+    const issuer = makeIssuer({
+      runtime: listenerRuntime(() => {}),
+      secret: Far('secret', { readBase64: async () => btoa('secret') }),
+      fetch: /** @type {any} */ (
+        async () => new Response('body-canary', { status })
+      ),
+      policy,
+      imageDigest: digest,
+      accountRef: 'account',
+      revealUpstreamRefusal,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const endpoint = await issuer.openEndpoint({ sessionId: 'session' });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(endpoint).request(inference), { message });
+    // eslint-disable-next-line no-await-in-loop
+    await issuer.dispose();
+  }
+});

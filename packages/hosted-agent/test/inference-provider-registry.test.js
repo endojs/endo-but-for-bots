@@ -2065,6 +2065,36 @@ test('a stream cut short is charged its reservation, not its partial usage', asy
   await registry.close();
 });
 
+for (const [label, thrown] of /** @type {Array<[string, unknown]>} */ ([
+  ['an unclassified error', Error('Provider request failed')],
+  ['a rejection that is no error', 'not an error'],
+])) {
+  test(`${label} from the endpoint reaches the caller and refuses nothing`, async t => {
+    const backing = makeBacking();
+    const registry = await makeRegistry(backing, {
+      modelPrices: harden({}),
+      behavior: {
+        streamResponse: () => Promise.reject(thrown),
+      },
+    });
+    const { directory, inference } = await tokenGrant(
+      registry,
+      'agent-unclassified',
+    );
+    const failure = await E(inference)
+      .requestByteStream(message('no'))
+      .catch(error => error);
+    t.is(
+      failure instanceof Error ? failure.message : failure,
+      thrown instanceof Error ? thrown.message : thrown,
+    );
+    const { refusals, turns } = await E(directory).getUsage();
+    t.deepEqual(refusals, []);
+    t.is(turns[0].disposition, 'estimated');
+    await registry.close();
+  });
+}
+
 for (const [thrown, code] of /** @type {Array<[string, string]>} */ ([
   ['Provider credential rejected', 'provider-authentication-failed'],
   ['Provider rate limited', 'provider-rate-limited'],
