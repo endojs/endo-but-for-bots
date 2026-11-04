@@ -90,7 +90,9 @@ export const makeRootGuestParticipant = powers =>
       }
     },
     listMail: async name => {
-      const messages = await E(E(powers).lookup(agentNameOf(name))).listMessages();
+      const messages = await E(
+        E(powers).lookup(agentNameOf(name)),
+      ).listMessages();
       return harden(
         messages.map(message =>
           harden({
@@ -173,7 +175,8 @@ export const make = async (powers, context, { env } = {}) => {
       Object.fromEntries(
         methods.map(method => [
           method,
-          (...callArguments) => E(E(powers).lookup(name))[method](...callArguments),
+          (...callArguments) =>
+            E(E(powers).lookup(name))[method](...callArguments),
         ]),
       ),
     );

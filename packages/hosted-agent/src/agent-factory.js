@@ -160,7 +160,10 @@ const safeCreateRequest = request => {
     ),
     'invalid-request',
   );
-  refuseUnless(IDENTIFIER_PATTERN.test(idempotencyKey), 'invalid-idempotency-key');
+  refuseUnless(
+    IDENTIFIER_PATTERN.test(idempotencyKey),
+    'invalid-idempotency-key',
+  );
   refuseUnless(IDENTIFIER_PATTERN.test(providerId), 'provider-not-found');
   refuseUnless(
     AGENT_HARNESS_CATALOG.some(({ id }) => id === harness),
@@ -629,7 +632,10 @@ export const makeAgentFactory = async ({
   ) => {
     const key = `${ownerId}:${idempotencyKey}`;
     const operationId = randomId();
-    refuseUnless(GENERATED_ID_PATTERN.test(operationId), 'invalid-generated-id');
+    refuseUnless(
+      GENERATED_ID_PATTERN.test(operationId),
+      'invalid-generated-id',
+    );
     const createdAt = now();
     const operation = harden({
       version: 1,
@@ -767,7 +773,10 @@ export const makeAgentFactory = async ({
         refuseUnless(state.names[nameKey] === undefined, 'agent-name-conflict');
         const operationSuffix = randomId();
         const agentId = `agent-${operationSuffix}`;
-        refuseUnless(GENERATED_ID_PATTERN.test(agentId), 'invalid-generated-id');
+        refuseUnless(
+          GENERATED_ID_PATTERN.test(agentId),
+          'invalid-generated-id',
+        );
         await writeIntent(
           ownerId,
           idempotencyKey,
@@ -863,8 +872,7 @@ export const makeAgentFactory = async ({
       .catch(() => harden({ deferred: [], refused: [] }));
     const unread = queuedAfter(mail, record.mailCursor);
     const lastMessage = mail.reduce(
-      (latest, { number }) =>
-        messageAfter(number, latest) ? number : latest,
+      (latest, { number }) => (messageAfter(number, latest) ? number : latest),
       undefined,
     );
     return harden({
@@ -1109,33 +1117,22 @@ export const makeAgentFactory = async ({
       },
       create: request => createAgent(ownerId, request),
       setWake: (agentId, request) =>
-        runAgentOperation(
-          ownerId,
-          agentId,
-          request,
-          'set-wake',
-          () =>
-            safeWakeRequest(requireLiveAgent(ownerId, agentId), request),
+        runAgentOperation(ownerId, agentId, request, 'set-wake', () =>
+          safeWakeRequest(requireLiveAgent(ownerId, agentId), request),
         ),
       setLimits: (agentId, request) =>
-        runAgentOperation(
-          ownerId,
-          agentId,
-          request,
-          'set-limits',
-          async () => {
-            requireLiveAgent(ownerId, agentId);
-            try {
-              validateInferenceLimits(request.limits, DEFAULT_AGENT_LIMITS);
-            } catch (_error) {
-              throw fixedError('invalid-agent-limits');
-            }
-            return harden({
-              limits: harden({ ...request.limits }),
-              confirmed: request.confirmed === true,
-            });
-          },
-        ),
+        runAgentOperation(ownerId, agentId, request, 'set-limits', async () => {
+          requireLiveAgent(ownerId, agentId);
+          try {
+            validateInferenceLimits(request.limits, DEFAULT_AGENT_LIMITS);
+          } catch (_error) {
+            throw fixedError('invalid-agent-limits');
+          }
+          return harden({
+            limits: harden({ ...request.limits }),
+            confirmed: request.confirmed === true,
+          });
+        }),
       reattachOptions: agentId => reattachOptions(ownerId, agentId),
       reattach: (agentId, request) => reattachAgent(ownerId, agentId, request),
       dismissMail: async (agentId, number) => {

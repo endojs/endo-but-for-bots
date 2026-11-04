@@ -45,7 +45,10 @@ export const classifyTurnFailure = error => {
   if (code.endsWith('-budget-exhausted')) {
     return harden({ disposition: 'budget', code });
   }
-  if (code.endsWith('-concurrency-exhausted') || code.endsWith('-rate-limited')) {
+  if (
+    code.endsWith('-concurrency-exhausted') ||
+    code.endsWith('-rate-limited')
+  ) {
     return harden({ disposition: 'backoff', code });
   }
   return harden({ disposition: 'refused', code });
@@ -209,7 +212,11 @@ export const makeAgentResponder = async ({
     const firstRefusedAtMs = prior?.firstRefusedAtMs ?? nowMs;
     // eslint-disable-next-line @endo/restrict-comparison-operands
     if (attempts >= maximumAttempts) {
-      return harden({ state: 'refused', code: 'retry-exhausted', lastCode: code });
+      return harden({
+        state: 'refused',
+        code: 'retry-exhausted',
+        lastCode: code,
+      });
     }
     const retryAtMs =
       disposition === 'budget'
@@ -292,7 +299,9 @@ export const makeAgentResponder = async ({
     await null;
     if (stopped || state.paused) return false;
     const mail = await E(guest).listMessages();
-    const byNumber = new Map(mail.map(message => [String(message.number), message]));
+    const byNumber = new Map(
+      mail.map(message => [String(message.number), message]),
+    );
     const gone = Object.keys(state.effects).filter(
       number => !byNumber.has(number),
     );
@@ -366,7 +375,7 @@ export const makeAgentResponder = async ({
         ),
       );
       cancelTimer?.();
-       
+
       cancelTimer = schedule(Math.min(earliest - nowMs, HOUR), pump);
     }
     return false;

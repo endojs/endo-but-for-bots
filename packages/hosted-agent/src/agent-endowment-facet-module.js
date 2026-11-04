@@ -25,8 +25,11 @@ export const make = async (powers, _context, { env } = {}) => {
   return makeExo('AgentEndowmentFacet', AgentEndowmentFacetInterface, {
     forTurn: async () => {
       const factory = await E(powers).lookup('factory');
-      const { powers: harnessPowers, inference, model } =
-        await E(factory).endowmentFor(agentId);
+      const {
+        powers: harnessPowers,
+        inference,
+        model,
+      } = await E(factory).endowmentFor(agentId);
       return harden({ powers: harnessPowers, inference, model });
     },
   });

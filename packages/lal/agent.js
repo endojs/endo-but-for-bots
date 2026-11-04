@@ -280,7 +280,6 @@ export const make = (guestPowers, _context) => {
       await E(powers).listMessages()
     );
     for (const msg of existingMessages) {
-       
       if (msg.from === selfLocator && msg.type === 'form') {
         formMessageId = msg.messageId;
       }
@@ -294,14 +293,10 @@ export const make = (guestPowers, _context) => {
       const msg = /** @type {any} */ (message);
 
       // Capture the form's messageId from our own outbound message.
-       
+
       if (msg.from === selfLocator && msg.type === 'form') {
         formMessageId = msg.messageId;
-      } else if (
-        msg.type === 'value' &&
-         
-        msg.replyTo === formMessageId
-      ) {
+      } else if (msg.type === 'value' && msg.replyTo === formMessageId) {
         // Only process value messages that reply to our form.
         try {
           // Resolve the submitted values from the value message.

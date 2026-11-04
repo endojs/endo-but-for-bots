@@ -65,7 +65,10 @@ export const make = async (powers, _context, { env }) => {
     ['launcher', await E(powers).identify(launcherName)],
   ]) {
     // eslint-disable-next-line no-await-in-loop
-    await E(powers).storeIdentifier([...responderPowersPath, entry], identifier);
+    await E(powers).storeIdentifier(
+      [...responderPowersPath, entry],
+      identifier,
+    );
   }
   await ensure(responderPath, () =>
     E(powers).makeUnconfined(workerPath, specifier, {

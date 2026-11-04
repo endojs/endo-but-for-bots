@@ -122,7 +122,6 @@ const makeWorld = () => {
 /** Let the responder's single-flight pass run to quiescence. */
 const settled = async () => {
   for (let turn = 0; turn < 200; turn += 1) {
-     
     await null;
   }
 };
@@ -141,7 +140,7 @@ const advance = async (world, ms) => {
     due.live = false;
     world.nowMs = Math.max(world.nowMs, due.at);
     due.callback();
-     
+
     await settled();
   }
   world.nowMs = until;
@@ -530,8 +529,14 @@ test('a turn past its wall clock is aborted and deferred', async t => {
 });
 
 test('failure classification follows the fixed codes', t => {
-  t.is(classifyTurnFailure(refusal('provider-budget-exhausted')).disposition, 'budget');
-  t.is(classifyTurnFailure(refusal('owner-rate-limited')).disposition, 'backoff');
+  t.is(
+    classifyTurnFailure(refusal('provider-budget-exhausted')).disposition,
+    'budget',
+  );
+  t.is(
+    classifyTurnFailure(refusal('owner-rate-limited')).disposition,
+    'backoff',
+  );
   t.is(classifyTurnFailure(refusal('provider-retired')).disposition, 'refused');
   t.like(classifyTurnFailure(Error('Anthropic rate limit reached')), {
     disposition: 'backoff',

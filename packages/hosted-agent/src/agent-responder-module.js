@@ -110,8 +110,11 @@ export const makeAgentResponderCaplet = makeTurnRunner =>
        * @param {AbortSignal} signal
        */
       const runTurn = async ({ prompt }, signal) => {
-        const { powers: harnessPowers, inference, model } =
-          await E(endowment).forTurn();
+        const {
+          powers: harnessPowers,
+          inference,
+          model,
+        } = await E(endowment).forTurn();
         if (current?.model !== model) {
           await current?.runner.dispose?.();
           current = harden({
@@ -144,7 +147,6 @@ export const makeAgentResponderCaplet = makeTurnRunner =>
         await null;
         while (!stopFollowing) {
           try {
-
             // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
             for await (const _message of iterateReader(
               E(guest).followMessages(),
