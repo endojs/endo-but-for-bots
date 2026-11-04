@@ -169,7 +169,9 @@ export const validateAnthropicInferenceRequest = (message, policy) => {
   try {
     body = JSON.parse(message.body);
   } catch (cause) {
-    throw makeError(X`inference-request-refused`, undefined, { cause });
+    throw makeError(X`inference-request-refused`, undefined, {
+      cause: /** @type {Error} */ (cause),
+    });
   }
   (body && typeof body === 'object' && !Array.isArray(body)) ||
     Fail`inference-request-refused`;
