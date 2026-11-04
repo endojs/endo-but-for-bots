@@ -989,7 +989,7 @@ test('owner-wide admission spans providers and cancellation releases its slot', 
     await null;
   }
   await t.throwsAsync(() => E(second).request(message('second')), {
-    message: /inference-request-refused/,
+    message: /owner-concurrency-exhausted/,
   });
   const firstAdmin = await E(directory).adminFor(firstProvider.providerId);
   await E(firstAdmin).retire('retire-owner-wide-1');
@@ -1077,7 +1077,7 @@ test('admission refuses worst-case reservations and unpriced dollar models befor
   );
   await t.throwsAsync(
     () => E(tokenInference).request(message('reservation is conservative')),
-    { message: /inference-request-refused/ },
+    { message: /agent-budget-exhausted/ },
   );
   t.deepEqual(tokenEvents, []);
   await tokenRegistry.close();
@@ -1112,7 +1112,7 @@ test('admission refuses worst-case reservations and unpriced dollar models befor
           ),
         }),
       ),
-    { message: /inference-request-refused/ },
+    { message: /unpriced-model/ },
   );
   t.deepEqual(dollarEvents, []);
   const dollarUsage = await E(dollarDirectory).getUsage();
@@ -1143,7 +1143,7 @@ test('admission refuses worst-case reservations and unpriced dollar models befor
     }),
   );
   await t.throwsAsync(() => E(ownerInference).request(message('owner')), {
-    message: /inference-request-refused/,
+    message: /unpriced-model/,
   });
   t.deepEqual(ownerEvents, []);
   const ownerUsage = await E(ownerDirectory).getUsage();
@@ -1329,11 +1329,11 @@ test('reservations hold across midnight and complete facts compact', async t => 
 
   clock = Date.parse('2026-10-28T00:00:01.000Z');
   await t.throwsAsync(() => E(inference).request(message('midnight')), {
-    message: /inference-request-refused/,
+    message: /-concurrency-exhausted/,
   });
   clock = Date.parse('2026-10-28T06:00:00.000Z');
   await t.throwsAsync(() => E(inference).request(message('still-held')), {
-    message: /inference-request-refused/,
+    message: /-concurrency-exhausted/,
   });
   const refused = await E(directory).getUsage();
   t.is(

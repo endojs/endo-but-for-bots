@@ -208,3 +208,30 @@ caplet needs a responder launcher, named by `AGENT_FACTORY_RESPONDER_LAUNCHER`,
 and fills the subagent-creation slot only from one named by
 `AGENT_FACTORY_SUBAGENT_SPAWNER`; without one, a request naming that endowment is
 refused.
+
+## Pinned responder
+
+`src/agent-responder.js` answers one agent's mail, one bounded turn at a time,
+through that agent's own inference grant. It keeps a cursor and one effect record
+per message in flight, in a snapshot under the guest's `@pins`, so restart and
+replayed delivery run no message twice once its turn has been recorded.
+
+A refused turn takes one of three paths, by its fixed code:
+
+- Concurrency and rate refusals defer with exponential backoff from a minute to
+  an hour.
+- Budget refusals defer until the next UTC day.
+- Anything else fixed, such as `provider-retired`, is marked refused.
+
+Eight transient refusals, or 72 hours from the first, make a message
+`retry-exhausted`. A refused or deferred message stays unread and its sender is
+told nothing, because a reply could reveal the owner's budget. The owner sees
+them on the agent summary and can retry them with `retryMail` or dismiss them
+with `dismissMail`.
+
+`src/agent-responder-launcher-module.js` is the daemon participant the agent
+factory drives; `@endo/lal/agent-responder.js` and `@endo/fae/agent-responder.js`
+are the per-harness entry points its env names. The daemon terminates any worker
+that references a formula it collects, so the launcher only ever holds data and
+each responder's control object, and released guests are set aside until the next
+daemon start.

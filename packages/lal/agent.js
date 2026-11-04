@@ -56,7 +56,7 @@ const LalInterface = M.interface('Lal', {
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string,
  *   LAL_INFERENCE?: any, LAL_MAX_TOKENS?: string }} workerEnv
  */
-const makeBrokeredModel = workerEnv => {
+export const makeBrokeredModel = workerEnv => {
   (!Object.hasOwn(workerEnv, 'LAL_AUTH_TOKEN') &&
     !Object.hasOwn(workerEnv, 'LAL_HOST')) ||
     Fail`Brokered Lal configuration cannot contain key material or a host`;
@@ -83,6 +83,28 @@ const makeBrokeredModel = workerEnv => {
     dispose: streamFn.dispose,
   });
 };
+harden(makeBrokeredModel);
+
+/**
+ * Bind Lal's tools to one guest's powers and build the PiAgent over them.
+ *
+ * @param {any} powers
+ * @param {any} model
+ * @param {any} piOptions
+ */
+export const makeWorkerPiAgent = (powers, model, piOptions) => {
+  const executeTool = makeExecuteTool(powers);
+  const agentTools = tools.map(({ name, summary }) =>
+    toAgentTool(name, summary, executeTool),
+  );
+  return makePiAgent({
+    systemPrompt,
+    model,
+    tools: agentTools,
+    ...piOptions,
+  });
+};
+harden(makeWorkerPiAgent);
 
 /**
  * lal historically selected a provider from LAL_HOST and a model from
@@ -159,17 +181,7 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   //       security-notes wrapping is applied), and
   //   (c) the per-tool parameter schema lives at the tool boundary,
   //       which lets `@endo/patterns` validation guard inbound args.
-  const executeTool = makeExecuteTool(powers);
-  const agentTools = tools.map(({ name, summary }) =>
-    toAgentTool(name, summary, executeTool),
-  );
-
-  const piAgent = makePiAgent({
-    systemPrompt,
-    model: resolvedModel,
-    tools: agentTools,
-    ...piOptions,
-  });
+  const piAgent = makeWorkerPiAgent(powers, resolvedModel, piOptions);
 
   /**
    * Run one chat round on the PiAgent, forwarding tool-call activity to
@@ -268,7 +280,7 @@ export const make = (guestPowers, _context) => {
       await E(powers).listMessages()
     );
     for (const msg of existingMessages) {
-      // eslint-disable-next-line @endo/restrict-comparison-operands
+       
       if (msg.from === selfLocator && msg.type === 'form') {
         formMessageId = msg.messageId;
       }
@@ -282,12 +294,12 @@ export const make = (guestPowers, _context) => {
       const msg = /** @type {any} */ (message);
 
       // Capture the form's messageId from our own outbound message.
-      // eslint-disable-next-line @endo/restrict-comparison-operands
+       
       if (msg.from === selfLocator && msg.type === 'form') {
         formMessageId = msg.messageId;
       } else if (
         msg.type === 'value' &&
-        // eslint-disable-next-line @endo/restrict-comparison-operands
+         
         msg.replyTo === formMessageId
       ) {
         // Only process value messages that reply to our form.

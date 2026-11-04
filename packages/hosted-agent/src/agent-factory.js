@@ -88,6 +88,7 @@ const AgentDirectoryInterface = M.interface('AgentDirectory', {
   reattachOptions: M.callWhen(M.string()).returns(M.arrayOf(M.record())),
   reattach: M.callWhen(M.string(), M.record()).returns(M.record()),
   dismissMail: M.callWhen(M.string(), M.string()).returns(M.record()),
+  retryMail: M.callWhen(M.string(), M.string()).returns(M.record()),
   delete: M.callWhen(M.string(), M.record()).returns(M.record()),
   getOperationStatus: M.callWhen(M.string()).returns(M.record()),
 });
@@ -857,6 +858,9 @@ export const makeAgentFactory = async ({
         .lookup(record.providerId)
         .catch(() => undefined),
     ]);
+    const responderView = await E(responders)
+      .describe(record.names.responder)
+      .catch(() => harden({ deferred: [], refused: [] }));
     const unread = queuedAfter(mail, record.mailCursor);
     const lastMessage = mail.reduce(
       (latest, { number }) =>
@@ -876,6 +880,10 @@ export const makeAgentFactory = async ({
       lifecycle: record.lifecycle,
       unreadCount: unread.length,
       unread,
+      deferred: responderView.deferred,
+      deferredCount: responderView.deferred.length,
+      refused: responderView.refused,
+      refusedCount: responderView.refused.length,
       ...(lastMessage === undefined ? {} : { lastMessage }),
       subagentCreation: record.subagentCreation,
       usage: usageFor(record, usage.turns),
@@ -1134,6 +1142,12 @@ export const makeAgentFactory = async ({
         const record = requireLiveAgent(ownerId, agentId);
         refuseUnless(MESSAGE_NUMBER_PATTERN.test(number), 'invalid-request');
         await E(guests).dismissMail(record.names.guest, number);
+        return summarize(agentId);
+      },
+      retryMail: async (agentId, number) => {
+        const record = requireLiveAgent(ownerId, agentId);
+        refuseUnless(MESSAGE_NUMBER_PATTERN.test(number), 'invalid-request');
+        await E(responders).retry(record.names.responder, number);
         return summarize(agentId);
       },
       delete: (agentId, request) =>
