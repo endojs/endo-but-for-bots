@@ -22,6 +22,7 @@ test('browser login uses current PKCE flow, refuses wrong state and returns only
   });
   const url = new URL(login.authorizationUrl);
   const state = url.searchParams.get('state');
+  if (state === null) throw Error('Missing OAuth state');
   t.is(url.origin, 'https://claude.com');
   t.is(url.pathname, '/cai/oauth/authorize');
   t.is(

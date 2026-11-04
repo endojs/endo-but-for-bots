@@ -47,5 +47,14 @@
       "test/**/*.test.js"
     ],
     "timeout": "60s"
+  },
+  "author": "Endo contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/browser-endo"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
   }
 }

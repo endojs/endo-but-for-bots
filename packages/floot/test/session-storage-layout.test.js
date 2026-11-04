@@ -14,7 +14,8 @@ import { makePromiseKit } from './_promise-kit.js';
 
 const root = 'floot-private-sessions/one';
 const fixture = (hooks = {}) => {
-  const values = new Map([
+  /** @type {Array<[string, unknown]>} */
+  const entries = [
     [`${root}/schema`, harden({ version: 2, sessionId: 'one' })],
     ['session-one', Far('Handle', {})],
     ['session-agent-one', Far('Guest', {})],
@@ -31,7 +32,8 @@ const fixture = (hooks = {}) => {
         ],
       }),
     ],
-  ]);
+  ];
+  const values = new Map(entries);
   const host = Far('LayoutHost', directoryHost(values, hooks));
   return { values, host };
 };

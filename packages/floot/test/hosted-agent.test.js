@@ -1030,7 +1030,9 @@ test('historical uncertainty stays in recovery context without marking a working
   t.true(sent[0].includes('Handle recovery quietly'));
   t.true(sent[0].includes('requires their decision or access'));
   t.false((await agent.getActivity()).needsRecovery);
-  t.falsy((await agent.getTurns()).find(turn => turn.turnId === id).resolution);
+  const recovered = (await agent.getTurns()).find(turn => turn.turnId === id);
+  if (!recovered) throw Error('Missing recovered turn');
+  t.falsy(recovered.resolution);
 });
 
 test('read-only history leaves undispatched evidence intact; writable startup repairs without acquiring a backend', async t => {
@@ -1070,6 +1072,7 @@ test('read-only history leaves undispatched evidence intact; writable startup re
   );
   t.teardown(() => writer.shutdown());
   const repaired = (await writer.getTurns()).find(turn => turn.turnId === id);
+  if (!repaired) throw Error('Missing repaired turn');
   t.is(repaired.state, 'cancelled');
   t.is(acquired, 0);
 });

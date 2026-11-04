@@ -824,6 +824,13 @@ test('creating recovery stops hosted native state and retains guest until termin
     .at(-1);
   if (!key) throw Error('Missing registry');
   const snapshot = world.hostStore.get(key);
+  if (
+    !snapshot ||
+    typeof snapshot !== 'object' ||
+    !('sessions' in snapshot) ||
+    !Array.isArray(snapshot.sessions)
+  )
+    throw Error('Missing registry sessions');
   world.hostStore.set(
     key,
     harden({

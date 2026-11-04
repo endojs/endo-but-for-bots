@@ -17,8 +17,11 @@ const fixture = () => {
   const key = path => {
     let directory = root;
     for (const part of path.slice(0, -1)) {
-      directory = directories.get(directory.get(part));
-      if (!directory) throw Error('Missing parent');
+      const identity = directory.get(part);
+      if (identity === undefined) throw Error('Missing parent identity');
+      const parent = directories.get(identity);
+      if (!parent) throw Error('Missing parent');
+      directory = parent;
     }
     return { directory, name: path.at(-1) };
   };
@@ -69,7 +72,9 @@ const fixture = () => {
     },
     copy: (from, to) => {
       const { directory, name } = key(to);
-      directory.set(name, identify(...from));
+      const identity = identify(...from);
+      if (identity === undefined) throw Error('Missing source identity');
+      directory.set(name, identity);
       writes.push(['copy', from, to]);
     },
     remove: (...path) => {
@@ -113,6 +118,7 @@ test('migration resumes a copied alias and refuses conflicting or non-directory 
     const f = fixture();
     await provideInstallationDirectory(f.host, 'claude-sandbox');
     const retained = f.identify(...installationPath('claude-sandbox'));
+    if (retained === undefined) throw Error('Missing retained installation');
     f.root.set('claude-sandbox', conflict ? 'other-directory' : retained);
     if (conflict) f.directories.set('other-directory', new Map());
     if (conflict) {

@@ -102,6 +102,7 @@ const setupFixture = ({ legacy = false, hasSecret = false } = {}) => {
   const entries = hasSecret
     ? [{ petNamePaths: [['secrets', 'openrouter-auth']] }]
     : [];
+  /** @type {{imports: unknown[][], mints: Array<{powersName: string[], resultName: string[], env: Record<string, string>}>}} */
   const calls = { imports: [], mints: [] };
   const key = (...names) => names.flat().join('/');
   const host = {

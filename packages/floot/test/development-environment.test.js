@@ -9,6 +9,7 @@ import {
 } from '../src/development-environment.js';
 
 const fixture = () => {
+  /** @type {Map<string, unknown>} */
   const hostStore = new Map([
     [
       'floot-private-sessions/test/schema',
