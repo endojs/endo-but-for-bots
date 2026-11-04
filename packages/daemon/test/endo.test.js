@@ -2855,13 +2855,14 @@ testNeedsNodeManager(
     }
     const digest = `sha256:${'a'.repeat(64)}`;
     const { host } = await makeHost(config, cancelled);
-    await E(host).makeDirectory('opencode-sandbox');
+    const installation = ['@pins', 'installations', 'opencode-sandbox'];
+    await E(host).provideDirectory(installation);
     // The same services setup-host.js and setup-hosted.js mint, over the
     // same powers shapes: host powers, a stored null, and a SecretBlob.
     await E(host).storeValue(null, 'opencode.null-powers');
     await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
       powersName: 'opencode.null-powers',
-      resultName: ['opencode-sandbox', 'native-sandbox'],
+      resultName: [...installation, 'native-sandbox'],
       env: {
         ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
         ENDO_SANDBOX_OWNER_ID: 'opencode-acceptance-native',
@@ -2890,7 +2891,7 @@ testNeedsNodeManager(
           new URL('./opencode-catalog-shim.js', import.meta.url).href,
         ],
         powersName: 'opencode-auth.broker-read',
-        resultName: ['opencode-sandbox', 'broker-service'],
+        resultName: [...installation, 'broker-service'],
         env: {
           OPENCODE_BROKER_CONFIG: JSON.stringify({
             ownerId: 'opencode-acceptance',
@@ -2904,10 +2905,7 @@ testNeedsNodeManager(
       },
     );
     await E(host).remove('opencode-auth.broker-read');
-    const brokerId = await E(host).identify(
-      'opencode-sandbox',
-      'broker-service',
-    );
+    const brokerId = await E(host).identify(...installation, 'broker-service');
     const brokerFormula = readFormulaFromDb(config.statePath, brokerId);
     t.not(brokerFormula.worker, await E(host).identify('@node'));
     await E(host).storeValue(null, 'opencode.storage-null-powers');
@@ -2916,7 +2914,7 @@ testNeedsNodeManager(
       spec('opencode-sandbox/src/opencode-session-storage-module.js'),
       {
         powersName: 'opencode.storage-null-powers',
-        resultName: ['opencode-sandbox', 'session-storage'],
+        resultName: [...installation, 'session-storage'],
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           OPENCODE_MCP_DIR: roots.mcpDir,
@@ -2929,13 +2927,14 @@ testNeedsNodeManager(
       spec('opencode-sandbox/src/opencode-backend-module.js'),
       {
         powersName: '@agent',
-        resultName: ['opencode-sandbox', 'backend'],
+        resultName: [...installation, 'backend'],
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           OPENCODE_MCP_DIR: roots.mcpDir,
         },
       },
     );
+    t.false(await E(host).has('opencode-sandbox'));
     t.is((await E(backend).describe()).id, 'opencode');
     const tools = Far('HostedToolSet', {
       describe: async () =>
@@ -2976,12 +2975,7 @@ testNeedsNodeManager(
       ),
       { message: refused },
     );
-    const recordPath = [
-      'opencode-sandbox',
-      'session-records',
-      'sessions',
-      'one',
-    ];
+    const recordPath = [...installation, 'session-records', 'sessions', 'one'];
     const record = await E(host).lookup(recordPath);
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
@@ -2998,7 +2992,7 @@ testNeedsNodeManager(
     ]);
     t.is(
       await E(host).identify(...recordPath, 'references', 'sandboxService'),
-      await E(host).identify('opencode-sandbox', 'native-sandbox'),
+      await E(host).identify(...installation, 'native-sandbox'),
     );
     for (const directory of [
       plan.workspaceDir,
@@ -3053,7 +3047,8 @@ testNeedsNodeManager(
     }
     const digest = `sha256:${'a'.repeat(64)}`;
     const { host } = await makeHost(config, cancelled);
-    await E(host).makeDirectory('claude-sandbox');
+    const installation = ['@pins', 'installations', 'claude-sandbox'];
+    await E(host).provideDirectory(installation);
     // The same services setup-host.js and setup-hosted.js mint, over the
     // same powers shapes: no powers, a stored null, a SecretBlob, the state
     // provider, and host powers for the backend.
@@ -3062,14 +3057,14 @@ testNeedsNodeManager(
       spec('claude-sandbox/src/claude-state-provider-module.js'),
       {
         powersName: '@none',
-        resultName: ['claude-sandbox', 'state-provider'],
+        resultName: [...installation, 'state-provider'],
         env: { ENDO_CLAUDE_STATE_DIR: stateDir },
       },
     );
     await E(host).storeValue(null, 'claude.null-powers');
     await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
       powersName: 'claude.null-powers',
-      resultName: ['claude-sandbox', 'native-sandbox'],
+      resultName: [...installation, 'native-sandbox'],
       env: {
         ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
         ENDO_SANDBOX_OWNER_ID: 'claude-acceptance-native',
@@ -3096,7 +3091,7 @@ testNeedsNodeManager(
           new URL('./claude-catalog-shim.js', import.meta.url).href,
         ],
         powersName: 'claude-creds.broker-read',
-        resultName: ['claude-sandbox', 'broker-service'],
+        resultName: [...installation, 'broker-service'],
         env: {
           CLAUDE_BROKER_CONFIG: JSON.stringify({
             ownerId: 'claude-acceptance',
@@ -3112,7 +3107,7 @@ testNeedsNodeManager(
     );
     await E(host).remove('claude-creds.broker-read');
     await E(host).copy(
-      ['claude-sandbox', 'state-provider'],
+      [...installation, 'state-provider'],
       ['claude.state-provider-powers'],
     );
     await E(host).makeUnconfined(
@@ -3120,7 +3115,7 @@ testNeedsNodeManager(
       spec('claude-sandbox/src/claude-session-storage-module.js'),
       {
         powersName: 'claude.state-provider-powers',
-        resultName: ['claude-sandbox', 'session-storage'],
+        resultName: [...installation, 'session-storage'],
         env: {
           CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           CLAUDE_MCP_DIR: roots.mcpDir,
@@ -3133,13 +3128,14 @@ testNeedsNodeManager(
       spec('claude-sandbox/src/claude-backend-module.js'),
       {
         powersName: '@agent',
-        resultName: ['claude-sandbox', 'backend'],
+        resultName: [...installation, 'backend'],
         env: {
           CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           CLAUDE_MCP_DIR: roots.mcpDir,
         },
       },
     );
+    t.false(await E(host).has('claude-sandbox'));
     t.is((await E(backend).describe()).id, 'claude');
     const tools = Far('HostedToolSet', {
       describe: async () =>
@@ -3166,7 +3162,7 @@ testNeedsNodeManager(
       E(backend).create(harden({ sessionId: 'one' }), tools),
       { message: refused },
     );
-    const recordPath = ['claude-sandbox', 'session-records', 'sessions', 'one'];
+    const recordPath = [...installation, 'session-records', 'sessions', 'one'];
     const record = await E(host).lookup(recordPath);
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
@@ -3188,7 +3184,7 @@ testNeedsNodeManager(
     ]);
     t.is(
       await E(host).identify(...recordPath, 'references', 'brokerService'),
-      await E(host).identify('claude-sandbox', 'broker-service'),
+      await E(host).identify(...installation, 'broker-service'),
     );
     for (const directory of [
       plan.workspaceDir,
