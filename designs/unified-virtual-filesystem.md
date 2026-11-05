@@ -197,13 +197,16 @@ posture and authority allow.
 Names such as `File` and `SnapshotBlob` therefore denote facets, not kinds.
 
 An arbitrary capability entry is a `CapabilityLink`.
-A directory snapshot freezes the binding to that link, not the state of the
-referent.
-A caller requiring a deep deterministic snapshot MUST call
-`snapshot({ strict: true })`.
-Strict mode throws `UNSNAPSHOTTABLE_ENTRY` for any `CapabilityLink` or any
-`DataStore` value that is not a Key, without dereferencing a link, instead of
-silently implying that the referent was frozen.
+Two operations freeze an entry, and they differ only in what they do with
+capabilities:
+
+- `snapshot()` returns immutable content that holds no capability.
+  It throws `UNSNAPSHOTTABLE_ENTRY` for any `CapabilityLink`, or any `DataStore` value
+  that is not a Key or that holds a remotable, without dereferencing a link.
+- `capture()` collapses every mutable entry to its immutable variant, such as a
+  `BlockStorage` to a blob, a `Directory` to a tree, and a `DataStore` to copy data,
+  and preserves all remaining capabilities by reference.
+  It freezes the binding to a link, not the state of the referent.
 
 `NameHub` remains the general pet-name map.
 `ReadableTree` is the filesystem-shaped subset whose entries have stable kinds
@@ -271,6 +274,7 @@ authority(A(B(x))) <= authority(A(x)) and authority(B(x))
 `R(x)` is therefore not `S(x)`.
 A snapshot can outlive and diverge from its source, whereas a read-only view
 observes later source changes.
+`capture` obeys the laws of `S`, except that its result can hold capabilities.
 
 Attenuation follows traversal.
 `lookup` on a read-only, controlled, narrowed, or rooted view returns each
@@ -326,13 +330,13 @@ mechanism, not this controller.
 The common interface proposes:
 
 ```js
-snapshot({ strict = false } = {}): Promise<Snapshot>
+snapshot(): Promise<Snapshot>
+capture(): Promise<Snapshot>
 Snapshot.equivalent(other): Promise<boolean>
 ```
 
-`strict` defaults to `false`, which freezes link bindings as described above.
-A strict snapshot that succeeds has the same shape as any other; it simply holds no
-links.
+Both return the same `Snapshot` facets, as described above.
+A capture that holds no capability is equivalent to a snapshot of the same content.
 
 A snapshot is the identity of its content.
 There is no separate identity method or token: a mutator's `expected` takes a
@@ -374,7 +378,9 @@ the same holds for a remotable inside a Key.
 A comparison across domains answers `false` if any other part of the operands differs,
 and otherwise throws `REFERENCE_INCOMPARABLE`.
 It never answers `true` for operands holding a link or a remotable.
-A caller that must compare such trees keeps both snapshots in one comparison domain.
+A caller that must compare such trees keeps both captures in one comparison domain.
+Only a capture can reach this case, because a result of `snapshot` holds no link or
+remotable.
 
 A caller holding references to both operands is the connectivity the comparison
 needs, so the two providers need no direct connection.
@@ -434,7 +440,7 @@ A mutator taking `{ expected }` accepts a snapshot from any provider the caller 
 bridge, and compares it with the complete current target immediately before commit.
 The provider pulls and digests a foreign snapshot's canonical form before opening
 its transaction, so no remote pull runs inside the transaction.
-A foreign snapshot holding a link or a remotable throws `REFERENCE_INCOMPARABLE`, a
+A foreign capture holding a link or a remotable throws `REFERENCE_INCOMPARABLE`, a
 severed pull throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws `PRECONDITION_FAILED`; none changes the
 target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
@@ -499,7 +505,7 @@ iterates a snapshot.
   - Views: all readable views
 - `grepHashLines(pattern, options)`: `grep` whose records also carry `hash`, the anchor of `line`.
   - Views: all readable views
-- `snapshot()`: Capture immutable content.
+- `snapshot()` / `capture()`: Freeze the content, which are the same for a blob.
   - Views: all readable views
 - `writeBytes(value, options)` / `writeText(value, options)`: Replace content atomically,
   optionally with `expected`.
@@ -545,7 +551,7 @@ avoid reading source content into the caller.
 - `grepHashLines(pattern, options)`, `glorpHashLines(globPattern, grepPattern, options)`: `grep`
   and `glorp` whose records also carry `hash`, the anchor of `line`.
   - Views: all tree views
-- `snapshot({ strict })`: Capture the whole visible tree.
+- `snapshot()`, `capture()`: Freeze the whole visible tree.
   - Views: all tree views
 - `watch()` / `followChanges(options)`: Follow live transactions; absent on immutable snapshots.
   - Views: live read-only, mutable, controlled
@@ -707,9 +713,8 @@ A weak store cannot enumerate its entries, so it has no snapshot, and a director
 names one only through a `CapabilityLink`.
 A store whose values are all Keys has the canonical form above.
 A store holding any other value, such as a promise, an error, or a copy record
-containing one, is still a valid entry with all its typed operations and a non-strict
-snapshot.
-It has no canonical form, so `equivalent`, strict `snapshot`, and any
+containing one, is still a valid entry with all its typed operations and a `capture`.
+It has no canonical form, so `snapshot`, `equivalent`, and any
 `expected` covering it or an enclosing tree throw `UNSNAPSHOTTABLE_ENTRY` and change
 nothing.
 A caller guarding such a tree uses the provider's revision instead.
@@ -744,7 +749,7 @@ and a copy-only `details` record.
   reached a capability link or remotable, whose exact form it may not exchange.
 - `SNAPSHOT_UNREACHABLE`: A connection carrying a foreign snapshot severed, or that snapshot's
   provider incarnation ended, before the operation finished with it.
-- `UNSNAPSHOTTABLE_ENTRY`: Strict deep snapshot encountered a capability link, or an operation
+- `UNSNAPSHOTTABLE_ENTRY`: `snapshot` encountered a capability link or a remotable, or an operation
   needing a canonical form reached a data store holding a value that is not a Key.
 - `LOCATOR_UNREACHABLE`: A restored capability link cannot presently resolve.
 - `ARCHIVE_MALFORMED`: An archive holds duplicate raw member names, names that collide after NFC
@@ -1040,7 +1045,7 @@ Extended attributes avoid visible sidecars but are not portable through ZIP,
 Git, object stores, or common copy tools.
 A directory-level index is therefore the portable source of truth.
 
-Snapshot and checkin record the link without dereferencing it.
+Capture and checkin record the link without dereferencing it.
 Checkout and `make-archive` reproduce the exact envelope and manifest entry.
 Only the verification above constructs an unresolved `CapabilityLink`.
 Resolution is a separate authority-bearing operation.
@@ -1248,7 +1253,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 - **Snapshotting capability slots**
   - Sources: mount and archive designs
   - What differs or is missing: It is unclear whether snapshot freezes a referenced object.
-  - Recommended resolution: Freeze the link only; strict deep snapshot rejects any link without
+  - Recommended resolution: `capture` freezes the link only; `snapshot` rejects any link without
     dereferencing it.
 - **Watcher vocabulary**
   - Sources: filesystem watchers, mount changes, root advancement
@@ -1304,15 +1309,15 @@ It covers:
 - **Views and paths:** view laws, path confinement, the shared segment guard, symbolic
   links leaving a native root, entry kinds, agreement between `kind()` and list records,
   a `kind()` that survives `snapshot()`, result paths that feed `lookup` unchanged,
-  missing-path behavior of `has`, `lookup`, and `maybeLookup`, and strict snapshots.
+  missing-path behavior of `has`, `lookup`, and `maybeLookup`, and `snapshot` versus `capture`.
 - **Comparison:** same-domain digest comparison, cross-provider snapshot comparison for every canonical form, comparison relayed
   through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
   Across domains, distinct locators whose digests are forced to collide MUST NOT
   compare `true`, a link pair MUST throw `REFERENCE_INCOMPARABLE`, a difference elsewhere
   MUST answer `false`, and no locator byte or locator digest may appear on the wire.
   A store holding a promise, an error, or a copy record containing one MUST keep its
-  typed operations and non-strict snapshot, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
-  `equivalent`, strict `snapshot`, and `expected`, including through an
+  typed operations and `capture`, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
+  `snapshot`, `equivalent`, and `expected`, including through an
   enclosing tree.
 - **Mutation:** ABA and stale CAS, controller setup and races, retained descendants
   across read, write, and revoked flips, partial-failure atomicity, merge conflict
