@@ -163,9 +163,17 @@ A snapshot can outlive and diverge from its source, whereas a read-only view
 observes later source changes.
 
 `C(k, x)` exposes the methods allowed by its static facet, but every operation
-also consults the controller's current branch policy.
-The controller can atomically set a branch to `read`, `write`, or `revoked`, and
-can later flip it in either direction.
+also consults the provider's current policy generation for the view's branch.
+The controller holds the authority to command that policy and owns no other state:
+`k.setPolicy(branch, 'read' | 'write' | 'revoked')` resolves to `{ generation }`
+only after the provider has journaled the new generation.
+The provider sequences policy generations and content commits in one journal, so
+it is the single serialization owner of every controlled decision.
+A controller can flip a branch in either direction.
+A command whose acknowledgment is lost has an unknown outcome until retried; it
+sets an absolute value, so a retry is idempotent.
+A controller spanning several providers issues one command to each and is not
+atomic across them.
 Only the controller can make a controlled view more permissive.
 Other attenuations remain monotonic: a size limit, path root, or omitted method
 cannot be raised or restored by the controller.
@@ -249,10 +257,10 @@ The comparison and mutation are one transaction.
 On success a mutator returns `{ snapshot, identity, revision }`, letting the
 caller verify the result without rereading it.
 
-A controlled mutation first checks the controller policy, then performs the CAS
-and commit under one serialization boundary.
-If policy changes first, it returns `ACCESS_REVOKED`; if content changes first,
-it returns `PRECONDITION_FAILED`.
+A controlled mutation checks the policy generation, performs the CAS, and commits
+as one provider transaction in journal order.
+If a policy generation that denies it lands first, it throws `ACCESS_REVOKED`; if
+a content commit lands first, it throws `PRECONDITION_FAILED`.
 
 ## Standard method families
 
@@ -559,15 +567,15 @@ parallel REST filesystem API.
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
 | Client view -> mutable provider | The view sends one guarded read or staged mutation. | The view's attenuation admits paths, methods, and result sizes; the provider validates CAS. | The provider alone owns bytes, tree metadata, revision, and journal. | The provider commits or discards one mutation and recovers its journal before publishing a root. | Path, operation, expected identity, and `MutationResult`, all filesystem vocabulary. |
-| Controller -> mutable provider | The controller supplies branch policy and generation. | The controller decides read/write/revoked; the provider decides transaction atomicity. | The controller owns durable policy; the provider owns content. | The controller restores policy before facets revive; the provider linearizes a write against its generation. | Branch selector and policy generation, controller vocabulary. |
+| Controller -> mutable provider | The controller sends an absolute policy command for a branch; the provider journals it and acknowledges its generation. | The controller decides read/write/revoked; the provider decides ordering and transaction atomicity. | The provider owns policy generations and content in one journal; the controller owns no durable state. | The provider alone commits, restoring policy from its journal before facets revive. | Branch selector, policy value, and acknowledged generation, controller vocabulary. |
 | Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private digests after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
 | Pet-name/formula directory -> provider or capability link | The directory binds a local name to a typed capability entry; a formula may reincarnate it. | The directory owner admits binding changes; it does not decide content mutations. | The directory/formula store owns bindings and recipes; the target provider owns target state. | The directory commits bindings and replays recipes before lookup; unresolved links remain inert. | Name, entry kind, formula ID or link, outer naming vocabulary. |
 | Archive/restore -> directory and locator resolver | Export writes a manifest/envelope; restore validates and mints unresolved links. | Explicit export authority admits bearer locators; restore chooses strict or unresolved mode. | The archive owner owns archive bytes; the destination owns installed bindings. | Export finalizes the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest entry, envelope bytes, and locator, archive vocabulary. |
 | Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
 
 **Persistent state.**
-The mutable provider owns content and journals, the controller owns policy, the
-content store owns immutable objects, the directory/formula store owns bindings
+The mutable provider owns content, policy generations, and journals, the content
+store owns immutable objects, the directory/formula store owns bindings
 and recipes, the archive owner owns exported bytes, and Git owns Git objects.
 No durable datum has two owners.
 A `ContentIdentity` retains no content and has no durable store: its issuer mints
@@ -590,7 +598,7 @@ resolver leaves an inert unresolved link rather than replaying an open.
 **Execution classification.**
 The mutable provider classifies a filesystem operation as committed, rejected,
 or failed.
-The controller supplies policy but does not relabel the outcome, and outer Git,
+The controller commands policy but does not relabel the outcome, and outer Git,
 archive, or formula layers decide what to do about it.
 
 **Inner/outer naming check.**
