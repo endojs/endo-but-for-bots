@@ -41,8 +41,8 @@ asks that capability for `main.js`.
 There is no global `/`, current working directory, drive letter, or authority to
 walk above the supplied root.
 
-Entries may be mutable files and directories, immutable blobs and trees, block
-devices, append-only logs, structured-data stores, or arbitrary capabilities.
+Entries may be mutable files and directories, immutable blobs and trees, block,
+log, map, set, and bag stores, cells, or arbitrary values.
 A holder can receive a live read-only view, an immutable snapshot, or a view whose
 writes a separate controller can enable, disable, or revoke.
 These views preserve ordinary filesystem intuitions while making authority and
@@ -169,26 +169,32 @@ Each kind has mutable facets and a snapshot facet:
 
 - `Blob`
   - Mutable facet and authority: `File`: byte mutation.
-    `BlockStorage`: sized random writes and append.
+    `BlockStore`: sized random writes and append.
   - Snapshot facet: `SnapshotBlob`
-  - Status: `File` **Implemented**, common shape proposed; `BlockStorage` **Proposed** in PR
-    #1265
+  - Status: `File` **Implemented**, common shape proposed; `BlockStore` **Proposed** in PR
+    #1265, as `BlockStorage`
 - `Tree`
   - Mutable facet and authority: `Directory`: tree mutation.
   - Snapshot facet: `SnapshotTree`
   - Status: **Implemented**, common shape proposed
 - `Log`
-  - Mutable facet and authority: `AppendLog`: append records only.
+  - Mutable facet and authority: `LogStore`: append records only.
   - Snapshot facet: `SnapshotLog`, an immutable record sequence
   - Status: **Proposed here**; no common design exists
-- `Data`
-  - Mutable facet and authority: `DataStore`: typed map/set/data operations.
-  - Snapshot facet: `SnapshotData`, a pass-by-copy value or immutable tree
-  - Status: **Designed** by daemon persistent stores
-- `Link`
-  - Mutable facet and authority: `CapabilityLink`: authority of the referenced capability.
-  - Snapshot facet: The link record, not the frozen referent
-  - Status: **Implemented concept**, serialization proposed here
+- `Map`, `Set`, `Bag`
+  - Mutable facet and authority: `MapStore`, `SetStore`, `BagStore`: typed store operations.
+  - Snapshot facet: `SnapshotMap`, `SnapshotSet`, `SnapshotBag`: a pass-by-copy value or immutable
+    tree
+  - Status: `MapStore` and `SetStore` **Designed** by daemon persistent stores, as data stores;
+    `BagStore` **Proposed here**
+- `Cell`
+  - Mutable facet and authority: `Cell`: replace the referent.
+  - Snapshot facet: `SnapshotCell`, a read-only cell over the frozen referent
+  - Status: **Proposed here**
+- `Value`
+  - Mutable facet and authority: None; rebinding the name in its directory replaces it.
+  - Snapshot facet: The binding itself
+  - Status: **Implemented**: a pet name bound to a formula
 
 Kind and posture are independent.
 The kind says what the content is and does not change when an entry is snapshotted.
@@ -196,17 +202,21 @@ The facet says what the holder may do with it, by exposing only the methods its
 posture and authority allow.
 Names such as `File` and `SnapshotBlob` therefore denote facets, not kinds.
 
-An arbitrary capability entry is a `CapabilityLink`.
+Stores and cells differ from a `Value` entry in what changes.
+A `Value` entry directly captures any durable value and changes only by modifying the
+entry in its directory.
+The content of a store or a cell can change without manipulating the directory.
+
 Two operations freeze an entry, and they differ only in what they do with
 capabilities:
 
 - `snapshot()` returns immutable content that holds no capability.
-  It throws `UNSNAPSHOTTABLE_ENTRY` for any `CapabilityLink`, or any `DataStore` value
-  that is not a Key or that holds a remotable, without dereferencing a link.
+  It throws `UNSNAPSHOTTABLE_ENTRY` for any value, in a `Value`, `Cell`, or store, that
+  is not a Key or that may hold a remotable, without dereferencing it.
 - `capture()` collapses every mutable entry to its immutable variant, such as a
-  `BlockStorage` to a blob, a `Directory` to a tree, and a `DataStore` to copy data,
-  and preserves all remaining capabilities by reference.
-  It freezes the binding to a link, not the state of the referent.
+  `BlockStore` to a blob, a `Directory` to a tree, and a `MapStore` to a copy map, and
+  preserves all remaining capabilities by reference.
+  It freezes the binding to a capability, not the state of that capability.
 
 `NameHub` remains the general pet-name map.
 `ReadableTree` is the filesystem-shaped subset whose entries have stable kinds
@@ -278,11 +288,11 @@ observes later source changes.
 
 Attenuation follows traversal.
 `lookup` on a read-only, controlled, narrowed, or rooted view returns each
-`File`, `Directory`, `BlockStorage`, `AppendLog`, and `DataStore` child under the
-same attenuation.
-A `CapabilityLink` child stays a link: the attenuation governs the binding, not the
-referent, whose authority comes from resolving the link.
-A minter that must withhold that authority omits link resolution from the facet.
+`File`, `Directory`, `BlockStore`, `LogStore`, `MapStore`, `SetStore`, `BagStore`, and
+`Cell` child under the same attenuation.
+A `Value` child is returned as it is, because the attenuation governs the binding and
+not the value, whose authority is its own.
+A minter that must withhold that authority omits `Value` lookup from the facet.
 
 `x.makeController()` mints a controller bound to the provider that owns `x`, and
 only a mutable facet of `x` offers it.
@@ -370,17 +380,17 @@ Within one domain it MAY compare private digests.
 Otherwise the receiver pulls the argument's canonical form over the reference it
 was passed and compares it with its own, materializing neither in the caller.
 
-A link cannot be compared this way.
+A capability reference cannot be compared this way.
 Its locator may be a bearer secret, so locator bytes MUST NOT cross this exchange, and
 a digest of them could not establish that the bytes are equal.
-The pulled canonical form therefore carries only the kind `Link` at that name, and
+The pulled canonical form therefore carries only the entry's kind at that name, and
 the same holds for a remotable inside a Key.
 A comparison across domains answers `false` if any other part of the operands differs,
 and otherwise throws `REFERENCE_INCOMPARABLE`.
-It never answers `true` for operands holding a link or a remotable.
+It never answers `true` for operands holding a capability reference.
 A caller that must compare such trees keeps both captures in one comparison domain.
-Only a capture can reach this case, because a result of `snapshot` holds no link or
-remotable.
+Only a capture can reach this case, because a result of `snapshot` holds no capability
+reference.
 
 A caller holding references to both operands is the connectivity the comparison
 needs, so the two providers need no direct connection.
@@ -405,22 +415,24 @@ Every entry compares by the canonical form of its kind:
 
 - **Blob**: The exact byte sequence.
   Capacity, block size, and timestamps are excluded.
-  - Facets: `File`, `BlockStorage`, `SnapshotBlob`
+  - Facets: `File`, `BlockStore`, `SnapshotBlob`
 - **Tree**: The set of NFC-normalized names, each with its entry's kind and canonical form.
   Listing order and timestamps are excluded.
   - Facets: `Directory`, `SnapshotTree`
 - **Log**: The ordered sequence of exact records.
   A strict prefix is not equivalent.
-  - Facets: `AppendLog` and its snapshot
-- **Data**: For a store whose values are all Keys, the store shape (map or set) and its entries
-  in key rank order, compared by `keyEQ` from `@endo/patterns`.
-  Other stores have no canonical form, as defined under *Blocks, logs, data, and generic slots*.
-  - Facets: `DataStore` and its snapshot
-- **Link**: Within one comparison domain, the exact locator bytes of the link record, or object
-  identity for a link with no locator.
+  - Facets: `LogStore` and its snapshot
+- **Map, Set, Bag**: For a store whose values are all Keys, the store kind and its entries in key
+  rank order, compared by `keyEQ` from `@endo/patterns`.
+  Other stores have no canonical form, as defined under *Stores, cells, and values*.
+  - Facets: `MapStore`, `SetStore`, `BagStore`, and their snapshots
+- **Cell**: The canonical form of its referent, under the kind `Cell`.
+  - Facets: `Cell`, `SnapshotCell`
+- **Value**: A value that is a Key compares by `keyEQ`.
+  Within one comparison domain, a capability reference compares by the exact bytes of its
+  locator, or by object identity if it has none.
   The referent is never dereferenced.
-  Across domains a link has no comparable form.
-  - Facets: `CapabilityLink`
+  Across domains a capability reference has no comparable form.
 
 A snapshot keeps its source's kind even when its representation is a
 pass-by-copy value or a tree, so comparison is defined for every kind.
@@ -440,15 +452,15 @@ A mutator taking `{ expected }` accepts a snapshot from any provider the caller 
 bridge, and compares it with the complete current target immediately before commit.
 The provider pulls and digests a foreign snapshot's canonical form before opening
 its transaction, so no remote pull runs inside the transaction.
-A foreign capture holding a link or a remotable throws `REFERENCE_INCOMPARABLE`, a
+A foreign capture holding a capability reference throws `REFERENCE_INCOMPARABLE`, a
 severed pull throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws `PRECONDITION_FAILED`; none changes the
 target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
 
-Tree CAS covers the complete visible root, including entry kinds and capability
-link records.
+Tree CAS covers the complete visible root, including entry kinds and `Value`
+bindings.
 File CAS covers the complete byte sequence.
 The comparison and mutation are one transaction.
 On success a mutator returns `{ snapshot, revision }`, letting the
@@ -567,14 +579,17 @@ Path `[]` names the receiver.
 `maybeLookup` resolves to `undefined` and `has` to `false`.
 All three throw `WRONG_ENTRY_KIND` when a non-final segment names an entry that is
 not a tree.
-Traversal never resolves a `CapabilityLink`, and `has` reports the binding whether
-or not its referent is reachable.
+Traversal never passes through a `Cell` or a `Value`, and `has` reports the binding
+whether or not its value is reachable.
+`lookup` on a `Value` entry returns the value itself or throws `LOCATOR_UNREACHABLE`.
 
+A `Value` entry therefore has no entry capability, and its kind appears only in its
+directory's list records.
 Every entry capability answers `kind()` with its kind:
 
 ```js
 kind(): Promise<EntryKind>
-// EntryKind: 'Blob' | 'Tree' | 'Log' | 'Data' | 'Link'
+// EntryKind: 'Blob' | 'Tree' | 'Log' | 'Map' | 'Set' | 'Bag' | 'Cell' | 'Value'
 ```
 
 The kind chooses the family of content operations, and a snapshot answers the same
@@ -625,7 +640,7 @@ mutable.applyTransform(transform, { expected }): Promise<MutationResult>
 references defined below instead of embedding bytes.
 `diff` exists only on immutable snapshots so both operands are stable.
 Across domains, `diff` and `merge` throw `REFERENCE_INCOMPARABLE` on reaching a pair of
-links or remotables, because they cannot tell whether the pair changed.
+capability references, because they cannot tell whether the pair changed.
 `applyPatch` exists only on mutable or writable controlled views and requires an
 expected snapshot unless the caller explicitly chooses last-writer-wins.
 
@@ -697,32 +712,39 @@ Because every source is immutable, the snapshot it returns predicts the result o
 `applyTransform` with the same transform on any target equivalent to the receiver,
 and `expected` rejects any other target.
 
-### Blocks, logs, data, and generic slots
+### Stores, cells, and values
 
-`BlockStorage` has `size`, range reads, `writeRange`, `append`, `truncate`,
+`BlockStore` has `size`, range reads, `writeRange`, `append`, `truncate`,
 and `snapshot`; it deliberately has no middle insertion method.
-`AppendLog` has `append`, `follow`, `snapshot`, and ranged record reads, with no
+`LogStore` has `append`, `follow`, `snapshot`, and ranged record reads, with no
 rewrite authority.
-`DataStore` has the typed map/set operations from the persistent-store design
-and `snapshot`, which returns a `SnapshotData` represented by a pass-by-copy value
-when bounded and an immutable tree otherwise.
+`MapStore`, `SetStore`, and `BagStore` have the typed store operations from the
+persistent-store design, which has no bag store, and `snapshot`, which returns a copy
+map, copy set, or copy bag when bounded and an immutable tree otherwise.
 
-A `DataStore` entry is a strong map or set store, ordered or not, and its values are
-whatever passables the persistent-store design admits.
+A store entry is a strong store, ordered or not, and its values are whatever passables
+the persistent-store design admits.
 A weak store cannot enumerate its entries, so it has no snapshot, and a directory
-names one only through a `CapabilityLink`.
+names one only through a `Value` entry.
 A store whose values are all Keys has the canonical form above.
 A store holding any other value, such as a promise, an error, or a copy record
 containing one, is still a valid entry with all its typed operations and a `capture`.
-It has no canonical form, so `snapshot`, `equivalent`, and any
-`expected` covering it or an enclosing tree throw `UNSNAPSHOTTABLE_ENTRY` and change
-nothing.
+It has no canonical form, so `snapshot`, `equivalent`, and any `expected` covering it
+or an enclosing tree throw `UNSNAPSHOTTABLE_ENTRY` and change nothing.
 A caller guarding such a tree uses the provider's revision instead.
 A store guarded to Key values, with `M.key()`, can never reach this case.
 Within one domain, a remotable inside a Key compares by its formula identity.
 
-`CapabilityLink` has `resolve()`, which returns the referent or throws
-`LOCATOR_UNREACHABLE`.
+A `Cell` is a level of indirection for an arbitrary value.
+It has `get()`, `set(value, { expected })`, `readOnly()`, `snapshot()`, and `capture()`.
+Its holder can change the referent without modifying any directory, and the read-only
+view and the snapshot are its attenuations.
+`get` returns the referent or throws `LOCATOR_UNREACHABLE`, and attenuating a cell does
+not attenuate its referent.
+
+Locators currently refer to values only through formula identifiers, so every
+expressible value has an implied serialized form.
+That form can expand to cover live references in durably journaled workers.
 
 These capabilities compose with directories by being entry values.
 They do not inherit file methods merely because a snapshot can become a blob.
@@ -746,12 +768,12 @@ and a copy-only `details` record.
 - `RESULT_BUDGET_EXHAUSTED`: A reader reached the total-result budget granted to its facet; the
   result is incomplete.
 - `REFERENCE_INCOMPARABLE`: A comparison across comparison domains found no other difference but
-  reached a capability link or remotable, whose exact form it may not exchange.
+  reached a capability reference, whose exact form it may not exchange.
 - `SNAPSHOT_UNREACHABLE`: A connection carrying a foreign snapshot severed, or that snapshot's
   provider incarnation ended, before the operation finished with it.
-- `UNSNAPSHOTTABLE_ENTRY`: `snapshot` encountered a capability link or a remotable, or an operation
-  needing a canonical form reached a data store holding a value that is not a Key.
-- `LOCATOR_UNREACHABLE`: A restored capability link cannot presently resolve.
+- `UNSNAPSHOTTABLE_ENTRY`: `snapshot` encountered a capability reference, or an operation
+  needing a canonical form reached a store holding a value that is not a Key.
+- `LOCATOR_UNREACHABLE`: A restored capability reference cannot presently resolve.
 - `ARCHIVE_MALFORMED`: An archive holds duplicate raw member names, names that collide after NFC
   normalization, or names the path rules forbid.
 - `ARCHIVE_UNAUTHENTICATED`: An archive's signature, signer, manifest, or member binding failed
@@ -936,7 +958,7 @@ whole-file expected snapshot prevent a splice at the wrong location.
 
 ### Exact loose-file envelope
 
-When a capability link must appear as a file in a format that cannot represent
+When a capability reference must appear as a file in a format that cannot represent
 typed directory entries, version 1 uses this byte layout:
 
 - **0**
@@ -988,15 +1010,15 @@ holding the archive version, a random 16-byte `archiveId`, and one record for ea
 other archive member, sorted by normalized path.
 Each record binds normalized path, kind, byte length, and the SHA-256 of the
 member's exact bytes.
-Records cover every member, not only capability links, so a changed, added,
+Records cover every member, not only capability references, so a changed, added,
 removed, or reclassified member fails verification.
 
 The manifest is the only classifier of entries, and the envelope is the only holder
 of locator bytes.
 An ordinary binary file beginning with the magic remains ordinary unless the
-manifest marks it `Link`.
+manifest marks it `Value`.
 The envelope's own digest serves a loose copy that has lost its manifest: a
-diagnostic tool can report corruption, but nothing restores it as a link.
+diagnostic tool can report corruption, but nothing restores it as a reference.
 
 Version 1 authenticates the manifest with one Ed25519 signature (RFC 8032 section
 5.1).
@@ -1004,12 +1026,12 @@ The signature record is a deterministic-CBOR map of `algorithm`, `keyId` (the
 SHA-256 of the public key), and `signature`, computed over ASCII
 `endo-archive-manifest-v1`, one zero byte, and the exact manifest bytes.
 Export signs through a `signer` capability, so the private key never enters the
-archive, and refuses to write a `CapabilityLink` entry without one.
+archive, and refuses to write a capability reference without one.
 
 The trust anchor is the argument the restoring holder supplies:
 
 ```js
-restore(archive, { trustedSigners, links: 'unresolved' | 'strict' | 'inert' })
+restore(archive, { trustedSigners, references: 'unresolved' | 'strict' | 'inert' })
 ```
 
 `trustedSigners` is an immutable set of `{ keyId, publicKey }` records.
@@ -1031,13 +1053,13 @@ Restore verifies in this order before installing anything:
 3. Parse the manifest, rejecting an unknown version or algorithm and any encoding
    that is not deterministic.
 4. Match archive members to records one for one, and check each length and digest.
-5. Validate every `CapabilityLink` envelope as specified above.
+5. Validate every reference envelope as specified above.
 
 A failure in steps 2 through 5 throws `ARCHIVE_UNAUTHENTICATED`, and nothing is
 installed on any failure.
-`links: 'inert'` is the one mode that needs no signer: after step 1 it skips these
+`references: 'inert'` is the one mode that needs no signer: after step 1 it skips these
 checks, ignores the manifest, restores every member as ordinary bytes, and mints no
-link.
+reference.
 
 Sidecar files were considered but introduce colliding reserved names and make
 atomic rename/copy difficult.
@@ -1045,15 +1067,15 @@ Extended attributes avoid visible sidecars but are not portable through ZIP,
 Git, object stores, or common copy tools.
 A directory-level index is therefore the portable source of truth.
 
-Capture and checkin record the link without dereferencing it.
+Capture and checkin record the reference without dereferencing it.
 Checkout and `make-archive` reproduce the exact envelope and manifest entry.
-Only the verification above constructs an unresolved `CapabilityLink`.
+Only the verification above constructs an unresolved reference.
 Resolution is a separate authority-bearing operation.
 
-If a locator is unavailable, `links: 'unresolved'` succeeds and preserves the
-unresolved link; opening it throws `LOCATOR_UNREACHABLE` with path and a
+If a locator is unavailable, `references: 'unresolved'` succeeds and preserves the
+unresolved reference; opening it throws `LOCATOR_UNREACHABLE` with path and a
 non-secret diagnostic.
-`links: 'strict'` fails the entire transaction atomically unless every link is
+`references: 'strict'` fails the entire transaction atomically unless every reference is
 reachable.
 
 Locators can be bearer capabilities, including secret-bearing HTTPS fragments.
@@ -1061,7 +1083,7 @@ Archives containing them MUST be treated as credential stores: least-readable
 permissions, encryption at rest and in transit, no logs, no search indexing, and
 explicit export authority.
 Neither the envelope digest nor a content-addressed archive makes a locator
-public or safe, and a manifest digest of a link envelope gets the same handling
+public or safe, and a manifest digest of a reference envelope gets the same handling
 as the locator.
 
 ## REST versus CapTP
@@ -1122,21 +1144,21 @@ filesystem API.
     re-indexes private digests after restart.
   - Value crossing: Immutable bytes/tree nodes and their `Snapshot`, snapshot
     vocabulary.
-- **Pet-name/formula directory -> provider or capability link**
+- **Pet-name/formula directory -> provider or value**
   - Mechanism: The directory binds a local name to a typed capability entry; a formula may
     reincarnate it.
   - Policy: The directory owner admits binding changes; it does not decide content mutations.
   - Durable state: The directory/formula store owns bindings and recipes; the target provider
     owns target state.
   - Lifecycle / commit authority: The directory commits bindings and replays recipes before
-    lookup; unresolved links remain inert.
-  - Value crossing: Name, entry kind, formula ID or link, outer naming vocabulary.
+    lookup; unresolved references remain inert.
+  - Value crossing: Name, entry kind, formula ID or locator, outer naming vocabulary.
 - **Archive/restore -> directory and locator resolver**
   - Mechanism: Export writes and signs a manifest/envelope; restore verifies and mints
-    unresolved links.
+    unresolved references.
   - Policy: Explicit export authority admits bearer locators; the restoring holder's
-    `trustedSigners` decides whose signature classifies links, and the restoring holder chooses
-    the link mode.
+    `trustedSigners` decides whose signature classifies references, and the restoring holder
+    chooses the reference mode.
   - Durable state: The archive owner owns archive bytes; the signer owns its private key; the
     restoring holder owns its trust set; the destination owns installed bindings.
   - Lifecycle / commit authority: Export finalizes and signs the manifest last; restore
@@ -1170,7 +1192,7 @@ operations separately commit and push.
 Each durable owner repairs or replays only its own state before reviving its
 facet.
 An ephemeral provider starts a new incarnation revision, and a missing locator
-resolver leaves an inert unresolved link rather than replaying an open.
+resolver leaves an inert unresolved reference rather than replaying an open.
 
 **Execution classification.**
 The mutable provider classifies a filesystem operation as committed, rejected,
@@ -1242,8 +1264,14 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
   - Sources: persistent stores, PRs #1264/#1265
   - What differs or is missing: Block and data stores are proposals; no common append-only
     interface exists.
-  - Recommended resolution: Add typed directory entry kinds; implement block first, append log
-    and data adapters later.
+  - Recommended resolution: Add typed directory entry kinds; implement block first, then log,
+    map, set, and bag adapters.
+- **Store and cell names**
+  - Sources: persistent stores, PRs #1264/#1265, mount capabilities
+  - What differs or is missing: `BlockStorage`, `DataStore`, and ad hoc capability links follow
+    no common pattern, and a link blurs a directory entry with a mutable indirection.
+  - Recommended resolution: Name `BlockStore`, `LogStore`, `MapStore`, `SetStore`, `BagStore`, and
+    `Cell`, and distinguish a `Cell` from a `Value` entry.
 - **Capability serialization**
   - Sources: checkin/checkout, make archive
   - What differs or is missing: Arbitrary capability bindings have no portable archive
@@ -1253,8 +1281,8 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 - **Snapshotting capability slots**
   - Sources: mount and archive designs
   - What differs or is missing: It is unclear whether snapshot freezes a referenced object.
-  - Recommended resolution: `capture` freezes the link only; `snapshot` rejects any link without
-    dereferencing it.
+  - Recommended resolution: `capture` freezes the binding only; `snapshot` rejects any capability
+    reference without dereferencing it.
 - **Watcher vocabulary**
   - Sources: filesystem watchers, mount changes, root advancement
   - What differs or is missing: Event records, ordering, and Promise/reader shapes differ.
@@ -1286,11 +1314,11 @@ Each rung can land independently behind adapters and conformance tests.
    three-way `merge`.
 7. Split static read-only guards from mutable guards and add the independent
    mutability controller with durable-policy tests.
-8. Land `BlockStorage`, then `AppendLog` and persistent `DataStore` adapters as
-   typed directory entries.
+8. Land `BlockStore`, then `LogStore`, the persistent `MapStore`, `SetStore`, and
+   `BagStore` adapters, and `Cell`, as typed directory entries.
 9. Add the signed archive manifest, restore-time signer verification, and
    version-1 capability envelope to checkin/checkout and `make-archive`, including
-   unreachable-link recovery.
+   unreachable-reference recovery.
 10. Migrate daemon, platform, exo-git, registry, formula inspector, container,
     CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings and
     every method that returns `{ algorithm, hash }`.
@@ -1313,7 +1341,7 @@ It covers:
 - **Comparison:** same-domain digest comparison, cross-provider snapshot comparison for every canonical form, comparison relayed
   through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
   Across domains, distinct locators whose digests are forced to collide MUST NOT
-  compare `true`, a link pair MUST throw `REFERENCE_INCOMPARABLE`, a difference elsewhere
+  compare `true`, a pair of references MUST throw `REFERENCE_INCOMPARABLE`, a difference elsewhere
   MUST answer `false`, and no locator byte or locator digest may appear on the wire.
   A store holding a promise, an error, or a copy record containing one MUST keep its
   typed operations and `capture`, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
