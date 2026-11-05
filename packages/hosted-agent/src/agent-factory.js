@@ -35,7 +35,7 @@ const CREATE_FIELDS = harden([
  * @typedef {object} AgentCreateRequest
  * @property {string} idempotencyKey
  * @property {string} providerId
- * @property {'lal' | 'fae'} harness
+ * @property {string} harness One of the catalog's harness ids.
  * @property {string} name
  * @property {string} model
  * @property {Record<string, unknown>} [limits]
