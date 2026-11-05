@@ -112,16 +112,18 @@ A directory maps each local name to one of these entry kinds:
 |---|---|---|---|
 | `File` / `Directory` | byte or tree mutation | `SnapshotBlob` / `SnapshotTree` | **Implemented**, common shape proposed |
 | `BlockStorage` | sized random writes and append | `SnapshotBlob` | **Proposed** in PR #1265 |
-| `AppendLog` | append records only | immutable sequence/tree | **Proposed here**; no common design exists |
-| `DataStore` | typed map/set/data operations | pass-by-copy value or immutable tree | **Designed** by daemon persistent stores |
+| `AppendLog` | append records only | `SnapshotLog`, an immutable record sequence | **Proposed here**; no common design exists |
+| `DataStore` | typed map/set/data operations | `SnapshotData`, a pass-by-copy value or immutable tree | **Designed** by daemon persistent stores |
 | `CapabilityLink` | authority of the referenced capability | link record, not frozen referent | **Implemented concept**, serialization proposed here |
 
 An arbitrary capability entry is a `CapabilityLink`.
 A directory snapshot freezes the binding to that link, not the state of the
 referent.
-A caller requiring a deep deterministic snapshot MUST request strict mode;
-strict mode rejects a non-snapshottable entry with `UNSNAPSHOTTABLE_ENTRY`
-instead of silently implying that the referent was frozen.
+A caller requiring a deep deterministic snapshot MUST call
+`snapshot({ strict: true })`.
+Strict mode throws `UNSNAPSHOTTABLE_ENTRY` for any `CapabilityLink` or any
+`DataStore` value with no canonical form, without dereferencing a link, instead of
+silently implying that the referent was frozen.
 
 `NameHub` remains the general pet-name map.
 `ReadableTree` is the filesystem-shaped subset whose entries have stable kinds
@@ -244,10 +246,14 @@ The common interface proposes:
 
 ```js
 identity(): Promise<ContentIdentity>
-snapshot(options = {}): Promise<Snapshot>
+snapshot({ strict = false } = {}): Promise<Snapshot>
 ContentIdentity.equivalent(other): Promise<boolean>
 Snapshot.equivalent(other): Promise<boolean>
 ```
+
+`strict` defaults to `false`, which freezes link bindings as described above.
+A strict snapshot that succeeds has the same shape as any other; it simply holds no
+links.
 
 Three values do three separate jobs:
 
@@ -359,9 +365,33 @@ avoid reading source content into the caller.
 | `glob(pattern, options)` | Return a `ResultReader` of matching paths using the corpus glob grammar. | all tree views |
 | `grep(pattern, options)` | Search readable text entries and return a `ResultReader` of `{ path, line, text, ranges }`. | all tree views |
 | `glorp(globPattern, grepPattern, options)` | Apply `glob`, then `grep` only those matching files, returning the same grep records. | all tree views |
-| `identity()`, `snapshot(options)` | Capture the whole visible tree. | all tree views |
+| `identity()`, `snapshot({ strict })` | Capture the whole visible tree. | all tree views |
 | `watch()` / `followChanges(options)` | Follow live transactions; absent on immutable snapshots. | live read-only, mutable, controlled |
 | `makeDirectory`, `makeFile`, `remove`, `move`, `copy` | Mutate one root transactionally, optionally with `expected`. | mutable, writable controlled |
+
+Path `[]` names the receiver.
+`lookup` throws `NOT_FOUND` when a segment has no binding; in that case
+`maybeLookup` resolves to `undefined` and `has` to `false`.
+All three throw `WRONG_ENTRY_KIND` when a non-final segment names an entry that is
+not a tree.
+Traversal never resolves a `CapabilityLink`, and `has` reports the binding whether
+or not its referent is reachable.
+
+Every entry capability answers `kind()` with the one discriminator for choosing its
+operations:
+
+```js
+kind(): Promise<EntryKind>
+// EntryKind: 'File' | 'Directory' | 'BlockStorage' | 'AppendLog' | 'DataStore'
+//   | 'CapabilityLink' | 'SnapshotBlob' | 'SnapshotTree' | 'SnapshotLog'
+//   | 'SnapshotData'
+```
+
+`list` delivers `{ name, kind }` records and `listTree` delivers `{ path, kind }`
+records, each `kind` matching what `kind()` answers on that entry.
+A record holds no capability, so a caller acts on an entry by looking it up.
+An adapter preserves the implemented `listTree` field name `type` and its
+`'file' | 'directory'` values.
 
 `ResultReader` is the one result shape of every listing and search method: a
 `PassableReader` from `@endo/exo-stream` that delivers one record per pull.
@@ -427,8 +457,10 @@ content.
 `AppendLog` has `append`, `follow`, `snapshot`, and ranged record reads, with no
 rewrite authority.
 `DataStore` has the typed map/set operations from the persistent-store design
-and `snapshot`; pass-by-copy snapshots are used when bounded, otherwise an
-immutable tree is returned.
+and `snapshot`, which returns a `SnapshotData` represented by a pass-by-copy value
+when bounded and an immutable tree otherwise.
+`CapabilityLink` has `resolve()`, which returns the referent or throws
+`LOCATOR_UNREACHABLE`.
 
 These capabilities compose with directories by being entry values.
 They do not inherit file methods merely because a snapshot can become a blob.
@@ -450,7 +482,7 @@ and a copy-only `details` record.
 | `MERGE_CONFLICT` | A caller requested conflict-free output but conflicts remain. |
 | `RESULT_TOO_LARGE` | Materializing or rendering a result exceeds its attenuation. |
 | `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
-| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a generic live capability, or a data store holds a value with no canonical form. |
+| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or a data store holds a value with no canonical form. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
 | `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
 
@@ -740,7 +772,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 | Dynamic mutability | mount capabilities | Mount-local control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
 | Non-file storage | persistent stores, PRs #1264/#1265 | Block and data stores are proposals; no common append-only interface exists. | Add typed directory entry kinds; implement block first, append log and data adapters later. |
 | Capability serialization | checkin/checkout, make archive | Arbitrary capability bindings have no portable archive representation. | Use a signed directory manifest, verified against the restorer's trusted signers, plus the versioned envelope in this design. |
-| Snapshotting capability slots | mount and archive designs | It is unclear whether snapshot freezes a referenced object. | Freeze the link only; strict deep snapshot rejects a non-snapshottable referent. |
+| Snapshotting capability slots | mount and archive designs | It is unclear whether snapshot freezes a referenced object. | Freeze the link only; strict deep snapshot rejects any link without dereferencing it. |
 | Watcher vocabulary | filesystem watchers, mount changes, root advancement | Event records, ordering, and Promise/reader shapes differ. | Standardize transaction followers around initial snapshot plus revision; adapt path-level events. |
 | Large agent reads | range designs, agent tools | Ranges exist, but a holder can still materialize an unlimited whole file or diff. | Mint size-limited reader facets and use the teaching error specified above. |
 
