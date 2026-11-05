@@ -164,3 +164,42 @@ test('seedGcEdges registers all local IDs', async t => {
   t.true(writes.some(w => w.formulaId === id('1:node')));
   t.true(writes.some(w => w.formulaId === id('2:node')));
 });
+
+const makeController = () => {
+  const petStore = makeMockPetStore();
+  const { hooks } = makeMockGcHooks();
+  const ctrl = makeLocalStoreController(id('store:node'), petStore, hooks);
+  return { ctrl, petStore };
+};
+
+test('compareAndStoreIdentifier stores only over the expected value', async t => {
+  const { ctrl, petStore } = makeController();
+  t.true(await ctrl.compareAndStoreIdentifier('name', undefined, id('a:node')));
+  t.is(petStore.identifyLocal('name'), 'a:node');
+  t.false(
+    await ctrl.compareAndStoreIdentifier('name', undefined, id('b:node')),
+  );
+  t.false(
+    await ctrl.compareAndStoreIdentifier('name', id('c:node'), undefined),
+  );
+  t.is(petStore.identifyLocal('name'), 'a:node');
+  t.true(
+    await ctrl.compareAndStoreIdentifier('name', id('a:node'), id('b:node')),
+  );
+  t.is(petStore.identifyLocal('name'), 'b:node');
+  t.true(await ctrl.compareAndStoreIdentifier('name', id('b:node'), undefined));
+  t.false(petStore.has('name'));
+  t.true(await ctrl.compareAndStoreIdentifier('name', undefined, undefined));
+});
+
+test('compareAndStoreIdentifier writes in the turn it compares', async t => {
+  const { ctrl, petStore } = makeController();
+  const first = ctrl.compareAndStoreIdentifier('name', undefined, id('a:node'));
+  const second = ctrl.compareAndStoreIdentifier(
+    'name',
+    undefined,
+    id('b:node'),
+  );
+  t.deepEqual(await Promise.all([first, second]), [true, false]);
+  t.is(petStore.identifyLocal('name'), 'a:node');
+});

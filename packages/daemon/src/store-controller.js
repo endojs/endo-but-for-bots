@@ -63,6 +63,20 @@ export const makeLocalStoreController = (storeId, petStore, gcHooks) => {
     }
   };
 
+  /** @type {StoreController['compareAndStoreIdentifier']} */
+  const compareAndStoreIdentifier = async (petName, expectedId, nextId) => {
+    await null;
+    // Nothing may suspend between the comparison and the write: `storeIdentifier`
+    // and `remove` reach the pet store's synchronous mutation in this same turn.
+    if (petStore.identifyLocal(petName) !== expectedId) return false;
+    if (nextId !== undefined) {
+      await storeIdentifier(petName, nextId);
+    } else if (expectedId !== undefined) {
+      await remove(petName);
+    }
+    return true;
+  };
+
   /** @type {StoreController['storeLocator']} */
   const storeLocator = async (_petName, _locator) => {
     throw new Error(
@@ -125,6 +139,7 @@ export const makeLocalStoreController = (storeId, petStore, gcHooks) => {
     list,
     reverseIdentify,
     storeIdentifier,
+    compareAndStoreIdentifier,
     storeLocator,
     remove,
     rename,

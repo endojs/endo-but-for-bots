@@ -30,6 +30,8 @@ export const helpTextEntries = harden([
         'reverseLookup(value) -> Promise<string[]>\nFind all pet names that refer to a given value.\nUseful for discovering what names exist for an object you have.',
       storeIdentifier:
         'storeIdentifier(petNameOrPath, formulaId) -> Promise<void>\nStore a formula identifier with a pet name.\n- storeIdentifier("my-name", id) stores id as "my-name"\n- storeIdentifier(["subdir", "name"], id) stores in a subdirectory\nOverwrites any existing value at that name.',
+      compareAndStoreIdentifier:
+        'compareAndStoreIdentifier(petName, expectedId, nextId) -> Promise<boolean>\nAtomically change one name only if it still holds the identifier you expect.\n- compareAndStoreIdentifier("name", undefined, id) stores id only if "name" is absent\n- compareAndStoreIdentifier("name", id, undefined) removes "name" only if it holds id\nResolves to whether the change applied. Use this rather than checking and then writing, which another writer can interleave.',
       storeLocator:
         'storeLocator(petNameOrPath, locator) -> Promise<void>\nStore an endo:// locator with a pet name.\n- storeLocator("my-name", locator) stores locator as "my-name"\n- storeLocator(["subdir", "name"], locator) stores in a subdirectory\nThe locator must be an endo:// URL. Overwrites any existing value.',
       remove:

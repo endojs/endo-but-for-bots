@@ -60,6 +60,7 @@ const ProviderAdminInterface = M.interface('InferenceProviderAdmin', {
 });
 
 const ProviderUseInterface = M.interface('InferenceProviderUse', {
+  describe: M.callWhen().returns(M.record()),
   grant: M.callWhen(M.record()).returns(M.remotable()),
   setGrantLimits: M.callWhen(M.string(), M.record(), M.string())
     .optional(M.boolean())
@@ -783,7 +784,10 @@ export const makeInferenceProviderRegistry = async ({
     return grant;
   };
 
-  /** @param {any} grant @param {string} reason */
+  /**
+   * @param {any} grant
+   * @param {string} reason
+   */
   const appendRefusal = async (grant, reason) => {
     const next = copyState(state);
     next.refusals = next.refusals.slice(-(MAX_REFUSALS - 1));
@@ -800,7 +804,10 @@ export const makeInferenceProviderRegistry = async ({
     await commit(next);
   };
 
-  /** @param {string} grantId @param {string} reason */
+  /**
+   * @param {string} grantId
+   * @param {string} reason
+   */
   const refuse = (grantId, reason) =>
     inOrder(async () => {
       const grant = requireActiveGrant(grantId);
@@ -976,7 +983,10 @@ export const makeInferenceProviderRegistry = async ({
       await commit(next);
     });
 
-  /** @param {string} providerId @param {string} model */
+  /**
+   * @param {string} providerId
+   * @param {string} model
+   */
   const markModelVerified = (providerId, model) =>
     inOrder(async () => {
       const current = state.modelStates?.[providerId] || {
@@ -1240,6 +1250,15 @@ export const makeInferenceProviderRegistry = async ({
     let use = uses.get(cacheKey);
     if (use !== undefined) return use;
     use = makeExo('InferenceProviderUse', ProviderUseInterface, {
+      describe: async () => {
+        const { descriptor, lifecycle } = requireProvider(providerId);
+        return harden({
+          providerId,
+          ownerId: descriptor.ownerId,
+          kind: descriptor.kind,
+          state: lifecycle.state,
+        });
+      },
       setGrantLimits: (grantId, limits, operationId, confirmed = false) =>
         inOrder(async () => {
           IDENTIFIER_PATTERN.test(operationId) ||
@@ -2082,11 +2101,49 @@ export const makeInferenceProviderRegistry = async ({
 
   await reconcile();
 
+  /**
+   * The grant records a root coordinator reconciles against: safe fields only,
+   * including the provider's owner, which an agent binding is compared with.
+   */
+  const listGrants = async () => {
+    await null;
+    /** @type {Map<string, number[]>} */
+    const admittedByGrant = new Map();
+    for (const turn of Object.values(
+      foldInferenceTurnEvents(state.turnEvents),
+    )) {
+      if (turn.state !== 'settled') {
+        const admitted = admittedByGrant.get(turn.grantId) || [];
+        admitted.push(turn.admittedAtMs);
+        admittedByGrant.set(turn.grantId, admitted);
+      }
+    }
+    return harden(
+      Object.values(state.grants).map(grant =>
+        harden({
+          grantId: grant.grantId,
+          ownerId: grant.ownerId,
+          providerId: grant.providerId,
+          providerOwnerId: state.descriptors[grant.providerId]?.ownerId,
+          agentId: grant.agentId,
+          models: grant.models,
+          caps: grant.caps,
+          state: grant.state,
+          generation: grant.generation,
+          activeTurnAdmittedAt: harden(
+            admittedByGrant.get(grant.grantId) || [],
+          ),
+        }),
+      ),
+    );
+  };
+
   return harden({
     directoryFor,
     useFor: provideUse,
     inferenceFor: provideInference,
     revokeGrant,
+    listGrants,
     reconcile,
     inspect: () =>
       harden({
