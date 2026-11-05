@@ -1302,6 +1302,194 @@ test('a foreign provider capability is refused at creation and reattachment befo
   t.is(/** @type {any} */ (accepted).providerId, provider.providerId);
 });
 
+test('a provider capability authorizes only the provider it designates', async t => {
+  const { world, factory, registry, provider, agent, target } =
+    await setupReattach();
+  const useA = await E(registry).useFor(OWNER, provider.providerId);
+  const guestsBefore = world.guestRecords.size;
+  await t.throwsAsync(
+    factory.createWithUse(
+      OWNER,
+      createRequest(target.providerId, {
+        idempotencyKey: 'create-sibling',
+        name: 'sibling',
+      }),
+      useA,
+    ),
+    refusalFor('provider-use-mismatch'),
+  );
+  t.is(world.guestRecords.size, guestsBefore);
+  await t.throwsAsync(
+    factory.reattachWithUse(
+      OWNER,
+      agent.agentId,
+      { idempotencyKey: 'reattach-sibling', providerId: target.providerId },
+      useA,
+    ),
+    refusalFor('provider-use-mismatch'),
+  );
+  t.is(factory.inspect().agents[agent.agentId].providerId, provider.providerId);
+
+  const useB = await E(registry).useFor(OWNER, target.providerId);
+  await factory.reattachWithUse(
+    OWNER,
+    agent.agentId,
+    { idempotencyKey: 'reattach-designated', providerId: target.providerId },
+    useB,
+  );
+  t.is(factory.inspect().agents[agent.agentId].providerId, target.providerId);
+});
+
+test('a look-alike that describes a provider conveys no authority over it', async t => {
+  const { factory, provider } = await setup();
+  const forged = harden({
+    describe: async () =>
+      harden({ ownerId: OWNER, providerId: provider.providerId }),
+  });
+  await t.throwsAsync(
+    factory.createWithUse(OWNER, createRequest(provider.providerId), forged),
+    refusalFor('provider-use-mismatch'),
+  );
+  t.deepEqual(factory.inspect().operations, {});
+});
+
+test('a retry with its fields in another order is the same request', async t => {
+  const { factory, directory, provider } = await setup();
+  const limits = { concurrentTurns: 1, requestsPerMinute: 2 };
+  const created = await E(directory).create(
+    createRequest(provider.providerId, { limits }),
+  );
+  const { idempotencyKey, providerId, name, model, harness } = createRequest(
+    provider.providerId,
+  );
+  const retried = await E(directory).create(
+    harden({
+      limits: { requestsPerMinute: 2, concurrentTurns: 1 },
+      endowments: [],
+      wake: true,
+      harness,
+      model,
+      name,
+      providerId,
+      idempotencyKey,
+    }),
+  );
+  t.is(retried.agentId, created.agentId);
+  t.is(Object.keys(factory.inspect().agents).length, 1);
+
+  await E(directory).setLimits(created.agentId, {
+    idempotencyKey: 'limits-1',
+    limits: { concurrentTurns: 1, requestsPerMinute: 1 },
+  });
+  await E(directory).setLimits(created.agentId, {
+    limits: { requestsPerMinute: 1, concurrentTurns: 1 },
+    idempotencyKey: 'limits-1',
+  });
+  await t.throwsAsync(
+    E(directory).setLimits(created.agentId, {
+      idempotencyKey: 'limits-1',
+      limits: { concurrentTurns: 1, requestsPerMinute: 2 },
+    }),
+    refusalFor('idempotency-conflict'),
+  );
+});
+
+test('a retry that spells an omitted field as undefined survives a restart', async t => {
+  const { world, directory, agent, target } = await setupReattach();
+  const asked = {
+    idempotencyKey: 'reattach-1',
+    providerId: target.providerId,
+    model: undefined,
+  };
+  await E(directory).reattach(agent.agentId, harden(asked));
+  const restarted = await boot(world);
+  const summary = await E(restarted.factory.directoryFor(OWNER)).reattach(
+    agent.agentId,
+    harden({ idempotencyKey: 'reattach-1', providerId: target.providerId }),
+  );
+  t.is(summary.providerId, target.providerId);
+});
+
+test('nested type confusion in a creation request gets a fixed refusal', async t => {
+  const { directory, provider, world } = await setup();
+  for (const limits of [null, false, 0, '', []]) {
+    await t.throwsAsync(
+      E(directory).create(createRequest(provider.providerId, { limits })),
+      refusalFor('invalid-agent-limits'),
+      String(limits),
+    );
+  }
+  for (const harnessConfig of [null, false, 'brokered-messages', []]) {
+    await t.throwsAsync(
+      E(directory).create(
+        createRequest(provider.providerId, { harnessConfig }),
+      ),
+      refusalFor('invalid-harness-configuration'),
+      String(harnessConfig),
+    );
+  }
+  t.is(world.guestRecords.size, 0);
+});
+
+test('a prior grant survives reconciliation while its reattachment is unfinished', async t => {
+  const crashed = await setupReattach({ crashAt: 'reattach-grant-effect' });
+  const [{ grantId: priorGrantId }] = await activeGrants(crashed.registry);
+  await t.throwsAsync(
+    E(crashed.directory).reattach(crashed.agent.agentId, {
+      idempotencyKey: 'reattach-1',
+      providerId: crashed.target.providerId,
+    }),
+    { message: /crash at/ },
+  );
+
+  // The registry has fenced the prior grant, its checkpoint is lost, and replay
+  // cannot advance: nothing yet records the operation as past its intent.
+  const blocked = await boot(crashed.world, {
+    wrapRegistry: registry =>
+      harden({
+        ...registry,
+        directoryFor: () => {
+          throw Error('registry unavailable');
+        },
+      }),
+  });
+  const { failures, revoked } = await blocked.factory.reconcile();
+  t.is(failures.length, 1);
+  t.deepEqual(revoked, []);
+  const grants = await E(blocked.registry).listGrants();
+  t.is(
+    grants.find(({ grantId }) => grantId === priorGrantId)?.state,
+    'reattached',
+  );
+
+  const recovered = await boot(crashed.world);
+  await recovered.factory.reconcile();
+  const [record] = Object.values(recovered.factory.inspect().agents);
+  t.is(record.providerId, crashed.target.providerId);
+  const after = await E(recovered.registry).listGrants();
+  t.is(
+    after.find(({ grantId }) => grantId === priorGrantId)?.state,
+    'revoked',
+  );
+});
+
+test('deleting an agent evicts its inference facet, which still refuses', async t => {
+  const { factory, directory, provider } = await setup();
+  const agent = await E(directory).create(createRequest(provider.providerId));
+  const facet = factory.inferenceFor(agent.agentId);
+  t.is(factory.inferenceFor(agent.agentId), facet, 'cached while live');
+  await E(directory).delete(agent.agentId, { idempotencyKey: 'delete-1' });
+
+  await t.throwsAsync(E(facet).request(turn()), refusalFor('agent-deleted'));
+  const afterDelete = factory.inferenceFor(agent.agentId);
+  t.not(afterDelete, facet, 'the deleted agent is not retained');
+  t.not(factory.inferenceFor(agent.agentId), afterDelete, 'nor cached anew');
+  await t.throwsAsync(
+    E(afterDelete).request(turn()),
+    refusalFor('agent-deleted'),
+  );
+});
+
 test('recovery revokes and reports a grant recorded against another owner provider', async t => {
   const world = makeWorld();
   const tampered = new Set();

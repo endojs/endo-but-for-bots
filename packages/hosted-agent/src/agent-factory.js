@@ -6,6 +6,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import { makeAgentGuestPowers } from './agent-guest-powers.js';
+import { canonicalJson } from './canonical-json.js';
 import {
   DEFAULT_AGENT_LIMITS,
   validateInferenceLimits,
@@ -39,8 +40,8 @@ const CREATE_FIELDS = harden([
  * @property {string} name
  * @property {string} model
  * @property {Record<string, unknown>} [limits]
- * @property {boolean} [wake]
- * @property {Array<unknown>} [endowments]
+ * @property {boolean} wake
+ * @property {string[]} endowments Only `subagent-creation`, or empty.
  * @property {Record<string, unknown>} [harnessConfig]
  */
 
@@ -52,10 +53,10 @@ const CREATE_FIELDS = harden([
  */
 
 /**
- * The part of an `InferenceProviderUse` the factory consults: the owner it
- * was granted to.
+ * The part of an `InferenceProviderUse` the factory consults: the provider it
+ * designates and that provider's owner.
  *
- * @typedef {{ describe(): Promise<{ ownerId: string }> }} ProviderUseOwner
+ * @typedef {{ describe(): Promise<{ ownerId: string, providerId: string }> }} ProviderUseBinding
  */
 
 /** A harness configuration with one of these could reach key material. */
@@ -74,7 +75,8 @@ export const AGENT_HARNESS_CATALOG = harden([
     id: 'lal',
     label: 'Lal',
     recommended: true,
-    description: 'A familiar agent with a fixed set of capability tools.',
+    description:
+      'A familiar agent with a fixed set of tools. It can keep a capability sent to it, but that adds no tool.',
     providerKinds: harden(['anthropic']),
   }),
   harden({
@@ -149,11 +151,41 @@ const copyState = state => ({
 });
 
 /**
+ * Records as a journal keeps them: the snapshot round trip forgets a field
+ * holding `undefined`, so a retry must compare as though it were never there.
+ *
+ * @param {any} value
+ * @returns {any}
+ */
+const withoutUndefinedFields = value => {
+  if (Array.isArray(value)) return value.map(withoutUndefinedFields);
+  if (value === null || typeof value !== 'object') return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([_name, field]) => field !== undefined)
+      .map(([name, field]) => [name, withoutUndefinedFields(field)]),
+  );
+};
+
+/**
+ * Whether two requests are the same data, whatever order their fields arrived
+ * in. Anything the canonical form refuses cannot match a journaled request.
+ *
  * @param {unknown} left
  * @param {unknown} right
  */
-const sameData = (left, right) =>
-  JSON.stringify(left) === JSON.stringify(right);
+const sameData = (left, right) => {
+  try {
+    return (
+      canonicalJson(withoutUndefinedFields(left)) ===
+      canonicalJson(withoutUndefinedFields(right))
+    );
+  } catch (_error) {
+    return false;
+  }
+};
 
 /**
  * Owner ids, idempotency keys, and agent names may all contain any character,
@@ -214,7 +246,9 @@ const safeCreateRequest = request => {
   );
   if (harnessConfig !== undefined) {
     refuseUnless(
-      harnessConfig.provider === 'brokered-messages' &&
+      harnessConfig !== null &&
+        typeof harnessConfig === 'object' &&
+        harnessConfig.provider === 'brokered-messages' &&
         !FORBIDDEN_HARNESS_CONFIG.some(field =>
           Object.hasOwn(harnessConfig, field),
         ),
@@ -222,7 +256,7 @@ const safeCreateRequest = request => {
     );
   }
   try {
-    validateInferenceLimits(limits || {}, DEFAULT_AGENT_LIMITS);
+    validateInferenceLimits(limits, DEFAULT_AGENT_LIMITS);
   } catch (_error) {
     throw fixedError('invalid-agent-limits');
   }
@@ -531,20 +565,18 @@ export const makeAgentFactory = async ({
     },
     reattach: {
       intent: async (key, operation) => {
-        const { agentId, operationId, ownerId, request } = operation;
-        const record = state.agents[agentId];
+        const { operationId, ownerId, priorGrantId, request } = operation;
         const directory = await E(registry).directoryFor(ownerId);
         const result = await E(directory).reattach(
           harden({
             idempotencyKey: `factory-${operationId}`,
-            grantId: record.grantId,
+            grantId: priorGrantId,
             providerId: request.providerId,
             model: request.model,
           }),
         );
         await boundaryReached('reattach-grant-effect', operation);
         return advance(key, 'inference-bound', {
-          priorGrantId: record.grantId,
           grantId: result.grantId,
           caps: result.caps,
         });
@@ -589,7 +621,7 @@ export const makeAgentFactory = async ({
         await boundaryReached('delete-name-effect', operation);
         await E(guests).release(record.names.guest);
         await boundaryReached('delete-guest-effect', operation);
-        return advance(key, 'completed', {}, next => {
+        const completed = await advance(key, 'completed', {}, next => {
           next.agents[agentId] = harden({
             ...record,
             lifecycle: 'deleted',
@@ -598,6 +630,8 @@ export const makeAgentFactory = async ({
           const nameKey = ownerScopedKey(ownerId, record.name);
           if (next.names[nameKey] === agentId) delete next.names[nameKey];
         });
+        inferences.delete(agentId);
+        return completed;
       },
     },
   });
@@ -772,14 +806,21 @@ export const makeAgentFactory = async ({
 
   /**
    * The binding check for a provider capability handed to the factory directly,
-   * rather than named by id in the owner's directory.
+   * rather than named by id in the owner's directory. The capability authorizes
+   * only the provider the request selects, and a description is only its
+   * holder's word, so the capability must also be the registry's own facet for
+   * that provider.
    *
    * @param {string} ownerId
-   * @param {ProviderUseOwner} use
+   * @param {string} providerId
+   * @param {ProviderUseBinding} use
    */
-  const assertUseMatchesOwner = async (ownerId, use) => {
-    const { ownerId: providerOwnerId } = await E(use).describe();
-    refuseUnless(providerOwnerId === ownerId, 'provider-owner-mismatch');
+  const assertUseDesignates = async (ownerId, providerId, use) => {
+    const described = await E(use).describe();
+    refuseUnless(described.ownerId === ownerId, 'provider-owner-mismatch');
+    refuseUnless(described.providerId === providerId, 'provider-use-mismatch');
+    const designated = await E(registry).useFor(ownerId, providerId);
+    refuseUnless(designated === use, 'provider-use-mismatch');
   };
 
   /**
@@ -982,7 +1023,9 @@ export const makeAgentFactory = async ({
    * @param {any} request
    * @param {string} kind
    * @param {() => Promise<any>} prepare
-   * @param {boolean} [requireLive]
+   * @param {object} [options]
+   * @param {boolean} [options.requireLive]
+   * @param {() => any} [options.intentFields] Read in the queue, for the intent.
    */
   const runAgentOperation = async (
     ownerId,
@@ -990,7 +1033,7 @@ export const makeAgentFactory = async ({
     request,
     kind,
     prepare,
-    requireLive = true,
+    { requireLive = true, intentFields = () => ({}) } = {},
   ) => {
     const { idempotencyKey, ...asked } = request || {};
     refuseUnless(
@@ -1009,6 +1052,7 @@ export const makeAgentFactory = async ({
         else requireOwnedAgent(ownerId, agentId);
         await writeIntent(ownerId, idempotencyKey, kind, prepared, agentId, {
           asked,
+          ...intentFields(),
         });
       } else {
         refuseUnless(
@@ -1060,6 +1104,12 @@ export const makeAgentFactory = async ({
         refuseUnless(MODEL_PATTERN.test(targetModel), 'invalid-model');
         await assertModelOffered(target.directory, providerId, targetModel);
         return harden({ providerId, model: targetModel });
+      },
+      {
+        // Recorded before the registry's atomic reattachment, so recovery can
+        // tell the prior grant still drains even if that effect's checkpoint
+        // is lost.
+        intentFields: () => ({ priorGrantId: state.agents[agentId].grantId }),
       },
     );
   };
@@ -1191,7 +1241,7 @@ export const makeAgentFactory = async ({
             requireOwnedAgent(ownerId, agentId);
             return harden({});
           },
-          false,
+          { requireLive: false },
         ),
       getOperationStatus: async idempotencyKey => {
         await null;
@@ -1239,7 +1289,10 @@ export const makeAgentFactory = async ({
       requestByteStream: message => E(current()).requestByteStream(message),
       attestation: () => E(current()).attestation(),
     });
-    inferences.set(agentId, inference);
+    // A deleted agent's facet refuses every call and only leaks if retained.
+    if (state.agents[agentId]?.lifecycle !== 'deleted') {
+      inferences.set(agentId, inference);
+    }
     return inference;
   };
 
@@ -1316,7 +1369,8 @@ export const makeAgentFactory = async ({
             !Object.values(state.operations).some(
               operation =>
                 operation.priorGrantId === grant.grantId &&
-                operation.state !== 'completed',
+                operation.state !== 'completed' &&
+                operation.state !== 'aborted',
             ));
         if (mismatch || (residue && !liveOperationAgents.has(grant.agentId))) {
           // eslint-disable-next-line no-await-in-loop
@@ -1383,20 +1437,20 @@ export const makeAgentFactory = async ({
     /**
      * @param {string} ownerId
      * @param {AgentCreateRequest} request
-     * @param {ProviderUseOwner} use
+     * @param {ProviderUseBinding} use
      */
     createWithUse: async (ownerId, request, use) => {
-      await assertUseMatchesOwner(ownerId, use);
+      await assertUseDesignates(ownerId, request.providerId, use);
       return createAgent(ownerId, request);
     },
     /**
      * @param {string} ownerId
      * @param {string} agentId
      * @param {AgentReattachRequest} request
-     * @param {ProviderUseOwner} use
+     * @param {ProviderUseBinding} use
      */
     reattachWithUse: async (ownerId, agentId, request, use) => {
-      await assertUseMatchesOwner(ownerId, use);
+      await assertUseDesignates(ownerId, request.providerId, use);
       return reattachAgent(ownerId, agentId, request);
     },
     endowmentFor,

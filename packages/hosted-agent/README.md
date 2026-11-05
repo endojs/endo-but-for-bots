@@ -185,6 +185,7 @@ Two subpaths support API-key providers:
 | Subpath | Exports |
 |---|---|
 | `@endo/hosted-agent/anthropic-api-key-issuer.js` | `makeAnthropicApiKeyIssuerFactory` builds the registry's issuer factory for Anthropic API-key grants; `make` is its Endo module entry point |
+| `@endo/hosted-agent/agent-factory-module.js` | `make` is the agent factory's Endo module entry point; see [Agent factory](#agent-factory) |
 | `@endo/hosted-agent/inference-provider-policy.js` | `DEFAULT_PROVIDER_LIMITS`, `DEFAULT_AGENT_LIMITS`, and `DEFAULT_OWNER_INFERENCE_LIMITS`, the limits a consumer configures against |
 
 `INFERENCE_PROVIDER_MODEL_PRICES` supplies, per model, a
@@ -194,8 +195,18 @@ is refused as a likely unit error.
 
 ## Agent factory
 
-The daemon's agent factory creates API-key guest agents running the Lal or Fae
-harness. Its caplet needs a responder launcher, named by
-`AGENT_FACTORY_RESPONDER_LAUNCHER`, and fills the subagent-creation slot only
-from one named by `AGENT_FACTORY_SUBAGENT_SPAWNER`; without one, a request
-naming that endowment is refused.
+The daemon's agent factory provisions API-key guest agents and records which
+harness, Lal or Fae, each should run. It coordinates the guest, its inference
+grant, its responder, and its name in the owner's inventory. It does not run a
+harness turn: mail reaches an agent's driver only through the responder launcher
+it is given, and the responder that follows mail arrives separately.
+
+Its caplet, `@endo/hosted-agent/agent-factory-module.js`, retains these
+collaborators by the names its environment gives:
+
+| Setting | Collaborator |
+|---|---|
+| `AGENT_FACTORY_PROVIDER_REGISTRY` | Required. The inference provider registry's root capability. |
+| `AGENT_FACTORY_RESPONDER_LAUNCHER` | Required. The wake-on-message participant. |
+| `AGENT_FACTORY_SUBAGENT_SPAWNER` | Optional. Fills the subagent-creation slot; without one, a request naming that endowment is refused. |
+| `AGENT_FACTORY_RECONCILE_MS` | Optional. The reconciler's period, an integer from 1 to 2147483647, 60000 by default. |

@@ -78,8 +78,11 @@ const MEDIATION = harden([
 ]);
 
 /**
- * The exact guest methods each harness receives. A method outside its list is
- * not on the facet at all, rather than checked at call time.
+ * The exact guest methods each harness receives. Both may `adopt`, which keeps
+ * a capability sent by mail under a pet name. Lal's tool list stays fixed
+ * regardless; only Fae's driver turns an adopted capability into a tool. A
+ * method outside its list is not on the facet at all, rather than checked at
+ * call time.
  */
 export const AGENT_POWERS_PROFILES = harden({
   lal: harden([...MAILBOX_AND_NAMES, ...MEDIATION]),

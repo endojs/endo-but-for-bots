@@ -57,6 +57,7 @@
     "./inference-provider-registry.js": "./src/inference-provider-registry.js",
     "./inference-provider-policy.js": "./src/inference-provider-policy.js",
     "./inference-provider-registry-module.js": "./src/inference-provider-registry-module.js",
+    "./agent-factory-module.js": "./src/agent-factory-module.js",
     "./provider-scopes.js": "./src/provider-scopes.js",
     "./session-supervisor.js": "./src/session-supervisor.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",

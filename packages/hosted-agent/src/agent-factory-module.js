@@ -25,6 +25,22 @@ const AgentFactoryRootInterface = M.interface('AgentFactory', {
 harden(AgentFactoryRootInterface);
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
+/** Beyond this, Node's timers substitute a one-millisecond delay. */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+/**
+ * The reconciler's period, from its environment setting.
+ *
+ * @param {string | undefined} setting
+ */
+export const parseReconcileIntervalMs = setting => {
+  if (setting === undefined) return DEFAULT_RECONCILE_INTERVAL_MS;
+  const delay = /^[1-9][0-9]*$/.test(setting) ? Number(setting) : NaN;
+  delay <= MAX_TIMER_DELAY_MS ||
+    Fail`AGENT_FACTORY_RECONCILE_MS must be an integer from 1 to ${q(MAX_TIMER_DELAY_MS)}, got ${q(setting)}`;
+  return delay;
+};
+harden(parseReconcileIntervalMs);
 
 /**
  * A guest's handle and its powers are separate pet names: `provideGuest` only
@@ -92,25 +108,21 @@ export const makeOwnerInventoryParticipant = powers =>
         );
       }
       const owner = E(powers).lookup(agentNameOf(ownerId));
-      const present = await E(owner).has(name);
-      if (present) {
-        const existing = await E(owner).identify(name);
-        if (existing !== handleId) {
-          throw makeError(
-            X`Agent operation failed: ${q('agent-name-conflict')}`,
-          );
-        }
-        return;
+      // The owner can rebind its names at any moment, so only the store may
+      // compare. Losing is fine when an earlier attempt wrote this same handle.
+      const stored = await E(owner).compareAndStoreIdentifier(
+        name,
+        undefined,
+        handleId,
+      );
+      if (!stored && (await E(owner).identify(name)) !== handleId) {
+        throw makeError(X`Agent operation failed: ${q('agent-name-conflict')}`);
       }
-      await E(owner).storeIdentifier(name, handleId);
     },
     remove: async (ownerId, name, handleId) => {
       if (!(await E(powers).has(agentNameOf(ownerId)))) return;
       const owner = E(powers).lookup(agentNameOf(ownerId));
-      if (!(await E(owner).has(name))) return;
-      if ((await E(owner).identify(name)) === handleId) {
-        await E(owner).remove(name);
-      }
+      await E(owner).compareAndStoreIdentifier(name, handleId, undefined);
     },
   });
 harden(makeOwnerInventoryParticipant);
@@ -131,6 +143,9 @@ export const make = async (powers, context, { env } = {}) => {
     env?.AGENT_FACTORY_RESPONDER_LAUNCHER ||
     Fail`Agent factory has no responder launcher`;
   const spawnerName = env?.AGENT_FACTORY_SUBAGENT_SPAWNER;
+  const reconcileIntervalMs = parseReconcileIntervalMs(
+    env?.AGENT_FACTORY_RECONCILE_MS,
+  );
   /**
    * @param {string} name
    * @param {string[]} methods
@@ -175,10 +190,7 @@ export const make = async (powers, context, { env } = {}) => {
       console.error('agent factory reconcile failed', error);
     });
   void reconcileQuietly();
-  const interval = setInterval(
-    reconcileQuietly,
-    Number(env?.AGENT_FACTORY_RECONCILE_MS) || DEFAULT_RECONCILE_INTERVAL_MS,
-  );
+  const interval = setInterval(reconcileQuietly, reconcileIntervalMs);
   interval.unref?.();
   if (context !== undefined) {
     await E(context).addDisposalHook(

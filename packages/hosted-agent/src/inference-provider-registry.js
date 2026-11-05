@@ -2107,7 +2107,17 @@ export const makeInferenceProviderRegistry = async ({
    */
   const listGrants = async () => {
     await null;
-    const turns = Object.values(foldInferenceTurnEvents(state.turnEvents));
+    /** @type {Map<string, number[]>} */
+    const admittedByGrant = new Map();
+    for (const turn of Object.values(
+      foldInferenceTurnEvents(state.turnEvents),
+    )) {
+      if (turn.state !== 'settled') {
+        const admitted = admittedByGrant.get(turn.grantId) || [];
+        admitted.push(turn.admittedAtMs);
+        admittedByGrant.set(turn.grantId, admitted);
+      }
+    }
     return harden(
       Object.values(state.grants).map(grant =>
         harden({
@@ -2121,12 +2131,7 @@ export const makeInferenceProviderRegistry = async ({
           state: grant.state,
           generation: grant.generation,
           activeTurnAdmittedAt: harden(
-            turns
-              .filter(
-                turn =>
-                  turn.grantId === grant.grantId && turn.state !== 'settled',
-              )
-              .map(turn => turn.admittedAtMs),
+            admittedByGrant.get(grant.grantId) || [],
           ),
         }),
       ),

@@ -157,6 +157,24 @@ testNode(
     // The owner's inventory entry is the agent's handle, which addresses mail
     // and carries none of the guest's powers.
     t.true((await E(ownerGuest).list()).includes('helper'));
+    // A real guest's store refuses to overwrite or delete on a stale comparison.
+    const helperHandle = await E(ownerGuest).identify('helper');
+    const privateId = await E(ownerGuest).identify('owner-private');
+    t.false(
+      await E(ownerGuest).compareAndStoreIdentifier(
+        'helper',
+        undefined,
+        privateId,
+      ),
+    );
+    t.false(
+      await E(ownerGuest).compareAndStoreIdentifier(
+        'helper',
+        privateId,
+        undefined,
+      ),
+    );
+    t.is(await E(ownerGuest).identify('helper'), helperHandle);
     const entry = await E(ownerGuest).lookup('helper');
     t.false(
       (await E(entry).__getMethodNames__()).includes('lookup'),
