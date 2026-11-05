@@ -198,7 +198,7 @@ export const makeDirectoryMaker = ({
       assertNamePath(petNamePath);
       const tailName = petNamePath[petNamePath.length - 1];
       if (petNamePath.length === 1) {
-         
+        // eslint-disable-next-line no-use-before-define
         return { hub: directory, name: tailName };
       }
       const prefixPath = petNamePath.slice(0, -1);

@@ -1467,10 +1467,7 @@ test('a prior grant survives reconciliation while its reattachment is unfinished
   const [record] = Object.values(recovered.factory.inspect().agents);
   t.is(record.providerId, crashed.target.providerId);
   const after = await E(recovered.registry).listGrants();
-  t.is(
-    after.find(({ grantId }) => grantId === priorGrantId)?.state,
-    'revoked',
-  );
+  t.is(after.find(({ grantId }) => grantId === priorGrantId)?.state, 'revoked');
 });
 
 test('deleting an agent evicts its inference facet, which still refuses', async t => {

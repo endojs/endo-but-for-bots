@@ -2222,7 +2222,7 @@ export const makeHostMaker = ({
         options?.resultName !== undefined
           ? `${options.resultName}`
           : `tree-unconfined-${await (async () => {
-               
+              // eslint-disable-next-line no-bitwise
               const r = Math.floor(Math.random() * 0xff_ffff);
               return r.toString(16);
             })()}`;
