@@ -138,12 +138,30 @@ A maintainer holds a mutable project directory `x` and gives a reviewer
 The reviewer sees later edits and has no method to make any.
 The reviewer keeps `s = await view.snapshot()`, and `s` stays the same while the
 maintainer keeps editing.
-A builder receives `c = x.controlled(k)`, while the maintainer keeps controller
-`k`.
-While `k` sets the branch to `read`, `c.writeText` fails; once `k` sets it to
-`write`, `c.writeText(text, { expected: s })` commits only if the content is still
-equivalent to `s`.
-Setting the branch to `revoked` ends the builder's access.
+
+The maintainer then grants a builder write access to `src` that the maintainer can
+withdraw.
+The maintainer keeps the controller `k` and the selector `branch`, and the builder
+receives only the view `c`:
+
+```js
+// Maintainer: mint a controller, a branch over src, and a view of that branch.
+const k = await x.makeController();
+const branch = await k.makeBranch(['src'], 'read');
+const c = await x.controlled(k, branch);
+
+// Builder: reads work, and a write fails under the 'read' policy.
+const file = await c.lookup(['main.js']);
+const base = await file.snapshot();
+await file.writeText(text, { expected: base }); // throws ACCESS_REVOKED
+
+// Maintainer: enable writes; the write commits only if still equivalent to base.
+await k.setPolicy(branch, 'write');
+await file.writeText(text, { expected: base });
+
+// Maintainer: end the builder's access; every further call throws ACCESS_REVOKED.
+await k.setPolicy(branch, 'revoked');
+```
 
 ### View algebra
 
@@ -151,7 +169,8 @@ For an underlying mutable object `x`, define:
 
 - `R(x) = x.readOnly()`: a live, structurally read-only view.
 - `S(x) = await x.snapshot()`: an immutable content snapshot.
-- `C(k, x) = x.controlled(k)`: a view governed by controller `k`.
+- `C(k, b, x) = x.controlled(k, b)`: a view governed by branch `b` of controller
+  `k`.
 - `I(x) = await x.identity()`: an opaque identity for the complete visible
   content at one instant.
 
@@ -184,7 +203,18 @@ A `CapabilityLink` child stays a link: the attenuation governs the binding, not 
 referent, whose authority comes from resolving the link.
 A minter that must withhold that authority omits link resolution from the facet.
 
-`C(k, x)` exposes the methods allowed by its static facet, but every operation
+`x.makeController()` mints a controller bound to the provider that owns `x`, and
+only a mutable facet of `x` offers it.
+`k.makeBranch(path, policy)` journals a new *branch*, a policy slot covering the
+entry at `path` beneath `x` with `policy` as its first generation, and returns an
+opaque selector for it.
+`x.controlled(k, branch)` returns a view rooted at that entry and governed by that
+branch; it throws `ACCESS_REVOKED` for a controller or selector the provider did
+not mint for `x`.
+All views of one branch flip together, separate branches flip independently, and a
+view consults only its own branch.
+
+`C(k, b, x)` exposes the methods allowed by its static facet, but every operation
 also consults the provider's current policy generation for the view's branch.
 The controller holds the authority to command that policy and owns no other state:
 `k.setPolicy(branch, 'read' | 'write' | 'revoked')` resolves to `{ generation }`
@@ -194,8 +224,9 @@ it is the single serialization owner of every controlled decision.
 A controller can flip a branch in either direction.
 A command whose acknowledgment is lost has an unknown outcome until retried; it
 sets an absolute value, so a retry is idempotent.
-A controller spanning several providers issues one command to each and is not
-atomic across them.
+A controller governs one provider, so an administrator spanning several providers
+holds one controller for each, issues one command to each, and gets no atomicity
+across them.
 Only the controller can make a controlled view more permissive.
 Other attenuations remain monotonic: a size limit, path root, or omitted method
 cannot be raised or restored by the controller.
@@ -281,8 +312,10 @@ caller verify the result without rereading it.
 
 A controlled mutation checks the policy generation, performs the CAS, and commits
 as one provider transaction in journal order.
-If a policy generation that denies it lands first, it throws `ACCESS_REVOKED`; if
-a content commit lands first, it throws `PRECONDITION_FAILED`.
+If a policy generation that denies it lands first, it throws `ACCESS_REVOKED`.
+If a competing commit lands first and leaves the target no longer matching
+`expected`, it throws `PRECONDITION_FAILED`.
+Otherwise the controlled mutation commits, linearized after whatever landed first.
 
 ## Standard method families
 
@@ -422,8 +455,9 @@ and a copy-only `details` record.
 | `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
 
 Static read-only facets SHOULD omit mutators entirely.
-The `READ_ONLY` error exists for current uniform extended-FS guards and dynamic
-controller flips, not as the desired attenuation mechanism.
+The `READ_ONLY` error exists for current uniform extended-FS guards, not as the
+desired attenuation mechanism.
+A dynamic controller denial throws `ACCESS_REVOKED`.
 
 ## Size-limited reader attenuation
 
@@ -651,14 +685,14 @@ filesystem API.
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
 | Client view -> mutable provider | The view sends one guarded read or staged mutation. | The view's attenuation admits paths, methods, and result sizes; the provider validates CAS. | The provider alone owns bytes, tree metadata, revision, and journal. | The provider commits or discards one mutation and recovers its journal before publishing a root. | Path, operation, expected identity, and `MutationResult`, all filesystem vocabulary. |
-| Controller -> mutable provider | The controller sends an absolute policy command for a branch; the provider journals it and acknowledges its generation. | The controller decides read/write/revoked; the provider decides ordering and transaction atomicity. | The provider owns policy generations and content in one journal; the controller owns no durable state. | The provider alone commits, restoring policy from its journal before facets revive. | Branch selector, policy value, and acknowledged generation, controller vocabulary. |
+| Controller -> mutable provider | The controller sends an absolute policy command for a branch; the provider journals it and acknowledges its generation. | The controller decides read/write/revoked; the provider decides ordering and transaction atomicity. | The provider owns branches, policy generations, and content in one journal; the controller owns no durable state. | The provider alone commits, restoring policy from its journal before facets revive. | Branch selector, policy value, and acknowledged generation, controller vocabulary. |
 | Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private digests after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
 | Pet-name/formula directory -> provider or capability link | The directory binds a local name to a typed capability entry; a formula may reincarnate it. | The directory owner admits binding changes; it does not decide content mutations. | The directory/formula store owns bindings and recipes; the target provider owns target state. | The directory commits bindings and replays recipes before lookup; unresolved links remain inert. | Name, entry kind, formula ID or link, outer naming vocabulary. |
 | Archive/restore -> directory and locator resolver | Export writes and signs a manifest/envelope; restore verifies and mints unresolved links. | Explicit export authority admits bearer locators; the restoring holder's `trustedSigners` decides whose signature classifies links, and it chooses the link mode. | The archive owner owns archive bytes; the signer owns its private key; the restoring holder owns its trust set; the destination owns installed bindings. | Export finalizes and signs the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest record, signature, envelope bytes, and locator, archive vocabulary. |
 | Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
 
 **Persistent state.**
-The mutable provider owns content, policy generations, and journals, the content
+The mutable provider owns content, branches, policy generations, and journals, the content
 store owns immutable objects, the directory/formula store owns bindings
 and recipes, the archive owner owns exported bytes, and Git owns Git objects.
 No durable datum has two owners.
