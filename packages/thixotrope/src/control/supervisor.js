@@ -129,9 +129,12 @@ const save = async (files, path, value) => {
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {PlatformPowers} platform
  * @param {string} statePath
- * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number, mailboxPlacement?: 'workspace' | 'separate'}} [options]
+ * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number, maxDeliveryAttempts?: number, mailboxPlacement?: 'workspace' | 'separate'}} [options]
  *   Mailbox placement is selected for fresh state and persisted for ordinary
  *   restarts. Omission retains separate mailboxes for existing state.
+ *   A journal frame that fails `maxDeliveryAttempts` times without a halt
+ *   and without progress past it records the worker's failure, as a halt
+ *   does, instead of making every later frame replay up to it again.
  */
 export const serveThixotrope = async (
   platform,
@@ -140,6 +143,7 @@ export const serveThixotrope = async (
     engine,
     idleSleepMs = 30_000,
     snapshotEveryDeliveries = 256,
+    maxDeliveryAttempts = 3,
     mailboxPlacement,
   } = {},
 ) => {
@@ -310,6 +314,7 @@ export const serveThixotrope = async (
         codec: syrupCodec,
         idleSleepMs,
         snapshotEveryDeliveries,
+        maxDeliveryAttempts,
         validateState: async () => {
           try {
             config = JSON.parse(await files.readText(configPath));
