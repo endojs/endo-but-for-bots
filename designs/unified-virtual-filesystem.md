@@ -459,7 +459,16 @@ This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
 
-Tree CAS covers the complete visible root, including entry kinds and `Value`
+Concurrency in the pet-name system is compare-and-swap, never locking.
+No method acquires, holds, or releases a lock on any part of a tree, and no holder can
+make another wait on its transaction.
+Concurrent mutators race, the fastest commits, and each other whose `expected` no
+longer holds throws `PRECONDITION_FAILED` and may retry from a fresh snapshot.
+A provider serializes each commit internally, for no longer than the commit itself.
+`expected` covers only the tree or file it is passed to, so mutations beneath `src`
+and beneath `docs` do not conflict unless an `expected` covers both.
+
+Tree CAS covers the complete visible tree of its receiver, including entry kinds and `Value`
 bindings.
 File CAS covers the complete byte sequence.
 The comparison and mutation are one transaction.
@@ -641,8 +650,8 @@ references defined below instead of embedding bytes.
 `diff` exists only on immutable snapshots so both operands are stable.
 Across domains, `diff` and `merge` throw `REFERENCE_INCOMPARABLE` on reaching a pair of
 capability references, because they cannot tell whether the pair changed.
-`applyPatch` exists only on mutable or writable controlled views and requires an
-expected snapshot unless the caller explicitly chooses last-writer-wins.
+`applyPatch` exists only on mutable or writable controlled views and always requires
+an expected snapshot.
 
 `merge` is a pure three-way operation: the receiver is left, `base` is the
 common ancestor, and `other` is right.
@@ -941,7 +950,7 @@ await root.applyPatch(patch, { expected: L });
 The provider reads the snapshots internally, so the agent reviews only conflict
 ranges.
 If `root` has changed since `L` was taken, `applyPatch` throws `PRECONDITION_FAILED`
-before any write.
+before any write, and the caller merges again from a fresh snapshot.
 
 ### Build a file from several blobs
 
@@ -1377,7 +1386,8 @@ It covers:
   typed operations and `capture`, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
   `snapshot`, `equivalent`, and `expected`, including through an
   enclosing tree.
-- **Mutation:** ABA and stale CAS, controller setup and races, retained descendants
+- **Mutation:** ABA and stale CAS, concurrent mutators of which exactly one commits,
+  disjoint subtrees that do not conflict, controller setup and races, retained descendants
   across read, write, and revoked flips, partial-failure atomicity, merge conflict
   frames whose `merged` anchors `editHashLines` accepts,
   reference splices, and rejection of live transform sources.
