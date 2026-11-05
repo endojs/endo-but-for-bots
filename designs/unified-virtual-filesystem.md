@@ -198,7 +198,7 @@ A snapshot can outlive and diverge from its source, whereas a read-only view
 observes later source changes.
 
 Attenuation follows traversal.
-`lookup` on a read-only, controlled, size-limited, or rooted view returns each
+`lookup` on a read-only, controlled, size-limited, budgeted, or rooted view returns each
 `File`, `Directory`, `BlockStorage`, `AppendLog`, and `DataStore` child under the
 same attenuation.
 A `CapabilityLink` child stays a link: the attenuation governs the binding, not the
@@ -415,6 +415,8 @@ An adapter preserves the implemented `listTree` field name `type` and its
 `PassableReader` from `@endo/exo-stream` that delivers one record per pull.
 These methods have no eager form, pages, or continuation tokens.
 The consumer stops early by closing the reader.
+Unless the holder's facet carries a result budget, a reader delivers the complete
+result.
 A reader over a live view is not a consistent cut, so a caller that needs one
 iterates a snapshot.
 
@@ -426,8 +428,9 @@ records.
 The common interface renames `file` to `path`, adds match `ranges`, and streams
 the same records; an adapter preserves the implemented shape.
 Its patterns have the same grammar as the corresponding separate operations.
-The current implementation's default 1,000-result cap and silent glob
-truncation become a reader that ends in `RESULT_TOO_LARGE`, never silent loss.
+The current implementation's default 1,000-result cap and silent glob truncation
+are replaced by a reader that delivers the complete result under backpressure.
+Results are never silently lost.
 
 ### Diff, patch, merge, and reference transforms
 
@@ -498,7 +501,8 @@ and a copy-only `details` record.
 | `PRECONDITION_FAILED` | The expected identity or revision is stale. |
 | `INVALID_RANGE` | A range is negative, fractional where integral, reversed, or unrepresentable; a valid range beyond the source clamps to an empty suffix. |
 | `MERGE_CONFLICT` | A caller requested conflict-free output but conflicts remain. |
-| `RESULT_TOO_LARGE` | Materializing or rendering a result exceeds its attenuation. |
+| `RESULT_TOO_LARGE` | Materializing or rendering one result exceeds its resource bound. |
+| `RESULT_BUDGET_EXHAUSTED` | A reader reached the total-result budget granted to its facet; the result is incomplete. |
 | `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
 | `SNAPSHOT_UNREACHABLE` | A connection carrying a foreign snapshot severed, or that snapshot's provider incarnation ended, before the operation finished with it. |
 | `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or a data store holds a value with no canonical form. |
@@ -513,11 +517,14 @@ A dynamic controller denial throws `ACCESS_REVOKED`.
 ## Size-limited reader attenuation
 
 Every materializing reader can be wrapped with
-`reader.limitResults({ bytes, entries, records, patchBytes })`.
+`reader.limitResults({ bytes, recordBytes, patchBytes })`.
+These are resource bounds: `bytes` bounds one materialized value or range,
+`recordBytes` bounds one record a `ResultReader` delivers, and `patchBytes` bounds
+one rendered patch.
 The minter or administrator chooses the outer policy.
 A holder may derive an equal or lower limit and MUST NOT raise any component;
 each attenuation chain uses the minimum at every layer.
-Changing controlled mutability does not change result limits.
+Changing controlled mutability does not change result limits or budgets.
 
 Before allocating or returning a whole result, the provider determines its
 actual encoded size where possible.
@@ -543,16 +550,18 @@ An oversized operation throws this shape:
 }
 ```
 
-If exact size is unknowable before streaming, `actual` is the first observed
+If exact size is unknowable before materializing, `actual` is the first observed
 size greater than the limit and `details.exact` is `false`.
-The stream terminates with the same structured error and MUST NOT buffer past
-the smallest necessary chunk.
+Materialization stops with the same structured error and MUST NOT buffer past the
+smallest necessary chunk.
+`streamBytes()` materializes nothing, so its backpressure is its bound.
 
-A `ResultReader` applies the same limits as it delivers: `entries` and `records`
-cap how many records one reader delivers, and `bytes` caps each record.
-Reaching a cap ends the reader with this structured error after the earlier
-records, so the holder knows the result is incomplete and narrows the query.
-A limit has no continuation, because resuming past it would raise it.
+Backpressure likewise bounds a `ResultReader`, which produces one record per pull,
+so no resource bound caps how many records it delivers.
+A record larger than `recordBytes` does not end the reader.
+The provider delivers it with the over-limit field removed and
+`omitted: { field, bytes }` added, and the holder retrieves that field with a ranged
+read.
 `Patch` and merged snapshots remain capabilities; only materializing or rendering
 them consumes a result budget.
 
@@ -566,6 +575,25 @@ only methods the raising facet exposes:
 | Tree | `glob` finds paths; `grep` and `glorp` find lines | `lookup`, then the blob range methods | `applyTransform`, `applyPatch` |
 
 Other facets list their ranged reads and omit a member they cannot fill.
+
+### Result budgets
+
+A total-result budget is an authority policy, separate from the resource bounds
+above, which never make a valid result inaccessible.
+A minter grants one when a holder may see only so much of one query, for example to
+bound what an agent receives.
+`view.withResultBudget({ records })` returns a facet each of whose readers delivers
+at most `records` records.
+A holder may derive an equal or lower budget and MUST NOT raise it; each attenuation
+chain uses the minimum at every layer.
+
+Reaching the budget ends that reader with `RESULT_BUDGET_EXHAUSTED` after the earlier
+records, so the holder knows the result is incomplete.
+The error uses the teaching shape and `details.retry` rules above, with
+`unit: 'records'`, `actual` the number of records delivered, and `details.exact`
+`false`.
+A budget has no continuation, because resuming past it would raise it.
+The holder narrows its query or asks the minter for a larger budget.
 
 ## Splicing without reading into an agent context
 
@@ -785,7 +813,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 | Range names | platform range/tree reads, range attenuation, extended FS | `fetch`, `rangeRead`, `rangeReadText`, `bytes`, `byteRange`, and `textRange` overlap. | Standardize bounded materializers as `readByteRange`/`readTextRange`; keep `byteRange`/`textRange` as attenuating capability constructors. |
 | NameHub and mount overlap | name-hub unification, interface consolidation, daemon guards | Shared methods have different accepted path and result shapes. | Derive guards from method families; keep explicit adapters for entry-as-path overloads. |
 | Read-only attenuation | extended FS, mount capabilities | One API keeps mutators and rejects calls; another omits mutators. | New static facets omit methods; dynamic controlled facets may reject after a flip. |
-| Search bounds | stream/glob/grep, current search implementation | Design streams; implementation returns eager arrays and silently truncates an intermediate glob. | Return `ResultReader`s that end in `RESULT_TOO_LARGE` at a limit; never silently truncate. |
+| Search bounds | stream/glob/grep, current search implementation | Design streams; implementation returns eager arrays and silently truncates an intermediate glob. | Return `ResultReader`s that deliver the complete result under backpressure; only a granted budget ends one early, with an explicit error; never silently truncate. |
 | Hashline CAS | CLI edit, daemon hashline implementation | Anchors use public raw SHA-256 and literal replacement content. | Accept opaque expected identity and range-reference payloads; preserve CRC32 line anchors. |
 | Diff, patch, merge | root advancement, exo-git, agent tools | Git has operations, but snapshots lack one portable contract. | Put pure `diff`/`merge` on snapshots and CAS `applyPatch` on mutable views. |
 | Dynamic mutability | mount capabilities | Mount-local control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
@@ -802,9 +830,9 @@ Each rung can land independently behind adapters and conformance tests.
 1. Publish terminology, result/error records, and tests proving that live
    read-only and snapshot views differ.
 2. Add `readByteRange`/`readTextRange` aliases and the size-limited reader facet,
-   including teaching errors for files, listings, and searches.
-3. Replace eager search truncation with `ResultReader`s, add blob `grep`, and make
-   `glorp` conformance explicit.
+   including teaching errors for whole-value and rendered results.
+3. Replace eager search truncation with complete `ResultReader`s, add the separate
+   result budget and blob `grep`, and make `glorp` conformance explicit.
 4. Introduce opaque `ContentIdentity` and `Snapshot.equivalent` beside existing
    hashes, then move hashline and tree CAS preconditions to them.
 5. Add reference payloads to hashline edits and atomic `Transform.copyRange` for
