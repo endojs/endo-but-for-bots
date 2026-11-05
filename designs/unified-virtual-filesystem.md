@@ -280,8 +280,16 @@ a fresh identity from it.
 Within one domain it MAY compare private digests.
 Otherwise the receiver pulls the argument's canonical form over the reference it
 was passed and compares it with its own, materializing neither in the caller.
-A link's locator crosses this exchange only as the `ocap:` digest of the envelope
-below, never as locator bytes.
+
+A link cannot be compared this way.
+Its locator may be a bearer secret, so locator bytes MUST NOT cross this exchange, and
+a digest of them could not establish that the bytes are equal.
+The pulled canonical form therefore carries only the category `Link` at that name, and
+the same holds for a remotable inside a Key.
+A comparison across domains answers `false` if any other part of the operands differs,
+and otherwise throws `REFERENCE_INCOMPARABLE`.
+It never answers `true` for operands holding a link or a remotable.
+A caller that must compare such trees keeps both snapshots in one identity domain.
 
 A caller holding references to both operands is the connectivity the comparison
 needs, so the two providers need no direct connection.
@@ -306,7 +314,7 @@ Every entry kind compares by the canonical form of its category:
 | Tree | `Directory`, `SnapshotTree` | The set of NFC-normalized names, each with its entry's category and canonical form. Listing order and timestamps are excluded. |
 | Log | `AppendLog` and its snapshot | The ordered sequence of exact records. A strict prefix is not equivalent. |
 | Data | `DataStore` and its snapshot | The store shape (map or set) and its entries in key rank order, compared by `keyEQ` from `@endo/patterns`. A value that is not a Key makes `identity()` and `equivalent` throw `UNSNAPSHOTTABLE_ENTRY`. |
-| Link | `CapabilityLink` | The exact locator bytes of the link record, or object identity for a link with no locator. The referent is never dereferenced. |
+| Link | `CapabilityLink` | Within one identity domain, the exact locator bytes of the link record, or object identity for a link with no locator. The referent is never dereferenced. Across domains a link has no comparable form. |
 
 A snapshot keeps its source's category even when its representation is a
 pass-by-copy value or a tree, so the identity law holds for every kind.
@@ -315,14 +323,22 @@ Two locators for one referent, or two presences of one object, are not equivalen
 either: comparison MAY report a false negative, which fails a compare-and-swap
 safely, and MUST NOT report a false positive.
 
+Within a domain, a digest stands in for exact comparison only because the domain's
+private digest MUST be collision-resistant.
+That is the one assumption behind the no-false-positive rule, and it is why a domain
+whose digest stops being trusted is replaced by a new domain rather than extended.
+Cross-domain comparison makes no such assumption, because it compares exact bytes
+and never concludes anything from a digest.
+
 A mutator taking `{ expected }` accepts a snapshot from any provider the caller can
 bridge or an identity from the target's own domain, and compares it with the
 complete current target immediately before commit.
 The provider pulls and digests a foreign snapshot's canonical form before opening
 its transaction, so no remote pull runs inside the transaction.
-An identity from another domain throws `IDENTITY_INCOMPARABLE`, a severed pull
-throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws `PRECONDITION_FAILED`; none
-changes the target.
+An identity from another domain throws `IDENTITY_INCOMPARABLE`, a foreign snapshot
+holding a link or a remotable throws `REFERENCE_INCOMPARABLE`, a severed pull throws
+`SNAPSHOT_UNREACHABLE`, and a mismatch throws `PRECONDITION_FAILED`; none changes the
+target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
@@ -446,6 +462,8 @@ mutable.applyTransform(transform, { expected }): Promise<MutationResult>
 `Patch` is an immutable, streamable capability whose hunks may hold the range
 references defined below instead of embedding bytes.
 `diff` exists only on immutable snapshots so both operands are stable.
+Across domains, `diff` and `merge` throw `REFERENCE_INCOMPARABLE` on reaching a pair of
+links or remotables, because they cannot tell whether the pair changed.
 `applyPatch` exists only on mutable or writable controlled views and requires an
 expected identity unless the caller explicitly chooses last-writer-wins.
 
@@ -516,6 +534,7 @@ and a copy-only `details` record.
 | `RESULT_TOO_LARGE` | Materializing or rendering one result exceeds its resource bound. |
 | `RESULT_BUDGET_EXHAUSTED` | A reader reached the total-result budget granted to its facet; the result is incomplete. |
 | `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
+| `REFERENCE_INCOMPARABLE` | A comparison across identity domains found no other difference but reached a capability link or remotable, whose exact form it may not exchange. |
 | `SNAPSHOT_UNREACHABLE` | A connection carrying a foreign snapshot severed, or that snapshot's provider incarnation ended, before the operation finished with it. |
 | `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or a data store holds a value with no canonical form. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
@@ -911,6 +930,9 @@ It covers:
 - **Identity:** same-domain identity comparison, foreign-domain rejection,
   cross-provider snapshot comparison for every canonical form, comparison relayed
   through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
+  Across domains, distinct locators whose digests are forced to collide MUST NOT
+  compare `true`, a link pair MUST throw `REFERENCE_INCOMPARABLE`, a difference elsewhere
+  MUST answer `false`, and no locator byte or locator digest may appear on the wire.
 - **Mutation:** ABA and stale CAS, controller setup and races, partial-failure
   atomicity, merge conflicts, reference splices, and rejection of live transform
   sources.
