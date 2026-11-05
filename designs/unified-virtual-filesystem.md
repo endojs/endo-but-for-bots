@@ -122,7 +122,7 @@ referent.
 A caller requiring a deep deterministic snapshot MUST call
 `snapshot({ strict: true })`.
 Strict mode throws `UNSNAPSHOTTABLE_ENTRY` for any `CapabilityLink` or any
-`DataStore` value with no canonical form, without dereferencing a link, instead of
+`DataStore` value that is not a Key, without dereferencing a link, instead of
 silently implying that the referent was frozen.
 
 `NameHub` remains the general pet-name map.
@@ -313,7 +313,7 @@ Every entry kind compares by the canonical form of its category:
 | Blob | `File`, `BlockStorage`, `SnapshotBlob` | The exact byte sequence. Capacity, block size, and timestamps are excluded. |
 | Tree | `Directory`, `SnapshotTree` | The set of NFC-normalized names, each with its entry's category and canonical form. Listing order and timestamps are excluded. |
 | Log | `AppendLog` and its snapshot | The ordered sequence of exact records. A strict prefix is not equivalent. |
-| Data | `DataStore` and its snapshot | The store shape (map or set) and its entries in key rank order, compared by `keyEQ` from `@endo/patterns`. A value that is not a Key makes `identity()` and `equivalent` throw `UNSNAPSHOTTABLE_ENTRY`. |
+| Data | `DataStore` and its snapshot | For a store whose values are all Keys, the store shape (map or set) and its entries in key rank order, compared by `keyEQ` from `@endo/patterns`. Other stores have no canonical form, as defined under *Blocks, logs, data, and generic slots*. |
 | Link | `CapabilityLink` | Within one identity domain, the exact locator bytes of the link record, or object identity for a link with no locator. The referent is never dereferenced. Across domains a link has no comparable form. |
 
 A snapshot keeps its source's category even when its representation is a
@@ -327,8 +327,8 @@ Within a domain, a digest stands in for exact comparison only because the domain
 private digest MUST be collision-resistant.
 That is the one assumption behind the no-false-positive rule, and it is why a domain
 whose digest stops being trusted is replaced by a new domain rather than extended.
-Cross-domain comparison makes no such assumption, because it compares exact bytes
-and never concludes anything from a digest.
+Cross-domain comparison exchanges exact bytes, so it never trusts another domain's
+digest.
 
 A mutator taking `{ expected }` accepts a snapshot from any provider the caller can
 bridge or an identity from the target's own domain, and compares it with the
@@ -510,6 +510,22 @@ rewrite authority.
 `DataStore` has the typed map/set operations from the persistent-store design
 and `snapshot`, which returns a `SnapshotData` represented by a pass-by-copy value
 when bounded and an immutable tree otherwise.
+
+A `DataStore` entry is a strong map or set store, ordered or not, and its values are
+whatever passables the persistent-store design admits.
+A weak store cannot enumerate its entries, so it has no snapshot, and a directory
+names one only through a `CapabilityLink`.
+A store whose values are all Keys has the canonical form above.
+A store holding any other value, such as a promise, an error, or a copy record
+containing one, is still a valid entry with all its typed operations and a non-strict
+snapshot.
+It has no canonical form, so `identity`, `equivalent`, strict `snapshot`, and any
+`expected` covering it or an enclosing tree throw `UNSNAPSHOTTABLE_ENTRY` and change
+nothing.
+A caller guarding such a tree uses the provider's revision instead.
+A store guarded to Key values, with `M.key()`, can never reach this case.
+Within one domain, a remotable inside a Key compares by its formula identity.
+
 `CapabilityLink` has `resolve()`, which returns the referent or throws
 `LOCATOR_UNREACHABLE`.
 
@@ -536,7 +552,7 @@ and a copy-only `details` record.
 | `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
 | `REFERENCE_INCOMPARABLE` | A comparison across identity domains found no other difference but reached a capability link or remotable, whose exact form it may not exchange. |
 | `SNAPSHOT_UNREACHABLE` | A connection carrying a foreign snapshot severed, or that snapshot's provider incarnation ended, before the operation finished with it. |
-| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or a data store holds a value with no canonical form. |
+| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or an operation needing a canonical form reached a data store holding a value that is not a Key. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
 | `ARCHIVE_MALFORMED` | An archive holds duplicate raw member names, names that collide after NFC normalization, or names the path rules forbid. |
 | `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
@@ -933,6 +949,10 @@ It covers:
   Across domains, distinct locators whose digests are forced to collide MUST NOT
   compare `true`, a link pair MUST throw `REFERENCE_INCOMPARABLE`, a difference elsewhere
   MUST answer `false`, and no locator byte or locator digest may appear on the wire.
+  A store holding a promise, an error, or a copy record containing one MUST keep its
+  typed operations and non-strict snapshot, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
+  `identity`, `equivalent`, strict `snapshot`, and `expected`, including through an
+  enclosing tree.
 - **Mutation:** ABA and stale CAS, controller setup and races, partial-failure
   atomicity, merge conflicts, reference splices, and rejection of live transform
   sources.
