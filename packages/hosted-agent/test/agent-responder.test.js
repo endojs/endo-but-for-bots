@@ -178,6 +178,7 @@ test('paused, the responder starts no turn; startAfter skips confirmed mail', as
   t.deepEqual(world.prompts, ['processed']);
   t.is(world.snapshot.cursor, later);
   t.is(world.mail.length, 1, 'skipped mail stays for the owner');
+  t.is((await responder.describe()).cursor, later);
 });
 
 test('a replayed delivery does not run the message again', async t => {
@@ -526,6 +527,85 @@ test('a turn past its wall clock is aborted and deferred', async t => {
   await settled();
   await advance(world, 5 * MINUTE);
   t.is((await responder.describe()).deferred[0].code, 'turn-failed');
+});
+
+test('a turn with no text dismisses the message and sends no reply', async t => {
+  const { world, deliver, start } = makeWorld();
+  world.turn = async () => harden({});
+  const responder = await start();
+  deliver('nothing to say');
+  await responder.setPaused(false);
+  await settled();
+  t.deepEqual(world.replies, []);
+  t.deepEqual(world.dismissed, ['1']);
+  t.deepEqual(world.snapshot.effects, {});
+});
+
+test('a turn that ignores the abort and finishes after stopping records nothing', async t => {
+  const { world, deliver, start } = makeWorld();
+  /** @type {(value: any) => void} */
+  let finishTurn = () => {};
+  world.turn = () =>
+    new Promise(resolve => {
+      finishTurn = resolve;
+    });
+  const responder = await start();
+  deliver('long');
+  await responder.setPaused(false);
+  await settled();
+  responder.stop();
+  finishTurn(harden({ text: 'too late' }));
+  await settled();
+  t.deepEqual(world.snapshot.effects, {});
+  t.deepEqual(world.replies, []);
+  t.deepEqual(world.dismissed, []);
+});
+
+test('mail arriving after stopping starts no turn', async t => {
+  const { world, deliver, start } = makeWorld();
+  const responder = await start();
+  await responder.setPaused(false);
+  responder.stop();
+  deliver('after stop');
+  responder.notify();
+  await settled();
+  t.deepEqual(world.prompts, []);
+});
+
+test('a failed pass is logged and resumes after the initial backoff', async t => {
+  const { world, deliver, start } = makeWorld();
+  /** @type {string[]} */
+  const logged = [];
+  world.failNextReplyRecord = true;
+  const responder = await start({
+    logError: message => logged.push(message),
+  });
+  deliver('hello');
+  await responder.setPaused(false);
+  await settled();
+  t.deepEqual(logged, ['Agent responder pass failed']);
+  t.deepEqual(world.replies, ['answer']);
+  t.deepEqual(world.dismissed, [], 'the pass stopped before dismissing');
+  await advance(world, MINUTE - 1);
+  t.deepEqual(world.dismissed, [], 'the retry waits out the backoff');
+  await advance(world, 1);
+  t.deepEqual(
+    world.replies,
+    ['answer'],
+    'the resumed pass does not reply again',
+  );
+  t.true(world.dismissed.includes('1'));
+  t.deepEqual(world.snapshot.effects, {});
+});
+
+test('a locator names its formula with or without connection hints', t => {
+  const bare = formulaIdOfLocator(PEER);
+  t.is(bare, `${'2'.repeat(64)}:${NODE}`);
+  t.is(formulaIdOfLocator(`${PEER}&at=tcp%3A%2F%2F127.0.0.1%3A8920`), bare);
+  t.not(formulaIdOfLocator(SELF), bare);
+  t.is(formulaIdOfLocator(undefined), undefined);
+  t.is(formulaIdOfLocator('not a locator'), undefined);
+  t.is(formulaIdOfLocator(`endo://${NODE}/?type=guest`), undefined);
 });
 
 test('failure classification follows the fixed codes', t => {

@@ -79,7 +79,7 @@ const laterOf = (left, right) => {
 };
 
 /** @param {any} message */
-const textOf = message => (message.strings ?? []).join('').trim();
+const textOf = message => message.strings.join('').trim();
 
 /**
  * The formula a locator names. Locators for one formula differ by optional
@@ -383,7 +383,6 @@ export const makeAgentResponder = async ({
 
   /** Mail, timers, and owner actions all wake this one single-flight loop. */
   const pump = () => {
-    if (stopped) return;
     if (pumping) {
       pumpAgain = true;
       return;

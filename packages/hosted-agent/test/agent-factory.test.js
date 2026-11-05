@@ -164,7 +164,7 @@ const makeWorld = () => {
     },
   };
 
-  /** @type {Map<string, { name: string, paused: boolean, startAfter?: string, starts: number }>} */
+  /** @type {Map<string, { name: string, paused: boolean, startAfter?: string, starts: number, deferred?: any[], retried?: string[] }>} */
   const responderRecords = new Map();
   const responders = {
     has: async name => responderRecords.has(name),
@@ -186,6 +186,17 @@ const makeWorld = () => {
         record.startAfter = startAfter;
       }
       record.paused = paused;
+    },
+    describe: async name => {
+      if (failures.responder) throw failures.responder;
+      return harden({
+        deferred: mustGet(responderRecords, name).deferred ?? [],
+        refused: [],
+      });
+    },
+    retry: async (name, number) => {
+      const record = mustGet(responderRecords, name);
+      record.retried = [...(record.retried ?? []), number];
     },
     remove: async (_guestName, name) => {
       responderRecords.delete(name);
@@ -938,6 +949,40 @@ test('enabling wake with no queued mail applies immediately, and dismissed mail 
     wake: true,
   });
   t.false([...world.responderRecords.values()][0].paused);
+});
+
+test('Retry now reaches the responder, and the summary reports its queue', async t => {
+  const { world, directory, provider } = await setup();
+  const agent = await E(directory).create(createRequest(provider.providerId));
+  world.deliver(agent.agentId, '1');
+  const [responder] = world.responderRecords.values();
+  responder.deferred = [
+    harden({
+      number: '1',
+      code: 'agent-rate-limited',
+      attempts: 1,
+      retryAt: '2026-11-04T12:01:00.000Z',
+    }),
+  ];
+  await t.throwsAsync(
+    E(directory).retryMail(agent.agentId, 'not-a-number'),
+    refusalFor('invalid-request'),
+  );
+  t.is(responder.retried, undefined);
+  const summary = await E(directory).retryMail(agent.agentId, '1');
+  t.deepEqual(responder.retried, ['1']);
+  t.is(summary.deferredCount, 1);
+  t.is(summary.deferred[0].code, 'agent-rate-limited');
+
+  world.failures.responder = Error('responder worker is down');
+  const degraded = await E(directory).get(agent.agentId);
+  t.is(
+    degraded.deferredCount,
+    0,
+    'an unreachable responder hides only its queue',
+  );
+  t.is(degraded.refusedCount, 0);
+  t.is(degraded.agentId, agent.agentId);
 });
 
 test('limit changes reach the grant, gate raises, and apply one operation', async t => {
