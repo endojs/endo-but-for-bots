@@ -453,8 +453,8 @@ bridge, and compares it with the complete current target immediately before comm
 The provider pulls and digests a foreign snapshot's canonical form before opening
 its transaction, so no remote pull runs inside the transaction.
 A foreign capture holding a capability reference throws `REFERENCE_INCOMPARABLE`, a
-severed pull throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws `PRECONDITION_FAILED`; none changes the
-target.
+severed pull throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws
+`PRECONDITION_FAILED`; none changes the target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
@@ -959,7 +959,8 @@ A transform creates `bundle.txt`, copies bytes `[0,120)` from snapshot blob `A`,
 appends one small literal terminator.
 The provider validates all three immutable sources, writes one staged target,
 and atomically publishes it.
-The caller compares the returned snapshot with a preview from `transform` without materializing the bundle.
+The caller compares the returned snapshot with a preview from `transform` without
+materializing the bundle.
 
 Hash-line edits are the line-oriented form of the same mechanism.
 Their replacement payload MAY be a range reference, and their anchors plus the
@@ -1034,7 +1035,7 @@ a restored reference remains unresolved until then.
 
 ### Signed manifest and round trip
 
-An archive combines the envelope with a directory-level manifest, stored at the
+An archive combines locator files with a directory-level manifest, stored at the
 archive root as `.endo-manifest` beside its signature, `.endo-manifest.sig`.
 Export rejects a tree that already uses either root name.
 The manifest is a map in CBOR core deterministic encoding (RFC 8949 section 4.2.1)
@@ -1377,7 +1378,8 @@ It covers:
   links leaving a native root, entry kinds, agreement between `kind()` and list records,
   a `kind()` that survives `snapshot()`, result paths that feed `lookup` unchanged,
   missing-path behavior of `has`, `lookup`, and `maybeLookup`, and `snapshot` versus `capture`.
-- **Comparison:** same-domain digest comparison, cross-provider snapshot comparison for every canonical form, comparison relayed
+- **Comparison:** same-domain digest comparison, cross-provider snapshot comparison
+  for every canonical form, comparison relayed
   through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
   Across domains, distinct locators whose digests are forced to collide MUST NOT
   compare `true`, a pair of references MUST throw `REFERENCE_INCOMPARABLE`, a difference elsewhere
@@ -1392,7 +1394,8 @@ It covers:
   frames whose `merged` anchors `editHashLines` accepts,
   reference splices, and rejection of live transform sources.
 - **Readers and limits:** range composition, anchors from `readHashLines`,
-  `grepHashLines`, and `glorpHashLines` that `editHashLines` accepts, result limits, oversized records that
+  `grepHashLines`, and `glorpHashLines` that `editHashLines` accepts, result limits,
+  oversized records that
   leave the reader running, result budgets, reader early close, and recovery advice
   matching the raising facet.
 - **Archives:** tampering, unsigned and untrusted-signer restore, inert restore,
