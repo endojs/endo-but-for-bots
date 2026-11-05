@@ -397,8 +397,12 @@ It never answers `false` for content it did not finish comparing.
 A retry with fresh references is safe because snapshots are immutable.
 
 Each operand retains its own content, and the content store owns that retention.
-Public `sha256()` and `{ algorithm, hash }` methods remain diagnostic and
-content-store locator APIs; new correctness logic MUST NOT depend on them.
+A method that reveals a digest names its algorithm, as `sha256()` does, and names
+its encoding too when the digest depends on one, as `treeSha256()` does.
+No method returns `{ algorithm, hash }`, so the implemented `TreeRef` and `BlobInfo`
+results are retired.
+These methods remain diagnostic and content-store locator APIs; new correctness logic
+MUST NOT depend on them.
 
 Every entry compares by the canonical form of its kind:
 
@@ -1301,7 +1305,8 @@ Each rung can land independently behind adapters and conformance tests.
    version-1 capability envelope to checkin/checkout and `make-archive`, including
    unreachable-link recovery.
 10. Migrate daemon, platform, exo-git, registry, formula inspector, container,
-    CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings.
+    CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings and
+    every method that returns `{ algorithm, hash }`.
 
 The full ladder is approximately three to five weeks when split across
 reviewable PRs.
