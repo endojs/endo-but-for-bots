@@ -97,7 +97,7 @@ the status printed in an older document.
   - Sources: [stream/glob/grep](mount-stream-glob-grep.md), [agent FS
     tools](agent-tools-mount-fs-tools.md), [CLI edit](cli-edit-verb.md), [endopi
     edit](endopi-edit-tool.md), [Chat edit](chat-view-edit-commands.md)
-  - Current status: **Implemented in part:** eager `glob`, `grep`, `glorp`, and hashline
+  - Current status: **Implemented in part:** eager `glob`, `grep`, `glorp`, and hash-line
     primitives exist; bounded streaming and one common tool surface do not.
 - **Snapshots and lifecycle**
   - Sources: [checkin/checkout](daemon-checkin-checkout.md), [CAS
@@ -135,7 +135,7 @@ the status printed in an older document.
     bytes, snapshots, ranges, and watches exist.
 - **Daemon baseline**
   - Sources: `../packages/daemon/src/{interfaces.js,mount.js,directory.js,hashline.js}`
-  - Current status: **Implemented:** pet-name hubs, mounts, search, hashline validation,
+  - Current status: **Implemented:** pet-name hubs, mounts, search, hash-line validation,
     read-only views, snapshots, and revocation exist.
 - **Exo baseline**
   - Sources: `../packages/exo-git/src/{interfaces.js,git.js,git-filesystem.js}` and the
@@ -490,6 +490,9 @@ iterates a snapshot.
 - `readTextRange(startLine, endLine)`: Materialize half-open zero-based line range, preserving
   terminators.
   - Views: all readable views
+- `readHashLines(startLine, endLine)`: Materialize a half-open zero-based line range as an array
+  of `{ line, hash, text }` records subject to the limit, `hash` being the line's anchor.
+  - Views: all readable views
 - `lineByteRange(startLine, endLine)`: Return the `{ start, end }` byte offsets of a half-open
   zero-based line range, without its content.
   - Views: all readable views
@@ -501,6 +504,8 @@ iterates a snapshot.
 - `grep(pattern, options)`: Search strict UTF-8 text and return a `ResultReader` of
   `{ line, text, ranges }` with a zero-based `line`; other content throws `WRONG_ENTRY_KIND`.
   - Views: all readable views
+- `grepHashLines(pattern, options)`: `grep` whose records also carry `hash`, the anchor of `line`.
+  - Views: all readable views
 - `identity()` / `snapshot()`: Capture opaque content identity or immutable content.
   - Views: all readable views
 - `writeBytes(value, options)` / `writeText(value, options)`: Replace content atomically,
@@ -508,7 +513,7 @@ iterates a snapshot.
   - Views: mutable, writable controlled
 - `append(value, options)`: Atomically append with an optional expected identity.
   - Views: mutable, writable controlled, append storage
-- `editHashlines(edits, options)`: Validate line anchors and apply one atomic splice
+- `editHashLines(edits, options)`: Validate line anchors and apply one atomic splice
   transaction.
   - Views: mutable, writable controlled
 
@@ -517,7 +522,12 @@ The existing materializing `text`, `bytes`, `fetch`, `rangeRead`, and
 `byteRange` and `textRange` are attenuation constructors; the `read*Range`
 methods are their bounded materializing conveniences.
 
-Hashline edits use a whole-file expected identity plus CRC32 line anchors.
+Hash-line edits use a whole-file expected identity plus CRC32 line anchors.
+An edit needs an anchor for every line it touches, and an anchor's width depends on the
+file's line count, so the provider supplies anchors rather than the caller computing
+them from text.
+`readHashLines` and the `grepHashLines` and `glorpHashLines` searches are how a caller
+obtains anchors without materializing the file.
 Replace, replace-range, delete, insert-before, insert-after, prepend, and append
 are supported.
 Literal replacement text is permitted, but reference payloads described below
@@ -538,6 +548,9 @@ avoid reading source content into the caller.
   - Views: all tree views
 - `glorp(globPattern, grepPattern, options)`: Apply `glob`, then `grep` only those matching
   files, returning the same grep records.
+  - Views: all tree views
+- `grepHashLines(pattern, options)`, `glorpHashLines(globPattern, grepPattern, options)`: `grep`
+  and `glorp` whose records also carry `hash`, the anchor of `line`.
   - Views: all tree views
 - `identity()`, `snapshot({ strict })`: Capture the whole visible tree.
   - Views: all tree views
@@ -785,6 +798,7 @@ The provider delivers such a record with `text` removed and
 `omitted: { field: 'text', bytes }` added.
 The record's `line`, and its `path` for a tree search, are the recovery handle: the
 holder looks up `path`, if any, and calls `readTextRange(line, line + 1)`.
+A hash-line record keeps its `hash`, so the holder can still anchor an edit to that line.
 `Patch` and merged snapshots remain capabilities; only materializing or rendering
 them consumes a result budget.
 
@@ -793,11 +807,11 @@ It MUST name the operation, limit, and observed size, and `details.retry` MUST n
 only methods the raising facet exposes:
 
 - **Blob or file**
-  - `locate`: `grep` finds lines
-  - `read`: `readTextRange`, `readByteRange`
-  - `update`, on writable facets only: `editHashlines`
+  - `locate`: `grep` and `grepHashLines` find lines
+  - `read`: `readTextRange`, `readHashLines`, `readByteRange`
+  - `update`, on writable facets only: `editHashLines`
 - **Tree**
-  - `locate`: `glob` finds paths; `grep` and `glorp` find lines
+  - `locate`: `glob` finds paths; `grep`, `glorp`, and their `HashLines` forms find lines
   - `read`: `lookup`, then the blob range methods
   - `update`, on writable facets only: `applyTransform`, `applyPatch`
 
@@ -896,7 +910,7 @@ and atomically publishes it.
 The caller compares the returned identity with the identity of a preview from
 `transform` without materializing the bundle.
 
-Hashline edits are the line-oriented form of the same mechanism.
+Hash-line edits are the line-oriented form of the same mechanism.
 Their replacement payload MAY be a range reference, and their anchors plus the
 whole-file expected identity prevent a splice at the wrong location.
 
@@ -1195,8 +1209,8 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
   - Recommended resolution: Return `ResultReader`s that deliver the complete result under
     backpressure; only a granted budget ends one early, with an explicit error; never silently
     truncate.
-- **Hashline CAS**
-  - Sources: CLI edit, daemon hashline implementation
+- **Hash-line CAS**
+  - Sources: CLI edit, daemon hash-line implementation
   - What differs or is missing: Anchors use public raw SHA-256 and literal replacement content.
   - Recommended resolution: Accept opaque expected identity and range-reference payloads;
     preserve CRC32 line anchors.
@@ -1250,9 +1264,10 @@ Each rung can land independently behind adapters and conformance tests.
 3. Replace eager search truncation with complete `ResultReader`s, add the separate
    result budget and blob `grep`, and make `glorp` conformance explicit.
 4. Introduce opaque `ContentIdentity` and `Snapshot.equivalent` beside existing
-   hashes, then move hashline and tree CAS preconditions to them.
-5. Add reference payloads to hashline edits and atomic `Transform` edit scripts for
-   one file, then a whole-tree transaction.
+   hashes, then move hash-line and tree CAS preconditions to them.
+5. Add `readHashLines`, `grepHashLines`, `glorpHashLines`, reference payloads to
+   hash-line edits, and atomic `Transform` edit scripts for one file, then a
+   whole-tree transaction.
 6. Add portable snapshot `diff`, streamable `Patch`, CAS `applyPatch`, and pure
    three-way `merge`.
 7. Split static read-only guards from mutable guards and add the independent
@@ -1293,7 +1308,8 @@ It covers:
 - **Mutation:** ABA and stale CAS, controller setup and races, retained descendants
   across read, write, and revoked flips, partial-failure atomicity, merge conflicts,
   reference splices, and rejection of live transform sources.
-- **Readers and limits:** range composition, result limits, oversized records that
+- **Readers and limits:** range composition, anchors from `readHashLines`,
+  `grepHashLines`, and `glorpHashLines` that `editHashLines` accepts, result limits, oversized records that
   leave the reader running, result budgets, reader early close, and recovery advice
   matching the raising facet.
 - **Archives:** tampering, unsigned and untrusted-signer restore, inert restore,
