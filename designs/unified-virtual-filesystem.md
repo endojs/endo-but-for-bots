@@ -78,7 +78,7 @@ filesystem content identity.
 ## Source map
 
 The source designs are linked instead of repeated.
-The status in this table describes the relevant slice on `llm`, not necessarily
+The status in this list describes the relevant slice on `llm`, not necessarily
 the status printed in an older document.
 
 - **Shared naming and guards**
@@ -405,7 +405,7 @@ Every entry compares by the canonical form of its kind:
 - **Blob**: The exact byte sequence.
   Capacity, block size, and timestamps are excluded.
   - Facets: `File`, `BlockStorage`, `SnapshotBlob`
-- **Tree**: The set of NFC-normalized names, each with its entry's category and canonical form.
+- **Tree**: The set of NFC-normalized names, each with its entry's kind and canonical form.
   Listing order and timestamps are excluded.
   - Facets: `Directory`, `SnapshotTree`
 - **Log**: The ordered sequence of exact records.
