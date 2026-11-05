@@ -279,7 +279,7 @@ A snapshot can outlive and diverge from its source, whereas a read-only view
 observes later source changes.
 
 Attenuation follows traversal.
-`lookup` on a read-only, controlled, size-limited, budgeted, or rooted view returns each
+`lookup` on a read-only, controlled, narrowed, or rooted view returns each
 `File`, `Directory`, `BlockStorage`, `AppendLog`, and `DataStore` child under the
 same attenuation.
 A `CapabilityLink` child stays a link: the attenuation governs the binding, not the
@@ -720,16 +720,19 @@ The `READ_ONLY` error exists for current uniform extended-FS guards, not as the
 desired attenuation mechanism.
 A dynamic controller denial throws `ACCESS_REVOKED`.
 
-## Size-limited reader attenuation
+## Narrowing readers
 
-Every materializing reader can be wrapped with
-`reader.limitResults({ bytes, recordBytes, patchBytes })`.
-These are resource bounds: `bytes` bounds one materialized value or range,
-`recordBytes` bounds one record a `ResultReader` delivers, and `patchBytes` bounds
-one rendered patch.
+`view.narrow({ bytes, recordBytes, patchBytes, records })` returns a facet with
+lower limits, in the manner of POSIX `nice`: a holder can lower its limits and can
+never raise them.
+Every component is optional, and each attenuation chain uses the minimum at every
+layer.
 The minter or administrator chooses the outer policy.
-A holder may derive an equal or lower limit and MUST NOT raise any component;
-each attenuation chain uses the minimum at every layer.
+
+`bytes`, `recordBytes`, and `patchBytes` are resource bounds: `bytes` bounds one
+materialized value or range, `recordBytes` bounds one record a `ResultReader`
+delivers, and `patchBytes` bounds one rendered patch.
+`records` is a result budget, described below.
 Changing controlled mutability does not change result limits or budgets.
 
 Before allocating or returning a whole result, the provider determines its
@@ -796,10 +799,8 @@ A total-result budget is an authority policy, separate from the resource bounds
 above, which never make a valid result inaccessible.
 A minter grants one when a holder may see only so much of one query, for example to
 bound what an agent receives.
-`view.withResultBudget({ records })` returns a facet each of whose readers delivers
-at most `records` records.
-A holder may derive an equal or lower budget and MUST NOT raise it; each attenuation
-chain uses the minimum at every layer.
+Under `narrow({ records })`, each reader of the returned facet delivers at most
+`records` records.
 
 Reaching the budget ends that reader with `RESULT_BUDGET_EXHAUSTED` after the earlier
 records, so the holder knows the result is incomplete.
@@ -1217,7 +1218,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
   - Sources: range designs, agent tools
   - What differs or is missing: Ranges exist, but a holder can still materialize an unlimited
     whole file or diff.
-  - Recommended resolution: Mint size-limited reader facets and use the teaching error specified
+  - Recommended resolution: Mint narrowed facets and use the teaching error specified
     above.
 
 ## Build ladder
@@ -1226,8 +1227,8 @@ Each rung can land independently behind adapters and conformance tests.
 
 1. Publish terminology, result/error records, and tests proving that live
    read-only and snapshot views differ.
-2. Add `readByteRange`/`readTextRange` aliases and the size-limited reader facet,
-   including teaching errors for whole-value and rendered results.
+2. Add `readByteRange`/`readTextRange` aliases and the `narrow` facet, including
+   teaching errors for whole-value and rendered results.
 3. Replace eager search truncation with complete `ResultReader`s, add the separate
    result budget and blob `grep`, and make `glorp` conformance explicit.
 4. Introduce opaque `ContentIdentity` and `Snapshot.equivalent` beside existing
