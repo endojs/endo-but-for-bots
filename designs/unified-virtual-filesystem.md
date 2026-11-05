@@ -355,9 +355,10 @@ could be unbounded.
 | `readBytes()` / `readText()` | Materialize the whole value subject to the result limit; text is strict UTF-8 unless an encoding is explicit. | all readable views |
 | `readByteRange(start, end)` | Materialize half-open byte range `[start,end)` subject to the limit. | all readable views |
 | `readTextRange(startLine, endLine)` | Materialize half-open zero-based line range, preserving terminators. | all readable views |
+| `lineByteRange(startLine, endLine)` | Return the `{ start, end }` byte offsets of a half-open zero-based line range, without its content. | all readable views |
 | `byteRange(start, end)` / `textRange(startLine, endLine)` | Return a narrowed reader capability; ranges compose by intersection. | all readable views |
 | `streamBytes()` | Return a backpressured byte stream. | all readable views |
-| `grep(pattern, options)` | Search strict UTF-8 text and return a `ResultReader` of `{ line, text, ranges }`; other content throws `WRONG_ENTRY_KIND`. | all readable views |
+| `grep(pattern, options)` | Search strict UTF-8 text and return a `ResultReader` of `{ line, text, ranges }` with a zero-based `line`; other content throws `WRONG_ENTRY_KIND`. | all readable views |
 | `identity()` / `snapshot()` | Capture opaque content identity or immutable content. | all readable views |
 | `writeBytes(value, options)` / `writeText(value, options)` | Replace content atomically, optionally with `expected`. | mutable, writable controlled |
 | `append(value, options)` | Atomically append with an optional expected identity. | mutable, writable controlled, append storage |
@@ -442,8 +443,8 @@ snapshot.transform(transform): Promise<Snapshot>
 mutable.applyTransform(transform, { expected }): Promise<MutationResult>
 ```
 
-`Patch` is an immutable, streamable capability whose hunks may refer to source
-ranges by capability instead of embedding bytes.
+`Patch` is an immutable, streamable capability whose hunks may hold the range
+references defined below instead of embedding bytes.
 `diff` exists only on immutable snapshots so both operands are stable.
 `applyPatch` exists only on mutable or writable controlled views and requires an
 expected identity unless the caller explicitly chooses last-writer-wins.
@@ -455,7 +456,7 @@ records with range references, not conflict-marker text silently written to a
 target.
 Applying the result is a separate CAS mutation.
 
-`Transform` contains ordered operations over capability references:
+`Transform` is an ordered array of operations over capability references:
 
 ```js
 { op: 'copyRange', source, sourceStart, sourceEnd, targetPath, targetOffset }
@@ -463,13 +464,24 @@ Applying the result is a separate CAS mutation.
 { op: 'insert', targetPath, targetOffset, value: bytesOrRangeReference }
 ```
 
+A range reference is `{ source, sourceStart, sourceEnd }`, a half-open byte range of
+`source`.
+Every `source` MUST be a `SnapshotBlob`; any other capability, including a live or
+read-only blob, throws `WRONG_ENTRY_KIND` before anything is staged.
+Offsets count bytes, `targetPath` is relative to the receiver, and a `targetPath` the
+receiver lacks starts as an empty file.
+
 The provider resolves every source snapshot, validates all ranges and the target
 precondition, stages the complete result, and commits once.
+It pulls a foreign source before opening its transaction, as it does for a foreign
+`expected`.
 Overlapping operations use their declared order against the staged value.
 No operation invokes caller code inside the transaction.
 `snapshot.transform` is the pure form: it returns the snapshot a commit would
-produce, so its identity predicts the result of `applyTransform` on the same
-content.
+produce.
+Because every source is immutable, its identity predicts the result of
+`applyTransform` with the same transform on any target equivalent to the receiver,
+and `expected` rejects any other target.
 
 ### Blocks, logs, data, and generic slots
 
@@ -599,14 +611,40 @@ The holder narrows its query or asks the minter for a larger budget.
 
 ### Move a function between files
 
-An agent uses `grep('function parseRequest')` to find the line range in snapshot
-`A`, requests only adjacent lines for review, and constructs a transform whose
-payload is `{ source: A.lookup(['src','old.js']), start, end }`.
-The same transform inserts that range in `src/new.js` and deletes the original
-range, with `expected: I(worktree)`.
-The agent first previews the transform on `A` with `A.transform(transform)`.
-The commit returns `identity` and a snapshot; the agent compares that identity
-with the preview's instead of rereading both files.
+An agent snapshots its worktree as `A`, finds the function with `grep`, reads only
+the adjacent lines with `readTextRange` to choose where the function ends, and
+converts those lines to byte offsets.
+It then moves the range without reading it into its context:
+
+```js
+const A = await worktree.snapshot();
+const oldFile = await A.lookup(['src', 'old.js']);
+const newFile = await A.lookup(['src', 'new.js']);
+
+// startLine and endLine come from grep and readTextRange on oldFile.
+const { start, end } = await oldFile.lineByteRange(startLine, endLine);
+
+const transform = [
+  {
+    op: 'copyRange',
+    source: oldFile,
+    sourceStart: start,
+    sourceEnd: end,
+    targetPath: ['src', 'new.js'],
+    targetOffset: await newFile.size(),
+  },
+  { op: 'deleteRange', targetPath: ['src', 'old.js'], start, end },
+];
+
+const preview = await A.transform(transform);
+const { identity } = await worktree.applyTransform(transform, {
+  expected: await A.identity(),
+});
+const verified = await identity.equivalent(await preview.identity());
+```
+
+The agent compares the committed identity with the preview's instead of rereading
+both files.
 
 ### Three-way merge edited snapshots
 
@@ -619,9 +657,9 @@ It applies the chosen merge snapshot to the mutable root with
 
 ### Build a file from several blobs
 
-A transform creates `bundle.txt`, copies bytes `[0,120)` from blob `A`,
-`[800,1040)` from blob `B`, and `[12,90)` from blob `C`, then appends one small
-literal terminator.
+A transform creates `bundle.txt`, copies bytes `[0,120)` from snapshot blob `A`,
+`[800,1040)` from snapshot blob `B`, and `[12,90)` from snapshot blob `C`, then
+appends one small literal terminator.
 The provider validates all three immutable sources, writes one staged target,
 and atomically publishes it.
 The caller compares the returned identity with the identity of a preview from
