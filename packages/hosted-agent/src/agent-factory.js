@@ -88,6 +88,7 @@ const AgentDirectoryInterface = M.interface('AgentDirectory', {
   reattachOptions: M.callWhen(M.string()).returns(M.arrayOf(M.record())),
   reattach: M.callWhen(M.string(), M.record()).returns(M.record()),
   dismissMail: M.callWhen(M.string(), M.string()).returns(M.record()),
+  retryMail: M.callWhen(M.string(), M.string()).returns(M.record()),
   delete: M.callWhen(M.string(), M.record()).returns(M.record()),
   getOperationStatus: M.callWhen(M.string()).returns(M.record()),
 });
@@ -159,7 +160,10 @@ const safeCreateRequest = request => {
     ),
     'invalid-request',
   );
-  refuseUnless(IDENTIFIER_PATTERN.test(idempotencyKey), 'invalid-idempotency-key');
+  refuseUnless(
+    IDENTIFIER_PATTERN.test(idempotencyKey),
+    'invalid-idempotency-key',
+  );
   refuseUnless(IDENTIFIER_PATTERN.test(providerId), 'provider-not-found');
   refuseUnless(
     AGENT_HARNESS_CATALOG.some(({ id }) => id === harness),
@@ -628,7 +632,10 @@ export const makeAgentFactory = async ({
   ) => {
     const key = `${ownerId}:${idempotencyKey}`;
     const operationId = randomId();
-    refuseUnless(GENERATED_ID_PATTERN.test(operationId), 'invalid-generated-id');
+    refuseUnless(
+      GENERATED_ID_PATTERN.test(operationId),
+      'invalid-generated-id',
+    );
     const createdAt = now();
     const operation = harden({
       version: 1,
@@ -766,7 +773,10 @@ export const makeAgentFactory = async ({
         refuseUnless(state.names[nameKey] === undefined, 'agent-name-conflict');
         const operationSuffix = randomId();
         const agentId = `agent-${operationSuffix}`;
-        refuseUnless(GENERATED_ID_PATTERN.test(agentId), 'invalid-generated-id');
+        refuseUnless(
+          GENERATED_ID_PATTERN.test(agentId),
+          'invalid-generated-id',
+        );
         await writeIntent(
           ownerId,
           idempotencyKey,
@@ -857,10 +867,12 @@ export const makeAgentFactory = async ({
         .lookup(record.providerId)
         .catch(() => undefined),
     ]);
+    const responderView = await E(responders)
+      .describe(record.names.responder)
+      .catch(() => harden({ deferred: [], refused: [] }));
     const unread = queuedAfter(mail, record.mailCursor);
     const lastMessage = mail.reduce(
-      (latest, { number }) =>
-        messageAfter(number, latest) ? number : latest,
+      (latest, { number }) => (messageAfter(number, latest) ? number : latest),
       undefined,
     );
     return harden({
@@ -876,6 +888,10 @@ export const makeAgentFactory = async ({
       lifecycle: record.lifecycle,
       unreadCount: unread.length,
       unread,
+      deferred: responderView.deferred,
+      deferredCount: responderView.deferred.length,
+      refused: responderView.refused,
+      refusedCount: responderView.refused.length,
       ...(lastMessage === undefined ? {} : { lastMessage }),
       subagentCreation: record.subagentCreation,
       usage: usageFor(record, usage.turns),
@@ -1101,39 +1117,34 @@ export const makeAgentFactory = async ({
       },
       create: request => createAgent(ownerId, request),
       setWake: (agentId, request) =>
-        runAgentOperation(
-          ownerId,
-          agentId,
-          request,
-          'set-wake',
-          () =>
-            safeWakeRequest(requireLiveAgent(ownerId, agentId), request),
+        runAgentOperation(ownerId, agentId, request, 'set-wake', () =>
+          safeWakeRequest(requireLiveAgent(ownerId, agentId), request),
         ),
       setLimits: (agentId, request) =>
-        runAgentOperation(
-          ownerId,
-          agentId,
-          request,
-          'set-limits',
-          async () => {
-            requireLiveAgent(ownerId, agentId);
-            try {
-              validateInferenceLimits(request.limits, DEFAULT_AGENT_LIMITS);
-            } catch (_error) {
-              throw fixedError('invalid-agent-limits');
-            }
-            return harden({
-              limits: harden({ ...request.limits }),
-              confirmed: request.confirmed === true,
-            });
-          },
-        ),
+        runAgentOperation(ownerId, agentId, request, 'set-limits', async () => {
+          requireLiveAgent(ownerId, agentId);
+          try {
+            validateInferenceLimits(request.limits, DEFAULT_AGENT_LIMITS);
+          } catch (_error) {
+            throw fixedError('invalid-agent-limits');
+          }
+          return harden({
+            limits: harden({ ...request.limits }),
+            confirmed: request.confirmed === true,
+          });
+        }),
       reattachOptions: agentId => reattachOptions(ownerId, agentId),
       reattach: (agentId, request) => reattachAgent(ownerId, agentId, request),
       dismissMail: async (agentId, number) => {
         const record = requireLiveAgent(ownerId, agentId);
         refuseUnless(MESSAGE_NUMBER_PATTERN.test(number), 'invalid-request');
         await E(guests).dismissMail(record.names.guest, number);
+        return summarize(agentId);
+      },
+      retryMail: async (agentId, number) => {
+        const record = requireLiveAgent(ownerId, agentId);
+        refuseUnless(MESSAGE_NUMBER_PATTERN.test(number), 'invalid-request');
+        await E(responders).retry(record.names.responder, number);
         return summarize(agentId);
       },
       delete: (agentId, request) =>

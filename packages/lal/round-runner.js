@@ -17,9 +17,10 @@ import { runAgentRound } from './agent-round.js';
  *
  * @param {any} piAgent
  * @param {string} prompt - User-role content for this round.
- * @returns {Promise<void>}
+ * @returns {Promise<string | undefined>} The last assistant prose, if any.
  */
 export const runRound = async (piAgent, prompt) => {
+  let lastAssistantText;
   for await (const event of runAgentRound(piAgent, prompt)) {
     switch (event.type) {
       case 'ToolCallStart': {
@@ -60,6 +61,7 @@ export const runRound = async (piAgent, prompt) => {
           // protocol is tool-call-only, so any prose surfaces here as a
           // debugging breadcrumb rather than being sent to a peer.
           console.log(`[assistant] ${event.content}`);
+          lastAssistantText = event.content;
         }
         break;
       }
@@ -71,5 +73,6 @@ export const runRound = async (piAgent, prompt) => {
         break;
     }
   }
+  return lastAssistantText;
 };
 harden(runRound);

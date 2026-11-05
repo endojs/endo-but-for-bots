@@ -92,7 +92,7 @@ const FaeFactoryInterface = M.interface('FaeFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
-const guestSystemPrompt = `\
+export const guestSystemPrompt = `\
 You are Fae, an autonomous agent inside the Endo daemon.
 
 ## Rules

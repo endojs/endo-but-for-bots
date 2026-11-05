@@ -108,7 +108,8 @@ export const makeAgentGuestPowers = (guest, harness) => {
     methods[method] = async (...callArguments) => {
       await null;
       for (const position of names) {
-        if (callArguments[position] !== undefined) assertOwnName(callArguments[position]);
+        if (callArguments[position] !== undefined)
+          assertOwnName(callArguments[position]);
       }
       for (const position of nameLists) {
         for (const name of callArguments[position] || []) assertOwnName(name);

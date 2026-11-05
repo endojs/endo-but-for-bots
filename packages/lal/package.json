@@ -21,6 +21,7 @@
     "./providers/index.js": "./providers/index.js",
     "./providers/brokered-messages.js": "./providers/brokered-messages.js",
     "./tools/mock-powers.js": "./tools/mock-powers.js",
+    "./agent-responder.js": "./agent-responder.js",
     "./package.json": "./package.json"
   },
   "scripts": {

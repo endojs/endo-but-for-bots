@@ -896,7 +896,8 @@ export const makeInferenceProviderRegistry = async ({
       });
       if (refusal !== undefined) {
         await appendRefusal(grant, refusal);
-        throw fixedError('inference-request-refused');
+        // The specific code tells a responder whether to retry and when.
+        throw fixedError(refusal);
       }
       const turnId = randomId();
       const next = copyState(state);

@@ -25,6 +25,7 @@ const AgentFactoryRootInterface = M.interface('AgentFactory', {
 harden(AgentFactoryRootInterface);
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 60_000;
+const RELEASED_GUESTS = 'agent-factory-released-guests';
 
 /**
  * A guest's handle and its powers are separate pet names: `provideGuest` only
@@ -48,14 +49,50 @@ export const makeRootGuestParticipant = powers =>
       return harden({ handleId: await E(powers).identify(name) });
     },
     guestFor: name => E(powers).lookup(agentNameOf(name)),
+    /**
+     * The daemon terminates a worker that references a formula it collects, and
+     * this worker references the guests it serves. So release empties the guest
+     * and sets its formula aside until `purgeReleased` runs on the next daemon
+     * start, when no worker holds it yet.
+     * @param name
+     */
     release: async name => {
-      for (const petName of [agentNameOf(name), name]) {
+      const powersName = agentNameOf(name);
+      if (await E(powers).has(powersName)) {
+        const guest = E(powers).lookup(powersName);
+        for (const { number } of await E(guest).listMessages()) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(guest).dismiss(number);
+        }
+      }
+      if (!(await E(powers).has(RELEASED_GUESTS))) {
+        await E(powers).makeDirectory(RELEASED_GUESTS);
+      }
+      for (const petName of [powersName, name]) {
         // eslint-disable-next-line no-await-in-loop
-        if (await E(powers).has(petName)) await E(powers).remove(petName);
+        if (await E(powers).has(petName)) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(powers).storeIdentifier(
+            [RELEASED_GUESTS, petName],
+            // eslint-disable-next-line no-await-in-loop
+            await E(powers).identify(petName),
+          );
+          // eslint-disable-next-line no-await-in-loop
+          await E(powers).remove(petName);
+        }
+      }
+    },
+    purgeReleased: async () => {
+      if (!(await E(powers).has(RELEASED_GUESTS))) return;
+      for (const petName of await E(powers).list(RELEASED_GUESTS)) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(powers).remove(RELEASED_GUESTS, petName);
       }
     },
     listMail: async name => {
-      const messages = await E(E(powers).lookup(agentNameOf(name))).listMessages();
+      const messages = await E(
+        E(powers).lookup(agentNameOf(name)),
+      ).listMessages();
       return harden(
         messages.map(message =>
           harden({
@@ -138,10 +175,14 @@ export const make = async (powers, context, { env } = {}) => {
       Object.fromEntries(
         methods.map(method => [
           method,
-          (...callArguments) => E(E(powers).lookup(name))[method](...callArguments),
+          (...callArguments) =>
+            E(E(powers).lookup(name))[method](...callArguments),
         ]),
       ),
     );
+
+  const guests = makeRootGuestParticipant(powers);
+  await guests.purgeReleased();
 
   const factory = await makeAgentFactory({
     journal: makeSnapshotJournal({ powers, prefix: 'agent-factory-v1-' }),
@@ -152,12 +193,14 @@ export const make = async (powers, context, { env } = {}) => {
       'revokeGrant',
       'listGrants',
     ]),
-    guests: makeRootGuestParticipant(powers),
+    guests,
     inventory: makeOwnerInventoryParticipant(powers),
     responders: retainedByName(responderName, [
       'has',
       'provide',
       'setPaused',
+      'describe',
+      'retry',
       'remove',
     ]),
     spawners:
