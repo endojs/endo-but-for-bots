@@ -261,7 +261,7 @@ Three values do three separate jobs:
 |---|---|---|---|
 | `Revision` | Has this provider's root advanced? | One provider incarnation | No |
 | `ContentIdentity` | Is this the content that token named? | One identity domain | No |
-| `Snapshot` | What is the content, and does another snapshot hold the same content? | Any provider | Yes, while reachable |
+| `Snapshot` | What is the content, and does another snapshot hold the same content? | Any provider the caller can bridge | Yes, while reachable |
 
 `ContentIdentity` is an opaque, non-forgeable token for content equivalence within
 one *identity domain*: the providers sharing one canonicalization, one private
@@ -277,8 +277,23 @@ A client whose precondition must survive a restart retains a snapshot and derive
 a fresh identity from it.
 
 `Snapshot.equivalent` is the cross-provider comparison.
-Within one domain it MAY compare private digests; otherwise the providers stream
-both canonical forms to each other without materializing them in the caller.
+Within one domain it MAY compare private digests.
+Otherwise the receiver pulls the argument's canonical form over the reference it
+was passed and compares it with its own, materializing neither in the caller.
+A link's locator crosses this exchange only as the `ocap:` digest of the envelope
+below, never as locator bytes.
+
+A caller holding references to both operands is the connectivity the comparison
+needs, so the two providers need no direct connection.
+Where CapTP has no direct route between them, the argument reference routes through
+the caller's connections, and the caller relays each pull under backpressure without
+retaining content.
+The caller MUST stay connected until the comparison settles.
+If a connection carrying the comparison severs, or an operand's provider incarnation
+has ended, `equivalent` throws `SNAPSHOT_UNREACHABLE`.
+It never answers `false` for content it did not finish comparing.
+A retry with fresh references is safe because snapshots are immutable.
+
 Each operand retains its own content, and the content store owns that retention.
 Public `sha256()` and `{ algorithm, hash }` methods remain diagnostic and
 content-store locator APIs; new correctness logic MUST NOT depend on them.
@@ -300,11 +315,14 @@ Two locators for one referent, or two presences of one object, are not equivalen
 either: comparison MAY report a false negative, which fails a compare-and-swap
 safely, and MUST NOT report a false positive.
 
-A mutator taking `{ expected }` accepts a snapshot from any provider or an identity
-from the target's own domain, and compares it with the complete current target
-immediately before commit.
-An identity from another domain throws `IDENTITY_INCOMPARABLE`, and a mismatch
-throws `PRECONDITION_FAILED`; neither changes the target.
+A mutator taking `{ expected }` accepts a snapshot from any provider the caller can
+bridge or an identity from the target's own domain, and compares it with the
+complete current target immediately before commit.
+The provider pulls and digests a foreign snapshot's canonical form before opening
+its transaction, so no remote pull runs inside the transaction.
+An identity from another domain throws `IDENTITY_INCOMPARABLE`, a severed pull
+throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws `PRECONDITION_FAILED`; none
+changes the target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
@@ -482,6 +500,7 @@ and a copy-only `details` record.
 | `MERGE_CONFLICT` | A caller requested conflict-free output but conflicts remain. |
 | `RESULT_TOO_LARGE` | Materializing or rendering a result exceeds its attenuation. |
 | `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
+| `SNAPSHOT_UNREACHABLE` | A connection carrying a foreign snapshot severed, or that snapshot's provider incarnation ended, before the operation finished with it. |
 | `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or a data store holds a value with no canonical form. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
 | `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
