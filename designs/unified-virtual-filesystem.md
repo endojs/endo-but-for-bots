@@ -773,6 +773,8 @@ and a copy-only `details` record.
   provider incarnation ended, before the operation finished with it.
 - `UNSNAPSHOTTABLE_ENTRY`: `snapshot` encountered a capability reference, or an operation
   needing a canonical form reached a store holding a value that is not a Key.
+- `RESERVED_CONTENT`: A mutation would commit a blob beginning with the locator file marker.
+- `LOCATOR_MALFORMED`: A file beginning with the locator file marker failed validation.
 - `LOCATOR_UNREACHABLE`: A restored capability reference cannot presently resolve.
 - `ARCHIVE_MALFORMED`: An archive holds duplicate raw member names, names that collide after NFC
   normalization, or names the path rules forbid.
@@ -956,49 +958,70 @@ whole-file expected snapshot prevent a splice at the wrong location.
 
 ## Portable serialization of capability entries
 
-### Exact loose-file envelope
+### Locator files
 
-When a capability reference must appear as a file in a format that cannot represent
-typed directory entries, version 1 uses this byte layout:
+When a pet-name tree is projected onto a Git or physical filesystem, a `Tree` becomes a
+directory and a `Blob` becomes a file.
+Any other value becomes a *locator file*, which holds a locator for that value.
+Version 1 uses this byte layout:
 
 - **0**
   - Length: 16
   - Value: Magic bytes `89 45 4e 44 4f 0d 0a 1a 0a 4f 43 41 50 52 45 46` (`0x89`, `ENDO`, CR LF
     SUB LF, `OCAPREF`)
 - **16**
+  - Length: 32
+  - Value: Format marker `c3 0b d0 66 f5 aa 37 20 a0 b4 17 c3 af 2f 25 af 21 df de 52 84 2d 5e 8b
+    d8 ec 86 41 63 51 50 6e`, a constant drawn at random once for this format
+- **48**
   - Length: 1
   - Value: Envelope version `0x01`
-- **17**
+- **49**
   - Length: 1
-  - Value: Digest algorithm `0x01` for SHA-256
-- **18**
+  - Value: Signature algorithm `0x01` for Ed25519
+- **50**
   - Length: 1
   - Value: Locator encoding `0x01` for strict UTF-8
-- **19**
+- **51**
   - Length: 1
   - Value: Flags, zero in version 1
-- **20**
+- **52**
   - Length: 8
   - Value: Unsigned big-endian locator byte length `N`
-- **28**
-  - Length: 32
-  - Value: SHA-256 of ASCII `ocap:` followed by the exact `N` locator bytes
 - **60**
+  - Length: 64
+  - Value: Ed25519 signature (RFC 8032 section 5.1) over ASCII `endo-locator-file-v1`, one zero
+    byte, and the exact `N` locator bytes
+- **124**
   - Length: `N`
   - Value: Locator bytes, with no delimiter or padding
 
 `N` MUST be at most 1 MiB.
 Unknown versions, algorithms, encodings, nonzero reserved flags, trailing bytes,
-invalid UTF-8, length mismatch, or digest mismatch are malformed envelopes.
-The digest detects accidental or unsophisticated tampering but is not a signature:
-an attacker who changes a locator can recompute it.
-Authenticity comes only from the signed manifest below.
+invalid UTF-8, length mismatch, or a signature failure make a malformed locator file.
 
-The leading `0x89` cannot begin valid UTF-8 text, so a plain text file never
-collides.
-Arbitrary binary can collide.
-Restore therefore MUST NOT classify an untrusted file as a capability solely from
-these bytes.
+The format makes two separate claims.
+The marker claims that the file is meant to be a locator: its 256 bits make a chance
+collision with an actual file as unlikely as a collision of content hashes.
+Every Endo file-writing path enforces that claim.
+A mutation whose committed blob would begin with the 48 marker bytes throws
+`RESERVED_CONTENT` and changes nothing, whichever method staged those bytes, so no holder
+of a `File` can forge a locator file through Endo.
+
+The marker is public, so a writer outside Endo can still produce those bytes.
+The signature therefore makes the second claim: that the locator was written by the
+peer able to honor the reference.
+The verifying key is the locator's `peerKey`, the Ed25519 public key of the peer that
+hosts the referent, so the file needs no other key and no trust anchor.
+The all-zero `LOCAL_NODE` placeholder is not a key and MUST NOT appear in a locator file.
+A file beginning with the marker that fails validation throws `LOCATOR_MALFORMED` on
+`lookup`, exposes no bytes as a blob, and mints no reference.
+
+A valid signature does not say the peer is trustworthy or the locator is fresh.
+An attacker can sign a locator for an object on the attacker's own peer, which grants
+only what that object offers.
+A holder that resolves a reference from an untrusted tree first checks `peerKey`, and
+a restored reference remains unresolved until then.
 
 ### Signed manifest and round trip
 
@@ -1013,12 +1036,10 @@ member's exact bytes.
 Records cover every member, not only capability references, so a changed, added,
 removed, or reclassified member fails verification.
 
-The manifest is the only classifier of entries, and the envelope is the only holder
-of locator bytes.
-An ordinary binary file beginning with the magic remains ordinary unless the
-manifest marks it `Value`.
-The envelope's own digest serves a loose copy that has lost its manifest: a
-diagnostic tool can report corruption, but nothing restores it as a reference.
+The manifest authenticates a whole archive and does not classify its members, because
+a locator file classifies itself and is also valid in a tree with no manifest.
+The locator file is the only holder of locator bytes.
+A manifest record's kind MUST agree with its member.
 
 Version 1 authenticates the manifest with one Ed25519 signature (RFC 8032 section
 5.1).
@@ -1026,7 +1047,7 @@ The signature record is a deterministic-CBOR map of `algorithm`, `keyId` (the
 SHA-256 of the public key), and `signature`, computed over ASCII
 `endo-archive-manifest-v1`, one zero byte, and the exact manifest bytes.
 Export signs through a `signer` capability, so the private key never enters the
-archive, and refuses to write a capability reference without one.
+archive, and refuses to write an archive without one.
 
 The trust anchor is the argument the restoring holder supplies:
 
@@ -1053,22 +1074,22 @@ Restore verifies in this order before installing anything:
 3. Parse the manifest, rejecting an unknown version or algorithm and any encoding
    that is not deterministic.
 4. Match archive members to records one for one, and check each length and digest.
-5. Validate every reference envelope as specified above.
+5. Validate every locator file as specified above.
 
 A failure in steps 2 through 5 throws `ARCHIVE_UNAUTHENTICATED`, and nothing is
 installed on any failure.
 `references: 'inert'` is the one mode that needs no signer: after step 1 it skips these
-checks, ignores the manifest, restores every member as ordinary bytes, and mints no
-reference.
+checks, ignores the manifest, restores every other member as ordinary bytes, omits each
+member beginning with the marker, reports the omitted paths, and mints no reference.
 
 Sidecar files were considered but introduce colliding reserved names and make
 atomic rename/copy difficult.
 Extended attributes avoid visible sidecars but are not portable through ZIP,
 Git, object stores, or common copy tools.
-A directory-level index is therefore the portable source of truth.
+A locator file therefore carries its own classification and proof.
 
 Capture and checkin record the reference without dereferencing it.
-Checkout and `make-archive` reproduce the exact envelope and manifest entry.
+Checkout and `make-archive` reproduce the exact locator file and manifest entry.
 Only the verification above constructs an unresolved reference.
 Resolution is a separate authority-bearing operation.
 
@@ -1082,9 +1103,9 @@ Locators can be bearer capabilities, including secret-bearing HTTPS fragments.
 Archives containing them MUST be treated as credential stores: least-readable
 permissions, encryption at rest and in transit, no logs, no search indexing, and
 explicit export authority.
-Neither the envelope digest nor a content-addressed archive makes a locator
-public or safe, and a manifest digest of a reference envelope gets the same handling
-as the locator.
+Neither the signature nor a content-addressed archive makes a locator public or safe,
+and a signature or a manifest digest of a locator file gets the same handling as the
+locator.
 
 ## REST versus CapTP
 
@@ -1154,16 +1175,16 @@ filesystem API.
     lookup; unresolved references remain inert.
   - Value crossing: Name, entry kind, formula ID or locator, outer naming vocabulary.
 - **Archive/restore -> directory and locator resolver**
-  - Mechanism: Export writes and signs a manifest/envelope; restore verifies and mints
+  - Mechanism: Export writes locator files and signs a manifest; restore verifies and mints
     unresolved references.
   - Policy: Explicit export authority admits bearer locators; the restoring holder's
-    `trustedSigners` decides whose signature classifies references, and the restoring holder
-    chooses the reference mode.
+    `trustedSigners` decides whose signature authenticates an archive, and the restoring
+    holder chooses the reference mode.
   - Durable state: The archive owner owns archive bytes; the signer owns its private key; the
     restoring holder owns its trust set; the destination owns installed bindings.
   - Lifecycle / commit authority: Export finalizes and signs the manifest last; restore
     atomically installs or discards staging and never owns resolver restart.
-  - Value crossing: Manifest record, signature, envelope bytes, and locator, archive vocabulary.
+  - Value crossing: Manifest record, signature, locator file, and locator, archive vocabulary.
 - **Git adapter -> filesystem provider**
   - Mechanism: The adapter reads a root and stages Git objects; the provider offers a filesystem
     transaction.
@@ -1276,8 +1297,8 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
   - Sources: checkin/checkout, make archive
   - What differs or is missing: Arbitrary capability bindings have no portable archive
     representation.
-  - Recommended resolution: Use a signed directory manifest, verified against the restorer's
-    trusted signers, plus the versioned envelope in this design.
+  - Recommended resolution: Use a versioned locator file signed for its referent's peer, with a
+    signed manifest, verified against the restorer's trusted signers, for whole archives.
 - **Snapshotting capability slots**
   - Sources: mount and archive designs
   - What differs or is missing: It is unclear whether snapshot freezes a referenced object.
@@ -1294,6 +1315,14 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
     whole file or diff.
   - Recommended resolution: Mint narrowed facets and use the teaching error specified
     above.
+
+## Open questions
+
+- How does a tree that holds a reference hosted by another peer get that peer's signature?
+  This design assumes a peer signs a locator as it mints it and the signature travels
+  with the locator, which the current locator format and minting path do not do.
+- Should an archive keep its signed manifest now that each locator file proves itself?
+  This design keeps it, only to detect a changed, added, or removed member.
 
 ## Build ladder
 
@@ -1316,8 +1345,9 @@ Each rung can land independently behind adapters and conformance tests.
    mutability controller with durable-policy tests.
 8. Land `BlockStore`, then `LogStore`, the persistent `MapStore`, `SetStore`, and
    `BagStore` adapters, and `Cell`, as typed directory entries.
-9. Add the signed archive manifest, restore-time signer verification, and
-   version-1 capability envelope to checkin/checkout and `make-archive`, including
+9. Add the version-1 locator file and its write refusal, then the signed archive
+   manifest and restore-time signer verification, to checkin/checkout and
+   `make-archive`, including
    unreachable-reference recovery.
 10. Migrate daemon, platform, exo-git, registry, formula inspector, container,
     CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings and
@@ -1356,7 +1386,8 @@ It covers:
   leave the reader running, result budgets, reader early close, and recovery advice
   matching the raising facet.
 - **Archives:** tampering, unsigned and untrusted-signer restore, inert restore,
-  binary magic collisions, secret-locator redaction, and unreachable locators.
+  refusal of marker bytes through every mutator, a forged signature, a signature by a
+  key other than `peerKey`, secret-locator redaction, and unreachable locators.
   Duplicate raw member names and NFC-normalization collisions, including a manifest
   naming only one colliding member, MUST be rejected before installation.
 - **Lifecycle:** restart replay and GC liveness.
