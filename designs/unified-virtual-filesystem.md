@@ -278,6 +278,7 @@ could be unbounded.
 | `readTextRange(startLine, endLine)` | Materialize half-open zero-based line range, preserving terminators. | all readable views |
 | `byteRange(start, end)` / `textRange(startLine, endLine)` | Return a narrowed reader capability; ranges compose by intersection. | all readable views |
 | `streamBytes()` | Return a backpressured byte stream. | all readable views |
+| `grep(pattern, options)` | Search strict UTF-8 text and return a `ResultReader` of `{ line, text, ranges }`; other content throws `WRONG_ENTRY_KIND`. | all readable views |
 | `identity()` / `snapshot()` | Capture opaque content identity or immutable content. | all readable views |
 | `writeBytes(value, options)` / `writeText(value, options)` | Replace content atomically, optionally with `expected`. | mutable, writable controlled |
 | `append(value, options)` | Atomically append with an optional expected identity. | mutable, writable controlled, append storage |
@@ -299,13 +300,20 @@ avoid reading source content into the caller.
 | Method | Meaning | Views |
 |---|---|---|
 | `has(path)`, `lookup(path)`, `maybeLookup(path)` | Traverse pet names and return an entry capability. | all tree views |
-| `list(path, options)`, `listTree(path, options)` | Return a bounded page or reader of typed entries. | all tree views |
-| `glob(pattern, options)` | Enumerate matching paths using the corpus glob grammar. | all tree views |
-| `grep(pattern, options)` | Search readable text entries and yield `{ path, line, text, ranges }`. | all tree views |
-| `glorp(globPattern, grepPattern, options)` | Apply `glob`, then `grep` only those matching files, yielding the same grep records. | all tree views |
+| `list(path, options)`, `listTree(path, options)` | Return a `ResultReader` of typed entries. | all tree views |
+| `glob(pattern, options)` | Return a `ResultReader` of matching paths using the corpus glob grammar. | all tree views |
+| `grep(pattern, options)` | Search readable text entries and return a `ResultReader` of `{ path, line, text, ranges }`. | all tree views |
+| `glorp(globPattern, grepPattern, options)` | Apply `glob`, then `grep` only those matching files, returning the same grep records. | all tree views |
 | `identity()`, `snapshot(options)` | Capture the whole visible tree. | all tree views |
 | `watch()` / `followChanges(options)` | Follow live transactions; absent on immutable snapshots. | live read-only, mutable, controlled |
 | `makeDirectory`, `makeFile`, `remove`, `move`, `copy` | Mutate one root transactionally, optionally with `expected`. | mutable, writable controlled |
+
+`ResultReader` is the one result shape of every listing and search method: a
+`PassableReader` from `@endo/exo-stream` that delivers one record per pull.
+These methods have no eager form, pages, or continuation tokens.
+The consumer stops early by closing the reader.
+A reader over a live view is not a consistent cut, so a caller that needs one
+iterates a snapshot.
 
 `glorp` is not a new fuzzy-search algorithm.
 It is the fused `glob`-then-`grep` operation already implemented by
@@ -316,8 +324,7 @@ The common interface renames `file` to `path`, adds match `ranges`, and streams
 the same records; an adapter preserves the implemented shape.
 Its patterns have the same grammar as the corresponding separate operations.
 The current implementation's default 1,000-result cap and silent glob
-truncation become an explicit continuation or `RESULT_TOO_LARGE`, never silent
-loss.
+truncation become a reader that ends in `RESULT_TOO_LARGE`, never silent loss.
 
 ### Diff, patch, merge, and reference transforms
 
@@ -337,8 +344,9 @@ expected identity unless the caller explicitly chooses last-writer-wins.
 
 `merge` is a pure three-way operation: the receiver is left, `base` is the
 common ancestor, and `other` is right.
-It returns `{ snapshot, conflicts }`; conflicts are bounded, typed records with
-range references, not conflict-marker text silently written to a target.
+It returns `{ snapshot, conflicts }`; `conflicts` is a `ResultReader` of typed
+records with range references, not conflict-marker text silently written to a
+target.
 Applying the result is a separate CAS mutation.
 
 `Transform` contains ordered operations over capability references:
@@ -412,15 +420,15 @@ An oversized operation throws this shape:
   name: 'ResultTooLargeError',
   code: 'RESULT_TOO_LARGE',
   message: 'readText would return 9187342 bytes; limit is 262144 bytes. ' +
-    'Use grep, glob, or glorp to locate relevant ranges, then retry with ' +
-    'readTextRange or readByteRange and propose changes by reference.',
+    'Use grep to locate relevant lines, then retry with readTextRange or ' +
+    'readByteRange.',
   details: {
     operation: 'readText',
     limit: 262144,
     actual: 9187342,
     unit: 'bytes',
     retry: {
-      locate: ['grep', 'glob', 'glorp'],
+      locate: ['grep'],
       read: ['readTextRange', 'readByteRange'],
     },
   },
@@ -432,16 +440,24 @@ size greater than the limit and `details.exact` is `false`.
 The stream terminates with the same structured error and MUST NOT buffer past
 the smallest necessary chunk.
 
-`list`, `listTree`, `glob`, `grep`, `glorp`, `diff`, conflict lists, and rendered
-merge results are subject to their entry, record, and byte limits.
-Their preferred success result is a backpressured reader or continuation-bearing
-page, so reaching a page boundary is not an error.
+A `ResultReader` applies the same limits as it delivers: `entries` and `records`
+cap how many records one reader delivers, and `bytes` caps each record.
+Reaching a cap ends the reader with this structured error after the earlier
+records, so the holder knows the result is incomplete and narrows the query.
+A limit has no continuation, because resuming past it would raise it.
 `Patch` and merged snapshots remain capabilities; only materializing or rendering
 them consumes a result budget.
 
 The error deliberately teaches an automated consumer how to recover.
-It MUST name the operation, limit, observed size, search operations, range
-operations, and reference-level update path.
+It MUST name the operation, limit, and observed size, and `details.retry` MUST name
+only methods the raising facet exposes:
+
+| Raising facet | `locate` | `read` | `update`, on writable facets only |
+|---|---|---|---|
+| Blob or file | `grep` finds lines | `readTextRange`, `readByteRange` | `editHashlines` |
+| Tree | `glob` finds paths; `grep` and `glorp` find lines | `lookup`, then the blob range methods | `applyTransform`, `applyPatch` |
+
+Other facets list their ranged reads and omit a member they cannot fill.
 
 ## Splicing without reading into an agent context
 
@@ -616,7 +632,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 | Range names | platform range/tree reads, range attenuation, extended FS | `fetch`, `rangeRead`, `rangeReadText`, `bytes`, `byteRange`, and `textRange` overlap. | Standardize bounded materializers as `readByteRange`/`readTextRange`; keep `byteRange`/`textRange` as attenuating capability constructors. |
 | NameHub and mount overlap | name-hub unification, interface consolidation, daemon guards | Shared methods have different accepted path and result shapes. | Derive guards from method families; keep explicit adapters for entry-as-path overloads. |
 | Read-only attenuation | extended FS, mount capabilities | One API keeps mutators and rejects calls; another omits mutators. | New static facets omit methods; dynamic controlled facets may reject after a flip. |
-| Search bounds | stream/glob/grep, current search implementation | Design streams; implementation returns eager arrays and silently truncates an intermediate glob. | Return readers/pages and explicit continuation or `RESULT_TOO_LARGE`; never silently truncate. |
+| Search bounds | stream/glob/grep, current search implementation | Design streams; implementation returns eager arrays and silently truncates an intermediate glob. | Return `ResultReader`s that end in `RESULT_TOO_LARGE` at a limit; never silently truncate. |
 | Hashline CAS | CLI edit, daemon hashline implementation | Anchors use public raw SHA-256 and literal replacement content. | Accept opaque expected identity and range-reference payloads; preserve CRC32 line anchors. |
 | Diff, patch, merge | root advancement, exo-git, agent tools | Git has operations, but snapshots lack one portable contract. | Put pure `diff`/`merge` on snapshots and CAS `applyPatch` on mutable views. |
 | Dynamic mutability | mount capabilities | Captive control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
@@ -634,8 +650,8 @@ Each rung can land independently behind adapters and conformance tests.
    read-only and snapshot views differ.
 2. Add `readByteRange`/`readTextRange` aliases and the size-limited reader facet,
    including teaching errors for files, listings, and searches.
-3. Replace eager search truncation with continuation-bearing pages/readers and
-   make `glorp` conformance explicit.
+3. Replace eager search truncation with `ResultReader`s, add blob `grep`, and make
+   `glorp` conformance explicit.
 4. Introduce opaque `ContentIdentity` and `Snapshot.equivalent` beside existing
    hashes, then move hashline and tree CAS preconditions to them.
 5. Add reference payloads to hashline edits and atomic `Transform.copyRange` for
@@ -663,8 +679,8 @@ and remote adapters where applicable.
 It covers view laws, path confinement, entry kinds, same-domain identity
 comparison, foreign-domain rejection, cross-provider snapshot comparison for every
 canonical form, ABA and stale CAS, controller races, partial-failure
-atomicity, range composition, result limits, search continuation, merge
-conflicts, reference splices, archive tampering, binary magic collisions,
+atomicity, range composition, result limits, reader early close, recovery advice matching
+the raising facet, merge conflicts, reference splices, archive tampering, binary magic collisions,
 secret-locator redaction, unreachable locators, restart replay, and GC liveness.
 
 Tests MUST demonstrate that no oversized whole result is allocated before the
