@@ -624,27 +624,37 @@ records with range references, not conflict-marker text silently written to a
 target.
 Applying the result is a separate CAS mutation.
 
-`Transform` is an ordered array of operations over capability references:
+`Transform` is an array of edit scripts, one for each target:
 
 ```js
-{ op: 'copyRange', source, sourceStart, sourceEnd, targetPath, targetOffset }
-{ op: 'deleteRange', targetPath, start, end }
-{ op: 'insert', targetPath, targetOffset, value: bytesOrRangeReference }
+{
+  targetPath,
+  edits: [
+    { op: 'keep', length },
+    { op: 'drop', length },
+    { op: 'insert', value: bytesOrRangeReference },
+  ],
+}
 ```
+
+A script walks its target from byte 0.
+`keep` passes `length` bytes through, `drop` omits `length` bytes, `insert` adds
+`value`, and the bytes after the last edit are kept.
+A `keep` or `drop` past the end of the target, or a second script for one target,
+throws `INVALID_RANGE`.
 
 A range reference is `{ source, sourceStart, sourceEnd }`, a half-open byte range of
 `source`.
 Every `source` MUST be a `SnapshotBlob` facet; any other capability, including a live
 or read-only blob, throws `WRONG_ENTRY_KIND` before anything is staged, even though
 those blobs also answer `kind()` with `'Blob'`.
-Offsets count bytes, `targetPath` is relative to the receiver, and a `targetPath` the
-receiver lacks starts as an empty file.
+Lengths and offsets count bytes, `targetPath` is relative to the receiver, and a
+`targetPath` the receiver lacks starts as an empty file.
 
 The provider resolves every source snapshot, validates all ranges and the target
 precondition, stages the complete result, and commits once.
 It pulls a foreign source before opening its transaction, as it does for a foreign
 `expected`.
-Overlapping operations use their declared order against the staged value.
 No operation invokes caller code inside the transaction.
 `snapshot.transform` is the pure form: it returns the snapshot a commit would
 produce.
@@ -829,14 +839,22 @@ const { start, end } = await oldFile.lineByteRange(startLine, endLine);
 
 const transform = [
   {
-    op: 'copyRange',
-    source: oldFile,
-    sourceStart: start,
-    sourceEnd: end,
     targetPath: ['src', 'new.js'],
-    targetOffset: await newFile.size(),
+    edits: [
+      { op: 'keep', length: await newFile.size() },
+      {
+        op: 'insert',
+        value: { source: oldFile, sourceStart: start, sourceEnd: end },
+      },
+    ],
   },
-  { op: 'deleteRange', targetPath: ['src', 'old.js'], start, end },
+  {
+    targetPath: ['src', 'old.js'],
+    edits: [
+      { op: 'keep', length: start },
+      { op: 'drop', length: end - start },
+    ],
+  },
 ];
 
 const preview = await A.transform(transform);
@@ -1233,7 +1251,7 @@ Each rung can land independently behind adapters and conformance tests.
    result budget and blob `grep`, and make `glorp` conformance explicit.
 4. Introduce opaque `ContentIdentity` and `Snapshot.equivalent` beside existing
    hashes, then move hashline and tree CAS preconditions to them.
-5. Add reference payloads to hashline edits and atomic `Transform.copyRange` for
+5. Add reference payloads to hashline edits and atomic `Transform` edit scripts for
    one file, then a whole-tree transaction.
 6. Add portable snapshot `diff`, streamable `Patch`, CAS `applyPatch`, and pure
    three-way `merge`.
