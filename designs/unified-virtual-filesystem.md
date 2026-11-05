@@ -151,14 +151,22 @@ A `Path` is a frozen array of segments.
 One shared guard validates every segment at the facet boundary of every adapter: a
 segment is a non-empty Unicode string that contains no `/`, `\`, or NUL and is neither
 `.` nor `..`.
-This tightens the daemon's implemented `isValidName`, which admits `\`, and that
-function's narrower pet-name rules still apply to pet names.
+This tightens the daemon's implemented `isValidName`, which admits `\`.
+That function's narrower pet-name rules still apply to pet names.
 A path therefore has no up-level or current-directory step.
 APIs MAY accept one string as shorthand for a one-segment path, but MUST NOT
 split a string on `/`.
 A native adapter MUST resolve a path one segment at a time beneath its root, and MUST
 refuse a symbolic link whose target leaves that root, so host path syntax never
 reinterprets a pet-name path.
+That resolution MUST be race-free: each step opens the next segment relative to the
+descriptor of the directory already opened, without following a symbolic link
+(`openat` with `O_NOFOLLOW`, `openat2` with `RESOLVE_BENEATH`, or an equivalent), and
+the operation acts on the descriptor it opened.
+An adapter MUST NOT check a path string and then open it by name, because a symbolic
+link swapped in between the check and the open would escape the root.
+A host offering no descriptor-relative, no-follow primitive MUST refuse symbolic links
+beneath the root entirely.
 Portable archives normalize entry names to Unicode NFC and reject duplicate
 normalized names, `.` and `..`, NUL, and names their target archive cannot
 represent losslessly.
@@ -203,8 +211,10 @@ posture and authority allow.
 Names such as `File` and `SnapshotBlob` therefore denote facets, not kinds.
 
 Stores and cells differ from a `Value` entry in what changes.
-A `Value` entry directly captures any durable value and changes only by modifying the
-entry in its directory.
+A `Value` entry directly captures any durable value other than `undefined`, and changes
+only by modifying the entry in its directory.
+Binding `undefined` throws `TypeError`, so `maybeLookup` resolving to `undefined`
+always means an absent name.
 The content of a store or a cell can change without manipulating the directory.
 
 Two operations freeze an entry, and they differ only in what they do with
@@ -217,6 +227,15 @@ capabilities:
   `BlockStore` to a blob, a `Directory` to a tree, and a `MapStore` to a copy map, and
   preserves all remaining capabilities by reference.
   It freezes the binding to a capability, not the state of that capability.
+  It returns a `Capture`, a facet distinct from every `Snapshot`.
+
+A `Snapshot` is an immutable content value; a `Capture` is a frozen set of bindings that
+may retain live authority.
+Only a `Snapshot` has content identity, so only a `Snapshot` is accepted as `expected`
+or as an argument to `Snapshot.equivalent`, and a `Capture` passed there fails the
+method guard.
+`Capture.snapshot()` returns the equivalent `Snapshot` when the capture holds no
+capability, and otherwise throws `UNSNAPSHOTTABLE_ENTRY`.
 
 `NameHub` remains the general pet-name map.
 `ReadableTree` is the filesystem-shaped subset whose entries have stable kinds
@@ -237,7 +256,9 @@ maintainer keeps editing.
 The maintainer then grants a builder write access to `src` that the maintainer can
 withdraw.
 The maintainer keeps the controller `k` and the selector `branch`, and the builder
-receives only the view `c`:
+receives only the view `c`.
+A controlled view is rooted at its branch's path, so `c` is `src` itself and the
+builder names `src/main.js` as `['main.js']`:
 
 ```js
 // Maintainer: mint a controller, a branch over src, and a view of that branch.
@@ -264,6 +285,7 @@ For an underlying mutable object `x`, define:
 
 - `R(x) = x.readOnly()`: a live, structurally read-only view.
 - `S(x) = await x.snapshot()`: an immutable content snapshot.
+- `K(x) = await x.capture()`: a capture, which may retain capabilities.
 - `C(k, b, x) = x.controlled(k, b)`: a view governed by branch `b` of controller
   `k`.
 
@@ -284,15 +306,24 @@ authority(A(B(x))) <= authority(A(x)) and authority(B(x))
 `R(x)` is therefore not `S(x)`.
 A snapshot can outlive and diverge from its source, whereas a read-only view
 observes later source changes.
-`capture` obeys the laws of `S`, except that its result can hold capabilities.
+`K` obeys the read laws of `S`, but its results are `Capture`s, not `Snapshot`s, and
+the identity and compare-and-swap laws below apply only to `S`.
 
 Attenuation follows traversal.
 `lookup` on a read-only, controlled, narrowed, or rooted view returns each
 `File`, `Directory`, `BlockStore`, `LogStore`, `MapStore`, `SetStore`, `BagStore`, and
 `Cell` child under the same attenuation.
-A `Value` child is returned as it is, because the attenuation governs the binding and
-not the value, whose authority is its own.
-A minter that must withhold that authority omits `Value` lookup from the facet.
+A `Value` child that is a Key is returned as it is, because it carries no authority.
+A `Value` child holding a capability cannot be attenuated by the view, because its
+authority is its own, so no attenuation's revocation could reach it once returned.
+A controlled or revocable view therefore withholds it: `lookup` of such a child throws
+`VALUE_WITHHELD`, and `list` reports only its name and kind.
+A minter that deliberately shares those capabilities mints the branch with
+`k.makeBranch(path, policy, { values: 'share' })`; revocation of that branch then
+governs only the view and its filesystem-kind descendants, and a capability already
+returned through it keeps its own authority after revocation.
+A static read-only or narrowed view, which no controller can revoke, returns such a
+child as it is.
 
 `x.makeController()` mints a controller bound to the provider that owns `x`, and
 only a mutable facet of `x` offers it.
@@ -341,12 +372,15 @@ The common interface proposes:
 
 ```js
 snapshot(): Promise<Snapshot>
-capture(): Promise<Snapshot>
-Snapshot.equivalent(other): Promise<boolean>
+capture(): Promise<Capture>
+Snapshot.equivalent(other: Snapshot): Promise<boolean>
+Capture.equivalent(other: Capture): Promise<boolean>
+Capture.snapshot(): Promise<Snapshot>
 ```
 
-Both return the same `Snapshot` facets, as described above.
-A capture that holds no capability is equivalent to a snapshot of the same content.
+`Snapshot` and `Capture` are distinct facets, as described above.
+Mutators, the content store, and every snapshot CAS API accept only a `Snapshot`.
+`Capture.equivalent` follows the comparison below, extended to capability references.
 
 A snapshot is the identity of its content.
 There is no separate identity method or token: a mutator's `expected` takes a
@@ -380,7 +414,7 @@ Within one domain it MAY compare private digests.
 Otherwise the receiver pulls the argument's canonical form over the reference it
 was passed and compares it with its own, materializing neither in the caller.
 
-A capability reference cannot be compared this way.
+A capability reference, which only a `Capture` can hold, cannot be compared this way.
 Its locator may be a bearer secret, so locator bytes MUST NOT cross this exchange, and
 a digest of them could not establish that the bytes are equal.
 The pulled canonical form therefore carries only the entry's kind at that name, and
@@ -389,7 +423,7 @@ A comparison across domains answers `false` if any other part of the operands di
 and otherwise throws `REFERENCE_INCOMPARABLE`.
 It never answers `true` for operands holding a capability reference.
 A caller that must compare such trees keeps both captures in one comparison domain.
-Only a capture can reach this case, because a result of `snapshot` holds no capability
+Only `Capture.equivalent` can reach this case, because a `Snapshot` holds no capability
 reference.
 
 A caller holding references to both operands is the connectivity the comparison
@@ -452,9 +486,8 @@ A mutator taking `{ expected }` accepts a snapshot from any provider the caller 
 bridge, and compares it with the complete current target immediately before commit.
 The provider pulls and digests a foreign snapshot's canonical form before opening
 its transaction, so no remote pull runs inside the transaction.
-A foreign capture holding a capability reference throws `REFERENCE_INCOMPARABLE`, a
-severed pull throws `SNAPSHOT_UNREACHABLE`, and a mismatch throws
-`PRECONDITION_FAILED`; none changes the target.
+A severed pull throws `SNAPSHOT_UNREACHABLE` and a mismatch throws
+`PRECONDITION_FAILED`; neither changes the target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
@@ -462,8 +495,8 @@ incarnation-local revision.
 Concurrency in the pet-name system is compare-and-swap, never locking.
 No method acquires, holds, or releases a lock on any part of a tree, and no holder can
 make another wait on its transaction.
-Concurrent mutators race, the fastest commits, and each other whose `expected` no
-longer holds throws `PRECONDITION_FAILED` and may retry from a fresh snapshot.
+Concurrent mutators race, the fastest commits, and each of the others whose `expected`
+no longer holds throws `PRECONDITION_FAILED` and may retry from a fresh snapshot.
 A provider serializes each commit internally, for no longer than the commit itself.
 `expected` covers only the tree or file it is passed to, so mutations beneath `src`
 and beneath `docs` do not conflict unless an `expected` covers both.
@@ -526,7 +559,8 @@ iterates a snapshot.
   - Views: all readable views
 - `grepHashLines(pattern, options)`: `grep` whose records also carry `hash`, the anchor of `line`.
   - Views: all readable views
-- `snapshot()` / `capture()`: Freeze the content, which are the same for a blob.
+- `snapshot()` / `capture()`: Freeze the content; for a blob, the two results hold the
+  same content.
   - Views: all readable views
 - `writeBytes(value, options)` / `writeText(value, options)`: Replace content atomically,
   optionally with `expected`.
@@ -780,6 +814,10 @@ and a copy-only `details` record.
   reached a capability reference, whose exact form it may not exchange.
 - `SNAPSHOT_UNREACHABLE`: A connection carrying a foreign snapshot severed, or that snapshot's
   provider incarnation ended, before the operation finished with it.
+- `VALUE_WITHHELD`: A controlled or revocable view declined to return a `Value` child holding a
+  capability, which its revocation could not reach.
+- `LOCATOR_UNSIGNED`: Export reached a capability reference hosted by another peer with no
+  locator signature from that peer.
 - `UNSNAPSHOTTABLE_ENTRY`: `snapshot` encountered a capability reference, or an operation
   needing a canonical form reached a store holding a value that is not a Key.
 - `RESERVED_CONTENT`: A mutation would commit a blob beginning with the locator file marker.
@@ -975,40 +1013,31 @@ directory and a `Blob` becomes a file.
 Any other value becomes a *locator file*, which holds a locator for that value.
 Version 1 uses this byte layout:
 
-- **0**
-  - Length: 16
-  - Value: Magic bytes `89 45 4e 44 4f 0d 0a 1a 0a 4f 43 41 50 52 45 46` (`0x89`, `ENDO`, CR LF
-    SUB LF, `OCAPREF`)
-- **16**
-  - Length: 32
-  - Value: Format marker `c3 0b d0 66 f5 aa 37 20 a0 b4 17 c3 af 2f 25 af 21 df de 52 84 2d 5e 8b
-    d8 ec 86 41 63 51 50 6e`, a constant drawn at random once for this format
-- **48**
-  - Length: 1
-  - Value: Envelope version `0x01`
-- **49**
-  - Length: 1
-  - Value: Signature algorithm `0x01` for Ed25519
-- **50**
-  - Length: 1
-  - Value: Locator encoding `0x01` for strict UTF-8
-- **51**
-  - Length: 1
-  - Value: Flags, zero in version 1
-- **52**
-  - Length: 8
-  - Value: Unsigned big-endian locator byte length `N`
-- **60**
-  - Length: 64
-  - Value: Ed25519 signature (RFC 8032 section 5.1) over ASCII `endo-locator-file-v1`, one zero
-    byte, and the exact `N` locator bytes
-- **124**
-  - Length: `N`
-  - Value: Locator bytes, with no delimiter or padding
+| Offset | Length | Value |
+| --- | --- | --- |
+| 0 | 16 | Magic bytes `89 45 4e 44 4f 0d 0a 1a 0a 4f 43 41 50 52 45 46` (`0x89`, `ENDO`, CR LF SUB LF, `OCAPREF`) |
+| 16 | 32 | Format marker `c3 0b d0 66 f5 aa 37 20 a0 b4 17 c3 af 2f 25 af 21 df de 52 84 2d 5e 8b d8 ec 86 41 63 51 50 6e`, a constant drawn at random once for this format |
+| 48 | 1 | Envelope version `0x01` |
+| 49 | 1 | Signature algorithm `0x01` for Ed25519 |
+| 50 | 1 | Locator encoding `0x01` for strict UTF-8 |
+| 51 | 1 | Flags, zero in version 1 |
+| 52 | 8 | Unsigned big-endian locator byte length `N` |
+| 60 | 32 | `peerKey`, the Ed25519 public key of the peer that hosts the referent |
+| 92 | 64 | Ed25519 signature ([RFC 8032, Section 5.1][rfc8032-5.1]) by `peerKey` over ASCII `endo-locator-file-v1`, one zero byte, the 32 `peerKey` bytes, and the exact `N` locator bytes |
+| 156 | `N` | Locator bytes, with no delimiter or padding |
+
+[rfc8032-5.1]: https://www.rfc-editor.org/rfc/rfc8032#section-5.1
+[rfc8949-4.2.1]: https://www.rfc-editor.org/rfc/rfc8949#section-4.2.1
 
 `N` MUST be at most 1 MiB.
 Unknown versions, algorithms, encodings, nonzero reserved flags, trailing bytes,
-invalid UTF-8, length mismatch, or a signature failure make a malformed locator file.
+invalid UTF-8, length mismatch, a signature failure, or a `peerKey` that disagrees with
+the locator make a malformed locator file.
+The locator bytes are an implemented `endo://{peerKey}/{formulaAddress}?type={type}`
+locator (`packages/daemon/src/locator.js`), whose URL host is the hosting peer's
+64-character hex Ed25519 public key.
+A validator MUST check that this host decodes to exactly the 32 `peerKey` bytes, so the
+key the signature binds is the key that hosts the referent.
 
 The format makes two separate claims.
 The marker claims that the file is meant to be a locator: its 256 bits make a chance
@@ -1021,8 +1050,18 @@ of a `File` can forge a locator file through Endo.
 The marker is public, so a writer outside Endo can still produce those bytes.
 The signature therefore makes the second claim: that the locator was written by the
 peer able to honor the reference.
-The verifying key is the locator's `peerKey`, the Ed25519 public key of the peer that
-hosts the referent, so the file needs no other key and no trust anchor.
+The verifying key is the file's `peerKey` field, bound to the locator as above, so the
+file needs no other key and no trust anchor.
+
+A locator file is only as good as the signature that mints it, so export follows one
+key-binding flow:
+
+- A reference hosted by the exporting peer is signed by that peer's own key at export.
+- A reference hosted by another peer is written only if the exporter holds a
+  locator signature from the hosting peer, which that peer returns, together with
+  its `peerKey`, from the method that reveals the locator.
+  Export of a remote reference without one throws `LOCATOR_UNSIGNED` and writes nothing.
+  `references: 'omit'` at export instead skips such entries and reports their paths.
 The all-zero `LOCAL_NODE` placeholder is not a key and MUST NOT appear in a locator file.
 A file beginning with the marker that fails validation throws `LOCATOR_MALFORMED` on
 `lookup`, exposes no bytes as a blob, and mints no reference.
@@ -1038,7 +1077,8 @@ a restored reference remains unresolved until then.
 An archive combines locator files with a directory-level manifest, stored at the
 archive root as `.endo-manifest` beside its signature, `.endo-manifest.sig`.
 Export rejects a tree that already uses either root name.
-The manifest is a map in CBOR core deterministic encoding (RFC 8949 section 4.2.1)
+The manifest is a map in CBOR core deterministic encoding ([RFC 8949, Section
+4.2.1][rfc8949-4.2.1])
 holding the archive version, a random 16-byte `archiveId`, and one record for each
 other archive member, sorted by normalized path.
 Each record binds normalized path, kind, byte length, and the SHA-256 of the
@@ -1051,8 +1091,8 @@ a locator file classifies itself and is also valid in a tree with no manifest.
 The locator file is the only holder of locator bytes.
 A manifest record's kind MUST agree with its member.
 
-Version 1 authenticates the manifest with one Ed25519 signature (RFC 8032 section
-5.1).
+Version 1 authenticates the manifest with one Ed25519 signature ([RFC 8032, Section
+5.1][rfc8032-5.1]).
 The signature record is a deterministic-CBOR map of `algorithm`, `keyId` (the
 SHA-256 of the public key), and `signature`, computed over ASCII
 `endo-archive-manifest-v1`, one zero byte, and the exact manifest bytes.
@@ -1072,6 +1112,20 @@ Rotating or revoking a signer means changing the set.
 A valid signature attests only that the key holder exported these bindings; it does
 not assert freshness, so a signed older archive still verifies.
 A caller that must reject replay tracks `archiveId`.
+
+An archive therefore carries two independent signatures, and the restore mode decides
+what they let through:
+
+| Proof | Signed by | Verified against | Establishes |
+| --- | --- | --- | --- |
+| Locator file signature | The peer hosting the referent | The file's own `peerKey` | The locator was minted by the peer that can honor it |
+| Manifest signature | The archive exporter, through `signer` | `trustedSigners` | The exporter produced exactly these members |
+
+| Mode | Checks | Installs | May resolve |
+| --- | --- | --- | --- |
+| `'unresolved'` | Both signatures | Every member, references unresolved | Later, by a separate authority-bearing operation |
+| `'strict'` | Both signatures and reachability | Every member, or nothing | Every reference, now |
+| `'inert'` | Member names only | Ordinary members as bytes | Nothing; locator files are omitted |
 
 Restore verifies in this order before installing anything:
 
@@ -1328,15 +1382,18 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 
 ## Open questions
 
-- How does a tree that holds a reference hosted by another peer get that peer's signature?
-  This design assumes a peer signs a locator as it mints it and the signature travels
-  with the locator, which the current locator format and minting path do not do.
+- What exact method does a remote peer use to return a locator signature with its
+  locator?
+  The key-binding flow above fixes what the signature covers and how export treats a
+  missing one; rung 9b waits on the method's design, and until then export writes only
+  locally hosted references.
 - Should an archive keep its signed manifest now that each locator file proves itself?
   This design keeps it, only to detect a changed, added, or removed member.
 
 ## Build ladder
 
-Each rung can land independently behind adapters and conformance tests.
+Each rung can land independently behind adapters and conformance tests, except rung
+9b, which lands only after its signing method is designed.
 
 1. Publish terminology, result/error records, and tests proving that live
    read-only and snapshot views differ.
@@ -1357,8 +1414,11 @@ Each rung can land independently behind adapters and conformance tests.
    `BagStore` adapters, and `Cell`, as typed directory entries.
 9. Add the version-1 locator file and its write refusal, then the signed archive
    manifest and restore-time signer verification, to checkin/checkout and
-   `make-archive`, including
-   unreachable-reference recovery.
+   `make-archive`, including unreachable-reference recovery.
+   This rung covers only references hosted by the exporting peer; export of a remote
+   reference throws `LOCATOR_UNSIGNED`.
+   Rung 9b, which depends on the remote locator-signature method in *Open questions*,
+   adds remotely hosted references and the cross-peer round-trip test.
 10. Migrate daemon, platform, exo-git, registry, formula inspector, container,
     CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings and
     every method that returns `{ algorithm, hash }`.
@@ -1375,9 +1435,11 @@ and remote adapters where applicable.
 It covers:
 
 - **Views and paths:** view laws, path confinement, the shared segment guard, symbolic
-  links leaving a native root, entry kinds, agreement between `kind()` and list records,
+  links leaving a native root, a symbolic link swapped in between resolution steps
+  (time-of-check/time-of-use) that MUST NOT escape the root, entry kinds, agreement between `kind()` and list records,
   a `kind()` that survives `snapshot()`, result paths that feed `lookup` unchanged,
-  missing-path behavior of `has`, `lookup`, and `maybeLookup`, and `snapshot` versus `capture`.
+  missing-path behavior of `has`, `lookup`, and `maybeLookup`, and `snapshot` versus `capture`,
+  including a `Capture` refused as `expected` and by `Snapshot.equivalent`.
 - **Comparison:** same-domain digest comparison, cross-provider snapshot comparison
   for every canonical form, comparison relayed
   through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
@@ -1388,9 +1450,10 @@ It covers:
   typed operations and `capture`, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
   `snapshot`, `equivalent`, and `expected`, including through an
   enclosing tree.
-- **Mutation:** ABA and stale CAS, concurrent mutators of which exactly one commits,
+- **Mutation:** ABA and stale CAS, concurrent mutators among which exactly one commits,
   disjoint subtrees that do not conflict, controller setup and races, retained descendants
-  across read, write, and revoked flips, partial-failure atomicity, merge conflict
+  across read, write, and revoked flips, a capability `Value` child withheld by a controlled
+  view, retain-then-revoke under `{ values: 'share' }`, partial-failure atomicity, merge conflict
   frames whose `merged` anchors `editHashLines` accepts,
   reference splices, and rejection of live transform sources.
 - **Readers and limits:** range composition, anchors from `readHashLines`,
@@ -1400,7 +1463,9 @@ It covers:
   matching the raising facet.
 - **Archives:** tampering, unsigned and untrusted-signer restore, inert restore,
   refusal of marker bytes through every mutator, a forged signature, a signature by a
-  key other than `peerKey`, secret-locator redaction, and unreachable locators.
+  key other than `peerKey`, a `peerKey` that disagrees with its locator, a remote reference
+  refused as `LOCATOR_UNSIGNED`, a cross-peer round trip in which one peer restores an
+  archive another exported (rung 9b), secret-locator redaction, and unreachable locators.
   Duplicate raw member names and NFC-normalization collisions, including a manifest
   naming only one colliding member, MUST be rejected before installation.
 - **Lifecycle:** restart replay and GC liveness.
