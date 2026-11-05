@@ -519,6 +519,7 @@ and a copy-only `details` record.
 | `SNAPSHOT_UNREACHABLE` | A connection carrying a foreign snapshot severed, or that snapshot's provider incarnation ended, before the operation finished with it. |
 | `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or a data store holds a value with no canonical form. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
+| `ARCHIVE_MALFORMED` | An archive holds duplicate raw member names, names that collide after NFC normalization, or names the path rules forbid. |
 | `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
 
 Static read-only facets SHOULD omit mutators entirely.
@@ -743,16 +744,22 @@ A caller that must reject replay tracks `archiveId`.
 
 Restore verifies in this order before installing anything:
 
-1. Look up `keyId` in `trustedSigners` and verify the signature over the bytes as
+1. Enumerate the raw member names, normalize each to NFC, and reject a duplicate raw
+   name, a normalization collision, or a name the path rules above forbid.
+   This step reads no manifest, so a colliding member the manifest does not name
+   still fails, and it throws `ARCHIVE_MALFORMED`.
+2. Look up `keyId` in `trustedSigners` and verify the signature over the bytes as
    received, before parsing them.
-2. Parse the manifest, rejecting an unknown version or algorithm and any encoding
+3. Parse the manifest, rejecting an unknown version or algorithm and any encoding
    that is not deterministic.
-3. Match archive members to records one for one, and check each length and digest.
-4. Validate every `CapabilityLink` envelope as specified above.
+4. Match archive members to records one for one, and check each length and digest.
+5. Validate every `CapabilityLink` envelope as specified above.
 
-Any failure throws `ARCHIVE_UNAUTHENTICATED` and installs nothing.
-`links: 'inert'` is the one mode that needs no signer: it skips these checks,
-ignores the manifest, restores every member as ordinary bytes, and mints no link.
+A failure in steps 2 through 5 throws `ARCHIVE_UNAUTHENTICATED`, and no failure
+installs anything.
+`links: 'inert'` is the one mode that needs no signer: after step 1 it skips these
+checks, ignores the manifest, restores every member as ordinary bytes, and mints no
+link.
 
 Sidecar files were considered but introduce colliding reserved names and make
 atomic rename/copy difficult.
