@@ -710,12 +710,22 @@ both files.
 
 ### Three-way merge edited snapshots
 
-Given base `B` and independently edited snapshots `L` and `R`, the caller asks
-`L.merge(B, R)`.
-The provider reads the snapshots internally, returns a merged snapshot plus
-range-referenced conflicts, and the agent reviews only conflict ranges.
-It applies the chosen merge snapshot to the mutable root with
-`expected: I(currentRoot)`; a concurrent edit fails before any write.
+Given base `B` and independently edited snapshots `L` and `R`, where `L` is a
+snapshot of the mutable `root`, the caller merges them and applies the result as a
+patch from `L`:
+
+```js
+const { snapshot: merged, conflicts } = await L.merge(B, R);
+// Review each record from conflicts, using only its range references.
+
+const patch = await L.diff(merged);
+await root.applyPatch(patch, { expected: await L.identity() });
+```
+
+The provider reads the snapshots internally, so the agent reviews only conflict
+ranges.
+If `root` has changed since `L` was taken, `applyPatch` throws `PRECONDITION_FAILED`
+before any write.
 
 ### Build a file from several blobs
 
