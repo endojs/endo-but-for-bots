@@ -99,9 +99,18 @@ the status printed in an older document.
 
 ### Entries and paths
 
-A `Path` is a frozen array of non-empty Unicode strings.
+A `Path` is a frozen array of segments.
+One shared guard validates every segment at the facet boundary of every adapter: a
+segment is a non-empty Unicode string that contains no `/`, `\\`, or NUL and is neither
+`.` nor `..`.
+This tightens the daemon's implemented `isValidName`, which admits `\\`, and that
+function's narrower pet-name rules still apply to pet names.
+A path therefore has no up-level or current-directory step.
 APIs MAY accept one string as shorthand for a one-segment path, but MUST NOT
 split a string on `/`.
+A native adapter MUST resolve a path one segment at a time beneath its root, and MUST
+refuse a symbolic link whose target leaves that root, so host path syntax never
+reinterprets a pet-name path.
 Portable archives normalize entry names to Unicode NFC and reject duplicate
 normalized names, `.` and `..`, NUL, and names their target archive cannot
 represent losslessly.
@@ -227,6 +236,12 @@ view consults only its own branch.
 
 `C(k, b, x)` exposes the methods allowed by its static facet, but every operation
 also consults the provider's current policy generation for the view's branch.
+That method surface does not change with policy.
+A controlled facet exposes its mutators under every generation, including `'read'`, and
+each denied call throws `ACCESS_REVOKED`.
+A descendant retained through traversal consults the same branch, so a file looked up
+under `'read'` can write after a flip to `'write'`.
+A static read-only facet is different: it omits its mutators and no flip restores them.
 The controller holds the authority to command that policy and owns no other state:
 `k.setPolicy(branch, 'read' | 'write' | 'revoked')` resolves to `{ generation }`
 only after the provider has journaled the new generation.
@@ -372,6 +387,15 @@ The signatures below are the proposed canonical vocabulary.
 Passable streams and result capabilities are used where an eager array or string
 could be unbounded.
 
+`ResultReader` is the one result shape of every listing and search method: a
+`PassableReader` from `@endo/exo-stream` that delivers one record per pull.
+These methods have no eager form, pages, or continuation tokens.
+The consumer stops early by closing the reader.
+Unless the holder's facet carries a result budget, a reader delivers the complete
+result.
+A reader over a live view is not a consistent cut, so a caller that needs one
+iterates a snapshot.
+
 ### Readable blobs and files
 
 | Method | Meaning | Views |
@@ -452,15 +476,6 @@ unambiguous because no segment can contain `/`.
 
 An adapter preserves the implemented `listTree` field name `type` and its
 `'file' | 'directory'` values.
-
-`ResultReader` is the one result shape of every listing and search method: a
-`PassableReader` from `@endo/exo-stream` that delivers one record per pull.
-These methods have no eager form, pages, or continuation tokens.
-The consumer stops early by closing the reader.
-Unless the holder's facet carries a result budget, a reader delivers the complete
-result.
-A reader over a live view is not a consistent cut, so a caller that needs one
-iterates a snapshot.
 
 `glorp` is not a new fuzzy-search algorithm.
 It is the fused `glob`-then-`grep` operation already implemented by
@@ -633,9 +648,13 @@ smallest necessary chunk.
 Backpressure likewise bounds a `ResultReader`, which produces one record per pull,
 so no resource bound caps how many records it delivers.
 A record larger than `recordBytes` does not end the reader.
-The provider delivers it with the over-limit field removed and
-`omitted: { field, bytes }` added, and the holder retrieves that field with a ranged
-read.
+Only the `text` field of a grep record can exceed the bound in practice, because every
+other record holds only names, kinds, offsets, and range references, which
+`recordBytes` does not count.
+The provider delivers such a record with `text` removed and
+`omitted: { field: 'text', bytes }` added.
+The record's `line`, and its `path` for a tree search, are the recovery handle: the
+holder looks up `path`, if any, and calls `readTextRange(line, line + 1)`.
 `Patch` and merged snapshots remain capabilities; only materializing or rendering
 them consumes a result budget.
 
@@ -989,8 +1008,8 @@ It covers:
   typed operations and non-strict snapshot, and MUST throw `UNSNAPSHOTTABLE_ENTRY` from
   `identity`, `equivalent`, strict `snapshot`, and `expected`, including through an
   enclosing tree.
-- **Mutation:** ABA and stale CAS, controller setup and races, partial-failure
-  atomicity, merge conflicts, reference splices, and rejection of live transform
+- **Mutation:** ABA and stale CAS, controller setup and races, retained descendants
+  across read, write, and revoked flips, partial-failure atomicity, merge conflicts, reference splices, and rejection of live transform
   sources.
 - **Readers and limits:** range composition, result limits, oversized records that
   leave the reader running, result budgets, reader early close, and recovery advice
