@@ -787,8 +787,9 @@ Authenticity comes only from the signed manifest below.
 
 The leading `0x89` cannot begin valid UTF-8 text, so a plain text file never
 collides.
-Arbitrary binary can collide, therefore restore MUST NOT classify an untrusted
-file as a capability solely from these bytes.
+Arbitrary binary can collide.
+Restore therefore MUST NOT classify an untrusted file as a capability solely from
+these bytes.
 
 ### Signed manifest and round trip
 
@@ -845,8 +846,8 @@ Restore verifies in this order before installing anything:
 4. Match archive members to records one for one, and check each length and digest.
 5. Validate every `CapabilityLink` envelope as specified above.
 
-A failure in steps 2 through 5 throws `ARCHIVE_UNAUTHENTICATED`, and no failure
-installs anything.
+A failure in steps 2 through 5 throws `ARCHIVE_UNAUTHENTICATED`, and nothing is
+installed on any failure.
 `links: 'inert'` is the one mode that needs no signer: after step 1 it skips these
 checks, ignores the manifest, restores every member as ordinary bytes, and mints no
 link.
@@ -885,7 +886,7 @@ REST appears only where the caller holds no reference yet or cannot speak CapTP.
 
 | Surface | Deciding criteria | Transport |
 |---|---|---|
-| Lookup, read, search, snapshot, mutation, control, watch, diff, patch, merge | Holding an object authorizes the call; calls pass and return capabilities, keep state or streams, attenuate independently, and return live results. | **CapTP** |
+| Lookup, read, search, snapshot, mutation, control, watch, diff, patch, merge | Holding an object authorizes the call. Calls pass and return capabilities and streams. The objects keep state, attenuate independently, and yield live results. | **CapTP** |
 | Initial archive download or upload | CapTP by default, as above. A client that cannot speak CapTP may use a one-use bearer URL designating exactly one transfer object, never an identity. | **CapTP**, or REST for bytes after CapTP mints the transfer grant |
 | Minting or opening the first external locator | A client with no session holds no reference yet, so one REST call establishes its first reference and every later call uses CapTP. | REST/HTTPS bootstrap; the opened object immediately becomes **CapTP** |
 
@@ -902,7 +903,7 @@ filesystem API.
 | Controller -> mutable provider | The controller sends an absolute policy command for a branch; the provider journals it and acknowledges its generation. | The controller decides read/write/revoked; the provider decides ordering and transaction atomicity. | The provider owns branches, policy generations, and content in one journal; the controller owns no durable state. | The provider alone commits, restoring policy from its journal before facets revive. | Branch selector, policy value, and acknowledged generation, controller vocabulary. |
 | Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private digests after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
 | Pet-name/formula directory -> provider or capability link | The directory binds a local name to a typed capability entry; a formula may reincarnate it. | The directory owner admits binding changes; it does not decide content mutations. | The directory/formula store owns bindings and recipes; the target provider owns target state. | The directory commits bindings and replays recipes before lookup; unresolved links remain inert. | Name, entry kind, formula ID or link, outer naming vocabulary. |
-| Archive/restore -> directory and locator resolver | Export writes and signs a manifest/envelope; restore verifies and mints unresolved links. | Explicit export authority admits bearer locators; the restoring holder's `trustedSigners` decides whose signature classifies links, and it chooses the link mode. | The archive owner owns archive bytes; the signer owns its private key; the restoring holder owns its trust set; the destination owns installed bindings. | Export finalizes and signs the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest record, signature, envelope bytes, and locator, archive vocabulary. |
+| Archive/restore -> directory and locator resolver | Export writes and signs a manifest/envelope; restore verifies and mints unresolved links. | Explicit export authority admits bearer locators; the restoring holder's `trustedSigners` decides whose signature classifies links, and the restoring holder chooses the link mode. | The archive owner owns archive bytes; the signer owns its private key; the restoring holder owns its trust set; the destination owns installed bindings. | Export finalizes and signs the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest record, signature, envelope bytes, and locator, archive vocabulary. |
 | Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
 
 **Persistent state.**

@@ -668,8 +668,6 @@ one known unindexed design.
 It consolidates and phases existing M3 filesystem work, so it does not add a
 second copy of that effort to milestone duration or the critical path.
 
-
-
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
