@@ -632,9 +632,32 @@ expected identity unless the caller explicitly chooses last-writer-wins.
 
 `merge` is a pure three-way operation: the receiver is left, `base` is the
 common ancestor, and `other` is right.
-It returns `{ snapshot, conflicts }`; `conflicts` is a `ResultReader` of typed
-records with range references, not conflict-marker text silently written to a
-target.
+It returns `{ snapshot, conflicts }`, and writes no conflict-marker text.
+`conflicts` is a hardened array of copy records, which hold no capability, so a
+caller has nothing to close or dispose:
+
+```js
+{
+  path, // relative to the receiver
+  reason: 'text' | 'bytes' | 'kind' | 'removed',
+  left, // text conflicts carry a frame for each side; others omit all four
+  base,
+  right,
+  merged,
+}
+// frame: { startLine, endLine, first: { line, hash }, last: { line, hash } }
+```
+
+A frame is a half-open zero-based line range, bracketed by the hash-line anchors of
+its first and last lines, which an empty range omits.
+`left`, `base`, and `right` address those three operands, and the caller reads them
+with `readTextRange` or `readHashLines`.
+The merged snapshot holds the left lines at each conflict, and `merged` frames them
+there, so a resolver can pass its anchors to `editHashLines` once the merge is
+applied.
+The array is a materialized result under the `bytes` limit.
+A merge that exceeds it throws `RESULT_TOO_LARGE`, and the caller merges smaller
+subtrees.
 Applying the result is a separate CAS mutation.
 
 `Transform` is an array of edit scripts, one for each target:
@@ -889,7 +912,7 @@ patch from `L`:
 
 ```js
 const { snapshot: merged, conflicts } = await L.merge(B, R);
-// Review each record from conflicts, using only its range references.
+// Review each record from conflicts, reading only its framed lines.
 
 const patch = await L.diff(merged);
 await root.applyPatch(patch, { expected: await L.identity() });
@@ -1306,7 +1329,8 @@ It covers:
   `identity`, `equivalent`, strict `snapshot`, and `expected`, including through an
   enclosing tree.
 - **Mutation:** ABA and stale CAS, controller setup and races, retained descendants
-  across read, write, and revoked flips, partial-failure atomicity, merge conflicts,
+  across read, write, and revoked flips, partial-failure atomicity, merge conflict
+  frames whose `merged` anchors `editHashLines` accepts,
   reference splices, and rejection of live transform sources.
 - **Readers and limits:** range composition, anchors from `readHashLines`,
   `grepHashLines`, and `glorpHashLines` that `editHashLines` accepts, result limits, oversized records that
