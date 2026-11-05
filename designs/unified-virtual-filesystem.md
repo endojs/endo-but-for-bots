@@ -397,6 +397,7 @@ and a copy-only `details` record.
 | `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
 | `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a generic live capability, or a data store holds a value with no canonical form. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
+| `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
 
 Static read-only facets SHOULD omit mutators entirely.
 The `READ_ONLY` error exists for current uniform extended-FS guards and dynamic
@@ -518,23 +519,67 @@ Unknown versions, algorithms, encodings, nonzero reserved flags, trailing bytes,
 invalid UTF-8, length mismatch, or digest mismatch are malformed envelopes.
 The digest detects accidental or unsophisticated tampering but is not a signature:
 an attacker who changes a locator can recompute it.
-Authenticity comes from an authenticated archive manifest or signature.
+Authenticity comes only from the signed manifest below.
 
 The leading `0x89` cannot begin valid UTF-8 text, so a plain text file never
 collides.
 Arbitrary binary can collide, therefore restore MUST NOT classify an untrusted
 file as a capability solely from these bytes.
 
-### Authoritative manifest and round trip
+### Signed manifest and round trip
 
-The recommended archive form combines the envelope with a canonical-CBOR,
-directory-level manifest.
-For each non-ordinary entry the manifest binds normalized path, entry kind,
-envelope digest, and archive version.
-The authenticated manifest is authoritative; the in-band envelope preserves a
-useful loose-file representation.
+An archive combines the envelope with a directory-level manifest, stored at the
+archive root as `.endo-manifest` beside its signature, `.endo-manifest.sig`.
+Export rejects a tree that already uses either root name.
+The manifest is a map in CBOR core deterministic encoding (RFC 8949 section 4.2.1)
+holding the archive version, a random 16-byte `archiveId`, and one record per
+archive member, sorted by normalized path.
+Each record binds normalized path, entry kind, byte length, and the SHA-256 of the
+member's exact bytes.
+Records cover every member, not only capability links, so a changed, added,
+removed, or reclassified member fails verification.
+
+The manifest is the only classifier of entries, and the envelope is the only holder
+of locator bytes.
 An ordinary binary file beginning with the magic remains ordinary unless the
 manifest marks it `CapabilityLink`.
+The envelope's own digest serves a loose copy that has lost its manifest: a
+diagnostic tool can report corruption, but nothing restores it as a link.
+
+Version 1 authenticates the manifest with one Ed25519 signature (RFC 8032 section
+5.1).
+The signature record is a deterministic-CBOR map of `algorithm`, `keyId` (the
+SHA-256 of the public key), and `signature`, computed over ASCII
+`endo-archive-manifest-v1`, one zero byte, and the exact manifest bytes.
+Export signs through a `signer` capability, so the private key never enters the
+archive, and refuses to write a `CapabilityLink` entry without one.
+
+The trust anchor is the argument the restoring holder supplies:
+
+```js
+restore(archive, { trustedSigners, links: 'unresolved' | 'strict' | 'inert' })
+```
+
+`trustedSigners` is an immutable set of `{ keyId, publicKey }` records.
+It has no default, nothing is trusted on first use, and a key carried in the
+archive grants nothing.
+Rotating or revoking a signer means changing the set.
+A valid signature attests only that the key holder exported these bindings; it does
+not assert freshness, so a signed older archive still verifies.
+A caller that must reject replay tracks `archiveId`.
+
+Restore verifies in this order before installing anything:
+
+1. Look up `keyId` in `trustedSigners` and verify the signature over the bytes as
+   received, before parsing them.
+2. Parse the manifest, rejecting an unknown version or algorithm and any encoding
+   that is not deterministic.
+3. Match archive members to records one for one, and check each length and digest.
+4. Validate every `CapabilityLink` envelope as specified above.
+
+Any failure throws `ARCHIVE_UNAUTHENTICATED` and installs nothing.
+`links: 'inert'` is the one mode that needs no signer: it skips these checks,
+ignores the manifest, restores every member as ordinary bytes, and mints no link.
 
 Sidecar files were considered but introduce colliding reserved names and make
 atomic rename/copy difficult.
@@ -544,14 +589,13 @@ A directory-level index is therefore the portable source of truth.
 
 Snapshot and checkin record the link without dereferencing it.
 Checkout and `make-archive` reproduce the exact envelope and manifest entry.
-Restore validates the manifest, length, encoding, and digest before constructing
-an unresolved `CapabilityLink`.
+Only the verification above constructs an unresolved `CapabilityLink`.
 Resolution is a separate authority-bearing operation.
 
-If a locator is unavailable, ordinary restore succeeds and preserves the
+If a locator is unavailable, `links: 'unresolved'` succeeds and preserves the
 unresolved link; opening it throws `LOCATOR_UNREACHABLE` with path and a
 non-secret diagnostic.
-Strict restore MAY fail the entire transaction atomically when all links must be
+`links: 'strict'` fails the entire transaction atomically unless every link is
 reachable.
 
 Locators can be bearer capabilities, including secret-bearing HTTPS fragments.
@@ -559,7 +603,8 @@ Archives containing them MUST be treated as credential stores: least-readable
 permissions, encryption at rest and in transit, no logs, no search indexing, and
 explicit export authority.
 Neither the envelope digest nor a content-addressed archive makes a locator
-public or safe.
+public or safe, and a manifest digest of a link envelope gets the same handling
+as the locator.
 
 ## REST versus CapTP
 
@@ -586,7 +631,7 @@ parallel REST filesystem API.
 | Controller -> mutable provider | The controller sends an absolute policy command for a branch; the provider journals it and acknowledges its generation. | The controller decides read/write/revoked; the provider decides ordering and transaction atomicity. | The provider owns policy generations and content in one journal; the controller owns no durable state. | The provider alone commits, restoring policy from its journal before facets revive. | Branch selector, policy value, and acknowledged generation, controller vocabulary. |
 | Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private digests after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
 | Pet-name/formula directory -> provider or capability link | The directory binds a local name to a typed capability entry; a formula may reincarnate it. | The directory owner admits binding changes; it does not decide content mutations. | The directory/formula store owns bindings and recipes; the target provider owns target state. | The directory commits bindings and replays recipes before lookup; unresolved links remain inert. | Name, entry kind, formula ID or link, outer naming vocabulary. |
-| Archive/restore -> directory and locator resolver | Export writes a manifest/envelope; restore validates and mints unresolved links. | Explicit export authority admits bearer locators; restore chooses strict or unresolved mode. | The archive owner owns archive bytes; the destination owns installed bindings. | Export finalizes the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest entry, envelope bytes, and locator, archive vocabulary. |
+| Archive/restore -> directory and locator resolver | Export writes and signs a manifest/envelope; restore verifies and mints unresolved links. | Explicit export authority admits bearer locators; the restoring holder's `trustedSigners` decides whose signature classifies links, and it chooses the link mode. | The archive owner owns archive bytes; the signer owns its private key; the restoring holder owns its trust set; the destination owns installed bindings. | Export finalizes and signs the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest record, signature, envelope bytes, and locator, archive vocabulary. |
 | Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
 
 **Persistent state.**
@@ -637,7 +682,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 | Diff, patch, merge | root advancement, exo-git, agent tools | Git has operations, but snapshots lack one portable contract. | Put pure `diff`/`merge` on snapshots and CAS `applyPatch` on mutable views. |
 | Dynamic mutability | mount capabilities | Captive control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
 | Non-file storage | persistent stores, PRs #1264/#1265 | Block and data stores are proposals; no common append-only interface exists. | Add typed directory entry kinds; implement block first, append log and data adapters later. |
-| Capability serialization | checkin/checkout, make archive | Arbitrary capability bindings have no portable archive representation. | Use an authenticated directory manifest plus the versioned envelope in this design. |
+| Capability serialization | checkin/checkout, make archive | Arbitrary capability bindings have no portable archive representation. | Use a signed directory manifest, verified against the restorer's trusted signers, plus the versioned envelope in this design. |
 | Snapshotting capability slots | mount and archive designs | It is unclear whether snapshot freezes a referenced object. | Freeze the link only; strict deep snapshot rejects a non-snapshottable referent. |
 | Watcher vocabulary | filesystem watchers, mount changes, root advancement | Event records, ordering, and Promise/reader shapes differ. | Standardize transaction followers around initial snapshot plus revision; adapt path-level events. |
 | Large agent reads | range designs, agent tools | Ranges exist, but a holder can still materialize an unlimited whole file or diff. | Mint size-limited reader facets and use the teaching error specified above. |
@@ -662,8 +707,9 @@ Each rung can land independently behind adapters and conformance tests.
    mutability controller with durable-policy tests.
 8. Land `BlockStorage`, then `AppendLog` and persistent `DataStore` adapters as
    typed directory entries.
-9. Add the canonical-CBOR archive manifest and version-1 capability envelope to
-   checkin/checkout and `make-archive`, including unreachable-link recovery.
+9. Add the signed archive manifest, restore-time signer verification, and
+   version-1 capability envelope to checkin/checkout and `make-archive`, including
+   unreachable-link recovery.
 10. Migrate daemon, platform, exo-git, registry, formula inspector, container,
     CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings.
 
@@ -680,7 +726,8 @@ It covers view laws, path confinement, entry kinds, same-domain identity
 comparison, foreign-domain rejection, cross-provider snapshot comparison for every
 canonical form, ABA and stale CAS, controller races, partial-failure
 atomicity, range composition, result limits, reader early close, recovery advice matching
-the raising facet, merge conflicts, reference splices, archive tampering, binary magic collisions,
+the raising facet, merge conflicts, reference splices, archive tampering, unsigned and untrusted-signer
+restore, inert restore, binary magic collisions,
 secret-locator redaction, unreachable locators, restart replay, and GC liveness.
 
 Tests MUST demonstrate that no oversized whole result is allocated before the
