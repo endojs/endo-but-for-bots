@@ -84,7 +84,7 @@ the status printed in an older document.
 | Area | Sources | Current status |
 |---|---|---|
 | Shared naming and guards | [name-hub unification](namehub-interface-unification.md), [interface reconciliation](fs-interface-reconciliation.md), [interface consolidation](fs-interface-consolidation.md) | **Implemented in part:** common readable guards exist; richer mount and extended-FS guards remain distinct. |
-| Mount model and authority | [capability filesystem](daemon-capability-filesystem.md), [mount](daemon-mount.md), [mount capabilities](daemon-mount-capabilities.md), [visible roots](daemon-mount-visible-roots.md) | **Implemented in part:** mounts, entries, snapshots, read-only views, and captive revocation exist; the controller in this design does not. |
+| Mount model and authority | [capability filesystem](daemon-capability-filesystem.md), [mount](daemon-mount.md), [mount capabilities](daemon-mount-capabilities.md), [visible roots](daemon-mount-visible-roots.md) | **Implemented in part:** mounts, entries, snapshots, read-only views, and mount-local revocation exist; the controller in this design does not. |
 | Search and agent operations | [stream/glob/grep](mount-stream-glob-grep.md), [agent FS tools](agent-tools-mount-fs-tools.md), [CLI edit](cli-edit-verb.md), [endopi edit](endopi-edit-tool.md), [Chat edit](chat-view-edit-commands.md) | **Implemented in part:** eager `glob`, `grep`, `glorp`, and hashline primitives exist; bounded streaming and one common tool surface do not. |
 | Snapshots and lifecycle | [checkin/checkout](daemon-checkin-checkout.md), [CAS management](daemon-cas-management.md), [content-store GC](daemon-content-store-gc.md), [snapshot mapper](snapshot-mapper.md), [make archive](daemon-make-archive.md) | **Implemented in part:** content-addressed stores, checkout, pruning, and archive machinery exist; the generic snapshot contract and capability round trip do not. |
 | Byte and range access | [range attenuation](readableblob-range-attenuation.md), [range/tree reads](platform-range-and-tree-reads.md), [Endo bytes](endo-bytes.md), [store write](store-write-file.md), [store text modes](cli-store-verb-text-modes.md) | **Implemented in part:** blob ranges and byte values exist under multiple names; the common bounded materializers are proposed here. |
@@ -131,6 +131,20 @@ lifecycle.
 Adapters SHOULD derive all three from the method families below rather than
 copying guards.
 
+### Views by example
+
+A maintainer holds a mutable project directory `x` and gives a reviewer
+`view = x.readOnly()`.
+The reviewer sees later edits and has no method to make any.
+The reviewer keeps `s = await view.snapshot()`, and `s` stays the same while the
+maintainer keeps editing.
+A builder receives `c = x.controlled(k)`, while the maintainer keeps controller
+`k`.
+While `k` sets the branch to `read`, `c.writeText` fails; once `k` sets it to
+`write`, `c.writeText(text, { expected: s })` commits only if the content is still
+equivalent to `s`.
+Setting the branch to `revoked` ends the builder's access.
+
 ### View algebra
 
 For an underlying mutable object `x`, define:
@@ -162,6 +176,14 @@ mutation of `x` need not be equivalent to it.
 A snapshot can outlive and diverge from its source, whereas a read-only view
 observes later source changes.
 
+Attenuation follows traversal.
+`lookup` on a read-only, controlled, size-limited, or rooted view returns each
+`File`, `Directory`, `BlockStorage`, `AppendLog`, and `DataStore` child under the
+same attenuation.
+A `CapabilityLink` child stays a link: the attenuation governs the binding, not the
+referent, whose authority comes from resolving the link.
+A minter that must withhold that authority omits link resolution from the facet.
+
 `C(k, x)` exposes the methods allowed by its static facet, but every operation
 also consults the provider's current policy generation for the view's branch.
 The controller holds the authority to command that policy and owns no other state:
@@ -182,8 +204,8 @@ Revocation or a policy flip linearizes before or after an in-flight transaction.
 It MUST NOT expose a partial write.
 The controller is separate from the client view and MUST NOT be discoverable by
 walking the directory.
-The current daemon `MountControl.revoke()` is a captive, one-way precursor, not
-this controller.
+The current daemon `MountControl.revoke()` is a mount-local, one-way revocation
+mechanism, not this controller.
 
 ### Opaque identity and compare-and-swap
 
@@ -299,7 +321,7 @@ avoid reading source content into the caller.
 
 | Method | Meaning | Views |
 |---|---|---|
-| `has(path)`, `lookup(path)`, `maybeLookup(path)` | Traverse pet names and return an entry capability. | all tree views |
+| `has(path)`, `lookup(path)`, `maybeLookup(path)` | Traverse pet names and return an entry capability under the view's attenuation. | all tree views |
 | `list(path, options)`, `listTree(path, options)` | Return a `ResultReader` of typed entries. | all tree views |
 | `glob(pattern, options)` | Return a `ResultReader` of matching paths using the corpus glob grammar. | all tree views |
 | `grep(pattern, options)` | Search readable text entries and return a `ResultReader` of `{ path, line, text, ranges }`. | all tree views |
@@ -532,8 +554,8 @@ An archive combines the envelope with a directory-level manifest, stored at the
 archive root as `.endo-manifest` beside its signature, `.endo-manifest.sig`.
 Export rejects a tree that already uses either root name.
 The manifest is a map in CBOR core deterministic encoding (RFC 8949 section 4.2.1)
-holding the archive version, a random 16-byte `archiveId`, and one record per
-archive member, sorted by normalized path.
+holding the archive version, a random 16-byte `archiveId`, and one record for each
+other archive member, sorted by normalized path.
 Each record binds normalized path, entry kind, byte length, and the SHA-256 of the
 member's exact bytes.
 Records cover every member, not only capability links, so a changed, added,
@@ -611,17 +633,18 @@ as the locator.
 The common interface defaults to CapTP because every operation exercises held
 object authority, returns further capabilities, benefits from pipelining, and
 needs revocation and disconnection semantics.
+REST appears only where the caller holds no reference yet or cannot speak CapTP.
 
-| Surface | Rubric score | Transport |
+| Surface | Deciding criteria | Transport |
 |---|---|---|
-| Lookup, read, search, snapshot, mutation, control, watch, diff, patch, merge | CapTP rows 1, 2, 3, 4, and 6: held-object authority, capability arguments/results, state/streams, independent attenuation, and live results. | **CapTP** |
-| Initial archive download or upload | CapTP rows 1 and 4 by default; REST row 5 only for a client that cannot speak CapTP. Override 2 permits a one-use bearer URL designating exactly one transfer object. | **CapTP**, or REST for bytes after CapTP mints the transfer grant |
-| Minting or opening the first external locator | REST rows 5 and 7 and override 1: a pre-session client establishes its first reference. | REST/HTTPS bootstrap; the opened object immediately becomes **CapTP** |
+| Lookup, read, search, snapshot, mutation, control, watch, diff, patch, merge | Holding an object authorizes the call; calls pass and return capabilities, keep state or streams, attenuate independently, and return live results. | **CapTP** |
+| Initial archive download or upload | CapTP by default, as above. A client that cannot speak CapTP may use a one-use bearer URL designating exactly one transfer object, never an identity. | **CapTP**, or REST for bytes after CapTP mints the transfer grant |
+| Minting or opening the first external locator | A client with no session holds no reference yet, so one REST call establishes its first reference and every later call uses CapTP. | REST/HTTPS bootstrap; the opened object immediately becomes **CapTP** |
 
 There are no REST endpoints that accept a raw pet-name path or bearer capability
 string as a substitute for possessing the root.
-The locator-opening boundary is the rubric's explicit bootstrap exception, not a
-parallel REST filesystem API.
+The locator-opening boundary is a bootstrap exception, not a parallel REST
+filesystem API.
 
 ## Ownership map
 
@@ -680,7 +703,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 | Search bounds | stream/glob/grep, current search implementation | Design streams; implementation returns eager arrays and silently truncates an intermediate glob. | Return `ResultReader`s that end in `RESULT_TOO_LARGE` at a limit; never silently truncate. |
 | Hashline CAS | CLI edit, daemon hashline implementation | Anchors use public raw SHA-256 and literal replacement content. | Accept opaque expected identity and range-reference payloads; preserve CRC32 line anchors. |
 | Diff, patch, merge | root advancement, exo-git, agent tools | Git has operations, but snapshots lack one portable contract. | Put pure `diff`/`merge` on snapshots and CAS `applyPatch` on mutable views. |
-| Dynamic mutability | mount capabilities | Captive control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
+| Dynamic mutability | mount capabilities | Mount-local control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
 | Non-file storage | persistent stores, PRs #1264/#1265 | Block and data stores are proposals; no common append-only interface exists. | Add typed directory entry kinds; implement block first, append log and data adapters later. |
 | Capability serialization | checkin/checkout, make archive | Arbitrary capability bindings have no portable archive representation. | Use a signed directory manifest, verified against the restorer's trusted signers, plus the versioned envelope in this design. |
 | Snapshotting capability slots | mount and archive designs | It is unclear whether snapshot freezes a referenced object. | Freeze the link only; strict deep snapshot rejects a non-snapshottable referent. |
@@ -713,9 +736,9 @@ Each rung can land independently behind adapters and conformance tests.
 10. Migrate daemon, platform, exo-git, registry, formula inspector, container,
     CLI, Chat, endopi, and agent-tool consumers; retire compatibility spellings.
 
-The full ladder is XL, approximately three to five weeks when split across
+The full ladder is approximately three to five weeks when split across
 reviewable PRs.
-Rungs 1–3 are the smallest useful first release and do not depend on controller,
+Rungs 1-3 are the smallest useful first release and do not depend on controller,
 archive, or non-file storage work.
 
 ## Conformance and acceptance
@@ -733,19 +756,3 @@ secret-locator redaction, unreachable locators, restart replay, and GC liveness.
 Tests MUST demonstrate that no oversized whole result is allocated before the
 teaching error, no rejected transaction publishes a partial root, and successful
 splices can be verified by identity without rereading output.
-
-## Open questions
-
-None.
-The first build should follow the recommendations above and surface any
-provider-specific impossibility as a focused amendment rather than reopening the
-common vocabulary.
-
-## Prompt
-
-Consolidate Endo's pet-name and virtual-filesystem designs into a normative,
-documentation-shaped interface.
-Cover mutable, snapshot, live read-only, and controlled views; files, blocks,
-logs, data, and arbitrary capabilities; opaque CAS identity; search, editing,
-diff/patch/merge, range and size attenuation; reference-level splicing;
-capability serialization; ownership; inconsistencies; and a small build ladder.
