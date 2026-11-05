@@ -6,6 +6,13 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[unified-virtual-filesystem](unified-virtual-filesystem.md) (added 2026-11-05;
+the normative consolidation and first user-documentation draft for Endo's
+pet-name virtual filesystem: mutable, live read-only, snapshot, and controlled
+views; files, blocks, logs, data stores, and capability links; opaque
+content-equivalence CAS; bounded range/search/edit/diff/patch/merge operations;
+reference-level splicing; a size-limit attenuation with agent-teaching errors;
+and a manifest-backed capability-link archive envelope),
 [ironhorse-guest-compartment](ironhorse-guest-compartment.md) (added
 2026-09-18; the implementation specification for a guest-callable
 `Compartment` in `ironhorse-vm` — the remainder
@@ -577,6 +584,7 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | In Progress |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
+| [unified-virtual-filesystem](unified-virtual-filesystem.md) | 2026-11-05 | 2026-11-05 | Proposed |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | In Progress |
 | [endo-claude-inference-backends](endo-claude-inference-backends.md) | 2026-09-28 | 2026-09-30 | Draft |
@@ -651,6 +659,14 @@ The 2026-10-14 pass adds [thixotrope-wasm-worker](thixotrope-wasm-worker.md) (**
 The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thixotrope/designs/host-managed-resources.md) (Proposed), bringing Proposed to 31 and the indexed records to 250 after the totals above.
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
+
+The 2026-11-05 pass adds
+[unified-virtual-filesystem](unified-virtual-filesystem.md) (Proposed), bringing
+Proposed to 33 and indexed records to 252.
+The raw corpus is now 253 files; `daemon-mount-visible-roots.md` remains the
+one known unindexed design.
+It consolidates and phases existing M3 filesystem work, so it does not add a
+second copy of that effort to milestone duration or the critical path.
 
 
 
@@ -918,6 +934,7 @@ flowchart TD
         dtools --> dposix
         hsandbox -. composition follow-up .-> dposix
         pfs[platform-fs<br/><i>COMPLETE</i>]
+        uvfs[unified-virtual-filesystem<br/><i>PROPOSED</i>]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]
@@ -947,6 +964,10 @@ flowchart TD
         errun[endor-run-expanded<br/><i>IN PROGRESS</i>]
         pfs --> dfs
         pfs --> dmount
+        pfs --> uvfs
+        dmount --> uvfs
+        dgitfollow --> uvfs
+        uvfs --> dtools
         dmount --> dmcap
         dmcap --> dgit
         dgit --> dgitfollow
@@ -1200,6 +1221,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | agentry-git-verb-gaps | In Progress | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | In Progress | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
+| unified-virtual-filesystem | Proposed | Normative pet-name filesystem contract and first user-documentation draft. Consolidates live read-only and snapshot views, opaque identity/CAS, controlled mutability, result-size attenuation, search/edit/diff/patch/merge, non-file entries, reference-level splicing, archive round trips, and a ten-rung migration ladder. Its XL estimate phases work already distributed across this milestone and is not added again to the critical path. |
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
@@ -1740,6 +1762,7 @@ an explicit accounting disposition.
 | `llm-dev-publish` | M, 4-5 days | M10 |
 | `mount-stream-glob-grep` | M, 4-5 days | M3 |
 | `reviewed-change-workflow` | M, 4-5 days | M3 |
+| `unified-virtual-filesystem` | XL, 3-5 weeks phased; consolidates existing rows | M3 |
 | `chat/outliner-confinement-migration` | Implemented, none | M9 |
 | `chat/outliner_drag_and_drop` | Implemented, none | M9 |
 | `chat/preact-confinement-migration` | S-M, 3-5 days | M9 |
@@ -1989,6 +2012,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | exo-git-follow-root-advancement | M-L | 1-1.5 weeks | 3 | `@endo/platform/fs` tree identity, snapshots, atomic mutators, change/latest followers, high-level patching, and conformance across in-memory/native/composed adapters; `GitStage` tentative metadata, mutable roots, explicit commit, stale-base checks, matching Git followers, declarations, attenuation, and recovery |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
+| unified-virtual-filesystem | XL | 3-5 weeks, phased | 3 | Ten small rungs consolidate already-counted filesystem work: terminology and conformance, bounded range/search results, opaque identities, reference transforms, diff/patch/merge, controlled mutability, non-file storage, capability-link archives, and consumer migration. Do not add the whole estimate again to M3; separately scoped build PRs replace the overlapping source rows. |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
