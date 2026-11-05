@@ -404,7 +404,7 @@ avoid reading source content into the caller.
 
 | Method | Meaning | Views |
 |---|---|---|
-| `has(path)`, `lookup(path)`, `maybeLookup(path)` | Traverse pet names and return an entry capability under the view's attenuation. | all tree views |
+| `has(path)`, `lookup(path)`, `maybeLookup(path)` | Traverse pet names; `lookup` and `maybeLookup` return an entry capability under the view's attenuation. | all tree views |
 | `list(path, options)`, `listTree(path, options)` | Return a `ResultReader` of typed entries. | all tree views |
 | `glob(pattern, options)` | Return a `ResultReader` of matching paths using the corpus glob grammar. | all tree views |
 | `grep(pattern, options)` | Search readable text entries and return a `ResultReader` of `{ path, line, text, ranges }`. | all tree views |
@@ -413,6 +413,9 @@ avoid reading source content into the caller.
 | `watch()` / `followChanges(options)` | Follow live transactions; absent on immutable snapshots. | live read-only, mutable, controlled |
 | `makeDirectory`, `makeFile`, `remove`, `move`, `copy` | Mutate one root transactionally, optionally with `expected`. | mutable, writable controlled |
 
+Every traversal method takes one `Path` argument.
+The implemented variadic `has(...path)` and `lookup(...path)` remain adapters while
+callers migrate.
 Path `[]` names the receiver.
 `lookup` throws `NOT_FOUND` when a segment has no binding; in that case
 `maybeLookup` resolves to `undefined` and `has` to `false`.
@@ -437,6 +440,16 @@ A caller that needs immutable content calls `snapshot()` rather than testing a k
 `list` delivers `{ name, kind }` records and `listTree` delivers `{ path, kind }`
 records, each `kind` matching what `kind()` answers on that entry.
 A record holds no capability, so a caller acts on an entry by looking it up.
+
+Every `path` in a result record, from `listTree`, `glob`, `grep`, or `glorp`, is a
+`Path` array relative to the receiver of the call, never a joined string and never
+relative to a `path` argument.
+`list` returns a local `name` relative to its `path` argument, and only `list` does.
+So `root.lookup(record.path)` needs no reconstruction, and after
+`root.listTree(['src'])` a record's path is `['src', 'main.js']`.
+A glob pattern is matched against a path's segments joined with `/`, which is
+unambiguous because no segment can contain `/`.
+
 An adapter preserves the implemented `listTree` field name `type` and its
 `'file' | 'directory'` values.
 
@@ -954,7 +967,7 @@ and remote adapters where applicable.
 It covers:
 
 - **Views and paths:** view laws, path confinement, entry kinds, agreement between
-  `kind()` and list records, a `kind()` that survives `snapshot()`, missing-path behavior of `has`, `lookup`, and
+  `kind()` and list records, result paths that feed `lookup` unchanged, a `kind()` that survives `snapshot()`, missing-path behavior of `has`, `lookup`, and
   `maybeLookup`, and strict snapshots.
 - **Identity:** same-domain identity comparison, foreign-domain rejection,
   cross-provider snapshot comparison for every canonical form, comparison relayed
