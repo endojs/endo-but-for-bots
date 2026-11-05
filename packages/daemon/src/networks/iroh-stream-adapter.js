@@ -81,19 +81,53 @@ export const adaptIrohStream = (bi, connection = {}) => {
   });
 
   // --- Write direction ---
+  // Serialize byte writes onto the native iroh SendStream. The caller may
+  // issue several `next()` calls without awaiting between them: in
+  // particular the chunked netstring writer fires a message's length prefix,
+  // payload, and trailing comma as three un-awaited `next()` calls. Each
+  // `send.writeAll` acquires the SendStream's internal (tokio) mutex inside
+  // the native binding, and concurrent `writeAll` futures are not guaranteed
+  // to acquire it in call order — so those three chunks (and adjacent
+  // messages' chunks) can interleave on the wire, producing a corrupt frame
+  // that the peer's netstring reader rejects ("Invalid netstring separator")
+  // and tears the connection down. Chaining every write on the previous one
+  // submits the bytes to the stream strictly in order, restoring the framing
+  // guarantee a synchronous socket would have given for free.
+  /** @type {Promise<unknown>} */
+  let writeTail = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} op
+   * @returns {Promise<T>}
+   */
+  const serialize = op => {
+    const result = writeTail.then(op);
+    // Advance the tail regardless of this write's outcome so one failed or
+    // rejected write does not wedge the queue; the result itself still
+    // carries the rejection to the caller.
+    writeTail = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
+
   /** @type {Writer<Uint8Array>} */
   const writer = harden({
     async next(value) {
       await null;
       // The binding's `writeAll` takes a plain `Array<number>`, not a
       // TypedArray.
-      await send.writeAll(Array.from(value));
+      const bytes = Array.from(value);
+      await serialize(() => send.writeAll(bytes));
       return harden({ value: undefined, done: false });
     },
     async return() {
       await null;
+      // Finish only after every queued write has drained, so the FIN does
+      // not race ahead of a still-pending frame.
       try {
-        await send.finish();
+        await serialize(() => send.finish());
       } catch {
         // Peer may have already torn the stream down.
       }
