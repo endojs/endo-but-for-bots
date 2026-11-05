@@ -81,19 +81,67 @@ The source designs are linked instead of repeated.
 The status in this table describes the relevant slice on `llm`, not necessarily
 the status printed in an older document.
 
-| Area | Sources | Current status |
-|---|---|---|
-| Shared naming and guards | [name-hub unification](namehub-interface-unification.md), [interface reconciliation](fs-interface-reconciliation.md), [interface consolidation](fs-interface-consolidation.md) | **Implemented in part:** common readable guards exist; richer mount and extended-FS guards remain distinct. |
-| Mount model and authority | [capability filesystem](daemon-capability-filesystem.md), [mount](daemon-mount.md), [mount capabilities](daemon-mount-capabilities.md), [visible roots](daemon-mount-visible-roots.md) | **Implemented in part:** mounts, entries, snapshots, read-only views, and mount-local revocation exist; the controller in this design does not. |
-| Search and agent operations | [stream/glob/grep](mount-stream-glob-grep.md), [agent FS tools](agent-tools-mount-fs-tools.md), [CLI edit](cli-edit-verb.md), [endopi edit](endopi-edit-tool.md), [Chat edit](chat-view-edit-commands.md) | **Implemented in part:** eager `glob`, `grep`, `glorp`, and hashline primitives exist; bounded streaming and one common tool surface do not. |
-| Snapshots and lifecycle | [checkin/checkout](daemon-checkin-checkout.md), [CAS management](daemon-cas-management.md), [content-store GC](daemon-content-store-gc.md), [snapshot mapper](snapshot-mapper.md), [make archive](daemon-make-archive.md) | **Implemented in part:** content-addressed stores, checkout, pruning, and archive machinery exist; the generic snapshot contract and capability round trip do not. |
-| Byte and range access | [range attenuation](readableblob-range-attenuation.md), [range/tree reads](platform-range-and-tree-reads.md), [Endo bytes](endo-bytes.md), [store write](store-write-file.md), [store text modes](cli-store-verb-text-modes.md) | **Implemented in part:** blob ranges and byte values exist under multiple names; the common bounded materializers are proposed here. |
-| Alternate trees | [npm registry tree](npm-registry-as-directory-tree.md), [FS from Git](endo-fs-from-git.md), [Git capability](daemon-git-capability.md), [watchers](filesystem-watchers.md), [root advancement](exo-git-follow-root-advancement.md) | **Implemented/designed:** adapters and watchers exist at different maturity; transactional root advancement is designed. |
-| Consumers | [formula inspector](formula-inspector.md), [container mount](runtime-container-fs-mount.md) | **Designed/implemented in part:** both depend on stable naming and attenuation rather than a new tree kind. |
-| Non-file storage | [daemon persistent stores](../packages/daemon/designs/daemon-persistent-stores.md), [storage matrix PR #1264](https://github.com/endojs/endo-but-for-bots/pull/1264), [mutable block storage PR #1265](https://github.com/endojs/endo-but-for-bots/pull/1265) | **Proposed:** the matrix distinguishes live and snapshot views; durable data and block capabilities are not common directory entries yet. |
-| Platform baseline | [platform FS](platform-fs.md), [backend seam](endo-fs-backend-seam.md) and `../packages/platform/src/fs/{interfaces.js,extended/}` | **Implemented:** lite and extended interfaces, native/in-memory backends, bytes, snapshots, ranges, and watches exist. |
-| Daemon baseline | `../packages/daemon/src/{interfaces.js,mount.js,directory.js,hashline.js}` | **Implemented:** pet-name hubs, mounts, search, hashline validation, read-only views, snapshots, and revocation exist. |
-| Exo baseline | `../packages/exo-git/src/{interfaces.js,git.js,git-filesystem.js}` and the `@endo/exo-*` capability style | **Implemented:** Git offers rendered diff and repository merge operations; these are not generic snapshot diff/merge. |
+- **Shared naming and guards**
+  - Sources: [name-hub unification](namehub-interface-unification.md), [interface
+    reconciliation](fs-interface-reconciliation.md), [interface
+    consolidation](fs-interface-consolidation.md)
+  - Current status: **Implemented in part:** common readable guards exist; richer mount and
+    extended-FS guards remain distinct.
+- **Mount model and authority**
+  - Sources: [capability filesystem](daemon-capability-filesystem.md), [mount](daemon-mount.md),
+    [mount capabilities](daemon-mount-capabilities.md), [visible
+    roots](daemon-mount-visible-roots.md)
+  - Current status: **Implemented in part:** mounts, entries, snapshots, read-only views, and
+    mount-local revocation exist; the controller in this design does not.
+- **Search and agent operations**
+  - Sources: [stream/glob/grep](mount-stream-glob-grep.md), [agent FS
+    tools](agent-tools-mount-fs-tools.md), [CLI edit](cli-edit-verb.md), [endopi
+    edit](endopi-edit-tool.md), [Chat edit](chat-view-edit-commands.md)
+  - Current status: **Implemented in part:** eager `glob`, `grep`, `glorp`, and hashline
+    primitives exist; bounded streaming and one common tool surface do not.
+- **Snapshots and lifecycle**
+  - Sources: [checkin/checkout](daemon-checkin-checkout.md), [CAS
+    management](daemon-cas-management.md), [content-store GC](daemon-content-store-gc.md),
+    [snapshot mapper](snapshot-mapper.md), [make archive](daemon-make-archive.md)
+  - Current status: **Implemented in part:** content-addressed stores, checkout, pruning, and
+    archive machinery exist; the generic snapshot contract and capability round trip do not.
+- **Byte and range access**
+  - Sources: [range attenuation](readableblob-range-attenuation.md), [range/tree
+    reads](platform-range-and-tree-reads.md), [Endo bytes](endo-bytes.md), [store
+    write](store-write-file.md), [store text modes](cli-store-verb-text-modes.md)
+  - Current status: **Implemented in part:** blob ranges and byte values exist under multiple
+    names; the common bounded materializers are proposed here.
+- **Alternate trees**
+  - Sources: [npm registry tree](npm-registry-as-directory-tree.md), [FS from
+    Git](endo-fs-from-git.md), [Git capability](daemon-git-capability.md),
+    [watchers](filesystem-watchers.md), [root advancement](exo-git-follow-root-advancement.md)
+  - Current status: **Implemented/designed:** adapters and watchers exist at different maturity;
+    transactional root advancement is designed.
+- **Consumers**
+  - Sources: [formula inspector](formula-inspector.md), [container
+    mount](runtime-container-fs-mount.md)
+  - Current status: **Designed/implemented in part:** both depend on stable naming and
+    attenuation rather than a new tree kind.
+- **Non-file storage**
+  - Sources: [daemon persistent stores](../packages/daemon/designs/daemon-persistent-stores.md),
+    [storage matrix PR #1264](https://github.com/endojs/endo-but-for-bots/pull/1264), [mutable
+    block storage PR #1265](https://github.com/endojs/endo-but-for-bots/pull/1265)
+  - Current status: **Proposed:** the matrix distinguishes live and snapshot views; durable data
+    and block capabilities are not common directory entries yet.
+- **Platform baseline**
+  - Sources: [platform FS](platform-fs.md), [backend seam](endo-fs-backend-seam.md) and
+    `../packages/platform/src/fs/{interfaces.js,extended/}`
+  - Current status: **Implemented:** lite and extended interfaces, native/in-memory backends,
+    bytes, snapshots, ranges, and watches exist.
+- **Daemon baseline**
+  - Sources: `../packages/daemon/src/{interfaces.js,mount.js,directory.js,hashline.js}`
+  - Current status: **Implemented:** pet-name hubs, mounts, search, hashline validation,
+    read-only views, snapshots, and revocation exist.
+- **Exo baseline**
+  - Sources: `../packages/exo-git/src/{interfaces.js,git.js,git-filesystem.js}` and the
+    `@endo/exo-*` capability style
+  - Current status: **Implemented:** Git offers rendered diff and repository merge operations;
+    these are not generic snapshot diff/merge.
 
 ## Core model
 
@@ -101,9 +149,9 @@ the status printed in an older document.
 
 A `Path` is a frozen array of segments.
 One shared guard validates every segment at the facet boundary of every adapter: a
-segment is a non-empty Unicode string that contains no `/`, `\\`, or NUL and is neither
+segment is a non-empty Unicode string that contains no `/`, `\`, or NUL and is neither
 `.` nor `..`.
-This tightens the daemon's implemented `isValidName`, which admits `\\`, and that
+This tightens the daemon's implemented `isValidName`, which admits `\`, and that
 function's narrower pet-name rules still apply to pet names.
 A path therefore has no up-level or current-directory step.
 APIs MAY accept one string as shorthand for a one-segment path, but MUST NOT
@@ -119,13 +167,28 @@ A directory maps each local name to an entry, and every entry has one *kind*, th
 category of its content.
 Each kind has mutable facets and a snapshot facet:
 
-| Kind | Mutable facet and authority | Snapshot facet | Status |
-|---|---|---|---|
-| `Blob` | `File`: byte mutation. `BlockStorage`: sized random writes and append. | `SnapshotBlob` | `File` **Implemented**, common shape proposed; `BlockStorage` **Proposed** in PR #1265 |
-| `Tree` | `Directory`: tree mutation. | `SnapshotTree` | **Implemented**, common shape proposed |
-| `Log` | `AppendLog`: append records only. | `SnapshotLog`, an immutable record sequence | **Proposed here**; no common design exists |
-| `Data` | `DataStore`: typed map/set/data operations. | `SnapshotData`, a pass-by-copy value or immutable tree | **Designed** by daemon persistent stores |
-| `Link` | `CapabilityLink`: authority of the referenced capability. | The link record, not the frozen referent | **Implemented concept**, serialization proposed here |
+- `Blob`
+  - Mutable facet and authority: `File`: byte mutation.
+    `BlockStorage`: sized random writes and append.
+  - Snapshot facet: `SnapshotBlob`
+  - Status: `File` **Implemented**, common shape proposed; `BlockStorage` **Proposed** in PR
+    #1265
+- `Tree`
+  - Mutable facet and authority: `Directory`: tree mutation.
+  - Snapshot facet: `SnapshotTree`
+  - Status: **Implemented**, common shape proposed
+- `Log`
+  - Mutable facet and authority: `AppendLog`: append records only.
+  - Snapshot facet: `SnapshotLog`, an immutable record sequence
+  - Status: **Proposed here**; no common design exists
+- `Data`
+  - Mutable facet and authority: `DataStore`: typed map/set/data operations.
+  - Snapshot facet: `SnapshotData`, a pass-by-copy value or immutable tree
+  - Status: **Designed** by daemon persistent stores
+- `Link`
+  - Mutable facet and authority: `CapabilityLink`: authority of the referenced capability.
+  - Snapshot facet: The link record, not the frozen referent
+  - Status: **Implemented concept**, serialization proposed here
 
 Kind and posture are independent.
 The kind says what the content is and does not change when an entry is snapshotted.
@@ -281,11 +344,18 @@ links.
 
 Three values do three separate jobs:
 
-| Value | Question it answers | Valid across | Retains content |
-|---|---|---|---|
-| `Revision` | Has this provider's root advanced? | One provider incarnation | No |
-| `ContentIdentity` | Is this the content that token named? | One identity domain | No |
-| `Snapshot` | What is the content, and does another snapshot hold the same content? | Any provider the caller can bridge | Yes, while reachable |
+- `Revision`
+  - Question it answers: Has this provider's root advanced?
+  - Valid across: One provider incarnation
+  - Retains content: No
+- `ContentIdentity`
+  - Question it answers: Is this the content that token named?
+  - Valid across: One identity domain
+  - Retains content: No
+- `Snapshot`
+  - Question it answers: What is the content, and does another snapshot hold the same content?
+  - Valid across: Any provider the caller can bridge
+  - Retains content: Yes, while reachable
 
 `ContentIdentity` is an opaque, non-forgeable token for content equivalence within
 one *identity domain*: the providers sharing one canonicalization, one private
@@ -332,13 +402,24 @@ content-store locator APIs; new correctness logic MUST NOT depend on them.
 
 Every entry compares by the canonical form of its kind:
 
-| Kind | Facets | Canonical form |
-|---|---|---|
-| Blob | `File`, `BlockStorage`, `SnapshotBlob` | The exact byte sequence. Capacity, block size, and timestamps are excluded. |
-| Tree | `Directory`, `SnapshotTree` | The set of NFC-normalized names, each with its entry's category and canonical form. Listing order and timestamps are excluded. |
-| Log | `AppendLog` and its snapshot | The ordered sequence of exact records. A strict prefix is not equivalent. |
-| Data | `DataStore` and its snapshot | For a store whose values are all Keys, the store shape (map or set) and its entries in key rank order, compared by `keyEQ` from `@endo/patterns`. Other stores have no canonical form, as defined under *Blocks, logs, data, and generic slots*. |
-| Link | `CapabilityLink` | Within one identity domain, the exact locator bytes of the link record, or object identity for a link with no locator. The referent is never dereferenced. Across domains a link has no comparable form. |
+- **Blob**: The exact byte sequence.
+  Capacity, block size, and timestamps are excluded.
+  - Facets: `File`, `BlockStorage`, `SnapshotBlob`
+- **Tree**: The set of NFC-normalized names, each with its entry's category and canonical form.
+  Listing order and timestamps are excluded.
+  - Facets: `Directory`, `SnapshotTree`
+- **Log**: The ordered sequence of exact records.
+  A strict prefix is not equivalent.
+  - Facets: `AppendLog` and its snapshot
+- **Data**: For a store whose values are all Keys, the store shape (map or set) and its entries
+  in key rank order, compared by `keyEQ` from `@endo/patterns`.
+  Other stores have no canonical form, as defined under *Blocks, logs, data, and generic slots*.
+  - Facets: `DataStore` and its snapshot
+- **Link**: Within one identity domain, the exact locator bytes of the link record, or object
+  identity for a link with no locator.
+  The referent is never dereferenced.
+  Across domains a link has no comparable form.
+  - Facets: `CapabilityLink`
 
 A snapshot keeps its source's kind even when its representation is a
 pass-by-copy value or a tree, so the identity law holds for every kind.
@@ -398,20 +479,38 @@ iterates a snapshot.
 
 ### Readable blobs and files
 
-| Method | Meaning | Views |
-|---|---|---|
-| `size()` | Exact byte length. | live read-only, snapshot, mutable, controlled |
-| `readBytes()` / `readText()` | Materialize the whole value subject to the result limit; text is strict UTF-8 unless an encoding is explicit. | all readable views |
-| `readByteRange(start, end)` | Materialize half-open byte range `[start,end)` subject to the limit. | all readable views |
-| `readTextRange(startLine, endLine)` | Materialize half-open zero-based line range, preserving terminators. | all readable views |
-| `lineByteRange(startLine, endLine)` | Return the `{ start, end }` byte offsets of a half-open zero-based line range, without its content. | all readable views |
-| `byteRange(start, end)` / `textRange(startLine, endLine)` | Return a narrowed reader capability; ranges compose by intersection. | all readable views |
-| `streamBytes()` | Return a backpressured byte stream. | all readable views |
-| `grep(pattern, options)` | Search strict UTF-8 text and return a `ResultReader` of `{ line, text, ranges }` with a zero-based `line`; other content throws `WRONG_ENTRY_KIND`. | all readable views |
-| `identity()` / `snapshot()` | Capture opaque content identity or immutable content. | all readable views |
-| `writeBytes(value, options)` / `writeText(value, options)` | Replace content atomically, optionally with `expected`. | mutable, writable controlled |
-| `append(value, options)` | Atomically append with an optional expected identity. | mutable, writable controlled, append storage |
-| `editHashlines(edits, options)` | Validate line anchors and apply one atomic splice transaction. | mutable, writable controlled |
+- `size()`: Exact byte length.
+  - Views: live read-only, snapshot, mutable, controlled
+- `readBytes()` / `readText()`: Materialize the whole value subject to the result limit; text is
+  strict UTF-8 unless an encoding is explicit.
+  - Views: all readable views
+- `readByteRange(start, end)`: Materialize half-open byte range `[start,end)` subject to the
+  limit.
+  - Views: all readable views
+- `readTextRange(startLine, endLine)`: Materialize half-open zero-based line range, preserving
+  terminators.
+  - Views: all readable views
+- `lineByteRange(startLine, endLine)`: Return the `{ start, end }` byte offsets of a half-open
+  zero-based line range, without its content.
+  - Views: all readable views
+- `byteRange(start, end)` / `textRange(startLine, endLine)`: Return a narrowed reader
+  capability; ranges compose by intersection.
+  - Views: all readable views
+- `streamBytes()`: Return a backpressured byte stream.
+  - Views: all readable views
+- `grep(pattern, options)`: Search strict UTF-8 text and return a `ResultReader` of
+  `{ line, text, ranges }` with a zero-based `line`; other content throws `WRONG_ENTRY_KIND`.
+  - Views: all readable views
+- `identity()` / `snapshot()`: Capture opaque content identity or immutable content.
+  - Views: all readable views
+- `writeBytes(value, options)` / `writeText(value, options)`: Replace content atomically,
+  optionally with `expected`.
+  - Views: mutable, writable controlled
+- `append(value, options)`: Atomically append with an optional expected identity.
+  - Views: mutable, writable controlled, append storage
+- `editHashlines(edits, options)`: Validate line anchors and apply one atomic splice
+  transaction.
+  - Views: mutable, writable controlled
 
 The existing materializing `text`, `bytes`, `fetch`, `rangeRead`, and
 `rangeReadText` spellings remain adapter aliases while callers migrate.
@@ -426,16 +525,27 @@ avoid reading source content into the caller.
 
 ### Trees and directories
 
-| Method | Meaning | Views |
-|---|---|---|
-| `has(path)`, `lookup(path)`, `maybeLookup(path)` | Traverse pet names; `lookup` and `maybeLookup` return an entry capability under the view's attenuation. | all tree views |
-| `list(path, options)`, `listTree(path, options)` | Return a `ResultReader` of typed entries. | all tree views |
-| `glob(pattern, options)` | Return a `ResultReader` of matching paths using the corpus glob grammar. | all tree views |
-| `grep(pattern, options)` | Search readable text entries and return a `ResultReader` of `{ path, line, text, ranges }`. | all tree views |
-| `glorp(globPattern, grepPattern, options)` | Apply `glob`, then `grep` only those matching files, returning the same grep records. | all tree views |
-| `identity()`, `snapshot({ strict })` | Capture the whole visible tree. | all tree views |
-| `watch()` / `followChanges(options)` | Follow live transactions; absent on immutable snapshots. | live read-only, mutable, controlled |
-| `makeDirectory`, `makeFile`, `remove`, `move`, `copy` | Mutate one root transactionally, optionally with `expected`. | mutable, writable controlled |
+- `has(path)`, `lookup(path)`, `maybeLookup(path)`: Traverse pet names; `lookup` and
+  `maybeLookup` return an entry capability under the view's attenuation.
+  - Views: all tree views
+- `list(path, options)`, `listTree(path, options)`: Return a `ResultReader` of typed entries.
+  - Views: all tree views
+- `glob(pattern, options)`: Return a `ResultReader` of matching paths using the corpus glob
+  grammar.
+  - Views: all tree views
+- `grep(pattern, options)`: Search readable text entries and return a `ResultReader` of
+  `{ path, line, text, ranges }`.
+  - Views: all tree views
+- `glorp(globPattern, grepPattern, options)`: Apply `glob`, then `grep` only those matching
+  files, returning the same grep records.
+  - Views: all tree views
+- `identity()`, `snapshot({ strict })`: Capture the whole visible tree.
+  - Views: all tree views
+- `watch()` / `followChanges(options)`: Follow live transactions; absent on immutable snapshots.
+  - Views: live read-only, mutable, controlled
+- `makeDirectory`, `makeFile`, `remove`, `move`, `copy`: Mutate one root transactionally,
+  optionally with `expected`.
+  - Views: mutable, writable controlled
 
 Every traversal method takes one `Path` argument.
 The implemented variadic `has(...path)` and `lookup(...path)` remain adapters while
@@ -579,24 +689,31 @@ A directory pet name grants exactly the entry capability stored there.
 All failures are passable error records with `name`, stable `code`, `message`,
 and a copy-only `details` record.
 
-| Code | Meaning |
-|---|---|
-| `NOT_FOUND` | A named path or range source does not exist. |
-| `WRONG_ENTRY_KIND` | The entry exists but does not support the operation. |
-| `READ_ONLY` | The static facet does not expose mutation; adapters may use this during migration. |
-| `ACCESS_REVOKED` | A controller policy or revoker denied the operation. |
-| `PRECONDITION_FAILED` | The expected identity or revision is stale. |
-| `INVALID_RANGE` | A range is negative, fractional where integral, reversed, or unrepresentable; a valid range beyond the source clamps to an empty suffix. |
-| `MERGE_CONFLICT` | A caller requested conflict-free output but conflicts remain. |
-| `RESULT_TOO_LARGE` | Materializing or rendering one result exceeds its resource bound. |
-| `RESULT_BUDGET_EXHAUSTED` | A reader reached the total-result budget granted to its facet; the result is incomplete. |
-| `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
-| `REFERENCE_INCOMPARABLE` | A comparison across identity domains found no other difference but reached a capability link or remotable, whose exact form it may not exchange. |
-| `SNAPSHOT_UNREACHABLE` | A connection carrying a foreign snapshot severed, or that snapshot's provider incarnation ended, before the operation finished with it. |
-| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a capability link, or an operation needing a canonical form reached a data store holding a value that is not a Key. |
-| `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
-| `ARCHIVE_MALFORMED` | An archive holds duplicate raw member names, names that collide after NFC normalization, or names the path rules forbid. |
-| `ARCHIVE_UNAUTHENTICATED` | An archive's signature, signer, manifest, or member binding failed verification. |
+- `NOT_FOUND`: A named path or range source does not exist.
+- `WRONG_ENTRY_KIND`: The entry exists but does not support the operation.
+- `READ_ONLY`: The static facet does not expose mutation; adapters may use this during
+  migration.
+- `ACCESS_REVOKED`: A controller policy or revoker denied the operation.
+- `PRECONDITION_FAILED`: The expected identity or revision is stale.
+- `INVALID_RANGE`: A range is negative, fractional where integral, reversed, or unrepresentable;
+  a valid range beyond the source clamps to an empty suffix.
+- `MERGE_CONFLICT`: A caller requested conflict-free output but conflicts remain.
+- `RESULT_TOO_LARGE`: Materializing or rendering one result exceeds its resource bound.
+- `RESULT_BUDGET_EXHAUSTED`: A reader reached the total-result budget granted to its facet; the
+  result is incomplete.
+- `IDENTITY_INCOMPARABLE`: A `ContentIdentity` came from a different identity domain than the
+  one comparing it.
+- `REFERENCE_INCOMPARABLE`: A comparison across identity domains found no other difference but
+  reached a capability link or remotable, whose exact form it may not exchange.
+- `SNAPSHOT_UNREACHABLE`: A connection carrying a foreign snapshot severed, or that snapshot's
+  provider incarnation ended, before the operation finished with it.
+- `UNSNAPSHOTTABLE_ENTRY`: Strict deep snapshot encountered a capability link, or an operation
+  needing a canonical form reached a data store holding a value that is not a Key.
+- `LOCATOR_UNREACHABLE`: A restored capability link cannot presently resolve.
+- `ARCHIVE_MALFORMED`: An archive holds duplicate raw member names, names that collide after NFC
+  normalization, or names the path rules forbid.
+- `ARCHIVE_UNAUTHENTICATED`: An archive's signature, signer, manifest, or member binding failed
+  verification.
 
 Static read-only facets SHOULD omit mutators entirely.
 The `READ_ONLY` error exists for current uniform extended-FS guards, not as the
@@ -662,10 +779,14 @@ The error deliberately teaches an automated consumer how to recover.
 It MUST name the operation, limit, and observed size, and `details.retry` MUST name
 only methods the raising facet exposes:
 
-| Raising facet | `locate` | `read` | `update`, on writable facets only |
-|---|---|---|---|
-| Blob or file | `grep` finds lines | `readTextRange`, `readByteRange` | `editHashlines` |
-| Tree | `glob` finds paths; `grep` and `glorp` find lines | `lookup`, then the blob range methods | `applyTransform`, `applyPatch` |
+- **Blob or file**
+  - `locate`: `grep` finds lines
+  - `read`: `readTextRange`, `readByteRange`
+  - `update`, on writable facets only: `editHashlines`
+- **Tree**
+  - `locate`: `glob` finds paths; `grep` and `glorp` find lines
+  - `read`: `lookup`, then the blob range methods
+  - `update`, on writable facets only: `applyTransform`, `applyPatch`
 
 Other facets list their ranged reads and omit a member they cannot fill.
 
@@ -767,16 +888,31 @@ whole-file expected identity prevent a splice at the wrong location.
 When a capability link must appear as a file in a format that cannot represent
 typed directory entries, version 1 uses this byte layout:
 
-| Offset | Length | Value |
-|---:|---:|---|
-| 0 | 16 | Magic bytes `89 45 4e 44 4f 0d 0a 1a 0a 4f 43 41 50 52 45 46` (`0x89`, `ENDO`, CR LF SUB LF, `OCAPREF`) |
-| 16 | 1 | Envelope version `0x01` |
-| 17 | 1 | Digest algorithm `0x01` for SHA-256 |
-| 18 | 1 | Locator encoding `0x01` for strict UTF-8 |
-| 19 | 1 | Flags, zero in version 1 |
-| 20 | 8 | Unsigned big-endian locator byte length `N` |
-| 28 | 32 | SHA-256 of ASCII `ocap:` followed by the exact `N` locator bytes |
-| 60 | `N` | Locator bytes, with no delimiter or padding |
+- **0**
+  - Length: 16
+  - Value: Magic bytes `89 45 4e 44 4f 0d 0a 1a 0a 4f 43 41 50 52 45 46` (`0x89`, `ENDO`, CR LF
+    SUB LF, `OCAPREF`)
+- **16**
+  - Length: 1
+  - Value: Envelope version `0x01`
+- **17**
+  - Length: 1
+  - Value: Digest algorithm `0x01` for SHA-256
+- **18**
+  - Length: 1
+  - Value: Locator encoding `0x01` for strict UTF-8
+- **19**
+  - Length: 1
+  - Value: Flags, zero in version 1
+- **20**
+  - Length: 8
+  - Value: Unsigned big-endian locator byte length `N`
+- **28**
+  - Length: 32
+  - Value: SHA-256 of ASCII `ocap:` followed by the exact `N` locator bytes
+- **60**
+  - Length: `N`
+  - Value: Locator bytes, with no delimiter or padding
 
 `N` MUST be at most 1 MiB.
 Unknown versions, algorithms, encodings, nonzero reserved flags, trailing bytes,
@@ -884,11 +1020,20 @@ object authority, returns further capabilities, benefits from pipelining, and
 needs revocation and disconnection semantics.
 REST appears only where the caller holds no reference yet or cannot speak CapTP.
 
-| Surface | Deciding criteria | Transport |
-|---|---|---|
-| Lookup, read, search, snapshot, mutation, control, watch, diff, patch, merge | Holding an object authorizes the call. Calls pass and return capabilities and streams. The objects keep state, attenuate independently, and yield live results. | **CapTP** |
-| Initial archive download or upload | CapTP by default, as above. A client that cannot speak CapTP may use a one-use bearer URL designating exactly one transfer object, never an identity. | **CapTP**, or REST for bytes after CapTP mints the transfer grant |
-| Minting or opening the first external locator | A client with no session holds no reference yet, so one REST call establishes its first reference and every later call uses CapTP. | REST/HTTPS bootstrap; the opened object immediately becomes **CapTP** |
+- **Lookup, read, search, snapshot, mutation, control, watch, diff, patch, merge**
+  - Deciding criteria: Holding an object authorizes the call.
+    Calls pass and return capabilities and streams.
+    The objects keep state, attenuate independently, and yield live results.
+  - Transport: **CapTP**
+- **Initial archive download or upload**
+  - Deciding criteria: CapTP by default, as above.
+    A client that cannot speak CapTP may use a one-use bearer URL designating exactly one
+    transfer object, never an identity.
+  - Transport: **CapTP**, or REST for bytes after CapTP mints the transfer grant
+- **Minting or opening the first external locator**
+  - Deciding criteria: A client with no session holds no reference yet, so one REST call
+    establishes its first reference and every later call uses CapTP.
+  - Transport: REST/HTTPS bootstrap; the opened object immediately becomes **CapTP**
 
 There are no REST endpoints that accept a raw pet-name path or bearer capability
 string as a substitute for possessing the root.
@@ -897,14 +1042,65 @@ filesystem API.
 
 ## Ownership map
 
-| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
-|---|---|---|---|---|---|
-| Client view -> mutable provider | The view sends one guarded read or staged mutation. | The view's attenuation admits paths, methods, and result sizes; the provider validates CAS. | The provider alone owns bytes, tree metadata, revision, and journal. | The provider commits or discards one mutation and recovers its journal before publishing a root. | Path, operation, expected identity, and `MutationResult`, all filesystem vocabulary. |
-| Controller -> mutable provider | The controller sends an absolute policy command for a branch; the provider journals it and acknowledges its generation. | The controller decides read/write/revoked; the provider decides ordering and transaction atomicity. | The provider owns branches, policy generations, and content in one journal; the controller owns no durable state. | The provider alone commits, restoring policy from its journal before facets revive. | Branch selector, policy value, and acknowledged generation, controller vocabulary. |
-| Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private digests after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
-| Pet-name/formula directory -> provider or capability link | The directory binds a local name to a typed capability entry; a formula may reincarnate it. | The directory owner admits binding changes; it does not decide content mutations. | The directory/formula store owns bindings and recipes; the target provider owns target state. | The directory commits bindings and replays recipes before lookup; unresolved links remain inert. | Name, entry kind, formula ID or link, outer naming vocabulary. |
-| Archive/restore -> directory and locator resolver | Export writes and signs a manifest/envelope; restore verifies and mints unresolved links. | Explicit export authority admits bearer locators; the restoring holder's `trustedSigners` decides whose signature classifies links, and the restoring holder chooses the link mode. | The archive owner owns archive bytes; the signer owns its private key; the restoring holder owns its trust set; the destination owns installed bindings. | Export finalizes and signs the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest record, signature, envelope bytes, and locator, archive vocabulary. |
-| Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
+- **Client view -> mutable provider**
+  - Mechanism: The view sends one guarded read or staged mutation.
+  - Policy: The view's attenuation admits paths, methods, and result sizes; the provider
+    validates CAS.
+  - Durable state: The provider alone owns bytes, tree metadata, revision, and journal.
+  - Lifecycle / commit authority: The provider commits or discards one mutation and recovers its
+    journal before publishing a root.
+  - Value crossing: Path, operation, expected identity, and `MutationResult`, all filesystem
+    vocabulary.
+- **Controller -> mutable provider**
+  - Mechanism: The controller sends an absolute policy command for a branch; the provider
+    journals it and acknowledges its generation.
+  - Policy: The controller decides read/write/revoked; the provider decides ordering and
+    transaction atomicity.
+  - Durable state: The provider owns branches, policy generations, and content in one journal;
+    the controller owns no durable state.
+  - Lifecycle / commit authority: The provider alone commits, restoring policy from its journal
+    before facets revive.
+  - Value crossing: Branch selector, policy value, and acknowledged generation, controller
+    vocabulary.
+- **Mutable provider -> snapshot/content store**
+  - Mechanism: The provider writes immutable children and a root.
+  - Policy: The provider decides when a complete snapshot can publish; store GC decides
+    reachability reclamation.
+  - Durable state: The content store alone owns immutable objects and reachability metadata.
+  - Lifecycle / commit authority: The store publishes complete roots and discards staging; it
+    re-indexes private digests after restart.
+  - Value crossing: Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot
+    vocabulary.
+- **Pet-name/formula directory -> provider or capability link**
+  - Mechanism: The directory binds a local name to a typed capability entry; a formula may
+    reincarnate it.
+  - Policy: The directory owner admits binding changes; it does not decide content mutations.
+  - Durable state: The directory/formula store owns bindings and recipes; the target provider
+    owns target state.
+  - Lifecycle / commit authority: The directory commits bindings and replays recipes before
+    lookup; unresolved links remain inert.
+  - Value crossing: Name, entry kind, formula ID or link, outer naming vocabulary.
+- **Archive/restore -> directory and locator resolver**
+  - Mechanism: Export writes and signs a manifest/envelope; restore verifies and mints
+    unresolved links.
+  - Policy: Explicit export authority admits bearer locators; the restoring holder's
+    `trustedSigners` decides whose signature classifies links, and the restoring holder chooses
+    the link mode.
+  - Durable state: The archive owner owns archive bytes; the signer owns its private key; the
+    restoring holder owns its trust set; the destination owns installed bindings.
+  - Lifecycle / commit authority: Export finalizes and signs the manifest last; restore
+    atomically installs or discards staging and never owns resolver restart.
+  - Value crossing: Manifest record, signature, envelope bytes, and locator, archive vocabulary.
+- **Git adapter -> filesystem provider**
+  - Mechanism: The adapter reads a root and stages Git objects; the provider offers a filesystem
+    transaction.
+  - Policy: Filesystem write, Git commit, and push policy remain independent.
+  - Durable state: Git owns objects, refs, and stage metadata; the provider owns the working
+    root.
+  - Lifecycle / commit authority: Each side commits and replays its own state; no filesystem
+    mutation implies commit or push.
+  - Value crossing: Snapshot root, tentative metadata, Git commit result, each named by its
+    owning layer.
 
 **Persistent state.**
 The mutable provider owns content, branches, policy generations, and journals.
@@ -942,22 +1138,87 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 
 ## Inconsistencies and gaps
 
-| Topic | Sources | What differs or is missing | Recommended resolution |
-|---|---|---|---|
-| Read-only versus snapshot | mount capabilities, storage matrix PR #1264, platform interfaces | Some names and formula types call immutable snapshots "readable"; `readOnly()` is live. | Use `Readable*` for a posture, `Snapshot*` for immutable content, and document `R(x) != S(x)`. |
-| Content identity | platform range reads, CAS management, root advancement | Public SHA-256/tree refs leak an algorithm into CAS; 2026-11-03 direction is opaque `identity()`/`snapshot()`. | Make identity opaque and content-equivalent within a domain, compare across providers through snapshots, and retain hashes only as private fast paths and explicit locator diagnostics. |
-| Range names | platform range/tree reads, range attenuation, extended FS | `fetch`, `rangeRead`, `rangeReadText`, `bytes`, `byteRange`, and `textRange` overlap. | Standardize bounded materializers as `readByteRange`/`readTextRange`; keep `byteRange`/`textRange` as attenuating capability constructors. |
-| NameHub and mount overlap | name-hub unification, interface consolidation, daemon guards | Shared methods have different accepted path and result shapes. | Derive guards from method families; keep explicit adapters for entry-as-path overloads. |
-| Read-only attenuation | extended FS, mount capabilities | One API keeps mutators and rejects calls; another omits mutators. | New static facets omit methods; dynamic controlled facets may reject after a flip. |
-| Search bounds | stream/glob/grep, current search implementation | Design streams; implementation returns eager arrays and silently truncates an intermediate glob. | Return `ResultReader`s that deliver the complete result under backpressure; only a granted budget ends one early, with an explicit error; never silently truncate. |
-| Hashline CAS | CLI edit, daemon hashline implementation | Anchors use public raw SHA-256 and literal replacement content. | Accept opaque expected identity and range-reference payloads; preserve CRC32 line anchors. |
-| Diff, patch, merge | root advancement, exo-git, agent tools | Git has operations, but snapshots lack one portable contract. | Put pure `diff`/`merge` on snapshots and CAS `applyPatch` on mutable views. |
-| Dynamic mutability | mount capabilities | Mount-local control only revokes a whole mount. | Add a separate branch-policy controller with atomic read/write/revoked flips. |
-| Non-file storage | persistent stores, PRs #1264/#1265 | Block and data stores are proposals; no common append-only interface exists. | Add typed directory entry kinds; implement block first, append log and data adapters later. |
-| Capability serialization | checkin/checkout, make archive | Arbitrary capability bindings have no portable archive representation. | Use a signed directory manifest, verified against the restorer's trusted signers, plus the versioned envelope in this design. |
-| Snapshotting capability slots | mount and archive designs | It is unclear whether snapshot freezes a referenced object. | Freeze the link only; strict deep snapshot rejects any link without dereferencing it. |
-| Watcher vocabulary | filesystem watchers, mount changes, root advancement | Event records, ordering, and Promise/reader shapes differ. | Standardize transaction followers around initial snapshot plus revision; adapt path-level events. |
-| Large agent reads | range designs, agent tools | Ranges exist, but a holder can still materialize an unlimited whole file or diff. | Mint size-limited reader facets and use the teaching error specified above. |
+- **Read-only versus snapshot**
+  - Sources: mount capabilities, storage matrix PR #1264, platform interfaces
+  - What differs or is missing: Some names and formula types call immutable snapshots
+    "readable"; `readOnly()` is live.
+  - Recommended resolution: Use `Readable*` for a posture, `Snapshot*` for immutable content,
+    and document `R(x) != S(x)`.
+- **Content identity**
+  - Sources: platform range reads, CAS management, root advancement
+  - What differs or is missing: Public SHA-256/tree refs leak an algorithm into CAS; 2026-11-03
+    direction is opaque `identity()`/`snapshot()`.
+  - Recommended resolution: Make identity opaque and content-equivalent within a domain, compare
+    across providers through snapshots, and retain hashes only as private fast paths and
+    explicit locator diagnostics.
+- **Range names**
+  - Sources: platform range/tree reads, range attenuation, extended FS
+  - What differs or is missing: `fetch`, `rangeRead`, `rangeReadText`, `bytes`, `byteRange`, and
+    `textRange` overlap.
+  - Recommended resolution: Standardize bounded materializers as
+    `readByteRange`/`readTextRange`; keep `byteRange`/`textRange` as attenuating capability
+    constructors.
+- **NameHub and mount overlap**
+  - Sources: name-hub unification, interface consolidation, daemon guards
+  - What differs or is missing: Shared methods have different accepted path and result shapes.
+  - Recommended resolution: Derive guards from method families; keep explicit adapters for
+    entry-as-path overloads.
+- **Read-only attenuation**
+  - Sources: extended FS, mount capabilities
+  - What differs or is missing: One API keeps mutators and rejects calls; another omits
+    mutators.
+  - Recommended resolution: New static facets omit methods; dynamic controlled facets may reject
+    after a flip.
+- **Search bounds**
+  - Sources: stream/glob/grep, current search implementation
+  - What differs or is missing: Design streams; implementation returns eager arrays and silently
+    truncates an intermediate glob.
+  - Recommended resolution: Return `ResultReader`s that deliver the complete result under
+    backpressure; only a granted budget ends one early, with an explicit error; never silently
+    truncate.
+- **Hashline CAS**
+  - Sources: CLI edit, daemon hashline implementation
+  - What differs or is missing: Anchors use public raw SHA-256 and literal replacement content.
+  - Recommended resolution: Accept opaque expected identity and range-reference payloads;
+    preserve CRC32 line anchors.
+- **Diff, patch, merge**
+  - Sources: root advancement, exo-git, agent tools
+  - What differs or is missing: Git has operations, but snapshots lack one portable contract.
+  - Recommended resolution: Put pure `diff`/`merge` on snapshots and CAS `applyPatch` on mutable
+    views.
+- **Dynamic mutability**
+  - Sources: mount capabilities
+  - What differs or is missing: Mount-local control only revokes a whole mount.
+  - Recommended resolution: Add a separate branch-policy controller with atomic
+    read/write/revoked flips.
+- **Non-file storage**
+  - Sources: persistent stores, PRs #1264/#1265
+  - What differs or is missing: Block and data stores are proposals; no common append-only
+    interface exists.
+  - Recommended resolution: Add typed directory entry kinds; implement block first, append log
+    and data adapters later.
+- **Capability serialization**
+  - Sources: checkin/checkout, make archive
+  - What differs or is missing: Arbitrary capability bindings have no portable archive
+    representation.
+  - Recommended resolution: Use a signed directory manifest, verified against the restorer's
+    trusted signers, plus the versioned envelope in this design.
+- **Snapshotting capability slots**
+  - Sources: mount and archive designs
+  - What differs or is missing: It is unclear whether snapshot freezes a referenced object.
+  - Recommended resolution: Freeze the link only; strict deep snapshot rejects any link without
+    dereferencing it.
+- **Watcher vocabulary**
+  - Sources: filesystem watchers, mount changes, root advancement
+  - What differs or is missing: Event records, ordering, and Promise/reader shapes differ.
+  - Recommended resolution: Standardize transaction followers around initial snapshot plus
+    revision; adapt path-level events.
+- **Large agent reads**
+  - Sources: range designs, agent tools
+  - What differs or is missing: Ranges exist, but a holder can still materialize an unlimited
+    whole file or diff.
+  - Recommended resolution: Mint size-limited reader facets and use the teaching error specified
+    above.
 
 ## Build ladder
 
@@ -996,9 +1257,10 @@ A shared suite MUST run against in-memory, native, mount, Git-backed, registry,
 and remote adapters where applicable.
 It covers:
 
-- **Views and paths:** view laws, path confinement, entry kinds, agreement between
-  `kind()` and list records, result paths that feed `lookup` unchanged, a `kind()` that survives `snapshot()`, missing-path behavior of `has`, `lookup`, and
-  `maybeLookup`, and strict snapshots.
+- **Views and paths:** view laws, path confinement, the shared segment guard, symbolic
+  links leaving a native root, entry kinds, agreement between `kind()` and list records,
+  a `kind()` that survives `snapshot()`, result paths that feed `lookup` unchanged,
+  missing-path behavior of `has`, `lookup`, and `maybeLookup`, and strict snapshots.
 - **Identity:** same-domain identity comparison, foreign-domain rejection,
   cross-provider snapshot comparison for every canonical form, comparison relayed
   through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
@@ -1010,8 +1272,8 @@ It covers:
   `identity`, `equivalent`, strict `snapshot`, and `expected`, including through an
   enclosing tree.
 - **Mutation:** ABA and stale CAS, controller setup and races, retained descendants
-  across read, write, and revoked flips, partial-failure atomicity, merge conflicts, reference splices, and rejection of live transform
-  sources.
+  across read, write, and revoked flips, partial-failure atomicity, merge conflicts,
+  reference splices, and rejection of live transform sources.
 - **Readers and limits:** range composition, result limits, oversized records that
   leave the reader running, result budgets, reader early close, and recovery advice
   matching the raising facet.
