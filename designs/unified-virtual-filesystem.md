@@ -91,9 +91,9 @@ the status printed in an older document.
 | Alternate trees | [npm registry tree](npm-registry-as-directory-tree.md), [FS from Git](endo-fs-from-git.md), [Git capability](daemon-git-capability.md), [watchers](filesystem-watchers.md), [root advancement](exo-git-follow-root-advancement.md) | **Implemented/designed:** adapters and watchers exist at different maturity; transactional root advancement is designed. |
 | Consumers | [formula inspector](formula-inspector.md), [container mount](runtime-container-fs-mount.md) | **Designed/implemented in part:** both depend on stable naming and attenuation rather than a new tree kind. |
 | Non-file storage | [daemon persistent stores](../packages/daemon/designs/daemon-persistent-stores.md), [storage matrix PR #1264](https://github.com/endojs/endo-but-for-bots/pull/1264), [mutable block storage PR #1265](https://github.com/endojs/endo-but-for-bots/pull/1265) | **Proposed:** the matrix distinguishes live and snapshot views; durable data and block capabilities are not common directory entries yet. |
-| Platform baseline | [platform FS](platform-fs.md), [backend seam](endo-fs-backend-seam.md) and `packages/platform/src/fs/{interfaces.js,extended/}` | **Implemented:** lite and extended interfaces, native/in-memory backends, bytes, snapshots, ranges, and watches exist. |
-| Daemon baseline | `packages/daemon/src/{interfaces.js,mount.js,directory.js,hashline.js}` | **Implemented:** pet-name hubs, mounts, search, hashline validation, read-only views, snapshots, and revocation exist. |
-| Exo baseline | `packages/exo-git/src/{interfaces.js,git.js,git-filesystem.js}` and the `@endo/exo-*` capability style | **Implemented:** Git offers rendered diff and repository merge operations; these are not generic snapshot diff/merge. |
+| Platform baseline | [platform FS](platform-fs.md), [backend seam](endo-fs-backend-seam.md) and `../packages/platform/src/fs/{interfaces.js,extended/}` | **Implemented:** lite and extended interfaces, native/in-memory backends, bytes, snapshots, ranges, and watches exist. |
+| Daemon baseline | `../packages/daemon/src/{interfaces.js,mount.js,directory.js,hashline.js}` | **Implemented:** pet-name hubs, mounts, search, hashline validation, read-only views, snapshots, and revocation exist. |
+| Exo baseline | `../packages/exo-git/src/{interfaces.js,git.js,git-filesystem.js}` and the `@endo/exo-*` capability style | **Implemented:** Git offers rendered diff and repository merge operations; these are not generic snapshot diff/merge. |
 
 ## Core model
 
@@ -423,7 +423,7 @@ iterates a snapshot.
 
 `glorp` is not a new fuzzy-search algorithm.
 It is the fused `glob`-then-`grep` operation already implemented by
-`packages/platform/src/fs/search.js` and exposed by `Mount`.
+`../packages/platform/src/fs/search.js` and exposed by `Mount`.
 The implemented result is exactly an eager array of `{ file, line, text }`
 records.
 The common interface renames `file` to `path`, adds match `ranges`, and streams
@@ -816,8 +816,8 @@ filesystem API.
 | Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
 
 **Persistent state.**
-The mutable provider owns content, branches, policy generations, and journals, the content
-store owns immutable objects, the directory/formula store owns bindings
+The mutable provider owns content, branches, policy generations, and journals.
+The content store owns immutable objects, the directory/formula store owns bindings
 and recipes, the archive owner owns exported bytes, and Git owns Git objects.
 No durable datum has two owners.
 A `ContentIdentity` retains no content and has no durable store: its issuer mints
@@ -903,13 +903,25 @@ archive, or non-file storage work.
 
 A shared suite MUST run against in-memory, native, mount, Git-backed, registry,
 and remote adapters where applicable.
-It covers view laws, path confinement, entry kinds, same-domain identity
-comparison, foreign-domain rejection, cross-provider snapshot comparison for every
-canonical form, ABA and stale CAS, controller races, partial-failure
-atomicity, range composition, result limits, reader early close, recovery advice matching
-the raising facet, merge conflicts, reference splices, archive tampering, unsigned and untrusted-signer
-restore, inert restore, binary magic collisions,
-secret-locator redaction, unreachable locators, restart replay, and GC liveness.
+It covers:
+
+- **Views and paths:** view laws, path confinement, entry kinds, agreement between
+  `kind()` and list records, missing-path behavior of `has`, `lookup`, and
+  `maybeLookup`, and strict snapshots.
+- **Identity:** same-domain identity comparison, foreign-domain rejection,
+  cross-provider snapshot comparison for every canonical form, comparison relayed
+  through the caller, and a severed relay that throws `SNAPSHOT_UNREACHABLE`.
+- **Mutation:** ABA and stale CAS, controller setup and races, partial-failure
+  atomicity, merge conflicts, reference splices, and rejection of live transform
+  sources.
+- **Readers and limits:** range composition, result limits, oversized records that
+  leave the reader running, result budgets, reader early close, and recovery advice
+  matching the raising facet.
+- **Archives:** tampering, unsigned and untrusted-signer restore, inert restore,
+  binary magic collisions, secret-locator redaction, and unreachable locators.
+  Duplicate raw member names and NFC-normalization collisions, including a manifest
+  naming only one colliding member, MUST be rejected before installation.
+- **Lifecycle:** restart replay and GC liveness.
 
 Tests MUST demonstrate that no oversized whole result is allocated before the
 teaching error, no rejected transaction publishes a partial root, and successful
