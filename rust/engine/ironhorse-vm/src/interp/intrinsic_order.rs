@@ -909,6 +909,10 @@ pub(super) const INTRINSIC_KEY_ORDER: &[(&str, &[&str])] = &[
     ),
     ("%WrapForValidIteratorPrototype%", &["next", "return"]),
     (
+        "%AsyncFromSyncIteratorPrototype%",
+        &["next", "return", "throw"],
+    ),
+    (
         "%AsyncIteratorPrototype%",
         &["@@asyncDispose", "@@asyncIterator"],
     ),
@@ -1249,6 +1253,7 @@ impl Interp {
             "%RegExpStringIteratorPrototype%" => self.regexp_string_iterator_proto,
             "%IteratorHelperPrototype%" => self.iterator_helper_proto,
             "%WrapForValidIteratorPrototype%" => self.iterator_wrapper_proto,
+            "%AsyncFromSyncIteratorPrototype%" => self.async_from_sync_iterator_proto,
             "%AsyncIteratorPrototype%" => self.instance_prototype(self.async_generator_proto),
             "%GeneratorPrototype%" => self.generator_proto,
             "%AsyncGeneratorPrototype%" => self.async_generator_proto,

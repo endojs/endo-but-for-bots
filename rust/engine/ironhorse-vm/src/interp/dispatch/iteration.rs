@@ -71,35 +71,17 @@ impl Interp {
             self.push(iterator);
             return Ok(());
         }
-        // `for await` falls back to the synchronous iterator and
-        // awaits each compiler-emitted `next()` result/value.
-        // Async generators themselves have no synchronous fallback.
-        if op == XS_CODE_FOR_AWAIT_OF {
-            let async_generator = match iterable.value {
-                Payload::Reference(i) if self.async_generators.contains_key(&i) => Some(i),
-                _ => None,
-            };
-            if let Some(instance) = async_generator {
-                // XS falls back through fxGetIterator, whose call
-                // of a missing synchronous method has this message.
-                // A supplied sync method still needs the separate
-                // AsyncFromSyncIterator semantic implementation;
-                // do not claim that XS throws in that case.
-                let sync_id = self
-                    .well_known_symbol_property_id("iterator")
-                    .unwrap_or(crate::value::XS_NO_ID);
-                let sync_method = if sync_id == crate::value::XS_NO_ID {
-                    Slot::undefined()
-                } else {
-                    (self.mop_get(code, instance, sync_id, iterable))?
-                };
-                if matches!(sync_method.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error_msg("call: not a function".into()));
-                }
-                return Err(self.catchable_type_error_msg(
-                    "async generator: synchronous iterator fallback unavailable".into(),
-                ));
-            }
+        // `for await` with no `@@asyncIterator` falls back to the synchronous
+        // iterator (`fxRunForAwaitOf`): GetIterator exactly as `for of` does,
+        // then wrap it in an AsyncFromSyncIterator, which awaits each step's
+        // value. A nullish operand keeps the `for of` error below.
+        if op == XS_CODE_FOR_AWAIT_OF && !matches!(iterable.kind, Kind::Null | Kind::Undefined) {
+            self.push(iterable);
+            self.dispatch_for_of(code, XS_CODE_FOR_OF)?;
+            let iterator = self.pop_checked()?;
+            let wrapper = self.new_async_from_sync_iterator(code, iterator)?;
+            self.push(wrapper);
+            return Ok(());
         }
         match iterable.value {
             Payload::Reference(i) if self.arrays.contains_key(&i) => {

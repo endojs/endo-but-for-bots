@@ -796,11 +796,23 @@ impl Interp {
                     let _ = machine.leave_call();
                     machine.stack.truncate(stack_base);
                     machine.jumps.truncate(jumps_base);
-                    machine.schedule_native_await(
-                        code,
-                        value,
-                        ReactionKind::AsyncGeneratorYield(gen),
-                    )
+                    if machine.async_generator_suspended_in_yield_star(code, gen) {
+                        // `fxAsyncGeneratorStep`'s `XS_CODE_YIELD_STAR` arm
+                        // resolves the request with the delegate's value at
+                        // once: `yield*` does not await what it yields (ES2024
+                        // 14.4.14). A synchronous delegate's values arrive
+                        // already awaited by its AsyncFromSyncIterator.
+                        let result = machine.new_generator_result(value, false);
+                        machine.async_generators.get_mut(&gen).unwrap().state =
+                            AsyncGeneratorState::SuspendedYield;
+                        machine.finish_async_generator_request(code, gen, result, false)
+                    } else {
+                        machine.schedule_native_await(
+                            code,
+                            value,
+                            ReactionKind::AsyncGeneratorYield(gen),
+                        )
+                    }
                 }
                 Step::Awaited(value) => {
                     let _ = machine.leave_call();

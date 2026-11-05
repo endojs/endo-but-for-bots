@@ -831,6 +831,300 @@ impl Interp {
         self.call_any(code, return_method, iterator, &[])
     }
 
+    /// `CreateAsyncFromSyncIterator` (`fxNewAsyncFromSyncIteratorInstance`):
+    /// wrap the synchronous `iterator` for `for await` and an async `yield*`.
+    /// The wrapper's [`IterState`] row (kind 16) names the synchronous
+    /// iterator, an arena holder for its `next` method read now, and the done
+    /// flag of the latest step, which the wrapper shares across steps as XS
+    /// does.
+    pub(in crate::interp) fn new_async_from_sync_iterator(
+        &mut self,
+        code: &[u8],
+        iterator: Slot,
+    ) -> Result<Slot, Step> {
+        let Payload::Reference(iterator_inst) = iterator.value else {
+            return Err(self.catchable_type_error_msg("iterator: not an object".into()));
+        };
+        let next_id = self.intern_static_key("next");
+        let next_method = self.mop_get(code, iterator_inst, next_id, iterator)?;
+        self.meter.tick_slot_alloc();
+        let next_holder = self
+            .slots
+            .alloc(Slot::of(next_method.kind, next_method.value));
+        self.meter.tick_slot_alloc();
+        let wrapper = self
+            .slots
+            .alloc(Slot::instance(self.async_from_sync_iterator_proto));
+        self.iterators.insert(
+            wrapper,
+            IterState {
+                iterable: iterator_inst,
+                index: 0,
+                kind: 16,
+                coll_seq: 0,
+                generation: 0,
+                result: next_holder,
+                done: false,
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
+            },
+        );
+        Ok(Slot::of(Kind::Reference, Payload::Reference(wrapper)))
+    }
+
+    /// The wrapper a kind-16 [`IterState`] row names, or XS's TypeError.
+    fn async_from_sync_wrapper(&mut self, this: Slot) -> Result<crate::value::SlotIndex, Step> {
+        match this.value {
+            Payload::Reference(wrapper)
+                if this.kind == Kind::Reference
+                    && self.iterators.get(&wrapper).is_some_and(|s| s.kind == 16) =>
+            {
+                Ok(wrapper)
+            }
+            _ => {
+                Err(self
+                    .catchable_type_error_msg("this: not an AsyncFromSyncIterator instance".into()))
+            }
+        }
+    }
+
+    /// The wrapper named by the `home` of the running Done/Failed handler,
+    /// whose function sits at `base + 1` of its call frame.
+    fn async_from_sync_handler_wrapper(
+        &self,
+        base: usize,
+    ) -> Result<crate::value::SlotIndex, Step> {
+        let function = self
+            .stack
+            .get(base + 1)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let home = match function.value {
+            Payload::Reference(f) => self.functions.get(&f).map(|info| info.home),
+            _ => None,
+        };
+        match home {
+            Some(wrapper) if self.iterators.get(&wrapper).is_some_and(|s| s.kind == 16) => {
+                Ok(wrapper)
+            }
+            _ => Err(Step::Host(Halt::EngineInvariant(
+                "async-from-sync:handler-without-wrapper",
+            ))),
+        }
+    }
+
+    /// `%AsyncFromSyncIteratorPrototype%.next/return/throw`
+    /// (`fx_AsyncFromSyncIterator_prototype_aux`). Steps the synchronous
+    /// iterator, then resolves the returned promise with the step's value
+    /// unwrapped through `PromiseResolve(%Promise%, value)`. Every abrupt
+    /// completion rejects the promise; as in XS, it first closes the
+    /// synchronous iterator, ignoring any error, except when `throw` is
+    /// missing, which closes it normally and then throws "no throw".
+    pub(in crate::interp) fn async_from_sync_iterator_step(
+        &mut self,
+        code: &[u8],
+        m: NativeMethod,
+        this: Slot,
+        arg: Option<Slot>,
+    ) -> Result<Slot, Step> {
+        let wrapper = self.async_from_sync_wrapper(this)?;
+        let (promise, resolve, reject) = self.new_promise_capability();
+        let mut close = true;
+        let outcome = self.native_try(|machine| {
+            machine
+                .async_from_sync_iterator_body(code, m, wrapper, arg, resolve, reject, &mut close)
+        })?;
+        if let Err(error) = outcome {
+            if close {
+                let iterator = self.async_from_sync_iterator_of(wrapper);
+                self.native_try(|machine| machine.async_from_sync_close(code, iterator))?
+                    .ok();
+            }
+            self.reject_via_function(reject, error)?;
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+    }
+
+    fn async_from_sync_iterator_of(&self, wrapper: crate::value::SlotIndex) -> Slot {
+        let iterable = self.iterators[&wrapper].iterable;
+        Slot::of(Kind::Reference, Payload::Reference(iterable))
+    }
+
+    /// Call the synchronous iterator's `return`, if any (`fxIteratorReturn`):
+    /// a non-object result is a TypeError.
+    fn async_from_sync_close(&mut self, code: &[u8], iterator: Slot) -> Result<(), Step> {
+        let Payload::Reference(inst) = iterator.value else {
+            return Ok(());
+        };
+        let return_id = self.intern_static_key("return");
+        let method = self.mop_get(code, inst, return_id, iterator)?;
+        if matches!(method.kind, Kind::Undefined | Kind::Null) {
+            return Ok(());
+        }
+        if !self.is_callable_value(method) {
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
+        }
+        let result = self.call_any(code, method, iterator, &[])?;
+        if result.kind != Kind::Reference {
+            return Err(self.catchable_type_error_msg("iterator result: not an object".into()));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn async_from_sync_iterator_body(
+        &mut self,
+        code: &[u8],
+        m: NativeMethod,
+        wrapper: crate::value::SlotIndex,
+        arg: Option<Slot>,
+        resolve: Slot,
+        reject: Slot,
+        close: &mut bool,
+    ) -> Result<(), Step> {
+        let iterator = self.async_from_sync_iterator_of(wrapper);
+        let Payload::Reference(iterator_inst) = iterator.value else {
+            return Err(Step::Host(Halt::EngineInvariant(
+                "async-from-sync:iterator",
+            )));
+        };
+        let step = match m {
+            NativeMethod::AsyncFromSyncIteratorNext => {
+                let holder = self.iterators[&wrapper].result;
+                self.slots.get(holder)
+            }
+            NativeMethod::AsyncFromSyncIteratorReturn => {
+                let return_id = self.intern_static_key("return");
+                let method = self.mop_get(code, iterator_inst, return_id, iterator)?;
+                if matches!(method.kind, Kind::Undefined | Kind::Null) {
+                    let result = self.new_generator_result(Slot::undefined(), true);
+                    return self.settle_via_function(code, resolve, result);
+                }
+                method
+            }
+            _ => {
+                let throw_id = self.intern_static_key("throw");
+                let method = self.mop_get(code, iterator_inst, throw_id, iterator)?;
+                if matches!(method.kind, Kind::Undefined | Kind::Null) {
+                    *close = false;
+                    self.async_from_sync_close(code, iterator)?;
+                    return Err(self.catchable_type_error_msg("no throw".into()));
+                }
+                method
+            }
+        };
+        if !self.is_callable_value(step) {
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
+        }
+        let args: &[Slot] = match &arg {
+            Some(value) => std::slice::from_ref(value),
+            None => &[],
+        };
+        let result = self.call_any(code, step, iterator, args)?;
+        let Payload::Reference(result_inst) = result.value else {
+            return Err(self.catchable_type_error_msg("iterator result: not an object".into()));
+        };
+        if result.kind != Kind::Reference {
+            return Err(self.catchable_type_error_msg("iterator result: not an object".into()));
+        }
+        let done_id = self.intern_static_key("done");
+        let done = self.mop_get(code, result_inst, done_id, result)?;
+        let done = self.truthy(&done);
+        if let Some(state) = self.iterators.get_mut(&wrapper) {
+            state.done = done;
+        }
+        let value_id = self.intern_static_key("value");
+        let value = self.mop_get(code, result_inst, value_id, result)?;
+        let promise_ctor =
+            self.intrinsics
+                .get("Promise")
+                .copied()
+                .ok_or(Step::Host(Halt::EngineInvariant(
+                    "Promise:missing-constructor",
+                )))?;
+        let promise_ctor = Slot::of(Kind::Reference, Payload::Reference(promise_ctor));
+        let value_wrapper = self.promise_resolve_with_constructor(code, promise_ctor, value)?;
+        let Payload::Reference(value_promise) = value_wrapper.value else {
+            return Err(Step::Host(Halt::EngineInvariant(
+                "async-from-sync:value-wrapper",
+            )));
+        };
+        if !self.promises.contains_key(&value_promise) {
+            return Err(Step::Host(Halt::EngineInvariant(
+                "async-from-sync:value-wrapper",
+            )));
+        }
+        let on_fulfilled =
+            self.async_from_sync_handler(NativeMethod::AsyncFromSyncIteratorDone, wrapper);
+        let on_rejected =
+            self.async_from_sync_handler(NativeMethod::AsyncFromSyncIteratorFailed, wrapper);
+        self.register_native_reaction(
+            value_promise,
+            PromiseReaction {
+                on_fulfilled,
+                on_rejected,
+                resolve,
+                reject,
+                kind: ReactionKind::User,
+            },
+        );
+        Ok(())
+    }
+
+    /// One of the two anonymous, length-1 handler functions a step registers
+    /// on its value, with the wrapper as its `home`.
+    fn async_from_sync_handler(
+        &mut self,
+        m: NativeMethod,
+        wrapper: crate::value::SlotIndex,
+    ) -> Slot {
+        let function = self.alloc_named_method(m, "", 1);
+        if let Some(info) = self.functions.get_mut(&function) {
+            info.home = wrapper;
+        }
+        Slot::of(Kind::Reference, Payload::Reference(function))
+    }
+
+    /// `fxAsyncFromSyncIteratorDone`: `{ value, done }` with the wrapper's
+    /// latest done flag.
+    pub(in crate::interp) fn async_from_sync_iterator_done(
+        &mut self,
+        base: usize,
+        value: Slot,
+    ) -> Result<Slot, Step> {
+        let wrapper = self.async_from_sync_handler_wrapper(base)?;
+        let done = self.iterators[&wrapper].done;
+        Ok(self.new_generator_result(value, done))
+    }
+
+    /// `fxAsyncFromSyncIteratorFailed`: close the synchronous iterator,
+    /// ignoring any error, then rethrow the rejection reason.
+    pub(in crate::interp) fn async_from_sync_iterator_failed(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        reason: Slot,
+    ) -> Result<Slot, Step> {
+        let wrapper = self.async_from_sync_handler_wrapper(base)?;
+        let iterator = self.async_from_sync_iterator_of(wrapper);
+        let _ = self.native_try(|machine| {
+            let Payload::Reference(inst) = iterator.value else {
+                return Ok(());
+            };
+            let return_id = machine.intern_static_key("return");
+            let method = machine.mop_get(code, inst, return_id, iterator)?;
+            if !matches!(method.kind, Kind::Undefined | Kind::Null) {
+                if !machine.is_callable_value(method) {
+                    return Err(machine.catchable_type_error_msg("call: not a function".into()));
+                }
+                machine.call_any(code, method, iterator, &[])?;
+            }
+            Ok(())
+        })?;
+        Err(self.raise_js(reason))
+    }
+
     /// The lazy Iterator helpers' shared holder layout. A helper's
     /// [`IterState::result`] names an internal Array whose items carry the
     /// captured iterator record and per-helper state; an Array keeps the

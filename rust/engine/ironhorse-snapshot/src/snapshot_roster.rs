@@ -1271,12 +1271,12 @@ macro_rules! snapshot_payloads {
                                 ));
                             }
                         }
-                        if r.kind == 8
+                        if (r.kind == 8 || r.kind == 16)
                             && iterator_from_wrapper_malformed(
                                 r.iterable,
                                 r.result,
                                 r.index,
-                                r.done,
+                                r.done && r.kind == 8,
                                 r.enum_keys.is_empty(),
                                 r.str_bytes.is_empty(),
                             )

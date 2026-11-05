@@ -284,6 +284,13 @@ impl Interp {
         term(format!("regexp_split_method={:?}", self.regexp_split_method).as_bytes());
         term(format!("iterator_proto={:?}", self.iterator_proto).as_bytes());
         term(format!("iterator_wrapper_proto={:?}", self.iterator_wrapper_proto).as_bytes());
+        term(
+            format!(
+                "async_from_sync_iterator_proto={:?}",
+                self.async_from_sync_iterator_proto
+            )
+            .as_bytes(),
+        );
         term(format!("iterator_helper_proto={:?}", self.iterator_helper_proto).as_bytes());
         term(format!("map_iterator_proto={:?}", self.map_iterator_proto).as_bytes());
         term(format!("set_iterator_proto={:?}", self.set_iterator_proto).as_bytes());
@@ -1302,6 +1309,18 @@ impl Interp {
         ] {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((async_generator_proto, name, mf));
+        }
+        // `%AsyncFromSyncIteratorPrototype%` (`fxBuildGenerator`): its three
+        // methods have length 1, as in XS.
+        let async_from_sync_proto = self.slots.alloc(Slot::instance(async_iterator_proto));
+        self.async_from_sync_iterator_proto = async_from_sync_proto;
+        for (name, m) in [
+            ("next", NativeMethod::AsyncFromSyncIteratorNext),
+            ("return", NativeMethod::AsyncFromSyncIteratorReturn),
+            ("throw", NativeMethod::AsyncFromSyncIteratorThrow),
+        ] {
+            let mf = self.alloc_named_method(m, name, 1);
+            self.proto_methods.push((async_from_sync_proto, name, mf));
         }
         self.async_iterator_identity = self.alloc_named_method(
             NativeMethod::AsyncIteratorIdentity,
