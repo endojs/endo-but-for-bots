@@ -106,15 +106,23 @@ Portable archives normalize entry names to Unicode NFC and reject duplicate
 normalized names, `.` and `..`, NUL, and names their target archive cannot
 represent losslessly.
 
-A directory maps each local name to one of these entry kinds:
+A directory maps each local name to an entry, and every entry has one *kind*, the
+category of its content.
+Each kind has mutable facets and a snapshot facet:
 
-| Kind | Mutable authority | Snapshot result | Status |
+| Kind | Mutable facet and authority | Snapshot facet | Status |
 |---|---|---|---|
-| `File` / `Directory` | byte or tree mutation | `SnapshotBlob` / `SnapshotTree` | **Implemented**, common shape proposed |
-| `BlockStorage` | sized random writes and append | `SnapshotBlob` | **Proposed** in PR #1265 |
-| `AppendLog` | append records only | `SnapshotLog`, an immutable record sequence | **Proposed here**; no common design exists |
-| `DataStore` | typed map/set/data operations | `SnapshotData`, a pass-by-copy value or immutable tree | **Designed** by daemon persistent stores |
-| `CapabilityLink` | authority of the referenced capability | link record, not frozen referent | **Implemented concept**, serialization proposed here |
+| `Blob` | `File`: byte mutation. `BlockStorage`: sized random writes and append. | `SnapshotBlob` | `File` **Implemented**, common shape proposed; `BlockStorage` **Proposed** in PR #1265 |
+| `Tree` | `Directory`: tree mutation. | `SnapshotTree` | **Implemented**, common shape proposed |
+| `Log` | `AppendLog`: append records only. | `SnapshotLog`, an immutable record sequence | **Proposed here**; no common design exists |
+| `Data` | `DataStore`: typed map/set/data operations. | `SnapshotData`, a pass-by-copy value or immutable tree | **Designed** by daemon persistent stores |
+| `Link` | `CapabilityLink`: authority of the referenced capability. | The link record, not the frozen referent | **Implemented concept**, serialization proposed here |
+
+Kind and posture are independent.
+The kind says what the content is and does not change when an entry is snapshotted.
+The facet says what the holder may do with it, by exposing only the methods its
+posture and authority allow.
+Names such as `File` and `SnapshotBlob` therefore denote facets, not kinds.
 
 An arbitrary capability entry is a `CapabilityLink`.
 A directory snapshot freezes the binding to that link, not the state of the
@@ -183,6 +191,7 @@ read(R(x), t) = read(x, t)                 live at time t
 write(R(x), ...) = absent                  no mutator is exposed
 read(S(x), t1) = read(S(x), t2)            immutable
 S(S(x)) = S(x)                             snapshot idempotence
+kind(S(x)) = kind(x)                       a snapshot keeps its kind
 equivalent(I(x at t), I(S(x at t)))        identity is captured with the snapshot
 authority(A(B(x))) <= authority(A(x)) and authority(B(x))
 ```
@@ -284,7 +293,7 @@ was passed and compares it with its own, materializing neither in the caller.
 A link cannot be compared this way.
 Its locator may be a bearer secret, so locator bytes MUST NOT cross this exchange, and
 a digest of them could not establish that the bytes are equal.
-The pulled canonical form therefore carries only the category `Link` at that name, and
+The pulled canonical form therefore carries only the kind `Link` at that name, and
 the same holds for a remotable inside a Key.
 A comparison across domains answers `false` if any other part of the operands differs,
 and otherwise throws `REFERENCE_INCOMPARABLE`.
@@ -306,9 +315,9 @@ Each operand retains its own content, and the content store owns that retention.
 Public `sha256()` and `{ algorithm, hash }` methods remain diagnostic and
 content-store locator APIs; new correctness logic MUST NOT depend on them.
 
-Every entry kind compares by the canonical form of its category:
+Every entry compares by the canonical form of its kind:
 
-| Category | Kinds | Canonical form |
+| Kind | Facets | Canonical form |
 |---|---|---|
 | Blob | `File`, `BlockStorage`, `SnapshotBlob` | The exact byte sequence. Capacity, block size, and timestamps are excluded. |
 | Tree | `Directory`, `SnapshotTree` | The set of NFC-normalized names, each with its entry's category and canonical form. Listing order and timestamps are excluded. |
@@ -316,9 +325,9 @@ Every entry kind compares by the canonical form of its category:
 | Data | `DataStore` and its snapshot | For a store whose values are all Keys, the store shape (map or set) and its entries in key rank order, compared by `keyEQ` from `@endo/patterns`. Other stores have no canonical form, as defined under *Blocks, logs, data, and generic slots*. |
 | Link | `CapabilityLink` | Within one identity domain, the exact locator bytes of the link record, or object identity for a link with no locator. The referent is never dereferenced. Across domains a link has no comparable form. |
 
-A snapshot keeps its source's category even when its representation is a
+A snapshot keeps its source's kind even when its representation is a
 pass-by-copy value or a tree, so the identity law holds for every kind.
-Values of different categories are never equivalent.
+Values of different kinds are never equivalent.
 Two locators for one referent, or two presences of one object, are not equivalent
 either: comparison MAY report a false negative, which fails a compare-and-swap
 safely, and MUST NOT report a false positive.
@@ -412,15 +421,18 @@ not a tree.
 Traversal never resolves a `CapabilityLink`, and `has` reports the binding whether
 or not its referent is reachable.
 
-Every entry capability answers `kind()` with the one discriminator for choosing its
-operations:
+Every entry capability answers `kind()` with its kind:
 
 ```js
 kind(): Promise<EntryKind>
-// EntryKind: 'File' | 'Directory' | 'BlockStorage' | 'AppendLog' | 'DataStore'
-//   | 'CapabilityLink' | 'SnapshotBlob' | 'SnapshotTree' | 'SnapshotLog'
-//   | 'SnapshotData'
+// EntryKind: 'Blob' | 'Tree' | 'Log' | 'Data' | 'Link'
 ```
+
+The kind chooses the family of content operations, and a snapshot answers the same
+kind as its source.
+It does not say whether an entry can be mutated or watched, because the facet decides
+that by which methods it exposes.
+A caller that needs immutable content calls `snapshot()` rather than testing a kind.
 
 `list` delivers `{ name, kind }` records and `listTree` delivers `{ path, kind }`
 records, each `kind` matching what `kind()` answers on that entry.
@@ -484,8 +496,9 @@ Applying the result is a separate CAS mutation.
 
 A range reference is `{ source, sourceStart, sourceEnd }`, a half-open byte range of
 `source`.
-Every `source` MUST be a `SnapshotBlob`; any other capability, including a live or
-read-only blob, throws `WRONG_ENTRY_KIND` before anything is staged.
+Every `source` MUST be a `SnapshotBlob` facet; any other capability, including a live
+or read-only blob, throws `WRONG_ENTRY_KIND` before anything is staged, even though
+those blobs also answer `kind()` with `'Blob'`.
 Offsets count bytes, `targetPath` is relative to the receiver, and a `targetPath` the
 receiver lacks starts as an empty file.
 
@@ -743,7 +756,7 @@ Export rejects a tree that already uses either root name.
 The manifest is a map in CBOR core deterministic encoding (RFC 8949 section 4.2.1)
 holding the archive version, a random 16-byte `archiveId`, and one record for each
 other archive member, sorted by normalized path.
-Each record binds normalized path, entry kind, byte length, and the SHA-256 of the
+Each record binds normalized path, kind, byte length, and the SHA-256 of the
 member's exact bytes.
 Records cover every member, not only capability links, so a changed, added,
 removed, or reclassified member fails verification.
@@ -751,7 +764,7 @@ removed, or reclassified member fails verification.
 The manifest is the only classifier of entries, and the envelope is the only holder
 of locator bytes.
 An ordinary binary file beginning with the magic remains ordinary unless the
-manifest marks it `CapabilityLink`.
+manifest marks it `Link`.
 The envelope's own digest serves a loose copy that has lost its manifest: a
 diagnostic tool can report corruption, but nothing restores it as a link.
 
@@ -941,7 +954,7 @@ and remote adapters where applicable.
 It covers:
 
 - **Views and paths:** view laws, path confinement, entry kinds, agreement between
-  `kind()` and list records, missing-path behavior of `has`, `lookup`, and
+  `kind()` and list records, a `kind()` that survives `snapshot()`, missing-path behavior of `has`, `lookup`, and
   `maybeLookup`, and strict snapshots.
 - **Identity:** same-domain identity comparison, foreign-domain rejection,
   cross-provider snapshot comparison for every canonical form, comparison relayed
