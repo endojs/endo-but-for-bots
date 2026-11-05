@@ -125,8 +125,14 @@ export const makePetSitter = (controller, specialNames) => {
     return harden(names);
   };
 
-  const { storeIdentifier, storeLocator, remove, rename, seedGcEdges } =
-    controller;
+  const {
+    storeIdentifier,
+    compareAndStoreIdentifier,
+    storeLocator,
+    remove,
+    rename,
+    seedGcEdges,
+  } = controller;
 
   const petSitter = {
     has,
@@ -136,6 +142,7 @@ export const makePetSitter = (controller, specialNames) => {
     followIdNameChanges,
     followNameChanges,
     storeIdentifier,
+    compareAndStoreIdentifier,
     storeLocator,
     remove,
     rename,

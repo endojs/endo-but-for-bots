@@ -198,7 +198,7 @@ export const makeDirectoryMaker = ({
       assertNamePath(petNamePath);
       const tailName = petNamePath[petNamePath.length - 1];
       if (petNamePath.length === 1) {
-        // eslint-disable-next-line no-use-before-define
+         
         return { hub: directory, name: tailName };
       }
       const prefixPath = petNamePath.slice(0, -1);
@@ -595,6 +595,15 @@ export const makeDirectoryMaker = ({
       await E(hub).storeIdentifier([petName], id);
     };
 
+    /** @type {EndoDirectory['compareAndStoreIdentifier']} */
+    const compareAndStoreIdentifier = (petName, expectedId, nextId) =>
+      // The store validates the name when it compares.
+      controller.compareAndStoreIdentifier(
+        /** @type {PetName} */ (petName),
+        expectedId,
+        nextId,
+      );
+
     /**
      * Store a locator (endo:// URL) at a pet name path.
      * @param {string | string[]} petNamePath
@@ -689,6 +698,7 @@ export const makeDirectoryMaker = ({
       maybeLookup,
       reverseLookup,
       storeIdentifier,
+      compareAndStoreIdentifier,
       storeLocator,
       move,
       remove,
@@ -802,6 +812,7 @@ export const makeDirectoryMaker = ({
         maybeLookup: directory.maybeLookup,
         reverseLookup,
         storeIdentifier: directory.storeIdentifier,
+        compareAndStoreIdentifier: directory.compareAndStoreIdentifier,
         storeLocator: directory.storeLocator,
         remove,
         move,

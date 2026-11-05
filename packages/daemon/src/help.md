@@ -77,6 +77,13 @@ Store a formula identifier with a pet name.
 - storeIdentifier(["subdir", "name"], id) stores in a subdirectory
 Overwrites any existing value at that name.
 
+## compareAndStoreIdentifier(petName, expectedId, nextId) -> Promise<boolean>
+
+Atomically change one name only if it still holds the identifier you expect.
+- compareAndStoreIdentifier("name", undefined, id) stores id only if "name" is absent
+- compareAndStoreIdentifier("name", id, undefined) removes "name" only if it holds id
+Resolves to whether the change applied. Use this rather than checking and then writing, which another writer can interleave.
+
 ## storeLocator(petNameOrPath, locator) -> Promise<void>
 
 Store an endo:// locator with a pet name.

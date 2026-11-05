@@ -117,6 +117,11 @@ export const nameHubMethodGuards = harden({
   followNameChanges: M.call().returns(M.remotable()),
   reverseLookup: M.call(M.any()).returns(M.promise()),
   storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  compareAndStoreIdentifier: M.call(
+    M.string(),
+    M.or(IdShape, M.undefined()),
+    M.or(IdShape, M.undefined()),
+  ).returns(M.promise()),
   storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
   remove: M.call().rest(NamePathShape).returns(M.promise()),
   move: M.call(NamePathShape, NamePathShape).returns(M.promise()),

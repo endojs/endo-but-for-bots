@@ -557,21 +557,21 @@ const makeDaemonCore = async (
    * ENDO_TRACE_RECORDS, ENDO_TRACE_BYTES, ENDO_TRACE_WORKERS.
    */
   const traceAggregator = makeTraceAggregator({
-    // eslint-disable-next-line no-undef
+     
     maxRecordsPerWorker: parseTraceEnvironmentNumber(
-      // eslint-disable-next-line no-undef
+       
       typeof process !== 'undefined'
         ? process.env.ENDO_TRACE_RECORDS
         : undefined,
       1024,
     ),
     maxBytes: parseTraceEnvironmentNumber(
-      // eslint-disable-next-line no-undef
+       
       typeof process !== 'undefined' ? process.env.ENDO_TRACE_BYTES : undefined,
       8 * 1024 * 1024,
     ),
     maxWorkers: parseTraceEnvironmentNumber(
-      // eslint-disable-next-line no-undef
+       
       typeof process !== 'undefined'
         ? process.env.ENDO_TRACE_WORKERS
         : undefined,
@@ -640,7 +640,7 @@ const makeDaemonCore = async (
     // released so that cleanup operations that need the lock
     // (e.g., CapTP messages triggering graph mutations on a
     // remote callback) can acquire it without deadlock.
-    // eslint-disable-next-line no-use-before-define
+     
     try {
       await drainCollectionCleanup();
     } catch (error) {
@@ -742,7 +742,7 @@ const makeDaemonCore = async (
    */
   const formulaChangeTopic = makeChangeTopic();
 
-  // eslint-disable-next-line no-undef
+   
   const lifecycleLogEnabled =
     typeof process === 'undefined' || process.env.ENDO_LIFECYCLE_LOG !== '0';
   const lifecycleT0 = Date.now();
@@ -999,7 +999,7 @@ const makeDaemonCore = async (
     if (!enableFormulaCollection) return;
 
     for (const id of collectedIds) {
-      // eslint-disable-next-line no-use-before-define
+       
       logLifecycle(id, 'COLLECTED');
     }
 
@@ -1061,7 +1061,7 @@ const makeDaemonCore = async (
       if (controller) {
         controllersToCancel.push({ id, controller });
       }
-      // eslint-disable-next-line no-use-before-define
+       
       dropLiveValue(id);
     }
 
@@ -1147,7 +1147,7 @@ const makeDaemonCore = async (
             .filter(result => result.status === 'rejected')
             .map(result => result.reason);
           try {
-            // eslint-disable-next-line no-use-before-define
+             
             await reclaimCollectedStorage(collectedFormulas, reclamation);
           } catch (error) {
             storageFailures.push(error);
@@ -1165,7 +1165,7 @@ const makeDaemonCore = async (
           // Even failed storage reclamation must not leave worker routes live.
           try {
             if (!disconnected) {
-              // eslint-disable-next-line no-use-before-define
+               
               residenceTracker.disconnectRetainersHolding(
                 collectedIds,
                 collectedFormulaTypes,
@@ -1220,7 +1220,7 @@ const makeDaemonCore = async (
         accum.add(hash);
         let entries;
         try {
-          // eslint-disable-next-line no-await-in-loop
+           
           entries = await contentStore.fetch(hash).json();
         } catch (_err) {
           // Tree JSON is missing or unparseable; nothing more to
@@ -1298,7 +1298,7 @@ const makeDaemonCore = async (
       /** @type {Set<string>} */
       const candidates = new Set();
       for (const formula of collectedFormulasByid.values()) {
-        // eslint-disable-next-line no-await-in-loop
+         
         await collectFormulaHashes(formula, candidates);
       }
       reclamation.candidateHashes = candidates;
@@ -1315,7 +1315,7 @@ const makeDaemonCore = async (
       /** @type {Set<string>} */
       const survivingHashes = new Set();
       for (const formula of formulaForId.values()) {
-        // eslint-disable-next-line no-await-in-loop
+         
         await collectFormulaHashes(formula, survivingHashes);
       }
       for (const hash of survivingHashes) {
@@ -1675,7 +1675,7 @@ const makeDaemonCore = async (
   const provide = (id, _expectedType) =>
     /** @type {any} */ (
       // Behold, unavoidable forward-reference:
-      // eslint-disable-next-line no-use-before-define
+       
       provideController(id).value
     );
 
@@ -2522,6 +2522,7 @@ const makeDaemonCore = async (
    * @param {string} specifier
    * @param {Record<string, string>} env
    * @param {Context} context
+   * @param cancelWithWorker
    */
   const makeUnconfined = async (
     workerId,
@@ -2647,9 +2648,9 @@ const makeDaemonCore = async (
         : undefined;
     const isLockedWorker = workerKind === 'locked';
     if (isLockedWorker) {
-      // eslint-disable-next-line no-use-before-define
+       
       const archiveBytes = await packTreeIntoArchiveBytes(treeP);
-      // eslint-disable-next-line no-use-before-define
+       
       const transientBlob = makeBytesBlob(archiveBytes);
       return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
         /** @type {any} */ (transientBlob),
@@ -3000,7 +3001,7 @@ const makeDaemonCore = async (
       const tasks = makeDeferredTasks();
       const hardenedRecord = harden(record);
       // Behold, forward reference:
-      // eslint-disable-next-line no-use-before-define
+       
       const { id } = await formulateMarshalValue(
         hardenedRecord,
         tasks,
@@ -3339,6 +3340,7 @@ const makeDaemonCore = async (
             maybeLookup,
             reverseLookup,
             storeIdentifier: disallowedMutation,
+            compareAndStoreIdentifier: disallowedMutation,
             storeLocator: disallowedMutation,
             remove: disallowedMutation,
             move: disallowedMutation,
@@ -3764,6 +3766,7 @@ const makeDaemonCore = async (
             maybeLookup,
             reverseLookup,
             storeIdentifier: disallowedMutation,
+            compareAndStoreIdentifier: disallowedMutation,
             storeLocator: disallowedMutation,
             remove: disallowedMutation,
             move: disallowedMutation,
@@ -3895,7 +3898,7 @@ const makeDaemonCore = async (
           // `provide(mountId)` returns a union of cap types; the
           // `getMountBacking` check above guarantees an `EndoMount`,
           // but TS can't narrow through it.
-          // eslint-disable-next-line object-shorthand
+           
           mount: /** @type {WritableGitWorktree} */ (mount),
           backend,
           lineageOf,
@@ -4105,10 +4108,10 @@ const makeDaemonCore = async (
       const { remote } = makeGitRemote({
         // `provide(gitId)` returns a union; `makeGitRemote` accepts a
         // bare `object` and asserts the shape internally.
-        // eslint-disable-next-line object-shorthand
+         
         git: /** @type {object} */ (git),
         operations,
-        // eslint-disable-next-line object-shorthand
+         
         credential:
           credential === undefined
             ? undefined
@@ -4180,7 +4183,7 @@ const makeDaemonCore = async (
       },
       context,
     ) =>
-      // eslint-disable-next-line no-use-before-define
+       
       makeFromTree(workerId, powersId, treeId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
@@ -4228,7 +4231,7 @@ const makeDaemonCore = async (
       );
 
       // Behold, forward reference:
-      // eslint-disable-next-line no-use-before-define
+       
       const agent = await makeHost(
         id,
         handleId,
@@ -4291,7 +4294,7 @@ const makeDaemonCore = async (
       );
 
       // Behold, forward reference:
-      // eslint-disable-next-line no-use-before-define
+       
       const agent = await makeGuest(
         id,
         handleId,
@@ -4683,7 +4686,7 @@ const makeDaemonCore = async (
                       // lets the old formula retire when its actual retainers
                       // release it.
                       const { id: peerId } =
-                        // eslint-disable-next-line no-use-before-define
+                         
                         await formulatePeer(networksId, nodeNumber, addresses);
                       await knownPeers.storeIdentifier(nodeNumber, peerId);
                       return;
@@ -4698,7 +4701,7 @@ const makeDaemonCore = async (
                   `addPeerInfo:   addresses=${JSON.stringify(addresses)}`,
                 );
                 const { id: peerId } =
-                  // eslint-disable-next-line no-use-before-define
+                   
                   await formulatePeer(networksId, nodeNumber, addresses);
                 await knownPeers.storeIdentifier(nodeNumber, peerId);
               },
@@ -4784,6 +4787,7 @@ const makeDaemonCore = async (
             lookupByLocator: disallowedFn,
             reverseLookup: disallowedFn,
             storeIdentifier: disallowedFn,
+            compareAndStoreIdentifier: disallowedFn,
             storeLocator: disallowedFn,
             remove: disallowedFn,
             move: disallowedFn,
@@ -4849,11 +4853,11 @@ const makeDaemonCore = async (
     },
     'pet-inspector': ({ petStore: petStoreId }) =>
       // Behold, unavoidable forward-reference:
-      // eslint-disable-next-line no-use-before-define
+       
       makePetStoreInspector(petStoreId),
     directory: ({ petStore: petStoreId }, context) => {
       // Behold, forward-reference:
-      // eslint-disable-next-line no-use-before-define
+       
       return makeIdentifiedDirectory({
         petStoreId,
         context,
@@ -4866,7 +4870,7 @@ const makeDaemonCore = async (
       context,
     ) =>
       // Behold, forward reference:
-      // eslint-disable-next-line no-use-before-define
+       
       makePeer(networksId, nodeId, addressesId, context),
     invitation: (
       {
@@ -4879,11 +4883,11 @@ const makeDaemonCore = async (
         hostHandle: legacyInvitingHandleId,
         guestName,
       },
-      _context, // eslint-disable-line no-underscore-dangle
+      _context,  
       id,
     ) =>
       // Behold, forward reference:
-      // eslint-disable-next-line no-use-before-define
+       
       makeInvitation(
         id,
         /** @type {FormulaIdentifier} */ (
@@ -4902,7 +4906,7 @@ const makeDaemonCore = async (
 
       // Start the timer loop (fire-and-forget — runs until cancelled)
       const runTimer = async () => {
-        // eslint-disable-next-line no-constant-condition
+         
         while (true) {
           try {
             await delay(interval, context.cancelled);
@@ -4957,7 +4961,7 @@ const makeDaemonCore = async (
         proposedName: channelProposedName,
       } = formula;
       // Behold, forward reference:
-      // eslint-disable-next-line no-use-before-define
+       
       return makeChannelInstance(
         id,
         handleId,
@@ -5005,7 +5009,7 @@ const makeDaemonCore = async (
     const { number: formulaNumber, node: formulaNode } = parseId(id);
     const isRemote = !isLocalKey(formulaNode);
     if (isRemote) {
-      // eslint-disable-next-line no-use-before-define
+       
       const peerId = await getPeerIdForNodeIdentifier(formulaNode);
       context.thisDiesIfThatDies(peerId);
       const peer = provide(peerId, 'peer');
@@ -5031,6 +5035,7 @@ const makeDaemonCore = async (
    *
    * @param {FormulaNumber} formulaNumber
    * @param {Formula} formula
+   * @param nodeNumber
    * @returns {Promise<FormulaIdentifier>}
    */
   const formulateLazy = async (
@@ -5082,7 +5087,7 @@ const makeDaemonCore = async (
 
     logLifecycle(id, 'FORMULATE');
     if (formula.type === 'marshal' && formula.slots.length === 0) {
-      // eslint-disable-next-line no-use-before-define
+       
       const context = makeContext(id);
       // An arrow here shares a lexical context with the graph-lock callback,
       // which captures formula. Bind explicit arguments so the controller
@@ -5099,7 +5104,7 @@ const makeDaemonCore = async (
     );
 
     // Behold, recursion:
-    // eslint-disable-next-line no-use-before-define
+     
     const context = makeContext(id);
     // Automatic cancellation must observe its cleanup failure too. Explicit
     // cancellation and context.disposed retain that rejection for the owner.
@@ -5141,7 +5146,7 @@ const makeDaemonCore = async (
 
     const metadata = formulaForId.get(id);
     if (metadata?.type === 'marshal' && metadata.slots.length === 0) {
-      // eslint-disable-next-line no-use-before-define
+       
       const context = makeContext(id);
       const controller = makeReloadableController(
         context,
@@ -5156,7 +5161,7 @@ const makeDaemonCore = async (
     );
 
     // Behold, recursion:
-    // eslint-disable-next-line no-use-before-define
+     
     const context = makeContext(id);
     // Automatic cancellation must observe its cleanup failure too. Explicit
     // cancellation and context.disposed retain that rejection for the owner.
@@ -6166,7 +6171,7 @@ const makeDaemonCore = async (
       ),
     );
 
-    /* eslint-disable no-use-before-define */
+     
     const inspectorId = pin(
       (
         await formulateNumberedPetInspector(
@@ -6213,7 +6218,7 @@ const makeDaemonCore = async (
     const { id: planesDirectoryId } = await formulateDirectory(agentNodeNumber);
     // Adopt the pin transferred by formulateDirectory without taking another.
     pinned.push(planesDirectoryId);
-    /* eslint-enable no-use-before-define */
+     
 
     return harden({
       ...remainingSpecifiedIdentifiers,
@@ -6698,7 +6703,7 @@ const makeDaemonCore = async (
               }
               await null;
               return (
-                /* eslint-disable no-use-before-define */
+                 
                 (
                   await formulateNumberedLookup(
                     /** @type {FormulaNumber} */ (await randomHex256()),
@@ -6706,7 +6711,7 @@ const makeDaemonCore = async (
                     /** @type {NamePath} */ (formulaIdOrPath),
                   )
                 ).id
-                /* eslint-enable no-use-before-define */
+                 
               );
             }),
           ),
@@ -7364,7 +7369,7 @@ const makeDaemonCore = async (
         let networkIndex = 0;
         for (const network of networks) {
           networkIndex += 1;
-          // eslint-disable-next-line no-await-in-loop
+           
           const supported = await E(network).supports(protocol);
           console.log(
             `Endo daemon makePeer ${nodeId.slice(0, 8)}: network ${networkIndex}/${networks.length} supports(${protocol}) -> ${supported}`,
@@ -7397,7 +7402,7 @@ const makeDaemonCore = async (
               addDisposalHook: _hook => {},
             });
             try {
-              // eslint-disable-next-line no-await-in-loop
+               
               const remoteGateway = await E(network).connect(
                 address,
                 /** @type {any} */ (attemptContext),
@@ -8636,9 +8641,9 @@ const makeDaemonCore = async (
    *   import('./retention-path-accumulator.js').RetentionPathDelta
    * >}
    */
-  // eslint-disable-next-line no-use-before-define
+   
   const followRetentionPaths = async function* followRetentionPaths(targetId) {
-    // eslint-disable-next-line no-use-before-define
+     
     const accumulator = makeRetentionPathAccumulator({
       compute: () => listRetentionPaths(targetId),
       // Route structured failures through the lifecycle log per
@@ -8973,7 +8978,7 @@ const makeDaemonCore = async (
   /** @type {DaemonCoreExternal} */
   await seedFormulaGraphFromPersistence();
 
-  // eslint-disable-next-line no-undef
+   
   if (typeof process !== 'undefined' && process.env.ENDO_FORMULA_GRAPH) {
     console.log('Formula graph after persistence seed:');
     for (const [id, formula] of formulaForId.entries()) {

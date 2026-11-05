@@ -1071,6 +1071,16 @@ export interface NameHub {
   maybeLookup(petNamePath: string | string[]): unknown;
   reverseLookup(value: unknown): Array<Name>;
   storeIdentifier(petNamePath: string | string[], id: string): Promise<void>;
+  /**
+   * Atomically change one name only if it still holds `expectedId`, where
+   * `undefined` means no entry: as `expectedId`, that the name is absent; as
+   * `nextId`, to remove it. Resolves to whether the change applied.
+   */
+  compareAndStoreIdentifier(
+    petName: string,
+    expectedId: string | undefined,
+    nextId: string | undefined,
+  ): Promise<boolean>;
   storeLocator(petNamePath: string | string[], locator: string): Promise<void>;
   remove(...petNamePath: string[]): Promise<void>;
   move(fromPetName: string[], toPetName: string[]): Promise<void>;
@@ -1251,6 +1261,11 @@ export interface StoreController {
   reverseIdentify(id: string): Array<Name>;
 
   storeIdentifier(petName: PetName, id: string): Promise<void>;
+  compareAndStoreIdentifier(
+    petName: PetName,
+    expectedId: string | undefined,
+    nextId: string | undefined,
+  ): Promise<boolean>;
   storeLocator(petName: PetName, locator: string): Promise<void>;
   remove(petName: PetName): Promise<void>;
   rename(fromPetName: PetName, toPetName: PetName): Promise<void>;
