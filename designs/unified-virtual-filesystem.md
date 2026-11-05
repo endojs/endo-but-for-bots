@@ -148,9 +148,15 @@ read(R(x), t) = read(x, t)                 live at time t
 write(R(x), ...) = absent                  no mutator is exposed
 read(S(x), t1) = read(S(x), t2)            immutable
 S(S(x)) = S(x)                             snapshot idempotence
-equivalent(I(x), I(S(x))) after S(x) = true
+equivalent(I(x at t), I(S(x at t)))        identity is captured with the snapshot
 authority(A(B(x))) <= authority(A(x)) and authority(B(x))
 ```
+
+`A` and `B` stand for any two attenuations.
+The identity law compares a snapshot with its source at the one instant `t` the
+snapshot was taken.
+A snapshot's identity never changes, whereas `I(x)` evaluated after a later
+mutation of `x` need not be equivalent to it.
 
 `R(x)` is therefore not `S(x)`.
 A snapshot can outlive and diverge from its source, whereas a read-only view
@@ -177,22 +183,61 @@ The common interface proposes:
 
 ```js
 identity(): Promise<ContentIdentity>
-snapshot(options = {}): Promise<SnapshotBlob | SnapshotTree>
+snapshot(options = {}): Promise<Snapshot>
 ContentIdentity.equivalent(other): Promise<boolean>
+Snapshot.equivalent(other): Promise<boolean>
 ```
 
-`ContentIdentity` is an opaque, non-forgeable description of content
-equivalence.
+Three values do three separate jobs:
+
+| Value | Question it answers | Valid across | Retains content |
+|---|---|---|---|
+| `Revision` | Has this provider's root advanced? | One provider incarnation | No |
+| `ContentIdentity` | Is this the content that token named? | One identity domain | No |
+| `Snapshot` | What is the content, and does another snapshot hold the same content? | Any provider | Yes, while reachable |
+
+`ContentIdentity` is an opaque, non-forgeable token for content equivalence within
+one *identity domain*: the providers sharing one canonicalization, one private
+digest algorithm, and the private brand that unwraps their tokens.
 It does not reveal a digest, algorithm, storage address, provider revision, or
 Git object ID.
-Providers MAY compare a shared private digest as a fast path and MUST fall back
-to canonical byte/tree comparison when identities use different algorithms.
+It retains no content, so two tokens of one domain remain comparable after their
+content is collected.
+Tokens of different domains hold nothing they could compare, so `equivalent`
+throws `IDENTITY_INCOMPARABLE` rather than guessing.
+A token is a live reference.
+A client whose precondition must survive a restart retains a snapshot and derives
+a fresh identity from it.
+
+`Snapshot.equivalent` is the cross-provider comparison.
+Within one domain it MAY compare private digests; otherwise the providers stream
+both canonical forms to each other without materializing them in the caller.
+Each operand retains its own content, and the content store owns that retention.
 Public `sha256()` and `{ algorithm, hash }` methods remain diagnostic and
 content-store locator APIs; new correctness logic MUST NOT depend on them.
 
-A mutator taking `{ expected }` compares the current complete target identity
-with the supplied snapshot or `ContentIdentity` immediately before commit.
-Mismatch throws `PRECONDITION_FAILED` without changing the target.
+Every entry kind compares by the canonical form of its category:
+
+| Category | Kinds | Canonical form |
+|---|---|---|
+| Blob | `File`, `BlockStorage`, `SnapshotBlob` | The exact byte sequence. Capacity, block size, and timestamps are excluded. |
+| Tree | `Directory`, `SnapshotTree` | The set of NFC-normalized names, each with its entry's category and canonical form. Listing order and timestamps are excluded. |
+| Log | `AppendLog` and its snapshot | The ordered sequence of exact records. A strict prefix is not equivalent. |
+| Data | `DataStore` and its snapshot | The store shape (map or set) and its entries in key rank order, compared by `keyEQ` from `@endo/patterns`. A value that is not a Key makes `identity()` and `equivalent` throw `UNSNAPSHOTTABLE_ENTRY`. |
+| Link | `CapabilityLink` | The exact locator bytes of the link record, or object identity for a link with no locator. The referent is never dereferenced. |
+
+A snapshot keeps its source's category even when its representation is a
+pass-by-copy value or a tree, so the identity law holds for every kind.
+Values of different categories are never equivalent.
+Two locators for one referent, or two presences of one object, are not equivalent
+either: comparison MAY report a false negative, which fails a compare-and-swap
+safely, and MUST NOT report a false positive.
+
+A mutator taking `{ expected }` accepts a snapshot from any provider or an identity
+from the target's own domain, and compares it with the complete current target
+immediately before commit.
+An identity from another domain throws `IDENTITY_INCOMPARABLE`, and a mismatch
+throws `PRECONDITION_FAILED`; neither changes the target.
 This is content-equivalence CAS, so an A-to-B-to-A history satisfies a
 precondition for A; clients that need history ordering also supply the provider's
 incarnation-local revision.
@@ -272,6 +317,7 @@ loss.
 snapshot.diff(other, options): Promise<Patch>
 mutable.applyPatch(patch, { expected }): Promise<MutationResult>
 snapshot.merge(base, other, options): Promise<MergeResult>
+snapshot.transform(transform): Promise<Snapshot>
 mutable.applyTransform(transform, { expected }): Promise<MutationResult>
 ```
 
@@ -299,6 +345,9 @@ The provider resolves every source snapshot, validates all ranges and the target
 precondition, stages the complete result, and commits once.
 Overlapping operations use their declared order against the staged value.
 No operation invokes caller code inside the transaction.
+`snapshot.transform` is the pure form: it returns the snapshot a commit would
+produce, so its identity predicts the result of `applyTransform` on the same
+content.
 
 ### Blocks, logs, data, and generic slots
 
@@ -329,7 +378,8 @@ and a copy-only `details` record.
 | `INVALID_RANGE` | A range is negative, fractional where integral, reversed, or unrepresentable; a valid range beyond the source clamps to an empty suffix. |
 | `MERGE_CONFLICT` | A caller requested conflict-free output but conflicts remain. |
 | `RESULT_TOO_LARGE` | Materializing or rendering a result exceeds its attenuation. |
-| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a generic live capability. |
+| `IDENTITY_INCOMPARABLE` | A `ContentIdentity` came from a different identity domain than the one comparing it. |
+| `UNSNAPSHOTTABLE_ENTRY` | Strict deep snapshot encountered a generic live capability, or a data store holds a value with no canonical form. |
 | `LOCATOR_UNREACHABLE` | A restored capability link cannot presently resolve. |
 
 Static read-only facets SHOULD omit mutators entirely.
@@ -394,8 +444,9 @@ An agent uses `grep('function parseRequest')` to find the line range in snapshot
 payload is `{ source: A.lookup(['src','old.js']), start, end }`.
 The same transform inserts that range in `src/new.js` and deletes the original
 range, with `expected: I(worktree)`.
-The result returns `identity` and a snapshot; the agent compares that identity
-with the transform's predicted result instead of rereading both files.
+The agent first previews the transform on `A` with `A.transform(transform)`.
+The commit returns `identity` and a snapshot; the agent compares that identity
+with the preview's instead of rereading both files.
 
 ### Three-way merge edited snapshots
 
@@ -413,8 +464,8 @@ A transform creates `bundle.txt`, copies bytes `[0,120)` from blob `A`,
 literal terminator.
 The provider validates all three immutable sources, writes one staged target,
 and atomically publishes it.
-The caller checks the returned opaque identity against an expected identity or a
-signed manifest without materializing the bundle.
+The caller compares the returned identity with the identity of a preview from
+`transform` without materializing the bundle.
 
 Hashline edits are the line-oriented form of the same mechanism.
 Their replacement payload MAY be a range reference, and their anchors plus the
@@ -509,7 +560,7 @@ parallel REST filesystem API.
 |---|---|---|---|---|---|
 | Client view -> mutable provider | The view sends one guarded read or staged mutation. | The view's attenuation admits paths, methods, and result sizes; the provider validates CAS. | The provider alone owns bytes, tree metadata, revision, and journal. | The provider commits or discards one mutation and recovers its journal before publishing a root. | Path, operation, expected identity, and `MutationResult`, all filesystem vocabulary. |
 | Controller -> mutable provider | The controller supplies branch policy and generation. | The controller decides read/write/revoked; the provider decides transaction atomicity. | The controller owns durable policy; the provider owns content. | The controller restores policy before facets revive; the provider linearizes a write against its generation. | Branch selector and policy generation, controller vocabulary. |
-| Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private identities after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
+| Mutable provider -> snapshot/content store | The provider writes immutable children and a root. | The provider decides when a complete snapshot can publish; store GC decides reachability reclamation. | The content store alone owns immutable objects and reachability metadata. | The store publishes complete roots and discards staging; it re-indexes private digests after restart. | Immutable bytes/tree nodes and opaque `ContentIdentity`, snapshot vocabulary. |
 | Pet-name/formula directory -> provider or capability link | The directory binds a local name to a typed capability entry; a formula may reincarnate it. | The directory owner admits binding changes; it does not decide content mutations. | The directory/formula store owns bindings and recipes; the target provider owns target state. | The directory commits bindings and replays recipes before lookup; unresolved links remain inert. | Name, entry kind, formula ID or link, outer naming vocabulary. |
 | Archive/restore -> directory and locator resolver | Export writes a manifest/envelope; restore validates and mints unresolved links. | Explicit export authority admits bearer locators; restore chooses strict or unresolved mode. | The archive owner owns archive bytes; the destination owns installed bindings. | Export finalizes the manifest last; restore atomically installs or discards staging and never owns resolver restart. | Manifest entry, envelope bytes, and locator, archive vocabulary. |
 | Git adapter -> filesystem provider | The adapter reads a root and stages Git objects; the provider offers a filesystem transaction. | Filesystem write, Git commit, and push policy remain independent. | Git owns objects, refs, and stage metadata; the provider owns the working root. | Each side commits and replays its own state; no filesystem mutation implies commit or push. | Snapshot root, tentative metadata, Git commit result, each named by its owning layer. |
@@ -519,6 +570,11 @@ The mutable provider owns content and journals, the controller owns policy, the
 content store owns immutable objects, the directory/formula store owns bindings
 and recipes, the archive owner owns exported bytes, and Git owns Git objects.
 No durable datum has two owners.
+A `ContentIdentity` retains no content and has no durable store: its issuer mints
+it, its holder owns the reference, and collection of the content does not affect
+it.
+Content lives only as long as a reachable snapshot, and the content store owns
+that reachability.
 
 **Commit or discard.**
 Each provider decides whether its staged mutation publishes; the directory
@@ -548,7 +604,7 @@ policy results; those outer lifecycle terms remain at their owning boundaries.
 | Topic | Sources | What differs or is missing | Recommended resolution |
 |---|---|---|---|
 | Read-only versus snapshot | mount capabilities, storage matrix PR #1264, platform interfaces | Some names and formula types call immutable snapshots "readable"; `readOnly()` is live. | Use `Readable*` for a posture, `Snapshot*` for immutable content, and document `R(x) != S(x)`. |
-| Content identity | platform range reads, CAS management, root advancement | Public SHA-256/tree refs leak an algorithm into CAS; 2026-11-03 direction is opaque `identity()`/`snapshot()`. | Make identity opaque and content-equivalent; retain hashes only as private fast paths and explicit locator diagnostics. |
+| Content identity | platform range reads, CAS management, root advancement | Public SHA-256/tree refs leak an algorithm into CAS; 2026-11-03 direction is opaque `identity()`/`snapshot()`. | Make identity opaque and content-equivalent within a domain, compare across providers through snapshots, and retain hashes only as private fast paths and explicit locator diagnostics. |
 | Range names | platform range/tree reads, range attenuation, extended FS | `fetch`, `rangeRead`, `rangeReadText`, `bytes`, `byteRange`, and `textRange` overlap. | Standardize bounded materializers as `readByteRange`/`readTextRange`; keep `byteRange`/`textRange` as attenuating capability constructors. |
 | NameHub and mount overlap | name-hub unification, interface consolidation, daemon guards | Shared methods have different accepted path and result shapes. | Derive guards from method families; keep explicit adapters for entry-as-path overloads. |
 | Read-only attenuation | extended FS, mount capabilities | One API keeps mutators and rejects calls; another omits mutators. | New static facets omit methods; dynamic controlled facets may reject after a flip. |
@@ -572,8 +628,8 @@ Each rung can land independently behind adapters and conformance tests.
    including teaching errors for files, listings, and searches.
 3. Replace eager search truncation with continuation-bearing pages/readers and
    make `glorp` conformance explicit.
-4. Introduce opaque `ContentIdentity` beside existing hashes, then move hashline
-   and tree CAS preconditions to it.
+4. Introduce opaque `ContentIdentity` and `Snapshot.equivalent` beside existing
+   hashes, then move hashline and tree CAS preconditions to them.
 5. Add reference payloads to hashline edits and atomic `Transform.copyRange` for
    one file, then a whole-tree transaction.
 6. Add portable snapshot `diff`, streamable `Patch`, CAS `applyPatch`, and pure
@@ -596,8 +652,9 @@ archive, or non-file storage work.
 
 A shared suite MUST run against in-memory, native, mount, Git-backed, registry,
 and remote adapters where applicable.
-It covers view laws, path confinement, entry kinds, opaque cross-provider
-identity comparison, ABA and stale CAS, controller races, partial-failure
+It covers view laws, path confinement, entry kinds, same-domain identity
+comparison, foreign-domain rejection, cross-provider snapshot comparison for every
+canonical form, ABA and stale CAS, controller races, partial-failure
 atomicity, range composition, result limits, search continuation, merge
 conflicts, reference splices, archive tampering, binary magic collisions,
 secret-locator redaction, unreachable locators, restart replay, and GC liveness.
