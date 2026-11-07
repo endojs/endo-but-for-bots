@@ -101,9 +101,10 @@
 // `globalThis.harden`, and installs its own into `Object[@harden]` if neither
 // is there -- which makes `repairIntrinsics` refuse outright ("a prior harden
 // implementation has been used and installed",
-// `packages/ses/src/lockdown.js:395`). That is how the node host fails the
-// `ses-xs-parity` corpus today, and how Ironhorse would fail it without
-// `packages/test262-runner/src/install-pre-lockdown-harden.js`.
+// `packages/ses/src/lockdown.js:395`). That is how the node host used to fail
+// the `ses-xs-parity` corpus, and how Ironhorse would fail it without
+// `packages/test262-runner/src/install-pre-lockdown-harden.js` -- which
+// `node-prelude.js` now imports too.
 //
 // XS escapes all of this by having a NATIVE `lockdown` -- `fx_lockdown`,
 // `c/moddable/xs/sources/xsLockdown.c` -- which rewires those constructors with
