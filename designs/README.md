@@ -6,6 +6,12 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[ordered-directory-formula](ordered-directory-formula.md) (added 2026-11-07;
+recasts the existing directory formula as a versioned, naturally sorted name
+hub and proposes a distinct insertion-ordered, manually reorderable formula;
+defines revision-pinned ranges, structured diff/patch and transforms, and a
+hashline adapter; migration, collation, and the shared read/edit surface remain
+explicit blocking questions),
 [ironhorse-guest-compartment](ironhorse-guest-compartment.md) (added
 2026-09-18; the implementation specification for a guest-callable
 `Compartment` in `ironhorse-vm` — the remainder
@@ -432,6 +438,7 @@ LLM-agent stack).*
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
 | [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-07-06 | In Progress |
 | [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) | 2026-07-29 | 2026-08-24 | **Complete** |
+| [ordered-directory-formula](ordered-directory-formula.md) | 2026-11-07 | 2026-11-07 | Proposed |
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | In Progress |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | In Progress |
 | [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) | 2026-09-08 | 2026-09-22 | **Implemented** |
@@ -652,6 +659,13 @@ The rebase of PR #1220 adds [thixotrope/host-managed-resources](../packages/thix
 
 The same PR adds [thixotrope/production-cost-model](../packages/thixotrope/designs/production-cost-model.md) (Proposed), bringing Proposed to 32 and the indexed records to 251.
 
+The 2026-11-07 addition of
+[ordered-directory-formula](ordered-directory-formula.md) brings Proposed to
+33 and the indexed records to 252. It is placed in M3 at M-L / 1–2 weeks, off
+the current hosted-Gateway critical path, so milestone duration and the
+timeline remain unchanged pending decisions on migration, collation, and the
+shared ranged-read/edit surface.
+
 
 
 ## Roadmap
@@ -684,6 +698,7 @@ inventing implementation commitments.
 |---|---|---|
 | `inter-package-plain-re-exports`, `intra-package-plain-re-exports` | M2 | Package-hygiene cleanup before cross-package capability work. |
 | `http-confine`, `platform-range-and-tree-reads`, `endo-fs-seam-review-followups` | M3 | HTTP and readable-tree foundations for tools and daemon guests. |
+| `ordered-directory-formula` | M3 | Versioned natural name order for ordinary directories and an insertion-ordered, manually reorderable formula with bounded reads and structured edits. |
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
 | `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
@@ -923,6 +938,7 @@ flowchart TD
         dmcap[daemon-mount-capabilities]
         dgit[daemon-git-capability]
         dgitfollow[exo-git-follow-root-advancement<br/><i>COMPLETE</i>]
+        odir[ordered-directory-formula<br/><i>PROPOSED</i>]
         dgitremote[daemon-git-remotes]
         dgitnext[daemon-git-next-steps]
         dfsw[filesystem-watchers<br/><i>COMPLETE</i>]
@@ -951,6 +967,8 @@ flowchart TD
         dmcap --> dgit
         dgit --> dgitfollow
         pfs --> dgitfollow
+        pfs --> odir
+        odir -.-> dtools
         dfsw --> dgitfollow
         dgit --> dgitremote
         dgit --> dgitnext
@@ -1213,6 +1231,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | snapshot-mapper | **Complete** (consolidated into `@endo/exo-npm`) | Layer 3 of 4. `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
 | daemon-git-capability | In Progress | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | exo-git-follow-root-advancement | **Complete** | Extends `@endo/platform/fs` with tree identity, atomic method-call transactions, high-level patches, and separate lossless-change / lossy-latest root followers; `GitStage` adds tentative commit metadata and a mutable root whose explicit `commit()` advances the corresponding Git followers |
+| ordered-directory-formula | Proposed | Recast ordinary directories as versioned natural-name order; add a manually ordered formula with stable entry keys, revisioned ranges, structured diff/patch/transform, and a hashline adapter. Migration, exact collation, and the shared ranged-read/edit surface await decisions. |
 | daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | In Progress | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
 | **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
@@ -1988,6 +2007,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | agentry-git-verb-gaps | S-M | 2-3 days | 3 | Extend the local `Git` surface and generated code-mode declarations with the narrow history-editing verbs required by `stack-surgery`; no broad `reset` |
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | exo-git-follow-root-advancement | M-L | 1-1.5 weeks | 3 | `@endo/platform/fs` tree identity, snapshots, atomic mutators, change/latest followers, high-level patching, and conformance across in-memory/native/composed adapters; `GitStage` tentative metadata, mutable roots, explicit commit, stale-base checks, matching Git followers, declarations, attenuation, and recovery |
+| ordered-directory-formula | M-L | 1-2 weeks | 3 | Versioned cross-runtime natural comparator; ordered-store formula, persistence, and recovery; revisioned ranges and followers; atomic diff/patch with idempotency, transform, and hashline adapters. Estimate is provisional until the migration, collation, and shared read/edit questions settle. |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
