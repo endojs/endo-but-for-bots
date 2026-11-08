@@ -63,6 +63,21 @@ const ConfigShape = M.splitRecord(
   harden({}),
 );
 
+// Fresh direct installations need only their stable owner and account identity.
+const DirectConfigShape = M.splitRecord(
+  {
+    ownerId: M.string(),
+    directOnly: M.eq(true),
+    accountAuthority: M.string(),
+    credentialKind: M.or(...CREDENTIAL_KINDS),
+  },
+  {
+    pool: M.boolean(),
+    anthropicBeta: M.string(),
+  },
+  harden({}),
+);
+
 /**
  * Read an explicit operator profile stored with the unconfined formula.
  * Runtime hooks and secrets are not configuration fields. The broker kit
@@ -97,7 +112,7 @@ export const readClaudeBrokerConfig = env => {
     !Object.hasOwn(config, 'accountAuthority')
   ) ||
     Fail`Retained Claude broker configuration names no account authority, which this release records into every session plan; retire that broker deliberately and set ENDO_CLAUDE_ACCOUNT_AUTHORITY for the next mint`;
-  if (!matches(config, ConfigShape))
+  if (!matches(config, ConfigShape) && !matches(config, DirectConfigShape))
     throw Fail`Invalid Claude broker configuration`;
   config.pool !== true ||
     config.credentialKind === 'oauthToken' ||
@@ -195,5 +210,9 @@ export const makeOwnedClaudeBrokerService = ({
 harden(makeOwnedClaudeBrokerService);
 
 /** Unconfined operator entrypoint. The returned facet contains only scopes. */
-export const make = makeOwnedClaudeBrokerService();
+// Retained broker formulas revive over the same account owners during cutover.
+export const make = makeOwnedClaudeBrokerService({
+  makeServiceKit: options =>
+    makeProviderBrokerServiceKit({ ...options, directOnly: true }),
+});
 harden(make);

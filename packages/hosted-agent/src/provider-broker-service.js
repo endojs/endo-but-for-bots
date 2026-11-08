@@ -139,11 +139,12 @@ harden(assertBrokerSettings);
  *   The one account's model admission, from its catalog owner; required
  *   without a pool.
  * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['catalogState']} [options.catalogState]
- * @param {string} options.ownerId - Stable operator-owned cleanup scope
- * @param {string} options.directory - Private host directory for listener state
- * @param {string} options.imageRef - Pinned slice image ref (used for digest checks)
- * @param {string} options.imageDigest - Slice image digest (`sha256:...`)
- * @param {string} options.listenerImageRef - Pinned listener image ref
+ * @param {string} [options.ownerId] - Stable operator-owned cleanup scope
+ * @param {string} [options.directory] - Private host directory for listener state
+ * @param {string} [options.imageRef] - Pinned slice image ref (used for digest checks)
+ * @param {string} [options.imageDigest] - Slice image digest (`sha256:...`)
+ * @param {string} [options.listenerImageRef] - Pinned listener image ref
+ * @param {boolean} [options.directOnly] Serve subscription endpoints without a listener runtime.
  * @param {Record<string,string>} [options.env] Trusted operator host environment overrides.
  * @param {boolean} [options.publicInternet] Operator initially permits public egress grants.
  * @param {number} [options.maxSessions] Initial concurrent listener capacity.
@@ -175,13 +176,14 @@ export const makeProviderBrokerKit = ({
   adaptRequest,
   admits,
   catalogState,
-  ownerId,
-  directory,
-  imageRef,
-  imageDigest,
-  listenerImageRef,
+  ownerId = '',
+  directory = '',
+  imageRef = '',
+  imageDigest = '',
+  listenerImageRef = '',
   maxSessions,
   env,
+  directOnly = false,
   publicInternet = false,
   audit,
   onDiagnostic,
@@ -199,6 +201,28 @@ export const makeProviderBrokerKit = ({
     'ENDO_PROVIDER_REQUEST_TIMEOUT_MS',
     DEFAULT_REQUEST_TIMEOUT_MS,
   );
+  if (directOnly) {
+    const issuer = makeIssuer({
+      secret,
+      credential,
+      adaptRequest,
+      admits,
+      catalogState,
+      fetch: fetchAuthority,
+      accountRef,
+      requestTimeoutMs,
+      policy,
+      audit,
+      onDiagnostic,
+      onReading,
+      pool,
+    });
+    return harden({
+      start: async () => ({ issuer, imageRef: '' }),
+      close: () => issuer.dispose(),
+      configure: async settings => assertBrokerSettings(settings),
+    });
+  }
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
   // An operator setting, not identity: `configure()` changes it later.
@@ -1397,7 +1421,7 @@ const saveSettings = async (directory, settings) => {
  * the original. Separate processes still depend on the broker runtime's
  * native ownership checks, and process loss is not a cleanup acknowledgement.
  *
- * @template {{ ownerId: string, directory: string, imageRef: string, imageDigest: string, listenerImageRef: string, publicInternet?: boolean, maxSessions?: number, diagnostics?: boolean, pool?: boolean }} Config
+ * @template {{ ownerId: string, directory?: string, imageRef?: string, imageDigest?: string, listenerImageRef?: string, publicInternet?: boolean, maxSessions?: number, diagnostics?: boolean, pool?: boolean }} Config
  * @param {object} options
  * @param {string} options.label
  * @param {(env: Record<string, string>) => Config} options.readConfig The

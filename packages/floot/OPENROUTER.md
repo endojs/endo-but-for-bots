@@ -22,17 +22,9 @@ endo run --UNCONFINED packages/floot/floot-factory-setup.js --powers @agent \
 ```
 
 Replace `vendor/model` with your chosen tool-capable OpenRouter model ID.
-Use a separate `FLOOT_DIR` to preserve an existing Anthropic-backed factory;
-each Floot factory currently has one API-provider configuration, alongside its hosted backends.
-The picker labels this API backend Fae and offers what the configured
-OpenRouter account lists: the factory reads the account-filtered catalog under
-Floot's own credential, keeps it for a while, and marks the configured model as
-the default when the account lists it.
-A model the account does not list is not offered, and a pin must be listed; a
-failed read is shown as unavailable, never as a list typed here.
-Model variants with a colon suffix are treated as API model IDs, not hosted-backend IDs.
-Reusing a factory directory changes its API provider: do not do that for existing sessions
-unless you intend to send their history to the new provider.
+Floot reads the account-filtered model catalog under its own credential. Its picker lists the models available to that account. Colon suffixes in OpenRouter model IDs are preserved.
+
+To add OpenRouter to a factory already using an Anthropic API key, rerun its existing setup with two additional options: `FLOOT_OPENROUTER_SECRET_NAME=openrouter-auth` and `FLOOT_OPENROUTER_MODEL=vendor/model`. This publishes an independent OpenRouter route and preserves the provider used by the factory's existing sessions. A factory serving only subscription accounts can be installed with `FLOOT_PROVIDER=none` before the direct pool setup scripts run.
 
 The secret is re-read each turn, so rotation and revocation use the existing Secrets workflow.
 Setup also accepts `OPENROUTER_API_KEY` or `FLOOT_AUTH_TOKEN` from the environment,

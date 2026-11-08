@@ -98,12 +98,12 @@ harden(withDeadline);
  * through the grant would mean the grant admitted something else.
  *
  * @param {object} options
- * @param {any} options.runtime Concrete provider listener runtime.
+ * @param {any} [options.runtime] Concrete provider listener runtime.
  * @param {any} options.secret SecretBlob read facet.
  * @param {typeof globalThis.fetch} options.fetch Explicit outbound authority.
  * @param {BrokerPolicy} options.policy
  * @param {number} [options.requestTimeoutMs] Host-only request deadline, independent of grant lifetime.
- * @param {string} options.imageDigest Target Codex image, not listener image.
+ * @param {string} [options.imageDigest] Required only for a listener runtime.
  * @param {string} options.accountRef
  * @param {(event: any) => void} [options.audit]
  * @param {Parameters<typeof makeProviderFetchTransport>[0]['onDiagnostic']} [options.onDiagnostic]
@@ -156,7 +156,10 @@ export const makeProviderBrokerGrantIssuer = ({
   pool,
   wrappedOpenDeadlineMs = WRAPPED_OPEN_DEADLINE_MS,
 }) => {
-  (/^sha256:[a-f0-9]{64}$/.test(imageDigest) &&
+  ((runtime === undefined
+    ? imageDigest === undefined
+    : typeof imageDigest === 'string' &&
+      /^sha256:[a-f0-9]{64}$/.test(imageDigest)) &&
     typeof accountRef === 'string' &&
     accountRef.length > 0 &&
     accountRef.length <= 256) ||
@@ -607,6 +610,8 @@ export const makeProviderBrokerGrantIssuer = ({
    * @param {any} requested
    */
   const issueKit = requested => {
+    runtime !== undefined ||
+      Fail`Direct inference cannot issue a listener grant`;
     const spec = harden({
       sessionId: requested.sessionId,
       providerOrigin: requested.providerOrigin,

@@ -8,7 +8,6 @@ import {
 } from '@endo/hosted-agent/provider-broker-service.js';
 import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { M, matches } from '@endo/patterns';
-import { readFile } from 'node:fs/promises';
 
 import { assertAccountAuthority } from '@endo/hosted-agent/account-authority.js';
 import { makeCodexAccountRead } from './codex-account-read.js';
@@ -38,6 +37,20 @@ const ConfigShape = M.splitRecord(
     // Several subscriptions: the formula's powers are then a namespace that
     // holds the declared set and each member's credential.
     pool: M.boolean(),
+  },
+  harden({}),
+);
+
+// Fresh direct installations need only their stable owner and account identity.
+const DirectConfigShape = M.splitRecord(
+  {
+    ownerId: M.string(),
+    directOnly: M.eq(true),
+    accountAuthority: M.string(),
+  },
+  {
+    pool: M.boolean(),
+    accountRef: M.string(),
   },
   harden({}),
 );
@@ -75,7 +88,7 @@ export const readCodexBrokerConfig = env => {
     !Object.hasOwn(config, 'accountAuthority')
   ) ||
     Fail`Retained Codex broker configuration names no account authority, which this release records into every session plan; retire that broker deliberately and set ENDO_CODEX_ACCOUNT_AUTHORITY for the next mint`;
-  if (!matches(config, ConfigShape))
+  if (!matches(config, ConfigShape) && !matches(config, DirectConfigShape))
     throw Fail`Invalid Codex broker configuration`;
   assertAccountAuthority(config.accountAuthority, 'Codex');
   if (config.pool === true) {
@@ -130,24 +143,14 @@ export const makeOwnedCodexBrokerService = ({
         accountRef,
         fetch: globalThis.fetch,
       }),
-    makeModelRead:
-      ({ credential, accountRef }) =>
-      async () => {
-        // The packaged runtime is the version authority, not a second pin in
-        // broker configuration. Read lazily: constructing an owner stays inert.
-        const manifest = JSON.parse(
-          await readFile(
-            new URL('../oci/package.json', import.meta.url),
-            'utf8',
-          ),
-        );
-        return makeCodexModelRead({
-          current: () => credential.current(),
-          accountRef,
-          clientVersion: manifest.dependencies['@openai/codex'],
-          fetch,
-        })();
-      },
+    makeModelRead: ({ credential, accountRef }) =>
+      makeCodexModelRead({
+        current: () => credential.current(),
+        accountRef,
+        // Catalog negotiation uses the protocol version the adapter supports.
+        clientVersion: '0.152.0',
+        fetch,
+      }),
     // For the operator's subscription admin: the one call that spends a
     // banked rate-limit reset. Nothing in the broker runs it.
     makeResetRedeem: ({ credential, accountRef }) =>
@@ -162,5 +165,9 @@ export const makeOwnedCodexBrokerService = ({
 harden(makeOwnedCodexBrokerService);
 
 /** Retained unconfined operator entrypoint. Its facet exposes only scopes. */
-export const make = makeOwnedCodexBrokerService();
+// Retained broker formulas revive over the same account owners during cutover.
+export const make = makeOwnedCodexBrokerService({
+  makeServiceKit: options =>
+    makeProviderBrokerServiceKit({ ...options, directOnly: true }),
+});
 harden(make);

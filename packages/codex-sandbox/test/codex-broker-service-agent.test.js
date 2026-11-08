@@ -5,7 +5,6 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 import { setImmediate } from 'node:timers/promises';
-import { readFile } from 'node:fs/promises';
 
 import {
   makeOwnedCodexBrokerService,
@@ -38,13 +37,10 @@ test('a profile from before account authorities is refused with the way out, and
   });
 });
 
-test('Codex catalog uses retained credential and the packaged CLI version without starting runtime', async t => {
+test('Codex catalog uses retained credential and the supported catalog protocol version without starting runtime', async t => {
   let reads = 0;
   let requests = 0;
   let constructions = 0;
-  const manifest = JSON.parse(
-    await readFile(new URL('../oci/package.json', import.meta.url), 'utf8'),
-  );
   // The catalog's own clock: within an observation's lifetime a second
   // catalog request is answered from what is held; past it, the provider is
   // read again under the credential as it is then.
@@ -80,7 +76,7 @@ test('Codex catalog uses retained credential and the packaged CLI version withou
       requests += 1;
       t.is(
         url,
-        `https://chatgpt.com/backend-api/codex/models?client_version=${manifest.dependencies['@openai/codex']}`,
+        'https://chatgpt.com/backend-api/codex/models?client_version=0.152.0',
       );
       t.like(options?.headers, {
         authorization: `Bearer token-${reads}`,

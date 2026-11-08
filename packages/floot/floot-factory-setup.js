@@ -284,17 +284,44 @@ export const main = async agent => {
   const guestName = `${dir}-controller-handle`;
   const agentName = `profile-for-${guestName}`;
 
-  const provider = env('FLOOT_PROVIDER') || 'anthropic';
-  assertProviderKind(provider);
-  const model = env('FLOOT_MODEL');
+  const explicitProvider = env('FLOOT_PROVIDER');
+  if (explicitProvider && explicitProvider !== 'none')
+    assertProviderKind(explicitProvider);
+  const dirExists = await E(agent).has(dir);
+  const previous =
+    dirExists && (await E(agent).has(dir, 'llm-provider'))
+      ? await E(agent).lookup([dir, 'llm-provider'])
+      : undefined;
+  const retainedProvider = previous
+    ? previous.provider || 'anthropic'
+    : undefined;
+  if (
+    retainedProvider &&
+    explicitProvider &&
+    retainedProvider !== explicitProvider
+  ) {
+    throw Error(
+      'Existing sessions use the configured API provider. Add the other provider separately.',
+    );
+  }
+  let provider = explicitProvider || retainedProvider || 'anthropic';
+  if (provider !== 'none') assertProviderKind(provider);
+  const model = env('FLOOT_MODEL') || previous?.model || '';
   const authToken =
     env('FLOOT_AUTH_TOKEN') ||
     (provider === 'openrouter'
-      ? process.env.OPENROUTER_API_KEY
+      ? env('OPENROUTER_API_KEY')
       : process.env.ANTHROPIC_API_KEY);
-  if (provider === 'openrouter' && (!model || !model.includes('/'))) {
+  if (provider === 'openrouter' && !model.includes('/')) {
     throw Error(
       'FLOOT_MODEL must be an organization-qualified OpenRouter model ID.',
+    );
+  }
+  const openRouterSecret = env('FLOOT_OPENROUTER_SECRET_NAME');
+  const openRouterModel = env('FLOOT_OPENROUTER_MODEL');
+  if (openRouterSecret && !openRouterModel.includes('/')) {
+    throw Error(
+      'FLOOT_OPENROUTER_MODEL must be an organization-qualified model ID.',
     );
   }
   const codePath = resolveCodePath();
@@ -313,7 +340,7 @@ export const main = async agent => {
   readFlootWorkloadConfig(factoryEnv);
 
   // 0. Ensure the floot/ directory exists (idempotent on re-provision).
-  if (!(await E(agent).has(dir))) {
+  if (!dirExists) {
     await E(agent).makeDirectory(dir);
   }
 
@@ -322,19 +349,45 @@ export const main = async agent => {
   const secretName =
     env('FLOOT_AUTH_SECRET_NAME') ||
     (provider === 'openrouter' ? `${dir}-openrouter-auth` : `${dir}-auth`);
-  const hasExistingSecret = await hasAuthSecret({
-    hostAgent: agent,
-    name: secretName,
-  });
-  if (provider === 'openrouter' && !authToken && !hasExistingSecret) {
-    throw Error(
-      'Add the OpenRouter API key in Secrets under the configured FLOOT_AUTH_SECRET_NAME, or set OPENROUTER_API_KEY.',
-    );
+  const hasExistingSecret =
+    provider !== 'none' &&
+    (await hasAuthSecret({
+      hostAgent: agent,
+      name: secretName,
+    }));
+  // Keep a retained generic slot's exact custom Secret grant on restart
+  // unless the operator names a replacement or supplies a new token.
+  const retainedProfile =
+    retainedProvider === provider &&
+    !env('FLOOT_AUTH_SECRET_NAME') &&
+    !authToken &&
+    (await E(agent).has(...controllerProfilePath))
+      ? await E(agent).lookup(controllerProfilePath)
+      : undefined;
+  const keepAuth =
+    retainedProfile && (await E(retainedProfile).has(AUTH_SECRET_PETNAME));
+  if (provider !== 'none' && !authToken && !hasExistingSecret && !keepAuth) {
+    if (explicitProvider || previous)
+      throw Error(
+        'Configure the API provider credential in Secrets before setup.',
+      );
+    provider = 'none';
   }
-  if (provider === 'anthropic' && !authToken && !hasExistingSecret) {
-    throw new Error(
-      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN / ENDO_FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
-    );
+  let routerLocator;
+  if (openRouterSecret && provider !== 'openrouter') {
+    if (await hasAuthSecret({ hostAgent: agent, name: openRouterSecret })) {
+      routerLocator = await E(agent).locate('secrets', openRouterSecret);
+    } else if (env('OPENROUTER_API_KEY')) {
+      ({ locator: routerLocator } = await provideAuthSecret({
+        hostAgent: agent,
+        name: openRouterSecret,
+        description: 'OpenRouter API key',
+        token: env('OPENROUTER_API_KEY'),
+      }));
+    } else
+      throw Error(
+        'Add the configured OpenRouter API key to Secrets before setup.',
+      );
   }
 
   // 1. The factory is its own child host. It needs host authority because only
@@ -379,47 +432,52 @@ export const main = async agent => {
     revived ? controllerProfilePath : agentName,
   );
 
-  // 2. Put the auth token in the daemon's secret manager and hand the factory
-  // the `SecretBlob`. Failure aborts before replacing the provider config;
-  // an authenticated setup must run with the root host's Secrets authority.
-  /** @type {string | undefined} */
-  let authSecretLocator;
-  if (authToken || hasExistingSecret) {
-    ({ locator: authSecretLocator } = authToken
-      ? await provideAuthSecret({
-          hostAgent: agent,
-          name: secretName,
-          description: `Floot ${provider} provider auth token`,
-          token: authToken,
-        })
-      : { locator: await E(agent).locate('secrets', secretName) });
-  }
+  if (provider !== 'none') {
+    // 2. Put the auth token in the daemon's secret manager and hand the factory
+    // the `SecretBlob`. Failure aborts before replacing the provider config;
+    // an authenticated setup must run with the root host's Secrets authority.
+    /** @type {string | undefined} */
+    let authSecretLocator;
+    if (!keepAuth && (authToken || hasExistingSecret)) {
+      ({ locator: authSecretLocator } = authToken
+        ? await provideAuthSecret({
+            hostAgent: agent,
+            name: secretName,
+            description: `Floot ${provider} provider auth token`,
+            token: authToken,
+          })
+        : { locator: await E(agent).locate('secrets', secretName) });
+    }
 
-  // 3. Store the provider config as a value under `floot/llm-provider` and hand
-  // the factory a capability reference to it under `llm-provider` — the fae
-  // pattern. The value never carries a credential.
-  if (await E(agent).has(dir, 'llm-provider')) {
-    await E(agent).remove(dir, 'llm-provider');
-  }
-  await E(agent).storeValue(
-    harden({
-      provider,
-      model,
-    }),
-    [dir, 'llm-provider'],
-  );
-  const providerLocator = await E(agent).locate(dir, 'llm-provider');
-  await E(factoryHost).storeLocator('llm-provider', providerLocator);
-  if (authSecretLocator) {
-    await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
-  } else if (await E(factoryHost).has(AUTH_SECRET_PETNAME)) {
-    // Switching to a tokenless provider withdraws the old credential binding.
-    await E(factoryHost).remove(AUTH_SECRET_PETNAME);
-  }
+    // 3. Store the provider config as a value under `floot/llm-provider` and hand
+    // the factory a capability reference to it under `llm-provider` — the fae
+    // pattern. The value never carries a credential.
+    await E(agent).storeValue(
+      harden({
+        provider,
+        model,
+      }),
+      [dir, 'llm-provider'],
+    );
+    const providerLocator = await E(agent).locate(dir, 'llm-provider');
+    await E(factoryHost).storeLocator('llm-provider', providerLocator);
+    if (authSecretLocator) {
+      await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+    }
 
-  // 4. The account oracle, if this deployment declared a profile. Provisioned
-  // before the factory so the very first session already has `accountStatus`.
-  await provideAccountOracle(agent, { dir, provider, factoryHost });
+    // 4. The account oracle, if this deployment declared a profile. Provisioned
+    // before the factory so the very first session already has `accountStatus`.
+    await provideAccountOracle(agent, { dir, provider, factoryHost });
+  }
+  // Publish the credential before advertising its route. An explicit separate
+  // binding lets an Anthropic API configuration retain its session history.
+  if (routerLocator) {
+    await E(factoryHost).storeLocator('openrouter-auth', routerLocator);
+    await E(factoryHost).storeValue(
+      harden({ provider: 'openrouter', model: openRouterModel }),
+      'openrouter-provider',
+    );
+  }
 
   // 4b. The machine-admin grants — the NixOS controller, the Forgejo push
   // credential, and the deploy-workflow connections — when this daemon has
@@ -487,7 +545,7 @@ export const main = async agent => {
   const factory = await E(agent).lookup(controllerPath);
   if (factoryReused) await E(factory).refreshCredentials();
   const sessions = await E(factory).listSessions();
-  if (sessions.length === 0) {
+  if (provider !== 'none' && sessions.length === 0) {
     await E(factory).createSession({ title: 'New chat', spoken: true });
     console.log('Seeded a default session.');
   }
