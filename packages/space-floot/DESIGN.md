@@ -24,6 +24,12 @@ Update it as decisions change.
   indicator, per-session token accounting, mic capture with noise-floor VAD,
   spoken replies with barge-in, the pause-grace endpointer, and session presets.
 
+## Starting a session
+
+On web and Android, select a preset, provider, and model. The preset supplies the session's instructions and endowments, including shell internet access. Selecting another model applies to this session. Edit the preset in Settings to change the defaults or choose which preset the Android voice shortcut starts.
+
+The shared model picker shows models available for automatic account selection. A saved model that disappears stays visible as unavailable. Select a listed model to start the session. The controller passes both the provider route and the model ID to the factory because different providers may list the same model.
+
 ## The confined-Preact constraint (the crux)
 
 Chat's confined renderer (`packages/chat/setup-preact-container.js`, built on
@@ -148,7 +154,8 @@ controller = {
 
   // --- callbacks (the view calls these; the host does the imperative work) ---
   send(text), stop(),                   // compose / barge-in stop
-  selectSession(id), newSession(presetId?, model?), renameSession(id, title),
+  selectSession(id), newSession({ presetId, backendId, modelId, reasoningEffort }),
+  renameSession(id, title),
   deleteSession(id),
   toggleMic(), toggleTts(), replayMessage(text),
   toggleSettings(), setInput(text),     // input is host-held for IME/caret safety

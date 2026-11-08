@@ -76,7 +76,8 @@ test.serial(
       await tick();
     };
     await change('[aria-label="Voice shortcut preset"]', 'custom');
-    await change('[aria-label="Preset model"]', 'fae:sol');
+    await change('[aria-label="Provider"]', 'fae-codex');
+    await change('[aria-label="Model"]', 'sol');
     await change('[aria-label="Preset reasoning effort"]', 'high');
     await change('[aria-label="Preset internet access"]', 'public-internet');
     await click('Add object');
@@ -105,7 +106,7 @@ test.serial(
 );
 
 test.serial(
-  'shell presets offer Fae models and expose hosted choices after shell removal',
+  'a shell preset can select direct Anthropic and keeps its workspace and shell',
   async t => {
     t.timeout(5000);
     const parent = dom.document.createElement('div');
@@ -121,6 +122,18 @@ test.serial(
     const state = /** @type {any} */ ({
       models: [
         { id: 'fae', backendId: 'fae-codex', modelId: 'sol', title: 'Sol' },
+        {
+          id: 'claude',
+          backendId: 'fae-claude',
+          modelId: 'sonnet',
+          title: 'Sonnet',
+        },
+        {
+          id: 'router',
+          backendId: 'openrouter',
+          modelId: 'vendor/sol',
+          title: 'Sol via OpenRouter',
+        },
         { id: 'hosted', backendId: 'codex', modelId: 'sol', title: 'Hosted' },
       ],
       presetSettings: {
@@ -144,26 +157,111 @@ test.serial(
         },
       },
     });
+    const saved = [];
     render(
       h(PresetSettings, {
         state,
-        controller: /** @type {any} */ ({ loadPresetSettings: () => {} }),
+        controller: /** @type {any} */ ({
+          loadPresetSettings: () => {},
+          savePreset: draft => saved.push(draft),
+        }),
       }),
       parent,
     );
     await waitFor(() => parent.querySelector('fieldset'));
-    const choices = () =>
-      [...parent.querySelectorAll('[aria-label="Preset model"] option')].map(
-        option => option.getAttribute('value'),
-      );
-    t.deepEqual(choices(), ['', 'fae']);
-    const shell = parent.querySelectorAll('.floot-preset-object input')[1];
-    shell.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const provider = parent.querySelector('select[aria-label="Provider"]');
+    if (!(provider instanceof dom.window.HTMLSelectElement))
+      throw Error('Missing provider');
+    t.deepEqual(
+      [...provider.options].map(o => o.textContent),
+      ['Factory default', 'OpenAI', 'Anthropic', 'OpenRouter'],
+    );
+    provider.value = 'fae-claude';
+    provider.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     await tick();
-    t.deepEqual(choices(), ['', 'fae', 'hosted']);
+    const model = parent.querySelector('select[aria-label="Model"]');
+    if (!(model instanceof dom.window.HTMLSelectElement))
+      throw Error('Missing model');
+    t.is(model.value, 'sonnet');
+    [...parent.querySelectorAll('button')]
+      .find(b => b.textContent === 'Save preset')
+      ?.click();
+    t.like(saved[0], {
+      id: 'voice',
+      backendId: 'fae-claude',
+      modelId: 'sonnet',
+      objects,
+    });
   },
 );
 
+test.serial(
+  'a saved factory-configured model remains editable when its catalog is unavailable',
+  async t => {
+    const parent = dom.document.createElement('div');
+    dom.document.body.append(parent);
+    t.teardown(() => {
+      render(null, parent);
+      parent.remove();
+    });
+    const preset = {
+      id: 'voice',
+      title: 'Voice',
+      description: '',
+      templateId: 'general',
+      backendId: 'provider',
+      modelId: '',
+      instructions: '',
+      objects: [],
+      endowments: [],
+      reasoningEffort: '',
+      networkPolicy: '',
+    };
+    const saved = [];
+    const state = /** @type {any} */ ({
+      models: [],
+      catalogs: [
+        { backendId: 'provider', providerTitle: 'Anthropic API', accounts: [] },
+      ],
+      presetSettings: {
+        busy: false,
+        configuration: {
+          revision: '0',
+          voicePresetId: 'voice',
+          builtinIds: ['voice'],
+          templates: [{ id: 'general', objects: [] }],
+          presets: [preset],
+        },
+      },
+    });
+    render(
+      h(PresetSettings, {
+        state,
+        controller: /** @type {any} */ ({
+          loadPresetSettings: () => {},
+          savePreset: draft => saved.push(draft),
+        }),
+      }),
+      parent,
+    );
+    await waitFor(() => parent.querySelector('fieldset'));
+    const input = parent.querySelector('textarea');
+    if (!input) throw Error('missing instructions');
+    input.value = 'Updated instructions';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    await tick();
+    const button = [...parent.querySelectorAll('button')].find(
+      b => b.textContent === 'Save preset',
+    );
+    t.false(button?.disabled);
+    button?.click();
+    t.like(saved[0], {
+      backendId: 'provider',
+      modelId: '',
+      instructions: 'Updated instructions',
+    });
+  },
+);
 test.serial(
   'unsaved preset edits cannot be erased by shortcut selection or reload',
   async t => {

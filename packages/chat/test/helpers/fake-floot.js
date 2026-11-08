@@ -415,7 +415,15 @@ export const makeFakeDaemon = ({
       return harden({ pending: null, last: null });
     },
     listPresets: () => harden([]),
-    listModels: () => harden([]),
+    listModels: () =>
+      harden([
+        {
+          id: 'fixture',
+          backendId: 'provider',
+          modelId: 'fixture',
+          title: 'Fixture',
+        },
+      ]),
     getSession: id => facet(id),
     renameSession: (id, title) => {
       sessions = sessions.map(session =>

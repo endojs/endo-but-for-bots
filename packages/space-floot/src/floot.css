@@ -970,37 +970,18 @@
   outline: none;
   border-color: var(--fl-accent);
 }
-.floot-preset-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.floot-preset-card {
-  text-align: left;
+.floot-start-session {
   width: 100%;
-  cursor: pointer;
-  background: var(--fl-surface2);
-  border: 1px solid var(--fl-border);
+  border: 1px solid var(--fl-accent);
   border-radius: 8px;
-  padding: 0.7rem 0.85rem;
+  padding: 0.65rem;
+  background: var(--fl-surface2);
   color: var(--fl-text);
-  transition:
-    border-color 0.12s,
-    background 0.12s;
+  cursor: pointer;
 }
-.floot-preset-card:hover {
-  background: var(--fl-surface3);
-  border-color: var(--fl-accent);
-}
-.floot-preset-name {
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-.floot-preset-desc {
-  font-size: 0.78rem;
-  color: var(--fl-text-muted);
-  margin-top: 0.15rem;
-  line-height: 1.35;
+.floot-start-session:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .floot-session-pill {

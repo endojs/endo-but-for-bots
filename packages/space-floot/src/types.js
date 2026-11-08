@@ -71,6 +71,7 @@ export {};
  *   defaultReasoningEffort?: string | null,
  *   backendId?: string,
  *   backendTitle?: string,
+ *   providerTitle?: string,
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],
@@ -87,6 +88,7 @@ export {};
  * @typedef {{
  *   backendId: string,
  *   backendTitle?: string,
+ *   providerTitle?: string,
  *   accounts: Array<{
  *     subscriptionId: string,
  *     label?: string,
@@ -185,7 +187,7 @@ export {};
  * @property {(pendingId: number | string, text: string) => void} [editPending]
  * @property {(pendingId: number | string) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string, networkPolicy?: string) => void} newSession
+ * @property {(selection: {presetId?: string, backendId: string, modelId: string, reasoningEffort?: string}) => void} newSession
  * @property {() => void} [refreshDiscovery] Read what the backends list now, for the picker.
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.

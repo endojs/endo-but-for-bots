@@ -2,6 +2,7 @@
 import harden from '@endo/harden';
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { ProviderModelFields, automaticModels } from './ProviderModelFields.js';
 /** @import { FlootController, FlootState, FlootSafeEvent } from './types.js' */
 
 const objectLabel = object =>
@@ -53,16 +54,7 @@ export const PresetSettings = ({ state, controller }) => {
           change({ [key]: event.target.value }),
       }),
     );
-  const hasShell = draft?.objects.some(
-    object => object.kind === 'development-environment',
-  );
-  const availableModels = state.models.filter(
-    model =>
-      !hasShell ||
-      model.backendId === 'provider' ||
-      model.backendId === 'fae-codex',
-  );
-  const currentModel = availableModels.find(
+  const currentModel = automaticModels(state.models).find(
     model =>
       model.backendId === draft?.backendId && model.modelId === draft?.modelId,
   );
@@ -187,51 +179,17 @@ export const PresetSettings = ({ state, controller }) => {
                 change({ instructions: event.target.value }),
             }),
           ),
-          field(
-            'Default model',
-            h(
-              'select',
-              {
-                'aria-label': 'Preset model',
-                value:
-                  currentModel?.id || (draft.backendId ? '__retained' : ''),
-                onChange: (/** @type {FlootSafeEvent} */ event) => {
-                  const model = state.models.find(
-                    item => item.id === event.target.value,
-                  );
-                  change({
-                    backendId: model?.backendId || '',
-                    modelId: model?.modelId || '',
-                    reasoningEffort: '',
-                  });
-                },
-              },
-              h('option', { value: '' }, 'Factory default'),
-              draft.backendId && !currentModel
-                ? h(
-                    'option',
-                    { value: '__retained' },
-                    `${draft.backendId} · ${draft.modelId || 'configured model'} (not currently listed)`,
-                  )
-                : null,
-              availableModels
-                .filter(model => model.backendId && model.modelId)
-                .map(model =>
-                  h(
-                    'option',
-                    { value: model.id },
-                    `${model.backendTitle || model.backendId} · ${model.title}`,
-                  ),
-                ),
-            ),
-          ),
-          hasShell
-            ? h(
-                'p',
-                null,
-                'The isolated shell works with Fae models. Hosted backends provide their own environment.',
-              )
-            : null,
+          h(ProviderModelFields, {
+            key: draft.id,
+            models: state.models,
+            catalogs: state.catalogs,
+            backendId: draft.backendId || '',
+            modelId: draft.modelId || '',
+            allowDefault: true,
+            discoveryError: state.discoveryError,
+            onChange: (backendId, modelId) =>
+              change({ backendId, modelId, reasoningEffort: '' }),
+          }),
           field(
             'Reasoning effort',
             h(
@@ -269,7 +227,7 @@ export const PresetSettings = ({ state, controller }) => {
           h(
             'p',
             null,
-            'Internet policy is enforced by the attached isolated shell, or by a hosted backend that supports it. For Fae, enable both workspace and shell below.',
+            'Enable the workspace and isolated shell below to apply this internet policy.',
           ),
           h('h4', null, 'Default objects'),
           (template?.objects || []).map(object =>
@@ -374,13 +332,24 @@ export const PresetSettings = ({ state, controller }) => {
             { class: 'floot-preset-actions' },
             h(
               'button',
-              { type: 'button', onClick: () => controller.savePreset?.(draft) },
+              {
+                type: 'button',
+                disabled:
+                  !!draft.backendId &&
+                  draft.backendId !== 'provider' &&
+                  !draft.modelId,
+                onClick: () => controller.savePreset?.(draft),
+              },
               'Save preset',
             ),
             h(
               'button',
               {
                 type: 'button',
+                disabled:
+                  !!draft.backendId &&
+                  draft.backendId !== 'provider' &&
+                  !draft.modelId,
                 onClick: () =>
                   controller.savePreset?.({
                     ...draft,

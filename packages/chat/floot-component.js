@@ -618,13 +618,13 @@ export const flootComponent = (
    * there is; `pending` is the daemon's queue of submissions not yet run.
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
-   *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
+   *   default: boolean, backendId?: string, backendTitle?: string, providerTitle?: string, modelId?: string,
    *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[],
    *   supportedNetworkPolicies?: string[], subscriptions?: { id: string, label: string }[],
    *   subscriptionIds?: string[] }} FlootModel
    * How a backend's discovery stands, per account: what the factory's
    * `listModelCatalogs()` says, so an empty picker can say why.
-   * @typedef {{ backendId: string, accounts: Array<{ subscriptionId: string,
+   * @typedef {{ backendId: string, providerTitle?: string, accounts: Array<{ subscriptionId: string,
    *   label?: string, pinnedOnly?: boolean, state: string,
    *   observedAt: number | null, modelCount: number }> }} FlootCatalog
    */
@@ -637,7 +637,7 @@ export const flootComponent = (
   let catalogs = [];
   /** Why the last discovery read failed, for the picker; `''` when it did not. */
   let discoveryError = '';
-  /** @type {Array<{ id: string, title?: string, subscriptions: any[], supportedNetworkPolicies: string[] }>} */
+  /** @type {Array<{ id: string, title?: string, providerTitle?: string, subscriptions: any[], supportedNetworkPolicies: string[] }>} */
   let backends = [];
   /** @type {FlootSession[]} */
   let sessions = [];
@@ -792,57 +792,38 @@ export const flootComponent = (
 
   // Create a new session on the factory and prepend it to the local list.
   /**
-   * @param {string} [title]
-   * @param {string} [presetId]
-   * @param {string} [model]
-   * @param {string} [reasoningEffort]
-   * @param {string} [subscription] one of the backend's subscriptions; absent
-   *   or `auto` leaves the choice to the backend
-   * @param {string} [networkPolicy]
+   * @param {{presetId?: string, backendId: string, modelId: string, reasoningEffort?: string}} [selection]
    * @param {string} [assistantId]
    */
-  const createSession = async (
-    title,
-    presetId,
-    model,
-    reasoningEffort,
-    subscription,
-    networkPolicy,
-    assistantId = '',
-  ) => {
-    const selected = models.find(candidate => candidate.id === model);
+  const createSession = async (selection, assistantId = '') => {
     if (
-      model &&
-      (!selected ||
-        typeof selected.backendId !== 'string' ||
-        selected.backendId === '' ||
-        typeof selected.modelId !== 'string' ||
-        selected.modelId === '')
+      selection &&
+      !models.some(
+        m =>
+          m.backendId === selection.backendId &&
+          m.modelId === selection.modelId,
+      )
     ) {
       throw Error(
-        'Selected model has no current backend/model identity; reopen the session picker',
+        'Selected provider or model is unavailable; reopen the session picker',
       );
     }
-    // Always the record form: it is the only one that can say this session is
-    // driven from here, where replies are read aloud. The factory composes
-    // the voice rules into the system prompt of a session that says so, and
-    // of no other.
     const facet = await (assistantId
       ? E(factory).createAssistantSession()
       : E(factory).createSession({
-          title: title || DEFAULT_TITLE,
+          title: DEFAULT_TITLE,
           spoken: true,
           userInitiated: true,
-          ...(presetId ? { presetId } : {}),
-          ...(selected?.backendId
+          ...(selection
             ? {
-                backendId: selected.backendId,
-                modelId: selected.modelId,
+                presetId: selection.presetId,
+                backendId: selection.backendId,
+                modelId: selection.modelId,
               }
             : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-          ...(subscription && subscription !== 'auto' ? { subscription } : {}),
-          ...(networkPolicy ? { networkPolicy } : {}),
+          ...(selection?.reasoningEffort
+            ? { reasoningEffort: selection.reasoningEffort }
+            : {}),
         }));
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
@@ -917,6 +898,7 @@ export const flootComponent = (
   const backendLabelOf = (/** @type {FlootSession} */ s) => {
     const id = s.backendId || 'provider';
     const known = backends.find(b => b.id === id);
+    if (known?.providerTitle) return known.providerTitle;
     if (known?.title) return known.title;
     return id === 'provider' ? 'Fae' : id;
   };
@@ -1069,6 +1051,7 @@ export const flootComponent = (
         default: m.default,
         backendId: m.backendId,
         backendTitle: m.backendTitle,
+        providerTitle: m.providerTitle,
         modelId: m.modelId,
         defaultReasoningEffort: m.defaultReasoningEffort,
         reasoningEfforts: m.reasoningEfforts,
@@ -1082,6 +1065,9 @@ export const flootComponent = (
       catalogs: catalogs.map(c => ({
         backendId: c.backendId,
         backendTitle: backends.find(b => b.id === c.backendId)?.title,
+        providerTitle:
+          c.providerTitle ||
+          backends.find(b => b.id === c.backendId)?.providerTitle,
         accounts: (c.accounts || []).map(a => ({
           subscriptionId: a.subscriptionId,
           label: a.label,
@@ -1916,28 +1902,9 @@ export const flootComponent = (
     if (wasActive) openActiveSession();
   };
 
-  /**
-   * @param {string} [presetId]
-   * @param {string} [model]
-   * @param {string} [reasoningEffort]
-   * @param {string} [subscription]
-   * @param {string} [networkPolicy]
-   */
-  const newSession = (
-    presetId,
-    model,
-    reasoningEffort,
-    subscription,
-    networkPolicy,
-  ) => {
-    createSession(
-      undefined,
-      presetId,
-      model,
-      reasoningEffort,
-      subscription,
-      networkPolicy,
-    )
+  /** @param {{presetId?: string, backendId: string, modelId: string, reasoningEffort?: string}} selection */
+  const newSession = selection => {
+    createSession(selection)
       .then(() => {
         stick = true;
         setStatus('Ready.');
@@ -2559,15 +2526,7 @@ export const flootComponent = (
             assistantPreparing = true;
             // Use the explicit identity without waiting for model discovery.
             // Start creation and capture in the same admitted lock turn.
-            ready = createSession(
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              request.id,
-            ).then(() => {
+            ready = createSession(undefined, request.id).then(() => {
               if (cancelled || activeAssistantId !== request.id) return;
               assistantPreparing = false;
               const transcript = inputText;
@@ -3011,15 +2970,7 @@ export const flootComponent = (
     selectSession(/** @type {string} */ id) {
       selectSession(id);
     },
-    newSession(
-      /** @type {string | undefined} */ presetId,
-      /** @type {string | undefined} */ model,
-      /** @type {string | undefined} */ reasoningEffort,
-      /** @type {string | undefined} */ subscription,
-      /** @type {string | undefined} */ networkPolicy,
-    ) {
-      newSession(presetId, model, reasoningEffort, subscription, networkPolicy);
-    },
+    newSession,
     /** Ask each account's provider for its figures now. */
     refreshAccounts() {
       void Promise.resolve(factory)
@@ -3104,6 +3055,7 @@ export const flootComponent = (
       replayMessage(text);
     },
     loadPresetSettings() {
+      void readDiscovery();
       void presetSettings.load();
     },
     savePreset(preset) {
@@ -3514,6 +3466,7 @@ export const flootComponent = (
           return {
             ...m,
             backendTitle: backend?.title,
+            providerTitle: m.providerTitle || backend?.providerTitle,
             subscriptions: backend?.subscriptions || [],
             supportedNetworkPolicies: backend?.supportedNetworkPolicies || [],
           };
@@ -3524,6 +3477,7 @@ export const flootComponent = (
         // the session load and turns write.
         if (cancelled) return;
         discoveryError = `${/** @type {Error} */ (err).message}`.slice(0, 200);
+        models = [];
         notify();
       } finally {
         discoveryP = undefined;
@@ -3554,6 +3508,7 @@ export const flootComponent = (
       backends = backendList.map((/** @type {any} */ b) => ({
         id: b.id,
         title: b.title,
+        providerTitle: b.providerTitle,
         subscriptions: Array.isArray(b.subscriptions) ? b.subscriptions : [],
         supportedNetworkPolicies: Array.isArray(b.supportedNetworkPolicies)
           ? b.supportedNetworkPolicies
