@@ -106,7 +106,7 @@ export {};
  * the view actually reads are modelled here; `target.value` is always a string
  * for the inputs this view registers.
  * @typedef {{
- *   target: { value: string },
+ *   target: { value: string, checked?: boolean },
  *   key?: string,
  *   shiftKey?: boolean,
  *   isComposing?: boolean,
@@ -153,6 +153,7 @@ export {};
  *   catalogs?: FlootCatalog[],
  *   discoveryError?: string,
  *   messages: FlootMessage[],
+ *   hasEarlier?: boolean, loadingEarlier?: boolean,
  *   streamingText: string,
  *   phase: string,
  *   busy: boolean,
@@ -186,8 +187,9 @@ export {};
  * @property {(pendingId: number | string) => void} [sendPendingNow]
  * @property {(pendingId: number | string, text: string) => void} [editPending]
  * @property {(pendingId: number | string) => void} [cancelPending]
+ * @property {() => void} [loadEarlierHistory]
  * @property {(id: string) => void} selectSession
- * @property {(selection: {presetId?: string, backendId: string, modelId: string, reasoningEffort?: string}) => void} newSession
+ * @property {(selection: {presetId?: string, backendId: string, modelId: string, reasoningEffort?: string, networkPolicy?: string}) => void} newSession
  * @property {() => void} [refreshDiscovery] Read what the backends list now, for the picker.
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.

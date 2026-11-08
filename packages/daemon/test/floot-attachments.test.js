@@ -10,12 +10,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { makeEndoClient, start, stop } from '../index.js';
 
-import { makeSessionAttachments } from '../../floot/src/session-attachments.js';
+import { makeSessionAttachments } from '../../fae/session/session-attachments.js';
 
 import {
   createPrivateTurnStorage,
   retirePrivateTurnStorage,
-} from '../../floot/src/private-turn-storage.js';
+} from '../../fae/session/private-turn-storage.js';
 
 test.serial(
   'Floot text references are real adoptable Endo packages without inventory or namespace leaks',

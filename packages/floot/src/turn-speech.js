@@ -23,7 +23,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { passStyleOf } from '@endo/pass-style';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
-/** @import { TurnStatus, TurnViewEvent } from './session-turn.js' */
+/** @import { TurnStatus, TurnViewEvent } from '@endo/fae/session/session-turn.js' */
 
 /**
  * The TTS text wire: append-only deltas and one terminal event. The same shape

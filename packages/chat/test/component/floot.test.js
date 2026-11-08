@@ -2600,6 +2600,51 @@ const openPicker = async (t, answers) => {
 };
 
 test.serial(
+  'new session internet follows the preset, resets on preset change and sends an explicit offline override',
+  async t => {
+    const { parent, change, pick, created } = await openPicker(t, {
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listPresets: () =>
+        harden([
+          {
+            id: 'general',
+            title: 'General',
+            networkPolicy: 'public-internet',
+            supportedNetworkPolicies: ['off', 'public-internet'],
+          },
+          {
+            id: 'chat-only',
+            title: 'Chat only',
+            networkPolicy: 'off',
+            supportedNetworkPolicies: ['off'],
+          },
+        ]),
+      listModels: () =>
+        harden([
+          { id: 'm', backendId: 'provider', modelId: 'm', title: 'Model' },
+        ]),
+      listModelCatalogs: () => harden([]),
+    });
+    const checkbox = () => {
+      const input = parent.querySelector('input[aria-label="Internet access"]');
+      if (!(input instanceof testWindow.HTMLInputElement))
+        throw Error('Missing internet toggle');
+      return input;
+    };
+    t.true(checkbox().checked);
+    await change('Preset', 'chat-only');
+    t.false(checkbox().checked);
+    t.true(checkbox().disabled);
+    await change('Preset', 'general');
+    t.true(checkbox().checked);
+    checkbox().checked = false;
+    checkbox().dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    await tick();
+    await pick();
+    t.is(created[0].networkPolicy, 'off');
+  },
+);
+test.serial(
   'manual and saved provider choices retain canonical identity and preset grants',
   async t => {
     const { change, select, options, parent, pick, created, card } =
@@ -2850,7 +2895,8 @@ test.serial(
         harden([{ id: 'openrouter', providerTitle: 'OpenRouter' }]),
       listModelCatalogs: () => harden([]),
       listModels: () => {
-        if (++reads > 1) throw Error('provider offline');
+        reads += 1;
+        if (reads > 1) throw Error('provider offline');
         return harden([
           {
             id: 'vendor/m',
@@ -3182,5 +3228,81 @@ test.serial(
       parent.querySelector('.floot-msg .chat-token'),
       'submitted reference remains visible as a chip',
     );
+  },
+);
+
+test.serial(
+  'chat opens the recent page and prepends earlier messages on demand, suppressing repeated mail receipts',
+  async t => {
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const stream = makeBufferedReader();
+    const reads = [];
+    /** @param {string} id @param {string} content @param {string} [receipt] */
+    const turn = (id, content, receipt = undefined) => ({
+      id,
+      ...(receipt === undefined ? {} : { receipt }),
+      messages: [
+        { role: 'user', content: 'prompt' },
+        { role: 'assistant', content },
+      ],
+    });
+    const facet = Far('PagedSession', {
+      getCurrentTurn: () => null,
+      watchRecent: () => stream.reader,
+      getHistoryPage: before => {
+        reads.push(before);
+        return harden({
+          turns: [turn('1', 'older answer', '8')],
+          before: null,
+        });
+      },
+      watch: () => {
+        throw Error('Full history watch requested');
+      },
+      getHistory: () => {
+        throw Error('Full history read requested');
+      },
+    });
+    const factory = farFactory('PagedFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'Paged session' }]),
+      listPresets: () => harden([]),
+      listModels: () => harden([]),
+      listBackends: () => harden([]),
+      getSession: () => facet,
+    });
+    stream.push(
+      harden({
+        type: 'snapshot',
+        turn: null,
+        running: null,
+        transcript: {
+          version: 1,
+          base: 0,
+          keep: 0,
+          append: [turn('2', 'new answer', '8')],
+          before: '2',
+        },
+      }),
+    );
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      stream.close();
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() => parent.querySelector('.floot-history-earlier'));
+    t.deepEqual(reads, []);
+    const pane = () =>
+      parent.querySelector('.floot-messages')?.textContent || '';
+    t.true(pane().includes('new answer'));
+    parent
+      .querySelector('.floot-history-earlier')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => pane().includes('older answer'));
+    t.deepEqual(reads, ['2']);
+    t.true(pane().indexOf('older answer') < pane().indexOf('new answer'));
+    t.is(pane().split('prompt').length - 1, 1);
+    t.falsy(parent.querySelector('.floot-history-earlier'));
   },
 );

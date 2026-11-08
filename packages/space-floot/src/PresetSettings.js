@@ -156,12 +156,24 @@ export const PresetSettings = ({ state, controller }) => {
               {
                 value: draft.templateId,
                 'aria-label': 'Preset template',
+                disabled:
+                  config.builtinIds.includes(draft.id) &&
+                  ['chat-only', 'rsi'].includes(draft.templateId),
                 onChange: (/** @type {FlootSafeEvent} */ event) => {
                   const next = config.templates.find(
                     item => item.id === event.target.value,
                   );
                   if (next)
-                    change({ templateId: next.id, objects: next.objects });
+                    change({
+                      templateId: next.id,
+                      objects: next.objects,
+                      ...(['chat-only', 'rsi'].includes(next.id)
+                        ? { endowments: [] }
+                        : {}),
+                      ...(next.id === 'chat-only'
+                        ? { networkPolicy: 'off' }
+                        : {}),
+                    });
                 },
               },
               config.templates.map(item =>
@@ -215,20 +227,16 @@ export const PresetSettings = ({ state, controller }) => {
               'select',
               {
                 'aria-label': 'Preset internet access',
-                value: draft.networkPolicy || '',
+                value: draft.networkPolicy || 'public-internet',
+                disabled: draft.templateId === 'chat-only',
                 onChange: (/** @type {FlootSafeEvent} */ event) =>
                   change({ networkPolicy: event.target.value }),
               },
-              h('option', { value: '' }, 'Default (off)'),
               h('option', { value: 'off' }, 'Off'),
               h('option', { value: 'public-internet' }, 'Public internet'),
             ),
           ),
-          h(
-            'p',
-            null,
-            'Enable the workspace and isolated shell below to apply this internet policy.',
-          ),
+          h('p', null, 'Internet access uses an isolated shell.'),
           h('h4', null, 'Default objects'),
           (template?.objects || []).map(object =>
             h(
@@ -239,7 +247,7 @@ export const PresetSettings = ({ state, controller }) => {
                 checked: draft.objects.some(
                   item => item.petName === object.petName,
                 ),
-                disabled: draft.templateId === 'development',
+                disabled: ['development', 'rsi'].includes(draft.templateId),
                 onChange: () =>
                   change({
                     objects: draft.objects.some(
@@ -316,7 +324,9 @@ export const PresetSettings = ({ state, controller }) => {
             'button',
             {
               type: 'button',
-              disabled: Number(draft.endowments.length) >= 32,
+              disabled:
+                ['chat-only', 'rsi'].includes(draft.templateId) ||
+                Number(draft.endowments.length) >= 32,
               onClick: () =>
                 change({
                   endowments: [

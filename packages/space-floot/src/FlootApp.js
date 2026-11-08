@@ -60,10 +60,17 @@ const PresetModal = ({
   onClose,
 }) => {
   const [presetId, setPresetId] = useState(presets[0]?.id || '');
+  const [networkOverride, setNetworkOverride] = useState(
+    /** @type {boolean | undefined} */ (undefined),
+  );
   const [override, setOverride] = useState(
     /** @type {{backendId: string, modelId: string} | null} */ (null),
   );
   const preset = presets.find(p => p.id === presetId) || presets[0];
+  const canEnableNetwork =
+    preset?.supportedNetworkPolicies?.includes('public-internet') === true;
+  const online =
+    canEnableNetwork && (networkOverride ?? preset.networkPolicy !== 'off');
   const offered = automaticModels(models);
   const preferred = firstModel(offered);
   const backendId =
@@ -111,6 +118,7 @@ const PresetModal = ({
                 onChange: (/** @type {FlootSafeEvent} */ e) => {
                   setPresetId(e.target.value);
                   setOverride(null);
+                  setNetworkOverride(undefined);
                 },
               },
               presets.map(p =>
@@ -129,6 +137,19 @@ const PresetModal = ({
         discoveryError,
         onChange: (route, id) => setOverride({ backendId: route, modelId: id }),
       }),
+      h(
+        'label',
+        { class: 'floot-preset-object' },
+        h('input', {
+          type: 'checkbox',
+          'aria-label': 'Internet access',
+          checked: online,
+          disabled: !canEnableNetwork,
+          onChange: (/** @type {FlootSafeEvent} */ e) =>
+            setNetworkOverride(e.target.checked),
+        }),
+        'Internet access',
+      ),
       !override && preset?.backendId && !modelId
         ? h(
             'small',
@@ -156,6 +177,9 @@ const PresetModal = ({
                 backendId,
                 modelId,
                 reasoningEffort: effort,
+                ...(preset?.supportedNetworkPolicies
+                  ? { networkPolicy: online ? 'public-internet' : 'off' }
+                  : {}),
               });
           },
         },

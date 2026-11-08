@@ -13,6 +13,7 @@ import {
   resolveMentions,
   validateChatMessage,
 } from '@endo/floot/src/session-mentions.js';
+import { makeFlootHistoryPages } from './floot-history-pages.js';
 import {
   makeFlootComposer,
   decodeChatDraft,
@@ -609,7 +610,7 @@ export const flootComponent = (
    *   pending: import('./floot-session-state.js').PendingState,
    *   displayTurn: FlootTurn | null,
    *   tail?: { input: string | null, message?: {strings: string[], names: string[]}, turn: FlootTurn } | null,
-   *   transcriptStale?: boolean }}
+   *   hasEarlier?: boolean, loadingEarlier?: boolean, transcriptStale?: boolean }}
    *   FlootSession
    *
    * `messages` is the settled transcript the session pushes; `current` is the
@@ -792,7 +793,7 @@ export const flootComponent = (
 
   // Create a new session on the factory and prepend it to the local list.
   /**
-   * @param {{presetId?: string, backendId: string, modelId: string, reasoningEffort?: string}} [selection]
+   * @param {{presetId?: string, backendId: string, modelId: string, reasoningEffort?: string, networkPolicy?: string}} [selection]
    * @param {string} [assistantId]
    */
   const createSession = async (selection, assistantId = '') => {
@@ -819,6 +820,9 @@ export const flootComponent = (
                 presetId: selection.presetId,
                 backendId: selection.backendId,
                 modelId: selection.modelId,
+                ...(selection.networkPolicy
+                  ? { networkPolicy: selection.networkPolicy }
+                  : {}),
               }
             : {}),
           ...(selection?.reasoningEffort
@@ -1078,6 +1082,8 @@ export const flootComponent = (
         })),
       })),
       messages: allMessages,
+      hasEarlier: session?.hasEarlier || false,
+      loadingEarlier: session?.loadingEarlier || false,
       streamingText: liveTurn ? liveTurn.streamingText : '',
       phase: liveTurn ? liveTurn.phase : (working && 'thinking') || '',
       // `busy` offers Stop, which needs a turn this page can cancel.
@@ -1429,6 +1435,19 @@ export const flootComponent = (
   let transcriptErrorStatus = '';
   /** @type {{ close: () => void } | null} */
   let sessionView = null;
+  /** @type {ReturnType<typeof makeFlootHistoryPages> | undefined} */
+  let historyPages;
+  let lastScrollTop = 0;
+  /** @type {{height:number, top:number} | undefined} */
+  let pageAnchor;
+  const loadEarlierHistory = () => {
+    const session = getActiveSession();
+    if (!historyPages || !session?.hasEarlier || session.loadingEarlier) return;
+    const el = $mount.querySelector('.floot-messages');
+    if (el) pageAnchor = { height: el.scrollHeight, top: el.scrollTop };
+    stick = false;
+    historyPages.more();
+  };
   // A subscription that ends without saying why (the daemon gave up on a
   // reader opened too late) is opened again, but not for ever: a stream that
   // keeps ending at once is a fault to report, not a loop to spin in.
@@ -1455,7 +1474,12 @@ export const flootComponent = (
         // A gap: an event was missed. Reopen rather than guess.
         if (!next) return false;
         session.transcript = next;
-        session.messages = historyMessages(next.messages);
+        if (Object.hasOwn(delta, 'before') && historyPages) {
+          historyPages.setLatest(next.messages, delta.before, snapshot);
+        } else {
+          session.hasEarlier = false;
+          session.messages = historyMessages(next.messages);
+        }
         session.loaded = true;
         session.tail = null;
         if (session.transcriptStale) {
@@ -1472,6 +1496,7 @@ export const flootComponent = (
         }
       }
     }
+    if (event.type === 'journal') historyPages?.journalChanged();
     if (event.type === 'transcript-error') {
       session.transcriptStale = true;
       transcriptErrorStatus = `error: ${event.message}`;
@@ -1532,6 +1557,10 @@ export const flootComponent = (
     composer?.close();
     if (sessionView) sessionView.close();
     sessionView = null;
+    pageAnchor = undefined;
+    lastScrollTop = 0;
+    historyPages?.close();
+    historyPages = undefined;
     if (detachActiveTurnView) detachActiveTurnView();
     // Opening a session starts at the latest message.
     stick = true;
@@ -1588,15 +1617,43 @@ export const flootComponent = (
     const view = {
       close() {
         closed = true;
+        if (sessionView === view) historyPages?.close();
         if (stream) void Promise.resolve(stream.return()).catch(() => {});
       },
     };
     sessionView = view;
     const live = () => !cancelled && !closed && sessionView === view;
     (async () => {
-      const reader = iterateReader(await E(facetFor(session)).watch(), {
-        buffer: 4,
-      });
+      const facet = facetFor(session);
+      // Session method introduction is negotiated with the same ordinary CapTP
+      // reflection used by the recovery view. Older daemons offer watch().
+      // eslint-disable-next-line no-underscore-dangle
+      const methods = await E(facet).__getMethodNames__();
+      if (!live()) return;
+      const paged =
+        methods.includes('watchRecent') && methods.includes('getHistoryPage');
+      if (paged) {
+        historyPages = makeFlootHistoryPages(
+          before => E(facet).getHistoryPage(before),
+          (messages, more, loading) => {
+            if (!live()) return;
+            session.messages = historyMessages(messages);
+            session.hasEarlier = more;
+            session.loadingEarlier = loading;
+            notify();
+          },
+          error =>
+            setStatus(
+              `Could not load earlier messages: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+        );
+      }
+      const reader = iterateReader(
+        paged ? await E(facet).watchRecent() : await E(facet).watch(),
+        {
+          buffer: 4,
+        },
+      );
       stream = reader;
       if (!live()) {
         view.close();
@@ -2967,6 +3024,7 @@ export const flootComponent = (
     cancelPending(/** @type {number | string} */ id) {
       cancelPending(id);
     },
+    loadEarlierHistory,
     selectSession(/** @type {string} */ id) {
       selectSession(id);
     },
@@ -3145,11 +3203,23 @@ export const flootComponent = (
       return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     stick = dist <= STICK_THRESHOLD_PX;
+    if (el.scrollTop < lastScrollTop && el.scrollTop < STICK_THRESHOLD_PX)
+      loadEarlierHistory();
+    lastScrollTop = el.scrollTop;
   };
   $mount.addEventListener('scroll', onScrollCapture, true);
   wakeLockDoc.addEventListener('visibilitychange', onVisibilityChange);
   const scrollObserver = new MutationObserver(() => {
     mountComposer();
+    if (pageAnchor && !getActiveSession()?.loadingEarlier) {
+      const scroll = $mount.querySelector('.floot-messages');
+      if (scroll && Math.abs(scroll.scrollTop - pageAnchor.top) < 2)
+        scroll.scrollTop += Math.max(
+          0,
+          scroll.scrollHeight - pageAnchor.height,
+        );
+      pageAnchor = undefined;
+    }
     if (!stick) return;
     const el = /** @type {HTMLElement | null} */ (
       $mount.querySelector('.floot-messages')

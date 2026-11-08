@@ -7,8 +7,8 @@ import { Far } from '@endo/far';
 /* eslint-disable import/no-relative-packages */
 import { messageFromResponsesOutput } from '../../lal/providers/subscription-responses.js';
 import { makeStreamingAgent } from '../../floot/agent.js';
-import { providePrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
-import { makeReplyChannel } from '../../floot/src/stream.js';
+import { providePrivateTurnStorage } from '../../fae/session/private-turn-storage.js';
+import { makeReplyChannel } from '../../fae/session/stream.js';
 /* eslint-enable import/no-relative-packages */
 
 /**

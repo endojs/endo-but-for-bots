@@ -540,7 +540,7 @@ export const spawnWorkerLoop = async (
    * @param {object[]} initialSchemas
    * @param {Map<string, object>} initialToolMap
    * @param {string} leafNodeId - the node to continue from
-   * @returns {Promise<{ answered: boolean, exhausted: boolean, leafId: string, message?: any }>} the turn outcome
+   * @returns {Promise<{ answered: boolean, exhausted: boolean, cursor: string, message?: any }>} the turn outcome
    */
   const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
     let toolWrite;
@@ -553,7 +553,7 @@ export const spawnWorkerLoop = async (
       toolMap: initialToolMap,
     });
     const outcome = await runAgenticTurn({
-      leafId: leafNodeId,
+      cursor: leafNodeId,
       signal: loopAbort.signal,
       maxRounds: maxToolRounds,
       getTools: round =>
@@ -599,7 +599,7 @@ export const spawnWorkerLoop = async (
         console.log(
           `[fae] context has ${providerContext.length} messages, sending to LLM`,
         );
-        return harden({ leafId: currentLeafId, messages: providerContext });
+        return harden({ cursor: currentLeafId, messages: providerContext });
       },
       invoke: async (providerContext, tools) => {
         let response;
@@ -988,7 +988,7 @@ export const spawnWorkerLoop = async (
         // tool, send the content as a fallback reply so the sender
         // (e.g. a Whylip UI) actually receives it.
         if (!replyTracker.sent) {
-          const finalNode = await tree.getNode(outcome.leafId);
+          const finalNode = await tree.getNode(outcome.cursor);
           loopAbort.signal.throwIfAborted();
           if (finalNode) {
             const lastMsg = finalNode.messages[finalNode.messages.length - 1];

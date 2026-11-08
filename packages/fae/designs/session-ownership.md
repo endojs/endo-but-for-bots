@@ -9,3 +9,9 @@ Fae owns agents, inference connections and model selection, delegation, tool exe
 5. Verify package dependencies and persisted entry points, run focused tests for both consumers and the session engine, and review each commit adversarially. Review fixes again before committing. Package dependency lockfile changes follow the repository's separate commit convention.
 
 Verify that history remains readable with the guest and provider unavailable. Use the same serialized journal for reads and live writes. Page by a stable turn identity even when a late result changes archive publication order. Validate that tool correlation preserves provider wire IDs and opaque reasoning blocks. Check the dependency graph and cold-load each retained module URL in addition to testing new entry points.
+
+## New-session networking and RSI
+
+The new-session form starts with the preset's network choice. Existing built-in presets offer the isolated environment's public internet policy by default. Chat-only starts offline and has no extra objects. A saved session or delegated child keeps its captured grants. Model inference still uses the selected provider connection when the session shell is offline.
+
+RSI works on Tokyo Forgejo's `floot/endo` and `floot/nixos-config`. Give it a private POSIX workspace and a capability for reading source and opening a pull request. Candidate branches belong to an Actions-disabled fork under a dedicated account with read-only upstream access. The agent never receives the account's password, daemon host powers, a machine controller or deployment approval. The review workflow binds the exact PR head and an independent reviewer. An approved review can propose the change to the existing deployment workflow, where application requires an operator decision.

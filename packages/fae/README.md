@@ -1,14 +1,12 @@
 # @endo/fae
 
-An LLM agent manager for Endo. Fae runs as a factory caplet inside the
-Endo daemon, creating named agent instances that process inbox messages
-via an LLM and adopt tool capabilities at runtime.
+Fae owns agent execution, provider connections, delegation, endowments, and durable sessions. Floot consumes its streaming session API for chat and speech. Whylip uses its factory and branching conversations for books. See [durable sessions](./SESSIONS.md) and the [ownership plan](./designs/session-ownership.md).
 
 For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](../floot/OPENROUTER.md#fae).
 
 ## Architecture
 
-Fae uses a three-layer architecture:
+The branching agent factory used by Whylip has three layers:
 
 1. **LLM Provider Factory** (`llm-provider-factory.js`) — presents a
    form to HOST for configuring LLM providers (API host, model, auth
@@ -146,11 +144,9 @@ ephemeral.
 
 ### Whylip
 
-Run `setup-whylip.js` after Floot setup. It uses the ordinary Fae factory and
-Floot's existing `fae-codex` inference capability, with the shared model catalog
-and no separate credentials or inference backend. Setup defaults to
-`gpt-5.6-sol` with low reasoning effort; an existing recipe retains its identity
-and configuration across startup so conversation recovery stays compatible.
+Whylip installs an ordinary Fae factory using the shared OpenAI subscription.
+Its installer and book service live in the [Whylip application](../space-whylip/README.md).
+Existing book recipes retain their identity across startup.
 
 The installation and book provisioning service live under
 `@pins/installations/whylip/`. The service serializes book creation and keeps
@@ -395,7 +391,7 @@ For visual development, use a granted browser or shell to render desktop and
 mobile screenshots, inspect browser errors, call `viewImage`, and iterate.
 Report any unavailable verification instead of claiming that a syntax check
 verified the scene.
-See [Floot's image-input guide](../floot/README.md#reading-images-and-checking-visual-work)
+See the [session image-input guide](./SESSIONS.md#reading-images-and-checking-visual-work)
 for transport and recovery details.
 
 When inference fails after a new image read, Fae checkpoints a receipt for that
@@ -405,3 +401,38 @@ Earlier successful images and the original immutable tool records remain intact.
 This recovery checkpoint survives restart; the agent may explicitly read a corrected
 image again.
 Compaction and diagnostic logs use image receipts rather than base64 text.
+
+The native session installer `packages/fae/setup-session-factory.js` uses
+`fae-sessions/controller` by default. Set `ENDO_FAE_SESSION_DIR` to give it
+a separate inventory directory. Install the OpenAI and Anthropic direct
+pools before or after this factory. It receives their shared inference and
+model catalog capabilities and the operator account bindings. Floot can
+use the same pools through its own controller. A pool can also be installed
+before either application, for example to serve Whylip.
+
+### RSI development
+
+The RSI preset provides a private Git workspace, a POSIX shell with public
+internet access by default, and two narrow capabilities. `pull-requests`
+reads sources and opens PRs for the Endo and endo-host repositories on the
+configured Tokyo Forgejo. `review-deploy` submits an open PR to the review
+and deployment workflow.
+
+Call `source(repo)` with `endo` or `endo-host`. It returns the branch name
+`base`, the upstream revision `commit`, and a tar.gz byte reader `archive`.
+Extract the archive in the shell and commit a local Git baseline before editing.
+Stage your changes, generate a patch with `git diff --cached --binary`, and
+pass its byte reader with the upstream revision to
+`open(repo, commit, title, patchReader, body?)`. Use its receipt in
+`review-deploy.propose({repo, number, head, title, summary})`. The response
+contains a workflow run ID. The reviewer's verdict applies to the exact
+revision. For endo-host the reviewer also receives the exact files that the
+deployment would stage. A reviewer rejection ends the proposal. Submit a new
+PR revision for another review.
+
+The root host can set a dedicated reviewer by installing its mail handle at
+`@pins/installations/workflow/rsi-reviewer`. Otherwise the operator receives
+the code review. An accepted review opens the ordinary deploy workflow with
+its separate operator approval. RSI receives neither a deploy performer nor
+workflow control. In-flight proposals keep their original reviewer and
+performer, and new proposals use the current installation.

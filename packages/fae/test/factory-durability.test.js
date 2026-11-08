@@ -10,7 +10,11 @@ import { Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeEndoClient, start, stop } from '@endo/daemon';
 import { parseId } from '@endo/daemon/formula-identifier.js';
+import { main as setupWorkflow } from '@endo/workflow/setup.js';
 import { releaseFaeAgent } from '../src/subagent-host.js';
+import { provisionRsiReview } from '../rsi-review-setup.js';
+import { provisionRsiForge } from '../session/setup-rsi-forge.js';
+import { setupSessionFactory } from '../setup-session-factory.js';
 import { setupWhylip } from '../setup-whylip.js';
 
 const prepareDaemon = async t => {
@@ -47,6 +51,150 @@ const prepareDaemon = async t => {
   const host = await connect();
   return { config, connect, host };
 };
+
+test.serial(
+  'RSI forge installation preserves its identity and withdraws private authority from retained copies',
+  async t => {
+    const { host, config, connect } = await prepareDaemon(t);
+    const profile = await E(host).provideHost('rsi-profile-handle', {
+      agentName: 'rsi-profile',
+    });
+    const enabled = { ENDO_FORGEJO_URL: 'https://git.goooooo.ooo' };
+    const grant = 'rsi-pull-requests';
+    const privatePath = [
+      '@pins',
+      'installations',
+      'rsi',
+      'forge-access',
+      'credential',
+    ];
+    t.false(await E(host).has('@pins', 'installations'));
+    await provisionRsiForge(host, profile, enabled);
+    t.false(await E(host).has('@pins', 'installations'));
+    t.false(await E(profile).has(grant));
+    // An intentionally malformed token proves the credential is reachable when
+    // enabled without ever making a real Forgejo request.
+    /** @type {any} */
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'rsi-forgejo-password',
+      'RSI test credential',
+      '/w==',
+    );
+    await provisionRsiForge(host, profile, enabled);
+    const id = await E(profile).identify(grant);
+    t.truthy(id);
+    const locator = await E(profile).locate(grant);
+    if (!locator) throw Error('Missing RSI test grant');
+    await E(host).storeLocator('held-rsi-forge', locator);
+    await provisionRsiForge(host, profile, enabled);
+    t.is(await E(profile).identify(grant), id);
+    t.is(
+      await E(host).identify(...privatePath),
+      await E(host).identify('secrets', 'rsi-forgejo-password'),
+    );
+    /** @type {any} */
+    const held = await E(host).lookup('held-rsi-forge');
+    await t.throwsAsync(E(held).source('endo'), {
+      message: /does not hold UTF-8/,
+    });
+    await E(profile).remove(grant);
+    await provisionRsiForge(host, profile, {});
+    t.false(await E(host).has(...privatePath));
+    await t.throwsAsync(E(held).source('endo'), {
+      message: /Unknown pet name/,
+    });
+    await stop(config);
+    await start(config);
+    const revived = await connect();
+    /** @type {any} */
+    const restoredProfile = await E(revived).lookup('rsi-profile');
+    /** @type {any} */
+    const restored = await E(revived).lookup('held-rsi-forge');
+    await t.throwsAsync(E(restored).source('endo'), {
+      message: /Unknown pet name/,
+    });
+    await provisionRsiForge(revived, restoredProfile, enabled);
+    t.is(await E(restoredProfile).identify(grant), id);
+    await t.throwsAsync(E(restored).source('endo'), {
+      message: /does not hold UTF-8/,
+    });
+    await provisionRsiForge(revived, restoredProfile, {});
+    t.false(await E(restoredProfile).has(grant));
+    t.false(await E(revived).has(...privatePath));
+
+    await provisionRsiForge(revived, restoredProfile, enabled);
+    await E(restoredProfile).storeValue('unrelated', grant);
+    await t.throwsAsync(provisionRsiForge(revived, restoredProfile, {}), {
+      message: /Conflicting RSI Forgejo grant/,
+    });
+    t.is(await E(restoredProfile).lookup(grant), 'unrelated');
+    t.false(await E(revived).has(...privatePath));
+    await t.throwsAsync(E(restored).source('endo'), {
+      message: /Unknown pet name/,
+    });
+  },
+);
+
+test.serial(
+  'session setup rejects a substituted controller, old pin or profile before handing over a secret',
+  async t => {
+    const { host } = await prepareDaemon(t);
+    const directory = 'reviewed-sessions';
+    await E(host).makeDirectory(directory);
+    const handle = [directory, 'controller-handle'];
+    const powers = [directory, 'controller-profile'];
+    const controller = [directory, 'controller'];
+    const pin = ['@pins', `${directory}-controller`];
+    const expected = await E(host).provideHost('expected-handle', {
+      agentName: 'expected-host',
+    });
+    const foreign = await E(host).provideHost('foreign-handle', {
+      agentName: 'foreign-host',
+    });
+    await E(host).copy(['expected-handle'], handle);
+    await E(host).copy(['expected-host'], powers);
+    /** @type {any} */
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      `${directory}-auth`,
+      'Session setup test',
+      '/w==',
+    );
+    await E(host).makeUnconfined(
+      '@main',
+      new URL('./fixtures/reviewed-pull.js', import.meta.url).href,
+      {
+        powersName: powers,
+        resultName: controller,
+      },
+    );
+    const conflicting = await E(host).identify(...controller);
+    const run = () => setupSessionFactory(host, { directory });
+    await t.throwsAsync(run(), {
+      message: /Unexpected Floot controller formula/,
+    });
+    t.false(await E(expected).has('llm-auth-secret'));
+    t.is(await E(host).identify(...controller), conflicting);
+    await E(host).move(controller, pin);
+    await t.throwsAsync(run(), {
+      message: /Unexpected Floot controller formula/,
+    });
+    t.false(await E(expected).has('llm-auth-secret'));
+    t.is(await E(host).identify(...pin), conflicting);
+    await E(host).remove(...pin);
+    await E(host).copy(['foreign-host'], powers);
+    await t.throwsAsync(run(), {
+      message: /Unexpected session controller profile/,
+    });
+    t.false(await E(foreign).has('llm-auth-secret'));
+    await E(host).copy(['foreign-handle'], handle);
+    await t.throwsAsync(run(), {
+      message: /Cannot identify the retained session factory/,
+    });
+    t.false(await E(foreign).has('llm-auth-secret'));
+  },
+);
 
 const prepare = async t => {
   const { config, connect, host } = await prepareDaemon(t);
@@ -116,30 +264,48 @@ const settled = async (owner, name) => {
   }, 'durable turn settlement');
 };
 
+// Upgrade coverage exercises the old installer entrypoint against the current Fae installation.
+const installSharedOpenAI = async host => {
+  const path = ['@pins', 'installations', 'codex-sandbox'];
+  await E(host).provideDirectory(path);
+  await E(host).makeUnconfined(
+    '@node',
+    new URL('./fixtures/broker.js', import.meta.url).href,
+    { resultName: [...path, 'broker-service'] },
+  );
+  for (const [name, module] of [
+    ['subscription', 'subscription-module'],
+    ['model-catalog', 'subscription-model-catalog'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).makeUnconfined(
+      '@node',
+      new URL(`../../hosted-agent/src/${module}.js`, import.meta.url).href,
+      { powersName: [...path, 'broker-service'], resultName: [...path, name] },
+    );
+  }
+};
+
 test.serial(
   'actual Whylip setup and book services preserve identities and saved views across cold restart',
   async t => {
     const { config, connect, host } = await prepareDaemon(t);
-    await E(host).provideDirectory(['floot', 'controller-profile']);
-    await E(host).makeUnconfined(
-      '@node',
-      new URL('./fixtures/broker.js', import.meta.url).href,
-      { resultName: ['floot', 'controller'] },
-    );
-    await E(host).makeUnconfined(
-      '@node',
-      new URL('../../hosted-agent/src/subscription-module.js', import.meta.url)
-        .href,
-      {
-        powersName: ['floot', 'controller'],
-        resultName: ['floot', 'controller-profile', 'codex-inference'],
-      },
-    );
+    await installSharedOpenAI(host);
     const rootNames = await E(host).list();
     const options = { model: 'test-luna', reasoningEffort: 'low' };
     t.deepEqual(await setupWhylip(host, options), { ready: true, restored: 0 });
     t.deepEqual(await E(host).list(), rootNames);
     const installation = ['@pins', 'installations', 'whylip'];
+    const booksPath = [...installation, 'books-service'];
+    await E(host).remove(...booksPath);
+    await E(host).makeUnconfined(
+      [...installation, 'factory-worker'],
+      new URL('../whylip-books.js', import.meta.url).href,
+      {
+        powersName: [...installation, 'books-state'],
+        resultName: booksPath,
+      },
+    );
     const books = await E(host).lookup([...installation, 'books-service']);
     const owner = await E(host).lookup([...installation, 'agents']);
     t.deepEqual(await E(books).createBook('physics'), ['whylip', 'physics']);
@@ -604,21 +770,7 @@ test.serial(
   'actual Whylip archived installation preserves evidence while fresh setup uses new private workers',
   async t => {
     const { host } = await prepareDaemon(t);
-    await E(host).provideDirectory(['floot', 'controller-profile']);
-    await E(host).makeUnconfined(
-      '@node',
-      new URL('./fixtures/broker.js', import.meta.url).href,
-      { resultName: ['floot', 'controller'] },
-    );
-    await E(host).makeUnconfined(
-      '@node',
-      new URL('../../hosted-agent/src/subscription-module.js', import.meta.url)
-        .href,
-      {
-        powersName: ['floot', 'controller'],
-        resultName: ['floot', 'controller-profile', 'codex-inference'],
-      },
-    );
+    await installSharedOpenAI(host);
     // In-memory root state proves recovery never restarts unrelated workers.
     const sentinel = await E(host).makeUnconfined(
       '@main',
@@ -666,9 +818,10 @@ test.serial(
     );
     const recipeId = await E(host).identify(...installation, 'recipe');
     const sourceId = await E(host).identify(
-      'floot',
-      'controller-profile',
-      'codex-inference',
+      '@pins',
+      'installations',
+      'codex-sandbox',
+      'subscription',
     );
     const archive = [...installation, 'retired-fixtures', 'terminal-v1'];
     await E(host).provideDirectory(archive);
@@ -693,7 +846,12 @@ test.serial(
     }
     t.is(await E(host).identify(...installation, 'recipe'), recipeId);
     t.is(
-      await E(host).identify('floot', 'controller-profile', 'codex-inference'),
+      await E(host).identify(
+        '@pins',
+        'installations',
+        'codex-sandbox',
+        'subscription',
+      ),
       sourceId,
     );
     t.is(await E(host).identify(...archive, 'book'), oldBookId);
@@ -723,5 +881,75 @@ test.serial(
     t.false(await E(guest).has('@pins', 'physics-agent-driver'));
     t.is(await E(host).identify('@main'), rootWorkerId);
     t.deepEqual(await E(sentinel).counts(), { opened: 1, revoked: 1 });
+  },
+);
+
+test.serial(
+  'RSI review connection binds an independent verdict before staging, survives restart and retracts retained grants',
+  async t => {
+    const { host, config, connect } = await prepareDaemon(t);
+    await setupWorkflow(host);
+    /** @type {any} */
+    const source = await E(host).makeUnconfined(
+      '@main',
+      new URL('./fixtures/reviewed-pull.js', import.meta.url).href,
+      { resultName: 'rsi-pull-requests' },
+    );
+    await E(host).copy(['rsi-pull-requests'], ['controller-for-nixos-admin']);
+    await E(host).provideGuest('test-reviewer', {
+      agentName: 'test-reviewer-powers',
+    });
+    await E(host).copy(
+      ['test-reviewer'],
+      ['@pins', 'installations', 'workflow', 'rsi-reviewer'],
+    );
+    /** @type {any} */
+    const reviewer = await E(host).lookup('test-reviewer-powers');
+    const opts = { dir: 'test', factoryHost: host };
+    t.true(await provisionRsiReview(host, opts));
+    const proposal = harden({
+      repo: 'endo',
+      number: 42,
+      head: 'a'.repeat(40),
+      title: 'Verify access',
+      summary: 'Independent code review',
+    });
+    /** @type {any} */
+    const connection = await E(host).lookup('rsi-review-deploy');
+    const receipt = await E(connection).propose(proposal);
+    t.deepEqual(await E(connection).propose(proposal), receipt);
+    const review = await eventually(
+      async () =>
+        (await E(reviewer).listMessages()).find(m => m.type === 'request'),
+      'independent review mail',
+    );
+    t.is(await E(source).stageCount(), 0);
+    t.false((await E(host).listMessages()).some(m => m.type === 'form'));
+    await E(reviewer).storeValue(
+      harden({ approve: true, feedback: 'Verified commit' }),
+      'verdict',
+    );
+    await E(reviewer).resolve(review.number, 'verdict');
+    await eventually(
+      async () => (await E(source).stageCount()) === 1,
+      'staging after independent approval',
+    );
+    const id = await E(host).identify('rsi-review-deploy');
+    await stop(config);
+    await start(config);
+    const revived = await connect();
+    t.true(
+      await provisionRsiReview(revived, { ...opts, factoryHost: revived }),
+    );
+    t.is(await E(revived).identify('rsi-review-deploy'), id);
+    /** @type {any} */
+    const saved = await E(revived).lookup('rsi-review-deploy');
+    t.deepEqual(await E(saved).propose(proposal), receipt);
+    await E(revived).remove('rsi-pull-requests');
+    t.false(
+      await provisionRsiReview(revived, { ...opts, factoryHost: revived }),
+    );
+    t.false(await E(revived).has('rsi-review-deploy'));
+    await t.throwsAsync(E(saved).propose(proposal));
   },
 );

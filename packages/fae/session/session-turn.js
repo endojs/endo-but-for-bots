@@ -1,0 +1,275 @@
+// @ts-check
+// A Fae turn owned by the daemon.
+//
+// The turn runs against a reply channel the daemon holds and drains here, so
+// the turn's progress does not depend on anyone consuming it. A caller observes
+// through `watch()`, which hands out a fresh buffered reader per viewer, and
+// stops the work through `cancel()` — nothing else. Losing an observer (a
+// component unmounts, a tab closes, a gateway drops) closes that viewer's
+// stream and leaves the turn running, which is the whole point: under
+// exo-stream a severed CapTP connection abandons the synchronize chain, and a
+// reply channel handed straight to the browser reads that as the consumer
+// hanging up.
+//
+// `speak()` is a view too: a TTS branch that opens its own snapshot-first view
+// beside the turn and feeds the assistant text to a TtsServer (turn-speech.js),
+// so a spoken reply never depends on the browser relaying text back.
+//
+// See designs/floot-daemon-owned-turns.md and designs/ui-view-not-driver.md.
+
+import { makeExo } from '@endo/exo';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { M } from '@endo/patterns';
+
+import { makeReplyFold } from './reply-fold.js';
+import { makeReplyChannel } from './stream.js';
+
+/** @import { BufferedReaderKit } from '@endo/exo-stream' */
+/** @import { ReplyEvent } from './stream.js' */
+
+/** @typedef {import('./reply-fold.js').FoldedMessage} TurnMessage */
+
+/**
+ * @typedef {import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number, incompleteTurns: number }} TurnUsage
+ */
+
+/**
+ * A turn's state coalesced from its reply events: what a view renders if it
+ * repaints from scratch. `messages` holds the assistant and tool messages the
+ * turn has completed; `streamingText` is the assistant text still arriving.
+ *
+ * @typedef {{
+ *   phase: string,
+ *   streamingText: string,
+ *   messages: TurnMessage[],
+ *   done: boolean,
+ *   error: string | null,
+ *   usage: TurnUsage | null,
+ * }} TurnStatus
+ */
+
+/**
+ * What `watch()` yields: the turn's state as of the moment the view opened,
+ * then the reply events that follow it.
+ *
+ * @typedef {{ type: 'snapshot', status: TurnStatus } | ReplyEvent} TurnViewEvent
+ */
+
+const turnGuards = harden({
+  getStatus: M.callWhen().returns(M.record()),
+  watch: M.call().returns(M.remotable()),
+  cancel: M.callWhen().returns(M.undefined()),
+  whenFinished: M.callWhen().returns(M.undefined()),
+});
+
+/**
+ * Copy the live status. The drain loop mutates message records in place (a tool
+ * call's result lands after the call), so a snapshot must copy each one rather
+ * than harden the originals out from under it.
+ *
+ * @param {TurnStatus} status
+ * @returns {TurnStatus}
+ */
+const snapshotOf = status =>
+  harden({
+    phase: status.phase,
+    streamingText: status.streamingText,
+    messages: status.messages.map(message => ({ ...message })),
+    done: status.done,
+    error: status.error,
+    usage: status.usage ? { ...status.usage } : null,
+  });
+
+/**
+ * Fold the turn's reply events into `status`, forwarding each one to the views
+ * before folding it — so a view that opened on the preceding snapshot applies
+ * exactly the events that snapshot does not already account for.
+ *
+ * @param {object} reader
+ * @param {TurnStatus} status
+ * @param {(event: ReplyEvent) => void} emit
+ * @returns {Promise<ReplyEvent | null>} the terminal event the channel carried,
+ *   or null if it was closed without one.
+ */
+const drainReplyReader = async (reader, status, emit) => {
+  const fold = makeReplyFold();
+  /** @type {ReplyEvent | null} */
+  let terminal = null;
+  try {
+    for await (const raw of iterateReader(reader, { buffer: 8 })) {
+      const event = /** @type {ReplyEvent} */ (raw);
+      if (event.type !== 'end' && event.type !== 'abort') emit(event);
+      terminal = fold.apply(status, event) ?? null;
+      if (terminal) break;
+    }
+  } finally {
+    // Whatever assistant text was still arriving is a message now, even
+    // when the channel failed under it.
+    fold.finish(status);
+  }
+  return terminal;
+};
+
+/**
+ * Start a turn the daemon owns, and return a handle to it.
+ *
+ * @param {object} options
+ * @param {(writer: object, signal: AbortSignal) => Promise<void>} options.run
+ *   Runs the turn, writing reply events to `writer` and honouring `signal`.
+ *   `signal` aborts only on `cancel()`.
+ * @param {{guards: Record<string, any>, methods: (watch: () => object) => Record<string, any>}} [presentation]
+ * @returns {object} the daemon-owned turn
+ */
+export const makeSessionTurn = ({ run }, presentation = undefined) => {
+  const { writer, reader, close } = makeReplyChannel();
+  const controller = new AbortController();
+
+  /** @type {TurnStatus} */
+  const status = {
+    phase: 'thinking',
+    streamingText: '',
+    messages: [],
+    done: false,
+    error: null,
+    usage: null,
+  };
+
+  // One buffered channel per viewer. A viewer's channel closing removes that
+  // viewer and nothing else — the turn is not an observer's to end.
+  /** @type {Set<BufferedReaderKit>} */
+  const views = new Set();
+
+  /** @param {ReplyEvent} event */
+  const emit = event => {
+    for (const view of [...views]) {
+      view.push(event);
+    }
+  };
+
+  let cancelled = false;
+  /** @type {() => void} */
+  let finish = () => {};
+  /** @type {Promise<void>} */
+  const finished = new Promise(resolve => {
+    finish = () => resolve(undefined);
+  });
+
+  /**
+   * The terminal event a view should end on, for a turn that produced none of
+   * its own. A cancelled turn ends cleanly: the caller asked for it.
+   *
+   * @returns {ReplyEvent}
+   */
+  const syntheticTerminal = () =>
+    status.error
+      ? harden({ type: /** @type {const} */ ('abort'), reason: status.error })
+      : harden({ type: /** @type {const} */ ('end') });
+
+  const running = (async () => {
+    try {
+      await run(writer, controller.signal);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      status.error = message;
+      writer.abort(message);
+    } finally {
+      // A successful run may return without emitting a terminal event (for
+      // example a queued turn cancelled before dispatch). Never strand a drain.
+      writer.end();
+    }
+  })();
+
+  (async () => {
+    /** @type {ReplyEvent | null} */
+    let terminal = null;
+    try {
+      terminal = await drainReplyReader(reader, status, emit);
+    } catch (error) {
+      status.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      // Even a drain failure must not bypass execution teardown.
+      await running;
+      status.done = true;
+      // Stream exhaustion is not execution completion. In particular, a
+      // hosted interrupt may still fail after cancel closes the local channel.
+      // Publish exactly one terminal outcome, once teardown has settled.
+      if (cancelled && !status.error) status.phase = 'cancelled';
+      emit(
+        status.error ? syntheticTerminal() : terminal || syntheticTerminal(),
+      );
+      views.clear();
+      finish();
+    }
+  })();
+
+  /**
+   * Open a view of the turn: a snapshot of where it has got to, then the
+   * events that follow. Disposable: closing the returned reader detaches this
+   * viewer. Others keep their streams and the turn keeps running.
+   *
+   * @returns {object} a Far StreamReader of TurnViewEvent
+   */
+  const openView = () => {
+    const view = makeBufferedReader();
+    view.push(harden({ type: 'snapshot', status: snapshotOf(status) }));
+    if (status.done) {
+      // Nothing more is coming: end the stream so a late viewer repaints from
+      // the snapshot instead of parking on a channel that will never speak.
+      view.push(syntheticTerminal());
+      return view.reader;
+    }
+    views.add(view);
+    view.setOnClose(() => {
+      views.delete(view);
+    });
+    return view.reader;
+  };
+
+  return makeExo(
+    'FlootTurn',
+    M.interface('FaeTurn', { ...turnGuards, ...presentation?.guards }),
+    {
+      ...presentation?.methods(openView),
+      /**
+       * The turn's state right now, for a caller that wants to poll rather than
+       * hold a stream.
+       */
+      async getStatus() {
+        return snapshotOf(status);
+      },
+      /**
+       * A view of the turn. Opening one costs a round trip, and the snapshot is
+       * what closes the gap — a view that started from the live events alone
+       * would miss everything emitted while `watch()` was in flight. It is also
+       * what lets a reloaded tab reattach to a turn already in progress.
+       */
+      watch() {
+        return openView();
+      },
+      /**
+       * Stop the turn. The only thing that does.
+       */
+      async cancel() {
+        if (cancelled || status.done) return;
+        cancelled = true;
+        // Abort before closing, so the turn's own teardown — a hosted backend's
+        // interrupt, a provider stream — starts while its writer is still live.
+        status.phase = 'cancelling';
+        emit(harden({ type: 'phase', phase: status.phase }));
+        controller.abort();
+        // An aborted turn returns without settling its writer, so nothing else
+        // would release the drain above.
+        close();
+      },
+      /**
+       * Settles once the turn has emitted its last event and `getStatus()` is
+       * final, including confirmation or failure of backend cancellation.
+       */
+      async whenFinished() {
+        await finished;
+      },
+    },
+  );
+};
+harden(makeSessionTurn);

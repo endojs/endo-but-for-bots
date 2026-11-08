@@ -9,6 +9,8 @@
     "scripts",
     "src",
     "tools",
-    "test"
+    "test",
+    "session",
+    "providers"
   ]
 }

@@ -1014,7 +1014,23 @@ export const MessageList = ({ state, controller, debug = false }) => {
     );
   }
 
-  const hasContent = messages.length > 0 || streamingText || thinking;
+  const earlier =
+    state.hasEarlier && controller.loadEarlierHistory
+      ? h(
+          'button',
+          {
+            type: 'button',
+            class: 'floot-history-earlier',
+            disabled: state.loadingEarlier,
+            onClick: () => controller.loadEarlierHistory?.(),
+          },
+          state.loadingEarlier
+            ? 'Loading earlier messages…'
+            : 'Load earlier messages',
+        )
+      : null;
+  const hasContent =
+    messages.length > 0 || streamingText || thinking || earlier;
   if (!hasContent) {
     return h(
       'div',
@@ -1036,7 +1052,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
     } else if (thinking) {
       rawRows.push(h(ThinkingRow, { key: 'thinking' }));
     }
-    return h('div', { class: 'floot-messages' }, rawRows);
+    return h('div', { class: 'floot-messages' }, earlier, rawRows);
   }
 
   // Keys are positional: the transcript is append-mostly, so an index key is
@@ -1080,6 +1096,6 @@ export const MessageList = ({ state, controller, debug = false }) => {
   // had already been sent.
   rows.push(...pendingRows());
 
-  return h('div', { class: 'floot-messages' }, rows);
+  return h('div', { class: 'floot-messages' }, earlier, rows);
 };
 harden(MessageList);

@@ -2,7 +2,7 @@
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 // eslint-disable-next-line import/no-relative-packages -- Test-only model discovery.
-import { makeTestInference } from '../../floot/test/_inference.js';
+import { makeTestInference } from '../../fae/test/session/_inference.js';
 
 /**
  * Real daemon storage, with inert inference and one injected remove failure.

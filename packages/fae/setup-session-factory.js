@@ -1,0 +1,633 @@
+// @ts-check
+/* global process */
+// endo run --UNCONFINED floot-factory-setup.js --powers @agent \
+//   -E ANTHROPIC_API_KEY=sk-...   (optionally -E FLOOT_DIR=floot)
+//
+// Every FLOOT_* knob is also read as ENDO_FLOOT_*, and the key as
+// ENDO_FLOOT_AUTH_TOKEN. A daemon that runs this script from ENDO_EXTRA
+// forwards only ENDO_-, LOCKDOWN_-, and XDG_-prefixed variables to its
+// subprocess (packages/daemon/index.js `allowEnvPass`), so a hosted deployment
+// provisions from a secrets EnvironmentFile under those names.
+//
+// Provisions the Floot factory under a `floot/` inventory directory as the
+// well-known `floot/controller` — a single pinned caplet that owns every chat
+// session (each session is its own guest, hidden behind the factory). The LLM
+// is configured programmatically (Anthropic API endpoint by default) and handed
+// to the factory behind an `llm-provider` capability handle, so no secret lives
+// in env. Persistence is daemon-only.
+//
+// The auth token is held by the daemon's secret manager and handed to the
+// factory as a `SecretBlob` capability, so the token can be rotated or revoked
+// without re-provisioning anything, every read is audited, and the pet-store
+// value the factory reads carries no credential at all.
+//
+// Re-runnable. A daemon re-runs every ENDO_EXTRA setup on each start, and an
+// operator re-runs it to rotate a key or correct the account profile. On a
+// re-run the factory host, its profile, the provider value, and the secret are
+// reused or replaced in place. The factory is reused when its module and
+// construction environment match; otherwise cancellation must drain before
+// replacement. Hosted deployments name its module through RELEASE_DIR's stable
+// current symlink, so a cold restart loads the pinned release without creating
+// another writer. Sessions are untouched — the registry lives in the factory
+// profile's pet store and each session's history in its own guest.
+//
+// The `machine-admin` preset draws on three grants this script stores on the
+// factory host (machine-admin-setup.js): the NixOS controller, the Forgejo
+// push credential, and the deploy-workflow connections. Their providers —
+// @endo/workflow/setup.js, @endo/space-nixos-admin/setup.js, and
+// @endo/space-nixos-admin/setup-forgejo-credential.js — belong in ENDO_EXTRA
+// ahead of this script; each grant is a quiet no-op where its provider is
+// absent and is re-derived on every start.
+
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { E } from '@endo/eventual-send';
+import {
+  assertSubscriptionConsumer,
+  bindInstalledDirectSubscription,
+  registerSubscriptionConsumer,
+} from '@endo/hosted-agent/setup-direct-subscription.js';
+import {
+  inspectSessionProfile,
+  inspectSessionController,
+} from '@endo/hosted-agent/session-consumer.js';
+import { coerceDeclaredProfile } from '@endo/hosted-agent/account.js';
+import {
+  invalidateAccountBindings,
+  makeAccountId,
+  publishAccountBindings,
+} from '@endo/hosted-agent/account-bindings.js';
+import {
+  AUTH_SECRET_PETNAME,
+  hasAuthSecret,
+  provideAuthSecret,
+} from './src/credentials.js';
+
+import { provisionRsiForge } from './session/setup-rsi-forge.js';
+import { assertProviderKind } from './providers/config.js';
+import { provisionRsiReview } from './rsi-review-setup.js';
+import { provisionFlootFactory } from './session/provision-factory.js';
+import {
+  FLOOT_WORKLOAD_ENV_KEYS,
+  readFlootWorkloadConfig,
+} from './session/workload-config.js';
+
+import {
+  isNamePersisted,
+  provisionMachineAdmin,
+} from './machine-admin-setup.js';
+
+const flootFactorySpecifier = new URL('session-factory.js', import.meta.url)
+  .href;
+const accountOracleSpecifier = new URL('account-oracle.js', import.meta.url)
+  .href;
+
+/**
+ * Read a setup knob, accepting the `ENDO_`-prefixed spelling that a hosted
+ * daemon's environment filter lets through.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+const env = name => process.env[name] || process.env[`ENDO_${name}`] || '';
+
+/**
+ * Provision the account oracle: a durable formula that answers what plan this
+ * deployment is on and how much quota is left, without holding the credential.
+ *
+ * The declared profile is an ordinary stored value, so an operator corrects the
+ * answer by re-running setup with an edited file — no capability changes hands.
+ * The oracle formula keeps its identity across that, and across a restart.
+ *
+ * @param {import('@endo/eventual-send').ERef<object>} agent
+ * @param {object} options
+ * @param {string} options.dir
+ * @param {string} options.provider
+ * @param {any} options.factoryHost
+ */
+const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
+  const profilePath = env('FLOOT_ACCOUNT_PROFILE');
+  const handleName = `${dir}-account-oracle-handle`;
+  const powersName = `profile-for-${handleName}`;
+  const oraclePath = [dir, 'account-oracle'];
+  const powersPath = [dir, 'account-oracle-powers'];
+  const profileNamePath = [dir, 'account-profile'];
+  await invalidateAccountBindings(factoryHost, { source: dir });
+  // Publish references to the existing oracle, not another account owner.
+  // The profile may still have its temporary top-level name on a fresh setup.
+  const publish = async () => {
+    const accountId = makeAccountId({
+      providerId: provider,
+      accountAuthority: env('FLOOT_ACCOUNT_AUTHORITY'),
+    });
+    const oracle = await E(agent).lookup(oraclePath);
+    await publishAccountBindings(factoryHost, {
+      source: dir,
+      accounts: [
+        {
+          accountId,
+          providerId: provider,
+          title: 'Fae',
+          oracle,
+          uses: [{ backendId: 'provider' }],
+        },
+      ],
+    });
+  };
+
+  const existing = await E(agent).has(...oraclePath);
+  if (!profilePath && !existing) {
+    // Nothing declared and no oracle yet: skip it rather than stand up one that
+    // can only answer "unavailable".
+    console.log(
+      'Floot: no FLOOT_ACCOUNT_PROFILE; skipping the account oracle (getAccount() will report it is unavailable).',
+    );
+    await publishAccountBindings(factoryHost, { source: dir, accounts: [] });
+    return;
+  }
+
+  makeAccountId({
+    providerId: provider,
+    accountAuthority: env('FLOOT_ACCOUNT_AUTHORITY'),
+  });
+
+  if (profilePath) {
+    if (!existsSync(profilePath)) {
+      throw new Error(
+        `FLOOT_ACCOUNT_PROFILE "${profilePath}" does not exist on disk.`,
+      );
+    }
+    // Parsed and range-checked here, where a bad file is a setup error the
+    // operator sees, rather than inside a caplet where it would surface as a
+    // failed answer much later.
+    const declared = coerceDeclaredProfile(
+      JSON.parse(readFileSync(profilePath, 'utf8')),
+    );
+    if (await E(agent).has(...profileNamePath)) {
+      await E(agent).remove(...profileNamePath);
+    }
+    await E(agent).storeValue(declared, profileNamePath);
+  }
+
+  if (existing) {
+    // Keep the oracle's identity: its journal of past observations lives in its
+    // own pet store, and a caller may already hold the capability. Re-storing
+    // the profile above minted a *new* value formula, so re-point the oracle's
+    // namespace at it — otherwise a refresh would read the formula that
+    // `remove` just dropped.
+    if (profilePath) {
+      // A run that died between the oracle's launch and the moves below
+      // left its powers guest top-level; find it wherever it is.
+      const oraclePowers = await E(agent).lookup(
+        (await E(agent).has(...powersPath)) ? powersPath : powersName,
+      );
+      await E(oraclePowers).storeLocator(
+        'account-profile',
+        await E(agent).locate(...profileNamePath),
+      );
+    }
+    await E(factoryHost).storeLocator(
+      'account-oracle',
+      await E(agent).locate(...oraclePath),
+    );
+    // Finish the moves a run that died after the launch left undone — only
+    // into a destination that is still free, so a stray top-level name can
+    // never displace the guest already tucked away.
+    const handlePath = [dir, 'account-oracle-handle'];
+    if (
+      (await E(agent).has(handleName)) &&
+      !(await E(agent).has(...handlePath))
+    ) {
+      await E(agent).move([handleName], handlePath);
+    }
+    if (
+      (await E(agent).has(powersName)) &&
+      !(await E(agent).has(...powersPath))
+    ) {
+      await E(agent).move([powersName], powersPath);
+    }
+    console.log(
+      `Floot account oracle at "${dir}/account-oracle" reused${
+        profilePath ? ' with the updated profile' : ''
+      }.`,
+    );
+    await publish();
+    return;
+  }
+
+  // Adopt the powers guest a run that died before the launch left top-level
+  // when its name is bound to a persisted formula; otherwise clear the strays
+  // and mint. Resolve it by its agent name either way: `provideGuest` against
+  // a handle name that already exists hands back the mail handle, not the
+  // guest.
+  if (
+    !(await E(agent).has(powersName)) ||
+    !(await isNamePersisted(agent, powersName))
+  ) {
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(agent).has(stray)) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(agent).remove(stray);
+      }
+    }
+    await E(agent).provideGuest(handleName, { agentName: powersName });
+  }
+  const oracleGuest = await E(agent).lookup(powersName);
+  await E(oracleGuest).storeLocator(
+    'account-profile',
+    await E(agent).locate(...profileNamePath),
+  );
+  await E(agent).makeUnconfined('@main', accountOracleSpecifier, {
+    powersName,
+    resultName: oraclePath,
+    env: harden({ ACCOUNT_PROVIDER_ID: provider }),
+  });
+  await E(agent).move([handleName], [dir, 'account-oracle-handle']);
+  await E(agent).move([powersName], powersPath);
+  await E(factoryHost).storeLocator(
+    'account-oracle',
+    await E(agent).locate(...oraclePath),
+  );
+  console.log(`Floot account oracle created at "${dir}/account-oracle".`);
+  await publish();
+};
+
+// Absolute host path to the Endo codebase, mounted read-only into full-control
+// sessions. Default: the repo root, two directories up from this script
+// (packages/floot/) — derivable because this setup script runs unconfined from
+// its real on-disk location. Override with FLOOT_CODE_PATH (e.g. to mount a
+// subset, or when the script is run from a copy outside the repo). Resolved to
+// '' when the path does not exist on disk, which makes the factory skip the
+// mount instead of failing per session.
+const resolveCodePath = () => {
+  const configured =
+    env('FLOOT_CODE_PATH') ||
+    env('RELEASE_DIR') ||
+    fileURLToPath(new URL('../../', import.meta.url));
+  if (!existsSync(configured)) {
+    console.warn(
+      `Floot: code path "${configured}" does not exist; full-control sessions will have no source mount.`,
+    );
+    return '';
+  }
+  return configured;
+};
+
+/**
+ * Provision (or revive) the floot-factory: its guest, its provider handle, the
+ * pinned factory caplet, and a default session if none exist yet.
+ *
+ * @param {import('@endo/eventual-send').ERef<object>} agent
+ */
+export const setupSessionFactory = async (
+  agent,
+  {
+    localSpecifier = flootFactorySpecifier,
+    releaseModule = 'packages/fae/session-factory.js',
+    directory = env('FAE_SESSION_DIR') || 'fae-sessions',
+    spokenSeed = false,
+  } = {},
+) => {
+  // Everything lives under a single `floot/` inventory directory rather than
+  // polluting the top level. The factory is the well-known `floot/controller`,
+  // which the chat space's picker auto-detects.
+  const dir = directory;
+  const controllerPath = [dir, 'controller'];
+  const controllerHandlePath = [dir, 'controller-handle'];
+  const controllerProfilePath = [dir, 'controller-profile'];
+  const pinPath = ['@pins', `${dir}-controller`];
+  // `provideHost` takes a single pet-name (not a path), so the factory host and
+  // its profile are created top-level and `move`d under `floot/` afterward.
+  const guestName = `${dir}-controller-handle`;
+  const agentName = `profile-for-${guestName}`;
+
+  const releaseDir = env('RELEASE_DIR');
+  const previousReleaseDir = env('FLOOT_PREVIOUS_RELEASE_DIR');
+  if (previousReleaseDir && !isAbsolute(previousReleaseDir))
+    throw Error(
+      'FLOOT_PREVIOUS_RELEASE_DIR must name an absolute checkout path',
+    );
+  const specifier = releaseDir
+    ? pathToFileURL(resolve(releaseDir, releaseModule)).href
+    : localSpecifier;
+  const previousSpecifier = previousReleaseDir
+    ? pathToFileURL(resolve(previousReleaseDir, releaseModule)).href
+    : undefined;
+  const explicitProvider = env('FLOOT_PROVIDER');
+  if (explicitProvider && explicitProvider !== 'none')
+    assertProviderKind(explicitProvider);
+  const dirExists = await E(agent).has(dir);
+  const previous =
+    dirExists && (await E(agent).has(dir, 'llm-provider'))
+      ? await E(agent).lookup([dir, 'llm-provider'])
+      : undefined;
+  const retainedProvider = previous
+    ? previous.provider || 'anthropic'
+    : undefined;
+  if (
+    retainedProvider &&
+    explicitProvider &&
+    retainedProvider !== explicitProvider
+  ) {
+    throw Error(
+      'Existing sessions use the configured API provider. Add the other provider separately.',
+    );
+  }
+  let provider = explicitProvider || retainedProvider || 'anthropic';
+  if (provider !== 'none') assertProviderKind(provider);
+  const model = env('FLOOT_MODEL') || previous?.model || '';
+  const authToken =
+    env('FLOOT_AUTH_TOKEN') ||
+    (provider === 'openrouter'
+      ? env('OPENROUTER_API_KEY')
+      : process.env.ANTHROPIC_API_KEY);
+  if (provider === 'openrouter' && !model.includes('/')) {
+    throw Error(
+      'FLOOT_MODEL must be an organization-qualified OpenRouter model ID.',
+    );
+  }
+  const openRouterSecret = env('FLOOT_OPENROUTER_SECRET_NAME');
+  const openRouterModel = env('FLOOT_OPENROUTER_MODEL');
+  if (openRouterSecret && !openRouterModel.includes('/')) {
+    throw Error(
+      'FLOOT_OPENROUTER_MODEL must be an organization-qualified model ID.',
+    );
+  }
+  const codePath = resolveCodePath();
+  // The factory reads its per-deployment knobs from the caplet env. Optional
+  // ones are forwarded only when set, so the factory's defaults apply
+  // otherwise and a bad value is rejected where the factory parses it.
+  const factoryEnv = harden({
+    FLOOT_CODE_PATH: codePath,
+    ...Object.fromEntries(
+      FLOOT_WORKLOAD_ENV_KEYS.filter(name => env(name) !== '').map(name => [
+        name,
+        env(name),
+      ]),
+    ),
+  });
+  readFlootWorkloadConfig(factoryEnv);
+
+  // 0. Ensure the floot/ directory exists (idempotent on re-provision).
+  if (!dirExists) {
+    await E(agent).makeDirectory(dir);
+  }
+
+  // 1. The factory is its own child host. It needs host authority because only
+  // a host can `provideGuest`, and the factory provisions one guest per session.
+  // (It must be a host, not a guest: a guest can only reach the host as a
+  // mail-only Handle, which after a daemon restart can no longer provideGuest —
+  // breaking session revival.) Sessions remain isolated guests owned by this
+  // factory host.
+  //
+  // On a re-run the host already exists, at the path step 6 moved it to.
+  // `provideHost(guestName)` looks for the top-level name and, not finding it,
+  // would mint a second host that owns none of the sessions. The pet name
+  // `provideHost` is given binds the host's mail handle and `agentName` binds
+  // the host itself, so the profile path is the one to look up.
+  // `lookup` takes one name-or-path argument; spreading the path here made
+  // every re-run throw before anything below it ran.
+  //
+  // A first run that died between minting the host and step 6 leaves both
+  // names top-level. `provideHost` against the surviving handle name would
+  // hand back the mail HANDLE rather than the host (packages/daemon/AGENTS.md
+  // § provideGuest idempotency), so the host is adopted by its agent name
+  // when that name is bound to a persisted formula; otherwise the strays (a
+  // handle with no host behind it, or a name the daemon stored before it
+  // wrote the host's formula) are cleared and the host is minted afresh.
+  const revived = await E(agent).has(...controllerProfilePath);
+  if (!revived) {
+    const adoptable =
+      (await E(agent).has(agentName)) &&
+      (await isNamePersisted(agent, agentName));
+    if (!adoptable) {
+      for (const stray of [guestName, agentName]) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await E(agent).has(stray)) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(agent).remove(stray);
+        }
+      }
+      await E(agent).provideHost(guestName, { agentName });
+    }
+  }
+  // Capture the verified profile by ID. A conflicting public controller,
+  // pin, profile, or handle must stop setup before any Secrets or grants
+  // reach the recipient. Either handle location can survive an interrupted move.
+  const powersPath = revived ? controllerProfilePath : [agentName];
+  const profileId = await E(agent).identify(...powersPath);
+  const placedHandle = await E(agent).identify(...controllerHandlePath);
+  const temporaryHandle = await E(agent).identify(guestName);
+  if (placedHandle && temporaryHandle && placedHandle !== temporaryHandle)
+    throw Error('Conflicting session controller handles');
+  const validatedProfileId = await inspectSessionProfile(
+    agent,
+    profileId,
+    placedHandle || temporaryHandle,
+  );
+  const registered = await assertSubscriptionConsumer(
+    agent,
+    dir,
+    validatedProfileId,
+  );
+  const controllerId = await E(agent).identify(...controllerPath);
+  const pinnedId = await E(agent).identify(...pinPath);
+  if (revived && !registered && !controllerId && !pinnedId)
+    throw Error(
+      'Cannot identify the retained session factory for this profile',
+    );
+  await Promise.all(
+    [...new Set([controllerId, pinnedId])].filter(Boolean).map(id =>
+      inspectSessionController(agent, id, {
+        profileId: validatedProfileId,
+        specifier,
+        localSpecifier,
+        previousSpecifier,
+      }),
+    ),
+  );
+  const factoryHost = await E(agent).lookupById(validatedProfileId);
+
+  // A re-provision without the key in env keeps the secret already in the
+  // manager: the credential lives in the daemon now, not in this shell.
+  const secretName =
+    env('FLOOT_AUTH_SECRET_NAME') ||
+    (provider === 'openrouter' ? `${dir}-openrouter-auth` : `${dir}-auth`);
+  const hasExistingSecret =
+    provider !== 'none' &&
+    (await hasAuthSecret({
+      hostAgent: agent,
+      name: secretName,
+    }));
+  // Keep a retained generic slot's exact custom Secret grant on restart
+  // unless the operator names a replacement or supplies a new token.
+  const retainedProfile =
+    retainedProvider === provider &&
+    !env('FLOOT_AUTH_SECRET_NAME') &&
+    !authToken &&
+    revived
+      ? factoryHost
+      : undefined;
+  const keepAuth =
+    retainedProfile && (await E(retainedProfile).has(AUTH_SECRET_PETNAME));
+  if (provider !== 'none' && !authToken && !hasExistingSecret && !keepAuth) {
+    if (explicitProvider || previous)
+      throw Error(
+        'Configure the API provider credential in Secrets before setup.',
+      );
+    provider = 'none';
+  }
+  let routerLocator;
+  if (openRouterSecret && provider !== 'openrouter') {
+    if (await hasAuthSecret({ hostAgent: agent, name: openRouterSecret })) {
+      routerLocator = await E(agent).locate('secrets', openRouterSecret);
+    } else if (env('OPENROUTER_API_KEY')) {
+      ({ locator: routerLocator } = await provideAuthSecret({
+        hostAgent: agent,
+        name: openRouterSecret,
+        description: 'OpenRouter API key',
+        token: env('OPENROUTER_API_KEY'),
+      }));
+    } else
+      throw Error(
+        'Add the configured OpenRouter API key to Secrets before setup.',
+      );
+  }
+
+  await bindInstalledDirectSubscription(agent, factoryHost, 'codex');
+  await bindInstalledDirectSubscription(agent, factoryHost, 'claude');
+
+  if (provider !== 'none') {
+    // 2. Put the auth token in the daemon's secret manager and hand the factory
+    // the `SecretBlob`. Failure aborts before replacing the provider config;
+    // an authenticated setup must run with the root host's Secrets authority.
+    /** @type {string | undefined} */
+    let authSecretLocator;
+    if (!keepAuth && (authToken || hasExistingSecret)) {
+      ({ locator: authSecretLocator } = authToken
+        ? await provideAuthSecret({
+            hostAgent: agent,
+            name: secretName,
+            description: `Floot ${provider} provider auth token`,
+            token: authToken,
+          })
+        : { locator: await E(agent).locate('secrets', secretName) });
+    }
+
+    // 3. Store the provider config as a value under `floot/llm-provider` and hand
+    // the factory a capability reference to it under `llm-provider` — the fae
+    // pattern. The value never carries a credential.
+    await E(agent).storeValue(
+      harden({
+        provider,
+        model,
+      }),
+      [dir, 'llm-provider'],
+    );
+    const providerLocator = await E(agent).locate(dir, 'llm-provider');
+    await E(factoryHost).storeLocator('llm-provider', providerLocator);
+    if (authSecretLocator) {
+      await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+    }
+
+    // 4. The account oracle, if this deployment declared a profile. Provisioned
+    // before the factory so the very first session already has `accountStatus`.
+    await provideAccountOracle(agent, { dir, provider, factoryHost });
+  }
+  // Publish the credential before advertising its route. An explicit separate
+  // binding lets an Anthropic API configuration retain its session history.
+  if (routerLocator) {
+    await E(factoryHost).storeLocator('openrouter-auth', routerLocator);
+    await E(factoryHost).storeValue(
+      harden({ provider: 'openrouter', model: openRouterModel }),
+      'openrouter-provider',
+    );
+  }
+
+  // 4b. The machine-admin grants — the NixOS controller, the Forgejo push
+  // credential, and the deploy-workflow connections — when this daemon has
+  // them. Provisioned before the factory caplet so the sessions its first
+  // incarnation revives already find the grants, rather than on the boot
+  // after.
+  await provisionMachineAdmin(agent, { dir, factoryHost });
+  await provisionRsiForge(agent, factoryHost, process.env);
+  await provisionRsiReview(agent, { dir, factoryHost });
+
+  // POSIX execution is separate from inference. Copy the configured durable
+  // runner identity, never its paths or administration into a model's guest.
+  const environmentPath = ['@pins', 'installations', 'environments', 'runner'];
+  if (
+    (await E(agent).has('@pins', 'installations')) &&
+    (await E(agent).has('@pins', 'installations', 'environments')) &&
+    (await E(agent).has(...environmentPath))
+  ) {
+    await E(factoryHost).storeLocator(
+      'environment-runner',
+      await E(agent).locate(...environmentPath),
+    );
+  } else if (await E(factoryHost).has('environment-runner')) {
+    await E(factoryHost).remove('environment-runner');
+  }
+
+  // 5. Hosted releases have a stable current symlink. Keeping that specifier
+  // preserves the factory formula through warm restarts while loading the
+  // pinned code anew in the next process. Never launch a second registry
+  // writer merely because setup was rerun; replacement must drain the first.
+  const { reused: factoryReused } = await provisionFlootFactory({
+    agent,
+    controllerPath,
+    pinPath,
+    powersName: revived ? controllerProfilePath : agentName,
+    specifier,
+    previousSpecifier,
+    validatedProfileId,
+    env: factoryEnv,
+  });
+
+  // 6. Tuck the factory host + its profile under floot/ so the top level stays
+  // clean. (The factory already resolved its powers in step 5; renaming the
+  // pet-names afterward is cosmetic — formulas reference by identity.) A re-run
+  // found them there already, and never moves a top-level name over them;
+  // on a fresh run each move is conditional so a run that died between the
+  // two heals here.
+  if (!revived) {
+    if (await E(agent).has(guestName)) {
+      await E(agent).move([guestName], controllerHandlePath);
+    }
+    if (await E(agent).has(agentName)) {
+      await E(agent).move([agentName], controllerProfilePath);
+    }
+  }
+
+  await registerSubscriptionConsumer(agent, dir, validatedProfileId, specifier);
+
+  // 7. The provisioning helper keeps the single pin. The factory revives all
+  // its sessions on daemon restart.
+  console.log(
+    revived
+      ? `Floot factory re-bound to the current release at "${dir}/controller" and pinned (sessions preserved).`
+      : `Floot factory created at "${dir}/controller" and pinned.`,
+  );
+
+  // 8. Seed a default session if this is a fresh factory.
+  const factory = await E(agent).lookup(controllerPath);
+  if (factoryReused) await E(factory).refreshCredentials();
+  const sessions = await E(factory).listSessions();
+  if (provider !== 'none' && sessions.length === 0) {
+    await E(factory).createSession({ title: 'New chat', spoken: spokenSeed });
+    console.log('Seeded a default session.');
+  }
+  console.log(
+    `Ready (provider: ${provider}${model ? `, model: ${model}` : ''}${
+      codePath ? `, code mount: ${codePath}` : ''
+    }). Look up "${dir}/controller" and call createSession({})/listSessions().`,
+  );
+};
+harden(setupSessionFactory);
+
+/** @param {any} agent */
+export const main = agent => setupSessionFactory(agent);
+harden(main);

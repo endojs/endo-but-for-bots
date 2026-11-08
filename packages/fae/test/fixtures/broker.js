@@ -8,12 +8,9 @@ export const make = () => {
   const subscription = makeSubscription();
   return Far('WhylipTestBroker', {
     subscription: () => subscription,
-    listModels: backend => {
-      if (backend !== 'fae-codex') throw Error('Unexpected inference backend');
-      return harden([{
-        backendId: 'fae-codex', modelId: 'test-luna', reasoningEfforts: ['low'],
-      }]);
-    },
+    modelCatalog: () => harden({accounts:[{subscriptionId:'primary',state:'current',observedAt:1,models:[{
+      id:'test-luna',title:'Test',description:'',default:false,defaultReasoningEffort:'low',reasoningEfforts:['low'],
+    }]}]}),
   });
 };
 harden(make);

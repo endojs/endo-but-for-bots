@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { makeEndoClient, start, stop } from '../index.js';
-import { createPrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
+import { createPrivateTurnStorage } from '../../fae/session/private-turn-storage.js';
 
 test.serial(
   'archived checkpoint and late tool evidence survive a cold daemon restart',

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeEndoClient, start, stop } from '../index.js';
+import { main as setupFae } from '../../fae/setup-session-factory.js';
 import { main as setupFloot } from '../../floot/floot-factory-setup.js';
 import { main as setupOpenAI } from '../../codex-sandbox/setup-direct.js';
 import { main as setupAnthropic } from '../../claude-sandbox/setup-direct.js';
@@ -49,7 +50,6 @@ test.serial(
     void client.closed.catch(() => {});
     const host = await E(client.getBootstrap()).host();
     const importer = await E(host).lookup(['@secrets', 'create']);
-    // The daemon starts the three setups in this order on a new installation.
     // Clear any operator bootstrap configuration inherited by the test worker.
     for (const key of Object.keys(process.env)) {
       if (
@@ -58,7 +58,7 @@ test.serial(
         delete process.env[key];
     }
     process.env.FLOOT_PROVIDER = 'none';
-    await setupFloot(host);
+    /* eslint-disable no-await-in-loop -- Sequential setups exercise installation order. */
     for (const [id, setup] of Object.entries({
       codex: setupOpenAI,
       claude: setupAnthropic,
@@ -72,7 +72,6 @@ test.serial(
         refreshToken: 'inert',
         expiresAt: Date.now() + 60_000,
       };
-      // eslint-disable-next-line no-await-in-loop
       await E(importer).createBase64(
         member.credsName,
         'Test',
@@ -84,37 +83,85 @@ test.serial(
           [`ENDO_${id.toUpperCase()}_ACCOUNT_AUTHORITY`]: `${id}-pool`,
         },
       };
-      // eslint-disable-next-line no-await-in-loop
       await setup(host, options);
+      if (id === 'codex') {
+        // The first pool is ready with no UI or session factory installed.
+        t.false(await E(host).has('floot'));
+        t.false(await E(host).has('fae-sessions'));
+        await setupFae(host);
+        await setupFloot(host);
+      }
       const brokerPath = [
         '@pins',
         'installations',
         `${id}-sandbox`,
         'broker-service',
       ];
-      // eslint-disable-next-line no-await-in-loop
       const ownerId = await E(host).identify(...brokerPath);
-      // eslint-disable-next-line no-await-in-loop
+      const standalone = await E(host).lookup([
+        'fae-sessions',
+        'controller-profile',
+      ]);
+      const pooled = await E(host).identify(
+        '@pins',
+        'installations',
+        `${id}-sandbox`,
+        'subscription',
+      );
+      const catalog = await E(host).identify(
+        '@pins',
+        'installations',
+        `${id}-sandbox`,
+        'model-catalog',
+      );
+      t.truthy(pooled);
+      t.truthy(catalog);
+      t.is(await E(standalone).identify(`${id}-inference`), pooled);
+      t.is(await E(standalone).identify(`${id}-model-catalog`), catalog);
+      t.true(await E(standalone).has('account-bindings', `${id}-sandbox`));
+      const factory = await E(host).lookup(['fae-sessions', 'controller']);
+      t.true(
+        (await E(factory).listBackends()).some(
+          route => route.id === `fae-${id}`,
+        ),
+      );
+      if (id === 'claude') {
+        const registered = [
+          '@pins',
+          'installations',
+          'fae',
+          'session-consumers',
+          'floot',
+        ];
+        await E(host).move(registered, ['saved-registration']);
+        const profilePath = ['floot', 'controller-profile'];
+        await E(host).move(profilePath, ['saved-profile']);
+        await E(host).provideHost('foreign-handle', {
+          agentName: 'foreign-profile',
+        });
+        await E(host).copy(['foreign-profile'], profilePath);
+        const foreign = await E(host).lookup(profilePath);
+        await t.throwsAsync(setup(host, options));
+        t.false(await E(foreign).has('claude-inference'));
+        t.false(await E(foreign).has('account-bindings'));
+        await E(host).move(['saved-profile'], profilePath);
+        // Genuine legacy Floot profiles have no registration and keep working.
+        await setup(host, options);
+        await E(host).move(['saved-registration'], registered);
+      }
       await setup(host, options);
-      // eslint-disable-next-line no-await-in-loop
       t.is(await E(host).identify(...brokerPath), ownerId);
-      // eslint-disable-next-line no-await-in-loop
       const profile = await E(host).lookup(['floot', 'controller-profile']);
-      // eslint-disable-next-line no-await-in-loop
       t.false(await E(profile).has(`${id}-backend`));
-      // eslint-disable-next-line no-await-in-loop
       t.true(await E(profile).has(`${id}-model-catalog`));
-      // eslint-disable-next-line no-await-in-loop
       const subscription = await E(profile).lookup(`${id}-inference`);
-      // eslint-disable-next-line no-await-in-loop
       const endpoint = await E(subscription).openEndpoint({
         sessionId: 'setup-test',
       });
-      // eslint-disable-next-line no-await-in-loop
       t.like(await E(endpoint).attestation(), { subscription: 'auto' });
-      // eslint-disable-next-line no-await-in-loop
       await E(endpoint).revoke();
     }
+    /* eslint-enable no-await-in-loop */
     // Install an Anthropic API credential and a second, distinct OpenRouter
     // credential without changing the pool or the existing session route.
     process.env.FLOOT_PROVIDER = 'anthropic';

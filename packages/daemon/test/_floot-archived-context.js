@@ -5,9 +5,9 @@ import { Far } from '@endo/far';
 // Test-only cross-package imports; no daemon production dependency on Floot.
 /* eslint-disable import/no-relative-packages */
 import { makeStreamingAgent } from '../../floot/agent.js';
-import { providePrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
-import { makeTurnJournal } from '../../floot/src/turn-journal.js';
-import { makeReplyChannel } from '../../floot/src/stream.js';
+import { providePrivateTurnStorage } from '../../fae/session/private-turn-storage.js';
+import { makeTurnJournal } from '../../fae/session/turn-journal.js';
+import { makeReplyChannel } from '../../fae/session/stream.js';
 /* eslint-enable import/no-relative-packages */
 
 const sessionId = 'archive-context';

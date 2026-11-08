@@ -1,0 +1,91 @@
+// @ts-check
+// Userspace streaming primitive: a buffered Far StreamReader paired with a
+// plain-object writer. The agent loop writes reply events as the LLM emits
+// tokens; the caller pulls them over CapTP via next() — exactly the shape the
+// voice Space already consumes for transcripts (audio-server-caplet.js).
+//
+// Reply events (append-style — LLM tokens accrete, they do not revise, so
+// unlike the moonshine transcript wire these are deltas, not full snapshots):
+//   { type: 'phase', phase }              coarse status ('thinking')
+//   { type: 'delta', text }               next chunk of assistant text
+//   { type: 'final', text }               the complete assistant message
+//   { type: 'tool_call', name, args }     a tool the agent is invoking (args JSON string)
+//   { type: 'tool_result', name, result } that tool's output (result string)
+//   { type: 'end' }                       stream complete
+//   { type: 'abort', reason }             stream failed
+
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { projectUsage } from '@endo/hosted-agent/token-usage.js';
+
+/**
+ * @typedef {(
+ *   | { type: 'phase', phase: string }
+ *   | { type: 'delta', text: string }
+ *   | { type: 'final', text: string }
+ *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
+ *   | { type: 'tool_call', id: string, name: string, args: string }
+ *   | { type: 'tool_result', id: string, name: string, result: string, failed?: boolean }
+ *   | ({ type: 'usage', turns: number, incompleteTurns: number } & import('@endo/hosted-agent/token-usage.js').TokenUsage)
+ *   | { type: 'end' }
+ *   | { type: 'abort', reason: string }
+ * )} ReplyEvent
+ */
+
+/**
+ * Create a writer + Far StreamReader pair backed by an in-memory buffer.
+ *
+ * @param {(() => void) | null} [onClose] Fires when the consumer stops pulling
+ *   (reader.return/throw) before the stream finished, so the producer (the
+ *   in-flight agent turn) can be aborted rather than left generating for no one.
+ *   A daemon-owned turn passes nothing: nobody but the turn's owner may end it,
+ *   and the owner uses `close` below.
+ * @returns {{ writer: object, reader: object, close: () => void }} `close`
+ *   finishes the channel from the producer's side, ending a local drain of
+ *   `reader` that no terminal event would otherwise release.
+ */
+export const makeReplyChannel = (onClose = null) => {
+  const { push, reader, close } = makeBufferedReader({ onClose });
+
+  const writer = harden({
+    /** @param {string} phase */
+    setPhase: phase => push({ type: 'phase', phase: `${phase}` }),
+    /** @param {string} text */
+    delta: text => push({ type: 'delta', text: `${text}` }),
+    /** @param {string} text */
+    final: text => push({ type: 'final', text: `${text}` }),
+    /** @param {{ id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }} event */
+    thinking: event => push({ type: 'thinking', ...event }),
+    /** @param {{ id: string, name: string, args: string }} call */
+    toolCall: ({ id, name, args }) =>
+      push({
+        type: 'tool_call',
+        id: `${id}`,
+        name: `${name}`,
+        args: `${args}`,
+      }),
+    /** @param {{ id: string, name: string, result: string, failed?: boolean }} result */
+    toolResult: ({ id, name, result, failed }) =>
+      push({
+        type: 'tool_result',
+        id: `${id}`,
+        name: `${name}`,
+        result: `${result}`,
+        ...(failed === undefined ? {} : { failed }),
+      }),
+    /** @param {Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage> & { turns: number, incompleteTurns?: number }} u */
+    usage: u =>
+      push({
+        type: 'usage',
+        // The five disjoint counts, and how full the window is now.
+        ...projectUsage(u),
+        turns: Math.trunc(u.turns) || 0,
+        incompleteTurns: Math.trunc(u.incompleteTurns || 0) || 0,
+      }),
+    end: () => push({ type: 'end' }),
+    /** @param {unknown} reason */
+    abort: reason => push({ type: 'abort', reason: `${reason}` }),
+  });
+
+  return harden({ writer, reader, close });
+};
+harden(makeReplyChannel);

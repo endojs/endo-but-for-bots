@@ -16,15 +16,15 @@ test('turn engine commits every complete tool step before the final answer', asy
     harden({ id: 'assistant-2', calls: harden([]) }),
   ];
   const outcome = await runAgenticTurn({
-    leafId: 'root',
+    cursor: 'root',
     maxRounds: 3,
     getTools: async round => {
       trace.push(`tools:${round}`);
       return harden({ round });
     },
-    getContext: async leafId => {
-      trace.push(`context:${leafId}`);
-      return harden({ leafId, messages: [leafId] });
+    getContext: async cursor => {
+      trace.push(`context:${cursor}`);
+      return harden({ cursor, messages: [cursor] });
     },
     invoke: async (context, tools, round) => {
       trace.push(`invoke:${context[0]}:${tools.round}:${round}`);
@@ -35,12 +35,12 @@ test('turn engine commits every complete tool step before the final answer', asy
       trace.push(`run:${calls.join(',')}:${tools.round}:${round}`);
       return harden(['result-1']);
     },
-    commitStep: async (leafId, message, results) => {
-      trace.push(`step:${leafId}:${message.id}:${results.join(',')}`);
+    commitStep: async (cursor, message, results) => {
+      trace.push(`step:${cursor}:${message.id}:${results.join(',')}`);
       return 'step-1';
     },
-    commitFinal: async (leafId, message) => {
-      trace.push(`final:${leafId}:${message.id}`);
+    commitFinal: async (cursor, message) => {
+      trace.push(`final:${cursor}:${message.id}`);
       return 'final-1';
     },
   });
@@ -59,7 +59,7 @@ test('turn engine commits every complete tool step before the final answer', asy
   t.deepEqual(outcome, {
     answered: true,
     exhausted: false,
-    leafId: 'final-1',
+    cursor: 'final-1',
     message: messages[1],
   });
 });
@@ -67,9 +67,9 @@ test('turn engine commits every complete tool step before the final answer', asy
 test('turn engine reports empty and exhausted outcomes without a false final', async t => {
   let finalCommits = 0;
   const common = {
-    leafId: 'root',
+    cursor: 'root',
     getTools: async () => harden({}),
-    getContext: async leafId => harden({ leafId, messages: [] }),
+    getContext: async cursor => harden({ cursor, messages: [] }),
     getToolCalls: message => message.calls,
     runTools: async () => harden([]),
     commitStep: async () => 'next',
@@ -87,7 +87,7 @@ test('turn engine reports empty and exhausted outcomes without a false final', a
   t.deepEqual(empty, {
     answered: false,
     exhausted: false,
-    leafId: 'root',
+    cursor: 'root',
   });
 
   const exhausted = await runAgenticTurn({
@@ -98,7 +98,7 @@ test('turn engine reports empty and exhausted outcomes without a false final', a
   t.deepEqual(exhausted, {
     answered: false,
     exhausted: true,
-    leafId: 'next',
+    cursor: 'next',
   });
   t.is(finalCommits, 0);
 });
@@ -107,10 +107,10 @@ test('turn engine rejects an invalid round bound', async t => {
   await t.throwsAsync(
     () =>
       runAgenticTurn({
-        leafId: 'root',
+        cursor: 'root',
         maxRounds: 0,
         getTools: async () => undefined,
-        getContext: async leafId => ({ leafId, messages: [] }),
+        getContext: async cursor => ({ cursor, messages: [] }),
         invoke: async () => ({}),
         getToolCalls: () => [],
         runTools: async () => [],
@@ -123,11 +123,11 @@ test('turn engine rejects an invalid round bound', async t => {
 
 test('context selection advances the committed head before inference', async t => {
   const outcome = await runAgenticTurn({
-    leafId: 'old',
+    cursor: 'old',
     maxRounds: 1,
     getTools: async () => harden({}),
     getContext: async () =>
-      harden({ leafId: 'checkpoint', messages: ['summary'] }),
+      harden({ cursor: 'checkpoint', messages: ['summary'] }),
     invoke: async messages => {
       t.deepEqual(messages, ['summary']);
       return harden({ message: { content: 'done' } });
@@ -137,12 +137,12 @@ test('context selection advances the committed head before inference', async t =
     commitStep: async () => {
       throw Error('unexpected tool step');
     },
-    commitFinal: async leafId => {
-      t.is(leafId, 'checkpoint');
+    commitFinal: async cursor => {
+      t.is(cursor, 'checkpoint');
       return 'final';
     },
   });
-  t.is(outcome.leafId, 'final');
+  t.is(outcome.cursor, 'final');
 });
 
 test('a provider response that arrives after cancellation cannot admit tools or a final', async t => {
@@ -151,11 +151,11 @@ test('a provider response that arrives after cancellation cannot admit tools or 
   await t.throwsAsync(
     () =>
       runAgenticTurn({
-        leafId: 'root',
+        cursor: 'root',
         maxRounds: 1,
         signal: controller.signal,
         getTools: async () => ({}),
-        getContext: async leafId => ({ leafId, messages: [] }),
+        getContext: async cursor => ({ cursor, messages: [] }),
         invoke: async () => {
           controller.abort(Error('cancelled during inference'));
           return { message: { calls: ['tool'] } };

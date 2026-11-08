@@ -3,15 +3,17 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
+import { make as makeFaeFactory } from '@endo/fae/session-factory.js';
 import {
   AUTH_SECRET_PETNAME,
   encodeAuthToken,
 } from '@endo/fae/src/credentials.js';
-import { makePromiseKit } from './_promise-kit.js';
-
-import { makeTestInference } from './_inference.js';
 import { make } from '../agent.js';
-import { directoryHost } from './_directory-host.js';
+/* eslint-disable import/no-relative-packages -- Share the Fae integration fixture without publishing test-only APIs. */
+import { makePromiseKit } from '../../fae/test/session/_promise-kit.js';
+import { makeTestInference } from '../../fae/test/session/_inference.js';
+import { directoryHost } from '../../fae/test/session/_directory-host.js';
+/* eslint-enable import/no-relative-packages */
 
 /** @param {string} token */
 const authSecret = token =>
@@ -23,9 +25,10 @@ const authSecret = token =>
  * A factory over an in-memory host with direct subscription inference.
  * Capture the instructions each request actually sent to the provider.
  *
- * @param {{ fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown, env?: Record<string, string>, beforeGuest?: () => Promise<void>, afterStore?: (value: any, name: string) => void }} [options]
+ * @param {{ fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown, env?: Record<string, string>, factoryMaker?: typeof make, beforeGuest?: () => Promise<void>, afterStore?: (value: any, name: string) => void }} [options]
  */
 const makeWorld = ({
+  factoryMaker = make,
   fetch,
   lookupProvider,
   env,
@@ -158,7 +161,7 @@ const makeWorld = ({
         disposalHook = hook;
       },
     });
-  let factory = make(host, context(), { fetch, env });
+  let factory = factoryMaker(host, context(), { fetch, env });
   /**
    * The prompt the backend was given for a session, once a turn has run.
    * @param session
@@ -198,7 +201,7 @@ const makeWorld = ({
       await factory;
       await E(disposalHook)();
       disposalHook = undefined;
-      factory = make(host, context(), { fetch, env });
+      factory = factoryMaker(host, context(), { fetch, env });
       return factory;
     },
     duringNextTurn: act => {
@@ -277,6 +280,39 @@ test('subagent spawn installs explicit capabilities without inheriting the paren
   );
 });
 
+test('Floot adds the speech APIs and guidance to a Fae session', async t => {
+  for (const factoryMaker of [makeFaeFactory, make]) {
+    const speech = factoryMaker === make;
+    const world = makeWorld({ factoryMaker });
+    t.teardown(world.close);
+    // Exercise the interfaces clients actually receive after creating a session.
+    // eslint-disable-next-line no-await-in-loop
+    const [factory, help] = await Promise.all([
+      world.factory,
+      E(world.factory).help(),
+    ]);
+    t.is(typeof factory.createAssistantSession === 'function', speech);
+    t.is(typeof factory.setVoicePreset === 'function', speech);
+    t.is(typeof factory.getVoicePreferences === 'function', speech);
+    t.is(help.includes('spoken'), speech);
+    // eslint-disable-next-line no-await-in-loop
+    const session = await E(factory).createSession({ ...direct, spoken: true });
+    // eslint-disable-next-line no-await-in-loop
+    const [overview, turn] = await Promise.all([
+      E(session).help(),
+      E(session).startTurn('hello'),
+    ]);
+    t.true(overview.includes('getHistoryPage'));
+    t.is(typeof turn.speak === 'function', speech);
+    // eslint-disable-next-line no-await-in-loop
+    await E(turn).whenFinished();
+    t.is(
+      world.specs[0].systemPrompt.includes('Your replies are spoken aloud'),
+      speech,
+    );
+  }
+});
+
 test('a direct session runs its composed prompt', async t => {
   t.timeout(10_000);
   const world = makeWorld();
@@ -317,6 +353,7 @@ test('a subagent of a full-control session keeps the operator’s rules and is n
   const parent = await E(world.factory).createSession({
     ...direct,
     presetId: 'full-control',
+    networkPolicy: 'off',
     spoken: true,
   });
   world.duringNextTurn(async toolSet => {
@@ -349,6 +386,7 @@ test('a backend that declares nothing gets no claim about names or paths', async
   const session = await E(world.factory).createSession({
     ...direct,
     presetId: 'full-control',
+    networkPolicy: 'off',
   });
   const prompt = await world.promptOf(session);
   t.false(prompt.includes('Where you run'));
@@ -443,6 +481,7 @@ test('an explicit spoken record retains the setup session voice rules', async t 
   await E(world.factory).createSession({
     title: 'Spoken',
     presetId: 'general',
+    networkPolicy: 'off',
     backendId: 'fae-codex',
     modelId: 'm',
     spoken: true,
@@ -1155,6 +1194,7 @@ test('a provider session is composed for the provider, and its context is record
   await E(world.factory).createSession({
     title: 'Provider',
     presetId: 'full-control',
+    networkPolicy: 'off',
     spoken: true,
   });
   const entry = registryOf(world.hostStore).find(
@@ -1417,6 +1457,7 @@ test('editable presets snapshot prompt and endowments across restart, later edit
     ...general,
     id: 'custom-helper',
     title: 'My helper',
+    networkPolicy: 'off',
     instructions: 'Standing instruction alpha.',
     backendId: 'fae-codex',
     modelId: 'm',
@@ -1488,7 +1529,9 @@ test('preset model defaults are overridden only by explicit session identity', a
     config.revision,
   );
   await t.throwsAsync(
-    E(world.factory).createSession(harden({ presetId: 'general' })),
+    E(world.factory).createSession(
+      harden({ presetId: 'general', networkPolicy: 'off' }),
+    ),
     { message: /Unknown inference backend/ },
   );
   t.like(
@@ -1512,11 +1555,12 @@ test('undefined session identity fields preserve saved preset defaults', async t
     config.revision,
   );
   const omitted = await E(world.factory).createSession(
-    harden({ presetId: 'general' }),
+    harden({ presetId: 'general', networkPolicy: 'off' }),
   );
   const undefinedKeys = await E(world.factory).createSession(
     harden({
       presetId: 'general',
+      networkPolicy: 'off',
       backendId: undefined,
       modelId: undefined,
       reasoningEffort: undefined,

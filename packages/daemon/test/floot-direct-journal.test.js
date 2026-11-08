@@ -10,7 +10,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { makeEndoClient, start, stop } from '../index.js';
-import { createPrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
+import { createPrivateTurnStorage } from '../../fae/session/private-turn-storage.js';
 
 test.serial(
   'direct-provider ordered journal survives two cold daemon starts',

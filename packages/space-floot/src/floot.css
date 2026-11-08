@@ -1548,3 +1548,15 @@
   color: var(--fl-text-muted);
   font-size: 12px;
 }
+
+.floot-history-earlier {
+  align-self: center;
+  margin: 0.5rem auto;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 0.3rem 0.65rem;
+  cursor: pointer;
+}

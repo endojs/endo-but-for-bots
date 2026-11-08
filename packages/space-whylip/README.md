@@ -2,57 +2,19 @@
 
 An interactive illustrated primer that runs as a mode inside Endo Chat. Whylip connects to a Fae agent as its LLM backend and renders responses as interactive scenes in sandboxed iframes, with a branching conversation tree for exploring topics from multiple angles.
 
-## Prerequisites
+## Installation
 
-- A running Endo daemon (`endo start`)
-- A configured Fae agent (requires an LLM API key — Anthropic, Ollama, or llama.cpp)
+After provisioning the shared OpenAI inference connection, run
+`endo run --UNCONFINED packages/space-whylip/setup.js --powers @agent`.
+The installer selects an admitted OpenAI model and reasoning effort through
+Fae. The default for a fresh installation is `gpt-5.6-sol` with low effort.
+Retained books reuse their original recipe, agent and conversation.
 
-## Quick Start
-
-### 1. Start the daemon
-
-```bash
-endo start
-```
-
-### 2. Set up Fae
-
-If you haven't already installed a Fae agent, run its setup script from the `packages/fae` directory:
-
-```bash
-cd packages/fae
-yarn setup
-```
-
-This provisions a Fae agent under the pet name `fae`. The first time you open its mailbox in the chat UI, it will present a form to configure LLM credentials (host, model, auth token).
-
-### 3. Launch Familiar (Electron) or the Chat dev server
-
-**Electron:**
-
-```bash
-cd packages/familiar
-yarn bundle && yarn start
-```
-
-**Dev server (browser):**
-
-```bash
-cd packages/chat
-yarn dev
-```
-
-Then open `http://localhost:5173/dev` in your browser.
-
-### 4. Create a Whylip Space
-
-1. In the spaces gutter (left edge), click the **+** button
-2. Select **Whylip Book**
-3. Enter a book name (e.g., `physics-primer`)
-4. Enter the pet name of your Fae agent (e.g., `fae` — the name from `endo list`)
-5. Click **Create Book**
-
-This creates a new Endo host profile for the book and writes a reference to the Fae agent into its pet store. The Whylip UI sends messages to the Fae agent through this reference.
+In Chat, select **Add Space → Whylip Book**, enter a book name and create the
+book. Whylip owns the primer prompt, book profiles, and saved views.
+The book service asks its ordinary Fae factory to provide the book agent.
+Its state lives under `@pins/installations/whylip` and each public book
+profile lives under `whylip/<book>`.
 
 ## Using Whylip
 

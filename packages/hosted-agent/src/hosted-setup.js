@@ -34,6 +34,7 @@ import {
 } from './current-specifier.js';
 import { assertAccountAuthority } from './account-authority.js';
 import {
+  assertAccountBindings,
   invalidateAccountBindings,
   makeAccountId,
   publishAccountBindings,
@@ -883,6 +884,7 @@ harden(provideSubscriptionShare);
  * @param {string} options.dir
  * @param {string} options.providerId
  * @param {string} options.flootDir
+ * @param {any[]} [options.operatorProfiles] Direct subscription consumers. Retain their account binding in the installation for factories installed later.
  * @param {string} options.backendId The hosted backend's descriptor id.
  * @param {string[]} [options.additionalBackendIds] Other consumers of the same accounts.
  * @param {string} options.accountAuthority The operator's explicit account identity.
@@ -899,6 +901,7 @@ export const publishAccountOracle = async (
     dir,
     providerId,
     flootDir,
+    operatorProfiles,
     backendId,
     additionalBackendIds = [],
     accountAuthority,
@@ -908,10 +911,21 @@ export const publishAccountOracle = async (
 ) => {
   await null;
   try {
-    const profile = (await E(hostAgent).has(flootDir, 'controller-profile'))
-      ? await E(hostAgent).lookup([flootDir, 'controller-profile'])
-      : undefined;
-    if (profile) await invalidateAccountBindings(profile, { source: dir });
+    const profiles =
+      operatorProfiles ??
+      ((await E(hostAgent).has(flootDir, 'controller-profile'))
+        ? [await E(hostAgent).lookup([flootDir, 'controller-profile'])]
+        : []);
+    const bindingPath = installationPath(dir, 'account-bindings');
+    if (operatorProfiles)
+      await E(hostAgent).storeValue(
+        harden({ version: 1, accounts: [], unavailable: true }),
+        bindingPath,
+      );
+    for (const profile of profiles) {
+      // eslint-disable-next-line no-await-in-loop
+      await invalidateAccountBindings(profile, { source: dir });
+    }
     makeAccountId({ providerId, accountAuthority });
     /** @type {import('./account-bindings.js').AccountBinding[]} */
     const accounts = [];
@@ -961,7 +975,13 @@ export const publishAccountOracle = async (
       });
     }
     /* eslint-enable no-await-in-loop */
-    if (profile) {
+    if (operatorProfiles)
+      await E(hostAgent).storeValue(
+        assertAccountBindings(harden({ version: 1, accounts })),
+        bindingPath,
+      );
+    for (const profile of profiles) {
+      // eslint-disable-next-line no-await-in-loop
       await publishAccountBindings(profile, { source: dir, accounts });
     }
   } catch (error) {

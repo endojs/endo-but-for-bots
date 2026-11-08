@@ -15,19 +15,19 @@ harden(DEFAULT_MAX_TOOL_ROUNDS);
  * response ends the logical turn.
  *
  * @param {object} options
- * @param {string} options.leafId
+ * @param {string} options.cursor
  * @param {number} options.maxRounds
  * @param {AbortSignal} [options.signal] Fence late provider outcomes and further tool admission.
  * @param {(round: number) => Promise<any>} options.getTools
- * @param {(leafId: string, tools: any, round: number) => Promise<{leafId: string, messages: readonly any[]}>} options.getContext A selected context snapshot; checkpoint selection may advance the durable head.
+ * @param {(cursor: string, tools: any, round: number) => Promise<{cursor: string, messages: readonly any[]}>} options.getContext A selected context snapshot; checkpoint selection may advance the durable head.
  * @param {(context: readonly any[], tools: any, round: number) => Promise<{ message?: any }>} options.invoke
  * @param {(message: any) => readonly any[]} options.getToolCalls
  * @param {(calls: readonly any[], tools: any, round: number) => Promise<any>} options.runTools
- * @param {(leafId: string, message: any, results: any) => Promise<string>} options.commitStep
- * @param {(leafId: string, message: any) => Promise<string>} options.commitFinal
+ * @param {(cursor: string, message: any, results: any) => Promise<string>} options.commitStep
+ * @param {(cursor: string, message: any) => Promise<string>} options.commitFinal
  */
 export const runAgenticTurn = async ({
-  leafId,
+  cursor,
   maxRounds,
   signal,
   getTools,
@@ -40,7 +40,7 @@ export const runAgenticTurn = async ({
 }) => {
   (Number.isInteger(maxRounds) && maxRounds > 0) ||
     Fail`agentic turn maxRounds must be a positive integer`;
-  let currentLeafId = leafId;
+  let currentCursor = cursor;
   await null;
   for (let round = 0; round < maxRounds; round += 1) {
     signal?.throwIfAborted();
@@ -48,8 +48,8 @@ export const runAgenticTurn = async ({
     const tools = await getTools(round);
     signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
-    const snapshot = await getContext(currentLeafId, tools, round);
-    currentLeafId = snapshot.leafId;
+    const snapshot = await getContext(currentCursor, tools, round);
+    currentCursor = snapshot.cursor;
     signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
     const outcome = await invoke(snapshot.messages, tools, round);
@@ -58,29 +58,29 @@ export const runAgenticTurn = async ({
       return harden({
         answered: false,
         exhausted: false,
-        leafId: currentLeafId,
+        cursor: currentCursor,
       });
     }
     const calls = getToolCalls(outcome.message);
     if (calls.length === 0) {
       // eslint-disable-next-line no-await-in-loop
-      currentLeafId = await commitFinal(currentLeafId, outcome.message);
+      currentCursor = await commitFinal(currentCursor, outcome.message);
       return harden({
         answered: true,
         exhausted: false,
-        leafId: currentLeafId,
+        cursor: currentCursor,
         message: outcome.message,
       });
     }
     // eslint-disable-next-line no-await-in-loop
     const results = await runTools(calls, tools, round);
     // eslint-disable-next-line no-await-in-loop
-    currentLeafId = await commitStep(currentLeafId, outcome.message, results);
+    currentCursor = await commitStep(currentCursor, outcome.message, results);
   }
   return harden({
     answered: false,
     exhausted: true,
-    leafId: currentLeafId,
+    cursor: currentCursor,
   });
 };
 harden(runAgenticTurn);

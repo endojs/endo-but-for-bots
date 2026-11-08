@@ -7,7 +7,7 @@ import {
   providePrivateTurnStorage,
   providePrivateNetworkStorage,
   retirePrivateTurnStorage,
-} from '../../floot/src/private-turn-storage.js';
+} from '../../fae/session/private-turn-storage.js';
 
 /** Real worker: no directory presence may cross this boundary. @param {any} host */
 export const make = host =>
