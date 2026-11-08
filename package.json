@@ -20,10 +20,10 @@
     "@lavamoat/allow-scripts": "^3.4.3",
     "@lavamoat/preinstall-always-fail": "^3.0.1",
     "@octokit/core": "^7.0.8",
-    "@types/node": "^26.6.5",
-    "@typescript-eslint/eslint-plugin": "8.72.0",
-    "@typescript-eslint/parser": "8.72.0",
-    "ava": "^8.1.2",
+    "@types/node": "^26.6.6",
+    "@typescript-eslint/eslint-plugin": "8.72.1",
+    "@typescript-eslint/parser": "8.72.1",
+    "ava": "^8.3.0",
     "eslint": "catalog:dev",
     "eslint-config-jessie": "^0.0.6",
     "eslint-config-prettier": "^10.1.8",
@@ -32,7 +32,7 @@
     "eslint-plugin-import": "catalog:dev",
     "eslint-plugin-jsdoc": "^65.4.2",
     "eslint-plugin-unicorn": "^79.0.0",
-    "globals": "^17.13.0",
+    "globals": "^17.14.0",
     "js-yaml": "^5.5.0",
     "lerna": "^8.2.4",
     "npm-packlist": "^11.3.0",
@@ -44,11 +44,11 @@
     "ts-node-pack": "^0.3.5",
     "tsd": "catalog:dev",
     "turbo": "^2.11.10",
-    "type-coverage": "^2.30.4",
+    "type-coverage": "^2.31.1",
     "typedoc": "^0.28.20",
     "typedoc-plugin-mermaid": "^1.12.0",
     "typescript": "catalog:dev",
-    "typescript-eslint": "8.72.0",
+    "typescript-eslint": "8.72.1",
     "unist-util-visit": "^5.2.0",
     "yaml": "^2.9.1",
     "zx": "^8.8.5"
@@ -112,6 +112,6 @@
   },
   "resolutions": {
     "@endo/eslint-plugin": "workspace:^",
-    "ava": "8.1.2"
+    "ava": "8.3.0"
   }
 }
