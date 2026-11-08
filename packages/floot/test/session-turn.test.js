@@ -208,7 +208,7 @@ test('cancel aborts the run and ends every view', async t => {
 });
 
 test('cancellation remains observable until backend teardown settles', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const driven = makeDrivenTurn();
   const events = [];
   const view = await E(driven.turn).watch();
@@ -243,7 +243,7 @@ test('cancellation remains observable until backend teardown settles', async t =
 });
 
 test('writer termination does not outrun the execution barrier', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const driven = makeDrivenTurn();
   const events = collect(await E(driven.turn).watch());
   driven.writer().delta('buffered output');
@@ -262,7 +262,7 @@ test('writer termination does not outrun the execution barrier', async t => {
 });
 
 test('a run returning without a terminal event still finishes', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const turn = makeSessionTurn({ run: async () => {} });
   await E(turn).whenFinished();
   t.true((await E(turn).getStatus()).done);

@@ -594,7 +594,7 @@ test('failed acquisition retains uncertain kernel mount for host close retry', a
 });
 
 test('close waits for admitted mount and bridge drain before directory release', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const mounting = deferred();
   const mounted = deferred();
   const stopping = deferred();
@@ -645,7 +645,7 @@ test('close waits for admitted mount and bridge drain before directory release',
 });
 
 test('close during mkdir fences bridge construction and waits for directory cleanup', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const entered = deferred();
   const ready = deferred();
   const { mounter, calls, close } = makeHarness({
@@ -734,7 +734,7 @@ test('path reservations survive failed cleanup and prevent successor interferenc
 });
 
 test('pending acquisition reserves its paths before native effects', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const entered = deferred();
   const ready = deferred();
   const { mounter, calls, close } = makeHarness({

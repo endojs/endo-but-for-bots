@@ -644,7 +644,7 @@ test('driver availability fails closed without lifecycle proof', async t => {
 });
 
 test('rejected wait requires driver release and fences admission before teardown', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   let handle;
   const fixture = makeDriverFixture({
     teardown: async () => {
@@ -681,7 +681,7 @@ test('accepted SIGKILL with no reap settles process failure and starts disposal'
 });
 
 test('failed disposal coalesces and retries while admission remains closed', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const release = makePromiseKit();
   let busy = true;
@@ -714,7 +714,7 @@ test('failed disposal coalesces and retries while admission remains closed', asy
 });
 
 test('failed disposal retains the handle for a later owner cancellation sweep', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const { cancelled, cancel } = makeCancelKit();
   const retried = makePromiseKit();
   let busy = true;

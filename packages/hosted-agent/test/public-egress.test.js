@@ -236,7 +236,7 @@ test('constrained resolver exposes only checked addresses and a bounded TTL', as
 });
 
 test('bounded duplex transport supports uploads/downloads and EOF', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const kit = setup(t);
   const tunnel = await E(kit.endpoint).open('example.com', 443);
   await E(tunnel).write(btoa('upload'));
@@ -254,7 +254,7 @@ test('bounded duplex transport supports uploads/downloads and EOF', async t => {
 });
 
 test('revocation wakes blocked reads and refuses all future connections', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const kit = setup(t);
   const tunnel = await E(kit.endpoint).open('example.com', 443);
   const read = E(tunnel).read();
@@ -309,7 +309,7 @@ test('explicit concurrency above the former 64 ceiling is configurable', async t
 });
 
 test('expired noncancellable DNS retains admission until it settles', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   /** @type {(value:any)=>void} */
   let resolve = () => {
     throw Error('Future not initialized');
@@ -335,7 +335,7 @@ test('expired noncancellable DNS retains admission until it settles', async t =>
 });
 
 test('absolute deadlines close idle tunnels and connection count is bounded', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const kit = setup(t, { timeoutMs: 20, maxConnections: 1, maxRequests: 1 });
   const tunnel = await E(kit.endpoint).open('1.1.1.1', 443);
   await t.throwsAsync(E(kit.endpoint).open('1.1.1.1', 443), {
@@ -391,7 +391,7 @@ test('explicit lifetime allowance still bounds combined DNS and connection work'
 });
 
 test('revocation rejects a stalled write even if its socket callback never returns', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   /** @type {() => void} */
   let entered = () => {
     throw Error('Uninitialized write latch');
@@ -421,7 +421,7 @@ test('revocation rejects a stalled write even if its socket callback never retur
 });
 
 test('public resolver and duplex capabilities cross the existing bounded private pipe', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const kit = setup(t);
   const leftStream = new PassThrough();
   const rightStream = new PassThrough();

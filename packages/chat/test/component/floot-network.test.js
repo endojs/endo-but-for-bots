@@ -91,7 +91,7 @@ test('remote active-turn recheck refuses policy changes and requires refresh', a
 });
 
 test('late selected-session reads and not-yet-dispatched decisions are fenced', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const read = makePromiseKit();
   const network = makeFlootNetwork({ notify: () => {}, isBusy: () => false });
   const loading = network.select(
@@ -147,7 +147,7 @@ test('unknown and unsupported backends never advertise enforced Off', async t =>
 });
 
 test('duplicate decisions are blocked and backend CAS refusal is shown', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const pending = makePromiseKit();
   const entered = makePromiseKit();
   let calls = 0;

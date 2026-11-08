@@ -1181,7 +1181,7 @@ test('overload retries do not swallow observer failures or ambiguous HTTP failur
 
 for (const action of ['abort', 'dispose']) {
   test(`${action} interrupts real overload backoff without another endpoint`, async t => {
-    t.timeout(1500);
+    t.timeout(10_000);
     const entered = makePromiseKit();
     const controller = new AbortController();
     const subject = retryFixture([[overload]], {

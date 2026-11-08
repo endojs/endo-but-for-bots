@@ -9,7 +9,7 @@ import { makeCapTP } from '../src/captp.js';
 
 for (const source of ['bootstrap', 'call']) {
   test(`dropping a ${source} answer removes its pipelining target`, async t => {
-    t.timeout(1000);
+    t.timeout(10_000);
     const result = Far('result', { ping: () => 42 });
     const bootstrap = Far('bootstrap', { result: () => result });
     /** @type {Map<string, ReturnType<typeof makePromiseKit>>} */

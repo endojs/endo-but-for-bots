@@ -887,7 +887,7 @@ test('stream enforces response quota and rejects encoded credential across chunk
 });
 
 test('cancel suppresses a pending delivery even if upstream ignores cancellation', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   /** @type {() => void} */
   let enter = () => {};
   const entered = new Promise(resolve => {

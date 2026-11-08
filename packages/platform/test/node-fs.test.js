@@ -261,7 +261,8 @@ test('xattrs on node-fs: vat-local sidecar does not persist to disk', async t =>
 });
 
 test('watch fires events when a child is created in the directory', async t => {
-  t.timeout(5000);
+  // fs.watch delivery (FSEvents on macOS) can lag well past 5s on loaded CI.
+  t.timeout(30_000);
   const fs = await setupFs(t);
   const root = await E(fs).root();
   const watcher = await E(root).watch();

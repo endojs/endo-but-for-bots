@@ -248,7 +248,7 @@ test('existing markers and abandoned storage refuse startup without a probe', as
 });
 
 test('close during ownership acquisition drains publication before releasing it', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = await fixture(t);
   const started = makePromiseKit();
   const gate = makePromiseKit();

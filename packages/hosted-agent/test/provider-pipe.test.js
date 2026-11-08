@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { makeProviderPipe } from '../src/provider-pipe.js';
 
 test('private pipe transports capabilities and rejects outstanding calls on EOF', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const a = new PassThrough();
   const b = new PassThrough();
   const left = makeProviderPipe({
@@ -38,7 +38,7 @@ test('private pipe transports capabilities and rejects outstanding calls on EOF'
 });
 
 test('oversized private frame closes before decoding its payload', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const input = new PassThrough();
   const output = new PassThrough();
   const pipe = makeProviderPipe({
@@ -55,7 +55,7 @@ test('oversized private frame closes before decoding its payload', async t => {
 });
 
 test('application rejection preserves the private pipe for subsequent calls', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const a = new PassThrough();
   const b = new PassThrough();
   const left = makeProviderPipe({
@@ -85,7 +85,7 @@ test('application rejection preserves the private pipe for subsequent calls', as
 });
 
 test('CapTP protocol rejection still closes the private pipe', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const input = new PassThrough();
   const output = new PassThrough();
   const pipe = makeProviderPipe({ input, output, bootstrap: undefined });

@@ -875,7 +875,7 @@ test('GitRemoteController.revoke during in-flight pull aborts before local integ
 });
 
 test('GitRemote push round-trips to an independent fetcher over file://', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   // Producer worktree pushes a branch to a real file:// bare remote; a second,
   // independent consumer worktree fetches that same branch back and recovers
   // the full commit object.

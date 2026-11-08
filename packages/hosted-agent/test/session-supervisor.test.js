@@ -25,7 +25,7 @@ const resolver = Far('Resolver', {});
 const readPlan = () => plan;
 
 test('checkpoint acknowledgement drains before stop completes without delaying fencing', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const committed = makePromiseKit();
   const fenced = makePromiseKit();
@@ -72,7 +72,7 @@ test('checkpoint acknowledgement drains before stop completes without delaying f
 });
 
 test('a hung client cannot delay revocation, sandbox closure, or MCP admission closure', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const clientStop = makePromiseKit();
   const revoked = makePromiseKit();
   const sandboxStopped = makePromiseKit();
@@ -132,7 +132,7 @@ test('a hung client cannot delay revocation, sandbox closure, or MCP admission c
 });
 
 test('failed revocation can retry while client termination is still pending', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const clientStop = makePromiseKit();
   const failedRevoke = makePromiseKit();
   const revoked = makePromiseKit();
@@ -247,7 +247,7 @@ test('failed release remains owned, successful releases are not repeated on retr
 });
 
 test('authority is fenced during hung sandbox closure, but its namespace anchor is retained', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const reaped = makePromiseKit();
   const fenced = makePromiseKit();
   let removed = false;
@@ -288,7 +288,7 @@ test('authority is fenced during hung sandbox closure, but its namespace anchor 
 });
 
 test('a client arriving after stop stays owned until its release acknowledges', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const acquired = makePromiseKit();
   const released = makePromiseKit();

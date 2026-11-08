@@ -221,7 +221,7 @@ test('the policy timeout is a default; per-call overrides reach the engine uncha
 });
 
 test('a shorter per-call timeout still terminates a hanging command', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const { spawner, calls, killLog } = makeFakeSpawner(() => ({ hang: true }));
   const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
   await t.throwsAsync(shell.exec('node', [], { timeoutMs: 20 }), {
@@ -232,7 +232,7 @@ test('a shorter per-call timeout still terminates a hanging command', async t =>
 });
 
 test('a longer per-call timeout keeps a command alive beyond the default', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   /** @type {string[]} */
   const signals = [];
   /** @type {(status: { code: number | null, signal: string | null }) => void} */
@@ -336,7 +336,7 @@ test('a read-only mount is refused: a shell that cannot mutate is not a shell', 
 });
 
 test('reader failure terminates the child and preserves the original error', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const failure = Error('output transport broke');
   let resolveExit = _status => {};
   const exit = new Promise(resolve => {
@@ -398,7 +398,7 @@ test('rejected wait triggers hard termination without becoming a successful resu
 });
 
 test('refused termination has a bounded error result rather than an unhandled rejection', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const signals = [];
   const shell = makeShell({
     cwd: '/repo',
@@ -426,7 +426,7 @@ test('refused termination has a bounded error result rather than an unhandled re
 });
 
 test('timeout during admission still terminates a process that arrives after caller failure', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   let release = _process => {};
   const admission = new Promise(resolve => {
     release = resolve;

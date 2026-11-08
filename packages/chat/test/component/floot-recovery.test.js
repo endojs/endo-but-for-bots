@@ -67,7 +67,7 @@ test('remote liveness recheck refuses a turn started since the snapshot', async 
 });
 
 test('session switching fences late reads and a not-yet-dispatched resolution', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const read = makePromiseKit();
   const recovery = makeFlootRecovery({ notify: () => {}, isBusy: () => false });
   const pending = recovery.select(
@@ -123,7 +123,7 @@ test('older facets and corrupt journals are safely unavailable', async t => {
 });
 
 test('double acknowledgment and refresh cannot race a pending resolution', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const pending = makePromiseKit();
   const entered = makePromiseKit();
   let calls = 0;

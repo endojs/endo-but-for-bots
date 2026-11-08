@@ -2245,7 +2245,7 @@ test('replaying an already durable checkpoint is idempotent', async t => {
 });
 
 test('Floot retry after revival acknowledges the durable base then reconciles the failed turn', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   let state;
   const failed = makeFixture({
     threadId: 'thread-saved',

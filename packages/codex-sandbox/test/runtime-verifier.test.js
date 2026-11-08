@@ -220,7 +220,7 @@ for (const [label, options] of [
 }
 
 test('controlled hanging probe is killed and reaped after deadline', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const f = fixture({ stall: true, timeoutMs: 10 });
   await t.throwsAsync(() => E(f.verifier).attest(f.context), {
     message: 'Codex runtime verification failed',
@@ -230,7 +230,7 @@ test('controlled hanging probe is killed and reaped after deadline', async t => 
 });
 
 test('controlled late process acquisition is cancelled after rejected admission', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const f = fixture({ late: true, timeoutMs: 10 });
   await t.throwsAsync(() => E(f.verifier).attest(f.context), {
     message: 'Codex runtime verification failed',

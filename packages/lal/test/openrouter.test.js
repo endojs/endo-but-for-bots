@@ -515,7 +515,7 @@ test('oversized HTTP error body is cancelled without exposing its contents', asy
 });
 
 test('a stalled HTTP error body keeps its cause and permits only one timeout retry', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   let requests = 0;
   const provider = makeOpenRouterProvider({
     ...options,

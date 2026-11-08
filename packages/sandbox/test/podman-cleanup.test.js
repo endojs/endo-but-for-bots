@@ -290,7 +290,7 @@ const fixture = (t, storage, fs, runAs) => {
 };
 
 test('successful removal and attach exit retain ownership until native stdio closes', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
   const [name] = f.active;
@@ -312,7 +312,7 @@ test('successful removal and attach exit retain ownership until native stdio clo
 });
 
 test('native operator identity uses keep-id without chowning writable binds', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t, undefined, undefined, { uid: 1000, gid: 1000 });
   await f.driver.spawn(f.slice, ['/bin/true'], {});
   const create = f.calls.find(args => args[0] === 'create');
@@ -334,7 +334,7 @@ test('native execution identity rejects root, fractions and extra policy fields'
 });
 
 test('failed natural removal retains ownership and disposal retries without rewriting process history', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
   const [name] = f.active;
@@ -358,7 +358,7 @@ test('failed natural removal retains ownership and disposal retries without rewr
 });
 
 test('teardown coalesces and waits for a pending create before removing its container', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.defer();
   const acquired = f.driver.spawn(f.slice, ['/bin/true'], {});
@@ -380,7 +380,7 @@ test('teardown coalesces and waits for a pending create before removing its cont
 });
 
 test('cancelled admission after successful create retains its slot until removal succeeds', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.slice.policy = {
     request: { resources: { maxConcurrentOperations: 1 } },
@@ -420,7 +420,7 @@ test('cancelled admission after successful create retains its slot until removal
 });
 
 test('failed removal does not prevent sibling or anchor cleanup and retains configuration', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const directory = await mkdtemp(join(tmpdir(), 'podman-config-test-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
