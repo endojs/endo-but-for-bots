@@ -277,7 +277,7 @@ harden(transcriptToProviderMessages);
  *
  * @param {any} turn
  * @param {(ref: any) => Promise<string>} readContent
- * @param {{ startOrdinal?: number, evidenceAfter?: string, reportNativeSafety?: (safe: boolean) => void }} [selection]
+ * @param {{ startOrdinal?: number, evidenceAfter?: string }} [selection]
  */
 export const recoverTurnTranscript = async (
   turn,
@@ -373,27 +373,6 @@ export const recoverTurnTranscript = async (
       result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
     }),
   });
-  const nativeSafe =
-    turn.transcriptComplete === true &&
-    ['completed', 'failed', 'cancelled'].includes(turn.state) &&
-    (turn.nativeContextFormat === undefined ||
-      records.some(
-        record =>
-          record.kind === 'native-context' &&
-          record.format === turn.nativeContextFormat,
-      )) &&
-    rows.every(
-      (row, index) =>
-        row.source === 'tree' &&
-        row.settled &&
-        !row.settledBy &&
-        // A native cut cannot hide an authoritative failure it did not report.
-        (row.failed !== true || pairs[index]?.result?.failed === true),
-    );
-  selection.reportNativeSafety?.(nativeSafe);
-  // Forensic reads must still expose a checkpoint published before a failure,
-  // along with any recovered evidence. Model-context selection owns the
-  // refusal to restore unsafe native bytes; history is not that authority.
   if (selection.evidenceAfter !== undefined) {
     const after = positionOf(selection.evidenceAfter);
     const evidence = [];

@@ -177,47 +177,6 @@ test('compaction retains exact Responses tail rather than resurrecting supersede
   t.is(restored[1].responsesOutput.items[0].encrypted_content, 'kept-context');
 });
 
-test('a sealed failed native checkpoint restores with its failure notice, not as success', async t => {
-  const native = {
-    kind: 'native-context',
-    format: 'claude-code-jsonl-v1',
-    payload: 'signed bytes',
-    context: [],
-  };
-  const turn = {
-    turnId: '1',
-    input: 'go',
-    state: 'failed',
-    error: 'provider failed',
-    transcriptComplete: true,
-    transcript: [
-      {
-        kind: native.kind,
-        ordinal: '0',
-        sequence: '2',
-        payload: encodeJournalTranscript(native),
-      },
-    ],
-  };
-  const read = async () => {
-    throw Error('Unexpected content read');
-  };
-  t.deepEqual(await projectContextTranscript([turn], read), [
-    native,
-    {
-      kind: 'message',
-      role: 'assistant',
-      content: '[Floot turn failed: provider failed]',
-    },
-  ]);
-  await t.throwsAsync(
-    projectContextTranscript([{ ...turn, state: 'outcome-unknown' }], read),
-    {
-      message: /cannot conceal unresolved or recovered tool evidence/,
-    },
-  );
-});
-
 test('forensic recovery preserves a native checkpoint after failure without authorizing restoration', async t => {
   const native = {
     kind: 'native-context',
@@ -269,7 +228,7 @@ test('forensic recovery preserves a native checkpoint after failure without auth
     ),
   );
   await t.throwsAsync(projectContextTranscript([turn], read), {
-    message: /cannot conceal unresolved or recovered tool evidence/,
+    message: /cannot restore backend-native context/,
   });
 });
 

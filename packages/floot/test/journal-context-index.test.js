@@ -69,12 +69,17 @@ test('native context requirement survives replay and archive without hiding fore
     error: 'capture unavailable',
   });
   await t.throwsAsync(readContextTranscript(makeTurnJournal(f.powers)), {
-    message: /cannot conceal unresolved or recovered tool evidence/,
+    message: /cannot restore backend-native context/,
   });
+  const later = await journal.begin(options);
+  await journal.dispatch(later);
+  await journal.recordTranscript(later, '0', checkpoint('later summary'));
+  await journal.completeTranscript(later, '1');
+  await journal.append(later, { type: 'finish', state: 'completed' });
   await finishMore(journal, 290, true);
   const revived = makeTurnJournal(f.powers);
   await t.throwsAsync(readContextTranscript(revived), {
-    message: /cannot conceal unresolved or recovered tool evidence/,
+    message: /cannot restore backend-native context/,
   });
   const view = await revived.readView();
   const page = await revived.listArchivedPage(view.archiveCursor);
@@ -88,15 +93,10 @@ test('native context requirement survives replay and archive without hiding fore
   );
 });
 
-test('native checkpoint payload survives immutable publication, archive index and reconstruction', async t => {
+test('large compaction survives immutable publication, archive index and reconstruction', async t => {
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
-  const native = harden({
-    kind: 'native-context',
-    format: 'claude-code-jsonl-v1',
-    payload: 'signed bytes'.repeat(2000),
-    context: [{ kind: 'compaction', summary: 'summary' }],
-  });
+  const saved = harden(checkpoint('a large summary'.repeat(2000)));
   const suffix = harden({
     kind: 'message',
     role: 'assistant',
@@ -104,12 +104,15 @@ test('native checkpoint payload survives immutable publication, archive index an
   });
   const id = await journal.begin(options);
   await journal.dispatch(id);
-  await journal.recordTranscript(id, '0', native);
-  await journal.recordTranscript(id, '0', native);
+  await journal.recordTranscript(id, '0', saved);
+  await journal.recordTranscript(id, '0', saved);
   await journal.recordTranscript(id, '1', suffix);
   await journal.completeTranscript(id, '2');
   await journal.append(id, { type: 'finish', state: 'completed' });
-  t.deepEqual(await readContextTranscript(journal), [native, suffix]);
+  t.deepEqual(await readContextTranscript(journal), [
+    { kind: 'compaction', summary: saved.summary },
+    suffix,
+  ]);
   await finishMore(journal, 290, true);
   const revived = makeTurnJournal(f.powers);
   t.like((await revived.readView()).archivedCheckpoint, {
@@ -117,7 +120,10 @@ test('native checkpoint payload survives immutable publication, archive index an
     ordinal: '0',
   });
   const restored = await readContextTranscript(revived);
-  t.deepEqual(restored.slice(0, 2), [native, suffix]);
+  t.deepEqual(restored.slice(0, 2), [
+    { kind: 'compaction', summary: saved.summary },
+    suffix,
+  ]);
   t.deepEqual(selectActiveTranscript(restored).active, restored);
   t.deepEqual(await readContextTranscript(makeTurnJournal(f.powers)), restored);
 });

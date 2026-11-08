@@ -1,15 +1,9 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { defined } from '../../../scripts/test/defined.js';
 
-import { runHostedTurn } from '../src/hosted-turn.js';
 import { projectJournalTurnHistory } from '../src/journal-history.js';
-import { encodeJournalTranscript } from '../src/journal-transcript.js';
-import { makeReplyFold } from '../src/reply-fold.js';
-import { makeReplyChannel } from '../src/stream.js';
 import { recoverTurnTranscript } from '../src/transcript-projection.js';
 import { reconcileTurnEvidence } from '../src/turn-evidence.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
@@ -29,72 +23,6 @@ const fixture = () => {
 };
 const options = { input: 'go', backendId: 'test', modelId: 'test' };
 const read = tool => ({ args: tool.args, result: tool.result });
-
-for (const failed of [true, false, undefined]) {
-  test(`native outcome reaches context, journal observation, reply and snapshot (failed=${failed})`, async t => {
-    const events = [];
-    const records = [];
-    const channel = makeReplyChannel();
-    t.teardown(channel.close);
-    const fold = makeReplyFold();
-    const status = {
-      phase: '',
-      streamingText: '',
-      /** @type {any[]} */
-      messages: [],
-      error: null,
-      usage: null,
-    };
-    const draining = (async () => {
-      for await (const event of iterateReader(channel.reader)) {
-        if (fold.apply(status, event)) break;
-      }
-    })();
-    const result = await runHostedTurn({
-      text: 'go',
-      writer: channel.writer,
-      client: harden({
-        send: async () =>
-          readerFromIterator(
-            (async function* toolEvents() {
-              yield {
-                type: 'tool-call',
-                id: 'call',
-                name: 'shell',
-                args: '{}',
-              };
-              yield {
-                type: 'tool-result',
-                id: 'call',
-                result: 'Error: literal output',
-                ...(failed === undefined ? {} : { ok: !failed }),
-              };
-              yield { type: 'end' };
-            })(),
-          ),
-      }),
-      recordToolEvent: async event => {
-        events.push(event);
-      },
-      recordTranscript: async (_ordinal, record) => {
-        records.push(record);
-      },
-      completeTranscript: async () => {},
-    });
-    channel.writer.end();
-    await draining;
-    t.is(result.toolCalls[0].failed, failed);
-    t.is(
-      events.find(event => event.type === 'observed-tool-result').failed,
-      failed,
-    );
-    t.is(records.find(record => record.kind === 'tool-result').failed, failed);
-    t.is(status.messages[0].failed, failed);
-    const adopted = { ...status, messages: /** @type {any[]} */ ([]) };
-    fold.adopt(adopted, status);
-    t.is(adopted.messages[0].failed, failed);
-  });
-}
 
 test('host and native classification survives event replay, snapshots, archives and full-content recovery', async t => {
   const f = fixture();
@@ -270,7 +198,7 @@ test('late host rejection settles unknown outcome without making the cancelled t
   t.true(defined(records.find(record => record.kind === 'tool-result')).failed);
 });
 
-test('failure enrichment keeps its journal position across compaction and cannot certify a native cut', async t => {
+test('failure enrichment keeps its journal position across compaction', async t => {
   const f = fixture();
   const id = await f.journal.begin(options);
   await f.journal.dispatch(id);
@@ -304,17 +232,9 @@ test('failure enrichment keeps its journal position across compaction and cannot
   await f.journal.completeTranscript(id, '3');
   await f.journal.append(id, { type: 'finish', state: 'completed' });
   const turn = await f.journal.get(id);
-  let safe;
-  const recovered = await recoverTurnTranscript(
-    turn,
-    ref => f.journal.readContent(ref),
-    {
-      reportNativeSafety: value => {
-        safe = value;
-      },
-    },
+  const recovered = await recoverTurnTranscript(turn, ref =>
+    f.journal.readContent(ref),
   );
-  t.false(safe);
   t.is(recovered.filter(record => record.kind === 'tool-result').length, 2);
   t.true(
     recovered
@@ -327,30 +247,6 @@ test('failure enrichment keeps its journal position across compaction and cannot
     { evidenceAfter: turn.transcript[2].sequence },
   );
   t.true(defined(late.find(record => record.kind === 'tool-result')).failed);
-  const native = {
-    ...turn,
-    nativeContextFormat: 'test-native',
-    transcript: [
-      ...turn.transcript,
-      {
-        ordinal: '3',
-        sequence: turn.tools[0].resultSequence,
-        kind: 'native-context',
-        payload: encodeJournalTranscript({
-          kind: 'native-context',
-          format: 'test-native',
-          payload: 'opaque',
-          context: [],
-        }),
-      },
-    ],
-  };
-  await recoverTurnTranscript(native, ref => f.journal.readContent(ref), {
-    reportNativeSafety: value => {
-      safe = value;
-    },
-  });
-  t.false(safe);
 });
 
 test('invalid outcome flags are rejected before journal publication', async t => {
