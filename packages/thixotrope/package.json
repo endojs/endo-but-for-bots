@@ -68,7 +68,7 @@
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.4.0",
-    "preact": "^10.29.8",
+    "preact": "^11.1.1",
     "ses": "workspace:^"
   },
   "devDependencies": {
