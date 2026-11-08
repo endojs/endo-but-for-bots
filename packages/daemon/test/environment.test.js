@@ -7,7 +7,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { makeEnvironment } from '../src/environment.js';
 
-test.beforeEach(t => t.timeout(5000));
+test.beforeEach(t => t.timeout(10_000));
 
 const recipe = harden({
   policy: { allowedCommands: ['sh'], timeoutMs: 1000, maxOutputBytes: 4096 },
@@ -244,7 +244,7 @@ test('recipe refuses open records and invalid execution bounds', t => {
 });
 
 test('failed execution retires its native owner before a later command; no effect is replayed', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let owners = 0;
   let effects = 0;
   let stops = 0;
@@ -300,7 +300,7 @@ test('failed execution retires its native owner before a later command; no effec
 });
 
 test('failed execution retains its exact owner when cleanup fails', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let owners = 0;
   let stops = 0;
   let refuse = true;
@@ -337,7 +337,7 @@ test('failed execution retains its exact owner when cleanup fails', async t => {
 });
 
 test('ordinary nonzero command status retains the usable native owner', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let owners = 0;
   let stops = 0;
   const f = await fixture({

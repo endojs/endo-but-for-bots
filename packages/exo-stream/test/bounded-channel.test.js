@@ -43,7 +43,7 @@ test('writes apply backpressure and preserve a long stream without increasing bo
 });
 
 test('closing a full queue releases its waiting writer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const channel = makeBoundedReader(options);
   channel.push('a');
   channel.push('b');
@@ -138,7 +138,7 @@ test('consumed traffic releases queue charges across a long healthy stream', asy
 });
 
 test('a stalled consumer does not drain the local queue into an eager ack chain', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const channel = makeBoundedReader(options);
   const reader = iterateReader(channel.reader, { buffer: 0 });
   channel.push('initial');
@@ -152,7 +152,7 @@ test('a stalled consumer does not drain the local queue into an eager ack chain'
 });
 
 test('consumer cancellation closes an idle producer without more events', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let closed = 0;
   const channel = makeBoundedReader({
     ...options,

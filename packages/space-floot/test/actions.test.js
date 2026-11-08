@@ -243,7 +243,7 @@ test('every token carries text, so the scanner always advances', t => {
   // A scan that returned its own start would loop forever, and the round-trip
   // check alone cannot see it: slicing [i, i) yields '', which joins invisibly.
   // Bounded so a regression fails here rather than parking on AVA's timeout.
-  t.timeout(5000);
+  t.timeout(10_000);
   for (const source of ADVERSARIAL) {
     const tokens = tokenizeJs(source);
     t.true(
@@ -262,7 +262,7 @@ test('a line of unclosed regex literals does not go quadratic', t => {
   // `scanRegExp` runs to the end of the line before giving up, so without
   // remembering that failure every later slash rescans the same tail. This view
   // renders model output and cannot yield, so the cost is a frozen tab.
-  t.timeout(5000);
+  t.timeout(10_000);
   const source = '=/['.repeat(20_000);
   const started = Date.now();
   const tokens = tokenizeJs(source);

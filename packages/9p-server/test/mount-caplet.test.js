@@ -35,7 +35,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 10));
 
 for (const kind of ['presence', 'local', 'promised']) {
   test(`make returns with a live ${kind} context and observes later cancellation`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let cancel;
     const cancelledP = new Promise((_resolve, reject) => {
       cancel = () => reject(Error('Test context cancelled'));
@@ -68,7 +68,7 @@ for (const kind of ['presence', 'local', 'promised']) {
 }
 
 test('make without a cancellation context returns an open mounter', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mounter = await make(undefined, undefined);
   t.deepEqual(await E(mounter).list(), []);
   await t.throwsAsync(

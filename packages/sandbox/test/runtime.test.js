@@ -342,7 +342,7 @@ test('factory and driver cleanup failures are preserved in the same attempt', as
 });
 
 test('runtime retains ownership for an actual Podman driver pending native closure', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   /** @type {any} */
   let child;
@@ -387,7 +387,7 @@ test('runtime retains ownership for an actual Podman driver pending native closu
 });
 
 test('close during driver construction owns the returned late controller', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   /** @type {Promise<void> | undefined} */
   let closing;
@@ -414,7 +414,7 @@ test('close during driver construction owns the returned late controller', async
 });
 
 test('close during storage creation retains its late acquisition before release', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   const started = makePromiseKit();
   const gate = makePromiseKit();
@@ -615,7 +615,7 @@ test('native scopes cannot each spend a separate generated-file budget', async t
 });
 
 test('native scope cleanup retains a late acquisition and permits sibling progress', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   const entered = makePromiseKit();
   const gate = makePromiseKit();

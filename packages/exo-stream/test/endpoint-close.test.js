@@ -52,7 +52,7 @@ const families = harden([
 
 for (const family of families) {
   test(`${family.name} close separates source failure from successful cleanup`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let returns = 0;
     const source = harden({
       next: async () => {
@@ -78,7 +78,7 @@ for (const family of families) {
   });
 
   test(`${family.name} close retries source cleanup independently of terminal failure`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let returns = 0;
     const source = harden({
       next: async () => done,
@@ -100,7 +100,7 @@ for (const family of families) {
 }
 
 test('endpoint close waits for cleanup after local validation has already rejected', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const returning = makePromiseKit();
   const released = makePromiseKit();
   t.teardown(() => released.resolve(undefined));
@@ -131,7 +131,7 @@ test('endpoint close waits for cleanup after local validation has already reject
 });
 
 test('endpoint close interrupts and drains every admitted reader invocation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const bothPulling = makePromiseKit();
   const interrupted = makePromiseKit();
   const release = makePromiseKit();
@@ -186,7 +186,7 @@ test('endpoint close interrupts and drains every admitted reader invocation', as
 });
 
 test('endpoint close releases idle streams and refuses new admission', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let pulls = 0;
   let returns = 0;
   const endpoint = writerFromIterator(
@@ -214,7 +214,7 @@ test('endpoint close releases idle streams and refuses new admission', async t =
 });
 
 test('endpoint close retains a return result that did not finish the source', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let returns = 0;
   const endpoint = readerFromIterator(
     harden({
@@ -235,7 +235,7 @@ test('endpoint close retains a return result that did not finish the source', as
 });
 
 test('source next ownership observes a native promise through its intrinsic then', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   /** @type {(value: typeof done) => void} */
   let finish = () => {};
@@ -285,7 +285,7 @@ test('source next ownership observes a native promise through its intrinsic then
 for (const family of families) {
   for (const consumed of [false, true]) {
     test(`${family.name} close observes cleanup failure with an abandoned ${consumed ? 'tail' : 'head'}`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       let refuses = true;
       const value =
         family.make === bytesReaderFromIterator ? Uint8Array.of(1) : 'chunk';

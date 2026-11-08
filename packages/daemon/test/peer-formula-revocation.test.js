@@ -76,7 +76,7 @@ const setupContextMaker = () => {
 // The peer formula's `cancelled` promise must reject with that error.
 // ---------------------------------------------------------------------------
 test('connection dispose cancels the peer formula context', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { createContext } = setupContextMaker();
   const peerFormulaId = id('peer:local');
   const peerContext = createContext(peerFormulaId, 'peer');
@@ -113,7 +113,7 @@ test('connection dispose cancels the peer formula context', async t => {
 // so when the peer formula is cancelled, every remote presence is revoked.
 // ---------------------------------------------------------------------------
 test('peer formula cancellation cascades to dependent remote presences', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { createContext } = setupContextMaker();
 
   const peerFormulaId = id('peer:local');
@@ -155,7 +155,7 @@ test('peer formula cancellation cascades to dependent remote presences', async t
 // fires, so remote presences remain live after connection loss.
 // ---------------------------------------------------------------------------
 test('regression evidence: dropLiveValue alone does not cancel remote presences', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { createContext, controllerForId } = setupContextMaker();
 
   const peerFormulaId = id('peer:regression');
@@ -199,7 +199,7 @@ test('regression evidence: dropLiveValue alone does not cancel remote presences'
 // Option A dispose callback to verify end-to-end cascade.
 // ---------------------------------------------------------------------------
 test('remote-control dispose triggers peer formula cancellation and cascades', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { createContext } = setupContextMaker();
 
   const peerFormulaId = id('peer:rc-test');

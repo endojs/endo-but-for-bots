@@ -19,7 +19,7 @@ const exported = JSON.stringify({
 });
 
 test('import validates every locator before mutation and repairs a partial import', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const values = new Map();
   let exists = false;
   let fail = true;

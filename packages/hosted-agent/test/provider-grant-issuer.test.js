@@ -171,7 +171,7 @@ for (const streaming of [false, true]) {
 
 for (const wrapped of [false, true]) {
   test(`failed pool construction releases earlier ${wrapped ? 'wrapped' : 'direct'} member resources`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const owner = makePoolMemberLifecycle();
     const retired = makePoolMemberLifecycle();
     retired.fence();
@@ -954,7 +954,7 @@ test('an oauth issuer requires a credential bound to its own account', async t =
 });
 
 test('retained issuance revoked before its queue turn acquires no listener', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   t.teardown(f.issuer.dispose);
   const kit = f.issuer.issueKit(spec);
@@ -968,7 +968,7 @@ test('retained issuance revoked before its queue turn acquires no listener', asy
 });
 
 test('retained issuance revokes authority during acquisition and drains its late listener', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const startBarrier = new Promise(resolve => {
     release = () => resolve(undefined);

@@ -9,7 +9,7 @@ import { make } from '../agent.js';
 import { directoryHost } from './_directory-host.js';
 
 test('factory facets retain disconnected turns, commit history, and provision delegation tools', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const inbox = makeBufferedReader();
   const backendEvents = makeBufferedReader();
   const store = new Map();

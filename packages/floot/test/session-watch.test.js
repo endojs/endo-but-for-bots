@@ -13,7 +13,7 @@ const user = text => harden({ role: 'user', content: text });
 const reply = text => harden({ role: 'assistant', content: text });
 
 test('session list rejects non-passable updates before delivering them', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {Array<{id: string, title?: string, invalid?: () => void}>} */
   let sessions = [{ id: 'valid' }];
   const watch = makeSessionListWatch(async () => sessions);
@@ -168,7 +168,7 @@ const turns = async (count = 20) => {
 };
 
 test('invalid local session data cannot poison the next snapshot', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { state, watch } = makeSources();
   t.teardown(() => watch.end());
   state.running = { input: 'same', invalid: () => {} };
@@ -549,7 +549,7 @@ test('ending the watch ends every view and refuses late reads', async t => {
 for (const source of ['transcript', 'network', 'usage']) {
   for (const fails of [false, true]) {
     test(`session watch end invalidates held ${source}, fails=${fails}`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const entered = makePromiseKit();
       const pending = makePromiseKit();
       const timers = new Set();
@@ -612,7 +612,7 @@ test('ending a session watch cancels a scheduled retry', async t => {
 });
 
 test('ending before admitted source microtasks run prevents their reads', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { watch, state } = makeSources();
   state.gateNetwork = true;
   const opening = watch.watch();

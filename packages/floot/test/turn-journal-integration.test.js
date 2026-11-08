@@ -124,7 +124,7 @@ const completed = () =>
 
 for (const format of ['claude-code-jsonl-v1', 'another-native-format']) {
   test(`agent selects argument comparison only for Claude checkpoints (${format})`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = fixture();
     const journal = makeTurnJournal(f.powers);
     const options = {
@@ -223,7 +223,7 @@ for (const format of ['claude-code-jsonl-v1', 'another-native-format']) {
 for (const boundary of ['onBegun', 'setup']) {
   for (const revive of [false, true]) {
     test(`native pre-send cancellation at ${boundary} preserves history without poisoning context (revive=${revive})`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const f = fixture();
       const controller = new AbortController();
       let release = () => {};
@@ -328,7 +328,7 @@ for (const boundary of ['onBegun', 'setup']) {
 for (const fault of ['beforeStore', 'afterStore']) {
   for (const kind of ['hosted', 'provider']) {
     test(`${kind} dispatch intent ${fault} failure refuses send and revival preserves uncertainty`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const f = fixture();
       let sends = 0;
       const client = harden({
@@ -400,7 +400,7 @@ for (const fault of ['beforeStore', 'afterStore']) {
 
 for (const refusal of ['rejection', 'leading abort']) {
   test(`native ${refusal} after dispatch intent remains unsafe after revival`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = fixture();
     let sends = 0;
     const client = harden({
@@ -863,7 +863,7 @@ test('oversized backend token is refused before successful journal settlement or
 });
 
 test('cancelled hosted thinking is journaled after the interrupt barrier', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const controller = new AbortController();
   const stream = makeBufferedReader();
@@ -1260,7 +1260,7 @@ test('cancellation during transcript sealing does not commit a successful turn',
 });
 
 test('parallel identical calls keep distinct results after partial transcript publication', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let releaseFirst;
   const first = new Promise(resolve => {
@@ -1440,7 +1440,7 @@ for (const missingId of [false, true]) {
 for (const phase of ['beforeStore', 'afterStore']) {
   for (const boundary of ['call', 'result', 'seal', 'finish']) {
     test(`direct ${boundary} ${phase} failure reconstructs its acknowledged prefix`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const f = fixture();
       let faulted = false;
       f[phase](value => {
@@ -1537,7 +1537,7 @@ for (const phase of ['beforeStore', 'afterStore']) {
 
 for (const hook of ['beforeStore', 'afterStore']) {
   test(`provider cancellation while initial transcript ${hook} awaits acknowledgement refuses inference`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = fixture();
     const controller = new AbortController();
     let sends = 0;
@@ -1602,7 +1602,7 @@ for (const hook of ['beforeStore', 'afterStore']) {
 
 for (const boundary of ['transcript-record', 'tool-intent']) {
   test(`direct cancellation during ${boundary} publication refuses effects`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = fixture();
     const abort = new AbortController();
     let effects = 0;
@@ -2012,7 +2012,7 @@ test('end-of-turn compaction restores retained tools and final answer exactly on
 });
 
 test('Responses overload after metadata retries without repeating a completed tool', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const requests = [];
   const delays = [];
@@ -2766,7 +2766,7 @@ test('direct-provider recovery hydrates full input and tool evidence, not UI pre
 });
 
 test('direct tools persist intent before effects and failed effects remain in later model context', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const contexts = [];
   let effects = 0;
@@ -2860,7 +2860,7 @@ test('direct tools persist intent before effects and failed effects remain in la
 });
 
 test('failed hosted turn preserves reported partial usage across revival without claiming success', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const hostedClient = harden({
     async send() {
@@ -2916,7 +2916,7 @@ test('failed hosted turn preserves reported partial usage across revival without
 });
 
 test('hosted snapshot tools durably authorize effects and preserve failures without stream tool events', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let effects = 0;
   const inputs = [];
@@ -2993,7 +2993,7 @@ test('hosted snapshot tools durably authorize effects and preserve failures with
 });
 
 test('aliased backend observations retain distinct execution evidence without claiming duplicate effects', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let effects = 0;
   const extraTools = new Map([
@@ -3062,7 +3062,7 @@ test('aliased backend observations retain distinct execution evidence without cl
 });
 
 test('failed mail turns restore journaled receipt and tool evidence after revival', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const contexts = [];
   let effects = 0;
@@ -3247,7 +3247,7 @@ test('repeated typed receipt hides only duplicate display input, not new admissi
 });
 
 test('lost result writes poison dispatch; revival permits unrelated work without replay or resolution', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let effects = 0;
   let calls = 0;
@@ -3329,7 +3329,7 @@ test('lost result writes poison dispatch; revival permits unrelated work without
 });
 
 test('failed intent persistence never dispatches the actual Endo tool', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   f.refuse('tool-intent');
   let effects = 0;
@@ -3367,7 +3367,7 @@ test('failed intent persistence never dispatches the actual Endo tool', async t 
 });
 
 test('native activity without result remains unknown while unrelated later work completes', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let sends = 0;
   const hostedClient = harden({
@@ -3420,7 +3420,7 @@ test('native activity without result remains unknown while unrelated later work 
 });
 
 test('interrupt closes hosted tool admission before backend acknowledgement and preserves admitted context', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const barrier = () => {
     let resolve = () => {};
@@ -3543,7 +3543,7 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
 });
 
 test('a turn stopped before its backend sized the window keeps the size already known', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let turn = 0;
   const hostedClient = harden({

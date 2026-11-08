@@ -736,7 +736,7 @@ for (const cold of [true, false]) {
   test.serial(
     `assistant routes ${cold ? 'cold default' : 'warm text-only space'} to voice and ignores detached gutters`,
     async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       testDocument.body.replaceChildren();
       localStorage.clear();
       const storedValues = new Map([

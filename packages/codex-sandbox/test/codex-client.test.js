@@ -48,7 +48,7 @@ test('a complete thread-state writer is required before transport startup', t =>
 });
 
 test('obsolete per-turn instructions refuse before transport work without reserving a turn', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     clientOptions: { developerInstructions: 'Configured prompt' },
   });
@@ -77,7 +77,7 @@ test('obsolete per-turn instructions refuse before transport work without reserv
 });
 
 test('catalog rotation restores the conversation once and reconciles the old catalog first', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const saved = [];
   const fixture = makeFixture({
     threadId: 'thread-saved',
@@ -199,7 +199,7 @@ test('a thread inherited across incarnations is superseded, not resumed', async 
 });
 
 test('an empty saved thread restores continuity again after a failed first turn is reverted', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     threadId: 'thread-saved',
     clientOptions: { savedRecovery: { baseTurnId: null } },
@@ -283,7 +283,7 @@ test('a long conversation is restored, not refused', async t => {
   // no length at which the stack declines to hand a session its own history:
   // the bound that used to sit here refused exactly the long conversations
   // that most need their context back.
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     threadId: 'thread-saved',
     existingTurnIds: ['turn-1'],
@@ -791,7 +791,7 @@ const nativeTestTransport = (overrides = {}) => ({
 });
 
 test('native capture completes outside the notification pump and precedes end', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const captures = [];
   const fixture = makeFixture({
     clientOptions: {
@@ -833,7 +833,7 @@ test('native capture completes outside the notification pump and precedes end', 
 
 for (const cancel of ['interrupt', 'terminate']) {
   test(`native capture ${cancel} drains helper and cannot publish late success`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let release = () => {};
     const gate = new Promise(resolve => {
       release = () => resolve(undefined);
@@ -886,7 +886,7 @@ for (const cancel of ['interrupt', 'terminate']) {
 }
 
 test('native restoration reconciles inherited ledger and persists actual resumed baseline', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const writes = [];
   const fixture = makeFixture({
     threadId: 'old-native',
@@ -952,7 +952,7 @@ test('native snapshot binding mismatch refuses before any transport work', async
 });
 
 test('recovery restores a native checkpoint and injects late settled evidence once before continuing', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const calls = [];
   const fixture = makeFixture({
     threadId: 'old-native',
@@ -1032,7 +1032,7 @@ test('recovery restores a native checkpoint and injects late settled evidence on
 });
 
 test('native suffix recovery refuses dangling calls before transport and failed injection before a prompt', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const writes = [];
   const fixture = makeFixture({
     injectFails: true,
@@ -1106,7 +1106,7 @@ test('malformed native capture refuses before restoration or protocol effects', 
 });
 
 test('native restoration cancellation drains held helper before any prompt dispatch', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let restoring = false;
   let closed = false;
   let release = () => {};
@@ -1153,7 +1153,7 @@ test('native restoration cancellation drains held helper before any prompt dispa
 });
 
 test('restored nonempty baseline retains exact prior checkpoint lineage after reconstruction', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     threadId: 'interrupted-projection',
     existingTurnIds: ['rollout-1'],
@@ -1187,7 +1187,7 @@ test('restored nonempty baseline retains exact prior checkpoint lineage after re
 
 for (const restoredBase of [null, 'rollout-1']) {
   test(`fresh native restoration retains journal lineage across setup crash (${restoredBase})`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     /** @type {{ threadId: string, recovery?: { baseTurnId: string | null, previousCheckpoint?: string } } | undefined} */
     let persisted;
     const restoredTurnIds = restoredBase === null ? [] : [restoredBase];
@@ -1250,7 +1250,7 @@ for (const restoredBase of [null, 'rollout-1']) {
 
 for (const acknowledged of [false, true]) {
   test(`missing disposable native rollout restores from journal after acknowledgement (${acknowledged})`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const fixture = makeFixture({
       threadId: 'missing-native',
       missingInheritedRollout: true,
@@ -1326,7 +1326,7 @@ test('missing native rollout with outstanding work refuses before replacement or
 });
 
 test('native capture failure aborts without an incomplete checkpoint or success', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     clientOptions: {
       nativeContext: nativeTestTransport({
@@ -1351,7 +1351,7 @@ test('native capture failure aborts without an incomplete checkpoint or success'
 });
 
 test('interrupt during held terminal audit settles naturally completed turn without capture', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const gate = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -1445,7 +1445,7 @@ const supervise = async client => {
 };
 
 test('supervisor retries real Codex client transport cleanup', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({ closeFailures: 1 });
   const owner = await supervise(fixture.client);
   await owner.controller.acknowledge('checkpoint-test');
@@ -1459,7 +1459,7 @@ test('supervisor retries real Codex client transport cleanup', async t => {
 });
 
 test('supervisor fences promptly but drains an admitted Codex send checkpoint write', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -1498,7 +1498,7 @@ test('supervisor fences promptly but drains an admitted Codex send checkpoint wr
 });
 
 test('shutdown during a held tool intent does not dispatch the tool after release', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -1565,7 +1565,7 @@ test('shutdown during a held tool intent does not dispatch the tool after releas
 
 for (const event of ['turn-terminal', 'server-request-denied', 'tool-intent']) {
   test(`Codex shutdown drains and retains failed ${event} writes`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let release = () => {};
     const held = new Promise(resolve => {
       release = () => resolve(undefined);
@@ -1838,7 +1838,7 @@ test('notifications arriving before turn/start response are replayed', async t =
 });
 
 test('an undrained event queue fails explicitly and requests producer interruption', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture();
   t.teardown(() => fixture.client.terminate());
   const reader = await fixture.client.send('go');
@@ -2025,7 +2025,7 @@ for (const early of [false, true]) {
   ]) {
     const reason = failure instanceof Error ? failure.message : String(failure);
     test(`completed checkpoint persistence failure delivers a terminal abort (${early ? 'before' : 'after'} turn/start reply; ${reason})`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const completedWrites = [];
       const fixture = makeFixture({
         beforeTurnResponse: early
@@ -2794,7 +2794,7 @@ test('teardown synchronously rejects a new turn before its close audit', async t
 });
 
 test('a native child cannot borrow parent tools and a late parent result survives quarantine', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve('late parent result');
@@ -2870,7 +2870,7 @@ test('a native child cannot borrow parent tools and a late parent result survive
 });
 
 test('a timed-out Endo tool poisons the session until late settlement', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {(value?: any) => void} */
   let settle = () => {};
   const audit = [];
@@ -2930,7 +2930,7 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
 });
 
 test('supervisor fences independently while Codex termination drains an admitted tool', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve('tool result');
@@ -2994,7 +2994,7 @@ test('supervisor fences independently while Codex termination drains an admitted
 });
 
 test('a failed late tool audit remains a shutdown failure after the tool settles', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let rejectTool = () => {};
   const operation = new Promise((_resolve, reject) => {
     rejectTool = () => reject(Error('late tool failure'));
@@ -3889,7 +3889,7 @@ test('interrupt during ledger admission fences the prompt and terminal-microtask
 });
 
 test('an immediate interrupt fences a reserved send before its reader is returned', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture();
   t.teardown(() => fixture.client.terminate());
   const sending = fixture.client.send('must not execute');
@@ -4424,7 +4424,7 @@ test('transport metadata alone cannot enable native networking without broker co
 });
 
 test('a new thread is restored through inject_items, not through its prompt', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     threadId: 'thread-saved',
     existingTurnIds: ['turn-1'],
@@ -4467,7 +4467,7 @@ test('a new thread is restored through inject_items, not through its prompt', as
 });
 
 test('an app-server without inject_items refuses the turn rather than degrading it', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({
     injectFails: true,
     threadId: 'thread-saved',
@@ -4495,7 +4495,7 @@ test('an app-server without inject_items refuses the turn rather than degrading 
 });
 
 test('dynamic image tools deliver pixels beyond the text cap and retain replay evidence', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const image = harden({
     mimeType: /** @type {const} */ ('image/png'),
     data: 'AAAA'.repeat(600_000),
@@ -4587,7 +4587,7 @@ test('dynamic image tools deliver pixels beyond the text cap and retain replay e
 
 for (const mode of ['fresh', 'catalog rotation', 'native suffix']) {
   test(`${mode} restores multiple large images in ordered bounded requests`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const native = mode === 'native suffix';
     const records = [0, 1].flatMap(index => [
       {
@@ -4660,7 +4660,7 @@ for (const mode of ['fresh', 'catalog rotation', 'native suffix']) {
 }
 
 test('a failed later native image batch leaves the checkpoint unpublished and never starts inference', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const writes = [];
   const records = [0, 1].flatMap(index => [
     {

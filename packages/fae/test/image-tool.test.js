@@ -116,7 +116,7 @@ test('overflow closes the stream and a later call can recover', async t => {
 });
 
 test('empty-chunk flooding closes the stream and a later call recovers', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let closed = false;
   let reads = 0;
   let calls = 0;

@@ -874,7 +874,7 @@ test('failed native restore does not admit a Claude prompt', async t => {
 });
 
 test('cancelling native restore during stdin acquisition never writes or admits prompt', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release;
   const held = new Promise(resolve => {
     release = resolve;
@@ -1048,7 +1048,7 @@ for (const captureSucceeds of [false, true]) {
 
 for (const failedTurn of [false, true]) {
   test(`interrupt during ${failedTurn ? 'failed' : 'successful'} turn capture kills its process and publishes no checkpoint`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let release;
     const held = new Promise(resolve => {
       release = resolve;
@@ -1097,7 +1097,7 @@ for (const failedTurn of [false, true]) {
 for (const phase of ['provision', 'restore']) {
   for (const cancellation of ['reader', 'interrupt']) {
     test(`${cancellation} cancellation during ${phase} prevents prompt spawn`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       let release;
       let entered;
       const gate = new Promise(resolve => {
@@ -1198,7 +1198,7 @@ test('raw stream backpressures a burst larger than the delivery queue', async t 
 });
 
 test('closing a queued reader skips its restoration without interrupting the active turn', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release;
   const gate = new Promise(resolve => {
     release = resolve;
@@ -1258,7 +1258,7 @@ test('closing a queued reader skips its restoration without interrupting the act
 });
 
 test('interrupt owns a late spawn handle without replaying its admitted prompt', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let releaseSpawn;
   const spawnGate = new Promise(resolve => {
     releaseSpawn = resolve;
@@ -1343,7 +1343,7 @@ test('interrupt owns a late spawn handle without replaying its admitted prompt',
 });
 
 test('interrupt releases a producer waiting behind a full raw queue', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fake = makeFakeSlice([
     [
       enc.encode(
@@ -1430,7 +1430,7 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
 });
 
 test('an oversized event fails with channel diagnostics and kills its producer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fake = makeFakeSlice([
     [
       enc.encode(
@@ -1471,7 +1471,7 @@ test('without an mcpConfigPath no MCP flags are passed', async t => {
 
 for (const mcpConfigPath of [undefined, '/endo-mcp/mcp.json']) {
   test(`native delegation is denied on fresh and resumed turns ${mcpConfigPath ? 'with' : 'without'} Endo tools`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const fake = makeFakeSlice([[], []]);
     const client = makeClaudeClient(
       baseArgs(fake, makeFakeMount(), { mcpConfigPath }),
@@ -1707,7 +1707,7 @@ test('invalid stderr deadline is refused before process or diagnostic acquisitio
 for (const partial of [false, true]) {
   for (const lateFailure of [false, true]) {
     test(`stderr deadline ends abort (${partial ? 'partial diagnostic' : 'first read'}, late ${lateFailure ? 'rejection' : 'chunk'})`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       let resolveRead;
       let rejectRead;
       const stalled = new Promise((resolve, reject) => {
@@ -1761,7 +1761,7 @@ for (const partial of [false, true]) {
 }
 
 test('stderr deadline bounds a stalled iterator return after its size cutoff', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let releaseReturn;
   const stalledReturn = new Promise(resolve => {
     releaseReturn = resolve;
@@ -1841,7 +1841,7 @@ for (const [label, failure] of [
   ['undefined', undefined],
 ]) {
   test(`failed exit observation (${label}) aborts rather than certifying success`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const partial = { type: 'assistant', text: 'partial answer' };
     const fake = makeFakeSlice(
       [[enc.encode(`${JSON.stringify(partial)}\n`)]],

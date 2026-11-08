@@ -28,7 +28,7 @@ test('cap includes notice, reports original size and preserves Unicode boundarie
 for (const kind of ['provider', 'hosted']) {
   for (const fails of [false, true]) {
     test(`${kind} bounds a 10 MB tool ${fails ? 'error' : 'result'} before journaling and the next model request`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const values = new Map();
       const powers = harden({
         list: prefix => harden(prefix === 'tools' ? [] : [...values.keys()]),

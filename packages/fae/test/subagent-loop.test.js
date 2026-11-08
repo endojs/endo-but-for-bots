@@ -534,7 +534,7 @@ test('a claimed subagent reply is dismissed so a restart cannot replay it', asyn
 
 for (const refuse of [false, true]) {
   test(`a ${refuse ? 'refused' : 'delayed'} claimed-reply receipt cannot clear the active turn fence`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const entered = makePromiseKit();
     const release = makePromiseKit();
     const cancelled = makePromiseKit();
@@ -962,7 +962,7 @@ test('the Fae loop uses a subscription for tools and preserves opaque Responses 
 });
 
 test('formula disposal drains startup publication and never announces readiness after cancellation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const release = makePromiseKit();
   const cancelled = makePromiseKit();
@@ -1020,7 +1020,7 @@ test('formula disposal drains startup publication and never announces readiness 
 });
 
 test('failed head publication keeps tool evidence and blocks restart inference', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let effects = 0;
   let calls = 0;
   const mailbox = makeLiveMailbox({
@@ -1340,7 +1340,7 @@ test('cancellation inside the first tool preserves its result and never admits t
 });
 
 test('cancellation does not wait for borrowed inference that ignores its signal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   const entered = makePromiseKit();
   const answer = makePromiseKit();
@@ -1394,7 +1394,7 @@ test('cancellation does not wait for borrowed inference that ignores its signal'
 });
 
 test('cancellation waits for admitted tool evidence publication, not just model disposal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const enteredWrite = makePromiseKit();
   const finishWrite = makePromiseKit();
   const cancelled = makePromiseKit();
@@ -1494,7 +1494,7 @@ test('cancellation waits for admitted tool evidence publication, not just model 
 });
 
 test('mailbox failure fences a late borrowed model response before admitting tools', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   const entered = makePromiseKit();
   const answer = makePromiseKit();

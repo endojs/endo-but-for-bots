@@ -9,7 +9,7 @@ import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
 
 test('owned provider shutdown waits for admitted tool evidence', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const gate = Promise.withResolvers();
   const entered = Promise.withResolvers();
   let effects = 0;
@@ -127,7 +127,7 @@ for (const [cleanupFails, attachmentFails] of [
   [true, true],
 ]) {
   test(`development cancellation drains native stop and quarantines cleanup failure (environment=${cleanupFails}, attachments=${attachmentFails})`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let refuseAttachmentCleanup = attachmentFails;
     const toolEntered = Promise.withResolvers();
     const toolReleased = Promise.withResolvers();

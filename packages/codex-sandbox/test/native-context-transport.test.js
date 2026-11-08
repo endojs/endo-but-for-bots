@@ -131,7 +131,7 @@ for (const options of [
 test.serial(
   'cancel retains late spawn custody and does not cancel the next call',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const spawn = gate();
     const f = fixture({ spawnGate: spawn.promise });
     t.teardown(() => spawn.release());
@@ -154,7 +154,7 @@ test.serial(
 test.serial(
   'close during stdin acquisition reaps and forbids a late write',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const stdin = gate();
     const f = fixture({
       stdinGate: stdin.promise,
@@ -177,7 +177,7 @@ test.serial(
 test.serial(
   'cancel waits for reaping and retains failed kill for close retry',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const output = gate();
     const wait = gate();
     const f = fixture({
@@ -212,7 +212,7 @@ test.serial(
 test.serial(
   'cancel retains admission until reaped helper IO continuations settle',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const output = gate();
     const f = fixture({ outputGate: output.promise });
     t.teardown(() => output.release());

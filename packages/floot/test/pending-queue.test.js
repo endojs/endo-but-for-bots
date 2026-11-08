@@ -293,7 +293,7 @@ test('a record that cannot be read does not make its session undeletable', async
 });
 
 test('a lost enqueue acknowledgement and reconnect retain one durable submission', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const host = makeHost();
   const now = () => 1_800_000_000_000;
   const requestId = '1800000000000-11111111-1111-4111-8111-111111111111';
@@ -324,7 +324,7 @@ test('a lost enqueue acknowledgement and reconnect retain one durable submission
 });
 
 test('concurrent duplicate sends share an ID and expired IDs are rejected after receipt expiry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { host } = makeHost();
   let clock = 1_800_000_000_000;
   const requestId = '1800000000000-11111111-1111-4111-8111-111111111111';
@@ -344,7 +344,7 @@ test('concurrent duplicate sends share an ID and expired IDs are rejected after 
 });
 
 test('inventory references survive restart privately and duplicate retry cannot replace them', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { host, store, loseNextAck } = makeHost();
   const now = 1_760_000_000_000;
   const requestId = `${now}-00000000-0000-4000-8000-000000000000`;

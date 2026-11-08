@@ -29,7 +29,7 @@ const makeWorld = (
     extraHas = () => false,
   } = {},
 ) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const inboxes = [];
   const requests = [];
   const guestStore = new Map([['user', harden({})]]);

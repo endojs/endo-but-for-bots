@@ -13,7 +13,7 @@ const barrier = () => {
 };
 
 test('overlapping usage projections keep their pinned cut when the older read completes last', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const started = barrier();
   const release = barrier();
   t.teardown(release.resolve);

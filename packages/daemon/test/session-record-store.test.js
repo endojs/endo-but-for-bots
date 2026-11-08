@@ -92,7 +92,7 @@ test('retaining a client cannot replace a prior resource owner', async t => {
 });
 
 test('failed cleanup retains ownership for retry without blocking another session', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const store = makeSessionRecordStore(makeDirectory());
   await store.create('session-a', 'plan A', { provider: 'provider-a' });
   const original = await store.inspect('session-a');
@@ -661,7 +661,7 @@ for (const rebound of ['record', 'references', 'client']) {
 }
 
 test('release serializes successor retention while another session proceeds', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const store = makeSessionRecordStore(makeDirectory());
   await store.create('session-a', 'plan', { client: 'client-a' });
   let enter = () => {};

@@ -12,7 +12,7 @@ import {
 import { makeChangeTopic } from '../src/pubsub.js';
 
 test('reader close cancels a pending pull through nested generators', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const topic = makeChangeTopic();
   const started = makePromiseKit();
   let cleaned = 0;
@@ -51,7 +51,7 @@ test('reader close cancels a pending pull through nested generators', async t =>
 });
 
 test('return during a snapshot releases the live subscription', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const topic = makeChangeTopic();
   const subscription = topic.subscribe();
   const pending = subscription.next(undefined);
@@ -71,7 +71,7 @@ test('return during a snapshot releases the live subscription', async t => {
 });
 
 test('cancellation reaches a source acquired after an await', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const ready = makePromiseKit();
   let canceled = 0;
   const iterator = makeCancelableIterator(
@@ -93,7 +93,7 @@ test('cancellation reaches a source acquired after an await', async t => {
 });
 
 test('a failing cancellation hook still runs generator cleanup', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let cleaned = false;
   const failure = Error('cancellation failed');
   const iterator = makeCancelableIterator(

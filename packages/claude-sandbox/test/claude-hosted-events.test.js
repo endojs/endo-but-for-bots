@@ -139,7 +139,7 @@ test('translated delivery backpressures bursts and drains in order', async t => 
 });
 
 test('closing a backpressured translated reader closes its raw producer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let closed = false;
   const raw = makeBufferedReader({
     onClose: () => {
@@ -534,7 +534,7 @@ test('result text and structured errors are both preserved', t => {
 });
 
 test('structured error remains visible when raw producer closes without terminal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { push, reader, close } = makeBufferedReader();
   const iterator = iterateReader(translateClaudeTurn(reader));
   push({

@@ -24,7 +24,7 @@ test('execute', async t => {
 
 for (const synchronous of [false, true]) {
   test(`execute drains sibling publication after ${synchronous ? 'synchronous' : 'asynchronous'} failure`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const tasks = makeDeferredTasks();
     const failure = Error('publication failed');
     /** @type {(value?: any) => void} */

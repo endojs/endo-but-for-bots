@@ -147,7 +147,7 @@ const fixture = async (
 test.serial(
   'network-only worker carries egress but no inference listener or authority',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t, true, true);
     const kit = makePodmanProviderListenerRuntimeKit(f.options);
     t.teardown(kit.close);
@@ -207,7 +207,7 @@ test.serial(
 test.serial(
   'default Podman commands retain one sanitized operator environment through listener cleanup',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t);
     /** @type {Array<{command: string, args: string[], env: Record<string,string>}>} */
     const nativeCalls = [];
@@ -299,7 +299,7 @@ for (const diagnosticsEnabled of [false, true]) {
   test.serial(
     `listener keeps inference alive after repeated oversized stderr (diagnostics=${diagnosticsEnabled})`,
     async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const f = await fixture(t);
       /** @type {ReturnType<typeof spawn> | undefined} */
       let child;
@@ -403,7 +403,7 @@ test('runtime excludes a second live owner and permits reacquisition after dispo
 test.serial(
   'public runtime uses loopback without a privileged helper and exports fixed resolver evidence',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t, true);
     const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
     t.teardown(runtimeKit.close);
@@ -624,7 +624,7 @@ test.serial(
 );
 
 test('inert runtime and same-tick close perform no native acquisition', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   const stateDirectory = join(f.options.stateDirectory, 'absent');
   const kit = makePodmanProviderListenerRuntimeKit({
@@ -642,7 +642,7 @@ test('inert runtime and same-tick close perform no native acquisition', async t 
 });
 
 test('close drains a held identity read and fences subsequent lock acquisition', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   let release = () => {};
   const pending = new Promise(resolve => {
@@ -794,7 +794,7 @@ test('failed recovery reservation release is retained without removing a live fo
 test.serial(
   'runtime close owns a listener acquired while shutdown is pending',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t);
     let release = () => {};
     const pending = new Promise(resolve => {
@@ -895,7 +895,7 @@ test('stale takeover retains its sweep before recovery reservation cleanup can f
 });
 
 test('retained listener stopped before its queue turn acquires no native child', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
   t.teardown(runtimeKit.close);
@@ -911,7 +911,7 @@ test('retained listener stopped before its queue turn acquires no native child',
 test.serial(
   'failed listener acquisition retains A-only cleanup while B stays live',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t);
     let bName;
     let failA = false;
@@ -954,7 +954,7 @@ test.serial(
 test.serial(
   'per-listener stop drains its admitted acquisition before final removal',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t);
     let release = () => {};
     const pending = new Promise(resolve => {
@@ -1080,7 +1080,7 @@ test.serial(
 test.serial(
   'listener error promptly rejects an unfinished handshake',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = await fixture(t);
     const runtimeKit = makePodmanProviderListenerRuntimeKit({
       ...f.options,

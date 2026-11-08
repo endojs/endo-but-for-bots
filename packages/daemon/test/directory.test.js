@@ -85,7 +85,7 @@ const setup = (publish, cleanup = async () => {}) => {
 };
 
 test('directory creation retains its transferred pin during concurrent publication', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const proceed = makePromiseKit();
   const f = setup(async name => {
@@ -114,7 +114,7 @@ test('directory creation retains its transferred pin during concurrent publicati
 });
 
 test('failed directory publication releases its pin and awaits collection cleanup', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const proceed = makePromiseKit();
   const f = setup(

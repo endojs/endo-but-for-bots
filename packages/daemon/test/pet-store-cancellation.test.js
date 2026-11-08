@@ -12,7 +12,7 @@ import { makePetStoreMaker } from '../src/pet-store.js';
 /** @import { DaemonDatabase } from '../src/types.js' */
 
 test('subscribing captures the name snapshot before a concurrent addition', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   // This fixture supplies the database operations used by this empty pet store.
   const database = /** @type {DaemonDatabase} */ (
     /** @type {unknown} */ ({

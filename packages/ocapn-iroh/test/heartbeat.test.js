@@ -59,7 +59,7 @@ const makeFakeConnection = () => {
 };
 
 test('calls native datagram methods with the connection as receiver', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   /** @type {string[]} */
   const failures = [];

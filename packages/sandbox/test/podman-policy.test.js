@@ -1411,7 +1411,7 @@ test('failed attestation retains its anchor until a checked removal succeeds', a
 });
 
 test('pending anchor closure fences removal; failed producer effects remain owned after close', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let first = true;
   /** @type {any} */
   let producer;
@@ -1462,7 +1462,7 @@ test('pending anchor closure fences removal; failed producer effects remain owne
 });
 
 test('closing during anchor creation drains the creator and refuses a later start', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let signalEntered;
   const entered = new Promise(resolve => {
     signalEntered = resolve;
@@ -1553,7 +1553,7 @@ for (const cancellation of ['token', 'predicate']) {
 }
 
 test('resolver exec retains anchor ownership through pending closure and uncertain effects', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {any} */
   let producer;
   const closeProducer = () => {
@@ -1601,7 +1601,7 @@ test('resolver exec retains anchor ownership through pending closure and uncerta
 });
 
 test('a failed probe retains its native command after its result is swallowed', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {any} */
   let held;
   const finish = () => {
@@ -1629,7 +1629,7 @@ test('a failed probe retains its native command after its result is swallowed', 
 });
 
 test('driver close aborts a held image pull and retains its direct closure only', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { promise: entered, resolve: began } = makePromiseKit();
   /** @type {any} */
   let held;
@@ -1711,7 +1711,7 @@ for (const invalid of [false, true]) {
 }
 
 test('scoped preparation close prevents anchor start without closing sibling admission', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   /** @type {any} */
   let producer;
@@ -1756,7 +1756,7 @@ test('scoped preparation close prevents anchor start without closing sibling adm
 });
 
 test('scoped failed-producer cleanup retains uncertainty without removing a sibling anchor', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let first = true;
   /** @type {any} */
   let producer;

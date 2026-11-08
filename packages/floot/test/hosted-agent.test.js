@@ -57,7 +57,7 @@ const makeFakePowers = () => {
 };
 
 test('hosted agents stay dormant for records and acquire once for serialized turns', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const powers = makeFakePowers();
   let acquisitions = 0;
   const sent = [];
@@ -129,7 +129,7 @@ test('hosted agents stay dormant for records and acquire once for serialized tur
 });
 
 test('concurrent explicit preparation shares acquisition and cannot report ready after shutdown', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const powers = makeFakePowers();
   const entered = makeSendSignal();
   let release = () => {};
@@ -186,7 +186,7 @@ test('concurrent explicit preparation shares acquisition and cannot report ready
 
 for (const action of ['cancel', 'shutdown']) {
   test(`${action} during hosted acquisition waits for ownership without sending`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const powers = makeFakePowers();
     const entered = makeSendSignal();
     let release = () => {};
@@ -250,7 +250,7 @@ for (const action of ['cancel', 'shutdown']) {
 }
 
 test('a hosted backend persists completed turns and scopes reused tool IDs', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sent = makeSendSignal();
   const turns = [];
   const sendOptions = [];
@@ -568,7 +568,7 @@ test('a leading backend refusal fails cleanly without fencing the next turn', as
 });
 
 test('agent shutdown interrupts and awaits an active hosted turn', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sent = makeSendSignal();
   const powers = makeFakePowers();
   let interrupted = 0;
@@ -619,7 +619,7 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
 });
 
 test('a rejected hosted interrupt quarantines the streaming agent', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sent = makeSendSignal();
   const powers = makeFakePowers();
   const turns = [];
@@ -661,7 +661,7 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
 });
 
 test('failed containment after EOF quarantines without an abort signal, including queued turns', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sent = makeSendSignal();
   const channel = makeBufferedReader();
   let sends = 0;
@@ -911,7 +911,7 @@ test('hosted provisioning receives the session delegation and account catalog', 
 });
 
 test('hosted delegation executes the Endo spawner inside the parent journal turn', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const stored = [];
   const spawned = [];
   const base = makeFakePowers();

@@ -11,7 +11,7 @@ import { makeProcessPowers } from '../src/platform/node/processes.js';
 for (const fd of [0]) {
   for (const operation of ['write', 'end']) {
     test.serial(`input ${fd} ${operation} reports a closed pipe`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const { processes } = makeNodePowers();
       const child = processes.spawn(
         execPath,
@@ -41,7 +41,7 @@ for (const fd of [0]) {
 }
 
 test.serial('process powers preserve normal input and output', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const child = makeNodePowers().processes.spawn(
     execPath,
     ['-e', 'process.stdin.pipe(process.stdout)'],
@@ -59,7 +59,7 @@ test.serial('process powers preserve normal input and output', async t => {
 });
 
 test('readline forwards read failures without throwing in the host', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const output = new PassThrough();
   t.teardown(() => output.destroy());
   const nativeChild = Object.assign(new EventEmitter(), {

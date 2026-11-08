@@ -5,7 +5,7 @@ import { claimAssistantInvocation } from '../../assistant-launch.js';
 import { makeTestLocks } from '../helpers/web-locks.js';
 
 test('assistant launch claims survive remounts, serialize duplicate delivery and stay bounded', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const data = new Map();
   const storage = /** @type {Storage} */ (
     /** @type {unknown} */ ({

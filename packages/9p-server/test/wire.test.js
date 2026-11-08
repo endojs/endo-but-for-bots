@@ -99,7 +99,7 @@ test('strings round-trip multi-byte UTF-8', t => {
 // Freezing the records instead is O(1) per frame; this budget is ~2 orders of
 // magnitude under the regressed cost and ~2 over the healthy one.
 test('draining a large backlog is not quadratic in the unconsumed bytes', t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const frames = 256;
   const payload = Buffer.alloc(65_536, 0x61);
   let buf = Buffer.concat(

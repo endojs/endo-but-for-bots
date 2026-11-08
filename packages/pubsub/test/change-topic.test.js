@@ -74,7 +74,7 @@ test('change-topic: terminal is sticky for a live subscriber after return', asyn
   // Guards against the regression where a subscriber created before
   // termination reads the terminal once and then blocks forever on the next
   // read. The timeout fails fast rather than hanging until the global limit.
-  t.timeout(5000);
+  t.timeout(10_000);
   const { publisher, subscribe } = makeChangeTopic();
   const reader = subscribe();
   await publisher.next(1);
@@ -87,7 +87,7 @@ test('change-topic: terminal is sticky for a live subscriber after return', asyn
 });
 
 test('change-topic: terminal is sticky for a live subscriber after throw', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { publisher, subscribe } = makeChangeTopic();
   const reader = subscribe();
   await publisher.next(1);

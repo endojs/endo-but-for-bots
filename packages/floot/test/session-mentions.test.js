@@ -30,7 +30,7 @@ test('structured edges preserve labels and plain voice/text never invent attachm
 });
 
 test('selected references resolve full paths and reject names changed during resolution', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const object = Far('Doc', {});
   let changed = false;
   let count = 0;

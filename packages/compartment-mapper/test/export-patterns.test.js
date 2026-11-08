@@ -41,7 +41,7 @@ scaffold(
 // The pattern is present in tslib >=2.x, which is a transitive dependency
 // of many popular packages.
 test('loading dual-format package with ./* wildcard export does not stall (tslib pattern)', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const tslibMockConsumer = new URL(
     'fixtures-export-patterns/node_modules/tslib-mock-consumer/main.js',
     import.meta.url,

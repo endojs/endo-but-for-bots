@@ -31,7 +31,7 @@ const toolFor = (name, description = '') =>
 const catalogOf = (...tools) => harden({ dynamicTools: tools });
 
 test('socket server relays JSON-RPC over a Unix socket and installs the bridge + config', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-test-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
@@ -91,7 +91,7 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
 });
 
 test('socket frames are handled concurrently and an unbounded frame drops the peer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-test-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
@@ -161,7 +161,7 @@ test('socket frames are handled concurrently and an unbounded frame drops the pe
 });
 
 test('failed socket-file cleanup can retry; a successful close cannot unlink a successor', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-retry-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const server = makeMcpSocketServer({

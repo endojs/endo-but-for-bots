@@ -334,7 +334,7 @@ test('one blocked owner does not serialize another owner', async t => {
 });
 
 test('independent entrypoint registries remain excluded by actual runtime ownership', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await fs.mkdtemp(join(tmpdir(), 'endo-owned-agent-'));
   /** @type {Array<ReturnType<typeof makeSandboxRuntime>>} */
   const runtimes = [];

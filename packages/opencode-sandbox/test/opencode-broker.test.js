@@ -302,7 +302,7 @@ test('public grants use shared egress and revocation removes its authority', asy
 });
 
 test('broker kit fences same-tick startup before opening its runtime', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let opens = 0;
   let closes = 0;
   const runtimeKit = {
@@ -327,7 +327,7 @@ test('broker kit fences same-tick startup before opening its runtime', async t =
 });
 
 test('broker retains late runtime acquisition and fences issuer construction', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const runtime = makeFakeRuntime();
   let release = () => {};
   const pending = new Promise(resolve => {

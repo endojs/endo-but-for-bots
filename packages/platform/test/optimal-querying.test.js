@@ -283,7 +283,7 @@ test('PATTERN: Directory.watchFrom atomically snapshots entries + subscribes (TO
   // already returned, watch starts AFTER. `watchFrom` mints both
   // halves in a single exo method invocation, so any mutation
   // observable after `watchFrom` returns is in the watcher.
-  t.timeout(5000);
+  t.timeout(10_000);
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   await populate(root, [

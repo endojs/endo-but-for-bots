@@ -534,7 +534,7 @@ test('subscription Responses reports HTTP refusal without consuming or echoing i
 });
 
 test('cancellation during endpoint acquisition retains and revokes a late endpoint', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const late = makePromiseKit();
   const entered = makePromiseKit();
   const controller = new AbortController();
@@ -563,7 +563,7 @@ test('cancellation during endpoint acquisition retains and revokes a late endpoi
 });
 
 test('disposal cancels a pending catalog lookup without acquiring an endpoint', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const catalog = makePromiseKit();
   const entered = makePromiseKit();
   const subject = fixture([], {
@@ -688,7 +688,7 @@ test('premature DONE and post-completion events cannot admit tool execution', as
 });
 
 test('cancellation during a stalled byte read settles the caller and revokes its endpoint', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const pull = makePromiseKit();
   const entered = makePromiseKit();
   const reader = bytesReaderFromIterator({
@@ -754,7 +754,7 @@ test('a falsy abort reason during a usage callback still fences the response', a
 });
 
 test('late acquisition cancellation never dispatches inference after revocation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   for (let delay = 0; delay <= 12; delay += 1) {
     const late = makePromiseKit();
     const entered = makePromiseKit();

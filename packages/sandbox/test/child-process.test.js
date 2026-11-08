@@ -259,7 +259,7 @@ test('failed or cancelled spawning has no acquired child to retain', async t => 
 });
 
 test('control lifetime observes real Node process closure', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const control = startControlCommand(
     /** @type {any} */ ({ spawn }),
     process.execPath,

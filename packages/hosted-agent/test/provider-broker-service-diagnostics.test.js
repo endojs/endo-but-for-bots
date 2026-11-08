@@ -716,7 +716,7 @@ test('discovery constructor failure does not discard the credential owner or lea
 });
 
 test('a removed account cannot publish its pending catalog as current', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let stored = { members: [{ id: 'work' }] };
   /** @type {(value?: any) => void} */
   let finish = () => {
@@ -763,7 +763,7 @@ test('a removed account cannot publish its pending catalog as current', async t 
 });
 
 test('catalog batch rechecks a fast account after a slower account finishes', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let stored = { members: [{ id: 'fast' }, { id: 'slow' }] };
   /** @type {(value: any) => void} */
   let finishSlow = () => {

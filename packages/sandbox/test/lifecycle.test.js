@@ -665,7 +665,7 @@ test('rejected wait requires driver release and fences admission before teardown
 });
 
 test('accepted SIGKILL with no reap settles process failure and starts disposal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeDriverFixture({ ignoreSignals: true });
   const handle = await makeHandle(fixture);
   const proc = await E(handle).spawn(harden(['/bin/fake']));

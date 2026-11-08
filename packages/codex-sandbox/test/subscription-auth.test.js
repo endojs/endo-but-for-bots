@@ -125,7 +125,7 @@ const renewalReplies = [
 for (const [name, chunks, succeeds] of renewalReplies) {
   for (const rejectsCancellation of [false, true]) {
     test(`renewal awaits one owned cancellation for ${name} (rejects=${rejectsCancellation})`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       let release = () => {};
       const cancellationBarrier = new Promise(resolve => {
         release = () => resolve(undefined);

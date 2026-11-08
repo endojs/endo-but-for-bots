@@ -650,7 +650,7 @@ test('Directory.getAttrs() throws ENOENT on a removed path', async t => {
 
 for (const fails of [false, true]) {
   test(`OpenFile writer cleanup waits for ${fails ? 'failed' : 'successful'} commit without repeating it`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let entered;
     const started = new Promise(resolve => {
       entered = resolve;

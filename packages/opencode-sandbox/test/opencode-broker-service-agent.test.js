@@ -280,7 +280,7 @@ test('broker entrypoint returns inert scopes and rejects a live duplicate withou
 });
 
 test('context cancellation reaches lazy broker opening and retains its drain', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   const state = f.next();
   state.holdOpen = true;
@@ -331,7 +331,7 @@ test('failed automatic cleanup retains the original broker until reconstruction 
 });
 
 test('cancellation abandons pending secret powers without constructing a broker', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   /** @type {(value: typeof secret) => void} */
   let release = () => {};

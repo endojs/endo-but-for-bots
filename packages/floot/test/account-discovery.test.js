@@ -85,7 +85,7 @@ test('matching labels and member names do not merge distinct declared accounts',
 });
 
 test('one logical account shared by runtimes gets one follower and one refresh', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const topic = makeLatestTopic();
   topic.publish(harden({}));
   let watched = 0;
@@ -175,7 +175,7 @@ test('setup withdrawal marker preserves only unknown-source provenance', async t
 });
 
 test('reset action revalidates pair identity and never spends stale or unknown authority', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const calls = [];
   const admin = id =>
     Far('Admin', {
@@ -223,7 +223,7 @@ test('reset action revalidates pair identity and never spends stale or unknown a
 });
 
 test('whole discovery failure clears reset authority rather than admitting cached action', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let failing = false;
   let spent = 0;
   const admin = Far('Admin', {

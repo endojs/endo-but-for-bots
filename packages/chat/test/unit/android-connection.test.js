@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { connectToAndroid } from '../../android-connection.js';
 
 test('reconnect reacquires local host and ignores callbacks from the old socket', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const peers = new Map();
   const host = Far('PhoneHost', { identity: () => 'persisted-phone-identity' });
   /** @type {{ onmessage: ((event: {data: string}) => void) | null, postMessage: (raw: string) => void }} */

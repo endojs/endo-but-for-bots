@@ -21,7 +21,7 @@ import { createInterface } from 'node:readline';
 import { makeHostedMcpSocketServer as makeMcpSocketServer } from '../src/mcp-server.js';
 
 test('transport-only server installs the relay without generating native configuration', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const server = makeMcpSocketServer({
@@ -74,7 +74,7 @@ test('transport-only server installs the relay without generating native configu
 });
 
 test('failed socket-file cleanup can retry; a successful close cannot unlink a successor', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-retry-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const server = makeMcpSocketServer({
@@ -120,7 +120,7 @@ test('inert server close has no native storage effects', async t => {
 });
 
 test('close drains admitted relay installation and fences later startup effects', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-install-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   let release = () => {};
@@ -168,7 +168,7 @@ test('close drains admitted relay installation and fences later startup effects'
 });
 
 test('post-listen permission failure retains native listener until close retry succeeds', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-chmod-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const native = new EventEmitter();

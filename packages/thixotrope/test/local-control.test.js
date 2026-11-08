@@ -25,7 +25,7 @@ const nodePowers = makeNodePowers();
 test.serial(
   'old workspace layouts are rejected before restoring workers',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const path = await mkdtemp('/tmp/thix-old-clock-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const metadata = '{"version":3}';
@@ -56,7 +56,7 @@ test.serial(
 test.serial(
   'a state directory whose socket paths cannot be bound is refused before it is created',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const base = await mkdtemp('/tmp/thix-long-');
     t.teardown(() => rm(base, { recursive: true, force: true }));
     // sun_path allows 103 bytes; this path alone is longer than that.

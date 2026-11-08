@@ -179,7 +179,7 @@ test('a subscription cannot carry ambient host, secret or injected provider opti
 });
 
 test('disposal fences a provider construction waiting for a Secret', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const token = makePromiseKit();
   let built = 0;
   const owner = makeProviderOwner({

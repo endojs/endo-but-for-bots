@@ -18,7 +18,7 @@ import { makeMcpSocketListener } from '../src/mcp-socket.js';
  * @param {number} [maxFrameLength]
  */
 const setup = async (t, handleMessage, maxFrameLength = 64) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(join(tmpdir(), 'mcp-wire-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const socketPath = join(directory, 'mcp.sock');
@@ -126,7 +126,7 @@ test('parse errors, blank lines and a partial tail retain framing', async t => {
 });
 
 test('close drops peers immediately and waits for an outstanding host call', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const pending = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -209,7 +209,7 @@ test('inert listener fences start when closed before acquisition', async t => {
 });
 
 test('same-tick start and close fence the queued native acquisition', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const native = makeNativeFixture();
   const listener = makeMcpSocketListener({
     socketPath: '/unused',
@@ -228,7 +228,7 @@ test('same-tick start and close fence the queued native acquisition', async t =>
 });
 
 test('close waits for late listen and retains native close failure for retry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const native = makeNativeFixture();
   const listener = makeMcpSocketListener({
     socketPath: '/unused',

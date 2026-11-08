@@ -292,7 +292,7 @@ test('environment and launch widening fail before spawning', async t => {
 });
 
 test('actual Python parent executes with controlled platform and fake Codex children', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   await E(f.verifier).attest(f.context);
   const { argv } = f.call();

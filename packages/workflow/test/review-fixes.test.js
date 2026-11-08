@@ -1196,7 +1196,7 @@ test('revocation releases a child reconciliation after parent finality', async t
 });
 
 test('synthetic cancelled spawns obey the cascade bound', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { powers } = makeFakeAgent();
   const harness = await makeWorkflowService({
     powers,

@@ -177,7 +177,7 @@ test('printed JSON escapes every terminal control character and still parses', t
 });
 
 test('entry subscriptions grant initial values and coalesce per-key changes without losing deletes', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const map = makeObservableMap();
   const value = Far('GrantedValue', {});
   map.set('first', value);

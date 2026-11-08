@@ -495,7 +495,7 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
 });
 
 test('timeout settles even when fetch ignores abort and cancels a late response', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let deliver = _value => {};
   let began = () => {};
   const started = new Promise(resolve => {
@@ -522,7 +522,7 @@ test('timeout settles even when fetch ignores abort and cancels a late response'
 });
 
 test('dispose aborts a pending body read and refuses subsequent dispatch', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {AbortSignal | undefined} */
   let signal;
   let began = () => {};

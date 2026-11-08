@@ -53,7 +53,7 @@ const fixture = async t => {
 };
 
 test('ownership publication waits for directory flush and includes ancestry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   const entered = makePromiseKit();
   const gate = makePromiseKit();

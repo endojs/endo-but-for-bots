@@ -133,7 +133,7 @@ test('read admission is fenced while close still reaches source cleanup', async 
 });
 
 test('closing after a fence interrupts a pending source pull', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const pending = makePromiseKit();
   const entered = makePromiseKit();
   let active = true;

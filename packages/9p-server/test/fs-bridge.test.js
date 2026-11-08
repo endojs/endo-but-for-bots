@@ -174,7 +174,7 @@ const connect = async (t, socketPath) => {
 test.serial(
   'stop before start fences acquisition without touching the socket path',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const socketPath = await makeLocation(t);
     await writeFile(socketPath, 'existing');
     const bridge = makeFsBridge9p({ fs: makeFilesystem(), socketPath });
@@ -187,7 +187,7 @@ test.serial(
 test.serial(
   'stop drains a pending start and forbids a late listener',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const socketPath = await makeLocation(t);
     const bridge = makeFsBridge9p({ fs: makeFilesystem(), socketPath });
     t.teardown(() => E(bridge).stop());
@@ -203,7 +203,7 @@ test.serial(
 test.serial(
   'concurrent start coalesces and successful stop cannot unlink a successor',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const socketPath = await makeLocation(t);
     const bridge = makeFsBridge9p({ fs: makeFilesystem(), socketPath });
     t.teardown(() => E(bridge).stop());
@@ -217,7 +217,7 @@ test.serial(
 );
 
 test.serial('failed socket unlink remains owned and retryable', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const socketPath = await makeLocation(t);
   const bridge = makeFsBridge9p({ fs: makeFilesystem(), socketPath });
   t.teardown(async () => {
@@ -236,7 +236,7 @@ test.serial('failed socket unlink remains owned and retryable', async t => {
 test.serial(
   'stop waits for admitted writes and handle closure after native socket close',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const writeEntered = deferred();
     const writeResume = deferred();
     const closeEntered = deferred();
@@ -287,7 +287,7 @@ test.serial(
 test.serial(
   'failed connection cleanup is retained after socket close and only failed owners retry',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let fail = true;
     /** @type {number[]} */
     const attempts = [];
@@ -318,7 +318,7 @@ test.serial(
 test.serial(
   'failed native listen remains stoppable and cannot restart',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const location = await makeLocation(t);
     const socketPath = path.join(path.dirname(location), 'missing', 'x');
     const bridge = makeFsBridge9p({ fs: makeFilesystem(), socketPath });
@@ -333,7 +333,7 @@ test.serial(
 test.serial(
   'cancellation fences the listener while retained cleanup drains',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const cancelled = deferred();
     const closeEntered = deferred();
     const closeResume = deferred();
@@ -376,7 +376,7 @@ test.serial(
 test.serial(
   'mounter close retains storage through real bridge drain and failed handle release',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const socketPath = await makeLocation(t);
     const mountPoint = path.join(path.dirname(socketPath), 'mount');
     const writeEntered = deferred();

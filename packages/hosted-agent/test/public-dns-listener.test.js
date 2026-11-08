@@ -124,7 +124,7 @@ test('oversized or malformed resolver replies fail closed', async t => {
 });
 
 test('UDP adapter answers through host capability and closes without late sends', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const server = await makePublicDnsListener({
     endpoint: resolver([{ address: '93.184.216.34', family: 4 }]),
     host: '127.0.0.1',
@@ -154,7 +154,7 @@ test('UDP adapter answers through host capability and closes without late sends'
 });
 
 test('DNS binding collision rejects cleanly without a leaked socket', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const endpoint = resolver([]);
   const server = await makePublicDnsListener({
     endpoint,

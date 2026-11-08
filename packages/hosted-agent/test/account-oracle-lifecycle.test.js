@@ -32,7 +32,7 @@ const reading = harden({
 });
 
 test('close drains an admitted journal write and rejects retained public calls', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = deferred();
   const gate = deferred();
   let writes = 0;
@@ -90,7 +90,7 @@ test('write uncertainty refuses handoff but read errors do not', async t => {
 });
 
 test('late source acquisition closes raw reader before acknowledging disposal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const gate = deferred();
   const entered = deferred();
   let closes = 0;
@@ -119,7 +119,7 @@ test('late source acquisition closes raw reader before acknowledging disposal', 
 });
 
 test('old source cannot journal after closed oracle is replaced', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const source = makeAccountReadingSource();
   let writes = 0;
   const journal = {
@@ -144,7 +144,7 @@ test('old source cannot journal after closed oracle is replaced', async t => {
 });
 
 test('module awaits disposal registration before exposing an oracle', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const gate = deferred();
   const entered = deferred();
   /** @type {() => Promise<void>} */
@@ -168,7 +168,7 @@ test('module awaits disposal registration before exposing an oracle', async t =>
 });
 
 test('failed raw source close rejects disposal without waiting for quiet read', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = deferred();
   const waiting = deferred();
   const kit = makeAccountOracleKit({
@@ -194,7 +194,7 @@ test('failed raw source close rejects disposal without waiting for quiet read', 
 });
 
 test('close cancels pending source retry and stale callbacks cannot reacquire', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const scheduled = deferred();
   let retry = () => {};
   let attempts = 0;

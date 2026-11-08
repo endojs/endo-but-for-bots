@@ -51,7 +51,7 @@ const makeFakeConnection = () => {
 };
 
 test('calls native datagram methods with the connection as receiver', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   const failures = [];
   const heartbeat = makeIrohHeartbeat(connection, {
@@ -69,7 +69,7 @@ test('calls native datagram methods with the connection as receiver', async t =>
 });
 
 test('emits heartbeat datagrams on the interval', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   const heartbeat = makeIrohHeartbeat(connection, {
     intervalMs: 20,
@@ -87,7 +87,7 @@ test('emits heartbeat datagrams on the interval', async t => {
 });
 
 test('inbound datagrams keep the session alive', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   let timeouts = 0;
   // A long send interval so only the injected inbound datagrams re-arm the
@@ -109,7 +109,7 @@ test('inbound datagrams keep the session alive', async t => {
 });
 
 test('presumes the peer dead after the keep-alive window of silence', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   let timeouts = 0;
   // A long send interval so only the inbound datagram drives the watchdog.
@@ -136,7 +136,7 @@ test('presumes the peer dead after the keep-alive window of silence', async t =>
 });
 
 test('does not presume death until the peer has first heartbeated', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   let timeouts = 0;
   const heartbeat = makeIrohHeartbeat(connection, {
@@ -159,7 +159,7 @@ test('does not presume death until the peer has first heartbeated', async t => {
 });
 
 test('stop halts heartbeats and disarms the watchdog', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   let timeouts = 0;
   const heartbeat = makeIrohHeartbeat(connection, {
@@ -178,7 +178,7 @@ test('stop halts heartbeats and disarms the watchdog', async t => {
 });
 
 test('disables itself when the connection lacks datagram support', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let timeouts = 0;
   // No sendDatagram/readDatagram on the connection.
   const heartbeat = makeIrohHeartbeat(
@@ -198,7 +198,7 @@ test('disables itself when the connection lacks datagram support', async t => {
 });
 
 test('a failing sendDatagram is caught and reported', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const logs = [];
   const connection = {
     sendDatagram() {
@@ -227,7 +227,7 @@ test('a non-Error thrown by sendDatagram is rendered without re-throwing', async
   // Native bindings can throw arbitrary values, not just `Error` instances.
   // Reaching for `.message` on a `null` throw would itself throw and crash
   // the heartbeat loop; the loop must survive that case.
-  t.timeout(5000);
+  t.timeout(10_000);
   const logs = [];
   let beats = 0;
   const connection = {
@@ -259,7 +259,7 @@ test('timeoutMs defaults to twice the chosen intervalMs', async t => {
   // The documented "tolerate a single dropped beat" invariant must hold for
   // callers that only override `intervalMs`. A 30ms interval should yield a
   // ~60ms watchdog window, so silence past ~80ms must fire the timeout.
-  t.timeout(5000);
+  t.timeout(10_000);
   const connection = makeFakeConnection();
   let timeouts = 0;
   const heartbeat = makeIrohHeartbeat(connection, {

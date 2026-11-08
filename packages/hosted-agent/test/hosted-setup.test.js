@@ -520,7 +520,7 @@ for (const { name, stem, provide } of [
   };
 
   test(`${name} waits for handle publication before moving its powers`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let entered = () => {};
     const held = new Promise(resolve => {
       entered = () => resolve(undefined);

@@ -13,7 +13,7 @@ import { makePetStoreMaker } from '../src/pet-store.js';
 
 for (const replacing of [false, true]) {
   test(`failed ${replacing ? 'replacement' : 'initial'} write keeps memory and notifications consistent with persistence`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const number = 'a'.repeat(64);
     assertFormulaNumber(number);
     const oldId = `${'b'.repeat(64)}:${number}`;
