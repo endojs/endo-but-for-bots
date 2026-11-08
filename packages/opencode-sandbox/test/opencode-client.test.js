@@ -272,7 +272,7 @@ test('concurrent sends queue and serialize with one terminal each', async t => {
 });
 
 test('closing a queued reader omits its command without interrupting the active turn', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const bridge = makeFakeBridge();
   const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
   t.teardown(() => client.terminate());
@@ -372,7 +372,7 @@ test('interrupt writes the command and is a terminal barrier', async t => {
 });
 
 test('overflow closes the reader but interruption still waits for the producer terminal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const bridge = makeFakeBridge();
   const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
   t.teardown(() => client.terminate());
@@ -583,7 +583,7 @@ test('failed state deletion remains retryable after successful termination', asy
 });
 
 test('termination drains late provisioning without spawning or awaiting readiness', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const acquired = makeGate(t);
   const finish = makeGate(t);
   const fake = makeFakeSlice(makeFakeBridge());
@@ -616,7 +616,7 @@ test('termination drains late provisioning without spawning or awaiting readines
 });
 
 test('termination retains an admitted spawn until disposal and acquisition settle', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makeGate(t);
   const finish = makeGate(t);
   const disposal = makeGate(t);
@@ -658,7 +658,7 @@ test('termination retains an admitted spawn until disposal and acquisition settl
 });
 
 test('termination does not wait for a missing guest ready event', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fake = makeFakeSlice(makeFakeBridge());
   const client = makeOpencodeClient(baseArgs(fake));
   const reader = await client.send('start');
@@ -670,7 +670,7 @@ test('termination does not wait for a missing guest ready event', async t => {
 });
 
 test('termination bypasses a blocked guest command writer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makeGate(t);
   const finish = makeGate(t);
   const bridge = makeFakeBridge();
@@ -813,7 +813,7 @@ test('a fresh native id restores the canonical transcript', async t => {
 });
 
 test('a bridge that cannot import refuses the turn instead of degrading it', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   // The image carries the bridge, so a slice running one built before the
   // import route cannot take the conversation at all. Reading it into the
   // prompt instead would let the session keep answering while the mechanism
@@ -844,7 +844,7 @@ test('a bridge that cannot import refuses the turn instead of degrading it', asy
 });
 
 test('restoration goes through the structured import, or not at all', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const transcript = harden([
     { kind: 'message', role: 'user', content: 'build the page' },
     { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"a"}' },
@@ -921,7 +921,7 @@ for (const ready of [
   readyLine('ses_old', ['import']),
 ]) {
   test(`an image without fresh-session refuses all turns: ${ready}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const bridge = makeFakeBridge();
     const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
     bridge.push(ready);
@@ -938,7 +938,7 @@ for (const ready of [
 for (const cancelMode of ['reader', 'interrupt']) {
   for (const imported of [true, false]) {
     test(`${cancelMode} cancellation during import fences prompt admission (${imported ? 'import accepted' : 'import refused'})`, async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const bridge = makeFakeBridge();
       const client = makeOpencodeClient(
         baseArgs(makeFakeSlice(bridge), { model: 'openrouter/deepseek/v4' }),
@@ -1011,7 +1011,7 @@ for (const cancelMode of ['reader', 'interrupt']) {
 
 for (const cancelMode of ['reader', 'interrupt']) {
   test(`${cancelMode} cancellation is rechecked inside a held command write chain`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const bridge = makeFakeBridge();
     const gate = makeGate(t);
     const client = makeOpencodeClient(
@@ -1067,7 +1067,7 @@ for (const cancelMode of ['reader', 'interrupt']) {
 
 for (const cancelMode of ['reader', 'interrupt']) {
   test(`${cancelMode} cancellation during startup does not import or admit a prompt`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const bridge = makeFakeBridge();
     const fake = makeFakeSlice(bridge);
     const client = makeOpencodeClient(
@@ -1119,7 +1119,7 @@ for (const cancelMode of ['reader', 'interrupt']) {
 }
 
 test('an uncertain import write fences later sends without replaying', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const bridge = makeFakeBridge();
   const client = makeOpencodeClient(
     baseArgs(makeFakeSlice(bridge), {

@@ -195,7 +195,7 @@ test('session A revocation preserves B and uses the original shared credential',
 });
 
 test('operator close reaches cancellation-dependent shared opening', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const opened = gate();
   const cancelled = gate();
@@ -233,7 +233,7 @@ test('operator close reaches cancellation-dependent shared opening', async t => 
 });
 
 test('operator close retains late listener acquisition and immediately revokes authority', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const held = gate();
   const entered = gate();

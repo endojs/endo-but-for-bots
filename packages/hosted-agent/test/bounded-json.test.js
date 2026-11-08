@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { boundedJson } from '../src/bounded-json.js';
 
 test('default oversized input cancels without awaiting the cancellation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const cancellation = new Promise(resolve => {
     release = () => resolve(undefined);

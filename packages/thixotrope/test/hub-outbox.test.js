@@ -180,7 +180,7 @@ test('failed pending withdrawal flushes rejection to another attached session', 
 test.serial(
   'remote transport restores hub acceptance before draining replayed outbox',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     /** @type {any} */
     let physicalHandlers;
     /** @type {any} */

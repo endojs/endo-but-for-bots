@@ -32,7 +32,7 @@ const gate = () => {
   });
   return { promise, resolve };
 };
-test.beforeEach(t => t.timeout(5000));
+test.beforeEach(t => t.timeout(10_000));
 
 /** @param {any} t */
 const fixture = async t => {

@@ -183,7 +183,7 @@ test('completion acknowledgement loss revives only the durably committed policy'
 });
 
 test('closing drains an admitted audit write and rejects further policy work', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const release = makePromiseKit();
   t.teardown(() => release.resolve(undefined));

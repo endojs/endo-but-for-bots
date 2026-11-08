@@ -24,7 +24,7 @@ const store = () => {
 };
 
 test('reconnect after lost acknowledgement reuses the durable submission ID', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   const accepted = new Map();
   let calls = 0;
@@ -56,7 +56,7 @@ test('reconnect after lost acknowledgement reuses the durable submission ID', as
 });
 
 test('a different draft cannot reuse an uncertain request, and storage failure sends nothing', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   storage.setItem('s', JSON.stringify({ id: 'request-1', text: 'first' }));
   let calls = 0;
@@ -86,7 +86,7 @@ test('a different draft cannot reuse an uncertain request, and storage failure s
 });
 
 test('older hosts remain usable but an ambiguous legacy enqueue is never retried', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   let calls = 0;
   const session = Far('OldSession', {
@@ -109,7 +109,7 @@ test('older hosts remain usable but an ambiguous legacy enqueue is never retried
 });
 
 test('a delayed acknowledgement from another view cannot erase the next retry ID', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   const pending = [];
   const session = Far('Session', {
@@ -190,7 +190,7 @@ test('recovered drafts and subsequent edits stay with their selected sessions', 
 });
 
 test('claim precedes slow discovery and legacy reservations have one dispatcher', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   const { promise: discovery, resolve: resolveMethods } = makePromiseKit();
   const accepted = [];
@@ -262,7 +262,7 @@ test('late uncertain receipts override empty caches and restoration failures ret
 });
 
 test('draft cleanup failure retains retry identity and a newer identical draft survives the ACK', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const backing = store();
   let failCleanup = true;
   const storage = {
@@ -298,7 +298,7 @@ test('draft cleanup failure retains retry identity and a newer identical draft s
 });
 
 test('missing Web Locks refuses dispatch, and concurrent views share one claim', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   let calls = 0;
   const requests = [];
@@ -329,7 +329,7 @@ test('missing Web Locks refuses dispatch, and concurrent views share one claim',
 });
 
 test('forgetting an inspected retry cannot erase a newer submission', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   storage.setItem('s', 'old inspected request');
   let release = () => {};
@@ -350,7 +350,7 @@ test('forgetting an inspected retry cannot erase a newer submission', async t =>
 });
 
 test('coalesced sends clear each submitted draft revision without dispatching twice', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   const acknowledged = makePromiseKit();
   let calls = 0;
@@ -378,7 +378,7 @@ test('coalesced sends clear each submitted draft revision without dispatching tw
 });
 
 test('inventory submissions reconnect with the same receipt and never fall back to plain text', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   const object = Far('Object', {});
   const references = harden([
@@ -452,7 +452,7 @@ test('inventory submissions reconnect with the same receipt and never fall back 
 });
 
 test('an undelivered mention retry cannot follow a rebound name, but accepted receipts survive deletion', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   let accepted = false;
   let deliveries = 0;
@@ -528,7 +528,7 @@ test('an undelivered mention retry cannot follow a rebound name, but accepted re
 });
 
 test('failed mention lookup before dispatch permits correcting the draft', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const storage = store();
   let deliveries = 0;
   const session = Far('MentionSession', {

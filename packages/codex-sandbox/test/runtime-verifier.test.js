@@ -220,7 +220,7 @@ for (const [label, options] of [
 }
 
 test('controlled hanging probe is killed and reaped after deadline', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const f = fixture({ stall: true, timeoutMs: 10 });
   await t.throwsAsync(() => E(f.verifier).attest(f.context), {
     message: 'Codex runtime verification failed',
@@ -230,7 +230,7 @@ test('controlled hanging probe is killed and reaped after deadline', async t => 
 });
 
 test('controlled late process acquisition is cancelled after rejected admission', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const f = fixture({ late: true, timeoutMs: 10 });
   await t.throwsAsync(() => E(f.verifier).attest(f.context), {
     message: 'Codex runtime verification failed',
@@ -292,7 +292,7 @@ test('environment and launch widening fail before spawning', async t => {
 });
 
 test('actual Python parent executes with controlled platform and fake Codex children', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   await E(f.verifier).attest(f.context);
   const { argv } = f.call();

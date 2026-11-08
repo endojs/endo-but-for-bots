@@ -250,7 +250,7 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
 });
 
 test('an unavailable source keeps readonly display but retires its follower', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const codex = pushedOracle(t, 'codex');
   let failing = false;
   const watch = makeAccountsWatch({

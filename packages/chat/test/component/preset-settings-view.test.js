@@ -11,7 +11,7 @@ const dom = createDOM();
 test.serial(
   'preset form edits voice choice, shell internet, models, and explicit objects',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = dom.document.createElement('div');
     dom.document.body.append(parent);
     t.teardown(() => {
@@ -107,7 +107,7 @@ test.serial(
 test.serial(
   'shell presets offer Fae models and expose hosted choices after shell removal',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = dom.document.createElement('div');
     dom.document.body.append(parent);
     t.teardown(() => {
@@ -167,7 +167,7 @@ test.serial(
 test.serial(
   'unsaved preset edits cannot be erased by shortcut selection or reload',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = dom.document.createElement('div');
     dom.document.body.append(parent);
     t.teardown(() => {

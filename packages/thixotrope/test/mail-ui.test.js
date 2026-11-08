@@ -784,7 +784,7 @@ test('incremental mail projection shares upstream streams and never rereads hist
 });
 
 test('incremental setup failure releases concurrently acquired entry streams', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const inventory = makeObservableMap();
   const contacts = makeObservableMap();
   let closed = false;

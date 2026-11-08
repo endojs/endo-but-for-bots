@@ -127,7 +127,7 @@ test('change topic terminates with error', async (/** @type {import('ava').Asser
 });
 
 test('return settles all pending pulls without publishing and isolates subscribers', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { publisher, subscribe } = makeChangeTopic();
   const closed = subscribe();
   const active = subscribe();

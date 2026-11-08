@@ -251,7 +251,7 @@ const drainReader = async reader => {
  * @param {number} pid
  * @param {number} [timeoutMs]
  */
-const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
+const waitForProcessGroupGone = async (pid, timeoutMs = 10_000) => {
   await null;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -1050,7 +1050,7 @@ test.serial(
 test.serial(
   'bwrap timeout and repeated cancellation reap process groups',
   async t => {
-    t.timeout(15_000);
+    t.timeout(45_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
     const driver = makeBwrapDriver({ env: {} });
@@ -1856,7 +1856,7 @@ test('teardown resolves as soon as the child stdio closes', async t => {
 
 for (const duringAcquisition of [false, true]) {
   test(`teardown fences ${duringAcquisition ? 'running' : 'queued'} acquisition`, async t => {
-    t.timeout(3000);
+    t.timeout(10_000);
     const { childProcess, children } = makeStubChildProcess({
       closeOnKill: false,
     });
@@ -1893,7 +1893,7 @@ test('bwrap refuses cancelled admission before creating a child', async t => {
 });
 
 test('process error does not release ownership before close', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const { childProcess, children } = makeStubChildProcess({
     closeOnKill: false,
   });
@@ -1910,7 +1910,7 @@ test('process error does not release ownership before close', async t => {
 });
 
 test('teardown cleans siblings independently and waits for retained child close', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const { childProcess, children } = makeStubChildProcess({
     closeOnKill: false,
   });

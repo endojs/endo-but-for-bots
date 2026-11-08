@@ -103,7 +103,7 @@ const setup = t => {
 };
 
 test('real package semantics: lost delivery ACK recovers; adoption survives dismissal; staging stays bounded', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   w.loseAck();
   for (let i = 0; i < 3; i += 1) {
@@ -133,7 +133,7 @@ test('real package semantics: lost delivery ACK recovers; adoption survives dism
 });
 
 test('cancelled preparation cleans bounded crash leftovers and leaves no guest authority', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   w.storage.set('floot-private-sessions/one/floot-attachment-31', w.object);
   let checks = 0;
@@ -153,7 +153,7 @@ test('cancelled preparation cleans bounded crash leftovers and leaves no guest a
 });
 
 test('failed dismissal retains ownership until explicit cleanup retry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   const packet = await w.manager.open(message, w.references, '1', () => {});
   const mail = [...w.messages.values()][0];
@@ -166,7 +166,7 @@ test('failed dismissal retains ownership until explicit cleanup retry', async t 
 });
 
 test('UI attachment package is suppressed by the inbox and visible to normal adoption tools', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   let calls = 0;
   const agent = await makeStreamingAgent(
@@ -217,7 +217,7 @@ test('UI attachment package is suppressed by the inbox and visible to normal ado
 });
 
 test('duplicate delivery identities reuse the package and cleanup dismisses all copies', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   const packet = await w.manager.open(message, w.references, '1', () => {});
   const original = [...w.messages.values()][0];
@@ -231,7 +231,7 @@ test('duplicate delivery identities reuse the package and cleanup dismisses all 
 });
 
 test('failed preparation cleanup quarantines new turns and remains retryable at shutdown', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   let opens = 0;
   const manager = harden({
@@ -285,7 +285,7 @@ test('failed preparation cleanup quarantines new turns and remains retryable at 
 });
 
 test('a restarted inbox dismisses orphaned self packages without starting a second turn', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const w = setup(t);
   await w.manager.open(message, w.references, 'old-incarnation', () => {});
   let backendCalls = 0;

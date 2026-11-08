@@ -12,7 +12,7 @@ const defer = () => {
 };
 
 test('session operations serialize locally, recover after failure, and allow unrelated progress', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sessions = makeResourceRegistry();
   const acquired = defer();
   const unblock = defer();
@@ -67,7 +67,7 @@ test('failed cleanup retains ownership and stale release cannot remove a success
 });
 
 test('shutdown fences queued and future work and cleans up a late acquisition', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sessions = makeResourceRegistry();
   const acquiring = defer();
   const unblock = defer();

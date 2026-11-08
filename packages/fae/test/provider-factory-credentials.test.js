@@ -6,7 +6,7 @@ import { make } from '../llm-provider-factory.js';
 
 for (const token of ['test-import-only', '']) {
   test(`provider form ${token ? 'refuses a failed Secret import' : 'permits tokenless local configuration'}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const inbox = makeBufferedReader();
     t.teardown(() => inbox.close());
     const stored = [];

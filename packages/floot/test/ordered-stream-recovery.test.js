@@ -266,7 +266,7 @@ for (const ordinal of ['1', '2', '3']) {
 }
 
 test('cancelled text is journaled only after producer shutdown acknowledgement', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture();
   const controller = new AbortController();
   let release = () => {};

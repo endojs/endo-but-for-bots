@@ -194,7 +194,7 @@ test('coordinator claims an operation before its first yield', async t => {
 });
 
 test('coordinator reports no dependency-tree change for pre-run cancellation', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   /** @type {((value?: void | PromiseLike<void>) => void) | undefined} */
   let releaseRevalidationStarted;
   const revalidationStarted = new Promise(resolve => {

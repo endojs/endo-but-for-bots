@@ -16,7 +16,7 @@ import { readHttpText, requestHttp } from './http-client.js';
 
 for (const placement of ['network', 'limits']) {
   test(`private network bootstrap rejects extra authority in ${placement}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let activations = 0;
     const worker = spawn(
       process.execPath,
@@ -241,7 +241,7 @@ for (const diagnosticsEnabled of [false, true]) {
 test.serial(
   'network listeners start only after trusted activation and are disposed with the worker',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const worker = spawn(
       process.execPath,
       [

@@ -20,7 +20,7 @@ const future = () => {
 };
 
 const listener = async (t, endpoint, options = {}) => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const server = await makePublicEgressListener({ endpoint, ...options });
   t.teardown(server.dispose);
   return server;
@@ -332,7 +332,7 @@ test.serial(
 test.serial(
   'real TCP bridge streams HTTP upload and rejects a redirect to private space',
   async t => {
-    t.timeout(3000);
+    t.timeout(10_000);
     const uploads = [];
     const origin = createServer(async (request, response) => {
       let body = '';

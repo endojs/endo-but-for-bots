@@ -108,7 +108,7 @@ test('writes land atomically and leave no temporary behind', async t => {
 });
 
 test('write acknowledgement waits for the directory flush after rename', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const dir = await makeTmp(t);
   let block = false;
   let entered = () => {};

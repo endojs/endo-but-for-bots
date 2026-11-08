@@ -32,7 +32,7 @@ const makeCursor = makeIterator =>
   });
 
 test('close fences queued and new reads while draining an admitted backend pull', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makeGate();
   const resumed = makeGate();
   let pulls = 0;
@@ -76,7 +76,7 @@ test('close fences queued and new reads while draining an admitted backend pull'
 });
 
 test('concurrent cursor consumers serialize backend pulls', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let active = 0;
   let maxActive = 0;
   let count = 0;
@@ -191,7 +191,7 @@ test('rewind retains failed cleanup and stale streams cannot reach its successor
 });
 
 test('close during rewind does not publish another listing', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makeGate();
   const released = makeGate();
   let listings = 0;

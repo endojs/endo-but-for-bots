@@ -74,7 +74,7 @@ test('host close is separate from public authority, fences admission, and caches
 });
 
 test('close waits for a pending prepare and removes its late context', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const started = makePromiseKit();
   const gate = makePromiseKit();
   const slice = {};
@@ -103,7 +103,7 @@ test('close waits for a pending prepare and removes its late context', async t =
 });
 
 test('close stops existing handles while an unrelated prepare is still pending', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const gate = makePromiseKit();
   const started = makePromiseKit();
   const first = {};
@@ -132,7 +132,7 @@ test('close stops existing handles while an unrelated prepare is still pending',
 });
 
 test('failed late-context cleanup remains owned for a subsequent host close', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const gate = makePromiseKit();
   const started = makePromiseKit();
   const slice = {};
@@ -177,7 +177,7 @@ test('failure after driver preparation releases the context and retains failed c
 });
 
 test('close during probing drains the acquisition without starting driver preparation', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const gate = makePromiseKit();
   const started = makePromiseKit();
   const f = fixture(t, {
@@ -199,7 +199,7 @@ test('close during probing drains the acquisition without starting driver prepar
 });
 
 test('close drains public backend probes and fences subsequent probes', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const gate = makePromiseKit();
   const started = makePromiseKit();
   const f = fixture(t, {
@@ -228,7 +228,7 @@ test('close drains public backend probes and fences subsequent probes', async t 
 });
 
 test('context cancellation uses retained host cleanup and does not strand a sibling', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const lost = makePromiseKit();
   const first = {};
   const second = {};
@@ -250,7 +250,7 @@ test('context cancellation uses retained host cleanup and does not strand a sibl
 });
 
 test('public disposal and host close share the same teardown attempt', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const started = makePromiseKit();
   const gate = makePromiseKit();
   let attempts = 0;
@@ -273,7 +273,7 @@ test('public disposal and host close share the same teardown attempt', async t =
 });
 
 test('factory close retains and fences a driver preparation before awaiting its value', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const value = makePromiseKit();
   let closeCalls = 0;

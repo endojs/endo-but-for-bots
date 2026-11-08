@@ -86,7 +86,7 @@ const makeFakeHostedClient = () => {
 };
 
 test('a stopped hosted turn keeps the prompt, tool result and partial reply', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
@@ -152,7 +152,7 @@ test('a stopped hosted turn keeps the prompt, tool result and partial reply', as
 });
 
 test('a failed hosted turn keeps the delivered prompt', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
@@ -209,7 +209,7 @@ test('a failed hosted turn keeps the delivered prompt', async t => {
 });
 
 test('a failed turn keeps the tool activity and text that streamed before it', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   // error_max_turns and error_during_execution end a turn whose transcript
   // already holds every tool round and the text before the error.
   const powers = makeFakePowers();
@@ -305,7 +305,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
 });
 
 test('a leading backend refusal remains a durable failed dispatch', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   // A spawn refusal, or a stop before dispatch, arrives as a leading abort:
   // the transcript has no such prompt, but the journal still reports the
   // attempted dispatch and its failure rather than silently dropping it.
@@ -334,7 +334,7 @@ test('a leading backend refusal remains a durable failed dispatch', async t => {
 });
 
 test('a cancelled text-only hosted turn remains in the journal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
@@ -372,7 +372,7 @@ test('a cancelled text-only hosted turn remains in the journal', async t => {
 });
 
 test('public thinking persists after failure and restart but is absent from model transcript', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(

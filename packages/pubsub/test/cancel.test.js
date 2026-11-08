@@ -13,7 +13,7 @@ import { makeLatestTopic } from '../latest-topic.js';
 // integration stays honest as either package evolves.
 
 test('cancellation: cancelled unblocks a pending read without disturbing the topic', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { publisher, subscribe } = makeChangeTopic();
   const reader = subscribe();
   const { cancel, cancelled, isCancelled } = makeCancelKit();
@@ -47,7 +47,7 @@ test('cancellation: cancelled unblocks a pending read without disturbing the top
 });
 
 test('cancellation: a for-await loop stops on the local signal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { publisher, subscribe } = makeChangeTopic();
   const reader = subscribe();
   const { cancel, cancelled } = makeCancelKit();

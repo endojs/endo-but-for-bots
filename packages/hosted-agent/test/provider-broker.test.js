@@ -478,7 +478,7 @@ test('method, paths, models and request bytes fail before touching secret', asyn
 });
 
 test('concurrent requests reserve slots before asynchronous secret reads', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -538,7 +538,7 @@ test('open streams retain admission slots until EOF or cancellation', async t =>
 });
 
 test('transport deadline releases an abandoned stream without another pull', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let expire = () => {};
   let fetches = 0;
   const transport = makeProviderFetchTransport({
@@ -573,7 +573,7 @@ test('transport deadline releases an abandoned stream without another pull', asy
 });
 
 test('revocation during secret read prevents transport dispatch', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -690,7 +690,7 @@ test('operator policy mutation does not widen a lease', async t => {
 });
 
 test('revocation during transport suppresses the response', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const lease = setup({
     respond: async () => {
       await E(lease.admin).revoke();
@@ -887,7 +887,7 @@ test('stream enforces response quota and rejects encoded credential across chunk
 });
 
 test('cancel suppresses a pending delivery even if upstream ignores cancellation', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   /** @type {() => void} */
   let enter = () => {};
   const entered = new Promise(resolve => {

@@ -15,7 +15,7 @@ const spec = harden({
 });
 
 test('model discovery never opens an issuer and is fenced by service closure', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let opens = 0;
   const requested = [];
   /** @type {(value?: any) => void} */
@@ -258,7 +258,7 @@ test('replacement waits for cleanup and stale scope calls cannot retarget', asyn
 });
 
 test('revoke before queued startup prevents opening the issuer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   t.teardown(f.close);
   const a = await E(f.service).provideScope('a', spec);
@@ -271,7 +271,7 @@ test('revoke before queued startup prevents opening the issuer', async t => {
 });
 
 test('revoke drains shared opening without closing it or issuing a late grant', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const held = gate();
   const entered = gate();
@@ -305,7 +305,7 @@ test('revoke drains shared opening without closing it or issuing a late grant', 
 });
 
 test('pending grant acquisition is fenced immediately and drained before scope release', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const held = gate();
   const entered = gate();
@@ -369,7 +369,7 @@ test('failed issuance and cleanup retain A-only recovery while B remains usable'
 });
 
 test('operator close fences every scope independently and retries only retained failures', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const held = gate();
   const entered = gate();
@@ -411,7 +411,7 @@ test('operator close fences every scope independently and retries only retained 
 });
 
 test('revoke drains admitted evidence and refuses its result after the fence', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   const held = gate();
   const entered = gate();

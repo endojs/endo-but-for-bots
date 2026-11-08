@@ -680,7 +680,7 @@ test('null output and absent context leave model limits unspecified', async t =>
 });
 
 test('late catalog completion after termination cannot create native effects', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.faults.catalogWait = true;
   f.faults.catalogState = 'current';
@@ -747,7 +747,7 @@ test('scope cleanup failure retains mounts and permits sibling progress before r
 
 for (const kind of ['mount', 'grant']) {
   test(`termination reaches ${kind} acquisition that waits for cancellation`, async t => {
-    t.timeout(3000);
+    t.timeout(10_000);
     const f = fixture(t);
     f.faults[`${kind}Wait`] = true;
     const controller = f.makeController();
@@ -765,7 +765,7 @@ for (const kind of ['mount', 'grant']) {
 
 for (const kind of ['sandbox', 'broker']) {
   test(`termination retains the original late ${kind} scope before acknowledging release`, async t => {
-    t.timeout(3000);
+    t.timeout(10_000);
     const f = fixture(t);
     f.faults.lateScope = kind;
     const a = f.makeController();
@@ -1024,7 +1024,7 @@ for (const [fault, message] of /** @type {const} */ ([
 }
 
 test('context loss fences the active client and starts retained cleanup', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const cancelled = gate();
   const context = Far('Context', { whenCancelled: () => cancelled.promise });

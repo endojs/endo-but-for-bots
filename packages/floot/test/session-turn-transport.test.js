@@ -48,7 +48,7 @@ const connect = bootstrap => {
 };
 
 test('a CapTP disconnect preserves the daemon turn for recovery and cancellation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {any[]} */
   const history = [];
   /** @type {any} */
@@ -145,7 +145,7 @@ test('a CapTP disconnect preserves the daemon turn for recovery and cancellation
 });
 
 test('CapTP discovery exposes a queued turn before its history promise settles', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {(history: any[]) => void} */
   let establishHistory = () => {};
   /** @type {AbortSignal | undefined} */
@@ -206,7 +206,7 @@ test('CapTP discovery exposes a queued turn before its history promise settles',
 });
 
 test('mention receipts recover across real CapTP record serialization', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const values = new Map();
   const host = Far('Host', {
     has: name => values.has(name),

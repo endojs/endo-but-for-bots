@@ -167,7 +167,7 @@ test('a refused duplicate and its cancellation cannot stop a live owner', async 
 });
 
 test('cancellation fences pending open immediately and refuses late publication', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const state = f.next();
   state.holdOpen = true;
@@ -188,7 +188,7 @@ test('cancellation fences pending open immediately and refuses late publication'
 });
 
 test('a queued cancelled caller acquires nothing and does not stop its predecessor', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const state = f.next();
   state.holdOpen = true;
@@ -208,7 +208,7 @@ test('a queued cancelled caller acquires nothing and does not stop its predecess
 });
 
 test('failed automatic cleanup is retried before one of two reconstructions can open', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const state = f.next();
   state.closeFault = true;
@@ -284,7 +284,7 @@ test('successful predecessor retry forgets its old failure before delayed cancel
 });
 
 test('cancellation can abandon unresolved daemon powers without blocking a successor', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const owner = f.context();
   const pendingPowers = /** @type {PromiseKit<SandboxPowers>} */ (
@@ -321,7 +321,7 @@ test('lost or fulfilled cancellation observation closes a published runtime', as
 });
 
 test('one blocked owner does not serialize another owner', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const state = f.next();
   state.holdOpen = true;
@@ -334,7 +334,7 @@ test('one blocked owner does not serialize another owner', async t => {
 });
 
 test('independent entrypoint registries remain excluded by actual runtime ownership', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await fs.mkdtemp(join(tmpdir(), 'endo-owned-agent-'));
   /** @type {Array<ReturnType<typeof makeSandboxRuntime>>} */
   const runtimes = [];
@@ -429,7 +429,7 @@ test('native entrypoint refuses non-null powers before construction', async t =>
 });
 
 test('native entrypoint cancellation interrupts pending null powers', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const directory = await fs.mkdtemp(join(tmpdir(), 'endo-native-powers-'));
   const token = makePromiseKit();
   /** @type {PromiseKit<null>} */

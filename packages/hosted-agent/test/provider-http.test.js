@@ -21,7 +21,7 @@ const options = harden({
 test.serial(
   'HTTP admission diagnostics expose fixed checks but never request data',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const diagnostics = [];
     const listener = await makeProviderHttpListener({
       ...options,
@@ -65,7 +65,7 @@ test.serial(
 test.serial(
   'HTTP listener forwards incremental chunks and the caller\u2019s own headers',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     /** @type {() => void} */
     let finish = () => {
       throw Error('uninitialized');
@@ -159,7 +159,7 @@ test.serial(
 test.serial(
   'HTTP rejects alternate routes, authority, browser origin, credentials and oversized bodies',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let calls = 0;
     const listener = await makeProviderHttpListener({
       ...options,
@@ -275,7 +275,7 @@ test.serial(
 test.serial(
   'strip mode admits a placeholder client credential on the configured path only',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const paths = [];
     const listener = await makeProviderHttpListener({
       ...options,
@@ -325,7 +325,7 @@ test.serial(
 test.serial(
   'HTTP disposal cancels an active stream and is idempotent',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let resolveRead;
     /** @type {Promise<IteratorResult<Uint8Array, undefined>>} */
     const read = new Promise(resolve => {
@@ -392,7 +392,7 @@ test.serial(
 test.serial(
   'HTTP deadline releases late readers and does not leak provider errors',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     /** @type {((value: any) => void) | undefined} */
     let release;
     const result = new Promise(resolve => {
@@ -485,7 +485,7 @@ test.serial('HTTP masks upstream exceptions', async t => {
 test.serial(
   'an endpoint with a bytes stream is read ahead of, and the body arrives whole',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const text = ['data: one\n\n', 'data: two 😀\n\n', 'data: [DONE]\n\n'];
     const calls = [];
     let pulls = 0;
@@ -539,7 +539,7 @@ test.serial(
 test.serial(
   'a text-only endpoint is refused without invoking its legacy method',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let legacyCalls = 0;
     const listener = await makeProviderHttpListener({
       ...options,

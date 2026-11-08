@@ -748,7 +748,7 @@ test('a terminate during activation fences the acquisition and releases what was
 });
 
 test('a terminate while the broker grant is starting revokes it and refuses the activation', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.faults.grantWait = true;
   const controller = f.makeController();

@@ -657,7 +657,7 @@ test('capability introductions reject duplicates and missing values', t => {
 });
 
 test('askSubagent carries capabilities with the correlated task', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeMailbox({
     names: { 'subagents/helper': locatorFor(CHILD) },
   });

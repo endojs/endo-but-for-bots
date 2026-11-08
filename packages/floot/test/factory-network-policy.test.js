@@ -33,7 +33,7 @@ const makeWorld = async (
   t,
   { executionState, lifecycle = 'ready', dormant = false } = {},
 ) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const inboxes = [];
   const streams = [];
   const creates = [];

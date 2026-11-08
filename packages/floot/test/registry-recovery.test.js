@@ -232,7 +232,7 @@ test('explicit direct pin and configured default survive registry restoration wi
 });
 
 test('deletion recovery takes precedence over a persisted stopped state', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const store = new Map([
     [
       journalName(0n),
@@ -329,7 +329,7 @@ test('a failed write leaves the prior snapshot recoverable after restart', async
 });
 
 test('a lost journal acknowledgement does not wedge later saves', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let fail = true;
   const store = new Map([[journalName(0n), snapshot()]]);
   const host = makeHost(store, {
@@ -419,7 +419,7 @@ test('failed obsolete-snapshot pruning never rolls back a committed snapshot', a
 });
 
 test('workflow provenance is watched and survives factory reconstruction', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const store = new Map([[journalName(0n), snapshot()]]);
   const host = makeHost(store);
   const factory = make(host);

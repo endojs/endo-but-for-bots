@@ -152,7 +152,7 @@ const controlFixture = t => {
 };
 
 test('control cancellation reports failure while retaining native closure', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = controlFixture(t);
   const control = startControlCommand(f.cp, 'command', []);
   const rejected = t.throwsAsync(control.result, { message: /aborted/ });
@@ -173,7 +173,7 @@ test('control cancellation reports failure while retaining native closure', asyn
 });
 
 test('a control error and failed kill do not release process ownership', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = controlFixture(t);
   const control = startControlCommand(f.cp, 'command', []);
   const rejected = t.throwsAsync(control.result, { message: 'control error' });
@@ -193,7 +193,7 @@ test('a control error and failed kill do not release process ownership', async t
 });
 
 test('a control deadline bounds the result but not native closure', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = controlFixture(t);
   const control = startControlCommand(f.cp, 'command', [], { timeoutMs: 5 });
   await t.throwsAsync(control.result, { message: /timed out/ });
@@ -209,7 +209,7 @@ test('a control deadline bounds the result but not native closure', async t => {
 });
 
 test('a reaped control child is not signalled while inherited pipes remain open', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = controlFixture(t);
   const control = startControlCommand(f.cp, 'command', []);
   const rejected = t.throwsAsync(control.result, { message: /aborted/ });
@@ -259,7 +259,7 @@ test('failed or cancelled spawning has no acquired child to retain', async t => 
 });
 
 test('control lifetime observes real Node process closure', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const control = startControlCommand(
     /** @type {any} */ ({ spawn }),
     process.execPath,

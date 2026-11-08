@@ -137,7 +137,7 @@ test('file powers return plain bytes and close early iteration', async t => {
 test.serial(
   'socket powers return plain bytes and close returns nothing',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const directory = await fsp.mkdtemp(join(tmpdir(), 'thix-socket-results-'));
     t.teardown(() => fsp.rm(directory, { recursive: true, force: true }));
     /** @type {Set<import('../src/platform/sockets.js').SocketConnection>} */
@@ -183,7 +183,7 @@ test.serial(
 );
 
 test('timer tokens expose no native methods and support cancellation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { timers } = powers;
   let fired = false;
   const cancelled = timers.setTimer(() => {

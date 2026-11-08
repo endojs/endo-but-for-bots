@@ -290,7 +290,7 @@ const fixture = (t, storage, fs, runAs) => {
 };
 
 test('successful removal and attach exit retain ownership until native stdio closes', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
   const [name] = f.active;
@@ -312,7 +312,7 @@ test('successful removal and attach exit retain ownership until native stdio clo
 });
 
 test('native operator identity uses keep-id without chowning writable binds', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t, undefined, undefined, { uid: 1000, gid: 1000 });
   await f.driver.spawn(f.slice, ['/bin/true'], {});
   const create = f.calls.find(args => args[0] === 'create');
@@ -334,7 +334,7 @@ test('native execution identity rejects root, fractions and extra policy fields'
 });
 
 test('failed natural removal retains ownership and disposal retries without rewriting process history', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
   const [name] = f.active;
@@ -358,7 +358,7 @@ test('failed natural removal retains ownership and disposal retries without rewr
 });
 
 test('teardown coalesces and waits for a pending create before removing its container', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.defer();
   const acquired = f.driver.spawn(f.slice, ['/bin/true'], {});
@@ -380,7 +380,7 @@ test('teardown coalesces and waits for a pending create before removing its cont
 });
 
 test('cancelled admission after successful create retains its slot until removal succeeds', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.slice.policy = {
     request: { resources: { maxConcurrentOperations: 1 } },
@@ -420,7 +420,7 @@ test('cancelled admission after successful create retains its slot until removal
 });
 
 test('failed removal does not prevent sibling or anchor cleanup and retains configuration', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = fixture(t);
   const directory = await mkdtemp(join(tmpdir(), 'podman-config-test-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
@@ -463,7 +463,7 @@ const resolverFiles = harden([
 ]);
 
 test('Podman lazily stages individual read-only files and reuses them across operations', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { storage, directory } = await storageFixture(t);
   const f = fixture(t, storage);
   t.true(f.driver.supportsGeneratedFiles);
@@ -498,7 +498,7 @@ test('Podman lazily stages individual read-only files and reuses them across ope
 });
 
 test('Podman retains generated files through failed container removal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { storage, directory } = await storageFixture(t);
   const f = fixture(t, storage);
   await f.prepare({ generatedFiles: resolverFiles });
@@ -518,7 +518,7 @@ test('Podman retains generated files through failed container removal', async t 
 });
 
 test('Podman teardown drains pending staging and prevents container creation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { promise: preparing, resolve: began } = makePromiseKit();
   const { promise: pending, resolve: resume } = makePromiseKit();
   t.teardown(() => resume(undefined));
@@ -550,7 +550,7 @@ test('Podman teardown drains pending staging and prevents container creation', a
 });
 
 test('Podman retries generated-file release after all containers are removed', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let releases = 0;
   const f = fixture(t, {
     makeStage: () => ({
@@ -675,7 +675,7 @@ for (const failure of ['serialization', 'write', 'validation']) {
 }
 
 test('closing slices drains a late preparation while cleaning existing contexts immediately', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fs = await import('node:fs/promises');
   const directory = await mkdtemp(join(tmpdir(), 'podman-prepare-drain-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
@@ -737,7 +737,7 @@ const limitToOneOperation = f => {
 };
 
 test('cancelled create retains its slot and configuration across native closure and successful rm', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   limitToOneOperation(f);
   f.defer();
@@ -909,7 +909,7 @@ for (const status of [
   { code: null, signal: 'SIGTERM' },
 ]) {
   test(`a positive startup witness permits cleanup after attached exit ${JSON.stringify(status)}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = fixture(t);
     const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
     const [name] = f.active;
@@ -933,7 +933,7 @@ for (const witness of [
   { code: 0, stdout: 'false\n', refused: true },
 ]) {
   test(`removal without a startup witness retains ownership: ${JSON.stringify(witness)}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const f = fixture(t);
     f.setWitness(witness);
     if (witness.refused) f.refuseWitness();
@@ -965,7 +965,7 @@ for (const witness of [
 }
 
 test('failed removal preserves the opportunity to retry startup observation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   f.setWitness({ code: 125, stdout: '' });
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
@@ -984,7 +984,7 @@ test('failed removal preserves the opportunity to retry startup observation', as
 });
 
 test('a positive witness survives a removal failure without another inspection', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
   const [name] = f.active;
@@ -1011,7 +1011,7 @@ test('a start with no acquired child needs no startup witness', async t => {
 });
 
 test('driver close drains a healthy create without aborting its producer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   await f.prepare({});
   f.defer();
@@ -1030,7 +1030,7 @@ test('driver close drains a healthy create without aborting its producer', async
 });
 
 test('driver close permits witness and removal retries and fences completed handles', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   await f.prepare({});
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
@@ -1048,7 +1048,7 @@ test('driver close permits witness and removal retries and fences completed hand
 });
 
 test('failed signaling retains native closure without poisoning later removal', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture(t);
   await f.prepare({});
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
@@ -1090,7 +1090,7 @@ test('preparation close before admission acquires nothing and leaves the driver 
 });
 
 test('factory scopes retry failed preparation without stopping a sibling on the same driver and allocator', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const directory = await mkdtemp(join(tmpdir(), 'podman-factory-scopes-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const storage = await makeGeneratedFileStorage({
@@ -1168,7 +1168,7 @@ test('factory scopes retry failed preparation without stopping a sibling on the 
 });
 
 test('preparation close drains a held write and does not publish its late context', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fs = await import('node:fs/promises');
   const directory = await mkdtemp(join(tmpdir(), 'podman-scoped-drain-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));

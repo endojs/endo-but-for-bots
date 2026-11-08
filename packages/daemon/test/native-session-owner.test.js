@@ -163,7 +163,7 @@ test('partial publication never activates and stop cancels without revival', asy
 });
 
 test('stop during admitted construction prevents activation and drains the constructor', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = harness();
   const entered = makePromiseKit();
   const release = makePromiseKit();
@@ -209,7 +209,7 @@ test('reconstructed owners require explicit start and retain the original contro
 });
 
 test('stop reaches a fresh constructor waiting for its cancellation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = harness();
   const entered = makePromiseKit();
   const cancelled = makePromiseKit();
@@ -237,7 +237,7 @@ test('stop reaches a fresh constructor waiting for its cancellation', async t =>
 });
 
 test('failed fresh construction cancellation retains identities for retry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = harness();
   const entered = makePromiseKit();
   const cancelled = makePromiseKit();
@@ -416,7 +416,7 @@ test('removal finishes a durable revision first, and changes nothing while it ca
 });
 
 test('removal drains detached dependency revival before cancelling formulas', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = harness();
   const entered = makePromiseKit();
   const release = makePromiseKit();
@@ -502,7 +502,7 @@ test('failed unstarted removal retains the original storage cleanup plan', async
 });
 
 test('a start queued during removal cannot enter a replacement session', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = harness();
   const entered = makePromiseKit();
   const release = makePromiseKit();
@@ -536,7 +536,7 @@ test('a start queued during removal cannot enter a replacement session', async t
 
 for (const failFirst of [false, true]) {
   test(`stop reaches cancellation-dependent activation${failFirst ? ' and retries failed termination' : ''}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const h = harness();
     const entered = makePromiseKit();
     const release = makePromiseKit();

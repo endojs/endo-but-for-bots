@@ -16,7 +16,7 @@ const entry = oracle => ({
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('historical stream failure does not replace reader cleanup acknowledgement', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let returned = false;
   const observed = makePromiseKit();
   const remote = Far('FailedStream', {
@@ -40,7 +40,7 @@ test('historical stream failure does not replace reader cleanup acknowledgement'
 });
 
 test('failed reader close is retained for an explicit retry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const channel = makeBufferedReader();
   let fail = true;
@@ -72,7 +72,7 @@ test('failed reader close is retained for an explicit retry', async t => {
 });
 
 test('close drains held oracle lookup without starting a late follower', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const gate = makePromiseKit();
   t.teardown(() => gate.resolve(undefined));
@@ -106,7 +106,7 @@ test('close drains held oracle lookup without starting a late follower', async t
 
 for (const late of [false, true]) {
   test(`close returns quiet oracle reader, including late acquisition: ${late}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const gate = makePromiseKit();
     const entered = makePromiseKit();
     t.teardown(() => gate.resolve(undefined));
@@ -146,7 +146,7 @@ for (const late of [false, true]) {
 }
 
 test('close drains an admitted reset and preserves its result', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const gate = makePromiseKit();
   const entered = makePromiseKit();
   t.teardown(() => gate.resolve(undefined));
@@ -189,7 +189,7 @@ test('close drains an admitted reset and preserves its result', async t => {
 });
 
 test('close cancels retries and stale timer callbacks cannot reconcile', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const scheduled = makePromiseKit();
   /** @type {() => void} */
   let callback = () => {

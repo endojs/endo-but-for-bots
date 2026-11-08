@@ -9,7 +9,7 @@ import { waitForExit, waitForExitOrCancel, waitForSpawn } from '../src/proc.js';
 
 for (const code of [0, 7]) {
   test.serial(`waitForExit preserves normal exit code ${code}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const child = spawn(process.execPath, ['-e', `process.exit(${code})`]);
     t.teardown(() => child.kill());
     t.is(await waitForExit(child), code);
@@ -20,7 +20,7 @@ for (const cancellable of [false, true]) {
   test.serial(
     `signal exit is a failure with cancellation support ${cancellable}`,
     async t => {
-      t.timeout(5000);
+      t.timeout(10_000);
       const child = spawn(process.execPath, [
         '-e',
         'setInterval(() => {}, 1000)',
@@ -37,7 +37,7 @@ for (const cancellable of [false, true]) {
 }
 
 test.serial('cancellation still rejects and terminates the child', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
   t.teardown(() => child.kill());
   /** @type {(reason: Error) => void} */

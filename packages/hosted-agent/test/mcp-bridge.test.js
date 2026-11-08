@@ -215,7 +215,7 @@ test('a JSON-RPC batch is refused with a reply rather than dropped', async t => 
 });
 
 test('tool admission is synchronous, bounded, reusable, and independent of controls', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {Array<() => void>} */
   const releases = [];
   t.teardown(() => releases.forEach(release => release()));

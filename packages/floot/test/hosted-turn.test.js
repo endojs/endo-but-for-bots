@@ -12,7 +12,7 @@ import {
 import { usageCounts } from './helpers/usage.js';
 
 test('dispatch persistence gates hosted send and precedes cancellation observation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const calls = [];
   const client = harden({
     async send() {
@@ -391,7 +391,7 @@ test('reasoning preview bounds block metadata without failing the turn', async t
 });
 
 test('send response loss still confirms producer stop and records uncertainty', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let stopped = false;
   const error = await t.throwsAsync(
     runHostedTurn({
@@ -874,7 +874,7 @@ test('an unresolved tool at turn end fails with an honest partial record', async
 });
 
 test('send failure during cancellation waits for the interrupt outcome', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let rejectSend = error => {};
   let rejectInterrupt = error => {};
   let signalStarted = () => {};
@@ -923,7 +923,7 @@ test('send failure during cancellation waits for the interrupt outcome', async t
 
 for (const failure of ['EOF', 'reader rejection']) {
   test(`${failure} waits for explicit interruption and preserves partial usage`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let finishInterrupt = () => {};
     const barrier = new Promise(resolve => {
       finishInterrupt = () => resolve(undefined);

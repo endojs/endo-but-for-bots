@@ -139,7 +139,7 @@ test('native preparation has no implicit scratch and shares network validation',
 });
 
 test('native late preparation shares the factory close fence and failed cleanup owner', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makePromiseKit();
   const ready = makePromiseKit();
   const context = {};

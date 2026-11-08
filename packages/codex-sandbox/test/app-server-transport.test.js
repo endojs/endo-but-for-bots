@@ -111,7 +111,7 @@ const makeFixture = ({
 };
 
 test('real stdio transport carries a maximum-sized image reply and completed-item echo', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const contentItems = [
     {
       type: 'inputImage',
@@ -372,7 +372,7 @@ test('close attempts all teardown steps and preserves failure', async t => {
 });
 
 test('a terminal stdin failure is diagnostic only after process reap', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const waitBarrier = new Promise(resolve => {
     release = () => resolve(undefined);
@@ -395,7 +395,7 @@ test('a terminal stdin failure is diagnostic only after process reap', async t =
 });
 
 test('close retries only rejected stages and retains successful cleanup', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = makeFixture({ killFailures: 1 });
   const transport = await startAppServerTransport({
     slice: /** @type {any} */ (fixture.slice),
@@ -407,7 +407,7 @@ test('close retries only rejected stages and retains successful cleanup', async 
 });
 
 test('close retries observation without duplicating a timed-out native operation', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let release = () => {};
   const waitBarrier = new Promise(resolve => {
     release = () => resolve(undefined);

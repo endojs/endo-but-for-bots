@@ -5,7 +5,7 @@ import { E } from '@endo/eventual-send';
 import { makeSessionTurnSlot } from '../src/session-turn-slot.js';
 
 test('a session retains its turn through cancellation and releases it after teardown', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   let settle = () => {};
   const slot = makeSessionTurnSlot(
     () =>

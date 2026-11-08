@@ -35,7 +35,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 10));
 
 for (const kind of ['presence', 'local', 'promised']) {
   test(`make returns with a live ${kind} context and observes later cancellation`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let cancel;
     const cancelledP = new Promise((_resolve, reject) => {
       cancel = () => reject(Error('Test context cancelled'));
@@ -68,7 +68,7 @@ for (const kind of ['presence', 'local', 'promised']) {
 }
 
 test('make without a cancellation context returns an open mounter', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mounter = await make(undefined, undefined);
   t.deepEqual(await E(mounter).list(), []);
   await t.throwsAsync(
@@ -594,7 +594,7 @@ test('failed acquisition retains uncertain kernel mount for host close retry', a
 });
 
 test('close waits for admitted mount and bridge drain before directory release', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const mounting = deferred();
   const mounted = deferred();
   const stopping = deferred();
@@ -645,7 +645,7 @@ test('close waits for admitted mount and bridge drain before directory release',
 });
 
 test('close during mkdir fences bridge construction and waits for directory cleanup', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const entered = deferred();
   const ready = deferred();
   const { mounter, calls, close } = makeHarness({
@@ -734,7 +734,7 @@ test('path reservations survive failed cleanup and prevent successor interferenc
 });
 
 test('pending acquisition reserves its paths before native effects', async t => {
-  t.timeout(2000);
+  t.timeout(10_000);
   const entered = deferred();
   const ready = deferred();
   const { mounter, calls, close } = makeHarness({

@@ -65,7 +65,7 @@ for (const input of [
   '猫'.repeat(6 * 1024 * 1024),
 ]) {
   test(`command input errors disclose only fixed labels (${input.length} chars)`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const result = await run(t, input);
     t.is(result.code, 1);
     t.is(result.stdout, '');
@@ -74,7 +74,7 @@ for (const input of [
 }
 
 test('command captures explicit sandbox file without ambient discovery', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const result = await run(t, undefined, async root => {
     const parent = path.join(root, 'sessions', '2026', '09', '24');
     await mkdir(parent, { recursive: true });

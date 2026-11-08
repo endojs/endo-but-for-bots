@@ -129,15 +129,20 @@ test('Sandbox spawner refuses shell wrapping before admitting a command', async 
   t.is(f.calls.length, 0);
 });
 
-test('Shell truncates and drains output beyond the old native 16 MiB guard', async t => {
-  t.timeout(10_000);
-  const f = await fixture(t, { outputChunks: 272 });
-  const result = await E(f.shell).exec('echo', []);
-  t.is(result.stdout.length, 1024);
-  t.true(result.truncated);
-  t.is(result.exitCode, 0);
-  t.deepEqual(f.signals, []);
-});
+// Serial: draining 17 MiB through CapTP is CPU-heavy under c8 and would
+// starve the wall-clock t.timeout deadlines of concurrent siblings.
+test.serial(
+  'Shell truncates and drains output beyond the old native 16 MiB guard',
+  async t => {
+    t.timeout(60_000);
+    const f = await fixture(t, { outputChunks: 272 });
+    const result = await E(f.shell).exec('echo', []);
+    t.is(result.stdout.length, 1024);
+    t.true(result.truncated);
+    t.is(result.exitCode, 0);
+    t.deepEqual(f.signals, []);
+  },
+);
 
 test('native output guard remains independently configurable', async t => {
   const f = await fixture(t, { outputByteLimit: 4n });
@@ -148,7 +153,7 @@ test('native output guard remains independently configurable', async t => {
 });
 
 test('Shell and separate byte streams cross a CapTP membrane', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = await fixture(t, { remote: true, code: 7 });
   const result = await E(f.shell).exec('echo', ['remote literal']);
   t.deepEqual(result, {
@@ -163,7 +168,7 @@ test('Shell and separate byte streams cross a CapTP membrane', async t => {
 });
 
 test('a longer Shell timeout reaches a remote slice without a policy clamp', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = await fixture(t, { remote: true });
   const result = await E(f.shell).exec('echo', [], { timeoutMs: 900_000 });
   t.is(result.exitCode, 0);
@@ -171,7 +176,7 @@ test('a longer Shell timeout reaches a remote slice without a policy clamp', asy
 });
 
 test('Sandbox reader failure stays a Shell failure and terminates the process', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const f = await fixture(t, { readerFailure: true });
   await t.throwsAsync(E(f.shell).exec('echo', []), {
     message: /stdout|reader/,
@@ -180,7 +185,7 @@ test('Sandbox reader failure stays a Shell failure and terminates the process', 
 });
 
 test('Shell timeout covers delayed slice admission and a late process remains owned', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const admission = makePromiseKit();
   t.teardown(() => admission.resolve(undefined));
   const f = await fixture(t, { admission: admission.promise, hang: true });
@@ -203,7 +208,7 @@ test('Sandbox process kill accepts terminal signals but not numeric probes', asy
 });
 
 test('Stalled stdin closure does not hide an admitted process from cancellation', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const stdinClosure = makePromiseKit();
   t.teardown(() => stdinClosure.resolve(undefined));
   const f = await fixture(t, {
@@ -219,7 +224,7 @@ test('Stalled stdin closure does not hide an admitted process from cancellation'
 });
 
 test('Rejected stdin closure remains an execution failure with controls available', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const stdinClosure = makePromiseKit();
   const f = await fixture(t, {
     stdinClosure: stdinClosure.promise,

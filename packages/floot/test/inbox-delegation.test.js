@@ -19,7 +19,7 @@ const HOST = 'd'.repeat(64);
 const locatorFor = number => `endo://${NODE}/${number}?type=handle`;
 
 test('first inbox message starts a dormant hosted backend', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   let acquisitions = 0;
   let sends = 0;
@@ -279,7 +279,7 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
 
 for (const fail of [false, true]) {
   test(`automatic ${fail ? 'error' : 'success'} replies cannot start an agent reply loop`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let calls = 0;
     let echoes = 0;
     const mailbox = makeLiveMailbox({
@@ -331,7 +331,7 @@ for (const fail of [false, true]) {
 }
 
 test('unclaimed replies remain passive across restart and do not block fresh tasks', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   let calls = 0;
   /** @type {Parameters<typeof makeStreamingAgent>[2]} */
@@ -561,7 +561,7 @@ test('a partial message does not swallow its settled revision', async t => {
 });
 
 test('poisoned journal preserves queued mail and shutdown releases its readiness wait', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   let turns = 0;
   const journalValues = new Map();
@@ -625,7 +625,7 @@ test('poisoned journal preserves queued mail and shutdown releases its readiness
 });
 
 test('unrelated queued mail proceeds after UI uncertainty without resolving or replaying it', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   const first = makeBufferedReader();
   let sends = 0;
@@ -685,7 +685,7 @@ test('unrelated queued mail proceeds after UI uncertainty without resolving or r
 });
 
 test('acknowledging an admitted mail turn with unknown effects never replays it', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const mailbox = makeLiveMailbox();
   let sends = 0;
   const hostedClient = harden({

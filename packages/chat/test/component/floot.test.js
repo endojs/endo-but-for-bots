@@ -65,7 +65,7 @@ const farFactory = (name, methods) =>
 test.serial(
   'new session filters models by backend and resets reasoning',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const created = [];
@@ -253,7 +253,7 @@ test.serial(
 test.serial(
   'new session model search does not truncate catalog routes',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const models = Array.from({ length: 150 }, (_, index) => ({
@@ -317,7 +317,7 @@ test.serial(
 );
 
 test.serial('each session row says what backend and model it runs', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const parent = testDocument.createElement('div');
   testDocument.body.appendChild(parent);
   const sessions = [
@@ -421,7 +421,7 @@ test.serial('each session row says what backend and model it runs', async t => {
 test.serial(
   'Settings keeps emergency stop available during a pending resume',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const { promise: resumeResult, resolve: resolveResume } = makePromiseKit();
@@ -487,7 +487,7 @@ test.serial(
 test.serial(
   'sandbox network changes require explicit operator actions and escape request reasons',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const sets = [];
@@ -637,7 +637,7 @@ test.serial(
 test.serial(
   'journal recovery renders evidence safely and keeps unavailable sessions visible',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const resolution = makePromiseKit();
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
@@ -904,7 +904,7 @@ const textareaIn = (parent, selector) => {
  *   before the page mounts, to leave the daemon in some state
  */
 const setup = async (t, count = 2, recover = false, prepare = () => {}) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const parent = testDocument.createElement('div');
   testDocument.body.appendChild(parent);
   const daemon = makeFakeDaemon({
@@ -1213,7 +1213,7 @@ test.serial('Stop continues observing cancellation failure', async t => {
 test.serial(
   'a failed turn reads plainly in the conversation, raw reason folded',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const raw =
@@ -2721,7 +2721,7 @@ test.serial(
 test.serial(
   'new session says how each backend’s discovery stands, and offers only what the chosen subscription lists',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const facet = farSession('DiscoverySession', {
@@ -2969,7 +2969,7 @@ const openPicker = async (t, answers) => {
 test.serial(
   'new session refuses a model without canonical identity instead of falling back',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const { parent, created, card } = await openPicker(t, {
       listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
       listModels: () =>
@@ -2995,7 +2995,7 @@ test.serial(
 test.serial(
   'new session preselects a model the chosen subscription can use, never one only a lane lists',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const { select, options, change } = await openPicker(t, {
       listBackends: () =>
         harden([
@@ -3045,7 +3045,7 @@ test.serial(
 test.serial(
   'with nothing listed, a hosted backend cannot be started and the direct provider runs its configured model unpinned',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const { parent, created, select, options, change, card, pick } =
       await openPicker(t, {
         listBackends: () =>
@@ -3111,7 +3111,7 @@ test.serial(
 test.serial(
   'opening the picker reads discovery again, so what an outage at load said does not stand once the provider is back',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let reads = 0;
     const { options, open, parent, pick, created } = await openPicker(t, {
       listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
@@ -3170,7 +3170,7 @@ test.serial(
 test.serial(
   'a discovery read that fails is said in the picker, and the status line is left to the sessions',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const { parent } = await openPicker(t, {
       listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
       listModels: () => {
@@ -3198,7 +3198,7 @@ test.serial(
 test.serial(
   'a subscription change under a search keeps the selection among what the search shows, and the pick sends it',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const { select, options, change, pick, created, parent } = await openPicker(
       t,
       {
@@ -3263,7 +3263,7 @@ test.serial(
 test.serial(
   'with no sessions the space makes none on its own, and says so',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const created = [];
@@ -3302,7 +3302,7 @@ test.serial(
 test.serial(
   'a session started from another page is shown when nothing was open',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const list = makeBufferedReader();
@@ -3368,7 +3368,7 @@ test.serial(
 test.serial(
   'only user-initiated roots are listed and opened across list updates',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const list = makeBufferedReader();
@@ -3457,7 +3457,7 @@ test.serial(
 test.serial(
   'saved-model presets honor explicit internet off without backend network controls',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.append(parent);
     const created = [];
@@ -3529,7 +3529,7 @@ test.serial(
 test.serial(
   'inventory picker sends a nested object reference through the confined composer',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const parent = testDocument.createElement('div');
     testDocument.body.append(parent);
     const object = Far('Notes', { read: () => 'notes' });

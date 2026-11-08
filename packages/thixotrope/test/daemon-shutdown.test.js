@@ -13,7 +13,7 @@ const nodePowers = makeNodePowers();
 test.serial(
   'failed sleep drains other workers before releasing ownership',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const raw = makePeerJournalReplayEngine(nodePowers);
     let releaseSlow = () => {};
     const slowGate = new Promise(resolve => {

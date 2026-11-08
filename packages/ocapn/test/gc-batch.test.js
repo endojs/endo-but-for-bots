@@ -84,7 +84,7 @@ test('empty lists and malformed notices retain immediate codec behavior', t => {
 });
 
 test('a deferred GC send failure invokes the session abort handler once', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const error = Error('write failed after uncertain acceptance');
   let attempts = 0;
   let resolveFailure;

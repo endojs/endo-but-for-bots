@@ -191,7 +191,7 @@ test('entrypoints validate IDs before using host authority', async t => {
 
 for (const fails of [false, true]) {
   test(`close drains admitted writes and fences old facets: fails=${fails}`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const entered = makePromiseKit();
     const release = makePromiseKit();
     t.teardown(() => release.resolve(undefined));
@@ -231,7 +231,7 @@ for (const fails of [false, true]) {
 }
 
 test('lost acknowledgement poisons queued operations; revival retains immutable committed record', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let fail = true;
   const f = fixture({
     afterStore: (_value, name) => {

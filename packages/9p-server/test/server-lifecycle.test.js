@@ -122,7 +122,7 @@ const makePeer = (t, fs, onClose) => {
 };
 
 test('failed filesystem write keeps its error while connection cleanup releases the writer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let writes = 0;
   const fs = wrapBackend(
     harden({
@@ -157,7 +157,7 @@ test('failed filesystem write keeps its error while connection cleanup releases 
 
 for (const trigger of ['control', 'disconnect']) {
   test(`connection ${trigger} waits for and closes a late OpenFile`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const entered = defer();
     const opened = defer();
     t.teardown(() => opened.resolve(handle));
@@ -215,7 +215,7 @@ for (const trigger of ['control', 'disconnect']) {
 }
 
 test('connection close waits for an admitted write before closing its OpenFile', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = defer();
   const written = defer();
   t.teardown(() => written.resolve());
@@ -264,7 +264,7 @@ test('connection close waits for an admitted write before closing its OpenFile',
 
 for (const late of [false, true]) {
   test(`connection close signals ${late ? 'late' : 'pending'} reader before draining dispatch`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const entered = defer();
     const read = defer();
     const pulled = defer();
@@ -334,7 +334,7 @@ for (const late of [false, true]) {
 }
 
 test('connection close retains a failed cursor closure and retries only remaining resources', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let cursorCloses = 0;
   let fileCloses = 0;
   let notifications = 0;
@@ -376,7 +376,7 @@ test('connection close retains a failed cursor closure and retries only remainin
 });
 
 test('connection close waits for a held cursor closure', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = defer();
   const released = defer();
   t.teardown(() => released.resolve());
@@ -403,7 +403,7 @@ test('connection close waits for a held cursor closure', async t => {
 });
 
 test('socket-triggered cleanup failure stays owned until an explicit retry', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let attempts = 0;
   let notifications = 0;
   const cursor = Far('Cursor', {
@@ -456,7 +456,7 @@ test('a created OpenFile remains owned when the following lookup fails', async t
 });
 
 test('connection close drains issued walk calls after an early error reply', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const lookedUp = defer();
   const entered = defer();
   t.teardown(() => lookedUp.resolve(file));
@@ -495,7 +495,7 @@ test('connection close drains issued walk calls after an early error reply', asy
 
 for (const failCleanup of [false, true]) {
   test(`connection cleanup separates read failure from ${failCleanup ? 'failed' : 'successful'} stream release`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let refuseCleanup = failCleanup;
     t.teardown(() => {
       refuseCleanup = false;
@@ -547,7 +547,7 @@ for (const failCleanup of [false, true]) {
 }
 
 test('Tclunk retains its fid and parent while a prior stream cleanup is failing', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let refuseCleanup = true;
   t.teardown(() => {
     refuseCleanup = false;

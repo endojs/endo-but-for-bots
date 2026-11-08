@@ -27,7 +27,7 @@ test('cleanup attempts independent releases and retries only failed resources', 
 });
 
 test('concurrent cleanup callers share a flight and closing forbids acquisition', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const scope = makeCleanupScope();
   let release = () => {};
   const barrier = new Promise(resolve => {

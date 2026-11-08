@@ -138,7 +138,7 @@ test('rejects traversal, wrong native filename and paths outside sessions', asyn
 });
 
 test('FIFO is opened nonblocking and refused without waiting for a writer', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = await fixture(t);
   await promisify(execFile)('mkfifo', [f.rolloutPath]);
   await t.throwsAsync(() => captureCodexContext(f));

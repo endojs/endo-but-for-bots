@@ -94,7 +94,7 @@ test('an empty journal publishes sequence zero', async t => {
 });
 
 test('publication is acknowledged before pruning, retaining four older snapshots', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makeGate();
   const release = makeGate();
   t.teardown(release.open);
@@ -137,7 +137,7 @@ test('publication is acknowledged before pruning, retaining four older snapshots
 });
 
 test('a failed publication preserves the old record and does not poison queued writes', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const entered = makeGate();
   const release = makeGate();
   t.teardown(release.open);

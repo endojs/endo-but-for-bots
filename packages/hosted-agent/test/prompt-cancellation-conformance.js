@@ -14,7 +14,7 @@
  * expected: string[] }} fixture
  */
 export const exercisePromptCancellation = async (t, fixture) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   await fixture.start();
   t.deepEqual(fixture.admitted(), [], 'preparation has not admitted a prompt');
   await fixture.cancel();

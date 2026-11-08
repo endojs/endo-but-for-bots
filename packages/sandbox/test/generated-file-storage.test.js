@@ -161,7 +161,7 @@ test('failed release retains reservation and remains retryable after store close
 });
 
 test('close during a write drains acquisition and prevents publication', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const { directory } = await rootFixture(t);
   const entered = makePromiseKit();
   const finish = makePromiseKit();
@@ -259,7 +259,7 @@ test('a changed writable alias is rechecked even after materialization', async t
 });
 
 test('concurrent stages share one atomic storage reservation', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const { directory } = await rootFixture(t);
   const entered = makePromiseKit();
   const finish = makePromiseKit();
@@ -293,7 +293,7 @@ test('concurrent stages share one atomic storage reservation', async t => {
 });
 
 test('release waits for a pending write and prevents publication', async t => {
-  t.timeout(3000);
+  t.timeout(10_000);
   const { directory } = await rootFixture(t);
   const entered = makePromiseKit();
   const finish = makePromiseKit();

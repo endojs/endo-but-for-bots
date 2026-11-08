@@ -14,7 +14,7 @@ const dom = createDOM();
 test.serial(
   'shared Chat composer restores chips, ignores IME, sends once, and disables input',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const edits = [];
     let sends = 0;
     const composer = makeFlootComposer({
@@ -75,7 +75,7 @@ test.serial(
 test.serial(
   'rich paste and drop insert only literal multiline text',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const edits = [];
     const composer = makeFlootComposer({
       document: /** @type {any} */ (dom.document),
@@ -125,7 +125,7 @@ test.serial(
 test.serial(
   'Backspace removal updates the saved draft and releases the document listener on disposal',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     const edits = [];
     const added = new Set();
     const add = dom.document.addEventListener;

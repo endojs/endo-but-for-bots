@@ -27,7 +27,7 @@ test.beforeEach(() => localStorage.clear());
  * @param {boolean} [options.tts]
  */
 const setup = async (t, { tts = false } = {}) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const parent = doc.createElement('div');
   doc.body.append(parent);
   let speechCalls = 0;

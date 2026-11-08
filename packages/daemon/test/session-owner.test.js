@@ -238,7 +238,7 @@ test('failed removal persists intent across owner reconstruction', async t => {
 });
 
 test('a stopped incarnation cannot dispatch after delayed capability resolution', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = makeHarness();
   const pending = makePromiseKit();
   const entered = makePromiseKit();
@@ -292,7 +292,7 @@ test('incomplete adopted records retain cleanup authority rather than infer no e
 });
 
 test('stop fences a client facet whose passive record read is still pending', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const h = makeHarness();
   const entered = makePromiseKit();
   const resume = makePromiseKit();

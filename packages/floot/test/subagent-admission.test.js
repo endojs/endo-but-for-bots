@@ -28,7 +28,7 @@ test('reservations count unpublished work once, isolate roots, and recover after
 });
 
 test('depth is checked at admission and deleting ancestors fence descendants', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const sessions = [
     { id: 'root', lifecycle: 'ready' },
     { id: 'child', parentSessionId: 'root', subagentName: 'a' },

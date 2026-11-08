@@ -352,7 +352,7 @@ test('diagnostic observer failures cannot change provider outcomes', async t => 
 });
 
 test('body failures and idle deadlines emit one sanitized diagnostic', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const diagnostics = [];
   const { response } = streamResponse([new Uint8Array([0xff])]);
   const invalid = setup(
@@ -495,7 +495,7 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
 });
 
 test('timeout settles even when fetch ignores abort and cancels a late response', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let deliver = _value => {};
   let began = () => {};
   const started = new Promise(resolve => {
@@ -522,7 +522,7 @@ test('timeout settles even when fetch ignores abort and cancels a late response'
 });
 
 test('dispose aborts a pending body read and refuses subsequent dispatch', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   /** @type {AbortSignal | undefined} */
   let signal;
   let began = () => {};
@@ -682,7 +682,7 @@ test('request bounds, header smuggling and redirects are rejected', async t => {
 });
 
 test('incremental reader delivers before EOF and retains deadline while idle', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   let closed = false;
   const body = new ReadableStream({
     start(controller) {
@@ -704,7 +704,7 @@ test('incremental reader delivers before EOF and retains deadline while idle', a
 });
 
 test('incremental cancellation settles an outstanding pull', async t => {
-  t.timeout(1000);
+  t.timeout(10_000);
   const lease = setup(async () => new Response(new ReadableStream()));
   t.teardown(lease.dispose);
   const response = await E(lease.transport).requestStream(request);

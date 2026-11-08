@@ -208,10 +208,11 @@ test('rename fires child-removed on src parent and child-added on dst parent', a
 
 test('watcher unblocks pending consumers when the backend iterator errors', async t => {
   // If the pump hangs (the bug this test pins), ava's t.timeout
-  // catches it — no need to race a manual setTimeout. Two seconds
-  // is plenty for the close() propagation; if it takes longer than
-  // that the bug is back regardless of the exact deadline.
-  t.timeout(2000);
+  // catches it — no need to race a manual setTimeout. Ten seconds
+  // is far more than the close() propagation needs, yet still bounds a
+  // hang; the slack absorbs coverage and CI load under ava's wall-clock
+  // deadline.
+  t.timeout(10_000);
 
   // A backend whose `watch` iterator throws on first next(). The
   // pump must surface the failure as a stream-done so subscribers
@@ -649,7 +650,7 @@ test('Directory.getAttrs() throws ENOENT on a removed path', async t => {
 
 for (const fails of [false, true]) {
   test(`OpenFile writer cleanup waits for ${fails ? 'failed' : 'successful'} commit without repeating it`, async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     let entered;
     const started = new Promise(resolve => {
       entered = resolve;

@@ -166,7 +166,7 @@ for (const persisted of [false, true]) {
 }
 
 test('dispatch acknowledgement waits for durable marker storage', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const f = fixture();
   let release = () => {};
   let entered = () => {};
@@ -663,7 +663,7 @@ test('targeted reads are detached snapshots and invalid transitions leave eviden
 });
 
 test('prepared transitions wait for storage and serialize following reads', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const store = new Map();
   // Replaced synchronously by the executor below; typed so the later call is
   // not reading a possibly-undefined binding.

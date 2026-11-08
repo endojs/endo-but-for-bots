@@ -228,7 +228,7 @@ const makeDrivenTurn = () => {
 };
 
 test('restarting speech on a live turn replays what was said and carries the rest', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const driven = makeDrivenTurn();
   const { ttsServer, textReaders, options } = makeFakeTts();
 

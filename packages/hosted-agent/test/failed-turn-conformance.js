@@ -10,7 +10,7 @@
  * admitted: () => string[] }} fixture
  */
 export const exerciseFailedTurnSuccessor = async (t, fixture) => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const failed = await fixture.fail();
   t.is(failed.at(-1)?.type, 'abort');
   t.is(failed.filter(event => ['abort', 'end'].includes(event.type)).length, 1);

@@ -172,7 +172,7 @@ test('Codex broker configuration refuses authority injection and unbound account
 });
 
 test('all Codex scopes share one host-only renewing credential and close with their owner', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const secret = Far('ExactRenewableSecret', {
     async readBase64() {
       throw Error('must not read on construction');

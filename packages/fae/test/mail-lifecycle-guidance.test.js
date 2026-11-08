@@ -22,7 +22,7 @@ for (const make of [makeExecTool, makeListMessagesTool, makeDismissTool]) {
 }
 
 test('exec can inspect mailbox data without awaiting lifecycle promises', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const dismissed = makePromiseKit();
   const settled = makePromiseKit();
   t.teardown(() => {

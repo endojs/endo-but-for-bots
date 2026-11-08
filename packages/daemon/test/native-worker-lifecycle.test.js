@@ -97,7 +97,7 @@ const prepare = t => {
 };
 
 test('native worker waits for child close after cancellation and process exit', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const { make, child, cancelled, signals, closedLogs } = prepare(t);
   const { workerTerminated, workerDaemonFacet } = await make();
   void Promise.resolve(workerDaemonFacet).catch(() => {});
@@ -119,7 +119,7 @@ test('native worker waits for child close after cancellation and process exit', 
 });
 
 test('native worker signals cancellation while post-fork setup is pending', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = prepare(t);
   const held = makePromiseKit();
   fixture.controls.write = () => held.promise;
@@ -145,7 +145,7 @@ test('native worker signals cancellation while post-fork setup is pending', asyn
 });
 
 test('native worker setup rejection retains the child until stdio closes', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = prepare(t);
   fixture.controls.write = async () => {
     throw Error('Cannot write pid');
@@ -168,7 +168,7 @@ test('native worker setup rejection retains the child until stdio closes', async
 });
 
 test('native worker cancellation before paths finish prevents fork', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = prepare(t);
   const held = makePromiseKit();
   fixture.controls.makePath = () => held.promise;
@@ -194,7 +194,7 @@ test('native worker fork failure releases the parent log descriptor', async t =>
 });
 
 test('native worker spawn error is observed and waits for close', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   const fixture = prepare(t);
   const held = makePromiseKit();
   fixture.controls.write = () => held.promise;

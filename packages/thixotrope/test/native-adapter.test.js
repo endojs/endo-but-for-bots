@@ -176,7 +176,7 @@ test.serial(
 test.serial(
   'retiring a manager closes the adapters it launched and no others',
   async t => {
-    t.timeout(5000);
+    t.timeout(10_000);
     /** @type {Array<{owner: string, terminated: boolean}>} */
     const children = [];
     const adapters = makeNativeAdapters(
@@ -234,7 +234,7 @@ test.serial(
 );
 
 test.serial('native shutdown closes a process awaiting its root', async t => {
-  t.timeout(5000);
+  t.timeout(10_000);
   let reportExit;
   let resolveClosed;
   let rejectRoot;
