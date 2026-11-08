@@ -42,13 +42,15 @@
  */
 
 import { Fail, q } from '@endo/errors';
-
-import { UNSETTLED_TOOL_RESULT } from './hosted-turn.js';
 import {
   sameExecutedToolName,
   sameToolArgs,
   sameToolResult,
 } from './tool-evidence.js';
+
+export const UNSETTLED_TOOL_RESULT =
+  'The turn ended before this tool call reported a result.';
+harden(UNSETTLED_TOOL_RESULT);
 
 /** What a host that cannot say an outcome shows in place of one. */
 export const UNKNOWN_TOOL_OUTCOME =

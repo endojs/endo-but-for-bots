@@ -22,13 +22,6 @@ test('journal storage must be explicit before guest or runtime side effects', as
         return {};
       },
     },
-    {
-      kind: 'hosted',
-      provideHostedClient: () => {
-        effects += 1;
-        return {};
-      },
-    },
     { kind: 'records-only' },
   ]) {
     for (const options of [
@@ -57,7 +50,6 @@ test('journal storage must be explicit before guest or runtime side effects', as
 test('runtime modes require exactly their own constructor', t => {
   for (const config of [
     { kind: 'provider', provideProvider: () => ({}) },
-    { kind: 'hosted', provideHostedClient: () => ({}) },
     { kind: 'records-only' },
   ]) {
     t.notThrows(() => assertRuntimeConfig(/** @type {any} */ (config)));
@@ -80,6 +72,7 @@ test('ambiguous and legacy runtime configurations fail before powers are used', 
     { hostedClient: {} },
     { host: 'localhost', model: 'm', authToken: 'not-a-token' },
     { kind: 'provider' },
+    { kind: 'hosted', provideHostedClient: () => ({}) },
     { kind: 'provider', provideProvider: null },
     { kind: 'hosted', provideHostedClient: () => ({}), provider: {} },
     {

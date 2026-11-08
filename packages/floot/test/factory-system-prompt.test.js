@@ -9,15 +9,9 @@ import {
 } from '@endo/fae/src/credentials.js';
 import { makePromiseKit } from './_promise-kit.js';
 
+import { makeTestInference } from './_inference.js';
 import { make } from '../agent.js';
 import { directoryHost } from './_directory-host.js';
-
-const sandboxed = harden({
-  toolNamePrefix: 'mcp__endo__',
-  toolNames: {},
-  nativeTools: true,
-  workspacePath: '/workspace',
-});
 
 /** @param {string} token */
 const authSecret = token =>
@@ -26,14 +20,12 @@ const authSecret = token =>
   });
 
 /**
- * A factory over an in-memory host with one hosted backend, which records the
- * spec of every session it is asked to create: `spec.systemPrompt` is the
- * prompt a hosted model actually runs under.
+ * A factory over an in-memory host with direct subscription inference.
+ * Capture the instructions each request actually sent to the provider.
  *
- * @param {{ promptEnvironment?: object, fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown, env?: Record<string, string>, beforeGuest?: () => Promise<void>, afterStore?: (value: any, name: string) => void }} [options]
+ * @param {{ fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown, env?: Record<string, string>, beforeGuest?: () => Promise<void>, afterStore?: (value: any, name: string) => void }} [options]
  */
 const makeWorld = ({
-  promptEnvironment,
   fetch,
   lookupProvider,
   env,
@@ -75,62 +67,71 @@ const makeWorld = ({
       },
     });
   };
-  const backend = Far('PromptBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-        ...(promptEnvironment ? { promptEnvironment } : {}),
-      }),
-    modelCatalog: () =>
-      harden({
-        accounts: [
-          {
-            subscriptionId: 'default',
-            state: 'current',
-            observedAt: 1,
-            models: [
-              {
-                id: 'm',
-                title: 'Model',
-                description: '',
-                default: true,
-                defaultReasoningEffort: null,
-                reasoningEfforts: [],
-              },
-            ],
-          },
-        ],
-      }),
-    create: async (spec, toolSet) => {
-      specs.push(spec);
-      return harden({
-        run: Far('PromptRun', {
-          send: async () => {
-            const events = makeBufferedReader();
-            const act = duringNextTurn;
-            duringNextTurn = undefined;
-            if (act) await act(toolSet);
-            events.push({ type: 'text-delta', text: 'ok' });
-            events.push({ type: 'end' });
-            return events.reader;
-          },
-          interrupt: () => undefined,
-          acknowledge: () => undefined,
-        }),
-        admin: Far('PromptAdmin', { terminate: () => undefined }),
+  // A scripted model emits tool calls and observes their results through the
+  // real direct Responses path. Consecutive turns use fresh call identities.
+  const replies = new Map();
+  let nextCall = 0;
+  let ready = makePromiseKit();
+  const outgoing = [];
+  let finished = true;
+  let scriptError;
+  const inference = makeTestInference(async (body, sessionId) => {
+    specs.push({
+      sessionId: sessionId.slice('floot-'.length),
+      systemPrompt: body.instructions,
+    });
+    for (const item of body.input) {
+      const pending = replies.get(item.call_id);
+      if (pending && item.type === 'function_call_output') {
+        replies.delete(item.call_id);
+        if (item.output.startsWith('Error: '))
+          pending.reject(Error(item.output.slice(7)));
+        else pending.resolve(item.output);
+      }
+    }
+    if (duringNextTurn) {
+      const act = duringNextTurn;
+      duringNextTurn = undefined;
+      finished = false;
+      const tools = Far('ScriptedToolCalls', {
+        execute(name, args) {
+          const callId = `call-${(nextCall += 1)}`;
+          const pending = makePromiseKit();
+          replies.set(callId, pending);
+          outgoing.push({
+            type: 'function_call',
+            call_id: callId,
+            name,
+            arguments: JSON.stringify(args),
+          });
+          ready.resolve();
+          return pending.promise;
+        },
       });
-    },
-    destroy: () => undefined,
-    stop: () => undefined,
+      void act(tools)
+        .catch(error => {
+          scriptError = error;
+        })
+        .finally(() => {
+          finished = true;
+          ready.resolve();
+        });
+    }
+    while (!outgoing.length && !finished) {
+      // Each model response waits for the next operation in the script.
+      // eslint-disable-next-line no-await-in-loop
+      await ready.promise;
+      ready = makePromiseKit();
+    }
+    if (scriptError) throw scriptError;
+    if (outgoing.length) return outgoing.splice(0);
+    return 'ok';
   });
   /** @type {Map<string, any>} */
   const hostStore = new Map(
     /** @type {[string, any][]} */ ([
-      ['codex-backend', backend],
+      ['codex-model-catalog', inference.catalog],
+      ['codex-inference', inference.subscription],
       [AUTH_SECRET_PETNAME, authSecret('test-key')],
     ]),
   );
@@ -166,7 +167,10 @@ const makeWorld = ({
     const { id } = await E(session).getInfo();
     const turn = await E(session).startTurn('hello');
     await E(turn).whenFinished();
-    const spec = specs.find(candidate => candidate.sessionId === id);
+    if (scriptError) throw scriptError;
+    const status = await E(turn).getStatus();
+    if (status.error) throw Error(status.error);
+    const spec = specs.findLast(candidate => candidate.sessionId === id);
     if (!spec) throw Error(`the backend never created session ${id}`);
     return `${spec.systemPrompt}`;
   };
@@ -203,13 +207,13 @@ const makeWorld = ({
   };
 };
 
-const hosted = harden({ backendId: 'test', modelId: 'm' });
+const direct = harden({ backendId: 'fae-codex', modelId: 'm' });
 
 test('subagent capability name collision rolls back without replacing inventory', async t => {
   t.timeout(10_000);
   const world = makeWorld();
   t.teardown(world.close);
-  const parent = await E(world.factory).createSession(hosted);
+  const parent = await E(world.factory).createSession(direct);
   const parentId = (await E(parent).getInfo()).id;
   const guest = world.hostStore.get(`floot-private-sessions/${parentId}/guest`);
   await E(guest).storeValue('explicit', 'source');
@@ -238,7 +242,7 @@ test('subagent spawn installs explicit capabilities without inheriting the paren
   t.timeout(10_000);
   const world = makeWorld();
   t.teardown(world.close);
-  const parent = await E(world.factory).createSession(hosted);
+  const parent = await E(world.factory).createSession(direct);
   const parentId = (await E(parent).getInfo()).id;
   const guest = world.hostStore.get(`floot-private-sessions/${parentId}/guest`);
   const source = Far('ReadOnlySource', { read: () => 'approved source' });
@@ -273,33 +277,33 @@ test('subagent spawn installs explicit capabilities without inheriting the paren
   );
 });
 
-test('a hosted session runs the prompt composed for its backend', async t => {
+test('a direct session runs its composed prompt', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const session = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     title: 'Hosted',
     spoken: true,
   });
   const prompt = await world.promptOf(session);
-  t.true(prompt.includes('`exec` appears as `mcp__endo__exec`'));
-  t.true(prompt.includes('attachContainerMount'));
+  t.false(prompt.includes('mcp__endo__exec'));
+  t.false(prompt.includes('attachContainerMount'));
   t.true(prompt.includes('Your replies are spoken aloud'));
 });
 
 test('only a caller that says its replies are spoken gets the voice rules', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const silent = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     title: 'Driven by a script',
   });
   t.false((await world.promptOf(silent)).includes('aloud'));
   // Saying so takes `true`, not a value that happens to be truthy.
   const truthy = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     title: 'Truthy',
     spoken: 'yes',
   });
@@ -308,10 +312,10 @@ test('only a caller that says its replies are spoken gets the voice rules', asyn
 
 test('a subagent of a full-control session keeps the operator’s rules and is not spoken', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const parent = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     presetId: 'full-control',
     spoken: true,
   });
@@ -343,23 +347,22 @@ test('a backend that declares nothing gets no claim about names or paths', async
   const world = makeWorld();
   t.teardown(world.close);
   const session = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     presetId: 'full-control',
   });
   const prompt = await world.promptOf(session);
-  t.true(prompt.includes('Where you run'));
+  t.false(prompt.includes('Where you run'));
   t.false(prompt.includes('appears as'));
   t.false(prompt.includes('/workspace'));
-  // It is still a hosted session, and those are handed the mount tools.
-  t.true(prompt.includes('attachContainerMount'));
+  t.false(prompt.includes('attachContainerMount'));
 });
 
 test('a subagent is never spoken, whatever its parent is', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const parent = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     title: 'Parent',
     spoken: true,
   });
@@ -382,19 +385,19 @@ test('a subagent is never spoken, whatever its parent is', async t => {
   t.false(prompt.includes('aloud'));
   // It runs where its parent runs, under the operator's preset, with the
   // parent's instructions appended rather than substituted.
-  t.true(prompt.includes('`exec` appears as `mcp__endo__exec`'));
+  t.false(prompt.includes('mcp__endo__exec'));
   t.true(prompt.includes('You are a subagent.'));
   t.true(prompt.endsWith('Find the bug.'));
 });
 
 test('a caller cannot make a subagent spoken by asking', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   // The delegation fields are stripped from a public call, so this is an
   // ordinary top-level session; what it must not be is a way to forge one.
   const session = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     parentSessionId: 'someone-else',
     userInitiated: true,
     spoken: true,
@@ -407,10 +410,10 @@ test('a caller cannot make a subagent spoken by asking', async t => {
 
 test('an operator prompt replaces the preset’s and is not recomposed', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const session = await E(world.factory).createSession({
-    ...hosted,
+    ...direct,
     systemPrompt: 'Be a poet.',
     spoken: true,
   });
@@ -419,13 +422,13 @@ test('an operator prompt replaces the preset’s and is not recomposed', async t
 
 test('invalid custom prompts cannot publish an unrestorable session', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const before = [...world.hostStore.entries()];
   for (const systemPrompt of ['', '  \n\t', null, false, 7, {}]) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
-      E(world.factory).createSession({ ...hosted, systemPrompt }),
+      E(world.factory).createSession({ ...direct, systemPrompt }),
       { message: /systemPrompt must be a nonblank string/ },
     );
   }
@@ -435,12 +438,12 @@ test('invalid custom prompts cannot publish an unrestorable session', async t =>
 
 test('an explicit spoken record retains the setup session voice rules', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   await E(world.factory).createSession({
     title: 'Spoken',
     presetId: 'general',
-    backendId: 'test',
+    backendId: 'fae-codex',
     modelId: 'm',
     spoken: true,
   });
@@ -451,11 +454,11 @@ test('an explicit spoken record retains the setup session voice rules', async t 
 
 test('createSession rejects the obsolete model option even beside canonical fields', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   for (const model of ['test:m', '', undefined]) {
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(E(world.factory).createSession({ ...hosted, model }), {
+    await t.throwsAsync(E(world.factory).createSession({ ...direct, model }), {
       message: /option "model" is unsupported; use backendId and modelId/,
     });
   }
@@ -464,8 +467,12 @@ test('createSession rejects the obsolete model option even beside canonical fiel
 
 test('createSession never infers a hosted backend from a colon in modelId', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
+  world.hostStore.set(
+    'llm-provider',
+    harden({ provider: 'unsupported-test-provider', model: 'test' }),
+  );
   await t.throwsAsync(E(world.factory).createSession({ modelId: 'test:m' }), {
     message: /provider backend|provider kind/,
   });
@@ -474,7 +481,7 @@ test('createSession never infers a hosted backend from a colon in modelId', asyn
 
 test('createSession rejects non-record and positional arguments before provisioning', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   const invalidArguments = [
     [],
@@ -482,7 +489,7 @@ test('createSession rejects non-record and positional arguments before provision
     [null],
     [[]],
     ['Spoken', 'general', 'test:m'],
-    [{ ...hosted }, 'general'],
+    [{ ...direct }, 'general'],
   ];
   await Promise.all(
     invalidArguments.map(args =>
@@ -490,37 +497,6 @@ test('createSession rejects non-record and positional arguments before provision
     ),
   );
   t.deepEqual(await E(world.factory).listSessions(), []);
-});
-
-test('a session keeps the prompt it started with when the backend changes its story', async t => {
-  t.timeout(10_000);
-  let environment = sandboxed;
-  const world = makeWorld();
-  t.teardown(world.close);
-  // Swap the backend for one whose descriptor can change under the session.
-  const original = /** @type {any} */ (world.hostStore.get('codex-backend'));
-  world.hostStore.set(
-    'codex-backend',
-    Far('ChangingBackend', {
-      describe: async () =>
-        harden({
-          ...(await E(original).describe()),
-          promptEnvironment: environment,
-        }),
-      modelCatalog: () => E(original).modelCatalog(),
-      create: (spec, toolSet) => E(original).create(spec, toolSet),
-      destroy: spec => E(original).destroy(spec),
-      stop: spec => E(original).stop(spec),
-    }),
-  );
-  const session = await E(world.factory).createSession({ ...hosted });
-  environment = harden({ ...sandboxed, toolNamePrefix: 'other_' });
-  const prompt = await world.promptOf(session);
-  t.true(prompt.includes('mcp__endo__exec'));
-  t.false(prompt.includes('other_'));
-  // A new session hears the new story.
-  const later = await E(world.factory).createSession({ ...hosted });
-  t.true((await world.promptOf(later)).includes('other_exec'));
 });
 
 /**
@@ -878,7 +854,7 @@ test('old catalog-read completion cannot evict its still-pending replacement', a
   const oldGate = makePromiseKit();
   const newGate = makePromiseKit();
   let requests = 0;
-  let hostedCatalogReads = 0;
+  let subscriptionCatalogReads = 0;
   const world = makeWorld({
     fetch: async url => {
       t.is(`${url}`, 'https://openrouter.ai/api/v1/models/user');
@@ -899,18 +875,10 @@ test('old catalog-read completion cannot evict its still-pending replacement', a
     await world.close();
   });
   world.hostStore.set(
-    'codex-backend',
+    'codex-model-catalog',
     Far('CountingCatalogBackend', {
-      describe: () =>
-        harden({
-          id: 'test',
-          title: 'Test',
-          kind: 'hosted',
-          continuity: 'explicit',
-          toolOwnership: 'endo',
-        }),
       modelCatalog: () => {
-        hostedCatalogReads += 1;
+        subscriptionCatalogReads += 1;
         return harden({ accounts: [] });
       },
     }),
@@ -950,18 +918,28 @@ test('old catalog-read completion cannot evict its still-pending replacement', a
   t.is(requests, 2);
   // Provider-owner singleflight could hide a duplicated factory catalog read.
   // The combined listing's hosted half runs once per factory read instead.
-  t.is(hostedCatalogReads, 2);
+  t.is(subscriptionCatalogReads, 2);
 });
 
-for (const pinned of [false, true]) {
+for (const route of ['default', 'pinned', 'independent OpenRouter']) {
+  const pinned = route !== 'default';
+  const backendId =
+    route === 'independent OpenRouter' ? 'openrouter' : 'provider';
+  const configName =
+    backendId === 'openrouter' ? 'openrouter-provider' : 'llm-provider';
   test.serial(
-    `direct provider delegation preserves explicit ${pinned ? 'colon-route pin' : 'configured-default'} identity across restoration`,
+    `direct provider delegation preserves explicit ${route} identity across restoration`,
     async t => {
       t.timeout(10_000);
       const originalFetch = globalThis.fetch;
       const requests = [];
       let sentTool = false;
       const fakeFetch = async (url, init) => {
+        if (backendId === 'openrouter' && !`${url}`.endsWith('/models'))
+          t.is(
+            new Headers(init.headers).get('authorization'),
+            'Bearer separate-test-key',
+          );
         if (`${url}`.endsWith('/models/user') || `${url}`.endsWith('/models')) {
           return Response.json({
             data: [
@@ -1017,14 +995,32 @@ for (const pinned of [false, true]) {
       const world = makeWorld({ fetch: fakeFetch });
       t.teardown(world.close);
       world.hostStore.set(
-        'llm-provider',
+        configName,
         harden({
           provider: 'openrouter',
           model: 'vendor/model:free',
         }),
       );
+      if (backendId === 'openrouter') {
+        world.hostStore.set(
+          'llm-provider',
+          harden({ provider: 'anthropic', model: 'other-model' }),
+        );
+        world.hostStore.set('openrouter-auth', authSecret('separate-test-key'));
+        const choices = (await E(world.factory).listBackends()).map(
+          row => row.providerId,
+        );
+        t.true(choices.includes('anthropic-api'));
+        t.true(choices.includes('openrouter'));
+        const [listed] = await E(world.factory).listModels('openrouter');
+        t.like(listed, {
+          providerId: 'openrouter',
+          backendId: 'openrouter',
+          modelId: 'vendor/model:free',
+        });
+      }
       const parent = await E(world.factory).createSession({
-        backendId: 'provider',
+        backendId,
         modelId: pinned ? 'vendor/model:free' : '',
         title: 'Direct parent',
         spoken: true,
@@ -1052,7 +1048,7 @@ for (const pinned of [false, true]) {
       );
       t.truthy(child);
       t.like(child, {
-        backendId: 'provider',
+        backendId,
         modelId: pinned ? 'vendor/model:free' : '',
         subagentName: 'helper',
         subagentDepth: 1,
@@ -1063,7 +1059,7 @@ for (const pinned of [false, true]) {
       t.is(world.specs.length, 0);
       const parentHistory = await E(parent).getHistory();
       world.hostStore.set(
-        'llm-provider',
+        configName,
         harden({
           provider: 'openrouter',
           model: 'vendor/new-default',
@@ -1075,7 +1071,7 @@ for (const pinned of [false, true]) {
         ? 'vendor/model:free'
         : 'vendor/new-default';
       t.like(await E(restored).getInfo(), {
-        backendId: 'provider',
+        backendId,
         modelId: pinned ? 'vendor/model:free' : '',
         effectiveModelId,
       });
@@ -1150,8 +1146,12 @@ test('direct provider creation persists explicit identity for a discovered pin i
 
 test('a provider session is composed for the provider, and its context is recorded', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
+  world.hostStore.set(
+    'llm-provider',
+    harden({ provider: 'anthropic', model: 'm' }),
+  );
   await E(world.factory).createSession({
     title: 'Provider',
     presetId: 'full-control',
@@ -1169,8 +1169,6 @@ test('a provider session is composed for the provider, and its context is record
     state: 'running',
     supported: false,
   });
-  await t.throwsAsync(E(session).getBindings(), { message: /hosted/ });
-  await t.throwsAsync(E(session).rebind([]), { message: /hosted/ });
   t.is(world.specs.length, 0);
   // No sandbox, so none of what only a sandbox has.
   t.false(entry.systemPrompt.includes('Where you run'));
@@ -1190,36 +1188,16 @@ test('a provider session is composed for the provider, and its context is record
   });
 });
 
-test('a hosted session records the environment it was composed for', async t => {
-  t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
-  t.teardown(world.close);
-  const session = await E(world.factory).createSession({ ...hosted });
-  const { id } = await E(session).getInfo();
-  const entry = registryOf(world.hostStore).find(
-    candidate => candidate.id === id,
-  );
-  t.deepEqual(entry.promptContext, {
-    environment: sandboxed,
-    spoken: false,
-    containerMounts: true,
-  });
-  // The record is the daemon's; a view of the session list does not carry it.
-  const [listed] = await E(world.factory).listSessions();
-  t.false('promptContext' in listed);
-  t.false('systemPrompt' in listed);
-});
-
 test('workflow sessions are explicitly created outside the user list', async t => {
   t.timeout(10_000);
   const world = makeWorld();
   t.teardown(world.close);
-  await E(world.factory).createSession({ ...hosted });
+  await E(world.factory).createSession({ ...direct });
   const [entry] = await E(world.factory).listSessions();
   t.false(entry.userInitiated);
   t.is(entry.parentSessionId, '');
   await t.throwsAsync(
-    E(world.factory).createSession({ ...hosted, userInitiated: 'false' }),
+    E(world.factory).createSession({ ...direct, userInitiated: 'false' }),
     {
       message: /userInitiated must be a boolean/,
     },
@@ -1230,7 +1208,7 @@ test('delegation stays enabled but recursive verification stops at the depth bou
   t.timeout(10_000);
   const world = makeWorld();
   t.teardown(world.close);
-  let session = await E(world.factory).createSession(hosted);
+  let session = await E(world.factory).createSession(direct);
   // Each child must exist before its tool set can create the next generation.
   /* eslint-disable no-await-in-loop */
   for (const name of ['researcher', 'checker']) {
@@ -1264,7 +1242,7 @@ test('concurrent spawns share the whole tree budget, survive revival, and recove
     env: { FLOOT_MAX_SUBAGENTS: '3', FLOOT_MAX_SUBAGENT_DEPTH: '4' },
   });
   t.teardown(world.close);
-  let parent = await E(world.factory).createSession(hosted);
+  let parent = await E(world.factory).createSession(direct);
   const rootId = (await E(parent).getInfo()).id;
   world.duringNextTurn(async tools => {
     await E(tools).execute('spawnSubagent', harden({ name: 'researcher' }));
@@ -1310,7 +1288,7 @@ test('duplicate concurrent names and failed introductions do not leak reservatio
   t.timeout(10_000);
   const world = makeWorld({ env: { FLOOT_MAX_SUBAGENTS: '1' } });
   t.teardown(world.close);
-  const parent = await E(world.factory).createSession(hosted);
+  const parent = await E(world.factory).createSession(direct);
   const { id } = await E(parent).getInfo();
   await E(world.hostStore.get(`floot-private-sessions/${id}/guest`)).storeValue(
     'value',
@@ -1363,15 +1341,12 @@ test('deleting a parent drains an in-flight spawn without stranding its child', 
     resume.resolve(undefined);
     await world.close();
   });
-  const parent = await E(world.factory).createSession(hosted);
+  const parent = await E(world.factory).createSession(direct);
   const { id } = await E(parent).getInfo();
   block = true;
-  world.duringNextTurn(async tools => {
-    await t.throwsAsync(
-      E(tools).execute('spawnSubagent', harden({ name: 'helper' })),
-      { message: /no longer accepts delegation/ },
-    );
-  });
+  world.duringNextTurn(tools =>
+    E(tools).execute('spawnSubagent', harden({ name: 'helper' })),
+  );
   const turn = await E(parent).startTurn('delegate');
   await entered.promise;
   const deletion = E(world.factory).deleteSession(id);
@@ -1395,7 +1370,7 @@ test('restart finishes a fenced subtree before reviving its descendants', async 
     },
   });
   t.teardown(world.close);
-  const parent = await E(world.factory).createSession(hosted);
+  const parent = await E(world.factory).createSession(direct);
   const { id } = await E(parent).getInfo();
   world.duringNextTurn(async tools => {
     await E(tools).execute('spawnSubagent', harden({ name: 'worker' }));
@@ -1432,7 +1407,7 @@ test('restart finishes a fenced subtree before reviving its descendants', async 
 
 test('editable presets snapshot prompt and endowments across restart, later edits, deletion and delegation', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ promptEnvironment: sandboxed });
+  const world = makeWorld();
   t.teardown(world.close);
   let config = await E(world.factory).getPresetConfiguration();
   const general = config.presets.find(preset => preset.id === 'general');
@@ -1443,7 +1418,7 @@ test('editable presets snapshot prompt and endowments across restart, later edit
     id: 'custom-helper',
     title: 'My helper',
     instructions: 'Standing instruction alpha.',
-    backendId: 'test',
+    backendId: 'fae-codex',
     modelId: 'm',
     endowments: [
       { petName: 'notebook', sourcePath: ['notes'], value: firstGrant },
@@ -1453,7 +1428,7 @@ test('editable presets snapshot prompt and endowments across restart, later edit
   config = await E(world.factory).setVoicePreset(custom.id, config.revision);
   const parent = await E(world.factory).createAssistantSession();
   const info = await E(parent).getInfo();
-  t.like(info, { presetId: custom.id, backendId: 'test', modelId: 'm' });
+  t.like(info, { presetId: custom.id, backendId: 'fae-codex', modelId: 'm' });
   const guest = world.hostStore.get(`floot-private-sessions/${info.id}/guest`);
   t.is(await E(guest).lookup('notebook'), firstGrant);
   const firstPrompt = await world.promptOf(parent);
@@ -1514,14 +1489,14 @@ test('preset model defaults are overridden only by explicit session identity', a
   );
   await t.throwsAsync(
     E(world.factory).createSession(harden({ presetId: 'general' })),
-    { message: /Unknown hosted backend/ },
+    { message: /Unknown inference backend/ },
   );
   t.like(
-    await E(await E(world.factory).createSession(hosted)).getInfo(),
-    hosted,
+    await E(await E(world.factory).createSession(direct)).getInfo(),
+    direct,
   );
   await t.throwsAsync(
-    E(world.factory).createSession(harden({ presetId: 'deleted', ...hosted })),
+    E(world.factory).createSession(harden({ presetId: 'deleted', ...direct })),
     { message: /Unknown preset/ },
   );
 });
@@ -1533,7 +1508,7 @@ test('undefined session identity fields preserve saved preset defaults', async t
   const config = await E(world.factory).getPresetConfiguration();
   const general = config.presets.find(p => p.id === 'general');
   await E(world.factory).savePreset(
-    harden({ ...general, ...hosted }),
+    harden({ ...general, ...direct }),
     config.revision,
   );
   const omitted = await E(world.factory).createSession(
@@ -1547,6 +1522,6 @@ test('undefined session identity fields preserve saved preset defaults', async t
       reasoningEffort: undefined,
     }),
   );
-  t.like(await E(omitted).getInfo(), hosted);
-  t.like(await E(undefinedKeys).getInfo(), hosted);
+  t.like(await E(omitted).getInfo(), direct);
+  t.like(await E(undefinedKeys).getInfo(), direct);
 });

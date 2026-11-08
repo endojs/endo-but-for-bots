@@ -6,17 +6,19 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { makeTestInference } from './_inference.js';
+import { makePromiseKit } from './_promise-kit.js';
 import { directoryHost } from './_directory-host.js';
 import { applyTranscript } from '../src/transcript-delta.js';
 
 /**
- * A factory over an in-memory host with one hosted session, `one`, whose
- * backend replies with whatever the test pushes into `backendEvents`.
+ * A factory over an in-memory host. Tests settle each direct inference request
+ * to observe turn, transcript and queue transitions independently.
  */
 /** @param {Map<string, unknown>} [existingStore] the host store of an earlier factory: a restart */
 const makeWorld = existingStore => {
   const inbox = makeBufferedReader();
-  /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
+  /** @type {Array<ReturnType<typeof makePromiseKit>>} */
   const runs = [];
   const store = new Map();
   store.set('user', harden({}));
@@ -33,29 +35,10 @@ const makeWorld = existingStore => {
     locate: () => 'test-locator',
     followMessages: () => inbox.reader,
   });
-  const backend = Far('TestBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-      }),
-    create: async () =>
-      harden({
-        run: Far('TestRun', {
-          send: () => {
-            const events = makeBufferedReader();
-            runs.push(events);
-            return events.reader;
-          },
-          interrupt: () => undefined,
-          acknowledge: () => undefined,
-        }),
-        admin: Far('TestAdmin', { terminate: () => undefined }),
-      }),
-    destroy: () => undefined,
+  const inference = makeTestInference(() => {
+    const run = makePromiseKit();
+    runs.push(run);
+    return run.promise;
   });
   /** @type {Map<string, unknown>} */
   const hostStore = existingStore || new Map();
@@ -78,13 +61,15 @@ const makeWorld = existingStore => {
             systemPrompt: 'Captured fixture prompt.',
             presetId: 'general',
             lifecycle: 'ready',
-            backendId: 'test',
+            backendId: 'fae-codex',
+            inferenceRecipe: inference.recipe,
             modelId: 'm',
           },
         ],
       }),
     );
-  hostStore.set('codex-backend', backend);
+  // Reopening the same subscription preserves its capability; its request
+  // queue stays attached to the original endpoint as it would on daemon restart.
   const host = Far('TestHost', {
     ...directoryHost(hostStore),
     provideGuest: (_name, { agentName: agentPath }) => {
@@ -141,7 +126,7 @@ test('a session view hears a turn start, the transcript it leaves, and then its 
   t.is(snapshot.type, 'snapshot');
   t.is(snapshot.turn, null);
   t.deepEqual(snapshot.transcript.append, []);
-  t.deepEqual(snapshot.execution, { state: 'running', supported: true });
+  t.deepEqual(snapshot.execution, { state: 'running', supported: false });
   let held = applyTranscript(null, snapshot.transcript);
 
   const turn = await E(session).startTurn('hello');
@@ -151,8 +136,7 @@ test('a session view hears a turn start, the transcript it leaves, and then its 
   t.false('history' in started.event.turn, 'no promise rides the event');
 
   const run = await nextRun();
-  run.push(harden({ type: 'text-delta', text: 'hello back' }));
-  run.push(harden({ type: 'end', checkpoint: 'committed' }));
+  run.resolve('hello back');
 
   // Transcript first, then the turn reported gone: the reply never blinks out.
   const ended = await until(view, 'turn');
@@ -197,7 +181,7 @@ test('a running turn is absent from the subscribed transcript', async t => {
   const snapshot = await next(view);
   t.deepEqual(snapshot.transcript.append, []);
   t.is(snapshot.turn.turn, turn);
-  run.push(harden({ type: 'end', checkpoint: 'committed' }));
+  run.resolve('done');
   await E(turn).whenFinished();
   await view.return();
 });
@@ -216,7 +200,7 @@ test('the session list says what each session is doing', async t => {
   t.is(snapshot.type, 'snapshot');
   t.is(snapshot.sessions.length, 1);
   t.is(snapshot.sessions[0].id, 'one');
-  t.is(snapshot.sessions[0].backendId, 'test');
+  t.is(snapshot.sessions[0].backendId, 'fae-codex');
   t.is(snapshot.sessions[0].modelId, 'm');
   t.is(snapshot.sessions[0].activity, 'passive');
 
@@ -224,7 +208,7 @@ test('the session list says what each session is doing', async t => {
   const turn = await E(session).startTurn('hello');
   t.is((await until(list, 'session')).event.session.activity, 'working');
   const run = await nextRun();
-  run.push(harden({ type: 'abort', reason: 'backend fell over' }));
+  run.reject(Error('backend fell over'));
   await E(turn).whenFinished();
   // A failed turn leaves the circle on error; it does not pass through passive.
   const after = await until(list, 'session');
@@ -268,7 +252,7 @@ test('a turn already in flight is in the snapshot, not in a later event', async 
   // than wait for a "turn" event that will not come.
   t.is(snapshot.turn?.turn, turn);
   const run = await nextRun();
-  run.push(harden({ type: 'end', checkpoint: 'committed' }));
+  run.resolve('done');
   t.is((await until(view, 'turn')).event.turn, null);
   await view.return();
 });
@@ -289,8 +273,7 @@ test('two viewers of one session hear the same things', async t => {
   t.is((await until(a, 'turn')).event.turn.turn, turn);
   t.is((await until(b, 'turn')).event.turn.turn, turn);
   const run = await nextRun();
-  run.push(harden({ type: 'text-delta', text: 'hi' }));
-  run.push(harden({ type: 'end', checkpoint: 'committed' }));
+  run.resolve('hi');
   const fromA = (await until(a, 'transcript')).event;
   const fromB = (await until(b, 'transcript')).event;
   t.deepEqual(fromA, fromB);
@@ -373,8 +356,7 @@ test('a message sent to an idle session becomes a turn at once', async t => {
   const run = await nextRun();
   // The journal has the input: the queue has let go of it.
   t.deepEqual((await pendingOf(session)).texts, []);
-  run.push(harden({ type: 'text-delta', text: 'hi' }));
-  run.push(harden({ type: 'end', checkpoint: 'committed' }));
+  run.resolve('hi');
   t.is((await until(view, 'turn')).event.turn, null);
   t.deepEqual(await E(session).getHistory(), [
     { role: 'user', content: 'hello' },
@@ -402,10 +384,10 @@ test('messages sent behind a running turn wait on the daemon and run in order', 
   await E(session).editPending(three.id, 'three, revised');
   t.true(await E(session).cancelPending(two.id));
   // Nobody is watching. The turn ends; the daemon starts the next on its own.
-  first.push(harden({ type: 'end', checkpoint: 'committed' }));
+  first.resolve('done');
   const second = await nextRun();
   t.is((await E(session).getCurrentTurn()).input, 'three, revised');
-  second.push(harden({ type: 'end', checkpoint: 'committed' }));
+  second.resolve('done');
   await E((await E(session).getCurrentTurn()).turn).whenFinished();
   const history = await E(session).getHistory();
   t.deepEqual(
@@ -434,7 +416,7 @@ test('only the head of the queue can cut the running turn short', async t => {
   t.is((await E(running).getStatus()).phase, 'cancelled');
   const next2 = await nextRun();
   t.is((await E(session).getCurrentTurn()).input, 'two');
-  next2.push(harden({ type: 'end', checkpoint: 'committed' }));
+  next2.resolve('done');
 });
 
 test('what was queued survives a restart, and waits for the user', async t => {
@@ -514,7 +496,7 @@ test('a queue goes with its session', async t => {
   const run = await nextRun();
   await E(session).enqueue('two');
   t.true(hostStore.has('floot-private-sessions/one/pending'));
-  run.push(harden({ type: 'abort', reason: 'going away' }));
+  run.reject(Error('going away'));
   await E(factory).deleteSession('one');
   t.false(hostStore.has('floot-private-sessions/one/pending'));
 });

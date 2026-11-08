@@ -164,7 +164,7 @@ test('the direct provider offers what its OpenRouter account lists, read once an
     openRouterFetch(keys),
   );
   const backends = await E(factory).listBackends();
-  t.is(backends[0].title, 'Fae');
+  t.is(backends[0].title, 'OpenRouter');
   const models = await E(factory).listModels('provider');
   t.deepEqual(
     models.map(m => [m.id, m.modelId, m.backendId, m.default, m.title]),
@@ -233,6 +233,8 @@ test('failed discovery offers nothing and admits no pin; it is not a list somebo
   t.deepEqual(await E(factory).listModelCatalogs(), [
     {
       backendId: 'provider',
+      providerId: 'openrouter',
+      providerTitle: 'OpenRouter',
       accounts: [
         {
           subscriptionId: 'default',

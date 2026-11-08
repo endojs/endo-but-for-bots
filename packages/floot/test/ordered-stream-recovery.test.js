@@ -1,11 +1,9 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
-import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 
-import { runHostedTurn, UNSETTLED_TOOL_RESULT } from '../src/hosted-turn.js';
+import { UNSETTLED_TOOL_RESULT } from '../src/turn-evidence.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
 import { projectContextTranscript } from '../src/context-transcript.js';
 import {
@@ -58,31 +56,6 @@ const fixture = async () => {
     },
   };
 };
-const writer = harden({
-  setPhase() {},
-  delta() {},
-  toolCall() {},
-  toolResult() {},
-});
-const events = harden([
-  { type: 'text-delta', text: 'before' },
-  { type: 'tool-call', id: 'c', name: 'read', args: '{}' },
-  { type: 'tool-result', id: 'c', result: 'result' },
-  { type: 'compaction', summary: 'summary' },
-  { type: 'text-delta', text: 'after' },
-  { type: 'end' },
-]);
-const clientFor = (items, interrupt = async () => {}) =>
-  harden({
-    send: async () =>
-      readerFromIterator(
-        (async function* stream() {
-          for (const event of items) yield event;
-        })(),
-      ),
-    interrupt,
-  });
-
 test('context selection preserves an unresolved canonical call before its same-turn checkpoint', async t => {
   const f = await fixture();
   await f.journal.recordTranscript(f.id, '0', {
@@ -174,136 +147,6 @@ test('unmatched host effects stay visible even when they predate compaction', as
   t.deepEqual(
     context.filter(row => row.role === 'tool').map(row => row.content),
     ['effect unknown to native summary'],
-  );
-});
-
-test('ordered stream restores text/tools/boundary without the conversation tree', async t => {
-  const f = await fixture();
-  await runHostedTurn({
-    client: clientFor(events),
-    writer,
-    text: 'request',
-    ...f.callbacks,
-  });
-  await f.journal.append(f.id, {
-    type: 'finish',
-    state: 'completed',
-    output: 'beforeafter',
-  });
-  const turn = await f.journal.get(f.id);
-  t.true(turn.transcriptComplete);
-  t.is(turn.transcript.length, 5);
-  t.true(
-    BigInt(turn.activity[0].sequence) < BigInt(turn.activity[0].resultSequence),
-  );
-  const records = await f.recover();
-  t.deepEqual(
-    records.map(record => record.kind),
-    ['message', 'message', 'tool-call', 'tool-result', 'compaction', 'message'],
-  );
-  t.is(pairToolCalls(records).pairs.length, 1);
-  t.deepEqual(transcriptToProviderMessages(records), [
-    { role: 'assistant', content: 'summary' },
-    { role: 'assistant', content: 'after' },
-  ]);
-});
-
-test('stream refuses compaction across an unsettled reported tool call', async t => {
-  const f = await fixture();
-  let stops = 0;
-  await t.throwsAsync(
-    runHostedTurn({
-      client: clientFor([events[0], events[1], events[3]], async () => {
-        stops += 1;
-      }),
-      writer,
-      text: 'request',
-      ...f.callbacks,
-    }),
-    { message: /Compaction cannot cross/ },
-  );
-  t.is(stops, 1);
-  t.false((await f.recover()).some(record => record.kind === 'compaction'));
-});
-
-for (const ordinal of ['1', '2', '3']) {
-  for (const stored of [false, true]) {
-    test(`failed publication at ordinal ${ordinal} (stored=${stored}) stops and recovers one tool`, async t => {
-      const f = await fixture();
-      f.fail(ordinal, stored);
-      let stops = 0;
-      await t.throwsAsync(
-        runHostedTurn({
-          client: clientFor(events, async () => {
-            stops += 1;
-          }),
-          writer,
-          text: 'request',
-          ...f.callbacks,
-        }),
-        { message: /Transcript/ },
-      );
-      t.is(stops, 1);
-      await t.throwsAsync(f.journal.assertReady(), {
-        message: /uncertain storage/,
-      });
-      const records = await f.recover();
-      const { pairs } = pairToolCalls(records);
-      t.is(pairs.length, 1);
-      t.is(pairs[0].result?.content, ordinal === '1' ? undefined : 'result');
-      t.true(
-        records.some(
-          record =>
-            record.kind === 'message' &&
-            record.content.includes('durable transcript prefix'),
-        ),
-      );
-      if (ordinal === '3' && stored) {
-        t.is(transcriptToProviderMessages(records)[0].content, 'summary');
-      }
-    });
-  }
-}
-
-test('cancelled text is journaled only after producer shutdown acknowledgement', async t => {
-  t.timeout(5000);
-  const f = await fixture();
-  const controller = new AbortController();
-  let release = () => {};
-  let entered = () => {};
-  /** @type {Promise<void>} */
-  const barrier = new Promise(resolve => {
-    release = resolve;
-  });
-  /** @type {Promise<void>} */
-  const stopped = new Promise(resolve => {
-    entered = resolve;
-  });
-  const channel = makeBufferedReader();
-  channel.push({ type: 'text-delta', text: 'partial' });
-  const client = harden({
-    send: async () => channel.reader,
-    interrupt: async () => {
-      entered();
-      await barrier;
-    },
-  });
-  const work = runHostedTurn({
-    client,
-    writer: harden({ ...writer, delta: () => controller.abort() }),
-    text: 'request',
-    signal: controller.signal,
-    ...f.callbacks,
-  });
-  await stopped;
-  t.is((await f.journal.get(f.id)).transcript, undefined);
-  release();
-  await work;
-  t.is((await f.journal.get(f.id)).transcriptComplete, undefined);
-  t.true(
-    (await f.recover()).some(
-      record => record.kind === 'message' && record.content === 'partial',
-    ),
   );
 });
 

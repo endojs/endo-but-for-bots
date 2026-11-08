@@ -7,6 +7,7 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 import { directoryHost } from './_directory-host.js';
+import { makeTestInference } from './_inference.js';
 import { makePromiseKit } from './_promise-kit.js';
 
 const self = `endo://${'a'.repeat(64)}/${'b'.repeat(64)}?type=handle`;
@@ -27,16 +28,13 @@ const until = async predicate => {
  * error.
  *
  * @param {import('ava').ExecutionContext} t
- * @param {{ executionState?: string, lifecycle?: string, dormant?: boolean }} [options]
+ * @param {{ executionState?: string, lifecycle?: string }} [options]
  */
-const makeWorld = async (
-  t,
-  { executionState, lifecycle = 'ready', dormant = false } = {},
-) => {
+const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   t.timeout(5000);
   const inboxes = [];
   const streams = [];
-  const creates = [];
+  const policies = [];
   const events = [];
   const replies = [];
   const dismissed = [];
@@ -44,9 +42,7 @@ const makeWorld = async (
   let mode = 'complete';
   let stopFails = false;
   let stopBarrier = Promise.resolve();
-  let createBarrier = Promise.resolve();
-  let createFails = false;
-  let terminateFailures = 0;
+  let policyBarrier = Promise.resolve();
   let writeFails = false;
   let journalWriteFails = false;
   let poisonedCleanup = false;
@@ -56,7 +52,11 @@ const makeWorld = async (
   let beforeLookup = () => Promise.resolve();
   let tools;
   const key = name => (Array.isArray(name) ? name.join('/') : name);
-  const guestStore = new Map([['user', harden({})]]);
+  const guestStore = new Map([
+    ['user', harden({})],
+    ['shell', Far('Shell')],
+    ['workspace', Far('Git')],
+  ]);
   const guest = Far('NetworkGuest', {
     has: name => guestStore.has(key(name)),
     lookup: name => guestStore.get(key(name)),
@@ -81,94 +81,47 @@ const makeWorld = async (
       return inbox.reader;
     },
   });
-  const backend = Far('NetworkBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-        supportedNetworkPolicies: ['off', 'public-internet'],
-        rebindableBindings: ['image', 'account', 'provider'],
-      }),
-    modelCatalog: () =>
-      harden({
-        accounts: [
-          {
-            subscriptionId: 'default',
-            state: 'current',
-            observedAt: 1,
-            models: [
-              {
-                id: 'm',
-                title: 'Model',
-                description: '',
-                default: true,
-                defaultReasoningEffort: null,
-                reasoningEfforts: [],
-              },
-            ],
-          },
-        ],
-      }),
-    inspectBindings: () => harden({ recorded: {}, proposed: {}, changed: [] }),
-    create: async (spec, toolSet) => {
-      tools = toolSet;
-      creates.push(spec);
-      const generation = creates.length;
-      events.push(`create:${generation}:${spec.networkPolicy}`);
-      await createBarrier;
-      if (createFails) throw Error('backend unavailable');
-      return harden({
-        run: Far('NetworkRun', {
-          send: async () => {
-            sends.push(generation);
-            const stream = makeBufferedReader();
-            streams.push(stream);
-            if (mode === 'hold') return stream.reader;
-            if (mode === 'request') {
-              await E(toolSet).execute(
-                'requestNetworkPolicyChange',
-                harden({
-                  policy: 'public-internet',
-                  reason: 'Fetch public documentation',
-                }),
-              );
-            }
-            stream.push({ type: 'text-delta', text: replyText });
-            stream.push({ type: 'end' });
-            return stream.reader;
-          },
-          interrupt: () => undefined,
-          acknowledge: () => undefined,
-        }),
-        admin: Far('NetworkAdmin', {
-          terminate: () => {
-            events.push(`terminate:${generation}`);
-            if (terminateFailures > 0) {
-              terminateFailures -= 1;
-              throw Error('termination temporarily unavailable');
-            }
-            events.push(`terminated:${generation}`);
-          },
-        }),
-      });
-    },
-    destroy: () => undefined,
+  const inference = makeTestInference(body => {
+    tools = body.tools;
+    if (body.input.at(-1)?.type === 'function_call_output') return replyText;
+    sends.push(inboxes.length);
+    if (mode === 'hold') {
+      const held = makePromiseKit();
+      streams.push(held);
+      return held.promise;
+    }
+    if (mode === 'request')
+      return [
+        {
+          type: 'function_call',
+          name: 'requestNetworkPolicyChange',
+          call_id: `request-${sends.length}`,
+          arguments: JSON.stringify({
+            policy: 'public-internet',
+            reason: 'Fetch public documentation',
+          }),
+        },
+      ];
+    return replyText;
+  });
+  const admin = Far('EnvironmentAdmin', {
     stop: async () => {
       events.push('stop');
-      for (const stream of streams)
-        stream.push({ type: 'abort', reason: 'sandbox stopped' });
+      for (const held of streams) held.resolve('stopped');
       await stopBarrier;
-      if (stopFails) throw Error('native cleanup pending');
+      if (stopFails) throw Error('shell cleanup pending');
     },
+    setNetworkPolicy: async policy => {
+      policies.push(policy);
+      await policyBarrier;
+    },
+    dispose: () => {},
   });
   const hostStore = new Map(
     /** @type {[string, unknown][]} */ ([
       ['floot-private-sessions/one/guest', guest],
       ['floot-private-sessions/one/handle', harden({})],
-      ['codex-backend', backend],
+      ['floot-private-sessions/one/environment-admin', admin],
       [
         'floot-private-sessions/one/schema',
         harden({ version: 2, sessionId: 'one' }),
@@ -184,10 +137,11 @@ const makeWorld = async (
               title: 'One',
               createdAt: 1,
               systemPrompt: 'Captured fixture prompt.',
-              presetId: 'general',
+              presetId: 'voice',
               lifecycle,
               ...(executionState ? { executionState } : {}),
-              backendId: 'test',
+              backendId: 'fae-codex',
+              inferenceRecipe: inference.recipe,
               modelId: 'm',
             },
           ],
@@ -233,7 +187,7 @@ const makeWorld = async (
     }),
   );
   t.teardown(async () => {
-    for (const stream of streams) stream.push({ type: 'end' });
+    for (const stream of streams) stream.resolve('done');
     for (const inbox of inboxes) inbox.close();
     stopFails = false;
     writeFails = false;
@@ -260,9 +214,6 @@ const makeWorld = async (
   const session = await E(factory).getSession('one');
   await E(session).getTurns();
   if (!executionState) await until(() => inboxes.length > 0);
-  // Native-ownership tests opt into a runtime through an explicit operator
-  // operation. Revival and journal observation alone no longer acquire one.
-  if (!executionState && !dormant) await E(session).setNetworkPolicy('off');
   return {
     session,
     factory,
@@ -273,7 +224,7 @@ const makeWorld = async (
       await E(disposalHook)();
     },
     storedExecutionState: () => storedExecutionState,
-    creates,
+    policies,
     events,
     sends,
     inboxes,
@@ -294,14 +245,8 @@ const makeWorld = async (
     blockStop: barrier => {
       stopBarrier = barrier;
     },
-    blockCreate: barrier => {
-      createBarrier = barrier;
-    },
-    failCreate: value => {
-      createFails = value;
-    },
-    failTerminateAttempts: count => {
-      terminateFailures = count;
+    blockPolicy: barrier => {
+      policyBarrier = barrier;
     },
     failWrite: value => {
       writeFails = value;
@@ -311,11 +256,7 @@ const makeWorld = async (
       poisonedCleanup = true;
     },
     tools: () => tools,
-    finish: () => {
-      const stream = streams.at(-1);
-      stream.push({ type: 'text-delta', text: 'completed held turn' });
-      stream.push({ type: 'end' });
-    },
+    finish: () => streams.at(-1).resolve('completed held turn'),
     mail: () => {
       inboxes.at(-1).push(
         harden({
@@ -335,17 +276,17 @@ const makeWorld = async (
 };
 
 test('ready session revival and observation stay dormant until a turn arrives', async t => {
-  const world = await makeWorld(t, { dormant: true });
+  const world = await makeWorld(t);
   await E(world.session).getHistory();
   await E(world.session).getTurns();
   await E(world.session).getUsage();
   await E(world.session).getNetworkPolicy();
-  t.is(world.creates.length, 0);
+  t.deepEqual(world.policies, []);
   t.is(world.sends.length, 0);
   t.true(world.inboxes.length > 0, 'mail delivery remains available');
   world.mail();
   await until(() => world.dismissed.includes(1n));
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   t.deepEqual(world.sends, [1]);
   t.is(world.replies.length, 1);
 });
@@ -371,12 +312,6 @@ test('emergency stop fences active turns, waits for cleanup, and requires explic
       completed = true;
       return value;
     });
-  await t.throwsAsync(
-    E(world.tools()).execute('getSandboxNetworkPolicy', harden({})),
-    {
-      message: /stopped or stopping/,
-    },
-  );
   await until(() => world.events.includes('stop'));
   t.false(completed);
   t.is((await E(world.session).getExecutionState()).state, 'stopping');
@@ -389,15 +324,15 @@ test('emergency stop fences active turns, waits for cleanup, and requires explic
   release();
   t.is((await stopped).state, 'stopped');
   await E(turn).whenFinished();
-  const count = world.creates.length;
+  const count = world.inboxes.length;
   await E(world.session).getHistory();
   await E(world.session).getTurns();
-  t.is(world.creates.length, count);
+  t.is(world.inboxes.length, count);
   await t.throwsAsync(E(world.session).startTurn('still blocked'), {
     message: /stopped or stopping/,
   });
   await E(world.session).resume();
-  t.is(world.creates.length, count + 1);
+  t.is(world.inboxes.length, count + 1);
   t.is(world.sends.length, 1, 'resume does not replay a prompt');
 });
 
@@ -439,13 +374,13 @@ test('resume drains retired journal reads and preserves history across repeated 
     message: /resum|stopped or stopping/i,
   });
   t.false(completed);
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   release.resolve(undefined);
   await t.throwsAsync(oldHistory, {
     message: /Private journal incarnation is closed/,
   });
   await resumed;
-  t.is(world.creates.length, 2);
+  t.is(world.inboxes.length, 2);
   const history = await E(world.session).getHistory();
   t.deepEqual(
     history.filter(row => row.role === 'assistant').map(row => row.content),
@@ -455,7 +390,7 @@ test('resume drains retired journal reads and preserves history across repeated 
   t.is((await E(world.session).getTurns()).at(-1).state, 'completed');
   await E(world.session).emergencyStop();
   await E(world.session).resume();
-  t.is(world.creates.length, 3);
+  t.is(world.inboxes.length, 3);
   t.deepEqual(
     (await E(world.session).getHistory()).slice(0, history.length),
     history,
@@ -499,14 +434,14 @@ test('emergency stop supersedes resume while its journal closure drains', async 
   await t.throwsAsync(E(world.session).getTurns(), {
     message: /resum|stopped or stopping/i,
   });
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   release.resolve(undefined);
   await t.throwsAsync(history, {
     message: /Private journal incarnation is closed/,
   });
   await t.throwsAsync(resumed, { message: /Resume superseded/ });
   await successor;
-  t.is(world.creates.length, 2);
+  t.is(world.inboxes.length, 2);
   t.is((await E(world.session).getTurns()).length, 2);
 });
 
@@ -557,7 +492,7 @@ test('factory disposal fences resume while its journal closure drains', async t 
         error.message === 'Floot factory admitted work failed during disposal',
     ),
   );
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   t.is(world.storedExecutionState(), 'stopped');
 });
 
@@ -573,13 +508,13 @@ test('uncertain journal closure leaves resume stopped without new acquisition', 
     message: /Private journal unavailable after uncertain storage/,
   });
   t.is((await E(world.session).getExecutionState()).state, 'stopped');
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   t.is(world.sends.length, 0);
   await t.throwsAsync(E(world.session).resume(), {
     message: /Private journal unavailable after uncertain storage/,
   });
   t.is((await E(world.session).getExecutionState()).state, 'stopped');
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
 });
 
 test('failed stop remains fenced and retryable without deleting records', async t => {
@@ -608,42 +543,42 @@ test('failed stop-intent persistence still withdraws native authority', async t 
   t.is((await E(world.session).emergencyStop()).state, 'stopped');
 });
 
-test('stopped session revival reads records without creating a sandbox or inbox', async t => {
+test('stopped session revival reads records without opening an inbox', async t => {
   const world = await makeWorld(t, { executionState: 'stopped' });
   await E(world.session).getHistory();
   await E(world.session).getTurns();
-  t.is(world.creates.length, 0);
+  t.is(world.inboxes.length, 0);
   t.is(world.inboxes.length, 0);
   const revived = make(world.host);
   const session = await E(revived).getSession('one');
   await E(session).getHistory();
-  t.is(world.creates.length, 0);
+  t.is(world.inboxes.length, 0);
   t.is(world.inboxes.length, 0);
   await E(session).resume();
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   await E(session).emergencyStop();
 });
 
-test('incomplete stop is retried on factory revival without starting a sandbox', async t => {
+test('incomplete stop is retried on factory revival without reopening the agent', async t => {
   const world = await makeWorld(t);
   world.failStop(true);
   await t.throwsAsync(E(world.session).emergencyStop());
   world.failStop(false);
-  const count = world.creates.length;
+  const count = world.inboxes.length;
   const revived = make(world.host);
   const session = await E(revived).getSession('one');
   // Joining the recovered stop observes its completion, not a new incarnation.
   t.is((await E(session).emergencyStop()).state, 'stopped');
-  t.is(world.creates.length, count);
+  t.is(world.inboxes.length, count);
 });
 
 test('fresh stopped factory resumes without a prior journal observer', async t => {
   const world = await makeWorld(t, { executionState: 'stopped' });
   const revived = make(world.host);
   const session = await E(revived).getSession('one');
-  t.is(world.creates.length, 0);
+  t.is(world.inboxes.length, 0);
   await E(session).resume();
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   await E(await E(session).startTurn('fresh resume')).whenFinished();
   t.is((await E(session).getTurns()).at(-1).state, 'completed');
   await E(session).emergencyStop();
@@ -667,83 +602,16 @@ test('failed stopped-observer guest lookup retries without losing journal histor
   await t.throwsAsync(E(session).getHistory(), {
     message: /guest lookup temporarily unavailable/,
   });
-  t.is(world.creates.length, 1);
+  t.is(world.inboxes.length, 1);
   failGuestLookup = false;
   t.deepEqual(await E(session).getHistory(), before);
-  t.is(world.creates.length, 1, 'records-only retry acquires no sandbox');
+  t.is(world.inboxes.length, 1, 'records-only retry never opens another inbox');
   await E(session).resume();
   await E(await E(session).startTurn('after setup retry')).whenFinished();
-  t.is(world.creates.length, 2);
+  t.is(world.inboxes.length, 2);
   t.is((await E(session).getTurns()).at(-1).state, 'completed');
   t.deepEqual((await E(session).getHistory()).slice(0, before.length), before);
   await E(session).emergencyStop();
-});
-
-test('disposal retries termination after late acquisition and failed setup rollback', async t => {
-  const world = await makeWorld(t, { executionState: 'stopped' });
-  const release = makePromiseKit();
-  t.teardown(() => release.resolve(undefined));
-  world.blockCreate(release.promise);
-  world.failTerminateAttempts(2);
-  const resumed = E(world.session).resume();
-  void resumed.catch(() => {});
-  await until(() => world.creates.length === 1);
-  const disposed = world.dispose();
-  void disposed.catch(() => {});
-  await t.throwsAsync(E(world.factory).listSessions(), { message: /closed/ });
-  release.resolve(undefined);
-  await t.throwsAsync(resumed, {
-    message: /Hosted runtime acquisition and rollback failed/,
-  });
-  await t.throwsAsync(disposed, { message: /Floot factory disposal failed/ });
-  t.true(world.events.filter(event => event === 'terminate:1').length >= 3);
-  t.true(
-    world.events.includes('terminated:1'),
-    'disposal retries the retained exact native owner',
-  );
-  t.is(world.creates.length, 1);
-  t.is(world.sends.length, 0);
-});
-
-test('admitted deletion retries classified setup cleanup but preserves journal on disposal conflict', async t => {
-  const world = await makeWorld(t, { executionState: 'stopped' });
-  const release = makePromiseKit();
-  t.teardown(() => release.resolve(undefined));
-  world.blockCreate(release.promise);
-  world.failTerminateAttempts(2);
-  const resumed = E(world.session).resume();
-  void resumed.catch(() => {});
-  await until(() => world.creates.length === 1);
-  const deleted = E(world.factory).deleteSession('one');
-  void deleted.catch(() => {});
-  await until(() => world.events.includes('registry:deleting'));
-  const disposed = world.dispose();
-  void disposed.catch(() => {});
-  await t.throwsAsync(E(world.factory).listSessions(), { message: /closed/ });
-  release.resolve(undefined);
-  await t.throwsAsync(resumed, {
-    message: /Hosted runtime acquisition and rollback failed/,
-  });
-  const deletionError = await t.throwsAsync(deleted, {
-    instanceOf: AggregateError,
-    message: 'Floot session one resources did not fully clean up',
-  });
-  t.deepEqual(
-    deletionError.errors.map(error => error.message),
-    ['Floot submissions incarnation is closed'],
-  );
-  await t.throwsAsync(disposed, { message: /Floot factory disposal failed/ });
-  t.true(world.events.includes('terminated:1'));
-  t.is(world.events.filter(event => event === 'terminate:1').length, 3);
-  t.true(world.events.includes('registry:error'));
-  t.false(world.events.includes('registry:absent'));
-  const names = await E(world.host).list();
-  t.true(names.includes('floot-private-sessions'));
-  t.true(
-    await E(await E(world.host).lookup('floot-private-sessions')).has('one'),
-  );
-  t.is(world.creates.length, 1);
-  t.is(world.sends.length, 0);
 });
 
 test('failed resume publication stays fenced until explicit emergency stop', async t => {
@@ -752,7 +620,7 @@ test('failed resume publication stays fenced until explicit emergency stop', asy
   await t.throwsAsync(E(world.session).resume(), {
     message: /registry write failed/,
   });
-  t.is(world.creates.length, 0);
+  t.is(world.inboxes.length, 0);
   await t.throwsAsync(E(world.session).resume(), {
     message: /Finish emergency stop/,
   });
@@ -762,58 +630,7 @@ test('failed resume publication stays fenced until explicit emergency stop', asy
   world.failWrite(false);
   await E(world.session).emergencyStop();
   await E(world.session).resume();
-  t.is(world.creates.length, 1);
-});
-
-test('emergency stop fences resume and reaps its late acquisition before completion', async t => {
-  const world = await makeWorld(t, { executionState: 'stopped' });
-  /** @type {() => void} */
-  let release = () => {};
-  const barrier = new Promise(resolve => {
-    release = () => resolve(undefined);
-  });
-  t.teardown(release);
-  world.blockCreate(barrier);
-  const resumed = E(world.session).resume();
-  await until(() => world.creates.length === 1);
-  const stopped = E(world.session).emergencyStop();
-  await until(() => world.events.includes('stop'));
-  t.is((await E(world.session).getExecutionState()).state, 'stopping');
-  await t.throwsAsync(E(world.session).startTurn('must not run'), {
-    message: /stopped or stopping/,
-  });
-  release();
-  await t.throwsAsync(resumed, { message: /shutting down/ });
-  t.is((await stopped).state, 'stopped');
-  t.is(world.creates.length, 1);
-  t.is(world.sends.length, 0);
-  t.true(world.events.filter(event => event === 'stop').length >= 2);
-});
-
-test('creation records explicit initial network policy before provisioning', async t => {
-  const world = await makeWorld(t);
-  const before = world.creates.length;
-  const session = await E(world.factory).createSession({
-    backendId: 'test',
-    modelId: 'm',
-    networkPolicy: 'public-internet',
-  });
-  t.is((await E(session).getNetworkPolicy()).policy, 'public-internet');
-  t.deepEqual(
-    world.creates.slice(before).map(spec => spec.networkPolicy),
-    ['public-internet'],
-  );
-  await E(session).emergencyStop();
-  const count = (await E(world.factory).listSessions()).length;
-  await t.throwsAsync(
-    E(world.factory).createSession({
-      backendId: 'test',
-      modelId: 'm',
-      networkPolicy: 'all',
-    }),
-    { message: /does not enforce/ },
-  );
-  t.is((await E(world.factory).listSessions()).length, count);
+  t.is(world.inboxes.length, 1);
 });
 
 test('factory network request only asks; idle approval recreates policy and resumes mail', async t => {
@@ -830,20 +647,16 @@ test('factory network request only asks; idle approval recreates policy and resu
     policy: 'public-internet',
     reason: 'Fetch public documentation',
   });
-  t.deepEqual(
-    world.creates.map(spec => spec.networkPolicy),
-    ['off'],
-  );
-  const catalog = await E(world.tools()).describe();
+  t.deepEqual(world.policies, []);
   t.true(
-    catalog.dynamicTools.some(
-      tool => tool.name === 'requestNetworkPolicyChange',
-    ),
+    world.tools().some(tool => tool.name === 'requestNetworkPolicyChange'),
   );
   t.false(
-    catalog.dynamicTools.some(tool =>
-      /^(setNetworkPolicy|resolveNetworkPolicyRequest|rebind)$/.test(tool.name),
-    ),
+    world
+      .tools()
+      .some(tool =>
+        /^(setNetworkPolicy|resolveNetworkPolicyRequest)$/.test(tool.name),
+      ),
   );
   const beforeInboxes = world.inboxes.length;
   world.setMode('complete');
@@ -853,14 +666,8 @@ test('factory network request only asks; idle approval recreates policy and resu
     'Operator reviewed the documentation requirement',
   );
   t.is((await E(session).getNetworkPolicy()).policy, 'public-internet');
-  t.deepEqual(
-    world.creates.map(spec => spec.networkPolicy),
-    ['off', 'public-internet'],
-  );
-  t.true(
-    world.events.indexOf('terminate:1') <
-      world.events.indexOf('create:2:public-internet'),
-  );
+  t.deepEqual(world.policies, ['public-internet']);
+  t.true(world.events.includes('stop'));
   await t.throwsAsync(
     E(session).resolveNetworkPolicyRequest(
       requested.request.id,
@@ -941,7 +748,7 @@ test('factory refuses network changes during admitted UI and mail work', async t
   );
   t.is((await E(session).getNetworkPolicy()).policy, 'off');
   t.is((await E(session).getNetworkPolicy()).request.id, request.id);
-  t.deepEqual(world.events, ['create:1:off']);
+  t.deepEqual(world.policies, [], 'no active turn changed shell policy');
   world.finish();
   await until(() => world.dismissed.includes(1n));
   await E(session).setNetworkPolicy('public-internet');
@@ -1069,7 +876,7 @@ test('a message that waited out a network change runs when it ends', async t => 
   const world = await makeWorld(t);
   // The change is under way when the message arrives, so it waits…
   let release = () => {};
-  world.blockCreate(
+  world.blockPolicy(
     new Promise(resolve => {
       release = () => resolve(undefined);
     }),
@@ -1078,9 +885,7 @@ test('a message that waited out a network change runs when it ends', async t => 
   const changing = E(world.session)
     .setNetworkPolicy('public-internet')
     .catch(error => error);
-  await until(
-    () => world.events.includes('terminate:1') || world.creates.length > 1,
-  );
+  await until(() => world.policies.length > 0);
   await E(world.session)
     .enqueue('sent during the change')
     .catch(() => undefined);
@@ -1089,166 +894,4 @@ test('a message that waited out a network change runs when it ends', async t => 
   // …and runs once the session admits work again, with nobody pressing Send.
   await until(() => world.sends.length >= 1);
   t.deepEqual((await E(world.session).listPending()).entries, []);
-});
-
-test('rebind stops the incarnation and reopens it under the named bindings, once', async t => {
-  const world = await makeWorld(t);
-  t.is(world.creates.length, 1);
-  t.false('rebind' in world.creates[0]);
-  t.deepEqual(await E(world.session).getBindings(), {
-    recorded: {},
-    proposed: {},
-    changed: [],
-  });
-  t.is(world.creates.length, 1, 'inspection does not replace the incarnation');
-  t.deepEqual(await E(world.session).rebind(['image', 'provider']), {
-    rebind: ['image', 'provider'],
-    bindings: { recorded: {}, proposed: {}, changed: [] },
-  });
-  // The old incarnation is stopped and released before the next is
-  // provisioned, and only that provisioning carries the authorization.
-  t.is(world.creates.length, 2);
-  t.deepEqual(world.creates[1].rebind, ['image', 'provider']);
-  const created = world.events.indexOf('create:2:off');
-  t.true(world.events.indexOf('terminate:1') < created);
-  t.true(world.events.indexOf('stop') < created);
-  const turn = await E(world.session).startTurn('hello');
-  await E(turn).whenFinished();
-  t.deepEqual(world.sends, [2]);
-  t.is(world.creates.length, 2, 'the authorization was spent');
-  // A name this backend does not declare is refused before the incarnation
-  // is touched, as is a list of the wrong size.
-  await t.throwsAsync(E(world.session).rebind(['imgae']), {
-    message: /rebind names the bindings a reopen may change/,
-  });
-  await t.throwsAsync(E(world.session).rebind(['persona']), {
-    message: /from \["image","account","provider"\]/,
-  });
-  await t.throwsAsync(E(world.session).rebind([]), {
-    message: /between one and eight/,
-  });
-  t.is(world.creates.length, 2);
-  // A turn in flight refuses a rebind.
-  world.setMode('hold');
-  const held = await E(world.session).startTurn('held');
-  await until(() => world.sends.length === 2);
-  await t.throwsAsync(E(world.session).rebind(['image']), {
-    message: /active turn/,
-  });
-  world.finish();
-  await E(held).whenFinished();
-  t.is(world.creates.length, 2);
-});
-
-test('rebind drains an admitted journal read and fences the retired storage facet', async t => {
-  const world = await makeWorld(t);
-  const firstText = `${'First payload '.repeat(800)}FIRST-END`;
-  const secondText = `${'Second payload '.repeat(800)}SECOND-END`;
-  world.setReply(firstText);
-  await E(await E(world.session).startTurn('first')).whenFinished();
-  world.setReply(secondText);
-  await E(await E(world.session).startTurn('second')).whenFinished();
-  const entered = makePromiseKit();
-  const release = makePromiseKit();
-  let held = false;
-  world.beforeLookup(name => {
-    if (!held && name.includes('/floot-turn-content-')) {
-      held = true;
-      entered.resolve(undefined);
-      return release.promise;
-    }
-    return Promise.resolve();
-  });
-  t.teardown(() => release.resolve(undefined));
-  const oldHistory = E(world.session).getHistory();
-  void oldHistory.catch(() => {});
-  await entered.promise;
-  let completed = false;
-  const replacement = E(world.session)
-    .rebind(['provider'])
-    .then(value => {
-      completed = true;
-      return value;
-    });
-  void replacement.catch(() => {});
-  await until(() => world.events.includes('terminate:1'));
-  t.false(completed);
-  t.is(world.creates.length, 1);
-  release.resolve(undefined);
-  await t.throwsAsync(oldHistory, {
-    message: /Private journal incarnation is closed/,
-  });
-  await replacement;
-  t.is(world.creates.length, 2);
-  const history = await E(world.session).getHistory();
-  t.deepEqual(
-    history.filter(row => row.role === 'assistant').map(row => row.content),
-    [firstText, secondText],
-  );
-  const next = await E(world.session).startTurn('after rebind');
-  await E(next).whenFinished();
-  t.is((await E(world.session).getTurns()).at(-1).state, 'completed');
-  await E(world.session).rebind(['provider']);
-  t.is(world.creates.length, 3);
-  t.deepEqual(
-    (await E(world.session).getHistory()).slice(0, history.length),
-    history,
-  );
-});
-
-test('uncertain private journal closure refuses replacement acquisition', async t => {
-  const world = await makeWorld(t);
-  world.failJournalWrite(true);
-  const turn = await E(world.session).startTurn(
-    'storage fails before inference',
-  );
-  await E(turn).whenFinished();
-  world.failJournalWrite(false);
-  t.truthy((await E(turn).getStatus()).error);
-  t.is(world.sends.length, 0);
-  await t.throwsAsync(E(world.session).rebind(['provider']), {
-    message: /Private journal unavailable after uncertain storage/,
-  });
-  t.is(world.creates.length, 1);
-  t.true(world.events.includes('terminate:1'));
-  await t.throwsAsync(E(world.session).rebind(['provider']), {
-    message: /Private journal unavailable after uncertain storage/,
-  });
-  t.is(world.creates.length, 1);
-});
-
-test('a rebind the backend refuses leaves no authorization behind for a later reopen', async t => {
-  const world = await makeWorld(t);
-  world.failCreate(true);
-  await t.throwsAsync(E(world.session).rebind(['image']), {
-    message: /backend unavailable/,
-  });
-  world.failCreate(false);
-  t.deepEqual(world.creates[1].rebind, ['image']);
-  // The next reopen carries nothing: the verb's authorization was spent by
-  // the request that failed, and would have been voided with the verb had
-  // no request been built.
-  const turn = await E(world.session).startTurn('hello');
-  await E(turn).whenFinished();
-  t.truthy((await E(turn).getStatus()).error);
-  t.is(world.creates.length, 2, 'failed acquisition stays fenced');
-  await E(world.session).emergencyStop();
-  await E(world.session).resume();
-  t.is(world.creates.length, 3);
-  t.false('rebind' in world.creates[2]);
-});
-
-test('a rebind refused before the incarnation is touched leaves it running and nothing behind', async t => {
-  const world = await makeWorld(t);
-  const backend = await E(world.host).lookup('codex-backend');
-  await E(world.host).remove('codex-backend');
-  await t.throwsAsync(E(world.session).rebind(['image']), {
-    message: /declares no rebindable bindings|unavailable/,
-  });
-  t.is(world.creates.length, 1, 'the incarnation was not replaced');
-  await E(world.host).storeValue(backend, 'codex-backend');
-  const turn = await E(world.session).startTurn('hello');
-  await E(turn).whenFinished();
-  t.deepEqual(world.sends, [1], 'the turn ran on the same incarnation');
-  t.is(world.creates.length, 1);
 });

@@ -3,8 +3,8 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
+import { makeTurnJournal } from '../src/turn-journal.js';
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
 
@@ -18,7 +18,7 @@ const HOST = 'd'.repeat(64);
 /** @param {string} number */
 const locatorFor = number => `endo://${NODE}/${number}?type=handle`;
 
-test('first inbox message starts a dormant hosted backend', async t => {
+test('first inbox message starts direct inference', async t => {
   t.timeout(5000);
   const mailbox = makeLiveMailbox();
   let acquisitions = 0;
@@ -27,17 +27,16 @@ test('first inbox message starts a dormant hosted backend', async t => {
     mailbox.powers,
     undefined,
     {
-      kind: 'hosted',
-      provideHostedClient: () => {
+      kind: 'provider',
+      provideProvider: () => {
         acquisitions += 1;
         return harden({
-          async send(text) {
+          chatStream: async messages => {
             sends += 1;
-            t.regex(text, /hello dormant agent/);
-            const channel = makeBufferedReader();
-            channel.push({ type: 'text-delta', text: 'Awake.' });
-            channel.push({ type: 'end' });
-            return channel.reader;
+            t.regex(messages.at(-1).content, /hello dormant agent/);
+            return harden({
+              message: { role: 'assistant', content: 'Awake.' },
+            });
           },
         });
       },
@@ -624,119 +623,57 @@ test('poisoned journal preserves queued mail and shutdown releases its readiness
   t.is(journalValues.size, 1);
 });
 
-test('unrelated queued mail proceeds after UI uncertainty without resolving or replaying it', async t => {
-  t.timeout(5000);
+test('new mail can proceed past an earlier interrupted UI tool without replaying it', async t => {
   const mailbox = makeLiveMailbox();
-  const first = makeBufferedReader();
-  let sends = 0;
-  const hostedClient = harden({
-    async interrupt() {
-      await null;
-    },
-    async send() {
-      sends += 1;
-      if (sends === 1) return first.reader;
-      const completed = makeBufferedReader();
-      completed.push({ type: 'text-delta', text: 'Mail completed once' });
-      completed.push({ type: 'end' });
-      return completed.reader;
-    },
+  const journal = makeTurnJournal(mailbox.powers);
+  const prior = await journal.begin({
+    input: 'UI operation',
+    backendId: 'provider',
+    modelId: 'test',
   });
+  await journal.dispatch(prior);
+  await journal.append(prior, {
+    type: 'tool-intent',
+    callId: '1',
+    name: 'external',
+    args: '{}',
+  });
+  let sends = 0;
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    {
+      kind: 'provider',
+      provideProvider: () => ({
+        chatStream: async () => {
+          sends += 1;
+          return harden({
+            message: { role: 'assistant', content: 'Mail completed once' },
+          });
+        },
+      }),
+    },
     'test',
     { journalPowers: mailbox.powers, timers: inertTimers },
   );
   t.teardown(async () => {
-    first.push({ type: 'end' });
     mailbox.close();
     await agent.shutdown();
   });
   agent.startInbox();
-  const uiFailed = t.throwsAsync(
-    agent.converse('UI operation', makeReplyChannel().writer),
-    { message: /outcome unknown|unsettled tool/i },
-  );
-  t.true(await until(() => sends === 1));
   const mail = mailbox.deliver({
     from: locatorFor(HOST),
-    strings: ['queued mail'],
+    strings: ['new mail'],
   });
-  // Mail waits behind the active UI turn, but historical uncertainty alone
-  // must not prevent its independent dispatch after that turn settles.
-  await new Promise(resolve => setTimeout(resolve, 50));
-  first.push({ type: 'tool-call', id: 'native', name: 'shell', args: '{}' });
-  first.push({ type: 'end' });
-  await uiFailed;
   t.true(await until(() => mailbox.dismissed.includes(mail.number)));
-  t.is(sends, 2);
-  const [unknown] = await agent.getTurns();
+  const [unknown, completed] = await agent.getTurns();
   t.is(unknown.state, 'outcome-unknown');
   t.is(unknown.resolution, undefined);
-  t.is((await agent.getTurns())[1].state, 'completed');
-  await agent.resolveTurn(
-    unknown.turnId,
-    'Checked UI operation effects independently',
-  );
-  t.is(sends, 2);
-  t.is((await agent.getTurns()).length, 2);
-});
-
-test('acknowledging an admitted mail turn with unknown effects never replays it', async t => {
-  t.timeout(5000);
-  const mailbox = makeLiveMailbox();
-  let sends = 0;
-  const hostedClient = harden({
-    async interrupt() {
-      await null;
-    },
-    async send() {
-      sends += 1;
-      const channel = makeBufferedReader();
-      channel.push({
-        type: 'tool-call',
-        id: 'native',
-        name: 'shell',
-        args: '{}',
-      });
-      channel.push({ type: 'end' });
-      return channel.reader;
-    },
-  });
-  const agent = await makeStreamingAgent(
-    mailbox.powers,
-    undefined,
-    { kind: 'hosted', provideHostedClient: () => hostedClient },
-    'test',
-    { journalPowers: mailbox.powers, timers: inertTimers },
-  );
-  t.teardown(async () => {
-    mailbox.close();
-    await agent.shutdown();
-  });
-  agent.startInbox();
-  const mail = mailbox.deliver({
-    from: locatorFor(HOST),
-    strings: ['perform external effect'],
-  });
-  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
-  const [unknown] = await agent.getTurns();
-  t.is(unknown.state, 'outcome-unknown');
-  t.is(sends, 1);
-  await agent.resolveTurn(
-    unknown.turnId,
-    'Checked external effect; do not replay',
-  );
+  t.is(completed.state, 'completed');
+  await agent.resolveTurn(prior, 'Checked effects independently');
   mailbox.replay();
   await new Promise(resolve => setTimeout(resolve, 50));
-  t.is(sends, 1, 'acknowledgment must not retry an admitted failed turn');
-  t.is((await agent.getTurns()).length, 1);
-  t.is(
-    mailbox.sent.filter(message => message.replyTo === mail.number).length,
-    1,
-  );
+  t.is(sends, 1);
 });
 
 test('a backlog larger than any bound is answered, not declined', async t => {

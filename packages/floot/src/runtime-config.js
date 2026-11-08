@@ -13,9 +13,8 @@ import { Fail } from '@endo/errors';
 
 /**
  * Runtime selection is incarnation-local, never a persisted credential owner.
- * Provider lookup runs per turn; hosted construction runs after tool admission.
+ * Provider lookup runs per turn. A stopped session may read only its records.
  * @typedef {{ kind: 'provider', provideProvider: () => StreamingProvider | Promise<StreamingProvider>, providerFormat?: string, disposeProvider?: () => Promise<void> } |
- * { kind: 'hosted', provideHostedClient: (snapshot: any) => any } |
  * { kind: 'records-only' }} RuntimeConfig
  */
 
@@ -30,15 +29,9 @@ export const assertRuntimeConfig = config => {
   Object.hasOwn(config, 'kind') ||
     Fail`Floot runtime configuration requires an own kind`;
   kind === 'provider' ||
-    kind === 'hosted' ||
     kind === 'records-only' ||
     Fail`Floot runtime configuration requires an explicit kind`;
-  const field =
-    kind === 'provider'
-      ? 'provideProvider'
-      : kind === 'hosted'
-        ? 'provideHostedClient'
-        : undefined;
+  const field = kind === 'provider' ? 'provideProvider' : undefined;
   Reflect.ownKeys(config).every(
     key =>
       key === 'kind' ||

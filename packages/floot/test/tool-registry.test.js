@@ -84,9 +84,6 @@ test('subagent tools appear only when the session was given a spawner', async t 
     ),
     ['askSubagent', 'spawnSubagent', 'stopSubagent'],
   );
-  // The catalog identity must change, so a hosted thread pinned without the
-  // delegation tools cannot resume with them.
-  t.not(plain.toolSetId, delegated.toolSetId);
 });
 
 test('accountStatus appears only when an oracle was endowed, and renders provenance', async t => {
@@ -167,7 +164,6 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
       }),
   }).snapshot();
   t.true(withOracle.names.includes('accountStatus'));
-  t.not(plain.toolSetId, withOracle.toolSetId);
 
   const report = await withOracle.execute('accountStatus', harden({}));
   t.regex(report, /Plan: Max on anthropic/);
@@ -177,7 +173,7 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
   t.regex(report, /No per-account usage attribution/);
 });
 
-test('a stored caplet tool is located with the path as separate name arguments', async t => {
+test('a stored caplet tool can be snapshotted and called without resolving its locator', async t => {
   const stored = Far('FaeTool', {
     schema: () =>
       harden({
@@ -198,19 +194,11 @@ test('a stored caplet tool is located with the path as separate name arguments',
       t.deepEqual(path, ['tools', 'weather'], 'lookup accepts a path array');
       return stored;
     },
-    // The daemon's guard is `M.call().rest(NamePathShape)`, so an array
-    // argument is rejected outright — unlike `lookup`. Enforce that here, or
-    // the only session shape that exercises it (one with a caplet tool) goes
-    // untested and every turn in such a session fails in production.
-    locate: async (...path) => {
-      t.deepEqual(path, ['tools', 'weather']);
-      return 'endo://node/formula?type=lookup';
-    },
+    locate: () => t.fail('Direct inference does not need a locator for a tool'),
     listMessages: async () => harden([]),
   });
   const snapshot = await makeFlootToolRegistry(powers).snapshot();
   t.true(snapshot.names.includes('weather'));
-  t.true(snapshot.toolSetId.includes('endo://node/formula'));
   t.is(await snapshot.execute('weather', harden({})), 'sunny');
 });
 
@@ -239,10 +227,6 @@ test('extra tools join the pinned catalog and cannot shadow a built-in', async t
   const snapshot = await registry.snapshot();
   t.true(snapshot.names.includes('attachContainerMount'));
   t.is(await snapshot.execute('attachContainerMount', {}), 'attached');
-  // The tool-set id pins the extras too: a hosted thread that resumed
-  // without them would be resuming with different powers.
-  const bare = await makeFlootToolRegistry(powers).snapshot();
-  t.not(snapshot.toolSetId, bare.toolSetId);
 
   t.throws(
     () =>
@@ -271,9 +255,11 @@ test('all built-in argument envelopes are closed and validated before effects', 
   });
   const snapshot = await makeFlootToolRegistry(powers).snapshot();
   for (const name of ['store', 'remove', 'listMessages']) {
-    const descriptor = snapshot.dynamicTools.find(tool => tool.name === name);
+    const descriptor = snapshot.providerSchemas.find(
+      tool => tool.function.name === name,
+    )?.function;
     if (!descriptor) throw Error(`Missing tool ${name}`);
-    t.is(descriptor.inputSchema.additionalProperties, false);
+    t.is(descriptor.parameters.additionalProperties, false);
   }
   await t.throwsAsync(
     () =>
@@ -334,9 +320,11 @@ test('open stored tool and factory-extra schemas remain open without re-reading 
   }).snapshot();
   const readsAtSnapshot = schemaReads;
   for (const name of ['stored', 'extra']) {
-    const descriptor = snapshot.dynamicTools.find(tool => tool.name === name);
+    const descriptor = snapshot.providerSchemas.find(
+      tool => tool.function.name === name,
+    )?.function;
     if (!descriptor) throw Error(`Missing tool ${name}`);
-    t.is(descriptor.inputSchema.additionalProperties, true);
+    t.is(descriptor.parameters.additionalProperties, true);
     t.is(
       // eslint-disable-next-line no-await-in-loop
       await snapshot.execute(name, harden({ arbitrary: 'accepted' })),
@@ -357,7 +345,6 @@ test('image capability is advertised only when backend recovery supports it', as
   }).snapshot();
   t.true(supported.names.includes('viewImage'));
   t.false(unsupported.names.includes('viewImage'));
-  t.not(supported.toolSetId, unsupported.toolSetId);
 });
 
 test('review tools follow installed authority and a removed workflow is not invoked', async t => {
@@ -390,7 +377,6 @@ test('review tools follow installed authority and a removed workflow is not invo
   const available = await registry.snapshot();
   t.true(available.names.includes('handoffDesign'));
   t.true(available.names.includes('reviewStatus'));
-  t.not(available.toolSetId, absent.toolSetId);
   const args = harden({
     name: 'scene',
     title: 'Scene',
@@ -408,7 +394,7 @@ test('review tools follow installed authority and a removed workflow is not invo
   t.is(starts.length, 1);
   t.is(receipts.size, 1, 'missing workflow creates no new receipt');
   const removed = await registry.snapshot();
-  t.is(removed.toolSetId, absent.toolSetId);
+  t.deepEqual(removed.providerSchemas, absent.providerSchemas);
 });
 
 test('unavailable review tools keep their names reserved against adopted tools', async t => {

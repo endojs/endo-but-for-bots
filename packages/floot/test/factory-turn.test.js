@@ -6,12 +6,14 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { makeTestInference } from './_inference.js';
+import { makePromiseKit } from './_promise-kit.js';
 import { directoryHost } from './_directory-host.js';
 
 test('factory facets retain disconnected turns, commit history, and provision delegation tools', async t => {
   t.timeout(5000);
   const inbox = makeBufferedReader();
-  const backendEvents = makeBufferedReader();
+
   const store = new Map();
   store.set('user', harden({}));
   const handoffs = [];
@@ -37,48 +39,31 @@ test('factory facets retain disconnected turns, commit history, and provision de
     locate: () => 'test-locator',
     followMessages: () => inbox.reader,
   });
-  let dispatched = false;
-  let releaseAck = () => {};
-  const ackBarrier = new Promise(resolve => {
-    releaseAck = () => resolve(undefined);
+  const request = makePromiseKit();
+  const response = makePromiseKit();
+  const argumentsText = JSON.stringify({
+    name: 'design',
+    title: 'Design',
+    design: 'Agreed acceptance criteria',
+    base: 'main',
+    rounds: '2',
   });
-  let signalAck = () => {};
-  const ackStarted = new Promise(resolve => {
-    signalAck = () => resolve(undefined);
-  });
-  t.teardown(releaseAck);
-  /** @type {{ dynamicTools: Array<{ name: string }> } | undefined} */
-  let catalog;
-  /** @type {{ execute(name: string, args: object): Promise<string> } | undefined} */
-  let hostedTools;
-  const backend = Far('TestBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-      }),
-    create: async (options, toolSet) => {
-      catalog = await E(toolSet).describe();
-      hostedTools = toolSet;
-      return harden({
-        run: Far('TestRun', {
-          send: () => {
-            dispatched = true;
-            return backendEvents.reader;
-          },
-          interrupt: () => undefined,
-          acknowledge: () => {
-            signalAck();
-            return ackBarrier;
-          },
-        }),
-        admin: Far('TestAdmin', { terminate: () => undefined }),
-      });
-    },
-    destroy: () => undefined,
+  let round = 0;
+  const inference = makeTestInference(async body => {
+    round += 1;
+    if (round === 1) {
+      request.resolve(body);
+      await response.promise;
+      return [
+        {
+          type: 'function_call',
+          name: 'handoffDesign',
+          call_id: 'call-1',
+          arguments: argumentsText,
+        },
+      ];
+    }
+    return 'hello back';
   });
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
@@ -101,14 +86,16 @@ test('factory facets retain disconnected turns, commit history, and provision de
           systemPrompt: 'Captured fixture prompt.',
           presetId: 'general',
           lifecycle: 'ready',
-          backendId: 'test',
+          backendId: 'fae-codex',
+          inferenceRecipe: inference.recipe,
           modelId: 'm',
         },
       ],
     }),
   );
   const lookups = [];
-  hostStore.set('codex-backend', backend);
+  hostStore.set('codex-inference', inference.subscription);
+  hostStore.set('codex-model-catalog', inference.catalog);
   const host = Far('TestHost', {
     ...directoryHost(hostStore),
     lookup: (...names) => {
@@ -126,13 +113,8 @@ test('factory facets retain disconnected turns, commit history, and provision de
     },
   });
   const factory = make(host);
-  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
-  hostStore.delete('codex-backend');
-  t.false((await E(factory).listBackends()).some(item => item.id === 'test'));
-  hostStore.set('codex-backend', backend);
-  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
   t.teardown(async () => {
-    backendEvents.push(harden({ type: 'end' }));
+    response.resolve();
     inbox.close();
     await E(factory).deleteSession('one');
   });
@@ -149,27 +131,11 @@ test('factory facets retain disconnected turns, commit history, and provision de
   await t.throwsAsync(() => E(session).startTurn('overlap'), {
     message: /active turn/,
   });
-  for (let tries = 0; !dispatched && tries < 1000; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
-  t.true(dispatched);
-  if (!catalog) throw Error('Hosted catalog was not supplied');
-  t.true(catalog.dynamicTools.some(tool => tool.name === 'spawnSubagent'));
-  t.true(catalog.dynamicTools.some(tool => tool.name === 'handoffDesign'));
-  // The backend's live tool capability remains usable after its UI detaches.
-  if (!hostedTools) throw Error('Hosted tools were not supplied');
-  const handoff = await E(hostedTools).execute(
-    'handoffDesign',
-    harden({
-      name: 'design',
-      title: 'Design',
-      design: 'Agreed acceptance criteria',
-      base: 'main',
-      rounds: '2',
-    }),
-  );
-  t.regex(handoff, /review-run/);
+  const { tools } = await request.promise;
+  t.true(tools.some(tool => tool.name === 'spawnSubagent'));
+  t.true(tools.some(tool => tool.name === 'handoffDesign'));
+  response.resolve();
+  await E(turn).whenFinished();
   t.deepEqual(handoffs, [
     {
       requestId: 'design',
@@ -182,35 +148,17 @@ test('factory facets retain disconnected turns, commit history, and provision de
     },
   ]);
   t.deepEqual(store.get('review-design'), { runId: 'review-run' });
-  backendEvents.push(harden({ type: 'text-delta', text: 'hello back' }));
-  backendEvents.push(harden({ type: 'end', checkpoint: 'committed' }));
-  await ackStarted;
-  t.false((await E(turn).getStatus()).done);
-  t.is((await E(session).getHistory()).length, 3);
-  t.deepEqual(await (await E(session).getCurrentTurn()).history, []);
-  releaseAck();
-  await E(turn).whenFinished();
   t.is(await E(session).getCurrentTurn(), null);
-  t.false(lookups.some(name => name.startsWith('claude-client')));
-  t.false(
-    (await E(factory).listModels()).some(model => model.id === 'claude-cli'),
-  );
-  t.deepEqual(await E(session).getHistory(), [
-    { role: 'user', content: 'hello' },
-    { role: 'assistant', content: 'hello back' },
+  t.false(lookups.some(name => name.endsWith('-backend')));
+  const history = await E(session).getHistory();
+  t.is(history[0].content, 'hello');
+  t.like(
+    history.find(message => message.role === 'tool'),
     {
-      role: 'tool',
       name: 'handoffDesign',
-      args: JSON.stringify({
-        name: 'design',
-        title: 'Design',
-        design: 'Agreed acceptance criteria',
-        base: 'main',
-        rounds: '2',
-      }),
-      result: `[Recovered evidence; ordering relative to the reply is unknown.]\n${handoff}`,
+      args: argumentsText,
       failed: false,
-      meta: { recoveredEvidence: true, orderUnknown: true },
     },
-  ]);
+  );
+  t.is(history.at(-1).content, 'hello back');
 });

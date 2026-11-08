@@ -173,19 +173,16 @@ test('UI attachment package is suppressed by the inbox and visible to normal ado
     w.guest,
     undefined,
     {
-      kind: 'hosted',
-      provideHostedClient: () =>
+      kind: 'provider',
+      provideProvider: () =>
         harden({
-          async send(text, options) {
+          async chatStream(messages) {
             calls += 1;
-            t.is(text, 'Read @document');
-            t.regex(options.systemPrompt, /Message #0 attaches/);
+            t.is(messages.at(-1).content, 'Read @document');
+            t.regex(messages[0].content, /Message #0 attaches/);
             const mail = [...w.messages.values()][0];
             await E(w.guest).adopt(mail.number, 'document', 'notes');
-            const stream = makeBufferedReader();
-            stream.push(harden({ type: 'text-delta', text: 'Done' }));
-            stream.push(harden({ type: 'end' }));
-            return stream.reader;
+            return harden({ message: { role: 'assistant', content: 'Done' } });
           },
         }),
     },
@@ -293,8 +290,8 @@ test('a restarted inbox dismisses orphaned self packages without starting a seco
     w.guest,
     undefined,
     {
-      kind: 'hosted',
-      provideHostedClient: () => {
+      kind: 'provider',
+      provideProvider: () => {
         backendCalls += 1;
         throw Error('must not run');
       },

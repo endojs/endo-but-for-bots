@@ -4,6 +4,7 @@ import { E } from '@endo/eventual-send';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
 
+import { makeTestInference } from './_inference.js';
 import { make } from '../agent.js';
 import { directoryHost } from './_directory-host.js';
 import { makePromiseKit } from './_promise-kit.js';
@@ -51,67 +52,20 @@ const makeWorld = (
   });
   let sends = 0;
   let creates = 0;
-  let nativeStops = 0;
-  let nativeDestroys = 0;
-  const backend = Far('PrivateJournalBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-        supportedNetworkPolicies: ['off', 'public-internet'],
-      }),
-    modelCatalog: () =>
-      harden({
-        accounts: [
-          {
-            subscriptionId: 'default',
-            state: 'current',
-            observedAt: 1,
-            models: [
-              {
-                id: 'm',
-                title: 'Test',
-                description: '',
-                default: true,
-                defaultReasoningEffort: null,
-                reasoningEfforts: [],
-              },
-            ],
-          },
-        ],
-      }),
-    create: () => {
+  const inference = makeTestInference(
+    body => {
+      sends += 1;
+      requests.push(body);
+      return replyText;
+    },
+    () => {
       creates += 1;
-      return harden({
-        run: Far('MigrationRun', {
-          send: (text, options) => {
-            requests.push({ text, options });
-            sends += 1;
-            const stream = makeBufferedReader();
-            stream.push(harden({ type: 'text-delta', text: replyText }));
-            stream.push(harden({ type: 'end' }));
-            t.teardown(() => stream.close());
-            return stream.reader;
-          },
-          interrupt: () => undefined,
-          acknowledge: () => undefined,
-        }),
-        admin: Far('MigrationAdmin', { terminate: () => undefined }),
-      });
     },
-    stop: () => {
-      nativeStops += 1;
-    },
-    destroy: () => {
-      nativeDestroys += 1;
-    },
-  });
+  );
   const hostStore = new Map(
     /** @type {[string, unknown][]} */ ([
-      ['codex-backend', backend],
+      ['codex-inference', inference.subscription],
+      ['codex-model-catalog', inference.catalog],
       [
         'floot-sessions-v1-00000000000000000000',
         harden({
@@ -127,8 +81,9 @@ const makeWorld = (
                   presetId: 'general',
                   lifecycle: 'ready',
                   ...(stopped ? { executionState: 'stopped' } : {}),
-                  backendId: 'test',
+                  backendId: 'fae-codex',
                   modelId: 'm',
+                  inferenceRecipe: inference.recipe,
                 },
               ]
             : [],
@@ -174,7 +129,6 @@ const makeWorld = (
     guestStore,
     requests,
     counts: () => ({ sends, creates, guests }),
-    nativeCounts: () => ({ stops: nativeStops, destroys: nativeDestroys }),
   };
 };
 
@@ -185,8 +139,8 @@ test('session facet returns full retained content beyond the implicit string gua
   const turn = await E(session).startTurn('write a long answer');
   await E(turn).whenFinished();
   const [record] = await E(session).getTurns();
+  t.is(record.state, 'completed', record.error);
   t.is(await E(session).getTurnContent(record.outputRef), replyText);
-  await E(session).emergencyStop();
   const restoredFactory = make(world.host, undefined, {
     env: { FLOOT_MAX_CONTENT_CHARS: '1' },
   });
@@ -253,7 +207,7 @@ test('an admitted account read cannot recreate a journal while deletion is retir
               providerId: 'test-provider',
               title: 'Test',
               oracle,
-              uses: [{ backendId: 'test' }],
+              uses: [{ backendId: 'fae-codex' }],
             },
           ],
         }),
@@ -302,7 +256,7 @@ test('session account reporting follows explicit backend publications, never the
               throw Error('No billing attribution');
             },
           }),
-          uses: [{ backendId: 'test' }],
+          uses: [{ backendId: 'fae-codex' }],
         },
       ],
     });
@@ -390,7 +344,7 @@ for (const rejection of [
       },
     });
     await t.throwsAsync(
-      E(world.factory).createSession({ backendId: 'test', modelId: 'm' }),
+      E(world.factory).createSession({ backendId: 'fae-codex', modelId: 'm' }),
       {
         message: /creation and rollback failed/,
       },
@@ -502,7 +456,7 @@ test('schema publication failure creates neither a registry entry nor a guest', 
     },
   });
   await t.throwsAsync(
-    E(world.factory).createSession({ backendId: 'test', modelId: 'm' }),
+    E(world.factory).createSession({ backendId: 'fae-codex', modelId: 'm' }),
     { message: /Schema write failed/ },
   );
   t.deepEqual(await E(world.factory).listSessions(), []);
@@ -531,7 +485,7 @@ for (const fail of [false, true]) {
     });
     t.teardown(() => release());
     const creation = E(world.factory).createSession({
-      backendId: 'test',
+      backendId: 'fae-codex',
       modelId: 'm',
     });
     const result = creation.then(
@@ -592,7 +546,7 @@ for (const prefix of ['session-agent-', 'session-']) {
       extraHas: name => name.startsWith(prefix),
     });
     await t.throwsAsync(
-      E(world.factory).createSession({ backendId: 'test', modelId: 'm' }),
+      E(world.factory).createSession({ backendId: 'fae-codex', modelId: 'm' }),
       { message: /bindings already exist/ },
     );
     t.false([...world.hostStore.keys()].some(name => name.endsWith('/schema')));
@@ -609,7 +563,7 @@ test('lost schema acknowledgement leaves evidence but cannot admit a session', a
     },
   });
   await t.throwsAsync(
-    E(world.factory).createSession({ backendId: 'test', modelId: 'm' }),
+    E(world.factory).createSession({ backendId: 'fae-codex', modelId: 'm' }),
     { message: /Schema acknowledgement lost/ },
   );
   t.is(
@@ -645,12 +599,12 @@ test('concurrent creation has distinct identities before schema acknowledgement'
   });
   t.teardown(() => release());
   const first = E(world.factory).createSession({
-    backendId: 'test',
+    backendId: 'fae-codex',
     modelId: 'm',
   });
   await waiting;
   const second = await E(world.factory).createSession({
-    backendId: 'test',
+    backendId: 'fae-codex',
     modelId: 'm',
   });
   t.is(ids.length, 2);
@@ -742,7 +696,7 @@ test('retained sessions add no per-session bindings to the controller profile', 
   let expectedRoots;
   for (let index = 0; index < 16; index += 1) {
     const session = await E(world.factory).createSession({
-      backendId: 'test',
+      backendId: 'fae-codex',
       modelId: 'm',
     });
     const { id } = await E(session).getInfo();
@@ -809,10 +763,10 @@ for (const [legacy, leaf] of [
   });
 }
 
-test('creating recovery stops hosted native state and retains guest until terminal deletion', async t => {
+test('creating recovery retains the direct session guest until terminal deletion', async t => {
   const world = makeWorld(t, { existing: false });
   const session = await E(world.factory).createSession({
-    backendId: 'test',
+    backendId: 'fae-codex',
     modelId: 'm',
   });
   const { id } = await E(session).getInfo();
@@ -849,10 +803,94 @@ test('creating recovery stops hosted native state and retains guest until termin
     await new Promise(resolve => setImmediate(resolve));
   }
   t.is((await E(restored).listSessions())[0].lifecycle, 'ready');
-  t.deepEqual(world.nativeCounts(), { stops: 1, destroys: 0 });
   t.is(world.hostStore.get(`floot-private-sessions/${id}/guest`), guest);
   t.is(world.hostStore.get(`floot-private-sessions/${id}/handle`), handle);
   await E(restored).deleteSession(id);
-  t.is(world.nativeCounts().destroys, 1);
   t.false(world.hostStore.has(`floot-private-sessions/${id}`));
+});
+
+test('CLI retirement checks identity, ancestry and durable queue at the session owner', async t => {
+  const world = makeWorld(t, { existing: false });
+  const base = {
+    title: 'test',
+    createdAt: 10,
+    lifecycle: 'ready',
+    executionState: 'stopped',
+    systemPrompt: 'test',
+    modelId: '',
+    presetId: 'general',
+  };
+  const root = { ...base, id: 'root', backendId: 'provider' };
+  const old = { ...base, id: 'old', backendId: 'opencode', modelId: 'legacy' };
+  const child = {
+    ...base,
+    id: 'child',
+    parentSessionId: 'old',
+    backendId: 'provider',
+  };
+  const sessions = [root, old, child];
+  const expected = entry =>
+    harden({
+      id: entry.id,
+      createdAt: entry.createdAt,
+      parentSessionId: entry.parentSessionId || '',
+      backendId: entry.backendId,
+    });
+  const destructions = [];
+  world.hostStore.set(
+    'opencode-backend',
+    Far('OldCleanupOwner', {
+      describe: () => harden({ id: 'opencode' }),
+      destroy: ({ sessionId }) => {
+        destructions.push(sessionId);
+      },
+    }),
+  );
+  world.hostStore.set(
+    'floot-sessions-v1-00000000000000000000',
+    harden({ version: 1, sequence: 0n, sessions }),
+  );
+  const directory = await E(world.host).makeDirectory('floot-private-sessions');
+  for (const entry of sessions) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(directory).makeDirectory(entry.id);
+    world.hostStore.set(
+      `floot-private-sessions/${entry.id}/schema`,
+      harden({ version: 2, sessionId: entry.id }),
+    );
+  }
+  const key = 'floot-private-sessions/child/pending';
+  world.hostStore.set(
+    key,
+    harden({
+      version: 1,
+      nextSequence: 1n,
+      entries: [{ id: '0', state: 'queued', createdAt: 1, text: 'work' }],
+    }),
+  );
+  let owner = make(world.host);
+  await t.throwsAsync(E(owner).retireCliSession(expected(root)), {
+    message: /outside retired subtree/,
+  });
+  await t.throwsAsync(E(owner).retireCliSession(expected(old)), {
+    message: /children first/,
+  });
+  await t.throwsAsync(
+    E(owner).retireCliSession({ ...expected(child), createdAt: 99 }),
+    { message: /identity changed/ },
+  );
+  await t.throwsAsync(E(owner).retireCliSession(expected(child)), {
+    message: /pending or unreadable/,
+  });
+  t.true(world.hostStore.has(key));
+  t.deepEqual(destructions, []);
+  world.hostStore.delete(key);
+  owner = make(world.host);
+  await E(owner).retireCliSession(expected(child));
+  await E(owner).retireCliSession(expected(old));
+  t.deepEqual(
+    (await E(owner).listSessions()).map(({ id }) => id),
+    ['root'],
+  );
+  t.deepEqual(destructions, ['old']);
 });

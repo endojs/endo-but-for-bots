@@ -1,7 +1,6 @@
 // @ts-check
 
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
 import { passStyleOf } from '@endo/pass-style';
 import {
   assertToolArguments,
@@ -19,12 +18,10 @@ import {
 } from '@endo/fae/src/tool-makers.js';
 import { makeSubagentTools } from '@endo/fae/src/subagent.js';
 import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
-import { HostedToolSetInterface } from '@endo/hosted-agent';
 
 import { makeAccountStatusTool } from './account-tool.js';
 import { makeWorkflowTools, REVIEW_TOOL_NAMES } from './workflow-tools.js';
 
-const TOOL_POLICY_VERSION = 'floot-endo-tools-v1';
 const MAX_SCHEMA_DEPTH = 32;
 const MAX_SCHEMA_NODES = 10_000;
 const MAX_SCHEMA_RECORD_KEYS = 1024;
@@ -160,55 +157,9 @@ export const projectToolSchema = schema => {
 };
 harden(projectToolSchema);
 
-/** @param {ReturnType<typeof projectToolSchema>} schema */
-const toDynamicTool = schema => {
-  const fn = schema.function;
-  return harden({
-    type: 'function',
-    name: fn.name,
-    description: fn.description,
-    inputSchema: fn.parameters,
-  });
-};
-
 /**
- * Attenuate a local snapshot to the two operations a hosted backend needs.
- *
- * @param {any} snapshot
- */
-export const makeEndoToolSet = snapshot =>
-  makeExo('HostedToolSet', HostedToolSetInterface, {
-    async describe() {
-      return harden({
-        dynamicTools: snapshot.dynamicTools,
-        toolSetId: snapshot.toolSetId,
-      });
-    },
-    execute(name, args) {
-      return snapshot.execute(name, args);
-    },
-    help() {
-      return 'Pinned Endo tool catalog: describe() and execute(name, args).';
-    },
-  });
-harden(makeEndoToolSet);
-
-/**
- * Build the one authoritative Endo tool catalog used by API providers and
- * hosted backends. A snapshot pins names, schemas, and executable capabilities
- * together so an advertised name cannot be rebound during a turn.
- *
- * Delegation is capability-gated: the subagent tools appear in the catalog only
- * when the factory handed this session a spawner, and their presence changes
- * `toolSetId`, so a hosted thread pinned without them cannot silently resume
- * with them.
- *
- * `accountStatus` is gated on a data-only session account reader.
- *
- * `extraTools` are session-scoped tools the factory supplies (a bounded
- * workspace publisher for a new-project session, say). They join the catalog
- * like the built-ins, so an API provider's tool loop and a hosted backend's
- * pinned tool set see exactly the same authority.
+ * A snapshot keeps advertised tool schemas and executable capabilities
+ * together for the duration of a model round.
  *
  * @param {any} powers
  * @param {object} [options]
@@ -218,12 +169,7 @@ harden(makeEndoToolSet);
  * @param {any} [options.subagentLimits] Operator delegation budgets.
  * @param {(refresh?: boolean) => Promise<any>} [options.readAccounts]
  * @param {Set<string>} [options.settledMail]
- * @param {Map<string, any>} [options.extraTools] - Tools the factory builds
- *   for this session beyond the built-ins — the container-mount tools of a
- *   session with a sandbox, or the bounded workspace publisher of one with a
- *   git workspace. They enter the same pinned catalog, so a hosted thread's
- *   `toolSetId` covers them and a name that collides with a built-in is
- *   refused rather than shadowing it.
+ * @param {Map<string, any>} [options.extraTools] Session tools supplied by the preset.
  */
 export const makeFlootToolRegistry = (
   powers,
@@ -315,11 +261,10 @@ export const makeFlootToolRegistry = (
     const reviewAvailable = await E(powers).has('dev-review');
     // Discover with every reserved built-in name, even when it is unavailable.
     // Otherwise an adopted tool could impersonate the missing workflow.
-    const {
-      schemas: discoveredSchemas,
-      toolMap,
-      storedTools,
-    } = await discoverTools(powers, builtins);
+    const { schemas: discoveredSchemas, toolMap } = await discoverTools(
+      powers,
+      builtins,
+    );
     const schemas = discoveredSchemas.filter(
       schema =>
         reviewAvailable || !REVIEW_TOOL_NAMES.includes(schema.function.name),
@@ -342,38 +287,9 @@ export const makeFlootToolRegistry = (
       builtinSchemas.set(fn.name, closed);
       return closed;
     });
-    const dynamicTools = providerSchemas.map(toDynamicTool);
-    const names = dynamicTools.map(tool => tool.name).sort();
-    const storedIdentities = await Promise.all(
-      storedTools.map(async ({ petName, functionName }) =>
-        harden({
-          functionName,
-          petName,
-          // Endo locators bind the schema to the durable formula/capability,
-          // not merely to a same-shaped replacement after reincarnation.
-          locator: await E(powers).locate('tools', petName),
-        }),
-      ),
-    );
     return harden({
       providerSchemas,
-      dynamicTools,
-      // A stable identifier for persisted hosted threads. Schema changes must
-      // create a new thread instead of silently resuming with different powers.
-      toolSetId: JSON.stringify(
-        harden({
-          policyVersion: TOOL_POLICY_VERSION,
-          storedIdentities,
-          tools: dynamicTools
-            .map(tool => ({
-              name: tool.name,
-              description: tool.description,
-              inputSchema: tool.inputSchema,
-            }))
-            .sort((left, right) => left.name.localeCompare(right.name)),
-        }),
-      ),
-      names,
+      names: providerSchemas.map(schema => schema.function.name).sort(),
       execute: async (name, args) => {
         const schema = builtinSchemas.get(name);
         if (schema) assertToolArguments(schema, args);

@@ -4,15 +4,13 @@ import { Fail } from '@endo/errors';
 import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 
 import { encodeJournalPresentation } from './journal-presentation.js';
-import { UNSETTLED_TOOL_RESULT } from './hosted-turn.js';
+import { UNSETTLED_TOOL_RESULT,
+  UNKNOWN_TOOL_OUTCOME,
+  reconcileTurnEvidence } from './turn-evidence.js';
 import {
   encodeJournalTranscript,
   transcriptIndex,
 } from './journal-transcript.js';
-import {
-  UNKNOWN_TOOL_OUTCOME,
-  reconcileTurnEvidence,
-} from './turn-evidence.js';
 
 /**
  * UI projection only: public thinking, mail metadata and tool previews never

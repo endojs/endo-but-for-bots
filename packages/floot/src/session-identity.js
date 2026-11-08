@@ -22,6 +22,7 @@ harden(assertSessionIdentity);
 export const isHostedSession = entry =>
   entry !== undefined &&
   entry.backendId !== 'provider' &&
+  entry.backendId !== 'openrouter' &&
   entry.backendId !== 'fae-codex' &&
   entry.backendId !== 'fae-claude';
 harden(isHostedSession);

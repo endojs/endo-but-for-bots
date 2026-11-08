@@ -13,6 +13,7 @@ export const DEVELOPMENT_PRESET_ID = 'development';
 harden(DEVELOPMENT_PRESET_ID);
 export const DEVELOPMENT_BACKENDS = harden([
   'provider',
+  'openrouter',
   'fae-codex',
   'fae-claude',
 ]);

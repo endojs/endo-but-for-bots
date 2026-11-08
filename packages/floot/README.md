@@ -9,11 +9,10 @@ Edit a preset's instructions, model, reasoning effort, default objects and inter
 save a copy to create a custom preset, or reset a built-in preset.
 The Voice shortcut selector chooses which preset Android assistant invocations use.
 
-The built-in voice preset uses Fae Codex / gpt-5.6-sol with an isolated Podman shell,
+The built-in voice preset uses the OpenAI subscription pool and gpt-5.6-sol with an isolated Podman shell,
 a workspace, and public internet enabled.
 Internet policy belongs to the attached shell, independently of the inference backend.
 General presets can include a workspace and shell; the shell requires the workspace.
-Hosted CLI backends keep their own environment and policy controls.
 The new-session picker uses saved defaults unless explicitly overridden.
 
 Additional endowments are explicit object paths, resolved once when granted.
@@ -134,27 +133,19 @@ that make it a hands-free voice assistant.
 The browser UI lives in [`@endo/chat`](../chat); a Chat Space looks these three
 objects up by pet-name and streams to/from them.
 
-## Hosted security status
+## Inference providers
 
-Floot refuses the legacy `claude-cli` route, which looked a bare `ClaudeClient`
-up by name from its own profile.
-Claude runs only through an operator-provisioned hosted backend discovered as
-`claude-backend`: [`@endo/claude-sandbox`](../claude-sandbox/README.md#claudebackendfactory-floot-hosted-backend)
-supplies one (`setup-hosted.js`) that runs `claude -p` in a rootless Podman
-slice per session and bridges the session's pinned Endo tools in over a
-per-session MCP socket.
-That backend still materialises the credential inside the slice; binding it is
-an operator decision, not a certification against the token-free hosted
-contract.
-Codex policy composition and broker primitives are available, but live runtime,
-listener, and subscription acceptance remain prerequisites for production use.
-See [deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
+Fae executes the agent loop and endowed tools. The controller offers OpenAI
+Responses and Anthropic Messages through the installed subscription pools,
+and OpenRouter through the installed API credential. The model picker reads
+each account's catalog. The provider setup binds inference and catalog access
+in the controller profile. The session guest receives the tools and objects
+selected by its preset.
 
-Runtime container mounts — a session attaching a capability it holds under
-`/mnt/` of its sandbox with `attachContainerMount` — stay inside that contract:
-each attach is declared on the hosted session's policy and attested as a 9P
-projection served through the capability, never an undeclared bind.
-See [runtime-container-fs-mount](../../designs/runtime-container-fs-mount.md).
+Existing direct subscription sessions retain their `fae-codex` and
+`fae-claude` identities. Existing API-key sessions use the factory's
+configured API slot. An additional OpenRouter slot uses its own Secret when
+that slot already serves Anthropic. See [OpenRouter setup](./OPENROUTER.md).
 
 ## Demo dependencies
 
@@ -206,8 +197,7 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    `FLOOT_MAX_TOOL_ROUNDS` (default 1024, shared with standalone Fae) caps
    direct-provider rounds before the tool-step fallback. Each round is a model
    response plus all requested tool results; parallel calls share one round.
-   It is a finite runaway-loop guard, not a model context limit. Hosted CLI
-   backends have their own loops and do not use this setting.
+   The model's context window is accounted for separately.
 
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:
@@ -254,12 +244,9 @@ by three facts about the session:
   aloud). The Floot space passes it. A session made by any other caller of the
   factory does not get them, and a subagent never does: its reader is its
   parent.
-- **Where its model runs.** A hosted backend declares a `promptEnvironment` in
-  its descriptor (see BACKEND-DESIGN.md). A model in a sandbox is told the names
-  Endo's tools carry in its tool list, that its own shell and file tools are
-  not Endo's `exec`, that its workspace is a directory it can edit, and what
-  the container-mount tools do. A model behind the provider API is told none
-  of that, and instead how to write files through `exec`.
+- **How to use Endo tools.** The model receives instructions for working with
+  endowed objects through `exec`. A preset can add a Podman shell to the
+  session guest.
 - **Its preset**, which decides the objects in its petstore and so the
   sections that explain them.
 
@@ -535,7 +522,6 @@ For API provider sessions, a later turn represents images from an incomplete tur
 as receipts, so a rejected image does not keep every later request failing.
 The agent may explicitly read a corrected image again with `viewImage`.
 Original journal bytes remain available as evidence, including after restart.
-Opaque hosted backend checkpoints retain their native recovery policy.
 
 ## Interrupted turns and session details
 

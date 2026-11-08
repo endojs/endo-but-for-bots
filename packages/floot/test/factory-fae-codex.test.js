@@ -57,7 +57,7 @@ const world = (
   const inboxes = [];
   const shellCalls = [];
   let nativeStops = 0;
-  let cliCreates = 0;
+
   let guestCreates = 0;
   let checkpointRefusals = 0;
   const subscription = Far('Pool', {
@@ -146,15 +146,7 @@ const world = (
       });
     },
   });
-  const backend = Far('CodexCLI', {
-    describe: () =>
-      harden({
-        id: 'codex',
-        title: 'Codex CLI',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-      }),
+  const catalog = Far('InferenceCatalog', {
     modelCatalog: () =>
       harden({
         accounts: [
@@ -176,16 +168,12 @@ const world = (
           },
         ],
       }),
-    create: () => {
-      cliCreates += 1;
-      throw Error('must not create CLI');
-    },
   });
   /** @type {Map<string, any>} */
   const store = new Map(
     /** @type {Array<[string, any]>} */ ([
       [claude ? 'claude-inference' : 'codex-inference', subscription],
-      ['codex-backend', backend],
+      ['codex-model-catalog', catalog],
     ]),
   );
   /** @type {Map<string, Map<string, any>>} */
@@ -320,7 +308,6 @@ const world = (
     inboxes,
     shellCalls,
     nativeStops: () => nativeStops,
-    cliCreates: () => cliCreates,
     guestCreates: () => guestCreates,
     environments: () => environments,
     environmentPolicies,
@@ -502,11 +489,11 @@ test('Fae picker projects CLI effort aliases and sends only supported wire choic
   });
   t.teardown(subject.close);
   const [fae] = await E(subject.factory).listModels('fae-codex');
-  const [cli] = await E(subject.factory).listModels('codex');
+  await t.throwsAsync(E(subject.factory).listModels('codex'), {
+    message: /Unknown inference backend/,
+  });
   t.deepEqual(fae.reasoningEfforts, ['high', 'max']);
   t.is(fae.defaultReasoningEffort, 'max');
-  t.deepEqual(cli.reasoningEfforts, ['high', 'ultra', 'max', 'future-effort']);
-  t.is(cli.defaultReasoningEffort, 'ultra');
   for (const reasoningEffort of ['ultra', 'future-effort']) {
     await t.throwsAsync(
       E(subject.factory).createSession({
@@ -532,7 +519,6 @@ test('Fae picker projects CLI effort aliases and sends only supported wire choic
   await E(next).whenFinished();
   t.falsy((await E(next).getStatus()).error);
   t.deepEqual(subject.requests[1].reasoning, { effort: 'max' });
-  t.is(subject.cliCreates(), 0);
 });
 
 test('a failed Fae session with a retained ultra recipe revives and continues with max', async t => {
@@ -580,7 +566,6 @@ test('a failed Fae session with a retained ultra recipe revives and continues wi
     (await E(restored).getTurns()).map(turn => turn.state),
     ['failed', 'completed'],
   );
-  t.is(subject.cliCreates(), 0);
   t.true(subject.endpoints.every(endpoint => endpoint.revoked));
 });
 
@@ -611,7 +596,6 @@ test('Floot Fae Codex pins inference, preserves opaque journal context, and neve
   t.is(subject.endpoints.length, 0);
   const turn = await E(session).startTurn('seed');
   await E(turn).whenFinished();
-  t.is(subject.cliCreates(), 0);
   t.true(subject.endpoints[0].revoked);
   // A newly bound pool must not replace this session's captured capability.
   subject.store.set(
@@ -1144,7 +1128,6 @@ test('direct Claude uses Fae tools, retains signed thinking through restart and 
   const child = sessions.find(s => s.parentSessionId === id);
   t.truthy(child);
   t.is(child.backendId, 'fae-claude');
-  t.is(subject.cliCreates(), 0);
   const revived = await subject.restart();
   const restored = await E(revived).getSession(id);
   await E(await E(restored).startTurn('continue')).whenFinished();
@@ -1158,7 +1141,6 @@ test('direct Claude uses Fae tools, retains signed thinking through restart and 
       ),
   );
   t.true(subject.endpoints.every(endpoint => endpoint.revoked));
-  t.is(subject.cliCreates(), 0);
 });
 
 test('direct Claude catalog and turns work with a broken native backend', async t => {
@@ -1180,5 +1162,100 @@ test('direct Claude catalog and turns work with a broken native backend', async 
   });
   await E(await E(session).startTurn('hello')).whenFinished();
   t.is(subject.requests.length, 1);
-  t.is(subject.cliCreates(), 0);
+});
+
+test('retired harnesses cannot be selected or revived by provider discovery', async t => {
+  const subject = world(t);
+  t.teardown(subject.close);
+  let touched = 0;
+  const retired = Far('RetiredBackend', {
+    describe() {
+      touched += 1;
+      throw Error('Retired harness consulted during a new session');
+    },
+  });
+  const ids = ['codex', 'claude', 'opencode'];
+  for (const id of ids) subject.store.set(`${id  }-backend`, retired);
+  await Promise.all(
+    ids.map(backendId =>
+      t.throwsAsync(
+        E(subject.factory).createSession({ backendId, modelId: 'luna' }),
+        { message: /Unknown inference backend/ },
+      ),
+    ),
+  );
+  t.deepEqual(
+    (await E(subject.factory).listBackends()).map(row => row.providerId),
+    ['openai'],
+  );
+  t.deepEqual(
+    (await E(subject.factory).listModels()).map(row => row.providerId),
+    ['openai'],
+  );
+  t.is(touched, 0);
+  t.deepEqual(await E(subject.factory).listSessions(), []);
+});
+
+test('automatic OpenAI routing offers only reasoning choices and limits supported on every serving account', async t => {
+  const subject = world(t);
+  t.teardown(subject.close);
+  const catalog = subject.store.get('codex-model-catalog');
+  const {
+    accounts: [account],
+  } = await E(catalog).modelCatalog();
+  const [model] = account.models;
+  subject.store.set(
+    'codex-model-catalog',
+    Far('MixedCatalog', {
+      modelCatalog: () =>
+        harden({
+          accounts: [
+            {
+              ...account,
+              models: [
+                {
+                  ...model,
+                  reasoningEfforts: ['low', 'high', 'ultra'],
+                  maxOutputTokens: 5000,
+                },
+              ],
+            },
+            {
+              ...account,
+              subscriptionId: 'secondary',
+              models: [
+                {
+                  ...model,
+                  defaultReasoningEffort: 'low',
+                  reasoningEfforts: ['low', 'max'],
+                  contextLength: 64_000,
+                  maxOutputTokens: 3000,
+                },
+              ],
+            },
+            {
+              ...account,
+              subscriptionId: 'reserved',
+              pinnedOnly: true,
+              models: [{ ...model, reasoningEfforts: ['high'] }],
+            },
+          ],
+        }),
+    }),
+  );
+  const [listed] = await E(subject.factory).listModels('fae-codex');
+  t.like(listed, {
+    reasoningEfforts: ['low', 'max'],
+    defaultReasoningEffort: null,
+    contextLength: 64_000,
+    maxOutputTokens: 3000,
+  });
+  await t.throwsAsync(
+    E(subject.factory).createSession({
+      backendId: 'fae-codex',
+      modelId: model.id,
+      reasoningEffort: 'high',
+    }),
+    { message: /Unsupported reasoning effort/ },
+  );
 });
