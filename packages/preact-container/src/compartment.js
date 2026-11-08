@@ -1,6 +1,6 @@
 // @ts-check
 
-import { h, Fragment, options } from 'preact';
+import { h, Fragment, isValidElement, options } from 'preact';
 import {
   useState,
   useEffect,
@@ -209,16 +209,17 @@ function coerceToSafeVNode(value, depth = 0) {
   }
   if (t !== 'object') return null;
 
-  // Preact tags real vnodes with `constructor === undefined` (see
-  // `src/create-element.js` — `UNDEFINED` is set as the constructor on
-  // every vnode literal). Anything else is not a vnode.
+  // Preact 11 tags real vnodes with a private shared-symbol marker that
+  // `isValidElement()` recognizes. Continue admitting the deliberately
+  // supported hand-built vnode shape too; the coercer rebuilds either form
+  // through our own `h()` before it can reach the renderer.
   let ctor;
   try {
     ctor = value.constructor;
   } catch (_) {
     return null;
   }
-  if (ctor !== undefined) return null;
+  if (ctor !== undefined && !isValidElement(value)) return null;
 
   // Read each field defensively: the attacker may have installed
   // getters that throw or that return varying values per read.
@@ -577,11 +578,13 @@ function install() {
   };
 }
 
-// Preact tags every vnode with an own `constructor: undefined` slot
-// (see `coerceToSafeVNode`); require `type` and `props` alongside it so
-// a host's null-prototype data bag is not mistaken for a vnode.
+// Recognize Preact 11's shared-symbol marker through its public predicate and
+// retain the hand-built Preact 10 vnode shape as a tripwire. For the latter,
+// require `type` and `props` alongside `constructor: undefined` so a host's
+// null-prototype data bag is not mistaken for a vnode.
 function looksLikeHostVNode(value) {
   if (value === null || typeof value !== 'object') return false;
+  if (isValidElement(value)) return true;
   let ctor;
   try {
     ctor = value.constructor;
