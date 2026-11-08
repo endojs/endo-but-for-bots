@@ -196,8 +196,9 @@ apply; a different configuration requires explicit retirement.
 Floot receives the runner capability directly, and models receive only their
 session Shell. Do not share the installation storage directory with a guest.
 
-Backend installation directories also live under `@pins/installations/`:
-`claude-sandbox`, `codex-sandbox`, and `opencode-sandbox`.
+Subscription installation directories also live under `@pins/installations/`.
+The OpenAI pool uses `codex-sandbox` and the Anthropic pool uses `claude-sandbox`.
+The `opencode-sandbox` path is reserved for retiring an earlier installation.
 `installationPath()` resolves these adapter IDs to their storage paths while
 keeping account binding source IDs unchanged.
 Other explicit namespaces passed to the shared provisioning helpers retain their

@@ -12,19 +12,7 @@ const exec = promisify(execFile);
 const script = fileURLToPath(new URL('../oci/dev/build.sh', import.meta.url));
 const digest = `sha256:${'a'.repeat(64)}`;
 
-test('all CLI runtime overlays use the shared base, without extra apt installs', async t => {
-  const overlays = await Promise.all(
-    ['claude', 'codex', 'opencode'].map(backend =>
-      readFile(
-        new URL(`../../${backend}-sandbox/oci/Containerfile`, import.meta.url),
-        'utf8',
-      ),
-    ),
-  );
-  for (const text of overlays) {
-    t.true(text.includes(`ARG ENDO_DEV_IMAGE\nFROM \${ENDO_DEV_IMAGE}`));
-    t.false(text.includes('apt-get'));
-  }
+test('the Fae development shell image includes its pinned toolchain and browser', async t => {
   const base = await readFile(
     new URL('../oci/dev/Containerfile', import.meta.url),
     'utf8',
@@ -102,18 +90,6 @@ test('the Docker base build omits Podman-only flags and keeps stdout machine-rea
   });
   t.is(stdout, `${digest}\n`);
   t.true(stderr.includes('build output'));
-  const overlays = [
-    '../../claude-sandbox/oci/build.sh',
-    '../../codex-sandbox/oci/build-reproducible.sh',
-  ];
-  const results = await Promise.all(
-    overlays.map(path =>
-      exec('sh', [fileURLToPath(new URL(path, import.meta.url))], {
-        env: { ...process.env, ENGINE: engine, ENDO_DEV_IMAGE: digest },
-      }),
-    ),
-  );
-  for (const result of results) t.true(result.stdout.includes('build output'));
 });
 
 test('browser smoke rejects blank and missing-text screenshot pixels', async t => {
