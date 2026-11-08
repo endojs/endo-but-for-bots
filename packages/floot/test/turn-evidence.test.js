@@ -1,10 +1,12 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { UNSETTLED_TOOL_RESULT,
+import {
+  UNSETTLED_TOOL_RESULT,
   UNKNOWN_TOOL_OUTCOME,
   isUnansweredResult,
-  reconcileTurnEvidence } from '../src/turn-evidence.js';
+  reconcileTurnEvidence,
+} from '../src/turn-evidence.js';
 
 /**
  * The journal's own text reader: whole content, nothing cut.

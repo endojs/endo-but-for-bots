@@ -4,9 +4,11 @@ import { Fail } from '@endo/errors';
 import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 
 import { encodeJournalPresentation } from './journal-presentation.js';
-import { UNSETTLED_TOOL_RESULT,
+import {
+  UNSETTLED_TOOL_RESULT,
   UNKNOWN_TOOL_OUTCOME,
-  reconcileTurnEvidence } from './turn-evidence.js';
+  reconcileTurnEvidence,
+} from './turn-evidence.js';
 import {
   encodeJournalTranscript,
   transcriptIndex,

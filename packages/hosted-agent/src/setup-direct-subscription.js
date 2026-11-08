@@ -49,7 +49,7 @@ export const setupDirectSubscription = async (
     singlePowersPath,
   },
 ) => {
-  const dir = `${id  }-sandbox`;
+  const dir = `${id}-sandbox`;
   const profilePath = [flootDir, 'controller-profile'];
   (await E(host).has(...profilePath)) ||
     Fail`Configure Floot before its direct subscriptions`;
@@ -90,8 +90,8 @@ export const setupDirectSubscription = async (
   } else {
     const env = {
       ...workloadEnv,
-      [`${id.toUpperCase()  }_BROKER_CONFIG`]: JSON.stringify({
-        ownerId: `${id  }-subscription`,
+      [`${id.toUpperCase()}_BROKER_CONFIG`]: JSON.stringify({
+        ownerId: `${id}-subscription`,
         directOnly: true,
         accountAuthority,
         ...profile,
@@ -101,7 +101,7 @@ export const setupDirectSubscription = async (
     readProfile(env);
     await mintWithPowersPath(host, {
       powersPath,
-      temporary: `${id  }.broker-powers`,
+      temporary: `${id}.broker-powers`,
       specifier,
       resultName: servicePath,
       env,
@@ -147,7 +147,7 @@ export const setupDirectSubscription = async (
     providerId,
     flootDir,
     accountAuthority,
-    backendId: `fae-${  id}`,
+    backendId: `fae-${id}`,
     subscriptionIds,
     resetCredits: id === 'codex',
   });

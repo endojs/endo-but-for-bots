@@ -1175,7 +1175,7 @@ test('retired harnesses cannot be selected or revived by provider discovery', as
     },
   });
   const ids = ['codex', 'claude', 'opencode'];
-  for (const id of ids) subject.store.set(`${id  }-backend`, retired);
+  for (const id of ids) subject.store.set(`${id}-backend`, retired);
   await Promise.all(
     ids.map(backendId =>
       t.throwsAsync(

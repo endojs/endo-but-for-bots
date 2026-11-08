@@ -63,7 +63,7 @@ test.serial(
       codex: setupOpenAI,
       claude: setupAnthropic,
     })) {
-      const member = { id: 'one', credsName: `${id  }-test-account` };
+      const member = { id: 'one', credsName: `${id}-test-account` };
       const accountRef = id === 'claude' ? 'claude-one' : 'openai-one';
       const inert = {
         version: 'BrokerOAuthStateV1',
@@ -80,10 +80,8 @@ test.serial(
       );
       const options = {
         env: {
-          [`ENDO_${  id.toUpperCase()  }_SUBSCRIPTIONS`]: JSON.stringify([
-            member,
-          ]),
-          [`ENDO_${  id.toUpperCase()  }_ACCOUNT_AUTHORITY`]: `${id  }-pool`,
+          [`ENDO_${id.toUpperCase()}_SUBSCRIPTIONS`]: JSON.stringify([member]),
+          [`ENDO_${id.toUpperCase()}_ACCOUNT_AUTHORITY`]: `${id}-pool`,
         },
       };
       // eslint-disable-next-line no-await-in-loop
@@ -91,7 +89,7 @@ test.serial(
       const brokerPath = [
         '@pins',
         'installations',
-        `${id  }-sandbox`,
+        `${id}-sandbox`,
         'broker-service',
       ];
       // eslint-disable-next-line no-await-in-loop
@@ -103,11 +101,11 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       const profile = await E(host).lookup(['floot', 'controller-profile']);
       // eslint-disable-next-line no-await-in-loop
-      t.false(await E(profile).has(`${id  }-backend`));
+      t.false(await E(profile).has(`${id}-backend`));
       // eslint-disable-next-line no-await-in-loop
-      t.true(await E(profile).has(`${id  }-model-catalog`));
+      t.true(await E(profile).has(`${id}-model-catalog`));
       // eslint-disable-next-line no-await-in-loop
-      const subscription = await E(profile).lookup(`${id  }-inference`);
+      const subscription = await E(profile).lookup(`${id}-inference`);
       // eslint-disable-next-line no-await-in-loop
       const endpoint = await E(subscription).openEndpoint({
         sessionId: 'setup-test',
