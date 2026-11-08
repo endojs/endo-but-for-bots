@@ -1687,24 +1687,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/claude-sandbox@workspace:^, @endo/claude-sandbox@workspace:packages/claude-sandbox":
+"@endo/claude-sandbox@workspace:packages/claude-sandbox":
   version: 0.0.0-use.local
   resolution: "@endo/claude-sandbox@workspace:packages/claude-sandbox"
   dependencies:
-    "@endo/9p-server": "workspace:^"
     "@endo/cli": "workspace:^"
-    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
-    "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/hosted-agent": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
-    "@endo/sandbox": "workspace:^"
-    "@endo/stream": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
@@ -1780,17 +1775,13 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/codex-sandbox@workspace:packages/codex-sandbox"
   dependencies:
-    "@endo/daemon": "workspace:^"
+    "@endo/cli": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
-    "@endo/exo": "workspace:^"
-    "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/hosted-agent": "workspace:^"
     "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
-    "@endo/sandbox": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"

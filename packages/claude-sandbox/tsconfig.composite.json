@@ -6,9 +6,6 @@
   },
   "references": [
     {
-      "path": "../daemon/tsconfig.composite.json"
-    },
-    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
@@ -16,12 +13,6 @@
     },
     {
       "path": "../exo/tsconfig.composite.json"
-    },
-    {
-      "path": "../exo-stream/tsconfig.composite.json"
-    },
-    {
-      "path": "../far/tsconfig.composite.json"
     },
     {
       "path": "../hosted-agent/tsconfig.composite.json"
@@ -34,12 +25,6 @@
     },
     {
       "path": "../platform/tsconfig.composite.json"
-    },
-    {
-      "path": "../sandbox/tsconfig.composite.json"
-    },
-    {
-      "path": "../stream/tsconfig.composite.json"
     }
   ]
 }

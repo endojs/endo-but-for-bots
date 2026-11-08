@@ -1,18 +1,11 @@
 // @ts-check
 
 /**
- * The `claude-sandbox/broker-service` caplet: the retained Anthropic broker
- * the daemon session owner records as each session's `brokerService` role.
- * Minted by `setup-hosted.js` with the managed credential's SecretBlob read
- * facet as its sole powers; its operator profile is persisted in the formula
- * environment, so sessions never resolve a mutable credential name.
- *
- * Formula env (set by `setup-hosted.js`):
- *   CLAUDE_BROKER_CONFIG  JSON: ownerId, directory, imageRef, imageDigest,
- *                         listenerImageRef, credentialKind, and optional
- *                         anthropicBeta, maxSessions, publicInternet. No model
- *                         list: the account's catalog, read from Anthropic,
- *                         admits models.
+ * Direct Anthropic subscription broker. setup-direct.js binds its powers to
+ * the operator's credential or pool. The CLAUDE_BROKER_CONFIG formula records
+ * accountAuthority, credentialKind and provider settings. Existing formulas
+ * may also carry their historical image descriptors. Direct endpoints use the
+ * authenticated Messages API and do not start a listener container.
  *
  * @module
  */

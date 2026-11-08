@@ -2,7 +2,7 @@
   "name": "@endo/codex-sandbox",
   "version": "0.0.0",
   "private": true,
-  "description": "A bounded Endo capability adapter for a Codex CLI process running in an externally managed sandbox slice.",
+  "description": "Direct OpenAI Responses subscription inference for Endo.",
   "keywords": [],
   "author": "Endo contributors",
   "license": "Apache-2.0",
@@ -15,48 +15,28 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "main": "src/codex-client.js",
   "exports": {
-    ".": "./src/codex-client.js",
-    "./setup-host.js": "./setup-host.js",
-    "./setup-hosted.js": "./setup-hosted.js",
-    "./src/codex-session-store.js": "./src/codex-session-store.js",
-    "./src/codex-state-provider.js": "./src/codex-state-provider.js",
-    "./src/codex-state-provider-module.js": "./src/codex-state-provider-module.js",
-    "./src/hosted-runtime-setup.js": "./src/hosted-runtime-setup.js",
-    "./src/codex-backend-module.js": "./src/codex-backend-module.js",
     "./src/codex-broker-service-agent.js": "./src/codex-broker-service-agent.js",
-    "./src/codex-native-controller.js": "./src/codex-native-controller.js",
-    "./src/codex-session-storage-module.js": "./src/codex-session-storage-module.js",
-    "./audit-journal.js": "./audit-journal.js",
-    "./backend-factory.js": "./backend-factory.js",
-    "./app-server-transport.js": "./app-server-transport.js",
-    "./protocol.js": "./protocol.js",
     "./package.json": "./package.json",
-    "./runtime-verifier.js": "./src/runtime-verifier.js"
+    "./setup-direct.js": "./setup-direct.js"
   },
   "scripts": {
     "build": "exit 0",
     "test": "ava",
-    "setup:host": "endo run --UNCONFINED setup-host.js --powers @agent",
-    "setup:hosted": "endo run --UNCONFINED setup-hosted.js --powers @agent",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
-    "lint:types": "tsc"
+    "lint:types": "tsc",
+    "setup:direct": "endo run --UNCONFINED setup-direct.js --powers @agent"
   },
   "dependencies": {
-    "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
-    "@endo/exo": "workspace:^",
-    "@endo/exo-stream": "workspace:^",
     "@endo/hosted-agent": "workspace:^",
-    "@endo/pass-style": "workspace:^",
-    "@endo/patterns": "workspace:^",
-    "@endo/sandbox": "workspace:^"
+    "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/cli": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "ava": "catalog:dev",

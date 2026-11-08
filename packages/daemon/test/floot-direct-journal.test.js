@@ -91,7 +91,13 @@ test.serial(
     t.deepEqual(restored.turns, seeded.turns);
     t.deepEqual(await E(host).lookup('direct-effect-proof'), { executions: 1 });
     const context = await E(agent).recall();
-    t.true(context.some(message => message.content === expectedText));
+    const retained = context.find(message => message.content === expectedText);
+    t.true(
+      retained?.responsesOutput?.items.some(
+        item => item.encrypted_content === 'durable-opaque-proof',
+      ),
+    );
+    t.is(retained?.responsesOutput.model, 'm');
     t.true(
       context.some(
         message =>

@@ -9,7 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { makeEndoClient, start, stop } from '../index.js';
 
-for (const mode of ['write', 'failed-write', 'late-native']) {
+for (const mode of ['write', 'failed-write']) {
   const fails = mode === 'failed-write';
   test.serial(
     `production Floot factory disposal drains admitted work and fences retained facets: ${mode}`,
@@ -63,45 +63,6 @@ for (const mode of ['write', 'failed-write', 'late-native']) {
         { powersName: 'control', resultName: 'factory' },
       );
       t.deepEqual(await E(factory).getVoicePreferences(), {});
-      if (mode === 'late-native') {
-        await E(control).enableNative();
-        const creation = E(factory).createSession({
-          backendId: 'test',
-          modelId: 'm',
-        });
-        void creation.catch(() => {});
-        // Fail with the admission error instead of waiting for the test
-        // timeout if startup never reaches the backend's held create call.
-        await Promise.race([
-          E(control).writing(),
-          creation.then(() => {
-            throw Error('Session creation bypassed the held backend call');
-          }),
-        ]);
-        let settled = false;
-        const disposal = E(host)
-          .cancel('factory')
-          .finally(() => {
-            settled = true;
-          });
-        void disposal.catch(() => {});
-        await new Promise(resolve => setTimeout(resolve, 50));
-        t.false(settled);
-        t.is(await E(control).terminated(), 0);
-        await t.throwsAsync(E(host).lookup('factory'), {
-          message: /disposal.*pending/i,
-        });
-        await E(control).release();
-        // The cancelled startup may fail its admitted turn, but must stop the
-        // late admin and settle disposal without waiting on its own startup.
-        await t.throwsAsync(creation, { message: /closed|unreachable/ });
-        await t.throwsAsync(disposal, { message: /Cancellation hooks failed/ });
-        t.true(Number(await E(control).terminated()) >= 1);
-        await t.throwsAsync(E(host).lookup('factory'), {
-          message: /disposal.*failed/i,
-        });
-        return;
-      }
       const keeper = await E(host).evaluate(
         'factory-worker',
         "makeExo('Keeper', M.interface('Keeper', {}, { defaultGuards: 'passable' }), { read: () => E(original).getVoicePreferences(), write: () => E(original).setVoicePreferences({voice: 'old'}) })",

@@ -1,7 +1,8 @@
 // @ts-check
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+// eslint-disable-next-line import/no-relative-packages -- Test-only model discovery.
+import { makeTestInference } from '../../floot/test/_inference.js';
 
 /**
  * Real daemon storage, with inert inference and one injected remove failure.
@@ -9,61 +10,14 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
  */
 export const make = host => {
   let fault;
-  const backend = Far('JournalTestBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-      }),
-    modelCatalog: () =>
-      harden({
-        accounts: [
-          {
-            subscriptionId: 'default',
-            state: 'current',
-            observedAt: 1,
-            models: [
-              {
-                id: 'm',
-                title: 'Model',
-                description: '',
-                default: true,
-                defaultReasoningEffort: null,
-                reasoningEfforts: [],
-              },
-            ],
-          },
-        ],
-      }),
-    create: () =>
-      harden({
-        run: Far('JournalTestRun', {
-          send: () => {
-            const stream = makeBufferedReader();
-            stream.push(
-              harden({ type: 'text-delta', text: 'journal evidence' }),
-            );
-            stream.push(harden({ type: 'end' }));
-            return stream.reader;
-          },
-          interrupt: () => undefined,
-          acknowledge: () => undefined,
-        }),
-        admin: Far('JournalTestAdmin', { terminate: () => undefined }),
-      }),
-    stop: () => undefined,
-    destroy: () => undefined,
-  });
+  const { catalog } = makeTestInference(() => 'journal evidence');
   return Far('JournalRetirementPowers', {
     list: (...args) => E(host).list(...args),
     createDirectory: (...args) => E(host).createDirectory(...args),
     has: (name, ...rest) =>
-      name === 'codex-backend' || E(host).has(name, ...rest),
+      name === 'codex-model-catalog' || E(host).has(name, ...rest),
     lookup: (name, ...rest) =>
-      name === 'codex-backend' ? backend : E(host).lookup(name, ...rest),
+      name === 'codex-model-catalog' ? catalog : E(host).lookup(name, ...rest),
     locate: (...args) => E(host).locate(...args),
     copy: (...args) => E(host).copy(...args),
     provideGuest: (...args) => E(host).provideGuest(...args),

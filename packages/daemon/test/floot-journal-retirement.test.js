@@ -62,6 +62,11 @@ for (const [kind, after] of [
         if (!name) throw Error('Missing durable registry');
         return E(currentHost).lookup(name);
       };
+      await E(host).makeUnconfined(
+        '@node',
+        new URL('./_floot-test-subscription.js', import.meta.url).href,
+        { powersName: '@agent', resultName: 'codex-inference' },
+      );
       const powers = await E(host).makeUnconfined(
         '@node',
         new URL('./_floot-journal-retirement-powers.js', import.meta.url).href,
@@ -78,7 +83,7 @@ for (const [kind, after] of [
         'unrelated-retirement-data',
       );
       const session = await E(factory).createSession({
-        backendId: 'test',
+        backendId: 'fae-codex',
         modelId: 'm',
       });
       const { id } = await E(session).getInfo();
@@ -90,7 +95,7 @@ for (const [kind, after] of [
       let survivorHistory;
       if (kind === 'gc') {
         survivor = await E(factory).createSession({
-          backendId: 'test',
+          backendId: 'fae-codex',
           modelId: 'm',
         });
         survivorId = (await E(survivor).getInfo()).id;

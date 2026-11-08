@@ -5,6 +5,7 @@ import { Far } from '@endo/far';
 // Test-only cross-package fixture: a daemon -> Floot dependency would cycle
 // back through Floot's daemon dependency. Private journal internals are not API.
 /* eslint-disable import/no-relative-packages */
+import { messageFromResponsesOutput } from '../../lal/providers/subscription-responses.js';
 import { makeStreamingAgent } from '../../floot/agent.js';
 import { providePrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
 import { makeReplyChannel } from '../../floot/src/stream.js';
@@ -25,20 +26,28 @@ export const make = async host => {
       lastContext = context;
       if (mode === 'seed' && calls === 1) {
         return harden({
-          message: {
-            role: 'assistant',
-            content: `${'Long dialogue '.repeat(800)}PRESERVE-TAIL`,
-            tool_calls: [
+          message: messageFromResponsesOutput({
+            model: 'm',
+            items: [
+              { type: 'reasoning', encrypted_content: 'durable-opaque-proof' },
               {
-                id: 'effect',
-                type: 'function',
-                function: {
-                  name: 'effect',
-                  arguments: '{}',
-                },
+                type: 'message',
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'output_text',
+                    text: `${'Long dialogue '.repeat(800)}PRESERVE-TAIL`,
+                  },
+                ],
+              },
+              {
+                type: 'function_call',
+                call_id: 'effect',
+                name: 'effect',
+                arguments: '{}',
               },
             ],
-          },
+          }),
         });
       }
       if (mode === 'seed') {
@@ -57,6 +66,7 @@ export const make = async host => {
     undefined,
     {
       kind: 'provider',
+      providerFormat: 'responses-output-v1',
       provideProvider: () => provider,
     },
     'Test',

@@ -1,7 +1,6 @@
 // @ts-check
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
 /** @param {any} host */
 export const make = host => {
@@ -15,107 +14,15 @@ export const make = host => {
   const gate = new Promise(resolve => {
     release = resolve;
   });
-  let nativeEnabled = false;
-  const guests = new Map();
-  // CapTP copies path arrays, and host methods accept both a path and spread
-  // segments. Index the simulated guests by path value, as the daemon does.
-  /** @param {...(string | string[])} names */
-  const pathKey = (...names) => JSON.stringify(names.flat());
-  let terminated = 0;
-  const backend = Far('LifecycleBackend', {
-    describe: () =>
-      harden({
-        id: 'test',
-        title: 'Test',
-        kind: 'hosted',
-        continuity: 'explicit',
-        toolOwnership: 'endo',
-      }),
-    modelCatalog: () =>
-      harden({
-        accounts: [
-          {
-            subscriptionId: 'default',
-            state: 'current',
-            observedAt: 1,
-            models: [
-              {
-                id: 'm',
-                title: 'Model',
-                description: '',
-                default: true,
-                defaultReasoningEffort: null,
-                reasoningEfforts: [],
-              },
-            ],
-          },
-        ],
-      }),
-    create: async () => {
-      entered();
-      await gate;
-      return harden({
-        run: Far('LifecycleRun', {
-          send: () => {
-            throw Error('Disposed native session must not send');
-          },
-          interrupt: () => undefined,
-          acknowledge: () => undefined,
-        }),
-        admin: Far('LifecycleAdmin', {
-          terminate: () => {
-            terminated += 1;
-          },
-        }),
-      });
-    },
-    destroy: () => undefined,
-    stop: () => undefined,
-  });
   return Far('FactoryLifecyclePowers', {
     list: (...args) => E(host).list(...args),
-    has: (...args) =>
-      guests.has(pathKey(...args)) ||
-      (nativeEnabled && args[0] === 'codex-backend')
-        ? true
-        : E(host).has(...args),
-    lookup: (...args) =>
-      guests.has(pathKey(...args))
-        ? guests.get(pathKey(...args))
-        : nativeEnabled && args[0] === 'codex-backend'
-          ? backend
-          : E(host).lookup(...args),
+    has: (...args) => E(host).has(...args),
+    lookup: (...args) => E(host).lookup(...args),
     locate: (...args) => E(host).locate(...args),
     copy: (...args) => E(host).copy(...args),
     createDirectory: (...args) => E(host).createDirectory(...args),
-    provideGuest: (...args) => {
-      if (!nativeEnabled) return E(host).provideGuest(...args);
-      // Isolate late backend acquisition/disposal from guest collection's
-      // worker termination, exercised by floot-journal-retirement.test.js.
-      const { agentName } = args[1];
-      const key = pathKey(agentName);
-      if (guests.has(key)) return undefined;
-      const store = new Map([['user', harden({})]]);
-      guests.set(
-        key,
-        Far('LifecycleGuest', {
-          has: name => store.has(name),
-          lookup: name => store.get(name),
-          storeValue: (value, name) => {
-            store.set(name, value);
-          },
-          remove: name => {
-            store.delete(name);
-          },
-          list: prefix => harden(prefix === 'tools' ? [] : [...store.keys()]),
-          locate: () => 'test-locator',
-          followMessages: () => makeBufferedReader().reader,
-        }),
-      );
-      return undefined;
-    },
-    remove: (...args) =>
-      guests.delete(pathKey(...args)) ? undefined : E(host).remove(...args),
+    provideGuest: (...args) => E(host).provideGuest(...args),
+    remove: (...args) => E(host).remove(...args),
     storeValue: async (value, name) => {
       let fail = false;
       if (armed) {
@@ -132,10 +39,6 @@ export const make = host => {
       failWrite = fail;
     },
     writing: () => writing,
-    enableNative: () => {
-      nativeEnabled = true;
-    },
-    terminated: () => terminated,
     release: () => release(),
   });
 };

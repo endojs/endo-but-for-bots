@@ -2,7 +2,7 @@
   "name": "@endo/claude-sandbox",
   "version": "0.0.0",
   "private": true,
-  "description": "Run Claude Code inside an @endo/sandbox podman slice, with the workspace projected via a host-side 9P mount and exposed as a ClaudeClient Endo capability.",
+  "description": "Direct Anthropic Messages subscription inference for Endo.",
   "keywords": [],
   "author": "Endo contributors",
   "license": "Apache-2.0",
@@ -16,9 +16,6 @@
   },
   "type": "module",
   "exports": {
-    "./src/claude-tool-input.js": "./src/claude-tool-input.js",
-    "./setup-host.js": "./setup-host.js",
-    "./setup-hosted.js": "./setup-hosted.js",
     "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",
     "./package.json": "./package.json",
     "./setup-direct.js": "./setup-direct.js"
@@ -26,10 +23,6 @@
   "scripts": {
     "build": "exit 0",
     "test": "ava",
-    "test:integration": "ava test/integration.test.js --timeout=180s",
-    "test:ninep": "ava test/ninep-flow.test.js --timeout=180s",
-    "setup:host": "endo run --UNCONFINED setup-host.js --powers @agent",
-    "setup:hosted": "endo run --UNCONFINED setup-hosted.js --powers @agent",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
@@ -37,32 +30,23 @@
     "login:direct": "node login.js"
   },
   "dependencies": {
-    "@endo/9p-server": "workspace:^",
-    "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
-    "@endo/exo-stream": "workspace:^",
-    "@endo/far": "workspace:^",
     "@endo/hosted-agent": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/platform": "workspace:^",
-    "@endo/sandbox": "workspace:^",
-    "@endo/stream": "workspace:^"
+    "@endo/platform": "workspace:^"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
+    "@endo/far": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"
   },
   "ava": {
-    "require": [
-      "./test/_preload-concordance.js"
-    ],
     "files": [
-      "test/**/*.test.js",
-      "!test/ninep-flow.test.js"
+      "test/**/*.test.js"
     ],
     "timeout": "60s"
   }
