@@ -1,6 +1,12 @@
 // @ts-check
 
-import { render as preactRender, Fragment, options, h } from 'preact';
+import {
+  render as preactRender,
+  Fragment,
+  isValidElement,
+  options,
+  h,
+} from 'preact';
 
 // Preact mangles its internal option-hook and vnode field names in its
 // published build (see preact's `mangle.json`). Because this package
@@ -1373,7 +1379,7 @@ function walkSanitize(node, allowedTags, safeAttrs) {
     }
     return;
   }
-  if (!node || typeof node !== 'object' || node.constructor !== undefined) {
+  if (!isValidElement(node)) {
     return;
   }
   sanitizeVNode(node, allowedTags, safeAttrs);
