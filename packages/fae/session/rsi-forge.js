@@ -13,6 +13,9 @@ const repositories = harden({
   endo: { owner: 'floot', name: 'endo', branch: 'llm' },
   'endo-host': { owner: 'floot', name: 'nixos-config', branch: 'master' },
 });
+// 64 KiB encodes as 87,384 base64 characters, within the default
+// PassableBytesReader frame limit used by EndoMountFile.writeBytes().
+const archiveFrameBytes = 64 * 1024;
 const maxPatch = 4 * 1024 * 1024;
 const maxFileBytes = 2 * 1024 * 1024;
 const maxFiles = 64;
@@ -33,6 +36,15 @@ async function* limited(stream, limit) {
     yield chunk;
   }
 }
+/** @param {AsyncIterable<Uint8Array>} body */
+async function* archiveFrames(body) {
+  for await (const bytes of limited(body, 256 * 1024 * 1024)) {
+    for (let start = 0; start < bytes.byteLength; start += archiveFrameBytes) {
+      yield bytes.subarray(start, start + archiveFrameBytes);
+    }
+  }
+}
+
 /** @param {AsyncIterable<Uint8Array>} stream @param {number} limit */
 const read = async (stream, limit) => {
   const chunks = [];
@@ -239,7 +251,7 @@ export const makePullRequests = (
         base: repo.branch,
         commit,
         archive: bytesReaderFromIterator(
-          limited(/** @type {any} */ (res.body), 256 * 1024 * 1024),
+          archiveFrames(res.body),
         ),
       });
     },

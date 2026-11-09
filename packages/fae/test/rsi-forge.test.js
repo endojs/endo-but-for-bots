@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E, Far } from '@endo/far';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makePullRequests } from '../session/rsi-forge.js';
 
 const base = 'a'.repeat(40);
@@ -10,7 +11,8 @@ const asPatch = () =>
   bytesReaderFromIterator([new TextEncoder().encode('diff --git a/x b/x\n')]);
 const token = Far('FakeSecret', { readBase64: () => btoa('test-password') });
 
-const fixture = ({ write = false, actions = false } = {}) => {
+/** @param {{write?: boolean, actions?: boolean, archiveBody?: ReadableStream<Uint8Array>}} [options] */
+const fixture = ({ write = false, actions = false, archiveBody } = {}) => {
   const writes = [];
   let topic;
   let candidate;
@@ -69,6 +71,8 @@ const fixture = ({ write = false, actions = false } = {}) => {
               private: true,
             },
       );
+    if (leaf === `archive/${base}.tar.gz` && archiveBody)
+      return new Response(archiveBody);
     if (leaf === 'branches/llm') return Response.json({ commit: { id: base } });
     if (leaf === `branches/${topic}`)
       return Response.json({ commit: { id: candidate } });
@@ -85,6 +89,85 @@ const fixture = ({ write = false, actions = false } = {}) => {
   };
   return { writes, broker: makePullRequests(token, 'floot-rsi', send) };
 };
+
+for (const [label, lengths] of /** @type {const} */ ([
+  ['one oversized HTTP chunk', [200_003]],
+  ['mixed HTTP chunk sizes', [17, 65_536, 200_003, 3]],
+])) {
+  test(`RSI source delivers exact archive bytes through the default reader for ${label}`, async t => {
+    const size = lengths.reduce((sum, length) => sum + length, 0);
+    const expected = Uint8Array.from({ length: size }, (_, i) => i % 251);
+    const archiveBody = new ReadableStream({
+      start(controller) {
+        let offset = 0;
+        for (const length of lengths) {
+          controller.enqueue(expected.subarray(offset, offset + length));
+          offset += length;
+        }
+        controller.close();
+      },
+    });
+    const { broker } = fixture({ archiveBody });
+    const { archive, commit } = await E(broker).source('endo');
+    t.is(commit, base);
+    const actual = new Uint8Array(size);
+    let offset = 0;
+    for await (const frame of iterateBytesReader(archive)) {
+      actual.set(frame, offset);
+      offset += frame.length;
+    }
+    t.is(offset, size);
+    t.true(actual.every((byte, i) => byte === expected[i]));
+    t.false(archiveBody.locked);
+  });
+}
+
+test('abandoning a partial RSI archive cancels its HTTP body', async t => {
+  let cancelled = false;
+  const archiveBody = new ReadableStream(
+    {
+      pull(controller) {
+        controller.enqueue(new Uint8Array(200_003));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const { broker } = fixture({ archiveBody });
+  const { archive } = await E(broker).source('endo');
+  const reader = iterateBytesReader(archive);
+  const first = await reader.next();
+  t.false(first.done);
+  await reader.return(undefined);
+  t.true(cancelled);
+  t.false(archiveBody.locked);
+});
+
+test('RSI source propagates an interrupted HTTP body to the archive consumer', async t => {
+  let started = false;
+  const archiveBody = new ReadableStream(
+    {
+      pull(controller) {
+        if (started) controller.error(Error('archive download interrupted'));
+        else {
+          started = true;
+          controller.enqueue(Uint8Array.of(7));
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const { broker } = fixture({ archiveBody });
+  const { archive } = await E(broker).source('endo');
+  const reader = iterateBytesReader(archive);
+  t.deepEqual((await reader.next()).value, Uint8Array.of(7));
+  await t.throwsAsync(reader.next(), {
+    message: /archive download interrupted/,
+  });
+  t.false(archiveBody.locked);
+});
 
 test('RSI retries reuse a single fork branch and PR; only pull creation reaches the upstream repository', async t => {
   const { broker, writes } = fixture();
