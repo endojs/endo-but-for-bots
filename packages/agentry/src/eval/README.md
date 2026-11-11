@@ -1,7 +1,8 @@
-# Git code-mode eval
+# Git eval condition matrix
 
-A harness for testing **git code mode**: drive a code-mode agent against a git
-repository and score whether the repository reached a target end-state.
+A harness for testing git agents across execution conditions: drive an agent
+against a git repository and score whether the repository reached a target
+end-state.
 
 ## Eval vs. optimize
 
@@ -26,19 +27,46 @@ A code-mode agent's only tool is `evaluate`: it runs `E(git).x()` and
 trace sees a single opaque `evaluate` call, not the individual git operations.
 There is therefore no git-op trace to score with edit distance, and there
 should not need to be: a correct run might stage in a different order, read
-status an extra time, or use a different method to the same end. Outcome
-assertion reads the repository's actual final state through the live `git`
-capability and checks it against the target, so it needs no in-compartment
-instrumentation and accepts any alternate-but-correct path.
+status an extra time, or use a different method to the same end.
+Outcome assertion reads the repository's actual final state through the live
+`git` capability and checks it against the target, so it needs no
+in-compartment instrumentation and accepts any alternate-but-correct path.
 
 Capturing the run's events is still useful for debugging _why_ a scenario
 failed, but it is a diagnostic, never the gate.
 
+## Conditions
+
+The matrix compares two ways of giving the same repository authority to an
+agent:
+
+- `code-mode` — the existing code-mode loop over the live `workspace` and `git`
+  capabilities.
+- `tool-calls` — direct pi-agent tool calls over the same `workspace` and `git`
+  capabilities, using the mounted filesystem and mount-bridged git tool
+  catalog.
+- `shell` — direct tool calls with a fresh `EndoShell` capability in addition to
+  the Git and mount tools. The shell allows only `git`, uses a 30-second
+  timeout, a 256 KiB per-stream output cap, and an explicit environment
+  passlist. Its host spawner remains an ordinary host process boundary; the
+  allowlist and sanitized environment are policy bounds, not kernel sandboxing.
+
+History-rewriting operations are selected from the scenario's
+`requirements.allowHistoryRewrite` capability declaration. The code-mode
+condition advertises the elevated `gitHistory` global only when that
+requirement is true, and the tool-call and shell conditions add the elevated
+history tool slice under the same rule. Stage-and-commit is provisioned with
+the ordinary Git capability in every condition.
+
 ## Metrics
 
 Every `runGitScenario` result includes `metrics` alongside `outcome`.
-The metrics record summed provider token usage, including reasoning tokens when reported, total provider cost, completed turns, assistant messages, tool executions, tool execution errors, and wall time for the agent run.
-They come from the same pi-agent-core event stream that powers diagnostics, so they report the real provider usage carried by assistant messages instead of estimating from transcript text.
+The metrics record summed provider token usage, including reasoning tokens when
+reported, total provider cost, completed turns, assistant messages, tool
+executions, tool execution errors, and wall time for the agent run.
+They come from the same pi-agent-core event stream that powers diagnostics, so
+they report the real provider usage carried by assistant messages instead of
+estimating from transcript text.
 
 Callers that need durable diagnostics can pass `onEvent` to receive the same agent events.
 The live test uses this seam to write one attributable, transcript-grade event per scenario turn plus one result record per scenario to the directory named by `ENDO_EVAL_ARTIFACT_DIR`.
@@ -58,32 +86,44 @@ The scenario's outcome assertion remains the only pass/fail gate.
 The harness splits along the seam between a **shared harness** (the runner, the
 env model, the shared types, the export surface, the README, and the generic
 outcome primitives) and **per-eval content** (one scenario's prompt, its outcome
-assertion, and the repository it runs against). The shared harness is
-scenario-agnostic and changes rarely; per-eval content grows with each new eval,
-so each eval gets its own folder.
+assertion, and the repository it runs against).
+The shared harness is scenario-agnostic and changes rarely; per-eval content
+grows with each new eval, so each eval gets its own folder.
 
 Shared harness (this directory's root):
 
-- `index.js` — the `@endo/agentry/eval` export surface: re-exports only the
-  shared harness.
-- `run.js` — `runGitScenario({ model, workspace, git, scenario, readText, ... })`:
-  builds the real code-mode git-loop agent, runs the scenario prompt, and scores
-  by outcome assertion while returning diagnostic run metrics. An optional
-  `onEvent` listener receives the agent event stream. Only the `model` differs
-  between a no-LLM run and a live run.
-- `metrics.js` — `makeRunMetricsRecorder()`: subscribes to plain
-  pi-agent-core events and snapshots per-run usage, turn, tool execution, and
-  wall-time metrics.
-- `env-model.js` — `resolveEvalModelFromEnv(env)`: build a live model +
-  `getApiKey` from the `ENDO_LLM_*` / `LAL_*` environment variables, or
-  `undefined` when no credentials are present.
-- `types.js` — shared contracts such as `GitScenario`, `ReadText`, outcome
-  reports, and runner options.
-- `outcome-kit.js` — the shared outcome primitives: `check()`, the `OutcomeReport`
-  shape, and the small shared readers (`readTrackedFileAt` reads a tracked file
-  at a ref through `filesystemAt`; `branchLog` resolves a branch's commit list).
-  Per-eval scorers build on these so each stays short. Cap-based and portable;
-  the byte reader is injected.
+- `index.js` — the `@endo/agentry/eval` export surface: re-exports the shared
+  harness and each eval's public symbols (the per-folder barrels).
+- `run.js` — `runGitScenarioUnder(condition, { model, workspace, git, scenario, readText, ... })`
+  runs one condition and scores by outcome assertion while returning diagnostic
+  run metrics and can capture the agent event stream.
+  `runGitScenario(...)` remains the code-mode default for existing
+  callers.
+- `conditions/` — one module per execution condition plus the default condition
+  registry.
+- `matrix.js` — `runEvalMatrix({ scenarios, conditions, models, repeats, readText })`
+  runs `scenarios x conditions x models x repeats`, returns per-run rows plus
+  aggregates, and renders the comparison markdown table. It accepts the same
+  optional event listener for durable diagnostics.
+- `repo.js` — Node-side eval repository helpers: temp git repo bootstrap,
+  `workspace` + `git` power construction, and the UTF-8 `readText` scorer
+  dependency.
+- `metrics.js` — `makeRunMetricsRecorder()`: subscribes to plain pi-agent-core
+  events and snapshots per-run usage, turn, tool execution, and wall-time
+  metrics.
+- `env-model.js` — `resolveEvalModelsFromEnv(env)`: builds a live model list
+  plus `getApiKey` hooks from `ENDO_EVAL_MODELS` / `ENDO_LLM_MODELS` /
+  `ENDO_LLM_MODEL` / `LAL_MODEL`.
+  `resolveEvalModelFromEnv(env)` remains as the
+  first-model compatibility shim.
+- `types.ts` — `GitScenario`, `GitScenarioSpec`, `ReadText`: the contract every
+  scenario implements.
+- `outcome-kit.js` — the shared outcome primitives: `check()`, the
+  `OutcomeReport` shape, and the small shared readers (`readTrackedFileAt`
+  reads a tracked file at a ref through `filesystemAt`; `branchLog` resolves a
+  branch's commit list).
+  Per-eval scorers build on these so each stays short.
+  Cap-based and portable; the byte reader is injected.
 
 Per-eval content is internal to this package (one folder under `scenarios/`):
 
@@ -110,7 +150,7 @@ Per-eval content is internal to this package (one folder under `scenarios/`):
   reference `evaluate` source, pointed at by the scenario's
   `referenceSourcePath` / `referenceSourceExport`), `types.ts` (the local
   target shape), and `index.js` (the folder-local barrel).
-
+- `scenarios/index.js` — the landed scenario registry used by the matrix CLI.
 A scenario's no-LLM assertion-path test and its per-eval repository fixture live
 together under `test/eval/` (see "Running" below), mirroring this source layout.
 
@@ -123,15 +163,17 @@ together under `test/eval/` (see "Running" below), mirroring this source layout.
   `test/eval/`.
   They run under the default `yarn test`.
 - **Live model (credentialed host):** `test/eval-live.test.js` runs the same
-  scenarios and scorers against a real provider, table-driven over a registry
-  with one row per eval. It is **not** part of the default `yarn test`: it runs
-  only via its own `test:live` command, under a dedicated ava config
-  (`ava-live.config.js`), so that a host that happens to have the credentials in
-  its environment does not reach a real provider as a side effect of a plain
-  `yarn test` at the package or workspace root. The live test additionally skips
-  every row unless the credentials are present. To run it, set `ENDO_LLM_HOST` /
-  `ENDO_LLM_MODEL` / `ENDO_LLM_AUTH_TOKEN` (or their `LAL_*` aliases) in the
-  environment to point at an OpenAI-compatible endpoint, then:
+  scenarios and scorers against a real provider across the default condition
+  matrix.
+  It is **not** part of the default `yarn test`: it runs only via its own
+  `test:live` command, under a dedicated ava config (`ava-live.config.js`), so
+  that a host that happens to have the credentials in its environment does not
+  reach a real provider as a side effect of a plain `yarn test` at the package or
+  workspace root.
+  The live test additionally skips every row unless the credentials are present.
+  To run it, set `ENDO_LLM_HOST` / `ENDO_LLM_MODEL` /
+  `ENDO_LLM_AUTH_TOKEN` (or their `LAL_*` aliases) in the environment to point
+  at an OpenAI-compatible endpoint, then:
 
   ```sh
   yarn workspace @endo/agentry test:live
@@ -153,3 +195,29 @@ That channel's public contract and format are documented in its
 [`FORMAT.md`](https://github.com/endojs/endo-but-for-bots/blob/orphan/eval-transcripts/FORMAT.md).
 Published links are pinned to commit SHAs, and the channel provides condensed
 result artifacts with links to the full observable transcripts.
+
+- **Matrix CLI (credentialed host):** run every landed scenario across the
+  default conditions, one or more live models, and any repeat count:
+
+  ```sh
+  yarn workspace @endo/agentry eval:matrix --models anthropic/claude-opus-4-5-20251101,openai/gpt-4o-mini --repeats 3 --out ./agentry-eval-matrix.json
+  ```
+
+  The command writes a JSON artifact with a provenance header (`recordedAt`,
+  providers, and model list), per-run rows (`scenario`, `condition`, `model`,
+  `repeat`, `pass`, `metrics`, `outcome`), and aggregates.
+  It also prints a markdown comparison table with pass rate, mean and median
+  tokens, turns, and wall time.
+
+  Model configuration can come from the CLI or environment:
+
+  - `--models` or `ENDO_EVAL_MODELS` / `ENDO_LLM_MODELS` accepts a
+    comma-separated list of pi-ai model specs such as
+    `anthropic/claude-opus-4-5-20251101,openai/gpt-4o-mini`.
+    Each model reads
+    its provider key from `<PROVIDER>_API_KEY`.
+  - With `ENDO_LLM_HOST` / `LAL_HOST` set, each model spec is treated as an
+    OpenAI-compatible endpoint model id and uses `ENDO_LLM_AUTH_TOKEN` /
+    `LAL_AUTH_TOKEN`.
+  - `--conditions code-mode,tool-calls` can narrow or reorder the default
+    condition list.

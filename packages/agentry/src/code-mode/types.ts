@@ -70,5 +70,6 @@ export interface GitLoopOptions {
   getApiKey?: GetApiKey;
   thinkingLevel?: ThinkingLevel;
   readOnlyGit?: boolean;
+  historyRewriteGit?: boolean;
   storeValue?: StoreValue;
 }

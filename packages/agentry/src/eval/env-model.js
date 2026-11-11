@@ -7,7 +7,35 @@
 import { resolveModelProfile } from '../harness/model.js';
 
 /**
- * Build a live eval model from an openai-compatible env-var contract.
+ * @param {string | undefined} value
+ * @returns {string[]}
+ */
+export const parseEvalModelSpecs = value =>
+  harden(
+    (value || '')
+      .split(',')
+      .map(spec => spec.trim())
+      .filter(spec => spec.length > 0),
+  );
+harden(parseEvalModelSpecs);
+
+/**
+ * @param {Record<string, string | undefined>} env
+ * @param {string | undefined} provider
+ * @param {string | undefined} fallbackToken
+ * @returns {GetApiKey}
+ */
+const makeEnvApiKeyGetter = (env, provider, fallbackToken) => requested => {
+  const requestedKey = env[`${requested.toUpperCase()}_API_KEY`];
+  const configuredKey = provider
+    ? env[`${provider.toUpperCase()}_API_KEY`]
+    : undefined;
+  return requestedKey || configuredKey || fallbackToken;
+};
+
+/**
+ * Build live eval models from either an openai-compatible env-var contract or
+ * comma-separated pi-ai registry model specs.
  *
  * Reads `ENDO_LLM_HOST` / `ENDO_LLM_MODEL` / `ENDO_LLM_AUTH_TOKEN` (with
  * `LAL_*` aliases) from the environment: a base URL, a model id, and a bearer
@@ -26,10 +54,69 @@ import { resolveModelProfile } from '../harness/model.js';
  * appears in code, config, or a committed file. It reaches only the in-process
  * environment.
  *
- * Returns `undefined` when any of host / model / token is absent, so a caller
- * (a test, a runner) can cleanly skip the live path on a host with no
- * credentials rather than constructing a model that would 401.
+ * For matrix runs, `ENDO_EVAL_MODELS` or `ENDO_LLM_MODELS` may contain a
+ * comma-separated list.
+ * Without `ENDO_LLM_HOST` / `LAL_HOST`, each entry is
+ * resolved as a pi-ai model profile such as `anthropic/claude-...`; the
+ * `getApiKey` hook reads `<PROVIDER>_API_KEY` from the environment.
+ * With a host
+ * configured, each entry is treated as a model id for that OpenAI-compatible
+ * endpoint and uses the single configured bearer token.
  *
+ * @param {Record<string, string | undefined>} env
+ * @param {object} [options]
+ * @param {string | string[]} [options.models]
+ * @returns {{ model: Model<string>, getApiKey: GetApiKey, name: string }[]}
+ */
+export const resolveEvalModelsFromEnv = (env, options = {}) => {
+  const host = env.ENDO_LLM_HOST || env.LAL_HOST;
+  const optionSpecs = Array.isArray(options.models)
+    ? options.models
+    : parseEvalModelSpecs(options.models);
+  const modelSpecs =
+    optionSpecs.length > 0
+      ? optionSpecs
+      : parseEvalModelSpecs(
+          env.ENDO_EVAL_MODELS ||
+            env.ENDO_LLM_MODELS ||
+            env.ENDO_LLM_MODEL ||
+            env.LAL_MODEL,
+        );
+  const token = env.ENDO_LLM_AUTH_TOKEN || env.LAL_AUTH_TOKEN;
+  if (modelSpecs.length === 0) {
+    return harden([]);
+  }
+  if (host && !token) {
+    return harden([]);
+  }
+
+  return harden(
+    modelSpecs.map(modelSpec => {
+      const parsedProvider =
+        !host && modelSpec.includes('/')
+          ? modelSpec.slice(0, modelSpec.indexOf('/'))
+          : undefined;
+      const modelConfig = host
+        ? {
+            provider: 'openai-compatible',
+            baseUrl: host,
+            model: modelSpec,
+            api: 'openai-completions',
+            reasoning: /reasoning|thinking/i.test(modelSpec),
+          }
+        : { model: modelSpec };
+      const { model } = resolveModelProfile(modelConfig);
+      return harden({
+        model,
+        name: model.name || `${model.provider}/${model.id}`,
+        getApiKey: makeEnvApiKeyGetter(env, parsedProvider, token),
+      });
+    }),
+  );
+};
+harden(resolveEvalModelsFromEnv);
+
+/**
  * @param {Record<string, string | undefined>} env
  * @returns {{ model: Model<string>, getApiKey: GetApiKey } | undefined}
  */
@@ -40,18 +127,11 @@ export const resolveEvalModelFromEnv = env => {
   if (!host || !modelId || !token) {
     return undefined;
   }
-  // A model id advertising itself as a reasoning model gets the harness's
-  // default thinking budget (`reasoning ? 'medium' : 'off'`).
-  const reasoning = /reasoning|thinking/i.test(modelId);
-  const { model } = resolveModelProfile({
-    provider: 'openai-compatible',
-    baseUrl: host,
-    model: modelId,
-    api: 'openai-completions',
-    reasoning,
-  });
-  /** @type {GetApiKey} */
-  const getApiKey = () => token;
-  return harden({ model, getApiKey });
+  const [first] = resolveEvalModelsFromEnv(env, { models: modelId });
+  // The preceding gate ensures this configuration always resolves one model.
+  if (first === undefined) {
+    throw new Error('configured eval model could not be resolved');
+  }
+  return harden({ model: first.model, getApiKey: first.getApiKey });
 };
 harden(resolveEvalModelFromEnv);
