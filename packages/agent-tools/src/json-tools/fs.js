@@ -11,12 +11,6 @@ import { walk, collectBytes } from '@endo/platform/fs/extended';
 import { makeTool } from '../tool.js';
 
 /**
- * Default text-read truncation cap, in characters. A `maxChars` option of `0`
- * disables truncation entirely.
- */
-const DEFAULT_MAX_TEXT_CHARS = 50_000;
-
-/**
  * Split a mount-relative path string into the `Filesystem` `walk` segments.
  * `walk` expects one `Directory.lookup` name per step, so empty components
  * (from a leading, trailing, or doubled slash) and explicit `.` steps collapse
@@ -134,19 +128,13 @@ const mountWriteTextParameters = harden({
  * @param {ERef<Filesystem>} fs An `@endo/platform/fs/extended` `Filesystem` ERef. Callers
  *   can attenuate authority with `readOnly` or `chroot`.
  * @param {object} [opts] Configuration options.
- * @param {number} [opts.maxChars] Maximum number of UTF-8 characters returned
- *   before the result is truncated. Defaults to `DEFAULT_MAX_TEXT_CHARS`
- *   (50,000). A value of `0` disables the limit; the full file contents are
- *   returned untruncated.
+ * @param {import('../types.js').ToolResultPolicy} [opts.resultPolicy]
+ *   Model-result presentation policy, applied by an adapter after this tool
+ *   returns its exact text.
  * @returns {ToolRecord}
  */
 export const makeMountReadTool = (fs, opts = {}) => {
-  const { maxChars = DEFAULT_MAX_TEXT_CHARS } = opts;
-  const limitDisabled = maxChars === 0;
-  // `open().read(0n, length)` is exclusive of `length`, so request one extra
-  // byte to detect overflow past the cap. With the limit disabled, read the
-  // whole file in one unbounded request.
-  const readLength = limitDisabled ? undefined : BigInt(maxChars + 1);
+  const { resultPolicy } = opts;
 
   return makeTool({
     name: 'mountReadText',
@@ -154,6 +142,7 @@ export const makeMountReadTool = (fs, opts = {}) => {
       'Read a UTF-8 text file from the mounted project directory. ' +
       'Path is relative to the mount root; "../" escapes are rejected.',
     parameters: mountReadTextParameters,
+    resultPolicy,
     execute: async args => {
       for (const key of Object.keys(args)) {
         if (key !== 'path') {
@@ -171,15 +160,12 @@ export const makeMountReadTool = (fs, opts = {}) => {
         /** @type {unknown} */ (walk(E(fs).root(), segments))
       );
       const openFile = E(file).open({ read: true });
-      // `read(offset)` with the length omitted reads to EOF, which is what we
-      // want when the limit is disabled (`maxChars === 0`).
-      const reader = await E(openFile).read(0n, readLength);
+      // Read the exact completion. Model-facing bounding belongs to the
+      // adapter, where the rendered UTF-8 bytes and truncation marker are
+      // visible; this tool must not create a second result shape.
+      const reader = await E(openFile).read(0n, undefined);
       const bytes = await collectBytes(/** @type {object} */ (reader));
-      const content = new TextDecoder().decode(bytes);
-      if (!limitDisabled && content.length > maxChars) {
-        return `${content.slice(0, maxChars)}\n\n... (truncated at ${maxChars} chars)`;
-      }
-      return content;
+      return new TextDecoder().decode(bytes);
     },
   });
 };
@@ -195,9 +181,11 @@ harden(makeMountReadTool);
  * Entries are sorted by name so the result is stable across backings.
  *
  * @param {ERef<Filesystem>} fs An `@endo/platform/fs/extended` `Filesystem` ERef.
+ * @param {import('../types.js').ToolMakerOptions} [opts]
  * @returns {ToolRecord}
  */
-export const makeMountListTool = fs => {
+export const makeMountListTool = (fs, opts = {}) => {
+  const { resultPolicy } = opts;
   return makeTool({
     name: 'mountList',
     description:
@@ -205,6 +193,7 @@ export const makeMountListTool = fs => {
       'Path is relative to the mount root ("" lists the root); "../" ' +
       'escapes are rejected.',
     parameters: mountPathParameters,
+    resultPolicy,
     execute: async args => {
       assertOnlyKeys(args, ['path'], 'mountList');
       const { path } = /** @type {{ path?: unknown }} */ (args);
@@ -241,9 +230,11 @@ harden(makeMountListTool);
  * `size` is reported as the base seam's `0`.
  *
  * @param {ERef<Filesystem>} fs An `@endo/platform/fs/extended` `Filesystem` ERef.
+ * @param {import('../types.js').ToolMakerOptions} [opts]
  * @returns {ToolRecord}
  */
-export const makeMountStatTool = fs => {
+export const makeMountStatTool = (fs, opts = {}) => {
+  const { resultPolicy } = opts;
   return makeTool({
     name: 'mountStat',
     description:
@@ -251,6 +242,7 @@ export const makeMountStatTool = fs => {
       'path in the mounted project directory. Path is relative to the mount ' +
       'root ("" stats the root); "../" escapes are rejected.',
     parameters: mountPathParameters,
+    resultPolicy,
     execute: async args => {
       assertOnlyKeys(args, ['path'], 'mountStat');
       const { path } = /** @type {{ path?: unknown }} */ (args);
@@ -292,9 +284,11 @@ harden(makeMountStatTool);
  * {@link makeMountFsTools}).
  *
  * @param {ERef<Filesystem>} fs An `@endo/platform/fs/extended` `Filesystem` ERef.
+ * @param {import('../types.js').ToolMakerOptions} [opts]
  * @returns {ToolRecord}
  */
-export const makeMountEditTool = fs => {
+export const makeMountEditTool = (fs, opts = {}) => {
+  const { resultPolicy } = opts;
   return makeTool({
     name: 'mountWriteText',
     description:
@@ -302,6 +296,7 @@ export const makeMountEditTool = fs => {
       'directory with the full new contents. Path is relative to the mount ' +
       'root; the parent directory must exist; "../" escapes are rejected.',
     parameters: mountWriteTextParameters,
+    resultPolicy,
     execute: async args => {
       assertOnlyKeys(args, ['path', 'content'], 'mountWriteText');
       const { path, content } =
@@ -351,18 +346,17 @@ harden(makeMountEditTool);
  * @param {object} [opts] Configuration options.
  * @param {boolean} [opts.readOnly] When `true`, omit the write (edit) slice so
  *   a read-only catalog advertises only read / list / stat. Defaults to `false`.
- * @param {number} [opts.maxChars] Forwarded to {@link makeMountReadTool} to cap
- *   read-tool output. See its documentation for the default and the `0`
- *   (unlimited) escape.
+ * @param {import('../types.js').ToolResultPolicy} [opts.resultPolicy]
+ *   Forwarded to every record for model-result presentation by adapters.
  * @returns {ToolRecord[]}
  */
 export const makeMountFsTools = (fs, opts = {}) => {
-  const { readOnly = false, maxChars } = opts;
+  const { readOnly = false, resultPolicy } = opts;
   const tagged = [
-    { scope: 'read', record: makeMountReadTool(fs, { maxChars }) },
-    { scope: 'read', record: makeMountListTool(fs) },
-    { scope: 'read', record: makeMountStatTool(fs) },
-    { scope: 'write', record: makeMountEditTool(fs) },
+    { scope: 'read', record: makeMountReadTool(fs, { resultPolicy }) },
+    { scope: 'read', record: makeMountListTool(fs, { resultPolicy }) },
+    { scope: 'read', record: makeMountStatTool(fs, { resultPolicy }) },
+    { scope: 'write', record: makeMountEditTool(fs, { resultPolicy }) },
   ];
   const records = tagged
     .filter(({ scope }) => !(readOnly && scope === 'write'))

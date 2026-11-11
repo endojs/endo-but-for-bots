@@ -156,6 +156,8 @@ export interface ToolSpec {
    * runs.
    */
   argGuards?: Pattern[];
+  /** Policy for presenting the completion to a model-facing adapter. */
+  resultPolicy?: ToolResultPolicy;
   /**
    * Dispatch target. Receives the named-args record keyed by the schema's
    * declared `parameters.properties` names (e.g. `{ message }`, `{ name,
@@ -165,6 +167,23 @@ export interface ToolSpec {
     args: Record<string, unknown>,
     context?: ToolInvocationContext,
   ) => Promise<unknown>;
+}
+
+/**
+ * Provider-independent limits for the model-visible rendering of a tool
+ * completion.
+ *
+ * The completion returned by `invoke` is never changed by this policy. An
+ * adapter applies the limit only after it has rendered the completion to text.
+ */
+export interface ToolResultPolicy {
+  /** Maximum UTF-8 bytes in the rendered model-visible completion. */
+  maxBytes: number;
+}
+
+/** Common optional configuration forwarded by tool makers. */
+export interface ToolMakerOptions {
+  resultPolicy?: ToolResultPolicy;
 }
 
 /** Host controls supplied alongside a tool invocation. */
@@ -179,6 +198,8 @@ export interface ToolRecord {
   parameters: object;
   /** The same JSON Schema used as MCP `inputSchema`. */
   inputSchema: object;
+  /** Model-result presentation metadata; raw `invoke` values remain exact. */
+  resultPolicy: ToolResultPolicy | undefined;
   /**
    * Validates the supplied args against `argGuards` when present, then calls
    * `execute(args)`.
@@ -205,15 +226,15 @@ export declare function makeTool(spec: ToolSpec): ToolRecord;
 export interface MakeGitTool {
   (
     gitCap: ERef<GitToolReaderCapability>,
-    options: { facet: 'reader' },
+    options: { facet: 'reader' } & ToolMakerOptions,
   ): ToolRecord[];
   (
     gitCap: ERef<GitToolWriterCapability>,
-    options?: { facet?: 'writer' },
+    options?: { facet?: 'writer' } & ToolMakerOptions,
   ): ToolRecord[];
   (
     gitCap: ERef<GitToolRewriterCapability>,
-    options: { facet: 'rewriter' },
+    options: { facet: 'rewriter' } & ToolMakerOptions,
   ): ToolRecord[];
 }
 
@@ -226,14 +247,17 @@ export declare const makeGitTool: MakeGitTool;
  */
 export declare function makeGitHistoryTool(
   gitCap: ERef<GitHistoryToolCapability>,
+  options?: ToolMakerOptions,
 ): ToolRecord[];
 
 export declare function makeGitMountTools(
   gitCap: ERef<GitMountToolCapability>,
+  options?: ToolMakerOptions,
 ): ToolRecord[];
 
 export declare function makeGitRemoteTool(
   remoteCap: ERef<GitRemoteToolCapability>,
+  options?: ToolMakerOptions,
 ): ToolRecord[];
 
 /**
@@ -252,6 +276,8 @@ export type RejectPatternEntry = RegExp | { pattern: RegExp; reason?: string };
 export type RejectFlagEntry = string | { flag: string; reason?: string };
 
 export interface ShellToolOptions {
+  /** Model-result presentation policy forwarded to every shell record. */
+  resultPolicy?: ToolResultPolicy;
   /**
    * Advisory command-string veto patterns applied in the tool layer before the
    * call reaches `Shell.exec`. Hardening advice, not the boundary.
@@ -266,16 +292,10 @@ export interface ShellToolOptions {
 
 export declare function makeShellTool(
   shellCap: ERef<ShellToolCapability>,
-  options?: ShellToolOptions,
+  options?: ShellToolOptions & ToolMakerOptions,
 ): ToolRecord[];
 
-export interface MountReadToolOptions {
-  /**
-   * Maximum number of UTF-8 characters returned before truncation. Defaults to
-   * 50,000. A value of `0` disables the limit and returns the full contents.
-   */
-  maxChars?: number;
-}
+export interface MountReadToolOptions extends ToolMakerOptions {}
 
 export interface MountFsToolsOptions {
   /**
@@ -284,12 +304,8 @@ export interface MountFsToolsOptions {
    * Defaults to `false`.
    */
   readOnly?: boolean;
-  /**
-   * Maximum number of UTF-8 characters the read tool returns before
-   * truncation, forwarded to `makeMountReadTool`. Defaults to 50,000; `0`
-   * disables the limit.
-   */
-  maxChars?: number;
+  /** Forwarded to every record for adapter-level model-result presentation. */
+  resultPolicy?: ToolResultPolicy;
 }
 
 export declare function makeMountReadTool(
@@ -297,11 +313,20 @@ export declare function makeMountReadTool(
   opts?: MountReadToolOptions,
 ): ToolRecord;
 
-export declare function makeMountListTool(fs: ERef<Filesystem>): ToolRecord;
+export declare function makeMountListTool(
+  fs: ERef<Filesystem>,
+  opts?: ToolMakerOptions,
+): ToolRecord;
 
-export declare function makeMountStatTool(fs: ERef<Filesystem>): ToolRecord;
+export declare function makeMountStatTool(
+  fs: ERef<Filesystem>,
+  opts?: ToolMakerOptions,
+): ToolRecord;
 
-export declare function makeMountEditTool(fs: ERef<Filesystem>): ToolRecord;
+export declare function makeMountEditTool(
+  fs: ERef<Filesystem>,
+  opts?: ToolMakerOptions,
+): ToolRecord;
 
 export declare function makeMountFsTools(
   fs: ERef<Filesystem>,
@@ -329,6 +354,7 @@ export type HttpResponseView = HttpResponse;
 
 export declare function makeHttpTool(
   httpCap: ERef<HttpToolCapability>,
+  options?: ToolMakerOptions,
 ): ToolRecord[];
 
 /**
@@ -360,8 +386,8 @@ export interface WorkspaceGrants {
   shell?: ERef<ShellToolCapability>;
   /** Drop the file-tool write slice; forwarded to `makeMountFsTools`. */
   readOnly?: boolean;
-  /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */
-  maxChars?: number;
+  /** Model-result presentation policy forwarded to every tool maker. */
+  resultPolicy?: ToolResultPolicy;
   /** Advisory shell-tool veto policy; forwarded to `makeShellTool`. */
   shellOptions?: ShellToolOptions;
 }
@@ -392,8 +418,8 @@ export interface HistoryToolsGrant {
   git: ERef<Pick<EndoGit, 'filesystemAt'>>;
   /** The ref to project as a read-only filesystem (`HEAD~1`, a branch, …). */
   ref: GitRef | string;
-  /** Read-tool truncation limit; forwarded to `makeMountFsTools`. */
-  maxChars?: number;
+  /** Model-result presentation policy forwarded to `makeMountFsTools`. */
+  resultPolicy?: ToolResultPolicy;
 }
 
 export declare function provisionHistoryTools(
