@@ -1438,10 +1438,10 @@ pub struct Interp {
     /// property chain carrying `XS_GETTER_FLAG|XS_SETTER_FLAG` plus an
     /// `accessors` entry — so it is revealed by
     /// `Object.getOwnPropertyDescriptor` and invoked on read with the receiver
-    /// as `this` (unlike the RegExp `flags` / Map `size` native getters, which
-    /// are id-special-cased in `GET_PROPERTY` and stay invisible to descriptor
-    /// reflection). `Intl.NumberFormat.prototype.format` is the first such
-    /// property. Unlike a plain method, an accessor the conformance tests read
+    /// as `this` (unlike the Map `size` native getter, which is id-special-cased
+    /// in `GET_PROPERTY` and stays invisible to descriptor reflection).
+    /// `Intl.NumberFormat.prototype.format` and the RegExp getters use this
+    /// path. Unlike a plain method, an accessor the conformance tests read
     /// only by the **string** key `"format"` (never a static `.format`) has no
     /// SYMB atom entry, so it must be force-installed rather than gated on the
     /// property name being referenced. To keep this from perturbing metering

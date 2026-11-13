@@ -2446,6 +2446,7 @@ impl Interp {
                 self.native_method_promise(m, base, argc, code, this, arg0)?
             }
             NativeMethod::RegExpExec
+            | NativeMethod::RegExpGetter(..)
             | NativeMethod::RegExpTest
             | NativeMethod::RegExpCompile
             | NativeMethod::RegExpEscape
@@ -5947,6 +5948,7 @@ impl Interp {
     ) -> Result<NativeResult, Step> {
         let _ = (base, argc, code, this, arg0);
         let result: Slot = match m {
+            NativeMethod::RegExpGetter(operation) => self.regexp_getter(code, this, operation)?,
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
             // surface over `ironhorse_regexp`.
             NativeMethod::RegExpExec => {
