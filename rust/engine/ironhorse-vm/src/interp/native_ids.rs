@@ -1005,6 +1005,11 @@ pub enum NativeMethod {
     /// `%RegExpStringIteratorPrototype%.next()`: drive `RegExpExec` lazily,
     /// including global zero-length-match advancement.
     RegExpStringIteratorNext,
+    /// A `%RegExp.prototype%` accessor getter. The operation byte selects
+    /// `source` (0), `flags` (1), or one of the eight boolean flag accessors
+    /// (2..=9). These are real callable accessors so descriptor reflection and
+    /// detached `.call(...)` brand checks observe the specification surface.
+    RegExpGetter(u8),
     /// `get RegExp[Symbol.species]`: the standard accessor returns its receiver.
     RegExpSpeciesGetter,
     /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an

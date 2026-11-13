@@ -38,6 +38,87 @@ impl Interp {
         s
     }
 
+    /// Call one detached `%RegExp.prototype%` accessor getter. Keeping these
+    /// getters as real native functions makes descriptor reflection expose a
+    /// callable with the specified brand checks, while ordinary `re.global`
+    /// reads may still use the side-table fast path.
+    pub(in crate::interp) fn regexp_getter(
+        &mut self,
+        code: &[u8],
+        receiver: Slot,
+        operation: u8,
+    ) -> Result<Slot, Step> {
+        let inst = match receiver.value {
+            Payload::Reference(inst) if receiver.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
+        };
+
+        if operation == 1 {
+            // `get RegExp.prototype.flags` is generic once its receiver has
+            // passed the object check: it observes the eight flag getters in
+            // canonical order and concatenates each truthy flag.
+            self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
+            let mut units = Vec::with_capacity(8);
+            for (name, unit) in [
+                ("hasIndices", b'd' as u16),
+                ("global", b'g' as u16),
+                ("ignoreCase", b'i' as u16),
+                ("multiline", b'm' as u16),
+                ("dotAll", b's' as u16),
+                ("unicode", b'u' as u16),
+                ("unicodeSets", b'v' as u16),
+                ("sticky", b'y' as u16),
+            ] {
+                let id = self.intern_static_key(name);
+                let value = self.mop_get(code, inst, id, receiver)?;
+                if self.truthy(&value) {
+                    units.push(unit);
+                }
+            }
+            return Ok(self.new_string_units(&units));
+        }
+
+        self.meter.tick_raw(REGEXP_GETTER_METERING);
+        if operation == 0 {
+            if self.regexps.contains_key(&inst) {
+                let (units, allocated) = self.regexp_source_units_metered(inst)?;
+                return Ok(if allocated {
+                    self.new_string_units(&units)
+                } else {
+                    let offset = self.chunks.alloc(&units_to_be16(&units));
+                    Slot::of(Kind::String, Payload::String(offset))
+                });
+            }
+            if inst == self.regexp_proto {
+                return Ok(self.new_string_metered(b"(?:)"));
+            }
+            return Err(self.catchable_type_error_msg("this: not a RegExp instance".into()));
+        }
+
+        use ironhorse_regexp::{
+            XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_S, XS_REGEXP_U,
+            XS_REGEXP_V, XS_REGEXP_Y,
+        };
+        let bit = match operation {
+            2 => XS_REGEXP_D,
+            3 => XS_REGEXP_G,
+            4 => XS_REGEXP_I,
+            5 => XS_REGEXP_M,
+            6 => XS_REGEXP_S,
+            7 => XS_REGEXP_U,
+            8 => XS_REGEXP_V,
+            9 => XS_REGEXP_Y,
+            _ => return Err(Step::Host(Halt::EngineInvariant("regexp:getter-operation"))),
+        };
+        if let Some(regexp) = self.regexps.get(&inst) {
+            return Ok(Slot::boolean(regexp.program.flags() & bit != 0));
+        }
+        if inst == self.regexp_proto {
+            return Ok(Slot::undefined());
+        }
+        Err(self.catchable_type_error_msg("this: not a RegExp instance".into()))
+    }
+
     /// The canonical `lastIndex` key. It is an XS boot-default key, so making
     /// it visible for an instance constructed by code that never spelled the
     /// name is unmetered, just like the pre-existing intrinsic property.
