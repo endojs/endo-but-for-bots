@@ -13,7 +13,8 @@ import { makeConfinedFetchService as makeConfinedFetchServiceCore } from '../src
 
 /** @import { FetchStoreDirectory } from '../src/types.js' */
 
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const delay = milliseconds =>
+  new Promise(resolve => setTimeout(resolve, milliseconds));
 /** Let the fire-and-forget persistence write-chain settle. */
 const flush = () => delay(10);
 
@@ -90,8 +91,8 @@ const makeStoreFixture = async () => {
     /** @type {unknown} */ (await E(root).makeDirectory('fetch-store'))
   );
   let counter = 0;
-  const makeId = async () => `${(counter += 1)}`;
-  const open = () => makeFetchStore(directory, makeId);
+  const makeIdentifier = async () => `${(counter += 1)}`;
+  const open = () => makeFetchStore(directory, makeIdentifier);
   // `directory` is exposed so a test can seed a corrupt document directly,
   // modelling a torn write the crash-safe read guards must survive.
   return { open, directory };

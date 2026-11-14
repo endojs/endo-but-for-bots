@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: NaN is the standard JavaScript numeric global.
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeCancelKit } from '@endo/cancel';

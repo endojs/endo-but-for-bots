@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: policyPromptTimeoutMs is an established public option.
 /**
  * HttpClient capability with structural origin confinement.
  *
@@ -342,7 +343,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
 } = {}) => {
   /** @type {PolicyMode} */
   let mode = validatePolicyMode(policyMode);
-  const promptTimeoutMs = validateTimerDelay(
+  const promptTimeoutMilliseconds = validateTimerDelay(
     policyPromptTimeoutMs,
     'policyPromptTimeoutMs',
   );
@@ -433,7 +434,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
         );
       }
       const { cancelled, cancel } = makeCancelKit();
-      const timeout = delay(promptTimeoutMs, cancelled).then(() => {
+      const timeout = delay(promptTimeoutMilliseconds, cancelled).then(() => {
         throw makeError(X`Policy decision timed out for ${q(target)}`);
       });
       try {
@@ -508,7 +509,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
         X`Policy binding limit exceeded: ${q(maxBindings)} bindings`,
       );
     }
-    const decisionP = (async () => {
+    const decisionPromise = (async () => {
       await null;
       appendAudit(
         harden({
@@ -523,10 +524,10 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
       );
       return decide(target, context);
     })();
-    pending.set(target, decisionP);
+    pending.set(target, decisionPromise);
     let resolved;
     try {
-      resolved = await decisionP;
+      resolved = await decisionPromise;
     } catch (err) {
       appendAudit(
         harden({

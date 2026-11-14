@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: timeoutMs is an established public policy field.
 import { makeCancelKit } from '@endo/cancel';
 import { makeError, q, X } from '@endo/errors';
 
@@ -62,7 +63,7 @@ const FORBIDDEN_HEADER_NAMES = freeze(
 const REDIRECT_STATUSES = freeze(new Set([301, 302, 303, 307, 308]));
 
 const HTTP_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-// eslint-disable-next-line no-control-regex
+
 const HTTP_HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
 /**
  * @param {string} name
@@ -760,26 +761,26 @@ export const makeHttpConfinement = (policy, { fetch, delay }) => {
       );
     },
     /**
-     * @param {number} n
+     * @param {number} limit
      */
-    setMaxRequestsPerMinute: n => {
+    setMaxRequestsPerMinute: limit => {
       assertNotRevoked();
-      requestLimit = validatePositiveInteger(n, 'maxRequestsPerMinute');
+      requestLimit = validatePositiveInteger(limit, 'maxRequestsPerMinute');
       rateLimiter.setMaxPerMinute(requestLimit);
     },
     /**
-     * @param {number} n
+     * @param {number} limit
      */
-    setMaxResponseBytes: n => {
+    setMaxResponseBytes: limit => {
       assertNotRevoked();
-      maxResponseBytes = validatePositiveInteger(n, 'maxResponseBytes');
+      maxResponseBytes = validatePositiveInteger(limit, 'maxResponseBytes');
     },
     /**
-     * @param {number} n
+     * @param {number} milliseconds
      */
-    setTimeoutMs: n => {
+    setTimeoutMs: milliseconds => {
       assertNotRevoked();
-      timeoutMs = validateTimeout(n, 'timeoutMs');
+      timeoutMs = validateTimeout(milliseconds, 'timeoutMs');
     },
     revoke: () => {
       revoked = true;

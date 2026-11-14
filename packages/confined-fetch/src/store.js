@@ -78,10 +78,10 @@ const assertSnapshotShape = value => {
 /**
  * @param {FetchStoreDirectory} root - the store-root
  *   Directory cap (or an eventual reference to one).
- * @param {() => Promise<string>} makeId - unique-suffix generator for temporary files.
+ * @param {() => Promise<string>} makeIdentifier - unique-suffix generator for temporary files.
  * @returns {Promise<FetchStore>}
  */
-export const makeFetchStore = async (root, makeId) => {
+export const makeFetchStore = async (root, makeIdentifier) => {
   await null;
 
   return harden({
@@ -108,7 +108,7 @@ export const makeFetchStore = async (root, makeId) => {
 
     /** @param {PersistedSnapshot} snapshot */
     async writeSnapshot(snapshot) {
-      const temporaryName = `.tmp.${await makeId()}`;
+      const temporaryName = `.tmp.${await makeIdentifier()}`;
       await E(root).write(temporaryName, `${JSON.stringify(snapshot)}\n`);
       await E(root).move(temporaryName, SNAPSHOT_NAME);
     },

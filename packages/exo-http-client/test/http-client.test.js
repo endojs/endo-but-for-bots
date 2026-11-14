@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: policyPromptTimeoutMs is an established public option.
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/far';
