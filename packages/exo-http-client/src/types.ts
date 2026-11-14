@@ -148,4 +148,7 @@ export type HttpClientControl = {
   help: () => string;
 };
 
-export type { Delay } from '@endo/http-confine';
+export type Delay = (
+  milliseconds: number,
+  cancelled: Promise<never>,
+) => Promise<undefined>;
