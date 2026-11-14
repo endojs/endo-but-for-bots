@@ -12,6 +12,7 @@ import { passStyleOf } from '@endo/pass-style';
 import { h } from 'preact';
 import { useState } from 'preact/hooks';
 import { renderConfined, unmount } from '@endo/preact-container/renderer';
+import { formatLocator } from '@endo/daemon/locator.js';
 
 import { valueToVnodes } from './value-vnodes.js';
 import { MarkdownFragment } from './markdown-vnodes.js';
@@ -612,6 +613,14 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
    */
   let formulaCache = new Map();
   /**
+   * Per-session cache of retention-path snapshots keyed by formula id, so
+   * flipping back to a value the modal already inspected does not refetch
+   * the (potentially large) path set. Reset alongside `formulaCache`.
+   *
+   * @type {Map<string, import('./retention-paths-view.js').RetentionPath[]>}
+   */
+  let retentionCache = new Map();
+  /**
    * Whether a modal session is currently open. Set once when the modal first
    * shows and cleared on dismiss, so the open-time focus capture runs exactly
    * once per session rather than on every back-stack navigation (which also
@@ -703,6 +712,7 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
     face = 'front';
     backStack = [];
     formulaCache = new Map();
+    retentionCache = new Map();
     updateFaceClass();
     // Return focus to wherever it was before the modal opened, so the user
     // lands back on the command input (or other prior control).
@@ -853,44 +863,115 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
     }
 
     unmount($backTreeMount);
-    renderConfined(
-      h(FormulaView, {
-        record,
-        onNavigateReference: async (identifier, _label) => {
-          // Clicking a reference button navigates to that formula's front face.
-          // The current frame is pushed onto the stack so Backspace returns here.
-          backStack.push({
-            value: currentValue,
-            id: currentId,
-            petNamePath: currentPetNamePath,
-            messageContext: currentMessageContext,
-          });
-          try {
-            const targetValue = await E(powers).lookupById(
-              /** @type {Parameters<EndoHost['lookupById']>[0]} */ (
-                /** @type {unknown} */ (identifier)
-              ),
-            );
-            await showValue(targetValue, identifier);
-          } catch {
-            // The target is not passable over CapTP (e.g. a pet store or
-            // mailbox store is a daemon-internal facet). Rather than fail,
-            // present it as a remote capability on the front face; its formula
-            // remains one flip away.
-            await focusRemote(identifier);
-          }
-        },
-        stackDepth: backStack.length + 1,
-        stackPosition: backStack.length + 1,
-      }),
-      $backFaceMount,
-    );
+
+    /**
+     * Paint the formula back face, threading the current retention-path
+     * fetch state through to the read-only "Retention paths" table.
+     * Re-invoked when the snapshot resolves; Preact reconciles the
+     * subtree in place, so the table updates without disturbing focus.
+     *
+     * @param {'loading' | 'error' | 'ready'} retentionState
+     * @param {import('./retention-paths-view.js').RetentionPath[] | undefined} retentionPaths
+     * @param {string | undefined} retentionError
+     */
+    const paintFormula = (retentionState, retentionPaths, retentionError) => {
+      renderConfined(
+        h(FormulaView, {
+          record,
+          onNavigateReference: async (identifier, _label) => {
+            // Clicking a reference button navigates to that formula's front
+            // face. The current frame is pushed onto the stack so Backspace
+            // returns here.
+            backStack.push({
+              value: currentValue,
+              id: currentId,
+              petNamePath: currentPetNamePath,
+              messageContext: currentMessageContext,
+            });
+            try {
+              const targetValue = await E(powers).lookupById(
+                /** @type {Parameters<EndoHost['lookupById']>[0]} */ (
+                  /** @type {unknown} */ (identifier)
+                ),
+              );
+              await showValue(targetValue, identifier);
+            } catch {
+              // The target is not passable over CapTP (e.g. a pet store or
+              // mailbox store is a daemon-internal facet). Rather than fail,
+              // present it as a remote capability on the front face; its
+              // formula remains one flip away.
+              await focusRemote(identifier);
+            }
+          },
+          stackDepth: backStack.length + 1,
+          stackPosition: backStack.length + 1,
+          retentionPaths,
+          retentionPathsState: retentionState,
+          retentionPathsError: retentionError,
+        }),
+        $backFaceMount,
+      );
+    };
+
+    // Paint immediately with whatever retention snapshot we already have;
+    // otherwise show the loading state and fetch it below.
+    const cachedPaths = retentionCache.get(id);
+    paintFormula(cachedPaths ? 'ready' : 'loading', cachedPaths, undefined);
 
     // Move focus to the formula-view's type heading for keyboard users. The
     // initial confined render is synchronous, so the node exists now.
     const $formulaTitle = $backFaceMount.querySelector('#formula-view-title');
     if ($formulaTitle instanceof HTMLElement) {
       $formulaTitle.focus();
+    }
+
+    // Fetch the retention-path snapshot from #284's host API and repaint the
+    // table when it arrives. The locator is derived from the formula id and
+    // type; a value whose type is not a valid locator type (or that the
+    // daemon cannot locate) yields an error state rather than a broken table.
+    if (!cachedPaths) {
+      /** @type {string | undefined} */
+      let locator;
+      try {
+        locator = formatLocator(id, record.type);
+      } catch {
+        locator = undefined;
+      }
+      if (locator === undefined) {
+        paintFormula(
+          'error',
+          undefined,
+          'Retention paths are unavailable for this value.',
+        );
+      } else {
+        E(powers)
+          .listRetentionPaths(locator)
+          .then(
+            paths => {
+              const snapshot =
+                /** @type {import('./retention-paths-view.js').RetentionPath[]} */ (
+                  paths || []
+                );
+              retentionCache.set(id, snapshot);
+              // A flip-away navigation may have moved focus while the fetch
+              // was in flight; only repaint if we are still on this value.
+              if (currentId === id && face === 'back') {
+                paintFormula('ready', snapshot, undefined);
+              }
+            },
+            err => {
+              if (currentId === id && face === 'back') {
+                paintFormula(
+                  'error',
+                  undefined,
+                  `Could not load retention paths: ${
+                    /** @type {Error} */ (err).message
+                  }`,
+                );
+              }
+            },
+          );
+      }
     }
 
     // A readable-tree's children live in its immutable content, not its formula
