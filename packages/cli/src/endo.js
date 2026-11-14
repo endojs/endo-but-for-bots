@@ -457,7 +457,9 @@ export const main = async rawArgs => {
 
   program
     .command('locate <name>')
-    .description('prints the locator for a named value')
+    .description(
+      'prints the endo:// locator (formula key, type, and connection hints) for a named value',
+    )
     .option(...commonOptions.as)
     .action(async (name, options) => {
       const { as: agentNames } = options;

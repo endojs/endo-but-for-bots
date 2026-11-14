@@ -23,12 +23,13 @@ Check if a pet name exists in this directory.
 
 Get the formula identifier for a pet name path.
 Returns undefined if the name doesn't exist.
-Formula identifiers are internal references used by Endo.
+A formula identifier is a formula key, `{formulaAddress}:{peerKey}`, an internal reference used by Endo.
 
 ## locate(...petNamePath) -> Promise<string | undefined>
 
 Get a locator string for a pet name path.
-Locators include the formula type and can be used for reverse lookups.
+A locator is an `endo://{peerKey}/{formulaAddress}` URL carrying the formula type and the agent's current connection hints.
+Locators can be shared with remote peers and used for reverse lookups.
 
 ## reverseLocate(locator) -> Promise<string[]>
 
