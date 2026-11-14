@@ -39,6 +39,7 @@
     "./src/mount.js": "./src/mount.js",
     "./src/hashline.js": "./src/hashline.js",
     "./src/manager-node-powers.js": "./src/manager-node-powers.js",
+    "./src/worker-facet-interface.js": "./src/worker-facet-interface.js",
     "./package.json": "./package.json"
   },
   "scripts": {
