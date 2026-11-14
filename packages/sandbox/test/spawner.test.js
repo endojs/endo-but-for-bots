@@ -222,15 +222,11 @@ test('Stalled stdin closure does not hide an admitted process from cancellation'
     hang: true,
     remote: true,
   });
-  const t0 = Date.now();
-  console.log('DBG start');
   await t.throwsAsync(E(f.shell).exec('echo', [], { timeoutMs: 10 }), {
     message: /timed out/,
   });
-  console.log('DBG exec rejected', Date.now() - t0);
   t.true(f.stdinClosed());
   t.true(f.signals.includes('SIGTERM'));
-  console.log('DBG body done', f.signals);
 });
 
 test('Rejected stdin closure remains an execution failure with controls available', async t => {
