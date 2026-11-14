@@ -1,0 +1,277 @@
+// @ts-nocheck
+/** @import { AddressInfo } from 'net' */
+
+// Integration test: `E(host).makeFromPackage` runs a caplet from a mount whose
+// root holds a `package.json` and no `node_modules`.  The daemon resolves the
+// dependencies through `@registry`, which reads a registry served by this test
+// on loopback, and a Node worker imports the entry against the resolved CAS
+// trees.  See designs/daemon-worker-import-from-mount.md § Phase 2.
+//
+// The socket path lives under a short os.tmpdir() directory to stay within
+// the ~104-character unix-domain-socket limit regardless of the checkout path.
+
+import '@endo/init/debug.js';
+
+import test from 'ava';
+import os from 'os';
+import path from 'path';
+import http from 'http';
+import zlib from 'zlib';
+import crypto from 'crypto';
+import fsp from 'fs/promises';
+import { E } from '@endo/eventual-send';
+import { makeCancelKit } from '@endo/cancel';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import {
+  tarFileHeader,
+  tarFilePadding,
+  tarEndMarker,
+} from '@endo/tar/writer.js';
+import { start, stop, restart, purge, makeEndoClient } from '../index.js';
+
+/**
+ * A gzipped npm tarball: every file under the leading `package/` directory.
+ *
+ * @param {Record<string, string>} files
+ */
+const makeTarball = files => {
+  /** @type {Uint8Array[]} */
+  const parts = [];
+  for (const [name, text] of Object.entries(files)) {
+    const bytes = encodeUtf8(text);
+    parts.push(tarFileHeader(`package/${name}`, bytes.length));
+    parts.push(bytes);
+    parts.push(tarFilePadding(bytes.length));
+  }
+  parts.push(tarEndMarker());
+  return zlib.gzipSync(Buffer.concat(parts));
+};
+
+/**
+ * @param {string} name
+ * @param {string} version
+ * @param {Record<string, string>} dependencies
+ * @param {string} source
+ */
+const makePublishedPackage = (name, version, dependencies, source) => ({
+  name,
+  version,
+  tarball: makeTarball({
+    'package.json': JSON.stringify({
+      name,
+      version,
+      type: 'module',
+      main: 'index.js',
+      dependencies,
+    }),
+    'index.js': source,
+  }),
+});
+
+// `entry` wants dep-a@^1 and dep-b@^1; dep-b wants dep-a@^2.
+const published = [
+  makePublishedPackage('dep-a', '1.0.0', {}, 'export const major = 1;'),
+  makePublishedPackage('dep-a', '1.4.0', {}, 'export const major = 1.4;'),
+  makePublishedPackage('dep-a', '2.1.0', {}, 'export const major = 2;'),
+  makePublishedPackage(
+    'dep-b',
+    '1.0.0',
+    { 'dep-a': '^2.0.0' },
+    "export { major as dependencyMajor } from 'dep-a';",
+  ),
+];
+
+/**
+ * Serve packuments and tarballs for `published` on loopback.
+ *
+ * @returns {Promise<{ url: string, close: () => Promise<void> }>}
+ */
+const startRegistry = async () => {
+  /** @type {string} */
+  let base = '';
+  const server = http.createServer((request, response) => {
+    const requestPath = decodeURIComponent(request.url ?? '');
+    const tarballMatch = /^\/-\/(.+)-(\d+\.\d+\.\d+)\.tgz$/.exec(requestPath);
+    if (tarballMatch) {
+      const [, name, version] = tarballMatch;
+      const entry = published.find(
+        candidate => candidate.name === name && candidate.version === version,
+      );
+      if (entry) {
+        response.writeHead(200, { 'content-type': 'application/octet-stream' });
+        response.end(entry.tarball);
+        return;
+      }
+    }
+    const name = requestPath.slice(1);
+    const versions = published.filter(candidate => candidate.name === name);
+    if (versions.length === 0) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const packument = {
+      name,
+      versions: Object.fromEntries(
+        versions.map(({ version, tarball }) => [
+          version,
+          {
+            name,
+            version,
+            dist: {
+              tarball: `${base}/-/${name}-${version}.tgz`,
+              integrity: `sha512-${crypto
+                .createHash('sha512')
+                .update(tarball)
+                .digest('base64')}`,
+            },
+          },
+        ]),
+      ),
+    };
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(packument));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = /** @type {AddressInfo} */ (server.address());
+  base = `http://127.0.0.1:${address.port}`;
+  return {
+    url: base,
+    close: () => new Promise(resolve => server.close(() => resolve())),
+  };
+};
+
+const contexts = [];
+
+test.afterEach.always(async () => {
+  while (contexts.length > 0) {
+    const { cancel, config, root, registry } = contexts.pop();
+    // eslint-disable-next-line no-await-in-loop
+    await stop(config).catch(() => {});
+    cancel(new Error('test teardown'));
+    // eslint-disable-next-line no-await-in-loop
+    await registry.close();
+    // eslint-disable-next-line no-await-in-loop
+    await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+/**
+ * Start a daemon whose `@registry` reads the loopback registry, and write
+ * the entry package to a directory beside it.
+ */
+const prepare = async () => {
+  const { cancel, cancelled } = makeCancelKit();
+  const registry = await startRegistry();
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'endo-mfp-'));
+  const config = {
+    statePath: path.join(root, 'state'),
+    ephemeralStatePath: path.join(root, 'run'),
+    cachePath: path.join(root, 'cache'),
+    sockPath: path.join(root, 'endo.sock'),
+    address: '127.0.0.1:0',
+    pets: new Map(),
+    values: new Map(),
+  };
+  contexts.push({ cancel, config, root, registry });
+  // The daemon process reads its registry from the environment it inherits.
+  process.env.ENDO_REGISTRY_URL = registry.url;
+  await purge(config);
+  await start(config);
+
+  const sourceDirectory = path.join(root, 'entry');
+  await fsp.mkdir(sourceDirectory);
+  await fsp.writeFile(
+    path.join(sourceDirectory, 'package.json'),
+    JSON.stringify({
+      name: 'entry',
+      version: '0.0.0',
+      type: 'module',
+      main: 'index.js',
+      dependencies: { 'dep-a': '^1.0.0', 'dep-b': '^1.0.0' },
+    }),
+  );
+  await fsp.writeFile(
+    path.join(sourceDirectory, 'index.js'),
+    `
+      import { major } from 'dep-a';
+      import { dependencyMajor } from 'dep-b';
+      const ProbeInterface = M.interface('Probe', {
+        majors: M.call().returns(M.record()),
+        getEnvVar: M.call(M.string()).returns(M.opt(M.string())),
+      });
+      export const make = (_powers, _context, { env }) =>
+        makeExo('Probe', ProbeInterface, {
+          majors: () => harden({ entry: major, dependency: dependencyMajor }),
+          getEnvVar: name => env[name],
+        });
+    `,
+  );
+
+  const connect = async () => {
+    const { getBootstrap, closed } = await makeEndoClient(
+      'client',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    return E(getBootstrap()).host();
+  };
+  const host = await connect();
+  await E(host).provideMount(sourceDirectory, 'entry-mount', {
+    readOnly: true,
+  });
+  return { host, config, connect };
+};
+
+test.serial(
+  'makeFromPackage runs a package.json-rooted mount against @registry',
+  async t => {
+    const { host } = await prepare();
+    const caplet = await E(host).makeFromPackage(undefined, 'entry-mount', {
+      env: { HELLO: 'from-package' },
+    });
+    // dep-a@^1 selects the minimal 1.0.0 under MVS; dep-b links dep-a@2.
+    t.deepEqual(await E(caplet).majors(), { entry: 1, dependency: 2 });
+    t.is(await E(caplet).getEnvVar('HELLO'), 'from-package');
+  },
+);
+
+test.serial('makeFromPackage reincarnates after a restart', async t => {
+  const { host, config, connect } = await prepare();
+  await E(host).makeFromPackage(undefined, 'entry-mount', {
+    resultName: 'package-caplet',
+    env: { HELLO: 'persist' },
+  });
+  await restart(config);
+  const restartedHost = await connect();
+  const caplet = await E(restartedHost).lookup('package-caplet');
+  t.deepEqual(await E(caplet).majors(), { entry: 1, dependency: 2 });
+  t.is(await E(caplet).getEnvVar('HELLO'), 'persist');
+});
+
+test.serial(
+  'makeFromPackage offline fails cleanly when the registry lacks a package',
+  async t => {
+    const { host } = await prepare();
+    await t.throwsAsync(
+      E(host).makeFromPackage(undefined, 'entry-mount', { offline: true }),
+      { message: /offline/ },
+    );
+  },
+);
+
+test.serial(
+  'makeFromPackage reports a source without a package.json',
+  async t => {
+    const { host, config } = await prepare();
+    const emptyDirectory = path.join(config.statePath, '..', 'empty');
+    await fsp.mkdir(emptyDirectory);
+    await E(host).provideMount(emptyDirectory, 'empty-mount', {
+      readOnly: true,
+    });
+    await t.throwsAsync(E(host).makeFromPackage(undefined, 'empty-mount'), {
+      message: /no package\.json/,
+    });
+  },
+);

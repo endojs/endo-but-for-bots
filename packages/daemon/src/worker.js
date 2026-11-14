@@ -17,6 +17,7 @@ import { WorkerFacetForDaemonInterface } from './interfaces.js';
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { EndoReadable, MignonicPowers } from './types.js' */
 /** @import { TraceRecord } from './trace-aggregator.js' */
+/** @import { PackageResolution } from './package-read-powers.js' */
 
 const endowments = harden({
   // See https://github.com/Agoric/agoric-sdk/issues/9515
@@ -161,6 +162,38 @@ export const makeWorkerFacet = ({ cancel }) => {
           parserForLanguage: defaultParserForLanguage,
         });
         const { namespace } = await application.import({
+          globals: endowments,
+        });
+        return /** @type {{make: Function}} */ (namespace).make(
+          powersP,
+          contextP,
+          Object.freeze({ env }),
+        );
+      },
+
+      /**
+       * @param {ERef<unknown>} sourceP - Readable tree (or Mount) whose
+       *   root holds a `package.json`.  Its dependencies are not in the
+       *   tree; they come from `resolution`.
+       * @param {PackageResolution} resolution - The eager resolution of
+       *   the source's `package.json`, computed by the daemon.
+       * @param {Promise<unknown>} powersP
+       * @param {Promise<unknown>} contextP
+       * @param {{ env: Record<string, string>, entry?: string }} options
+       */
+      makeFromPackage: async (
+        sourceP,
+        resolution,
+        powersP,
+        contextP,
+        { env, entry },
+      ) => {
+        // Deferred like makeArchive's compartment-mapper import.
+        const { importPackage } = await import('./package-read-powers.js');
+        const namespace = await importPackage({
+          entryTree: await sourceP,
+          resolution,
+          entry,
           globals: endowments,
         });
         return /** @type {{make: Function}} */ (namespace).make(

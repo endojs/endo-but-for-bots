@@ -578,6 +578,22 @@ export type MakeFromTreeFormula = {
   // TODO formula slots
 };
 
+export type MakeFromPackageFormula = {
+  type: 'make-from-package';
+  worker: FormulaIdentifier;
+  powers: FormulaIdentifier;
+  /** ReadableTree or Mount whose root holds a `package.json`. */
+  source: FormulaIdentifier;
+  /** EndoRegistry that resolves the source's dependencies. */
+  registry: FormulaIdentifier;
+  /** Module path relative to the package root; defaults to the package's own entry. */
+  entry?: string;
+  /** Resolve only from packages the registry already holds. */
+  offline?: boolean;
+  env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
+};
+
 export type MakeCapletDeferredTaskParams = {
   capletId: FormulaIdentifier;
   powersId: FormulaIdentifier;
@@ -771,6 +787,7 @@ export type Formula =
   | MakeUnconfinedFormula
   | MakeArchiveFormula
   | MakeFromTreeFormula
+  | MakeFromPackageFormula
   | HandleFormula
   | PetInspectorFormula
   | KnownPeersStoreFormula
@@ -1687,6 +1704,15 @@ export type MakeCapletOptions = {
   workerTrustedShims?: string[];
 };
 
+export type MakeFromPackageOptions = MakeCapletOptions & {
+  /** Module path relative to the package root. */
+  entry?: string;
+  /** Pet name of the EndoRegistry to resolve with; defaults to `@registry`. */
+  registryName?: string | string[];
+  /** Resolve only from packages the registry already holds. */
+  offline?: boolean;
+};
+
 export interface EndoPeer {
   provide: (id: string) => Promise<unknown>;
 }
@@ -2175,6 +2201,18 @@ export interface EndoHost extends EndoAgent {
     workerPetName: string | string[] | undefined,
     treeName: string | string[],
     options?: MakeCapletOptions,
+  ): Promise<unknown>;
+  /**
+   * Run a caplet from a ReadableTree or Mount whose root holds a
+   * `package.json`.  The daemon resolves the declared dependencies through
+   * the registry (`options.registryName`, default `@registry`), and a Node
+   * worker imports the entry through compartment-mapper, reading the source
+   * tree and the resolved packages' trees.  No `node_modules` is needed.
+   */
+  makeFromPackage(
+    workerPetName: string | string[] | undefined,
+    sourceName: string | string[],
+    options?: MakeFromPackageOptions,
   ): Promise<unknown>;
   /**
    * Materialise a ReadableTree or Mount into a new scratch mount
@@ -2991,6 +3029,20 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     treeId: FormulaIdentifier,
+    deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
+    specifiedWorkerId?: FormulaIdentifier,
+    specifiedPowersId?: FormulaIdentifier,
+    env?: Record<string, string>,
+    trustedShims?: string[],
+    workerLabel?: string,
+  ) => FormulateResult<unknown>;
+
+  formulateFromPackage: (
+    hostAgentId: FormulaIdentifier,
+    hostHandleId: FormulaIdentifier,
+    sourceId: FormulaIdentifier,
+    registryId: FormulaIdentifier,
+    packageOptions: { entry?: string; offline?: boolean },
     deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
     specifiedWorkerId?: FormulaIdentifier,
     specifiedPowersId?: FormulaIdentifier,
