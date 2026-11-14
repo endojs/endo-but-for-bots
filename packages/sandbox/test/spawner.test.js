@@ -6,8 +6,8 @@ import { E } from '@endo/eventual-send';
 import { makeShell } from '@endo/exo-shell';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { makeSandboxSpawner } from '@endo/host-spawner/src/sandbox-spawner.js';
 import { makeSandboxFactory } from '../src/factory.js';
-import { makeSandboxSpawner } from '../src/spawner.js';
 
 /**
  * @param {import('ava').ExecutionContext} t

@@ -21,7 +21,7 @@ import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
 import {
   makeSandboxSpawner,
   DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT,
-} from '@endo/sandbox/spawner.js';
+} from '@endo/host-spawner/src/sandbox-spawner.js';
 import { readWorkloadBytes } from './workload-limits.js';
 import { makeStateStorageOperations } from './session-state-storage.js';
 import { makeDefaultMounter } from './workspace-projection.js';

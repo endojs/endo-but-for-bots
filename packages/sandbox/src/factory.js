@@ -10,6 +10,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
+import { DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } from '@endo/host-spawner/src/sandbox-spawner.js';
 
 import {
   ProcessHandleInterface,
@@ -21,7 +22,6 @@ import { makeEagerReader } from './eager-reader.js';
 import { makeResourceRegistry } from './resource-registry.js';
 import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
-import { DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } from './spawner.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 /** @import { NativeSandboxMakeOpts, NativeSandboxHandle, MakeSandboxFactoryKitInput } from './native-factory-types.js' */
