@@ -69,8 +69,8 @@ const makeBase = (body = 'ok') => {
 
 /**
  * Build the powers the plugin resolves by name: the base `Fetch`, a store-root
- * directory, and an optional policy authority. A name the map omits throws, so
- * the plugin's optional lookup degrades gracefully.
+ * directory, and an optional policy authority. `has` reports an ungranted
+ * policy authority as absent, so the plugin's optional lookup degrades.
  *
  * @param {{ base?: any, policyAuthority?: any, timer?: any }} [options]
  */
@@ -84,6 +84,10 @@ const makePowers = async ({
   const storeRoot = await E(root).makeDirectory('fetch-store');
 
   const powers = makeTestExo('Powers', {
+    /** @param {string} name */
+    has(name) {
+      return name !== 'fetch-policy-authority' || policyAuthority !== undefined;
+    },
     /** @param {string} name */
     lookup(name) {
       if (name === 'fetch' && base) return base;

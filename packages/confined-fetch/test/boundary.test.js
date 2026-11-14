@@ -103,6 +103,10 @@ const makePowers = async ({
   }
   const powers = makeTestExo('Powers', {
     /** @param {string} name */
+    has(name) {
+      return name !== 'fetch-policy-authority' || policyAuthority !== undefined;
+    },
+    /** @param {string} name */
     lookup(name) {
       if (name === 'fetch' && base) return base;
       if (name === 'timer') return timer;
