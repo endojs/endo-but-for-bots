@@ -119,6 +119,56 @@ test('makeRateLimiter releases capacity after the injected delay', async t => {
   t.is(limiter.remaining(), 1);
 });
 
+test('makeRateLimiter fails closed when the injected delay rejects', async t => {
+  const { cancelled } = makeCancelKit();
+  /** @type {(milliseconds: number, token: Promise<never>) => Promise<undefined>} */
+  const delay = async () => {
+    await null;
+    throw Error('timer revoked');
+  };
+  const limiter = makeRateLimiter({ maxPerMinute: 2, delay, cancelled });
+  limiter.take();
+  await null;
+  for (let turn = 0; turn < 5; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.is(limiter.remaining(), 0);
+  t.throws(() => limiter.take(), {
+    instanceOf: RateLimitError,
+    message: /unavailable: timer revoked/,
+  });
+});
+
+test('makeRateLimiter retunes in place, keeping held slots', t => {
+  const { cancelled } = makeCancelKit();
+  /** @type {(milliseconds: number, token: Promise<never>) => Promise<undefined>} */
+  const delay = () => new Promise(() => {});
+  const limiter = makeRateLimiter({ maxPerMinute: 2, delay, cancelled });
+  limiter.take();
+  limiter.take();
+  limiter.setMaxPerMinute(2);
+  t.throws(() => limiter.take(), { instanceOf: RateLimitError });
+  limiter.setMaxPerMinute(3);
+  t.is(limiter.remaining(), 1);
+});
+
+test('makeRequestCancellation refuses a timeout above the timer bound', t => {
+  /** @type {(milliseconds: number, token: Promise<never>) => Promise<undefined>} */
+  const delay = () => new Promise(() => {});
+  t.throws(() => makeRequestCancellation({ timeoutMs: 2 ** 31, delay }), {
+    message: /"timeoutMs" must be at most 2147483647/,
+  });
+  t.throws(
+    () =>
+      makeHttpConfinement(
+        { allowedOrigins: [], timeoutMs: 3_000_000_000 },
+        { fetch: async () => ({}), delay },
+      ),
+    { message: /"timeoutMs" must be at most/ },
+  );
+});
+
 test('limitResponseBytes truncates at read time and marks exact fills', async t => {
   /** @type {unknown[]} */
   const cancelReasons = [];
@@ -680,7 +730,7 @@ test('revoking mid-body cancels the in-flight read and rejects the request', asy
   t.true(cancelReasons[0] instanceof RevokedError);
 });
 
-test('setMaxRequestsPerMinute rebuilds the limiter over the injected delay', async t => {
+test('setMaxRequestsPerMinute retunes the limiter over the injected delay', async t => {
   /** @type {number[]} */
   const delays = [];
   const delay = (milliseconds, cancelled) => {
