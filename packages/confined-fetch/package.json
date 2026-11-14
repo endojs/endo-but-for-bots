@@ -25,9 +25,6 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./src/service.js": "./src/service.js",
-    "./src/store.js": "./src/store.js",
-    "./src/transport.js": "./src/transport.js",
     "./package.json": "./package.json"
   },
   "files": [

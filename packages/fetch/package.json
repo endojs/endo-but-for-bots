@@ -25,7 +25,6 @@
   "exports": {
     ".": "./src/index.js",
     "./timer.js": "./src/timer.js",
-    "./src/types.js": "./src/types.js",
     "./package.json": "./package.json"
   },
   "files": [

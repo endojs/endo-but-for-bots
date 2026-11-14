@@ -16,7 +16,7 @@ import { thawedBytes } from '@endo/immutable-arraybuffer';
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { FetchLike, FetchLikeRequestOptions, FetchLikeResponse } from '@endo/exo-http-client' */
-/** @import { Fetch } from '@endo/fetch/src/types.js' */
+/** @import { Fetch } from '@endo/fetch' */
 
 /**
  * @param {ERef<Fetch>} base
@@ -36,13 +36,14 @@ export const makeTransportFromBase = base => {
     } = options || {
       redirect: 'manual',
     };
+    if (requestBody !== undefined && typeof requestBody !== 'string') {
+      throw TypeError('A confined fetch request body must be a string');
+    }
     const response = E(base).fetch(
       url,
       harden({
         ...requestOptions,
-        ...(requestBody === undefined
-          ? {}
-          : { body: /** @type {string} */ (requestBody) }),
+        ...(requestBody === undefined ? {} : { body: requestBody }),
         ...(cancelled === undefined ? {} : { cancelled }),
       }),
     );
@@ -53,7 +54,6 @@ export const makeTransportFromBase = base => {
     if (body === null) {
       return { ...summary, body: null };
     }
-    // `iterateReader` consumes the byte stream a `bytesReaderFromIterator` serves.
     const iterator = iterateReader(/** @type {any} */ (body));
     return {
       ...summary,

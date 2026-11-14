@@ -31,6 +31,11 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 /** @import { Cancelled } from '@endo/cancel' */
 /** @import { FetchRequestOptions, FetchResponse, Transport, TransportBody } from './types.js' */
 
+/**
+ * @typedef {import('./types.js').Fetch} Fetch
+ * @typedef {import('./types.js').Timer} Timer
+ */
+
 export const FetchRequestOptionsShape = M.splitRecord(
   {},
   {

@@ -20,7 +20,6 @@ export type FetchResponse = {
   body: CloseablePassableBytesReader | null;
 };
 
-/** The `Fetch` capability's remote surface. */
 export type Fetch = {
   fetch: (url: string, options?: FetchRequestOptions) => Promise<FetchResponse>;
   help: () => string;
@@ -45,7 +44,6 @@ export type TransportResponse = {
   body?: TransportBody | null;
 };
 
-/** The platform `fetch`, or a test double of it. */
 export type Transport = (
   url: string,
   options: Omit<FetchRequestOptions, 'cancelled'> & { signal?: AbortSignal },

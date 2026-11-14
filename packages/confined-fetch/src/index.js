@@ -85,12 +85,12 @@ const parseOptionalOriginList = value => {
  * @returns {Promise<any>}
  */
 const lookupOptional = async (powers, name) => {
-  await null;
-  try {
-    return await E(powers).lookup(name);
-  } catch (_error) {
+  // Only absence degrades; a failing lookup of a granted power rejects.
+  const granted = await E(powers).has(name);
+  if (!granted) {
     return undefined;
   }
+  return E(powers).lookup(name);
 };
 
 /**

@@ -31,7 +31,7 @@ Endow this to confined plugins that need time; do not grant it to guests.`;
  */
 const validateDelay = milliseconds => {
   if (
-    !Number.isSafeInteger(milliseconds) ||
+    !Number.isInteger(milliseconds) ||
     milliseconds < 0 ||
     milliseconds > MAX_TIMER_DELAY_MILLISECONDS
   ) {

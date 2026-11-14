@@ -1,5 +1,5 @@
 // @ts-check
-// build-vs-buy-exempt: moved from @endo/fetch, which no longer defines it.
+// build-vs-buy-exempt: a VFS-backed store specific to this plugin.
 
 /**
  * The fetch service's durable store, backed by a writable virtual-file-system
