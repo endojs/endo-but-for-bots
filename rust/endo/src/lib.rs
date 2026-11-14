@@ -6,6 +6,7 @@ pub mod codec;
 pub mod entry_walk;
 pub mod fetch;
 pub mod git_cas;
+pub mod git_odb;
 pub mod npm_resolve;
 pub mod npmrc;
 pub mod registry;
