@@ -53,6 +53,13 @@ export type SpawnerOptions = {
   maxOutputBytes?: number;
 };
 
+/**
+ * A spawned child. `wait()` resolves with the exit status of a process that
+ * ended on its own or on a `kill()` the caller requested. A sandbox spawner's
+ * `wait()` and `kill()` reject instead when the child was killed without the
+ * caller's request or when containment failed, so a confinement failure never
+ * reads as an ordinary signal exit.
+ */
 export type ProcessLike = {
   pid: number;
   stdout?: AsyncIterable<Uint8Array> | null;

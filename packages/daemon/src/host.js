@@ -159,7 +159,7 @@ export const normalizeShellPolicy = policy => {
   }
   if (engine !== 'host' && engine !== 'sandbox') {
     throw makeError(
-      X`provideShell: policy.engine must be 'host' or 'sandbox', got ${q(engine)}`,
+      X`provideShell: policy.engine must be 'host' or 'sandbox' ('environment' is reported by delegating shells, not constructible), got ${q(engine)}`,
     );
   }
   const timeoutMsValue = /** @type {number} */ (timeoutMs);

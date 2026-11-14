@@ -7,6 +7,12 @@
  * `@endo/sandbox` against the sandbox engine.  Each case uses only coreutils,
  * which both a host and a `host-bind` sandbox slice can reach.
  *
+ * The cap and the timeout are enforced by the Shell exo's own `exec`, shared by
+ * every engine, so this table pins the Shell-level behavior over a real engine.
+ * It cannot detect an engine that ignores the `timeoutMs` or `maxOutputBytes`
+ * it is handed; the per-spawner forwarding tests in `@endo/host-spawner` and
+ * `@endo/exo-shell` cover that.
+ *
  * @import { ShellResult } from './types.js'
  */
 

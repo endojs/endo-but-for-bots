@@ -142,7 +142,7 @@ export const makeShell = ({
   }
   if (engine !== 'host' && engine !== 'sandbox') {
     throw makeError(
-      X`makeShell: policy.engine must be 'host' or 'sandbox', got ${q(engine)}`,
+      X`makeShell: policy.engine must be 'host' or 'sandbox' ('environment' is reported by delegating shells, not constructible), got ${q(engine)}`,
     );
   }
   if (

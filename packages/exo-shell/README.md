@@ -70,7 +70,9 @@ confinement comes from running the same capability over a sandbox spawner.
 The engine is chosen host-side, and `inspect().engine` reports it: `'host'`,
 `'sandbox'` (an `@endo/sandbox` slice), or `'environment'` (execution
 delegated to an environment runner, whose confinement this surface does not
-attest).
+attest). Only `'host'` and `'sandbox'` are constructible through a policy's
+`engine`; `'environment'` is reported by the daemon's delegating shell, and a
+policy naming it is refused.
 
 Command-name attenuation is void if a delegating command is allowlisted. An
 interpreter (`node -e`, `python -c`, `bash -c`, `sh`), an exec-forwarder (`env`,
