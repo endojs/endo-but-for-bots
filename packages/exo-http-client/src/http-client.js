@@ -359,6 +359,15 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
   const pending = new Map();
   /** @type {AuditEntry[]} */
   const audit = [];
+  /**
+   * Origins a controller has revoked while the revocation's timestamp is
+   * still resolving.
+   * The revocation is effective as soon as the origin enters this set; if
+   * `now()` fails, the origin stays here and stays refused.
+   *
+   * @type {Set<string>}
+   */
+  const revoking = new Set();
 
   /**
    * @param {AuditEntry} entry
@@ -458,6 +467,9 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
     if (current && current.state === 'Revoked') {
       return current;
     }
+    if (revoking.has(target)) {
+      return harden({ ...binding, state: 'Revoked', decidedBy: 'controller' });
+    }
     setBinding(target, 'Pending', binding, context);
     return binding;
   };
@@ -468,6 +480,9 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
    */
   const assertAllowed = async (target, context = {}) => {
     await null;
+    if (revoking.has(target)) {
+      throw makeError(X`Policy refuses origin ${q(target)}`);
+    }
     const binding = bindings.get(target);
     if (binding) {
       if (binding.state === 'Pinned-Allow') {
@@ -554,33 +569,38 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
      * @param {string} target
      */
     revokeBinding: async target => {
-      await null;
       const origin = validateOrigin(target);
       const previous = bindings.get(origin);
+      revoking.add(origin);
+      const decidedAt = await now();
       /** @type {Binding} */
       const binding = harden({
         target: origin,
         state: 'Revoked',
-        decidedAt: await now(),
+        decidedAt,
         decidedBy: 'controller',
         decisionMode: mode,
       });
       setBinding(origin, previous ? previous.state : 'Unknown', binding);
+      revoking.delete(origin);
     },
     /**
      * @param {string} target
      */
     unpin: async target => {
-      await null;
       const origin = validateOrigin(target);
       const previous = bindings.get(origin);
       if (!previous) {
         return;
       }
+      // Remove and persist before awaiting the audit timestamp, so a failed
+      // `now()` cannot leave the pin live or unpersisted.
       bindings.delete(origin);
+      onChange();
+      const at = await now();
       appendAudit(
         harden({
-          at: await now(),
+          at,
           target: origin,
           fromState: previous.state,
           toState: 'Unknown',
@@ -588,7 +608,6 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
           decidedBy: 'controller',
         }),
       );
-      onChange();
     },
     /**
      * @param {PolicyMode} nextMode
@@ -921,7 +940,8 @@ export const makeHttpClientAndControl = ({
     revokeBinding: async origin => {
       assertNotRevoked();
       const validated = validateOrigin(origin);
-      // As in removeAllowedOrigin, the allowlist shrinks before the await.
+      // The allowlist shrinks before the await, so a request issued while the
+      // binding update is pending is already refused.
       allowed = harden(allowed.filter(item => item !== validated));
       await policy.revokeBinding(validated);
       notifyPolicyChange();
@@ -929,7 +949,6 @@ export const makeHttpClientAndControl = ({
     unpin: async origin => {
       assertNotRevoked();
       const validated = validateOrigin(origin);
-      // As in removeAllowedOrigin, the allowlist shrinks before the await.
       allowed = harden(allowed.filter(item => item !== validated));
       await policy.unpin(validated);
       notifyPolicyChange();
