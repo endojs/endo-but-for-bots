@@ -176,6 +176,29 @@ export const makeXsWorkerFacet = ({ markShouldTerminate }) =>
     },
 
     /**
+     * Planned: host `@endo/compartment-mapper`'s package-graph walk in
+     * XS with reads served from the CAS; see
+     * `designs/daemon-worker-import-from-mount.md` § XS bridging.
+     *
+     * @param {unknown} _sourceP
+     * @param {unknown} _resolution
+     * @param {unknown} _powersP
+     * @param {unknown} _contextP
+     * @param {unknown} _options
+     */
+    makeFromPackage: async (
+      _sourceP,
+      _resolution,
+      _powersP,
+      _contextP,
+      _options,
+    ) => {
+      throw new Error(
+        'makeFromPackage not yet implemented in XS worker: compartment-mapper is not yet hosted in XS; see designs/daemon-worker-import-from-mount.md § XS bridging',
+      );
+    },
+
+    /**
      * Planned: the Node worker's `makeUnconfined` is a dynamic
      * `import()` of a host path, which XS has no equivalent for.  The
      * XS route is a host function that reads the module source via
