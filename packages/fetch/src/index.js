@@ -29,11 +29,11 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
 /** @import { Cancelled } from '@endo/cancel' */
-/** @import { FetchRequestOptions, FetchResponse, Transport, TransportBody } from './types.js' */
+/** @import { Fetch as FetchType, FetchRequestOptions, FetchResponse, Timer as TimerType, Transport, TransportBody } from './types.js' */
 
 /**
- * @typedef {import('./types.js').Fetch} Fetch
- * @typedef {import('./types.js').Timer} Timer
+ * @typedef {FetchType} Fetch
+ * @typedef {TimerType} Timer
  */
 
 export const FetchRequestOptionsShape = M.splitRecord(
