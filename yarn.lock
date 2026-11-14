@@ -2611,6 +2611,7 @@ __metadata:
     "@endo/exo-shell": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
+    "@endo/host-spawner": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/netstring": "workspace:^"
     "@endo/pass-style": "workspace:^"
