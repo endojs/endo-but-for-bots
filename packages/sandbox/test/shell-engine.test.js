@@ -78,6 +78,24 @@ const namespaceDenial =
   /^bwrap: .*(namespace|uid map|gid map|Operation not permitted|Permission denied)/m;
 
 /**
+ * Record that this host cannot run a bwrap slice.  With
+ * `ENDO_SANDBOX_REQUIRE_BWRAP=1` (set by CI's sandbox-drivers job, which
+ * installs bwrap) the missing backend fails the test instead, so these
+ * tests cannot pass vacuously where they are meant to run.
+ *
+ * @param {ExecutionContext} t
+ * @param {string} reason
+ */
+const skipWithoutBwrap = (t, reason) => {
+  if (process.env.ENDO_SANDBOX_REQUIRE_BWRAP === '1') {
+    t.fail(`bwrap required but unusable: ${reason}`);
+    return;
+  }
+  t.log(`SKIP: ${reason}`);
+  t.pass();
+};
+
+/**
  * Build a sandboxed Shell over a fresh mount, or record a skip and return
  * `undefined` when this host cannot run a bwrap slice.
  *
@@ -93,7 +111,7 @@ const makeSandboxedShell = async (t, policy = {}) => {
   });
   const backends = await E(factory).listBackends();
   if (!backends.some(backend => backend.available)) {
-    t.pass(`SKIP: no sandbox backend: ${backends[0]?.reason}`);
+    skipWithoutBwrap(t, `no sandbox backend: ${backends[0]?.reason}`);
     return undefined;
   }
   const { cwd, spawner } = await makeSandboxShellEngine({
@@ -112,7 +130,10 @@ const makeSandboxedShell = async (t, policy = {}) => {
   // fails the test.
   const smoke = await shell.exec('echo', ['ready']);
   if (smoke.exitCode !== 0 && namespaceDenial.test(smoke.stderr)) {
-    t.pass(`SKIP: bwrap cannot create a namespace here: ${smoke.stderr}`);
+    skipWithoutBwrap(
+      t,
+      `bwrap cannot create a namespace here: ${smoke.stderr}`,
+    );
     return undefined;
   }
   // A small cap truncates the smoke output, so only its prefix is checked.
