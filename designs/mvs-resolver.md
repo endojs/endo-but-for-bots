@@ -109,6 +109,10 @@ than keying them by major:
   all of its ranges, by full semver precedence.
   A pre-release satisfies a range only through a `||` alternative
   that names a pre-release of the same `major.minor.patch`.
+  Ranges are desugared as npm's `semver` does, so partial versions
+  (`2`, `^1.2`, `<3`, `1.0.0 - 2`) and a space after an operator
+  (`>= 1.0.0 < 3`) resolve, and a malformed alternative such as a
+  dist-tag matches nothing.
 - The walk proceeds in rounds: every edge of a round is recorded
   before any package is regrouped, and the versions selected for
   the first time supply the next round's edges.
@@ -411,8 +415,12 @@ Notes on the sketch:
   dependency Y") when an importer's peer requirement does not
   appear in the resolved closure within its declared range.
 - `enqueueAllDependencies` walks `dependencies`,
-  `peerDependencies`, and `optionalDependencies` together;
-  conditional exports do not enter the dependency graph (they
+  `peerDependencies`, and `optionalDependencies` together.
+  A name that is also optional is walked as optional only, since
+  npm copies optional entries into `dependencies` on publish.
+  A peer marked optional in `peerDependenciesMeta` is not walked;
+  it is checked only when the closure already holds the name.
+  Conditional exports do not enter the dependency graph (they
   apply at link time, not at graph-walk time).
 
 ## Phased implementation
