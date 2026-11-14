@@ -1,13 +1,17 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
-import { E, Far } from '@endo/far';
+import { E } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
   makeHttpClientAndControl as makeHttpClientAndControlCore,
   makeTrustOnFirstBindPolicyAdapter as makeTrustOnFirstBindPolicyAdapterCore,
 } from '../src/http-client.js';
+
+/** @import { PolicySnapshot } from '../src/types.js' */
 
 const neverDelay = (_milliseconds, cancelled) =>
   new Promise((_resolve, reject) => {
@@ -554,7 +558,7 @@ test('policy-change notifications run in a later event', async t => {
 test('a control mutation resolves only after its snapshot is persisted', async t => {
   /** @type {() => void} */
   let commit = () => {};
-  /** @type {Array<import('../src/types.js').PolicySnapshot>} */
+  /** @type {Array<PolicySnapshot>} */
   const committed = [];
   const { client, control } = makeHttpClientAndControl({
     fetch: makeFakeFetch().fetch,
@@ -610,12 +614,18 @@ test('a control mutation rejects when persistence fails, but still applies', asy
 test('a remote policy authority is sent a hardened decision request', async t => {
   /** @type {unknown[]} */
   const requests = [];
-  const policyAuthority = Far('PolicyAuthority', {
-    decide: request => {
-      requests.push(request);
-      return 'allow';
+  const policyAuthority = makeExo(
+    'PolicyAuthority',
+    M.interface('PolicyAuthority', {
+      decide: M.call(M.any()).returns(M.string()),
+    }),
+    {
+      decide: request => {
+        requests.push(request);
+        return 'allow';
+      },
     },
-  });
+  );
   const { client } = makeHttpClientAndControl({
     fetch: makeFakeFetch().fetch,
     policyMode: 'tofu-attenuator',

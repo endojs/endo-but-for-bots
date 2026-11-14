@@ -1,11 +1,23 @@
 // @ts-check
+// reexport-policy-exempt: this is the package's own entry point, not a
+// compatibility shim; each name has no older home to deprecate.
 
 /**
- * @typedef {import('./src/types.js').Fetch} Fetch
- * @typedef {import('./src/types.js').FetchRequestOptions} FetchRequestOptions
- * @typedef {import('./src/types.js').FetchResponse} FetchResponse
- * @typedef {import('./src/types.js').Timer} Timer
- * @typedef {import('./src/types.js').Transport} Transport
+ * @import {
+ *   Fetch as FetchType,
+ *   FetchRequestOptions as FetchRequestOptionsType,
+ *   FetchResponse as FetchResponseType,
+ *   Timer as TimerType,
+ *   Transport as TransportType,
+ * } from './src/types.js';
+ */
+
+/**
+ * @typedef {FetchType} Fetch
+ * @typedef {FetchRequestOptionsType} FetchRequestOptions
+ * @typedef {FetchResponseType} FetchResponse
+ * @typedef {TimerType} Timer
+ * @typedef {TransportType} Transport
  */
 
 export {
