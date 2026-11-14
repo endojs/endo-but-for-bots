@@ -288,6 +288,11 @@ export interface MvsEdge {
   source: 'dependencies' | 'peerDependencies' | 'optionalDependencies';
   importer: string;
   from: MvsEdgeOrigin;
+  /**
+   * A peer marked optional in `peerDependenciesMeta`: checked against the
+   * closure when present, never walked or installed on its own account.
+   */
+  optionalPeer?: boolean;
 }
 
 /**

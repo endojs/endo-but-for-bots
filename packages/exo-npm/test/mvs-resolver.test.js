@@ -128,6 +128,66 @@ test('satisfiesRange rejects a version with trailing text', t => {
   t.false(satisfiesRange('1.2.3garbage', '*'));
 });
 
+test('satisfiesRange fills partial versions as npm does', t => {
+  // A bare major or major.minor is an X-range.
+  t.true(satisfiesRange('2.0.4', '2'));
+  t.false(satisfiesRange('3.0.0', '2'));
+  t.true(satisfiesRange('1.2.9', '1.2'));
+  t.false(satisfiesRange('1.3.0', '1.2'));
+  // Caret and tilde over partials.
+  t.true(satisfiesRange('1.9.0', '^1.2'));
+  t.false(satisfiesRange('1.1.0', '^1.2'));
+  t.false(satisfiesRange('2.0.0', '^1'));
+  t.true(satisfiesRange('0.0.9', '^0.0'));
+  t.false(satisfiesRange('0.1.0', '^0.0'));
+  t.true(satisfiesRange('1.9.0', '~1'));
+  t.false(satisfiesRange('1.3.0', '~1.2'));
+  // Comparators over partials.
+  t.true(satisfiesRange('2.9.9', '<3'));
+  t.false(satisfiesRange('3.0.0', '<3'));
+  t.false(satisfiesRange('3.0.0-rc.1', '<3'));
+  t.true(satisfiesRange('1.2.9', '<=1.2'));
+  t.false(satisfiesRange('1.3.0', '<=1.2'));
+  t.false(satisfiesRange('1.9.9', '>1'));
+  t.true(satisfiesRange('2.0.0', '>1'));
+  t.true(satisfiesRange('1.2.0', '>=1.2'));
+  // A space between an operator and its version.
+  t.true(satisfiesRange('2.5.0', '>= 1.0.0 < 3'));
+  t.false(satisfiesRange('3.0.0', '>= 1.0.0 < 3'));
+  // A hyphen range with a partial upper end includes all of it.
+  t.true(satisfiesRange('2.9.0', '1.0.0 - 2'));
+  t.false(satisfiesRange('3.0.0', '1.0.0 - 2'));
+  // A malformed set (here a dist-tag) matches nothing.
+  t.false(satisfiesRange('1.0.0', 'latest'));
+  t.false(satisfiesRange('1.0.0', '<garbage'));
+});
+
+test('resolve selects a version for a bare-major range', async t => {
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const fetcher = makeFakeFetcher({
+    packuments: {
+      inherits: {
+        versions: {
+          '1.0.0': { dist: { integrity: 'sha512-i1' } },
+          '2.0.3': { dist: { integrity: 'sha512-i203' } },
+          '2.0.4': { dist: { integrity: 'sha512-i204' } },
+        },
+      },
+    },
+  });
+  const resolveHook = makeMvsResolveHook({
+    fetcher,
+    makeTreeRef: makeFakeTreeRef,
+  });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
+  const entry = JSON.stringify({
+    name: 'entry',
+    dependencies: { inherits: '2' },
+  });
+  const resolution = await registry.resolve(entry, {});
+  t.deepEqual([...resolution.keys], ['inherits@2.0.3']);
+});
+
 test('resolve does not upgrade beyond a graph requirement', async t => {
   // Entry depends on `lib-a@^1.0.0`; lib-a depends on
   // `helper@^1.0.0`. Newer compatible releases exist.
@@ -827,6 +887,83 @@ test('resolve treats optionalDependencies as best-effort', async t => {
   // channel.
   t.truthy(resolution.unmetOptionals);
   t.true(resolution.unmetOptionals?.some(d => d.name === 'fsevents') ?? false);
+});
+
+test('resolve lets an optional entry override a required one', async t => {
+  // npm publishes each optional dependency in `dependencies` too.
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const fetcher = makeFakeFetcher({
+    packuments: {
+      watcher: {
+        versions: {
+          '1.0.0': {
+            dependencies: { fsevents: '^2.0.0' },
+            optionalDependencies: { fsevents: '^2.0.0' },
+            dist: { integrity: 'sha512-w' },
+          },
+        },
+      },
+    },
+  });
+  const resolveHook = makeMvsResolveHook({
+    fetcher,
+    makeTreeRef: makeFakeTreeRef,
+  });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
+  const entry = JSON.stringify({
+    name: 'entry',
+    dependencies: { watcher: '^1.0.0' },
+  });
+  const resolution =
+    /** @type {{keys: string[], unmetOptionals?: ReadonlyArray<{name: string}>}} */ (
+      await registry.resolve(entry, {})
+    );
+  t.deepEqual([...resolution.keys], ['watcher@1.0.0']);
+  t.true(resolution.unmetOptionals?.some(d => d.name === 'fsevents') ?? false);
+});
+
+test('resolve neither installs nor requires an optional peer', async t => {
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const fetcher = makeFakeFetcher({
+    packuments: {
+      plugin: {
+        versions: {
+          '1.0.0': {
+            peerDependencies: { typescript: '^5.0.0' },
+            peerDependenciesMeta: { typescript: { optional: true } },
+            dist: { integrity: 'sha512-p' },
+          },
+        },
+      },
+      typescript: {
+        versions: {
+          '4.9.0': { dist: { integrity: 'sha512-t4' } },
+          '5.1.0': { dist: { integrity: 'sha512-t5' } },
+        },
+      },
+    },
+  });
+  const resolveHook = makeMvsResolveHook({
+    fetcher,
+    makeTreeRef: makeFakeTreeRef,
+  });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
+  const resolution = await registry.resolve(
+    JSON.stringify({ name: 'entry', dependencies: { plugin: '^1.0.0' } }),
+    {},
+  );
+  t.deepEqual([...resolution.keys], ['plugin@1.0.0']);
+  // Present but unsatisfying, the optional peer is still checked.
+  const error = await t.throwsAsync(() =>
+    registry.resolve(
+      JSON.stringify({
+        name: 'entry',
+        dependencies: { plugin: '^1.0.0', typescript: '^4.0.0' },
+      }),
+      {},
+    ),
+  );
+  t.is(registryErrorName(error), 'RegistryMissingPackageError');
 });
 
 test('resolve in offline mode rejects on missing cache entry', async t => {

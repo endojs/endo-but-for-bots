@@ -190,128 +190,207 @@ const compareVersionStrings = (a, b) =>
 harden(compareVersionStrings);
 
 /**
- * Match a candidate version against one comparator set of an npm-style
- * range (no `||`) by semver precedence alone, ignoring pre-release
- * eligibility. Supports the common shapes that appear in published
- * `package.json` dependencies:
- *
- * - `^1.2.3` compatible by major
- * - `~1.2.3` compatible by minor
- * - `>=1.2.3`, `>1.2.3`, `<1.2.3`, `<=1.2.3`
- * - `1.2.3` exact
- * - `1.2.x`, `1.x`, `*` shape
- * - `1.2.3 - 2.0.0` range (inclusive)
- *
- * Comparisons use full semver precedence, so `1.0.0-alpha.1` does not
- * match `^1.0.0-beta.2`.
- *
- * @param {ReturnType<typeof parseVersion>} candidate
- * @param {string} comparatorSet
- * @returns {boolean}
+ * @param {string} major
+ * @param {string} minor
+ * @param {string} patch
+ * @param {string[]} [prerelease]
+ * @returns {ReturnType<typeof parseVersion>}
  */
-const matchesComparatorSet = (candidate, comparatorSet) => {
-  const trimmed = comparatorSet.trim();
-  if (trimmed === '' || trimmed === '*' || trimmed === 'x') {
-    return true;
-  }
-  // Hyphen range: '1.2.3 - 2.0.0'.
-  const hyphen = /^([^\s]+)\s+-\s+([^\s]+)$/.exec(trimmed);
-  if (hyphen) {
-    return (
-      matchesComparatorSet(candidate, `>=${hyphen[1]}`) &&
-      matchesComparatorSet(candidate, `<=${hyphen[2]}`)
-    );
-  }
-  // Composite: '>=1.2.3 <2.0.0' (space-separated AND).
-  if (/\s/.test(trimmed)) {
-    return trimmed
-      .split(/\s+/)
-      .every(part => matchesComparatorSet(candidate, part));
-  }
-  // Caret: '^1.2.3'.
-  if (trimmed.startsWith('^')) {
-    const base = parseVersion(trimmed.slice(1));
-    if (!base.valid || compareDigits(candidate.major, base.major) !== 0) {
-      return false;
-    }
-    if (!isZero(base.major)) {
-      return compareVersions(candidate, base) >= 0;
-    }
-    if (compareDigits(candidate.minor, base.minor) !== 0) return false;
-    if (!isZero(base.minor)) {
-      return compareVersions(candidate, base) >= 0;
-    }
-    // '^0.0.3-beta' is '>=0.0.3-beta <0.0.4-0'.
-    return (
-      compareDigits(candidate.patch, base.patch) === 0 &&
-      compareVersions(candidate, base) >= 0
-    );
-  }
-  // Tilde: '~1.2.3'.
-  if (trimmed.startsWith('~')) {
-    const base = parseVersion(trimmed.slice(1));
-    if (!base.valid) return false;
-    if (compareDigits(candidate.major, base.major) !== 0) return false;
-    if (compareDigits(candidate.minor, base.minor) !== 0) return false;
-    return compareVersions(candidate, base) >= 0;
-  }
-  // Comparators.
-  if (trimmed.startsWith('>=')) {
-    return compareVersions(candidate, parseVersion(trimmed.slice(2))) >= 0;
-  }
-  if (trimmed.startsWith('<=')) {
-    return compareVersions(candidate, parseVersion(trimmed.slice(2))) <= 0;
-  }
-  if (trimmed.startsWith('>')) {
-    return compareVersions(candidate, parseVersion(trimmed.slice(1))) > 0;
-  }
-  if (trimmed.startsWith('<')) {
-    return compareVersions(candidate, parseVersion(trimmed.slice(1))) < 0;
-  }
-  if (trimmed.startsWith('=')) {
-    return compareVersions(candidate, parseVersion(trimmed.slice(1))) === 0;
-  }
-  // X-range: '1.2.x' or '1.x'.
-  if (/[xX*]/.test(trimmed)) {
-    const parts = trimmed.split('.');
-    const isWild = part => /^[xX*]$/.test(part);
-    const sameAs = (part, digits) =>
-      /^\d+$/.test(part) && compareDigits(part, digits) === 0;
-    if (!isWild(parts[0]) && !sameAs(parts[0], candidate.major)) return false;
-    if (parts.length < 2 || isWild(parts[1])) return true;
-    if (!sameAs(parts[1], candidate.minor)) return false;
-    if (parts.length < 3 || isWild(parts[2])) return true;
-    return sameAs(parts[2], candidate.patch);
-  }
-  // Exact.
-  return compareVersions(candidate, parseVersion(trimmed)) === 0;
-};
-harden(matchesComparatorSet);
+const makeVersion = (major, minor, patch, prerelease = []) => ({
+  valid: true,
+  major,
+  minor,
+  patch,
+  prerelease,
+  raw: `${major}.${minor}.${patch}`,
+});
+harden(makeVersion);
 
 /**
- * Whether a comparator set names a pre-release of the candidate's own
- * `major.minor.patch`, which npm requires before a pre-release
- * candidate may match it.
- *
- * @param {ReturnType<typeof parseVersion>} candidate
- * @param {string} comparatorSet
+ * @param {string} digits
  */
-const namesPrereleaseOf = (candidate, comparatorSet) =>
-  [...comparatorSet.matchAll(/(?:^|[\s<>=^~v])(\d+)\.(\d+)\.(\d+)-/g)].some(
-    ([, major, minor, patch]) =>
-      compareDigits(major, candidate.major) === 0 &&
-      compareDigits(minor, candidate.minor) === 0 &&
-      compareDigits(patch, candidate.patch) === 0,
-  );
-harden(namesPrereleaseOf);
+const increment = digits => `${BigInt(digits) + 1n}`;
+harden(increment);
+
+/**
+ * Parse a possibly partial version as it appears in a range (`1`, `1.2`,
+ * `1.x`, `*`, `1.2.3-beta`). A wildcard or missing component leaves it
+ * and every later component `undefined`. Returns `undefined` when the
+ * text is not a partial version at all.
+ *
+ * @param {string} text
+ */
+const parsePartial = text => {
+  const match =
+    /^v?(\d+|[xX*])(?:\.(\d+|[xX*]))?(?:\.(\d+|[xX*]))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      text,
+    );
+  if (!match) return undefined;
+  /** @param {string | undefined} part */
+  const concrete = part =>
+    part === undefined || /^[xX*]$/.test(part) ? undefined : part;
+  const major = concrete(match[1]);
+  const minor = major === undefined ? undefined : concrete(match[2]);
+  const patch = minor === undefined ? undefined : concrete(match[3]);
+  const prerelease =
+    patch === undefined || match[4] === undefined ? [] : match[4].split('.');
+  return { major, minor, patch, prerelease };
+};
+harden(parsePartial);
+
+/**
+ * @typedef {{ operator: '<' | '<=' | '>' | '>=' | '=', version: ReturnType<typeof parseVersion> }} Comparator
+ */
+
+/** `<0.0.0-0`, which no version satisfies. */
+const unsatisfiable = harden({
+  operator: /** @type {const} */ ('<'),
+  version: makeVersion('0', '0', '0', ['0']),
+});
+
+/**
+ * Desugar one operator applied to a partial version into primitive
+ * comparators, following npm's `semver`: a partial `>=` or lower bound
+ * fills missing components with zero, and an exclusive upper bound is
+ * `<X.Y.Z-0`, which excludes the pre-releases of `X.Y.Z` too (`^1.2` is
+ * `>=1.2.0 <2.0.0-0`, `<=1.2` is `<1.3.0-0`, `1` is `>=1.0.0 <2.0.0-0`).
+ * An empty list matches every version.
+ *
+ * @param {string} operator
+ * @param {NonNullable<ReturnType<typeof parsePartial>>} partial
+ * @returns {Comparator[]}
+ */
+const desugarComparator = (operator, partial) => {
+  const { major, minor, patch, prerelease } = partial;
+  if (major === undefined) {
+    return operator === '<' || operator === '>' ? [unsatisfiable] : [];
+  }
+  /**
+   * @param {string} upperMajor
+   * @param {string} upperMinor
+   * @param {string} upperPatch
+   * @returns {Comparator}
+   */
+  const below = (upperMajor, upperMinor, upperPatch) => ({
+    operator: '<',
+    version: makeVersion(upperMajor, upperMinor, upperPatch, ['0']),
+  });
+  /** @type {Comparator} */
+  const atLeast = {
+    operator: '>=',
+    version: makeVersion(major, minor ?? '0', patch ?? '0', prerelease),
+  };
+  // The least release beyond every version the partial covers.
+  const [nextMajor, nextMinor] =
+    minor === undefined ? [increment(major), '0'] : [major, increment(minor)];
+  switch (operator) {
+    case '^': {
+      if (!isZero(major)) return [atLeast, below(increment(major), '0', '0')];
+      if (minor === undefined) return [atLeast, below('1', '0', '0')];
+      if (!isZero(minor) || patch === undefined) {
+        return [atLeast, below('0', increment(minor), '0')];
+      }
+      return [atLeast, below('0', '0', increment(patch))];
+    }
+    case '~':
+    case '~>':
+      return [atLeast, below(nextMajor, nextMinor, '0')];
+    case '':
+    case '=':
+      return patch === undefined
+        ? [atLeast, below(nextMajor, nextMinor, '0')]
+        : [{ operator: '=', version: atLeast.version }];
+    case '>=':
+      return [atLeast];
+    case '>':
+      return patch === undefined
+        ? [{ operator: '>=', version: makeVersion(nextMajor, nextMinor, '0') }]
+        : [{ operator: '>', version: atLeast.version }];
+    case '<':
+      return patch === undefined
+        ? [below(major, minor ?? '0', '0')]
+        : [{ operator: '<', version: atLeast.version }];
+    case '<=':
+      return patch === undefined
+        ? [below(nextMajor, nextMinor, '0')]
+        : [{ operator: '<=', version: atLeast.version }];
+    default:
+      return [unsatisfiable];
+  }
+};
+harden(desugarComparator);
+
+/**
+ * Parse one comparator set of an npm-style range (no `||`) into
+ * primitive comparators, or `undefined` when the set is malformed (a
+ * dist-tag, a URL, a typo), which then matches no version. Supports:
+ *
+ * - `^1.2.3`, `^1.2`, `^1` compatible by the leftmost nonzero component
+ * - `~1.2.3`, `~1.2`, `~1` compatible by minor (or by major)
+ * - `>=1.2.3`, `>1.2`, `<2`, `<=1.2.3`, with or without a space after
+ *   the operator
+ * - `1.2.3` or `=1.2.3` exact
+ * - `1.2.x`, `1.x`, `1.2`, `1`, `*`, and the empty set
+ * - `1.2.3 - 2.0.0` inclusive hyphen range, either end possibly partial
+ * - space-separated conjunctions of the above
+ *
+ * @param {string} comparatorSet
+ * @returns {Comparator[] | undefined}
+ */
+const parseComparatorSet = comparatorSet => {
+  const text = comparatorSet
+    .trim()
+    .replace(/(^|\s)(<=|>=|~>|[<>=~^])\s+/g, '$1$2');
+  if (text === '') return [];
+  const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text);
+  if (hyphen) {
+    const from = parsePartial(hyphen[1]);
+    const to = parsePartial(hyphen[2]);
+    if (from === undefined || to === undefined) return undefined;
+    return [...desugarComparator('>=', from), ...desugarComparator('<=', to)];
+  }
+  /** @type {Comparator[]} */
+  const comparators = [];
+  for (const token of text.split(/\s+/)) {
+    const [, operator = '', rest] = /** @type {RegExpExecArray} */ (
+      /^(<=|>=|~>|[<>=~^])?(.*)$/.exec(token)
+    );
+    const partial = parsePartial(rest);
+    if (partial === undefined) return undefined;
+    comparators.push(...desugarComparator(operator, partial));
+  }
+  return comparators;
+};
+harden(parseComparatorSet);
+
+/**
+ * @param {ReturnType<typeof parseVersion>} candidate
+ * @param {Comparator} comparator
+ */
+const matchesComparator = (candidate, { operator, version }) => {
+  const order = compareVersions(candidate, version);
+  switch (operator) {
+    case '<':
+      return order < 0;
+    case '<=':
+      return order <= 0;
+    case '>':
+      return order > 0;
+    case '>=':
+      return order >= 0;
+    default:
+      return order === 0;
+  }
+};
+harden(matchesComparator);
 
 /**
  * Determine whether a candidate version satisfies an npm-style range
  * specifier. A range is a `||` union of comparator sets, and the
- * candidate must match one of them. As in npm, a pre-release matches a
- * comparator set only when that same set names a pre-release of the
- * same `major.minor.patch`, so `1.0.0-rc.1` satisfies `^1.0.0-rc.0` but
- * not `^1.0.0`, nor `^1.0.0 || ^2.0.0-rc.0`.
+ * candidate must match one of them by full semver precedence. As in npm,
+ * a pre-release matches a comparator set only when that same set names a
+ * pre-release of the same `major.minor.patch`, so `1.0.0-rc.1` satisfies
+ * `^1.0.0-rc.0` but not `^1.0.0`, nor `^1.0.0 || ^2.0.0-rc.0`.
  *
  * @param {string} candidateRaw
  * @param {string} range
@@ -320,14 +399,25 @@ harden(namesPrereleaseOf);
 export const satisfiesRange = (candidateRaw, range) => {
   const candidate = parseVersion(candidateRaw);
   if (!candidate.valid) return false;
-  return range
-    .split('||')
-    .some(
-      comparatorSet =>
-        (candidate.prerelease.length === 0 ||
-          namesPrereleaseOf(candidate, comparatorSet)) &&
-        matchesComparatorSet(candidate, comparatorSet),
+  return range.split('||').some(comparatorSet => {
+    const comparators = parseComparatorSet(comparatorSet);
+    if (comparators === undefined) return false;
+    if (
+      !comparators.every(comparator => matchesComparator(candidate, comparator))
+    ) {
+      return false;
+    }
+    return (
+      candidate.prerelease.length === 0 ||
+      comparators.some(
+        ({ version }) =>
+          version.prerelease.length > 0 &&
+          compareDigits(version.major, candidate.major) === 0 &&
+          compareDigits(version.minor, candidate.minor) === 0 &&
+          compareDigits(version.patch, candidate.patch) === 0,
+      )
     );
+  });
 };
 harden(satisfiesRange);
 
@@ -604,7 +694,7 @@ export const makeMvsResolveHook = options => {
        * @type {Map<string, Array<{ ranges: string[], version: string }>>}
        */
       const groupsByName = new Map();
-      /** @type {Array<{ importer: string, name: string, range: string, from: MvsEdgeOrigin }>} */
+      /** @type {Array<{ importer: string, name: string, range: string, from: MvsEdgeOrigin, optional?: boolean }>} */
       const peerRequirements = [];
       /** @type {Array<{ importer: string, name: string, range: string, reason: string, from: MvsEdgeOrigin }>} */
       const unmetOptionals = [];
@@ -620,6 +710,12 @@ export const makeMvsResolveHook = options => {
        * @param {MvsEdgeOrigin} from
        */
       const enqueueAll = (frontier, pkg, importer, from) => {
+        const optionals =
+          /** @type {Record<string, string> | undefined} */
+          (pkg.optionalDependencies) ?? {};
+        const peerMeta =
+          /** @type {Record<string, { optional?: boolean }> | undefined} */
+          (pkg.peerDependenciesMeta) ?? {};
         const sources = /** @type {const} */ ([
           'dependencies',
           'peerDependencies',
@@ -631,7 +727,23 @@ export const makeMvsResolveHook = options => {
             (pkg[source]);
           if (table) {
             for (const [name, range] of Object.entries(table)) {
-              frontier.push({ name, range, source, importer, from });
+              // npm copies `optionalDependencies` into `dependencies` on
+              // publish, and an optional entry overrides a required one,
+              // so the optional edge alone stands for the name.
+              if (
+                source !== 'dependencies' ||
+                !Object.hasOwn(optionals, name)
+              ) {
+                /** @type {MvsEdge} */
+                const edge = { name, range, source, importer, from };
+                if (
+                  source === 'peerDependencies' &&
+                  peerMeta[name]?.optional === true
+                ) {
+                  edge.optionalPeer = true;
+                }
+                frontier.push(edge);
+              }
             }
           }
         }
@@ -678,6 +790,19 @@ export const makeMvsResolveHook = options => {
       const processEdge = async (edge, touched, next) => {
         await null;
         const { name, range, source, importer, from } = edge;
+
+        // An optional peer is never installed on its own account; it
+        // constrains only a version the closure already holds.
+        if (edge.optionalPeer) {
+          peerRequirements.push({
+            importer,
+            name,
+            range,
+            from,
+            optional: true,
+          });
+          return;
+        }
 
         // Workspace specifier? Prefer workspace lookup over registry.
         if (isWorkspaceSpecifier(range)) {
@@ -930,7 +1055,7 @@ export const makeMvsResolveHook = options => {
           edge !== undefined;
           edge = pending.pop()
         ) {
-          const target = targetOf(edge);
+          const target = edge.optionalPeer ? undefined : targetOf(edge);
           if (target !== undefined && !excluded.has(target)) {
             const incoming = reached.get(target);
             if (incoming === undefined) {
@@ -997,11 +1122,14 @@ export const makeMvsResolveHook = options => {
             .filter(selection => selection.name === peer.name)
             .map(selection => selection.version);
           if (versions.length === 0) {
-            throw RegistryMissingPackageError(
-              `${peer.importer} declares unmet peer dependency ${peer.name}@${peer.range}`,
-            );
-          }
-          if (!versions.some(version => satisfiesRange(version, peer.range))) {
+            if (!peer.optional) {
+              throw RegistryMissingPackageError(
+                `${peer.importer} declares unmet peer dependency ${peer.name}@${peer.range}`,
+              );
+            }
+          } else if (
+            !versions.some(version => satisfiesRange(version, peer.range))
+          ) {
             throw RegistryMissingPackageError(
               `${peer.importer} declares peer dependency ${peer.name}@${peer.range} but resolved closure has no satisfying version`,
             );
