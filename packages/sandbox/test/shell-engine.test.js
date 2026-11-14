@@ -79,9 +79,10 @@ const namespaceDenial =
 
 /**
  * Record that this host cannot run a bwrap slice.  With
- * `ENDO_SANDBOX_REQUIRE_BWRAP=1` (set by CI's sandbox-drivers job, which
- * installs bwrap) the missing backend fails the test instead, so these
- * tests cannot pass vacuously where they are meant to run.
+ * `ENDO_SANDBOX_REQUIRE_BWRAP=1` (set by the `test:drivers` script, which
+ * CI's sandbox-drivers job runs after installing bwrap) the missing backend
+ * fails the test instead, so these tests cannot pass vacuously where they
+ * are meant to run.
  *
  * @param {ExecutionContext} t
  * @param {string} reason
