@@ -4809,6 +4809,7 @@ const makeDaemonCore = async (
             storeBlob: disallowedFn,
             storeValue: disallowedFn,
             submit: disallowedFn,
+            submitOnce: disallowedFn,
             sendValue: disallowedFn,
             invite: disallowedFn,
             accept: disallowedFn,
