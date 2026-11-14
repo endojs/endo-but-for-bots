@@ -10,5 +10,5 @@ Breaking API changes:
 
 Migration: await the control mutators, and inject a fake `delay` rather than a fake `now` to control rate windows in tests.
 
-Additions: `initialBindings` reconstitutes the trust-on-first-bind table, `onPolicyChange(snapshot)` reports each durable policy or binding change, and the `Delay` type is re-exported from `@endo/http-confine`.
+Additions: `initialBindings` reconstitutes the trust-on-first-bind table, `onPolicyChange(snapshot)` reports each durable policy or binding change, and the package exports a `Delay` type.
 A binding revocation or unpin takes effect before its audit timestamp resolves.
