@@ -290,9 +290,8 @@ const describeProcessGroup = pgid => {
  * with the rest of the group: bwrap's pid-namespace init stays in the
  * group until the kernel has killed every process in the namespace and
  * torn down its mount namespace, and then it lingers as a zombie until
- * the host reaper collects it.  When the podman suite runs alongside,
- * that teardown can take several seconds on a CI runner, so the bound
- * is generous.  A process that escaped containment survives any bound.
+ * the host reaper collects it, so the bound is generous.  A process
+ * that escaped containment survives any bound.
  *
  * @param {number} pid
  * @param {number} [timeoutMs]

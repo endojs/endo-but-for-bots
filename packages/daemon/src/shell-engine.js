@@ -13,7 +13,6 @@ const { apply } = Reflect;
 const { isArray } = Array;
 const { some, map, join } = Array.prototype;
 
-/** Where a sandboxed shell's mount appears inside its slice. */
 export const SANDBOX_SHELL_WORKDIR = '/work';
 harden(SANDBOX_SHELL_WORKDIR);
 
