@@ -1,9 +1,10 @@
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-import { Far, passStyleOf } from '@endo/pass-style';
+import { Far } from '@endo/pass-style';
 import { stringify, parse } from '../src/marshal-stringify.js';
 import { roundTripPairs } from '../tools/marshal-test-data.js';
+import { passablesEqual } from './passables-equal.js';
 
 const { isFrozen } = Object;
 
@@ -13,14 +14,7 @@ test('stringify parse round trip pairs', t => {
     const encoding = JSON.stringify(encoded);
     t.is(str, encoding);
     const decoding = parse(str);
-    if (passStyleOf(plain) === 'byteArray') {
-      t.deepEqual(
-        [.../** @type {Uint8Array} */ (decoding)],
-        [.../** @type {Uint8Array} */ (plain)],
-      );
-    } else {
-      t.deepEqual(decoding, plain);
-    }
+    passablesEqual(t, decoding, plain);
     t.assert(isFrozen(decoding));
   }
 });
