@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-10-26 |
+| **Updated** | 2026-10-31 |
 | **Author** | endolinbot (prompted) |
 | **Status** | In Progress |
 
@@ -631,6 +631,24 @@ No compartment-mapper extension point was needed.
      cleanly (`RegistryOfflineError`; see
      [registry-capability](registry-capability.md) § *Failure
      surface*).
+
+**Implementation status (2026-10-31).**
+Phase 3 is built.
+`EndoHost.makeFromMount` asks the source for `compartment-map.json`
+and then `package.json` at its root, forwarding to `makeFromTree` or
+`makeFromPackage`; a compartment map wins when both are present,
+since a source archive's root may also carry a `package.json`.
+It refuses a root with neither, and refuses `entry`, `registryName`,
+or `offline` on a compartment-map root rather than ignoring them.
+The detection runs in the host rather than in a worker-side
+`selectRootShape`, because the host already holds the source and
+the two downstream methods already pin and check their own shape.
+The CLI takes the mount as `endo run --mount <name> [entry]` and
+`endo make --mount <name> [entry]` rather than as the bare
+positional the CLI sketch above shows, because that positional is
+already a filesystem path and a pet name cannot be told apart from
+one.
+`--registry <name>` and `--offline` require `--mount`.
 
 ### Phase 4: Snapshot-before-import
 

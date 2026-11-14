@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@endo/stream": "workspace:^",
+    "@endo/tar": "workspace:^",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "eslint": "catalog:dev",
