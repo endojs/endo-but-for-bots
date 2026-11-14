@@ -1,5 +1,5 @@
 ---
-'@endo/fetch': minor
+'@endo/fetch': major
 ---
 
 `@endo/fetch` is now the unconfined base plugin: `make()` adapts the worker's ambient `fetch` into a passable, unfettered `Fetch` capability with no allowlist, caps, policy, or persistence.

@@ -1,8 +1,8 @@
 ---
-'@endo/http-confine': minor
+'@endo/http-confine': major
 ---
 
-Breaking API changes (a `minor` bump, as for any breaking change before 1.0):
+Breaking API changes:
 - `makeRequestSignal` is removed. The new `makeRequestCancellation({ timeoutMs, cancellation, delay })` returns a cancellation token rather than an `AbortSignal`.
 - `FetchLikeRequestOptions.signal` is replaced by `cancelled`, a `Promise<never>`, and `limitResponseBytes` takes `cancelled` instead of `signal`.
 - `makeRateLimiter` takes `{ maxPerMinute, delay, cancelled }` instead of `{ maxPerMinute, now }`, and its limiter gains `setMaxPerMinute`.

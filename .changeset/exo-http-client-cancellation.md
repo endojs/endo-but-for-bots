@@ -1,8 +1,8 @@
 ---
-'@endo/exo-http-client': minor
+'@endo/exo-http-client': major
 ---
 
-Breaking API changes (a `minor` bump, as for any breaking change before 1.0):
+Breaking API changes:
 - `FetchLikeRequestOptions.signal` is replaced by `cancelled`, so an injected `fetch` must honor `cancelled` instead of an `AbortSignal`.
 - The `HttpClientControl` methods `setAllowedOrigins`, `addAllowedOrigin`, `removeAllowedOrigin`, `revokeBinding`, and `unpin` return `Promise<void>`.
 - `makeHttpClientAndControl` and `makeTrustOnFirstBindPolicyAdapter` take a `delay` function for request deadlines, rate windows, and policy-prompt timeouts; a caller-supplied `now` no longer drives the rate window, and `now` may return a `Promise<number>`.
