@@ -18,6 +18,7 @@ const fixture = () => {
         allowedCommands: ['sh'],
         timeoutMs: 1000,
         maxOutputBytes: 1024,
+        engine: 'host',
       }),
     exec: () =>
       harden({

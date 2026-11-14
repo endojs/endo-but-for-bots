@@ -201,6 +201,7 @@ const world = (
               allowedCommands: ['sh'],
               timeoutMs: 1000,
               maxOutputBytes: 4096,
+              engine: 'host',
             }),
         }),
       );
