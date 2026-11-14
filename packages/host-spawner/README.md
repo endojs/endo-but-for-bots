@@ -9,7 +9,10 @@ that would depend on `@endo/daemon` in turn.
 A `Spawner` is a single-method contract:
 
 ```ts
-type Spawner = (argv: string[], opts?: SpawnerOpts) => Promise<ProcessLike>;
+type Spawner = (
+  argv: string[],
+  options?: SpawnerOptions,
+) => Promise<ProcessLike>;
 ```
 
 `ProcessLike` mirrors `DriverProcess` from `@endo/sandbox`, so a slice's process
@@ -23,7 +26,25 @@ logic stays uniform across engines.
 import { makeHostSpawner } from '@endo/host-spawner';
 
 const spawn = makeHostSpawner({ searchPath: '/usr/bin:/bin', defaultEnv: {} });
-const proc = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
+const child = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
+```
+
+`makeSandboxSpawner(slice, { outputByteLimit })`, imported from
+`@endo/host-spawner/src/sandbox-spawner.js` (its only entry point), is the
+other engine: it runs each spawn inside an `@endo/sandbox` slice and is the
+daemon Shell's adapter for `engine: 'sandbox'`. Its JSDoc documents how kills,
+timeouts, and containment failures settle `wait()`.
+
+```js
+import { makeSandboxSpawner } from '@endo/host-spawner/src/sandbox-spawner.js';
+
+const slice = await E(sandboxFactory).make({
+  rootfs: { kind: 'host-bind' },
+  mounts: [{ cap: worktree, innerPath: '/work', mode: 'rw' }],
+  network: 'none',
+});
+const spawn = makeSandboxSpawner(slice);
+const child = await spawn(['make', 'test'], { cwd: '/work', timeoutMs: 60_000 });
 ```
 
 An agent host that already speaks the `Spawner` seam can re-export

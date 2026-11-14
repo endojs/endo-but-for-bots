@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 
 import {
   killProcessGroup,
+  sweepLeaderlessGroup,
   startControlCommand,
 } from '../src/drivers/child-process.js';
 
@@ -100,6 +101,67 @@ test('killProcessGroup does not signal a reused pgid', async t => {
   ]);
   t.true(survived, 'the unrelated process group must be untouched');
   t.is(bystander.exitCode, null);
+});
+
+/**
+ * @param {string} code
+ */
+const errnoError = code => Object.assign(new Error(code), { code });
+
+/**
+ * @param {Record<string, string | undefined>} outcomes  Error code per
+ *   `${pid}:${signal}` call, or undefined for success.
+ */
+const makeKillRecorder = outcomes => {
+  /** @type {string[]} */
+  const calls = [];
+  /**
+   * @param {number} pid
+   * @param {NodeJS.Signals | 0} signal
+   */
+  const kill = (pid, signal) => {
+    const key = `${pid}:${signal}`;
+    calls.push(key);
+    const code = outcomes[key];
+    if (code !== undefined) throw errnoError(code);
+  };
+  return { calls, kill };
+};
+
+test('sweepLeaderlessGroup does not signal a pgid reallocated as a pid', t => {
+  const { calls, kill } = makeKillRecorder({});
+  t.false(sweepLeaderlessGroup(4242, { kill, isLive: () => true }));
+  t.deepEqual(calls, []);
+});
+
+test('sweepLeaderlessGroup does not signal an empty group', t => {
+  // An empty group's pgid is free for reuse, so no SIGKILL may follow.
+  const { calls, kill } = makeKillRecorder({ '-4242:0': 'ESRCH' });
+  t.false(sweepLeaderlessGroup(4242, { kill, isLive: () => false }));
+  t.deepEqual(calls, ['-4242:0']);
+});
+
+test('sweepLeaderlessGroup kills a group that still has members', t => {
+  const { calls, kill } = makeKillRecorder({});
+  t.true(sweepLeaderlessGroup(4242, { kill, isLive: () => false }));
+  t.deepEqual(calls, ['-4242:0', '-4242:SIGKILL']);
+});
+
+test('sweepLeaderlessGroup tolerates a group that empties before SIGKILL', t => {
+  const { kill } = makeKillRecorder({ '-4242:SIGKILL': 'ESRCH' });
+  t.false(sweepLeaderlessGroup(4242, { kill, isLive: () => false }));
+});
+
+test('sweepLeaderlessGroup throws a non-ESRCH signal failure', t => {
+  const { kill } = makeKillRecorder({ '-4242:SIGKILL': 'EPERM' });
+  t.throws(() => sweepLeaderlessGroup(4242, { kill, isLive: () => false }), {
+    message: 'EPERM',
+  });
+  const probe = makeKillRecorder({ '-4242:0': 'EPERM' });
+  t.throws(
+    () => sweepLeaderlessGroup(4242, { kill: probe.kill, isLive: () => false }),
+    { message: 'EPERM' },
+  );
 });
 
 test('killProcessGroup ignores a child that never spawned', t => {

@@ -6,6 +6,12 @@ import type { CapTPOptions } from '@endo/captp';
 import type { Reader, Writer, Stream } from '@endo/stream';
 import type { PassableBytesReader, StreamNode } from '@endo/exo-stream';
 import type {
+  ShellEngine,
+  ShellInspectEngine,
+  ShellPolicy,
+} from '@endo/exo-shell';
+import type { SandboxSlice } from '@endo/host-spawner';
+import type {
   EndoGit,
   GitRemote,
   HistoryRewriteEndoGit,
@@ -366,14 +372,39 @@ export type GitProvisionOptions = {
  * Policy baked into a `shell` formula at `provideShell` time (formula-owned,
  * like `GitRemote`'s endpoint policy), so the capability reconstitutes across
  * daemon restart with the same bounds.  `env` and `searchPath` are host-private
- * construction inputs and are never revealed by `Shell.inspect()`.
+ * construction inputs and are never revealed by `Shell.inspect()`.  An absent
+ * `engine` means `'host'`, so formulas persisted before the field existed
+ * reconstitute unchanged.  `@endo/exo-shell` owns the type.
  */
-export type ShellPolicy = {
-  allowedCommands: string[];
-  timeoutMs: number;
-  maxOutputBytes: number;
-  env?: Record<string, string>;
-  searchPath?: string;
+export type { ShellPolicy, ShellEngine, ShellInspectEngine };
+
+/**
+ * The policy `EndoHost.provideShell` accepts.  A host-engine policy carries
+ * no factory; a sandbox-engine policy carries the `SandboxFactory`
+ * capability (the `@endo/sandbox` plugin's `make` result) the shell mints its
+ * slice from.  The factory is recorded as a formula dependency, never
+ * persisted inside the policy.
+ */
+export type ShellProvisionPolicy =
+  | (ShellPolicy & { engine?: 'host'; sandbox?: undefined })
+  | (ShellPolicy & { engine: 'sandbox'; sandbox: ERef<SandboxFactoryLike> });
+
+/**
+ * The part of an `@endo/sandbox` `SandboxHandle` a sandbox-engine shell
+ * uses: the spawner's slice surface plus disposal.
+ */
+export type SandboxSliceLike = SandboxSlice & {
+  dispose(): Promise<void>;
+};
+
+/**
+ * The part of an `@endo/sandbox` `SandboxFactory` the shell formula uses.
+ */
+export type SandboxFactoryLike = {
+  listBackends(): Promise<
+    Array<{ name: string; available: boolean; reason?: string }>
+  >;
+  make(options: object): Promise<SandboxSliceLike>;
 };
 
 export type ShellResult = {
@@ -388,6 +419,8 @@ export type ShellFormula = {
   type: 'shell';
   mountId: FormulaIdentifier;
   policy: ShellPolicy;
+  /** The `SandboxFactory` a `'sandbox'`-engine shell mints its slice from. */
+  sandboxId?: FormulaIdentifier;
 };
 
 /**
@@ -401,6 +434,7 @@ export interface EndoShell {
     allowedCommands: string[];
     timeoutMs: number;
     maxOutputBytes: number;
+    engine: ShellInspectEngine;
   }>;
   exec(
     command: string,
@@ -2010,12 +2044,15 @@ export interface EndoHost extends EndoAgent {
    * (never guest-visible) and the `policy` — allowlist, sanitized-env passlist,
    * timeout, and output cap — is baked into the formula so it survives restart.
    * Rejects a read-only mount: a child process holds OS-level write authority a
-   * read-only mount cannot bound.  Host-only; not exposed to guests.
+   * read-only mount cannot bound.  With `engine: 'sandbox'` the children run
+   * in a slice minted from `policy.sandbox`; it rejects when that factory
+   * reports no usable backend rather than falling back to the host engine.
+   * Host-only; not exposed to guests.
    */
   provideShell(
     mountCap: EndoMount,
     petName: string | string[],
-    policy: ShellPolicy,
+    policy: ShellProvisionPolicy,
   ): Promise<EndoShell>;
   /**
    * Capture exact local or remote runner/workspace dependencies. Passive
@@ -3162,6 +3199,7 @@ export interface DaemonCore {
   formulateShell: (
     mountId: FormulaIdentifier,
     policy: ShellPolicy,
+    sandboxId: FormulaIdentifier | undefined,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
   formulateEnvironment: (

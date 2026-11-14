@@ -92,7 +92,10 @@ const fixture = async ({ stored, provide, remove, write } = {}) => {
 
 test('creation, inspect, and idle restoration remain passive', async t => {
   const f = await fixture();
-  t.deepEqual(await E(f.owner.shell).inspect(), recipe.policy);
+  t.deepEqual(await E(f.owner.shell).inspect(), {
+    ...recipe.policy,
+    engine: 'environment',
+  });
   t.is((await E(f.owner.admin).inspect()).phase, 'idle');
   const restored = await makeEnvironment({
     id: 'exact-id',
@@ -100,7 +103,10 @@ test('creation, inspect, and idle restoration remain passive', async t => {
     directory: f.directory,
     resolve: f.resolve,
   });
-  t.deepEqual(await E(restored.shell).inspect(), recipe.policy);
+  t.deepEqual(await E(restored.shell).inspect(), {
+    ...recipe.policy,
+    engine: 'environment',
+  });
   t.deepEqual(f.calls, []);
 });
 

@@ -6,7 +6,7 @@ import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
 import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 import { makePodmanHostEnvironment } from '@endo/sandbox/podman-host-environment.js';
-import { DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } from '@endo/sandbox/spawner.js';
+import { DEFAULT_PROCESS_OUTPUT_BYTE_LIMIT } from '@endo/host-spawner/src/sandbox-spawner.js';
 import { readWorkloadBytes } from './src/workload-limits.js';
 import {
   PUBLIC_EGRESS_ENV_KEYS,

@@ -183,7 +183,11 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
     return stopping;
   };
   const shell = makeExo('EnvironmentShell', ShellInterface, {
-    inspect: async () => recipe.policy,
+    // Execution is delegated to the runner, whose `open()` may return any
+    // shell, so this one attests no confinement of its own: it reports the
+    // delegated engine rather than claiming a sandbox slice.  Inspection
+    // stays passive.
+    inspect: async () => harden({ ...recipe.policy, engine: 'environment' }),
     exec: (command, args, options = {}) => {
       let failedController;
       const pending = inOrder(async () => {

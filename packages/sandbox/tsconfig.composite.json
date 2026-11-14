@@ -24,6 +24,9 @@
       "path": "../exo-stream/tsconfig.composite.json"
     },
     {
+      "path": "../host-spawner/tsconfig.composite.json"
+    },
+    {
       "path": "../patterns/tsconfig.composite.json"
     },
     {

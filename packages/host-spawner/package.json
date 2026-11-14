@@ -2,7 +2,7 @@
   "name": "@endo/host-spawner",
   "version": "0.0.0",
   "private": true,
-  "description": "The host-side `Spawner` seam: `makeHostSpawner` wraps `child_process.spawn` behind a single `spawn(argv, opts) -> ProcessLike` contract whose async-iterable stdio mirrors `@endo/sandbox`'s DriverProcess, so a host engine and a sandbox slice engine are interchangeable. Lets daemon-side capabilities (e.g. the Shell formula) reach it without depending on an agent framework.",
+  "description": "The host-side `Spawner` seam: `makeHostSpawner` wraps `child_process.spawn` behind a single `spawn(argv, opts) -> ProcessLike` contract whose async-iterable stdio mirrors `@endo/sandbox`'s DriverProcess, and `makeSandboxSpawner` adapts an `@endo/sandbox` slice to the same contract, so the host engine and the sandbox engine are interchangeable. Lets daemon-side capabilities (e.g. the Shell formula) reach it without depending on an agent framework.",
   "keywords": [
     "endo",
     "spawn",
@@ -31,6 +31,10 @@
       "types": "./src/host-spawner.d.ts",
       "default": "./src/host-spawner.js"
     },
+    "./src/sandbox-spawner.js": {
+      "types": "./src/sandbox-spawner.d.ts",
+      "default": "./src/sandbox-spawner.js"
+    },
     "./types-index.js": {
       "types": "./types-index.types.d.ts",
       "default": "./types-index.js"
@@ -46,10 +50,16 @@
     "lint:types": "tsc"
   },
   "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^"
   },
   "devDependencies": {
+    "@endo/exo": "workspace:^",
     "@endo/init": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
