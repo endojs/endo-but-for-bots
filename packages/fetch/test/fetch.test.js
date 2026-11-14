@@ -109,7 +109,7 @@ test('cancelling the cancelled token aborts the transport request', async t => {
   const { transport, calls } = makeTransport({ pending });
   const { cancelled, cancel } = makeCancelKit();
 
-  const responseP = E(makeFetch({ fetch: transport })).fetch(
+  const responsePromise = E(makeFetch({ fetch: transport })).fetch(
     'https://example.com/',
     { cancelled },
   );
@@ -122,7 +122,7 @@ test('cancelling the cancelled token aborts the transport request', async t => {
   await cancelled.catch(() => {});
   t.true(signal.aborted);
   release(undefined);
-  await responseP;
+  await responsePromise;
 });
 
 test('closing the body reader early cancels the transport reader', async t => {

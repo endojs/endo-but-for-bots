@@ -34,8 +34,9 @@ exposes is the worker's own `fetch`.
 ## Surface
 
 - `fetch(url, options?)` resolves to a passable record
-  `{ status, statusText, ok, headers, url, body }`. `headers` is a record with
-  lowercased names. `body` is a `CloseablePassableBytesReader`
+  `{ type, status, statusText, ok, headers, url, body }`. `type` is the Fetch
+  Standard response type, such as `opaqueredirect` for a browser's filtered
+  manual redirect. `headers` is a record with lowercased names. `body` is a `CloseablePassableBytesReader`
   ([`@endo/exo-stream`](../exo-stream)), or `null` for a null-body response.
   `options` accepts `method`, `headers`, a string `body`, `redirect`
   (`'manual'`, `'follow'`, or `'error'`), and `cancelled`, an

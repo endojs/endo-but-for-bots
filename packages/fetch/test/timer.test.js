@@ -73,3 +73,29 @@ test('Timer over the ambient host powers resolves a delay and honors cancellatio
   await t.throwsAsync(() => pending, { message: 'stop' });
   t.true(Math.abs((await timer.now()) - Date.now()) < 60_000);
 });
+
+test('Timer accepts exactly the documented integer delay range', async t => {
+  /** @type {number[]} */
+  const scheduled = [];
+  const timer = makeTimer({
+    setTimeout: (callback, milliseconds) => {
+      scheduled.push(milliseconds);
+      callback();
+      return harden({});
+    },
+    clearTimeout: () => {},
+  });
+  t.is(await timer.delay(0), undefined);
+  t.is(await timer.delay(MAX_TIMER_DELAY_MILLISECONDS), undefined);
+  t.deepEqual(scheduled, [0, MAX_TIMER_DELAY_MILLISECONDS]);
+
+  for (const milliseconds of [-1, 0.5, NaN, Infinity, -Infinity]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => timer.delay(milliseconds),
+      { message: /must be an integer between/ },
+      String(milliseconds),
+    );
+  }
+  t.deepEqual(scheduled, [0, MAX_TIMER_DELAY_MILLISECONDS]);
+});

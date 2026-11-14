@@ -11,6 +11,8 @@ export type FetchRequestOptions = {
 };
 
 export type FetchResponse = {
+  /** The Fetch Standard response type, such as `basic` or `opaqueredirect`. */
+  type: string;
   status: number;
   statusText: string;
   ok: boolean;
@@ -36,6 +38,7 @@ export type TransportBody = {
 };
 
 export type TransportResponse = {
+  type?: string;
   status: number;
   statusText?: string;
   ok?: boolean;
@@ -53,7 +56,7 @@ export type Timer = {
   delay: (
     milliseconds: number,
     cancelled?: PromiseLike<never>,
-  ) => Promise<void>;
+  ) => Promise<undefined>;
   now: () => Promise<number>;
   help: () => string;
 };

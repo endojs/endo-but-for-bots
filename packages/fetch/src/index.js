@@ -2,23 +2,8 @@
 // spell-out-exempt: `ok` is the platform Response field this record mirrors.
 
 /**
- * `@endo/fetch` - the unconfined base plugin for outbound HTTP.
- *
- * Its `make()` adapts the unconfined worker's ambient `fetch` into the
- * passable, unfettered `Fetch` capability. `Fetch` makes no allowlist, rate,
- * size, policy, persistence, or revival decision, so granting it grants the
- * transport's whole network reach. The integration that provisions it
- * retains it and endows it, with a private state directory, to
- * `@endo/confined-fetch`; a guest never receives it.
- *
- * ```
- * E(host).makeUnconfined(workerName, '@endo/fetch', { powersName, resultName })
- * ```
- *
- * Requests and responses are passable so the capability can cross a vat
- * boundary: a request carries a string body and an optional `cancelled`
- * token, and a response is a record whose body is a
- * `CloseablePassableBytesReader`.
+ * `@endo/fetch`: `make()` returns a passable, unfettered `Fetch` over the
+ * worker's ambient `fetch`. See the README.
  */
 
 import { makeExo } from '@endo/exo';
@@ -48,6 +33,7 @@ export const FetchRequestOptionsShape = M.splitRecord(
 );
 
 export const FetchResponseShape = M.splitRecord({
+  type: M.string(),
   status: M.number(),
   statusText: M.string(),
   ok: M.boolean(),
@@ -67,7 +53,7 @@ const fetchHelp = `\
 Fetch - unfettered outbound HTTP. Not for guests.
 
   fetch(url, { method?, headers?, body?, redirect?, cancelled? })
-    -> { status, statusText, ok, headers, url, body }
+    -> { type, status, statusText, ok, headers, url, body }
 
 body is a CloseablePassableBytesReader, or null for a null-body response.
 Rejecting the cancelled token aborts the request and its body.
@@ -133,6 +119,9 @@ export const makeFetch = ({
           : bytesReaderFromIterator(readTransportBody(response.body));
       const status = Number(response.status);
       return harden({
+        // The Fetch Standard response type; downstream policy relies on
+        // `opaqueredirect` to refuse a browser's filtered manual redirect.
+        type: String(response.type ?? 'default'),
         status,
         statusText: String(response.statusText ?? ''),
         ok: response.ok ?? (status >= 200 && status < 300),

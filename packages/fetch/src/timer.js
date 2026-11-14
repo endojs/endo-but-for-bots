@@ -62,10 +62,12 @@ export const makeTimer = ({
     /**
      * @param {number} milliseconds
      * @param {PromiseLike<unknown>} [cancelled]
+     * @returns {Promise<undefined>}
      */
     delay: (milliseconds, cancelled) => {
       validateDelay(milliseconds);
-      return new Promise((resolve, reject) => {
+      /** @type {Promise<undefined>} */
+      const delayed = new Promise((resolve, reject) => {
         let settled = false;
         const timer = setTimeout(() => {
           settled = true;
@@ -90,6 +92,7 @@ export const makeTimer = ({
           );
         }
       });
+      return delayed;
     },
     now: async () => now(),
     help: () => timerHelp,
