@@ -297,6 +297,8 @@ jobs:
         run: podman pull docker.io/library/alpine:3.19
 
       - name: Run sandbox driver tests
+        env:
+          ENDO_SANDBOX_REQUIRE_BWRAP: '1'
         run: yarn workspace @endo/sandbox run test:drivers
 
   test-async-hooks:
