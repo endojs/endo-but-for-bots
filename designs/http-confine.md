@@ -52,12 +52,13 @@ redirect, timeout, revocation, and response byte-cap enforcement.
   pairs with `redirect: 'manual'`.
   Redirects are followed only when their `Location` resolves to an allowlisted
   HTTP(S) origin.
-- `makeRequestSignal(opts: { timeoutMs: number, cancellation?: Promise<never> })`
-  returns `{ signal: AbortSignal, dispose(): void }`.
+- `makeRequestCancellation(opts: { timeoutMs: number, cancellation?: Promise<never>, delay: Delay })`
+  returns `{ cancelled: Promise<never>, cancel(reason?): void, dispose(): void }`;
+  the `cancelled` token rejects on timeout or parent cancellation.
 
 ### Aggregate pipeline
 
-`makeHttpConfinement(policy, seams: { fetch: FetchLike, now: () => number })`
+`makeHttpConfinement(policy, seams: { fetch: FetchLike, delay: Delay })`
 returns:
 
 ```ts

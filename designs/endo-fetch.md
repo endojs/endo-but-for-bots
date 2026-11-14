@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-13 |
-| **Updated** | 2026-10-31 |
+| **Updated** | 2026-11-14 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 | **Supersedes** | [endoclaw-network-fetch](endoclaw-network-fetch.md) (provisioning; the capability shape is landed and carries over) |
@@ -97,22 +97,30 @@ The private state directory uses the reconciled virtual-file-system tree verbs:
 
 ```
 fetch-store/
-  config.json      # allowedOrigins, maxRequestsPerMinute, maxResponseBytes,
-                   # policyMode, revoked
-  bindings.json    # origin -> state, decidedAt, source, note?
+  policy.json      # { policy: { allowedOrigins, maxRequestsPerMinute,
+                   #             maxResponseBytes, policyMode, revoked },
+                   #   bindings: [ { target, state, decidedAt, decidedBy,
+                   #                 decisionMode, note? } ] }
 ```
 
-Writes are serialized and use write-then-`move` within the directory. Atomic
-within-directory `move` is a required backing contract, as in
-[endo-reminder](endo-reminder.md). The rate-limit window and audit ring remain
+Policy and bindings are one document, so a crash cannot pair a new policy with
+stale bindings. Writes are serialized and use write-then-`move` within the
+directory. Atomic within-directory `move` is a required backing contract, as in
+[endo-reminder](endo-reminder.md). A control mutation resolves only after its
+snapshot is committed, and rejects if the write fails, so a revocation is never
+acknowledged before it is durable. Only a missing document means first
+provisioning: a document that cannot be read, parsed, or validated refuses
+revival rather than reseeding from the provisioning `env`. The rate-limit window and audit ring remain
 ephemeral. They are bounded operational state, not durable policy.
 
 `@endo/exo-http-client` needs an `initialBindings` input and an
 `onPolicyChange(snapshot)` callback. The callback runs after every durable
 mutation, including a request-time trust-on-first-bind pin, so the confined
 plugin can persist a complete snapshot without putting VFS code in the pure
-capability package. `@endo/http-confine` changes only to stop reading ambient
-time, per § Time in a confined worker.
+capability package. `@endo/http-confine` stops reading ambient time, per
+§ Time in a confined worker. The same change also narrows redirect validation
+to the Fetch redirect statuses, refuses opaque redirects, and forbids the
+method-override request headers.
 
 ### Time in a confined worker
 
@@ -238,8 +246,7 @@ without the endowed base and that a guest receives only `HttpClient`.
 
 ### Phase 2: Durable policy and TOFU bindings (S)
 
-Add serialized `config.json` / `bindings.json` persistence in the confined
-package. Add `initialBindings` and `onPolicyChange` to
+Add serialized `policy.json` persistence in the confined package. Add `initialBindings` and `onPolicyChange` to
 `@endo/exo-http-client`. Tests prove restart reconstitution, durable
 revocation, and a request-time TOFU pin that survives restart and remains
 revocable.
