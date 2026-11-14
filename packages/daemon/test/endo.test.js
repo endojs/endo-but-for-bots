@@ -7205,6 +7205,37 @@ test('submitOnce refuses a malformed attempt', async t => {
   t.is((await listValueMessages(guest)).length, 0);
 });
 
+test('submitOnce refuses an attempt that already answered another form', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formA = await sendAnswerForm(host, guest);
+  await E(guest).form(
+    '@host',
+    'Twice',
+    harden([{ name: 'answer', label: 'Answer' }]),
+  );
+  const forms = (await E(host).listMessages()).filter(
+    message => message.type === 'form',
+  );
+  t.is(forms.length, 2);
+  const formB = forms[1];
+  t.not(formB.messageId, formA.messageId);
+
+  const first = await E(host).submitOnce(
+    formA.number,
+    harden({ answer: 'a' }),
+    'shared',
+  );
+  t.true(first.first);
+  await t.throwsAsync(
+    () => E(host).submitOnce(formB.number, harden({ answer: 'b' }), 'shared'),
+    { message: /already answered another form/ },
+  );
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1);
+  t.is(guestValues[0].replyTo, formA.messageId);
+});
+
 test('submitOnce attempts go with their dismissed form, and are bounded per form', async t => {
   const { host } = await prepareHost(t);
   const guest = await E(host).provideGuest('guest');
