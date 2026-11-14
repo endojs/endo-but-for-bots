@@ -34,6 +34,10 @@
       "types": "./src/interfaces.d.ts",
       "default": "./src/interfaces.js"
     },
+    "./engine-cases.js": {
+      "types": "./src/engine-cases.d.ts",
+      "default": "./src/engine-cases.js"
+    },
     "./types-index.js": {
       "types": "./types-index.types.d.ts",
       "default": "./types-index.js"

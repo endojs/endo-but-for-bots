@@ -1,6 +1,6 @@
 // @ts-check
 /** @import { EndoGit, WritableGitWorktree } from '@endo/exo-git' */
-/** @import { RegistryFormula } from './types.js' */
+/** @import { RegistryFormula, SandboxFactoryLike } from './types.js' */
 /* eslint-disable no-await-in-loop */
 /* global clearTimeout, process, setTimeout */
 
@@ -130,6 +130,10 @@ import {
   ReadableTreeInterface,
   EndoInterface,
 } from './interfaces.js';
+import {
+  makeSandboxShellEngine,
+  resolveShellFormulaEngine,
+} from './shell-engine.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
@@ -917,7 +921,12 @@ const makeDaemonCore = async (
       case 'git':
         return [['mount', formula.mountId]];
       case 'shell':
-        return [['mount', formula.mountId]];
+        return formula.sandboxId === undefined
+          ? [['mount', formula.mountId]]
+          : [
+              ['mount', formula.mountId],
+              ['sandbox', formula.sandboxId],
+            ];
       case 'environment':
         return [
           ['runner', formula.runner],
@@ -3948,7 +3957,7 @@ const makeDaemonCore = async (
       context.assertActive();
       return kit[formula.facet];
     },
-    shell: async ({ mountId, policy }, context) => {
+    shell: async ({ mountId, policy, sandboxId }, context) => {
       context.thisDiesIfThatDies(mountId);
       const mount = await provide(mountId);
       const backing = getMountBacking(mount);
@@ -3972,6 +3981,38 @@ const makeDaemonCore = async (
           X`Shell requires a writable mount; refusing to construct a shell over a read-only mount`,
         );
       }
+      // A formula persisted before `engine` existed is a host-engine shell;
+      // an unknown engine fails closed.
+      const engine = resolveShellFormulaEngine(policy.engine);
+      const shellPolicy = harden({
+        allowedCommands: harden([...policy.allowedCommands]),
+        timeoutMs: policy.timeoutMs,
+        maxOutputBytes: policy.maxOutputBytes,
+        env: harden({ ...(policy.env || {}) }),
+        engine,
+      });
+      if (engine === 'sandbox') {
+        if (sandboxId === undefined) {
+          throw makeError(
+            X`Shell formula with engine 'sandbox' names no sandbox factory`,
+          );
+        }
+        context.thisDiesIfThatDies(sandboxId);
+        const factory = /** @type {ERef<SandboxFactoryLike>} */ (
+          await provide(sandboxId)
+        );
+        const { cwd, spawner } = await makeSandboxShellEngine({
+          factory,
+          mount,
+          context,
+        });
+        return makeShell({
+          cwd,
+          policy: shellPolicy,
+          spawner,
+          readOnly: false,
+        });
+      }
       // PATH is policy-owned and baked at provideShell time.  A legacy formula
       // without `searchPath` gets an empty path rather than reincarnating with
       // ambient daemon process authority.
@@ -3989,12 +4030,7 @@ const makeDaemonCore = async (
       });
       return makeShell({
         cwd: backing.currentDir,
-        policy: harden({
-          allowedCommands: harden([...policy.allowedCommands]),
-          timeoutMs: policy.timeoutMs,
-          maxOutputBytes: policy.maxOutputBytes,
-          env: harden({ ...(policy.env || {}) }),
-        }),
+        policy: shellPolicy,
         spawner,
         readOnly: false,
       });
@@ -5480,7 +5516,7 @@ const makeDaemonCore = async (
   };
 
   /** @type {DaemonCore['formulateShell']} */
-  const formulateShell = async (mountId, policy, deferredTasks) => {
+  const formulateShell = async (mountId, policy, sandboxId, deferredTasks) => {
     return /** @type {FormulateResult<import('./types.js').EndoShell>} */ (
       withFormulaGraphLock(async () => {
         await null;
@@ -5500,6 +5536,7 @@ const makeDaemonCore = async (
           type: 'shell',
           mountId,
           policy,
+          ...(sandboxId === undefined ? {} : { sandboxId }),
         });
 
         return formulate(formulaNumber, formula);

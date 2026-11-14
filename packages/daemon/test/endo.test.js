@@ -590,7 +590,10 @@ testNeedsNodeWorker(
       );
       await E(host).remove('runner');
       await E(host).remove('workspace');
-      t.deepEqual(await E(kit.shell).inspect(), recipe.policy);
+      t.deepEqual(await E(kit.shell).inspect(), {
+        ...recipe.policy,
+        engine: 'environment',
+      });
       t.is((await E(kit.admin).inspect()).phase, 'idle');
     }
     await restart(config);
@@ -599,7 +602,10 @@ testNeedsNodeWorker(
       const audit = await E(host).lookup('audit');
       const shell = await E(host).lookup('shell');
       const admin = await E(host).lookup('environment-admin');
-      t.deepEqual(await E(shell).inspect(), recipe.policy);
+      t.deepEqual(await E(shell).inspect(), {
+        ...recipe.policy,
+        engine: 'environment',
+      });
       t.is((await E(admin).inspect()).phase, 'idle');
       t.is(await E(audit).readText('runner-revivals'), '1');
       t.is(await E(audit).readText('revivals-original'), '1');
@@ -5522,7 +5528,7 @@ testNeedsNodeWorker.serial(
     );
     await E(local).storeLocator(['shell'], await E(remote).locate('shell'));
     const shell = await E(local).lookup('shell');
-    t.deepEqual(await E(shell).inspect(), policy);
+    t.deepEqual(await E(shell).inspect(), { ...policy, engine: 'environment' });
     t.is((await E(shell).exec('sh', harden([]))).stdout, 'remote-workspace');
     t.false(await E(local).has('environment-admin'));
     await E(kit.admin).stop();
@@ -5530,6 +5536,108 @@ testNeedsNodeWorker.serial(
     await t.throwsAsync(E(shell).exec('sh', harden([])), {
       message: /disposed/,
     });
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'provideShell sandbox engine persists its factory and revives sandboxed after restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t, { configName: 'sbx' });
+    const factorySpecifier = new URL(
+      './_stub-sandbox-factory.js',
+      import.meta.url,
+    ).href;
+    const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sbx-shell-'));
+    t.teardown(() => fsp.rm(workDir, { recursive: true, force: true }));
+    const policy = harden({
+      allowedCommands: ['sh'],
+      timeoutMs: 1000,
+      maxOutputBytes: 4096,
+    });
+    /**
+     * @param {any} host
+     * @param {string} name
+     */
+    const readCount = async (host, name) => {
+      const text = await E(host).maybeReadText(['audit', name]);
+      return Number(text || '0');
+    };
+    let shellId;
+    let sandboxId;
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      const sandbox = await E(host).makeUnconfined(
+        'sandbox-worker',
+        factorySpecifier,
+        { powersName: 'audit', resultName: 'sandbox-factory' },
+      );
+      const mount = await E(host).provideMount(workDir, 'work');
+
+      // A sandbox engine without a factory, and a factory without the
+      // sandbox engine, are both refused before any formula is written.
+      await t.throwsAsync(
+        E(host).provideShell(mount, 'no-factory', {
+          ...policy,
+          engine: 'sandbox',
+        }),
+        { message: /engine 'sandbox' requires policy\.sandbox/ },
+      );
+      await t.throwsAsync(
+        E(host).provideShell(mount, 'stray-factory', { ...policy, sandbox }),
+        { message: /only meaningful with engine 'sandbox'/ },
+      );
+      t.false(await E(host).has('no-factory'));
+      t.false(await E(host).has('stray-factory'));
+
+      const shell = await E(host).provideShell(mount, 'shell', {
+        ...policy,
+        engine: 'sandbox',
+        sandbox,
+      });
+      t.deepEqual(await E(shell).inspect(), { ...policy, engine: 'sandbox' });
+      t.is(await readCount(host, 'makes'), 1);
+      t.deepEqual(
+        JSON.parse(await E(host).maybeReadText(['audit', 'last-make'])),
+        {
+          rootfs: { kind: 'host-bind' },
+          mounts: [{ innerPath: '/work', mode: 'rw' }],
+          network: 'none',
+          seccomp: 'default',
+          env: { LC_ALL: 'C' },
+          cwd: '/work',
+        },
+      );
+
+      shellId = await E(host).identify('shell');
+      sandboxId = await E(host).identify('sandbox-factory');
+      t.like(readFormulaFromDb(config.statePath, shellId), {
+        type: 'shell',
+        sandboxId,
+        policy: { engine: 'sandbox' },
+      });
+      t.false('sandbox' in readFormulaFromDb(config.statePath, shellId).policy);
+
+      // The shell alone retains its factory: forgetting the factory's pet
+      // name must not let it be collected.
+      await E(host).remove('sandbox-factory');
+      t.true(formulaExistsInDb(config.statePath, sandboxId));
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      t.true(formulaExistsInDb(config.statePath, sandboxId));
+      const shell = await E(host).lookup('shell');
+      t.is(await E(host).identify('shell'), shellId);
+      t.deepEqual(await E(shell).inspect(), { ...policy, engine: 'sandbox' });
+      // The revived incarnation minted its own slice from the persisted
+      // factory rather than falling back to the host engine.
+      t.is(await readCount(host, 'makes'), 2);
+      await t.throwsAsync(E(shell).exec('sh', harden([])), {
+        message: /stub sandbox slice does not spawn/,
+      });
+    }
   },
 );
 

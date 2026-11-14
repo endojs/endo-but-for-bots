@@ -18,6 +18,7 @@ import { makeHostSpawner } from '@endo/host-spawner';
 
 import { makeShell } from '../src/shell.js';
 import { ShellInterface } from '../src/interfaces.js';
+import { engineCases } from '../src/engine-cases.js';
 
 /**
  * A fully controllable in-memory {@link Spawner}.  Each spawn records the argv
@@ -297,6 +298,7 @@ test('inspect reveals the policy bounds but no host path (cwd/env/searchPath)', 
     allowedCommands: ['echo'],
     timeoutMs: 1000,
     maxOutputBytes: 2048,
+    engine: 'host',
   });
   const serialized = JSON.stringify(revealed);
   t.false(serialized.includes('secret'), 'cwd path did not leak');
@@ -318,12 +320,54 @@ test("inspect's returns-guard is a closed record: a stray host-path field is rej
     allowedCommands: ['echo'],
     timeoutMs: 1000,
     maxOutputBytes: 2048,
+    engine: 'sandbox',
   });
-  t.true(matches(bounds, returnGuard), 'the three named fields match');
+  t.true(matches(bounds, returnGuard), 'the four named fields match');
+  t.false(
+    matches(harden({ ...bounds, engine: 'container' }), returnGuard),
+    'an unknown engine is rejected',
+  );
   t.false(
     matches(harden({ ...bounds, cwd: '/secret/host/path' }), returnGuard),
     'a stray host-path field is rejected by the closed record',
   );
+});
+
+test('inspect reports the engine the shell was built with', async t => {
+  const { spawner } = makeFakeSpawner(() => ({ stdout: [] }));
+  const shell = makeShell({
+    cwd: '/work',
+    policy: harden({ ...basePolicy, engine: 'sandbox' }),
+    spawner,
+  });
+  t.is((await shell.inspect()).engine, 'sandbox');
+  t.throws(
+    () =>
+      makeShell({
+        cwd: '/work',
+        policy: harden({
+          ...basePolicy,
+          engine: /** @type {any} */ ('container'),
+        }),
+        spawner,
+      }),
+    { message: /policy.engine must be/ },
+  );
+});
+
+test('the spawner is told the timeout and the output cap', async t => {
+  const { spawner, calls } = makeFakeSpawner(() => ({ stdout: [bytes('ok')] }));
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: basePolicy,
+    spawner,
+    killGraceMs: 500,
+  });
+  await shell.exec('echo', ['ok'], { timeoutMs: 200 });
+  // The per-call timeout reaches the engine unchanged, not padded by the
+  // SIGKILL grace.
+  t.is(calls[0].opts.timeoutMs, 200);
+  t.is(calls[0].opts.maxOutputBytes, basePolicy.maxOutputBytes);
 });
 
 test('a read-only mount is refused: a shell that cannot mutate is not a shell', t => {
@@ -515,3 +559,34 @@ test('host engine: the child sees only the policy env, never the host process en
   const cwd = await shell.exec('pwd', []);
   t.is(cwd.stdout.trim(), fs.realpathSync(root));
 });
+
+for (const engineCase of engineCases) {
+  test(`host engine conformance: ${engineCase.name}`, async t => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'exo-shell-'),
+    );
+    t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+    const searchPath = process.env.PATH || '/usr/bin:/bin';
+    const shell = makeShell({
+      cwd: root,
+      policy: harden({
+        allowedCommands: [engineCase.command],
+        timeoutMs: 10_000,
+        maxOutputBytes: 65_536,
+        ...engineCase.policy,
+      }),
+      spawner: makeHostSpawner({
+        searchPath,
+        defaultEnv: { PATH: searchPath, LC_ALL: 'C' },
+        killProcessGroup: true,
+      }),
+    });
+    const outcome = shell.exec(engineCase.command, engineCase.commandArguments);
+    if (engineCase.rejects !== undefined) {
+      await t.throwsAsync(outcome, { message: engineCase.rejects });
+      return;
+    }
+    const result = await outcome;
+    t.deepEqual(engineCase.observe?.(result), engineCase.expected);
+  });
+}
