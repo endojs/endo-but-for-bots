@@ -1,7 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
-import { E } from '@endo/far';
+import { E, Far } from '@endo/far';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
@@ -538,15 +538,94 @@ test('policy-change notifications run in a later event', async t => {
   /** @type {import('../src/types.js').PolicySnapshot[]} */
   const snapshots = [];
   const { control } = makeHttpClientAndControl({
-    onPolicyChange: snapshot => snapshots.push(snapshot),
+    onPolicyChange: snapshot => {
+      snapshots.push(snapshot);
+    },
   });
 
-  control.setMaxResponseBytes(9);
+  const settled = control.setMaxResponseBytes(9);
   t.is(snapshots.length, 0);
 
-  await Promise.resolve();
+  await settled;
   t.is(snapshots.length, 1);
   t.is(snapshots[0].policy.maxResponseBytes, 9);
+});
+
+test('a control mutation resolves only after its snapshot is persisted', async t => {
+  /** @type {() => void} */
+  let commit = () => {};
+  /** @type {Array<import('../src/types.js').PolicySnapshot>} */
+  const committed = [];
+  const { client, control } = makeHttpClientAndControl({
+    fetch: makeFakeFetch().fetch,
+    allowedOrigins: [ALLOWED],
+    onPolicyChange: snapshot =>
+      /** @type {Promise<void>} */ (
+        new Promise(resolve => {
+          commit = () => {
+            committed.push(snapshot);
+            resolve(undefined);
+          };
+        })
+      ),
+  });
+
+  let acknowledged = false;
+  const revoked = E(control)
+    .revoke()
+    .then(() => {
+      acknowledged = true;
+    });
+  // Revocation takes effect at once, before it is durable.
+  await t.throwsAsync(() => E(client).fetch(`${ALLOWED}/`), {
+    message: /revoked/,
+  });
+  t.false(acknowledged);
+
+  commit();
+  await revoked;
+  t.true(acknowledged);
+  t.true(committed[0].policy.revoked);
+});
+
+test('a control mutation rejects when persistence fails, but still applies', async t => {
+  const { client, control } = makeHttpClientAndControl({
+    fetch: makeFakeFetch().fetch,
+    allowedOrigins: [ALLOWED],
+    onPolicyChange: async () => {
+      throw Error('disk full');
+    },
+  });
+
+  await t.throwsAsync(() => E(control).removeAllowedOrigin(ALLOWED), {
+    message: /disk full/,
+  });
+  await t.throwsAsync(() => E(client).fetch(`${ALLOWED}/`), {
+    message: /Policy refuses|not in the allowed-origin list/,
+  });
+  await t.throwsAsync(() => E(control).revoke(), { message: /disk full/ });
+  t.true(await E(control).isRevoked());
+});
+
+test('a remote policy authority is sent a hardened decision request', async t => {
+  /** @type {unknown[]} */
+  const requests = [];
+  const policyAuthority = Far('PolicyAuthority', {
+    decide: request => {
+      requests.push(request);
+      return 'allow';
+    },
+  });
+  const { client } = makeHttpClientAndControl({
+    fetch: makeFakeFetch().fetch,
+    policyMode: 'tofu-attenuator',
+    policyAuthority,
+  });
+
+  await E(client).fetch(`${ALLOWED}/`);
+  t.is(requests.length, 1);
+  t.true(Object.isFrozen(requests[0]));
+  t.like(requests[0], { kind: 'http-origin', target: ALLOWED });
 });
 
 test('origin configuration rejects non-http schemes and path-bearing entries', t => {

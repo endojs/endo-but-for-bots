@@ -52,14 +52,14 @@ interface HttpClientControl {
   setAllowedOrigins(origins: string[]): Promise<void>;
   addAllowedOrigin(origin: string): Promise<void>;
   removeAllowedOrigin(origin: string): Promise<void>;
-  setMaxRequestsPerMinute(n: number): void;
-  setMaxResponseBytes(n: number): void;
-  revoke(): void;
+  setMaxRequestsPerMinute(limit: number): Promise<void>;
+  setMaxResponseBytes(limit: number): Promise<void>;
+  revoke(): Promise<void>;
   isRevoked(): boolean;
   listBindings(): Binding[];
   revokeBinding(origin: string): Promise<void>;
   unpin(origin: string): Promise<void>;
-  setPolicyMode(mode: PolicyMode): void;
+  setPolicyMode(mode: PolicyMode): Promise<void>;
   listAuditEntries(options?: { since?: number, limit?: number }): AuditEntry[];
   help(): string;
 }
@@ -96,6 +96,12 @@ callers.
 For an exact-fill response, `truncated()` is therefore `true` even if no
 additional byte was observed or dropped; the client cancels the upstream reader
 as soon as the cap is full.
+
+Every `HttpClientControl` mutator returns a promise. When the maker receives
+an `onPolicyChange(snapshot)` callback, the mutator takes effect at once but
+resolves only after the callback's returned promise fulfills, and rejects if it
+rejects. A provisioning plugin that writes the snapshot to durable storage
+therefore never acknowledges a revocation that a restart could undo.
 
 `removeAllowedOrigin(origin)` is intentionally conservative: it removes the
 static allowlist entry and records a `Revoked` binding for that origin, so TOFU

@@ -4,7 +4,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/far';
-import { makeHttpClientAndControl } from '@endo/exo-http-client';
+import {
+  makeFetchLikeFromPlatformFetch,
+  makeHttpClientAndControl,
+} from '@endo/exo-http-client';
 
 import { normalizeHttpClientPolicy } from '../src/host.js';
 
@@ -73,7 +76,7 @@ const makeFakeFetch = ({ body = 'ok', status = 200 } = {}) => {
  * @param {import('../src/types.js').HttpClientPolicy} policy
  * @param {import('@endo/exo-http-client').FetchLike} fetch
  * @param {() => number} [now]
- * @param {(ms: number, cancelled?: Promise<never>) => Promise<undefined>} [delay]
+ * @param {(milliseconds: number, cancelled?: Promise<never>) => Promise<undefined>} [delay]
  */
 const makeHttpClientLikeFormulaMaker = (
   policy,
@@ -231,11 +234,11 @@ test('provideHttpClient composition: the rate limit is enforced per minute', asy
   const now = () => clock;
   // The limiter's window is driven by the `delay` seam, not `now`: model it
   // with a manual scheduler so the test advances the window deterministically.
-  /** @type {Array<{ ms: number, resolve: () => void }>} */
+  /** @type {Array<{ milliseconds: number, resolve: () => void }>} */
   const timers = [];
-  const delay = ms =>
+  const delay = milliseconds =>
     new Promise(resolve => {
-      timers.push({ ms, resolve: () => resolve(undefined) });
+      timers.push({ milliseconds, resolve: () => resolve(undefined) });
     });
   const throttledPolicy = normalizeHttpClientPolicy({
     allowedOrigins: ['https://api.example.com'],
@@ -253,10 +256,41 @@ test('provideHttpClient composition: the rate limit is enforced per minute', asy
   await t.throwsAsync(() => E(client).fetch('https://api.example.com/b'));
   // Advance past the one-minute window; the budget refills.
   clock += 61_000;
-  for (const timer of timers.filter(({ ms }) => ms === 60_000)) {
+  for (const timer of timers.filter(
+    ({ milliseconds }) => milliseconds === 60_000,
+  )) {
     timer.resolve();
   }
   await new Promise(resolve => setTimeout(resolve, 0));
   const refilled = await E(client).fetch('https://api.example.com/c');
   t.is(await E(refilled).status(), 200);
+});
+
+test('a request timeout aborts the platform fetch the daemon maker adapts', async t => {
+  /** @type {AbortSignal[]} */
+  const signals = [];
+  // A platform fetch that, like native `fetch`, honors only `signal`.
+  const platformFetch = (_url, init = {}) => {
+    signals.push(init.signal);
+    return new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    });
+  };
+  const { client } = makeHttpClientAndControl({
+    // The same adapter the daemon's `http-client` maker wraps around
+    // `globalThis.fetch`.
+    fetch: makeFetchLikeFromPlatformFetch(platformFetch),
+    // Expire the request deadline at once; leave the rate window open.
+    delay: (milliseconds, cancelled) =>
+      milliseconds === 60_000
+        ? new Promise((_resolve, reject) => {
+            cancelled.catch(reject);
+          })
+        : Promise.resolve(undefined),
+    allowedOrigins: harden([...basePolicy.allowedOrigins]),
+  });
+
+  await t.throwsAsync(() => E(client).fetch('https://api.example.com/slow'));
+  t.is(signals.length, 1);
+  t.true(signals[0].aborted);
 });

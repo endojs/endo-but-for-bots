@@ -86,6 +86,8 @@ export type FetchLikeBodyReader = {
 };
 
 export type FetchLikeResponse = {
+  // The Fetch Standard response type; `opaqueredirect` is refused.
+  type?: string;
   // Null for null-body responses (204, 205, 304, and answers to HEAD).
   body?: {
     getReader: () => FetchLikeBodyReader;
@@ -133,14 +135,14 @@ export type HttpClientControl = {
   setAllowedOrigins: (origins: string[]) => Promise<void>;
   addAllowedOrigin: (origin: string) => Promise<void>;
   removeAllowedOrigin: (origin: string) => Promise<void>;
-  setMaxRequestsPerMinute: (n: number) => void;
-  setMaxResponseBytes: (n: number) => void;
-  revoke: () => void;
+  setMaxRequestsPerMinute: (limit: number) => Promise<void>;
+  setMaxResponseBytes: (limit: number) => Promise<void>;
+  revoke: () => Promise<void>;
   isRevoked: () => boolean;
   listBindings: () => Binding[];
   revokeBinding: (origin: string) => Promise<void>;
   unpin: (origin: string) => Promise<void>;
-  setPolicyMode: (mode: PolicyMode) => void;
+  setPolicyMode: (mode: PolicyMode) => Promise<void>;
   listAuditEntries: (options?: {
     since?: number;
     limit?: number;

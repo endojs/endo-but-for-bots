@@ -22,6 +22,7 @@
  */
 
 export {
+  makeFetchLikeFromPlatformFetch,
   makeHttpClientAndControl,
   makeHttpClientKit,
   makeTrustOnFirstBindPolicyAdapter,
