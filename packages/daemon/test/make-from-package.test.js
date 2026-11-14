@@ -27,6 +27,8 @@ import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { ZipReader } from '@endo/zip/reader.js';
 import { makeCancelKit } from '@endo/cancel';
+import { decodeBase64 } from '@endo/base64';
+import { encodeHex } from '@endo/hex';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import {
   tarFileHeader,
@@ -149,6 +151,25 @@ const startRegistry = async () => {
 
 const contexts = [];
 
+const contentPathOf = (statePath, hashBase64) =>
+  path.join(statePath, 'store-sha256', encodeHex(decodeBase64(hashBase64)));
+
+const waitForCondition = async (predicate, message) => {
+  await null;
+  const startTime = Date.now();
+  while (true) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await predicate()) {
+      return;
+    }
+    if (Date.now() - startTime > 5000) {
+      throw new Error(`Timed out waiting for ${message}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+};
+
 test.afterEach.always(async () => {
   while (contexts.length > 0) {
     const { cancel, config, root, registry } = contexts.pop();
@@ -178,6 +199,7 @@ const prepare = async () => {
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
+    gcEnabled: true,
   };
   contexts.push({ cancel, config, root, registry });
   // The daemon process reads its registry from the environment it inherits.
@@ -205,13 +227,19 @@ const prepare = async () => {
       const ProbeInterface = M.interface('Probe', {
         majors: M.call().returns(M.record()),
         getEnvVar: M.call(M.string()).returns(M.opt(M.string())),
+        marker: M.call().returns(M.promise()),
       });
       export const make = (_powers, _context, { env }) =>
         makeExo('Probe', ProbeInterface, {
           majors: () => harden({ entry: major, dependency: dependencyMajor }),
           getEnvVar: name => env[name],
+          marker: async () => (await import('./marker.js')).marker,
         });
     `,
+  );
+  await fsp.writeFile(
+    path.join(sourceDirectory, 'marker.js'),
+    "export const marker = 'original';\n",
   );
 
   const connect = async () => {
@@ -227,7 +255,7 @@ const prepare = async () => {
   await E(host).provideMount(sourceDirectory, 'entry-mount', {
     readOnly: true,
   });
-  return { host, config, connect };
+  return { host, config, connect, sourceDirectory };
 };
 
 test.serial(
@@ -240,6 +268,78 @@ test.serial(
     // dep-a@^1 selects the minimal 1.0.0 under MVS; dep-b links dep-a@2.
     t.deepEqual(await E(caplet).majors(), { entry: 1, dependency: 2 });
     t.is(await E(caplet).getEnvVar('HELLO'), 'from-package');
+  },
+);
+
+test.serial(
+  'makeFromPackage snapshots a live mount before a deferred import',
+  async t => {
+    const { host, sourceDirectory } = await prepare();
+    const caplet = await E(host).makeFromPackage(undefined, 'entry-mount');
+    await fsp.writeFile(
+      path.join(sourceDirectory, 'marker.js'),
+      "export const marker = 'changed';\n",
+    );
+    t.is(await E(caplet).marker(), 'original');
+  },
+);
+
+test.serial(
+  'makeFromPackage retains its snapshot only for the caplet lifetime',
+  async t => {
+    const { host, config } = await prepare();
+    await E(host).makeFromPackage(undefined, 'entry-mount', {
+      resultName: 'snapshot-caplet',
+    });
+    const capletId = await E(host).identify('snapshot-caplet');
+    const mountId = await E(host).identify('entry-mount');
+    const diagnostics = await E(host).diagnostics();
+    const capletFormula = await E(diagnostics).getFormula(capletId);
+    const snapshotId = capletFormula.properties.source.identifier;
+    t.not(snapshotId, mountId);
+    t.is((await E(diagnostics).getFormula(snapshotId)).type, 'readable-tree');
+
+    await E(host).storeIdentifier('snapshot-alias', snapshotId);
+    const snapshot = await E(host).lookup('snapshot-alias');
+    const contentPath = contentPathOf(
+      config.statePath,
+      await E(snapshot).sha256(),
+    );
+    t.true(fs.existsSync(contentPath));
+    await E(host).remove('snapshot-alias');
+    t.true(
+      fs.existsSync(contentPath),
+      'caplet retains snapshot content after its temporary alias is removed',
+    );
+
+    await E(host).cancel('snapshot-caplet');
+    await E(host).remove('snapshot-caplet');
+    await waitForCondition(
+      async () => !fs.existsSync(contentPath),
+      'snapshot content collection after the caplet ends',
+    );
+    await t.throwsAsync(E(diagnostics).getFormula(snapshotId), {
+      message: /unknown identifier/,
+    });
+  },
+);
+
+test.serial(
+  'makeFromPackage uses a readable-tree source without re-snapshotting',
+  async t => {
+    const { host } = await prepare();
+    const mount = await E(host).lookup('entry-mount');
+    await E(host).storeTree(await E(mount).snapshot(), 'entry-tree');
+    const caplet = await E(host).makeFromPackage(undefined, 'entry-tree', {
+      resultName: 'tree-caplet',
+    });
+    t.is(await E(caplet).marker(), 'original');
+
+    const treeId = await E(host).identify('entry-tree');
+    const capletId = await E(host).identify('tree-caplet');
+    const diagnostics = await E(host).diagnostics();
+    const capletFormula = await E(diagnostics).getFormula(capletId);
+    t.is(capletFormula.properties.source.identifier, treeId);
   },
 );
 
