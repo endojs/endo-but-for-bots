@@ -1,17 +1,17 @@
 // @ts-check
 
-/** @import { Delay as CancellableDelay } from './src/types.js' */
+/** @import { Delay as CancellableDelay, ConfinedRequest as ConfinedRequestType, ConfinedResponse as ConfinedResponseType, ConfinedResponseSummary as ConfinedResponseSummaryType, FetchLike as FetchLikeType, FetchLikeBodyReader as FetchLikeBodyReaderType, FetchLikeRequestOptions as FetchLikeRequestOptionsType, FetchLikeResponse as FetchLikeResponseType, HttpConfinementPolicy as HttpConfinementPolicyType } from './src/types.js' */
 
 /**
- * @typedef {import('./src/types.js').ConfinedRequest} ConfinedRequest
- * @typedef {import('./src/types.js').ConfinedResponse} ConfinedResponse
- * @typedef {import('./src/types.js').ConfinedResponseSummary} ConfinedResponseSummary
+ * @typedef {ConfinedRequestType} ConfinedRequest
+ * @typedef {ConfinedResponseType} ConfinedResponse
+ * @typedef {ConfinedResponseSummaryType} ConfinedResponseSummary
  * @typedef {CancellableDelay} Delay
- * @typedef {import('./src/types.js').FetchLike} FetchLike
- * @typedef {import('./src/types.js').FetchLikeBodyReader} FetchLikeBodyReader
- * @typedef {import('./src/types.js').FetchLikeRequestOptions} FetchLikeRequestOptions
- * @typedef {import('./src/types.js').FetchLikeResponse} FetchLikeResponse
- * @typedef {import('./src/types.js').HttpConfinementPolicy} HttpConfinementPolicy
+ * @typedef {FetchLikeType} FetchLike
+ * @typedef {FetchLikeBodyReaderType} FetchLikeBodyReader
+ * @typedef {FetchLikeRequestOptionsType} FetchLikeRequestOptions
+ * @typedef {FetchLikeResponseType} FetchLikeResponse
+ * @typedef {HttpConfinementPolicyType} HttpConfinementPolicy
  */
 
 export {
