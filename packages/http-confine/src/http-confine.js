@@ -1,6 +1,5 @@
 // @ts-check
-/* global AbortController, clearTimeout, setTimeout */
-
+import { makeCancelKit } from '@endo/cancel';
 import { makeError, q, X } from '@endo/errors';
 
 /**
@@ -8,6 +7,7 @@ import { makeError, q, X } from '@endo/errors';
  *   ConfinedRequest,
  *   ConfinedResponse,
  *   ConfinedResponseSummary,
+ *   Delay,
  *   FetchLike,
  *   FetchLikeBodyReader,
  *   FetchLikeResponse,
@@ -51,15 +51,19 @@ const FORBIDDEN_HEADER_NAMES = freeze(
     'transfer-encoding',
     'upgrade',
     'via',
+    // Method-override headers would let an allowlisted method smuggle another.
+    'x-http-method',
+    'x-http-method-override',
+    'x-method-override',
   ]),
 );
+
+// https://fetch.spec.whatwg.org/#redirect-status
+const REDIRECT_STATUSES = freeze(new Set([301, 302, 303, 307, 308]));
 
 const HTTP_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 // eslint-disable-next-line no-control-regex
 const HTTP_HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
-/** @type {WeakMap<AbortSignal, AbortController>} */
-const signalToController = new WeakMap();
-
 /**
  * @param {string} name
  * @returns {new (message?: string) => Error}
@@ -139,6 +143,26 @@ const validatePositiveInteger = (value, name) => {
     );
   }
   return value;
+};
+
+// ECMA-262 hosts clamp timer delays to a signed 32-bit integer, and the
+// endowed Timer rejects anything larger, so a longer timeout is refused here,
+// at the policy boundary, rather than surfacing as a request-time timer error.
+const MAX_TIMER_DELAY_MILLISECONDS = 2 ** 31 - 1;
+
+/**
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {number}
+ */
+const validateTimeout = (value, name) => {
+  const milliseconds = validatePositiveInteger(value, name);
+  if (milliseconds > MAX_TIMER_DELAY_MILLISECONDS) {
+    throw makeError(
+      X`${name} must be at most ${q(MAX_TIMER_DELAY_MILLISECONDS)}, got ${q(value)}`,
+    );
+  }
+  return milliseconds;
 };
 
 /**
@@ -245,32 +269,54 @@ export const assertHeadersSafe = headers => {
 freeze(assertHeadersSafe);
 
 /**
- * @param {{ maxPerMinute: number, now: () => number }} opts
+ * Each `take()` holds one slot for a 60-second `delay`.
+ * If that delay rejects, the slot stays held and every later `take()` throws:
+ * a failed or revoked timer must not lift the limit.
+ * `setMaxPerMinute` retunes the cap in place, so slots already held keep
+ * counting against the new cap.
+ *
+ * @param {{ maxPerMinute: number, delay: Delay, cancelled: Promise<never> }} opts
  */
-export const makeRateLimiter = ({ maxPerMinute, now }) => {
-  const max = validatePositiveInteger(maxPerMinute, 'maxPerMinute');
-  /** @type {number[]} */
-  const requestTimes = [];
-  const prune = () => {
-    const cutoff = now() - 60_000;
-    while (requestTimes.length > 0 && requestTimes[0] <= cutoff) {
-      requestTimes.shift();
-    }
-  };
+export const makeRateLimiter = ({ maxPerMinute, delay, cancelled }) => {
+  let max = validatePositiveInteger(maxPerMinute, 'maxPerMinute');
+  let active = 0;
+  /** @type {Error | undefined} */
+  let failure;
   const limiter = freeze({
     take: () => {
-      prune();
-      if (requestTimes.length >= max) {
+      if (failure !== undefined) {
+        throw makeNamedError(
+          'RateLimitError',
+          `HttpClient rate limit unavailable: ${failure.message}`,
+        );
+      }
+      if (active >= max) {
         throw makeNamedError(
           'RateLimitError',
           `HttpClient rate limit exceeded: ${max} requests per minute`,
         );
       }
-      requestTimes.push(now());
+      active += 1;
+      void Promise.resolve()
+        .then(() => delay(60_000, cancelled))
+        .then(
+          () => {
+            active -= 1;
+          },
+          reason => {
+            failure =
+              reason instanceof Error
+                ? reason
+                : makeError(X`rate window timer failed: ${q(reason)}`);
+          },
+        );
     },
-    remaining: () => {
-      prune();
-      return Math.max(0, max - requestTimes.length);
+    remaining: () => (failure === undefined ? Math.max(0, max - active) : 0),
+    /**
+     * @param {number} n
+     */
+    setMaxPerMinute: n => {
+      max = validatePositiveInteger(n, 'maxPerMinute');
     },
   });
   return limiter;
@@ -296,10 +342,10 @@ const chunkToBytes = chunk => {
 
 /**
  * @param {{ getReader: () => FetchLikeBodyReader } | null | undefined} source
- * @param {{ maxBytes: number, signal?: AbortSignal }} opts
+ * @param {{ maxBytes: number, cancelled?: Promise<never> }} opts
  * @returns {{ stream: Promise<Uint8Array>, truncated: () => boolean }}
  */
-export const limitResponseBytes = (source, { maxBytes, signal }) => {
+export const limitResponseBytes = (source, { maxBytes, cancelled }) => {
   const max = validatePositiveInteger(maxBytes, 'maxBytes');
   let wasTruncated = false;
 
@@ -314,42 +360,50 @@ export const limitResponseBytes = (source, { maxBytes, signal }) => {
       );
     }
     const reader = source.getReader();
-    let aborted = false;
+    let cancelledState = false;
+    let streamSettled = false;
+    let cancellationReason = makeNamedError(
+      'RevokedError',
+      'HttpClient has been revoked',
+    );
     /** @type {(reason?: unknown) => void} */
-    let rejectAborted = () => {};
-    const abortedP = new Promise((_, reject) => {
-      rejectAborted = reject;
+    let rejectCancelled = () => {};
+    const cancelledRace = new Promise((_, reject) => {
+      rejectCancelled = reject;
     });
-    const abort = () => {
-      aborted = true;
-      rejectAborted(
-        makeNamedError('RevokedError', 'HttpClient has been revoked'),
-      );
+    const cancel = reason => {
+      if (streamSettled) {
+        return;
+      }
+      cancelledState = true;
+      cancellationReason =
+        reason || makeNamedError('RevokedError', 'HttpClient has been revoked');
+      rejectCancelled(cancellationReason);
       if (typeof reader.cancel === 'function') {
-        void Promise.resolve(reader.cancel('HttpClient revoked')).catch(
-          () => {},
-        );
+        void Promise.resolve(reader.cancel(cancellationReason)).catch(() => {});
       }
     };
-    if (signal) {
-      if (signal.aborted) {
-        abort();
-      } else {
-        signal.addEventListener('abort', abort, { once: true });
-      }
+    if (cancelled) {
+      void cancelled.then(
+        () => cancel(makeError(X`Cancellation token must not fulfill`)),
+        cancel,
+      );
     }
     /** @type {Uint8Array[]} */
     const chunks = [];
     let total = 0;
     try {
       while (!wasTruncated) {
-        if (aborted) {
-          throw makeNamedError('RevokedError', 'HttpClient has been revoked');
+        if (cancelledState) {
+          throw cancellationReason;
         }
         // eslint-disable-next-line no-await-in-loop
-        const { done, value } = await Promise.race([reader.read(), abortedP]);
-        if (aborted) {
-          throw makeNamedError('RevokedError', 'HttpClient has been revoked');
+        const { done, value } = await Promise.race([
+          reader.read(),
+          cancelledRace,
+        ]);
+        if (cancelledState) {
+          throw cancellationReason;
         }
         if (done) {
           break;
@@ -373,9 +427,7 @@ export const limitResponseBytes = (source, { maxBytes, signal }) => {
         );
       }
     } finally {
-      if (signal) {
-        signal.removeEventListener('abort', abort);
-      }
+      streamSettled = true;
       if (typeof reader.releaseLock === 'function') {
         reader.releaseLock();
       }
@@ -400,8 +452,13 @@ freeze(limitResponseBytes);
  * @returns {'follow' | 'reject'}
  */
 export const resolveRedirect = (response, origins) => {
+  // A browser-like transport answers `redirect: 'manual'` with an opaque
+  // redirect (status 0, no Location), which the allowlist cannot examine.
+  if (/** @type {{ type?: unknown }} */ (response).type === 'opaqueredirect') {
+    return 'reject';
+  }
   const status = Number(response.status || 0);
-  if (status < 300 || status >= 400) {
+  if (!REDIRECT_STATUSES.has(status)) {
     return 'follow';
   }
   const headers = response.headers || {};
@@ -421,8 +478,8 @@ export const resolveRedirect = (response, origins) => {
     return 'reject';
   }
   const baseUrl = String(response.url || '');
-  const redirectUrl = new URL(String(location), baseUrl).href;
   try {
+    const redirectUrl = new URL(String(location), baseUrl).href;
     checkOriginAllowed(redirectUrl, origins);
   } catch (_err) {
     return 'reject';
@@ -513,32 +570,29 @@ export const snapshotResponse = response => {
 freeze(snapshotResponse);
 
 /**
- * @param {{ timeoutMs: number, cancellation?: Promise<never> }} opts
- * @returns {{ signal: AbortSignal, dispose: () => void }}
+ * @param {{ timeoutMs: number, cancellation?: Promise<never>, delay: Delay }} opts
+ * @returns {{ cancelled: Promise<never>, cancel: (reason?: Error) => void, dispose: () => void }}
  */
-export const makeRequestSignal = ({ timeoutMs, cancellation }) => {
-  const timeout = validatePositiveInteger(timeoutMs, 'timeoutMs');
-  const controller = new AbortController();
-  signalToController.set(controller.signal, controller);
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  if (cancellation) {
-    void cancellation.then(
-      () => controller.abort(),
-      () => controller.abort(),
+export const makeRequestCancellation = ({ timeoutMs, cancellation, delay }) => {
+  const timeout = validateTimeout(timeoutMs, 'timeoutMs');
+  const { cancelled, cancel } = makeCancelKit(cancellation);
+  void Promise.resolve()
+    .then(() => delay(timeout, cancelled))
+    .then(() => cancel(makeError(X`HttpClient request timed out`)))
+    .catch(reason =>
+      cancel(
+        reason instanceof Error
+          ? reason
+          : makeError(X`HttpClient request timer failed: ${q(reason)}`),
+      ),
     );
-  }
-  // Object.freeze, not freeze: the shallow freeze is load-bearing. Deep
-  // hardening reaches the host AbortSignal, and `controller.abort()` then
-  // throws `Cannot assign to read only property 'Symbol(kAborted)'`. Same
-  // hazard that snapshotResponse avoids for the transport response.
-  return Object.freeze({
-    signal: controller.signal,
-    dispose: () => {
-      clearTimeout(timeoutId);
-    },
+  return freeze({
+    cancelled,
+    cancel,
+    dispose: () => cancel(makeError(X`HttpClient request settled`)),
   });
 };
-freeze(makeRequestSignal);
+freeze(makeRequestCancellation);
 
 /**
  * If `policy.allowedOrigins` is an array, this confinement owns the normalized
@@ -548,15 +602,18 @@ freeze(makeRequestSignal);
  * throw.
  *
  * @param {HttpConfinementPolicy} policy
- * @param {{ fetch: FetchLike, now: () => number }} seams
+ * @param {{ fetch: FetchLike, delay: Delay }} seams
  */
-export const makeHttpConfinement = (policy, { fetch, now }) => {
+export const makeHttpConfinement = (policy, { fetch, delay }) => {
   if (typeof fetch !== 'function') {
     throw makeError(X`fetch is required`);
   }
-  if (typeof now !== 'function') {
-    throw makeError(X`now is required`);
+  if (typeof delay !== 'function') {
+    throw makeError(X`delay is required`);
   }
+
+  const { cancelled: serviceCancelled, cancel: cancelService } =
+    makeCancelKit();
 
   const allowedOriginSource = policy.allowedOrigins || [];
   const hasInjectedAllowedOrigins = typeof allowedOriginSource === 'function';
@@ -565,16 +622,17 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     typeof allowedOriginSource === 'function'
       ? parseAllowedOrigins([])
       : parseAllowedOrigins(allowedOriginSource);
-  let rateLimiter = makeRateLimiter({
+  const rateLimiter = makeRateLimiter({
     maxPerMinute:
       policy.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE,
-    now,
+    delay,
+    cancelled: serviceCancelled,
   });
   let maxResponseBytes = validatePositiveInteger(
     policy.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
     'maxResponseBytes',
   );
-  let timeoutMs = validatePositiveInteger(
+  let timeoutMs = validateTimeout(
     policy.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     'timeoutMs',
   );
@@ -582,8 +640,8 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     policy.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE;
   const allowedMethods = policy.allowedMethods || CONFINED_ALLOWED_METHODS;
   let revoked = false;
-  /** @type {Set<AbortController>} */
-  const controllers = new Set();
+  /** @type {Set<(reason?: Error) => void>} */
+  const requestCancellers = new Set();
 
   const assertNotRevoked = () => {
     if (revoked) {
@@ -621,22 +679,30 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     assertHeadersSafe(headers);
     checkOriginAllowed(url, getAllowedOrigins());
 
-    const { signal, dispose } = makeRequestSignal({ timeoutMs, cancellation });
-    const controller = signalToController.get(signal);
-    if (controller) {
-      controllers.add(controller);
-    }
+    const {
+      cancelled,
+      cancel: cancelRequest,
+      dispose,
+    } = makeRequestCancellation({
+      timeoutMs,
+      cancellation,
+      delay,
+    });
+    requestCancellers.add(cancelRequest);
     await null;
     try {
-      const response = await Promise.resolve(
-        fetch(url, {
-          redirect: 'manual',
-          method,
-          ...(headers === undefined ? {} : { headers }),
-          ...(body === undefined ? {} : { body }),
-          signal,
-        }),
-      );
+      const response = await Promise.race([
+        Promise.resolve(
+          fetch(url, {
+            redirect: 'manual',
+            method,
+            ...(headers === undefined ? {} : { headers }),
+            ...(body === undefined ? {} : { body }),
+            cancelled,
+          }),
+        ),
+        cancelled,
+      ]);
       assertNotRevoked();
       if (resolveRedirect(response, getAllowedOrigins()) === 'reject') {
         throw makeNamedError(
@@ -646,7 +712,7 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
       }
       const limited = limitResponseBytes(response.body, {
         maxBytes: maxResponseBytes,
-        signal,
+        cancelled,
       });
       const bytes = await limited.stream;
       assertNotRevoked();
@@ -657,9 +723,7 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
         maxResponseBytes,
       });
     } finally {
-      if (controller) {
-        controllers.delete(controller);
-      }
+      requestCancellers.delete(cancelRequest);
       dispose();
     }
   };
@@ -700,7 +764,7 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     setMaxRequestsPerMinute: n => {
       assertNotRevoked();
       requestLimit = validatePositiveInteger(n, 'maxRequestsPerMinute');
-      rateLimiter = makeRateLimiter({ maxPerMinute: n, now });
+      rateLimiter.setMaxPerMinute(requestLimit);
     },
     /**
      * @param {number} n
@@ -714,14 +778,19 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
      */
     setTimeoutMs: n => {
       assertNotRevoked();
-      timeoutMs = validatePositiveInteger(n, 'timeoutMs');
+      timeoutMs = validateTimeout(n, 'timeoutMs');
     },
     revoke: () => {
       revoked = true;
-      for (const controller of controllers) {
-        controller.abort();
+      const reason = makeNamedError(
+        'RevokedError',
+        'HttpClient has been revoked',
+      );
+      cancelService(reason);
+      for (const cancelRequest of requestCancellers) {
+        cancelRequest(reason);
       }
-      controllers.clear();
+      requestCancellers.clear();
     },
     isRevoked: () => revoked,
     inspect: () =>
