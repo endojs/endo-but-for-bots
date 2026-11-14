@@ -21,6 +21,9 @@
       "path": "../eventual-send/tsconfig.composite.json"
     },
     {
+      "path": "../exo/tsconfig.composite.json"
+    },
+    {
       "path": "../exo-git/tsconfig.composite.json"
     },
     {
@@ -31,6 +34,9 @@
     },
     {
       "path": "../marshal/tsconfig.composite.json"
+    },
+    {
+      "path": "../patterns/tsconfig.composite.json"
     },
     {
       "path": "../platform/tsconfig.composite.json"

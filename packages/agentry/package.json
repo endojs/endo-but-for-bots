@@ -56,6 +56,10 @@
       "types": "./src/edit-text.js",
       "default": "./src/edit-text.js"
     },
+    "./rpc": {
+      "types": "./rpc.types.d.ts",
+      "default": "./src/rpc/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -81,10 +85,12 @@
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
     "@endo/exo-git": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
+    "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/where": "workspace:^",
     "ses": "workspace:^"
@@ -95,7 +101,6 @@
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/pass-style": "workspace:^",
-    "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
