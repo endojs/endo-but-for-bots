@@ -18,7 +18,8 @@
  * `env` initials - is authoritative across restarts: persisted policy and pins
  * are adopted when present, and every durable mutation (a control operation or
  * a request-time trust-on-first-bind pin) is written back through the
- * `onPolicyChange` seam.
+ * `onPolicyChange` seam, and a control mutation resolves only once its
+ * snapshot is committed.
  */
 
 import { makeExo } from '@endo/exo';
@@ -77,81 +78,58 @@ export const makeConfinedFetchService = async powers => {
   }
 
   // The durable store is authoritative across restarts; the env-supplied values
-  // are only the initial policy at first provisioning. Read both documents up
-  // front and adopt persisted fields when present, otherwise fall through to the
-  // env initials (and, for those the env omits, to the pair's own defaults).
-  const persistedConfig = /** @type {any} */ (await store.readConfig());
-  const persistedBindings = await store.readBindings();
+  // are only the initial policy at first provisioning. A snapshot that exists
+  // but cannot be read rejects here, so revival fails closed instead of
+  // reseeding from the env.
+  const persisted = await store.readSnapshot();
 
-  const pick = (persistedValue, envValue) =>
-    persistedValue !== undefined ? persistedValue : envValue;
-
-  const allowedOrigins =
-    pick(
-      persistedConfig && persistedConfig.allowedOrigins,
-      envAllowedOrigins,
-    ) || [];
-  const maxRequestsPerMinute = pick(
-    persistedConfig && persistedConfig.maxRequestsPerMinute,
-    envMaxRequestsPerMinute,
-  );
-  const maxResponseBytes = pick(
-    persistedConfig && persistedConfig.maxResponseBytes,
-    envMaxResponseBytes,
-  );
-  const policyMode = pick(
-    persistedConfig && persistedConfig.policyMode,
-    envPolicyMode,
-  );
-  const revoked = Boolean(persistedConfig && persistedConfig.revoked);
-
-  // Persist every durable mutation. Writes are serialized on a promise chain so
-  // overlapping control operations and request-time pins cannot interleave, and
-  // the snapshot is already an immutable capture from the seam, so a later
-  // mutation cannot race the write that reads it. Best-effort: a failed write is
-  // logged, never thrown into the request or control path.
+  // Writes are serialized so overlapping mutations commit in order. Each
+  // snapshot is captured synchronously at mutation time, so awaiting one write
+  // also awaits every earlier one. A failed write rejects the caller's
+  // persist, which the control facet surfaces to the controller; the chain
+  // itself continues so a later snapshot can still commit.
   let writeChain = Promise.resolve();
   /** @param {PolicySnapshot} snapshot */
   const persist = snapshot => {
-    writeChain = writeChain
-      .then(async () => {
-        await store.writeConfig(snapshot.policy);
-        await store.writeBindings(snapshot.bindings);
-      })
-      .catch(error => {
-        console.error('[confined-fetch] failed to persist policy:', error);
-      });
+    const written = writeChain.then(() => store.writeSnapshot(snapshot));
+    writeChain = written.catch(() => {});
+    return written;
   };
+
+  const initial =
+    persisted === undefined
+      ? {
+          allowedOrigins: envAllowedOrigins || [],
+          maxRequestsPerMinute: envMaxRequestsPerMinute,
+          maxResponseBytes: envMaxResponseBytes,
+          policyMode: envPolicyMode,
+        }
+      : persisted.policy;
 
   const { client, control } = makeHttpClientAndControl({
     fetch,
     delay,
     now,
-    allowedOrigins,
-    ...(maxRequestsPerMinute !== undefined ? { maxRequestsPerMinute } : {}),
-    ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
-    ...(policyMode !== undefined ? { policyMode } : {}),
-    ...(policyAuthority !== undefined ? { policyAuthority } : {}),
-    ...(persistedBindings !== undefined
-      ? { initialBindings: persistedBindings }
+    allowedOrigins: initial.allowedOrigins,
+    ...(initial.maxRequestsPerMinute !== undefined
+      ? { maxRequestsPerMinute: initial.maxRequestsPerMinute }
       : {}),
+    ...(initial.maxResponseBytes !== undefined
+      ? { maxResponseBytes: initial.maxResponseBytes }
+      : {}),
+    ...(initial.policyMode !== undefined
+      ? { policyMode: initial.policyMode }
+      : {}),
+    ...(policyAuthority !== undefined ? { policyAuthority } : {}),
+    ...(persisted !== undefined ? { initialBindings: persisted.bindings } : {}),
     onPolicyChange: persist,
   });
 
-  // A service persisted as revoked revives revoked: reapply the terminal flag
-  // (which also re-persists it, harmlessly). Revocation is durable and permanent
-  // by design.
-  if (revoked) {
-    control.revoke();
-  }
-
-  // Seed the store on first provisioning so it immediately reflects the initial
-  // policy (config.json + bindings.json exist from the outset). Thereafter the
-  // onPolicyChange seam keeps it current. On a restart the documents already
-  // exist, so this is skipped and the persisted state stands.
-  if (persistedConfig === undefined) {
+  if (persisted === undefined) {
+    // Seed the store on first provisioning so it reflects the initial policy
+    // from the outset. Thereafter the onPolicyChange seam keeps it current.
     const inspected = control.inspect();
-    persist(
+    await persist(
       harden({
         policy: {
           allowedOrigins: [...inspected.allowedOrigins],
@@ -165,6 +143,10 @@ export const makeConfinedFetchService = async powers => {
         bindings: control.listBindings(),
       }),
     );
+  } else if (persisted.policy.revoked) {
+    // Revocation is durable and permanent: a service persisted as revoked
+    // revives revoked.
+    await control.revoke();
   }
 
   // The service exo hands out the two facets. It is what the plugin returns and

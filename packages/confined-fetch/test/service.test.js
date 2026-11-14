@@ -121,12 +121,12 @@ test('client fetches an allowed origin, denies others, seeds the store', async t
     message: /not in the allowed-origin list|Policy refuses/,
   });
 
-  // The first-run seed wrote config.json.
-  await flush();
-  const config = await store.readConfig();
-  t.deepEqual(config.allowedOrigins, [ALLOWED]);
-  t.is(config.maxResponseBytes, 1000);
-  t.is(config.revoked, false);
+  // The first-run seed committed before the service resolved.
+  const snapshot = await store.readSnapshot();
+  const config = snapshot?.policy;
+  t.deepEqual(config?.allowedOrigins, [ALLOWED]);
+  t.is(config?.maxResponseBytes, 1000);
+  t.is(config?.revoked, false);
 });
 
 test('reconstitutes identical policy across a restart', async t => {
@@ -195,7 +195,7 @@ test('a trust-on-first-bind pin survives a restart and stays revocable', async t
   t.is(firstBindings[0].state, 'Pinned-Allow');
   await flush();
 
-  // Restart: the pin is reconstituted from bindings.json.
+  // Restart: the pin is reconstituted from policy.json.
   const second = await makeConfinedFetchService({ store: await open(), fetch });
   const revivedBindings = second.control.listBindings();
   t.is(revivedBindings.length, 1);
@@ -211,8 +211,8 @@ test('a trust-on-first-bind pin survives a restart and stays revocable', async t
   await t.throwsAsync(() => second.client.fetch(OTHER_URL), {
     message: /Policy refuses|not in the allowed-origin/,
   });
-  await flush();
 
+  // No settling delay: the acknowledged revocation is already durable.
   const third = await makeConfinedFetchService({ store: await open(), fetch });
   const thirdBindings = third.control.listBindings();
   t.is(thirdBindings.length, 1);
@@ -234,14 +234,12 @@ test('the persisted store outranks a conflicting env on restart', async t => {
     allowedOrigins: [ALLOWED],
     maxResponseBytes: 1000,
   });
-  await flush();
 
   // Restart with a CONFLICTING env: a different allowlist and a different byte
   // cap. The store - not env - is authoritative across restarts, so the
   // persisted values must win. This pins the ordering, not mere durability:
-  // flipping the service's `pick` to env-first reddens exactly this assertion,
-  // whereas the sibling reconstitution test (which restarts with no env) would
-  // stay green.
+  // preferring env reddens exactly this assertion, whereas the sibling
+  // reconstitution test (which restarts with no env) would stay green.
   const second = await makeConfinedFetchService({
     store: await open(),
     fetch,
@@ -261,65 +259,145 @@ test('the persisted store outranks a conflicting env on restart', async t => {
   });
 });
 
-test('a corrupt bindings.json degrades to no pins without bricking revival', async t => {
+test('a corrupt policy.json refuses revival rather than reseeding from env', async t => {
   const { open, directory } = await makeStoreFixture();
   const { fetch } = makeFakeFetch();
 
-  // First provisioning pins a first-seen origin under tofu-auto.
   const first = await makeConfinedFetchService({
     store: await open(),
     fetch,
-    now: () => 1000,
-    policyMode: 'tofu-auto',
+    allowedOrigins: [ALLOWED],
   });
-  await first.client.fetch(OTHER_URL);
-  t.is(first.control.listBindings().length, 1);
-  await flush();
+  await first.control.revoke();
 
-  // A torn write leaves bindings.json unparseable.
-  await E(directory).write('bindings.json', '{ not valid json');
-
-  // Revival must not brick: the read guard treats the corrupt document as absent
-  // and the service comes up with no reconstituted pins (only its static
-  // allowlist, which fails closed) rather than throwing out of makeConfinedFetchService.
-  const second = await makeConfinedFetchService({ store: await open(), fetch });
-  t.deepEqual(second.control.listBindings(), []);
+  // A damaged document must not be mistaken for first provisioning, which
+  // would restore the permissive env allowlist to a revoked service.
+  await E(directory).write('policy.json', 'not-json');
+  const store = await open();
+  await t.throwsAsync(
+    () =>
+      makeConfinedFetchService({
+        store,
+        fetch,
+        allowedOrigins: [ALLOWED, OTHER],
+        policyMode: 'tofu-auto',
+      }),
+    { message: /JSON|Unexpected token/ },
+  );
 });
 
-test('a corrupt config.json degrades to the env policy without bricking revival', async t => {
+test('a structurally invalid policy.json refuses revival', async t => {
   const { open, directory } = await makeStoreFixture();
   const { fetch } = makeFakeFetch();
 
-  // First provisioning persists a tofu-auto policy with no static allowlist.
-  await makeConfinedFetchService({
-    store: await open(),
-    fetch,
-    now: () => 1000,
-    policyMode: 'tofu-auto',
+  for (const document of [
+    '{}',
+    '[]',
+    'null',
+    JSON.stringify({ policy: { allowedOrigins: [], revoked: false } }),
+    JSON.stringify({
+      policy: { allowedOrigins: [], revoked: false },
+      bindings: null,
+    }),
+    JSON.stringify({
+      policy: { allowedOrigins: [], revoked: false },
+      bindings: {},
+    }),
+    JSON.stringify({ policy: { allowedOrigins: [] }, bindings: [] }),
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(directory).write('policy.json', document);
+    // eslint-disable-next-line no-await-in-loop
+    const store = await open();
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        makeConfinedFetchService({
+          store,
+          fetch,
+          allowedOrigins: [ALLOWED],
+        }),
+      { message: /policy\.json/ },
+      document,
+    );
+  }
+});
+
+test('an unreadable store refuses revival; only absence provisions', async t => {
+  const { fetch } = makeFakeFetch();
+  const failingDirectory = /** @type {FetchStoreDirectory} */ (
+    harden({
+      lookup: async () => {
+        throw Error('EIO: transient backing failure');
+      },
+      write: async () => {},
+      move: async () => {},
+    })
+  );
+  const store = await makeFetchStore(failingDirectory, async () => '1');
+  await t.throwsAsync(
+    () => makeConfinedFetchService({ store, fetch, allowedOrigins: [ALLOWED] }),
+    { message: /EIO/ },
+  );
+});
+
+test('an authority reduction rejects when its snapshot cannot be written', async t => {
+  const { open } = await makeStoreFixture();
+  const { fetch } = makeFakeFetch();
+  const realStore = await open();
+  let failWrites = false;
+  const store = harden({
+    readSnapshot: () => realStore.readSnapshot(),
+    writeSnapshot: async snapshot => {
+      if (failWrites) {
+        throw Error('ENOSPC: no space left');
+      }
+      return realStore.writeSnapshot(snapshot);
+    },
   });
-  await flush();
 
-  // A torn write leaves config.json unparseable.
-  await E(directory).write('config.json', 'not-json');
-
-  // Revival adopts the env initials (the corrupt store is treated as absent)
-  // rather than throwing: a strict policy with a static allowlist, fail-closed
-  // for every other origin.
-  const second = await makeConfinedFetchService({
-    store: await open(),
+  const { client, control } = await makeConfinedFetchService({
+    store,
     fetch,
-    allowedOrigins: [ALLOWED],
-    policyMode: 'strict',
+    allowedOrigins: [ALLOWED, OTHER],
   });
-  const inspected = second.control.inspect();
-  t.deepEqual([...inspected.allowedOrigins], [ALLOWED]);
-  t.is(inspected.policyMode, 'strict');
 
-  const response = await second.client.fetch(ALLOWED_URL);
-  t.is(response.status(), 200);
-  await t.throwsAsync(() => second.client.fetch(OTHER_URL), {
+  failWrites = true;
+  await t.throwsAsync(() => control.removeAllowedOrigin(OTHER), {
+    message: /ENOSPC/,
+  });
+  // The reduction still applies in memory.
+  await t.throwsAsync(() => client.fetch(OTHER_URL), {
     message: /not in the allowed-origin list|Policy refuses/,
   });
+
+  // Once storage recovers, the next acknowledged mutation commits the whole
+  // current snapshot, including the earlier reduction.
+  failWrites = false;
+  await control.setMaxResponseBytes(2048);
+  const revived = await makeConfinedFetchService({
+    store: await open(),
+    fetch,
+  });
+  t.deepEqual([...revived.control.inspect().allowedOrigins], [ALLOWED]);
+});
+
+test('policy and bindings revive from one generation', async t => {
+  const { open } = await makeStoreFixture();
+  const { fetch } = makeFakeFetch();
+
+  const first = await makeConfinedFetchService({
+    store: await open(),
+    fetch,
+    policyMode: 'tofu-auto',
+  });
+  await first.client.fetch(OTHER_URL);
+  await first.control.revokeBinding(OTHER);
+  await first.control.revoke();
+
+  const second = await makeConfinedFetchService({ store: await open(), fetch });
+  t.true(second.control.isRevoked());
+  t.like(second.control.listBindings(), [{ target: OTHER, state: 'Revoked' }]);
 });
 
 test('the service refuses to start without both endowed time seams', async t => {
@@ -357,7 +435,6 @@ test('the service refuses to start without both endowed time seams', async t => 
   );
 
   // The guard fires before provisioning: nothing was seeded or fetched.
-  await flush();
-  t.is(await store.readConfig(), undefined);
+  t.is(await store.readSnapshot(), undefined);
   t.is(calls.length, 0);
 });

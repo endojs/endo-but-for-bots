@@ -4,6 +4,7 @@ import type {
   HttpClientControl,
   PolicyAuthority,
   PolicyMode,
+  PolicySnapshot,
 } from '@endo/exo-http-client';
 
 export type FetchStoreDirectory = {
@@ -20,11 +21,11 @@ export type FetchStoreSnapshot = {
   json: () => Promise<unknown> | unknown;
 };
 
+export type PersistedSnapshot = PolicySnapshot;
+
 export type FetchStore = {
-  readConfig: () => Promise<any>;
-  writeConfig: (config: unknown) => Promise<void>;
-  readBindings: () => Promise<any[] | undefined>;
-  writeBindings: (bindings: ReadonlyArray<unknown>) => Promise<void>;
+  readSnapshot: () => Promise<PersistedSnapshot | undefined>;
+  writeSnapshot: (snapshot: PersistedSnapshot) => Promise<void>;
 };
 
 export type ConfinedFetchServiceExo = {
@@ -41,7 +42,6 @@ export type ConfinedFetchService = {
 
 export type ConfinedFetchServicePowers = {
   store: FetchStore;
-  /** Built from the endowed `@endo/fetch` base; never the ambient `fetch`. */
   fetch: FetchLike;
   delay: (
     milliseconds: number,

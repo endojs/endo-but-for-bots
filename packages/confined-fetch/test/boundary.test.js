@@ -309,7 +309,7 @@ test('a cancellation token aborts the endowed base request', async t => {
   };
   const fetchLike = makeTransportFromBase(makeFetch({ fetch: transport }));
   const { cancelled, cancel } = makeCancelKit();
-  const responseP = fetchLike(ALLOWED_URL, {
+  const responsePromise = fetchLike(ALLOWED_URL, {
     redirect: 'manual',
     method: 'GET',
     cancelled,
@@ -317,10 +317,41 @@ test('a cancellation token aborts the endowed base request', async t => {
   await flush();
   t.is(baseSignals.length, 1);
   cancel(Error('timed out'));
-  await t.throwsAsync(async () => responseP, { message: /timed out/ });
+  await t.throwsAsync(async () => responsePromise, { message: /timed out/ });
   await flush();
   t.true(baseSignals[0].aborted);
   release();
+});
+
+test('a browser opaque redirect through the base is refused', async t => {
+  // A browser answers a manual redirect with a filtered response whose type is
+  // `opaqueredirect`, status 0, and no Location. The type must survive the
+  // passable base and the transport so the confinement can refuse it.
+  /** @type {any} */
+  const transport = async url => ({
+    type: 'opaqueredirect',
+    status: 0,
+    statusText: '',
+    headers: {},
+    url: String(url),
+    body: null,
+  });
+  const base = makeFetch({ fetch: transport });
+  const baseResponse = await E(base).fetch(ALLOWED_URL);
+  t.is(baseResponse.type, 'opaqueredirect');
+
+  const fetchLike = makeTransportFromBase(base);
+  const response = await fetchLike(ALLOWED_URL, { redirect: 'manual' });
+  t.is(response.type, 'opaqueredirect');
+
+  const { powers } = await makePowers({ base });
+  const service = await make(powers, undefined, {
+    env: { allowedOrigins: ALLOWED },
+  });
+  const client = await E(service).client();
+  await t.throwsAsync(() => E(client).fetch(ALLOWED_URL), {
+    message: /redirect/i,
+  });
 });
 
 test('a null-body response passes through the transport', async t => {

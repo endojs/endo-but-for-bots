@@ -1,32 +1,11 @@
 // @ts-check
 
 /**
- * `@endo/confined-fetch` - the confined plugin that attenuates an endowed
- * `@endo/fetch` capability into a policy-bound `HttpClient`.
- *
- * The module exports the standard confined-caplet maker,
- * `make(powers, context, { env })`. It resolves everything it needs by name
- * through `powers` and has no route to the network except the endowed base:
- *
- * - `E(powers).lookup('fetch')` -> the unfettered `Fetch` capability of
- *   `@endo/fetch`, the only transport the client and control pair is built
- *   over. Without it, `make()` rejects.
- * - `E(powers).lookup('fetch-store')` -> a writable virtual-file-system
- *   directory private to this service, backing the durable policy store
- *   (`./store.js`).
- * - `E(powers).lookup('timer')` -> an unconfined `Timer` capability, the only
- *   source of delays and wall-clock time.
- * - `E(powers).lookup('fetch-policy-authority')` (optional) -> the referral
- *   target for trust-on-first-bind decisions. Without it, the prompt modes are
- *   unavailable and unknown origins fail closed.
- *
- * Initial `allowedOrigins` (comma-separated), `maxRequestsPerMinute`,
- * `maxResponseBytes`, and `policyMode` arrive via `env` only on first
- * provisioning; thereafter the store is authoritative.
- *
- * Revival is integration-owned: the integration pins the service under
- * `@pins` and restores the same base and directory at boot, so `revivePins()`
- * re-incarnates it with identical policy and pins. See the README.
+ * `@endo/confined-fetch` entry point: `make(powers, context, { env })` builds
+ * a `ConfinedFetchService` over the endowed `fetch`, `timer`, and
+ * `fetch-store` powers and the optional `fetch-policy-authority`. Revival
+ * requires the integration to restore all three required powers. The README
+ * covers provisioning, `env` initials, and the `@pins` revival recipe.
  */
 
 import { E } from '@endo/eventual-send';
@@ -50,11 +29,11 @@ const parseOptionalPositiveInteger = (value, name) => {
   if (value === undefined) {
     return undefined;
   }
-  const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
     throw Error(`@endo/confined-fetch: env.${name} must be a positive integer`);
   }
-  return n;
+  return parsed;
 };
 
 /**
@@ -116,11 +95,11 @@ export const make = async (powers, _context, { env = {} } = {}) => {
   // writes, so a per-incarnation counter keeps temporary names distinct, and a
   // name left behind by a crash is simply overwritten.
   let temporaryCounter = 0;
-  const makeTemporaryId = async () => {
+  const makeTemporaryIdentifier = async () => {
     temporaryCounter += 1;
     return `${temporaryCounter}`;
   };
-  const store = await makeFetchStore(storeDirectory, makeTemporaryId);
+  const store = await makeFetchStore(storeDirectory, makeTemporaryIdentifier);
 
   const allowedOrigins = parseOptionalOriginList(env.allowedOrigins);
   const maxRequestsPerMinute = parseOptionalPositiveInteger(

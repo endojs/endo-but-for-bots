@@ -77,6 +77,6 @@ export const makeTransportFromBase = base => {
       },
     };
   };
-  return transport;
+  return harden(transport);
 };
 harden(makeTransportFromBase);

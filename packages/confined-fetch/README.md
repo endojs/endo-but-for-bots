@@ -13,22 +13,6 @@ integration. The capability itself is
 The [`@endo/fetch` README](../fetch/README.md) shows how the base, this plugin,
 and a guest compose.
 
-## What it is
-
-- **The base is an endowment, not ambient authority.** The only transport the
-  client is built over is the endowed `Fetch`. `make()` rejects without it, and
-  the service core refuses to start without a transport rather than fall back
-  to `globalThis.fetch`.
-- **Persistence is a virtual-file-system capability, backing-agnostic.** The
-  plugin depends only on the writable-tree verbs of
-  [`@endo/platform/fs/extended`](../platform) (`lookup`, `write`, `move`), so
-  the backing may be a host directory, an in-memory tree, a daemon mount, or a
-  database.
-- **The confined capability is `@endo/exo-http-client`'s.** The plugin composes
-  `makeHttpClientAndControl` and persists through its `initialBindings` and
-  `onPolicyChange` seams, so request-time trust-on-first-bind pins survive
-  restart.
-
 ## Provisioning
 
 `make(powers, context, { env })` resolves by name through `powers`:
@@ -69,9 +53,8 @@ user-driven:
    service's `fetch-store` directory so the same endowments are restored at
    boot.
 2. On the next boot, `revivePins()` provides the identifier, the worker
-   incarnates the plugin with the same base and directory, and `make()`
-   reconstitutes the pair from
-   `config.json` + `bindings.json` with **identical policy and pins** — the
+   incarnates the plugin with the same base, timer, and directory, and `make()`
+   reconstitutes the pair from `policy.json` with **identical policy and pins** — the
    allowlist, the byte/rate/mode limits, the trust-on-first-bind bindings, and
    the revoked flag.
 3. **Unpinning decommissions.** Remove the pin and the service does not wake next
@@ -103,18 +86,20 @@ The store is a writable directory on the platform virtual file system:
 
 ```
 fetch-store/
-  config.json    # { allowedOrigins, maxRequestsPerMinute, maxResponseBytes,
-                 #   policyMode, revoked }
-  bindings.json  # the trust-on-first-bind binding table
+  policy.json    # { policy: { allowedOrigins, maxRequestsPerMinute,
+                 #   maxResponseBytes, policyMode, revoked },
+                 #   bindings: the trust-on-first-bind binding table }
 ```
 
-Writes are write-then-`move` within the store directory, serialized so
-overlapping operations cannot interleave partial documents; atomic
-within-directory `move` is **required of the backing** as a store contract. Not
-persisted, by design: the rate-limit window (resets on restart, at worst
+Policy and bindings are one document, committed together. Writes are
+write-then-`move` within the store directory, serialized so overlapping
+operations cannot interleave partial documents; atomic within-directory `move`
+is **required of the backing** as a store contract. A control mutation resolves
+only once its snapshot is committed and rejects if the write fails. A
+`policy.json` that exists but cannot be read, parsed, or validated makes
+`make()` reject: the service never falls back to the `env` initials once it has
+been provisioned.
+
+Not persisted, by design: the rate-limit window (resets on restart, at worst
 briefly generous) and the `listAuditEntries` ring buffer (bounded in-memory
 observability, not a durable log).
-
-## Bugs
-
-See https://github.com/endojs/endo/issues.
