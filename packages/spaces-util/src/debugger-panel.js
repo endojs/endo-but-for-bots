@@ -48,7 +48,9 @@ import { renderConfined } from '@endo/preact-container/renderer';
  * @property {() => Promise<void>} stepIn
  * @property {() => Promise<void>} stepOut
  * @property {() => Promise<void>} abort
- * @property {(mode: 'none'|'all'|'uncaught') => Promise<void>} setExceptionBreakMode
+ * @property {(mode: 'none'|'all'|'uncaught') => Promise<void>} setExceptionBreakMode `'uncaught'`
+ *   is not yet honored by any shipping engine — live only against an
+ *   Ironhorse-backed session; on the current engine it disables exception breaking.
  * @property {(path: string, line: number) => Promise<void>} setBreakpoint
  * @property {(path: string, line: number) => Promise<void>} clearBreakpoint
  * @property {() => Promise<void>} clearAllBreakpoints
@@ -739,7 +741,10 @@ const DebuggerRoot = ({ $container, isLive, controller }) => {
         'select',
         {
           class: 'debugger-exception-mode',
-          title: 'Exception break mode',
+          title:
+            'Exception break mode. "uncaught" is not yet honored by any ' +
+            'shipping engine — it goes live only against an Ironhorse-backed ' +
+            'session; on the current engine it disables exception breaking.',
           value: exceptionMode,
           /** @param {{ target: { value: string } }} e */
           onChange: e =>
@@ -748,7 +753,15 @@ const DebuggerRoot = ({ $container, isLive, controller }) => {
             ),
         },
         h('option', { value: 'none' }, 'Exceptions: none'),
-        h('option', { value: 'uncaught' }, 'Exceptions: uncaught'),
+        // `uncaught` is not yet honored by any shipping engine; label it so a
+        // human is not misled into thinking it narrows breaking. It goes live
+        // only against an Ironhorse-backed session
+        // (designs/ironhorse-debugger-recovery-and-uncaught.md, issue #940).
+        h(
+          'option',
+          { value: 'uncaught' },
+          'Exceptions: uncaught (engine support pending)',
+        ),
         h('option', { value: 'all' }, 'Exceptions: all'),
       ),
     ),

@@ -495,6 +495,20 @@ export const makeDebugSession = sendToWorker => {
     },
 
     // Exception mode
+    //
+    // ENGINE-SUPPORT CAVEAT — the `'uncaught'` arm is not honored by any
+    // shipping engine yet. It sends the `uncaughtExceptions` pseudo-breakpoint
+    // that only the recovered Ironhorse debugger row will recognize
+    // (designs/ironhorse-debugger-recovery-and-uncaught.md, issue #940). On the
+    // current C-XS/xsnap engine `uncaughtExceptions` is an *unrecognized*
+    // pseudo-path, so this call clears the real `exceptions` breakpoint and then
+    // arms a phantom breakpoint that never hits: selecting `'uncaught'` on C-XS
+    // *disables* exception breaking rather than narrowing it. The wire commands
+    // are deliberately left byte-identical to what the native engine will honor,
+    // so the mode goes live automatically once Ironhorse implements the
+    // pseudo-path — do NOT add a C-XS fallback, capability negotiation, or alias
+    // here (per the design). Callers/UI must not present `'uncaught'` as
+    // effective until an Ironhorse-backed session is attached.
     setExceptionBreakMode(mode) {
       if (mode === 'all') {
         sendCommand('<clear-breakpoint path="uncaughtExceptions" line="0"/>');
