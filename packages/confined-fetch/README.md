@@ -10,13 +10,8 @@ integration. The capability itself is
 [`@endo/http-confine`](../http-confine)
 ([design](../../designs/endo-fetch.md)).
 
-```mermaid
-flowchart LR
-    U["@endo/fetch"] -->|unfettered Fetch| I[integration]
-    I -->|Fetch + Timer + fetch-store| C["@endo/confined-fetch"]
-    C -->|HttpClient only| G[guest]
-    I -->|retains HttpClientControl| H[policy operator]
-```
+The [`@endo/fetch` README](../fetch/README.md) shows how the base, this plugin,
+and a guest compose.
 
 ## What it is
 
@@ -43,7 +38,8 @@ flowchart LR
   **directory**, private to this service.
 - `E(powers).lookup('timer')` -> the unconfined `Timer` from
   `@endo/fetch/timer.js`. It supplies cancellable delays and wall-clock stamps
-  without adding ambient time to the confined worker.
+  without adding ambient time to the confined worker, and rejects delays above
+  `2 ** 31 - 1` milliseconds.
 - `E(powers).lookup('fetch-policy-authority')` (**optional**) -> the referral
   target for trust-on-first-bind decisions (`tofu-prompt` / `tofu-attenuator`
   modes). Without it, those modes are unavailable and unknown origins fail
@@ -54,18 +50,11 @@ Initial `allowedOrigins` (comma-separated), `maxRequestsPerMinute`,
 `HttpClientControl` adjusts them and the store persists them, so the **store,
 not `env`, is authoritative** across restarts.
 
+The plugin runs in the daemon's ordinary confined-worker compartment, which has
+no ambient `fetch`, timers, `AbortController`, or wall-clock access.
 The integration retains the base privately, provisions one confined service
 per guest with a fresh directory, keeps `control()`, and grants the guest only
 `client()`.
-
-## Runtime requirement
-
-Provision the package as a confined plugin with three required powers: the
-base `Fetch`, its private `fetch-store`, and a `Timer` made unconfined through
-`@endo/fetch/timer.js`. The timer rejects host-clamped delays above
-`2 ** 31 - 1` milliseconds and clears its host timeout when cancellation wins.
-The plugin runs in the daemon's ordinary confined-worker compartment without
-ambient `fetch`, timers, `AbortController`, or wall-clock access.
 
 ## The `@pins` recipe (wake-on-restart)
 
@@ -88,9 +77,6 @@ user-driven:
 3. **Unpinning decommissions.** Remove the pin and the service does not wake next
    boot; its durable store remains until you delete it. A revoked service revives
    revoked.
-
-The Familiar app and the online Gateway are candidate future owners of this
-retention; daemon core gains no fetch-specific revival logic either way.
 
 ## Facets
 
@@ -125,19 +111,9 @@ fetch-store/
 Writes are write-then-`move` within the store directory, serialized so
 overlapping operations cannot interleave partial documents; atomic
 within-directory `move` is **required of the backing** as a store contract. Not
-persisted, by design: the sliding rate-limit window (resets on restart, at worst
+persisted, by design: the rate-limit window (resets on restart, at worst
 briefly generous) and the `listAuditEntries` ring buffer (bounded in-memory
 observability, not a durable log).
-
-## The agent-tool binding
-
-The `makeHttpTool` half of
-[daemon-agent-tools](../../designs/daemon-agent-tools.md) Phase 3.6 binds
-whatever `HttpClient` a guest was granted (a `ToolRecord` plus wire schema,
-mirroring `makeGitTool` / `makeShellTool`); bounds come entirely from the
-capability, and the network tool group is absent from the catalog unless the
-agent holds the `HttpClient`. This plugin provisions that client; the tool never
-needs the base `Fetch`.
 
 ## Bugs
 

@@ -16,6 +16,7 @@ flowchart LR
     U["@endo/fetch"] -->|unfettered Fetch| I[integration]
     I -->|Fetch + Timer + fetch-store| C["@endo/confined-fetch"]
     C -->|HttpClient only| G[guest]
+    I -->|retains HttpClientControl| H[policy operator]
 ```
 
 ## Provisioning
@@ -48,6 +49,11 @@ The delay clears its host timeout when cancellation wins and rejects values
 above `2 ** 31 - 1` milliseconds instead of allowing host timer clamping.
 Integrations retain this capability and endow it to `@endo/confined-fetch`; it
 is not guest-facing.
+
+For composition and tests, the main entry also exports `makeFetch` and the
+`FetchInterface`, `FetchRequestOptionsShape`, and `FetchResponseShape` guards,
+and `timer.js` exports `makeTimer`, `TimerInterface`, and
+`MAX_TIMER_DELAY_MILLISECONDS`.
 
 ## Bugs
 
