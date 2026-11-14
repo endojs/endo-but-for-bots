@@ -41,6 +41,19 @@ const commonOptions = {
     '--allow',
     'Allow all path segments (disable path-segment denial entirely)',
   ],
+  mount: [
+    '-m,--mount <name>',
+    'Mount or readable tree whose root holds a compartment-map.json or a ' +
+      'package.json; [file] then names the entry module',
+  ],
+  registry: [
+    '--registry <name>',
+    'Registry that resolves a package.json mount (default: @registry)',
+  ],
+  offline: [
+    '--offline',
+    'Resolve a package.json mount only from packages the registry holds',
+  ],
 };
 
 const parseOptionAsMapping = (optionValueString, obj) => {
@@ -85,6 +98,9 @@ export const main = async rawArgs => {
       '-z,--archive <archive>',
       'Source-only ZIP archive name for the caplet program',
     )
+    .option(...commonOptions.mount)
+    .option(...commonOptions.registry)
+    .option(...commonOptions.offline)
     .option(
       '--UNCONFINED <path>',
       'Or path of an unconfined plugin to run in Node.js',
@@ -99,10 +115,13 @@ export const main = async rawArgs => {
       parseEnvOption,
       {},
     )
-    .action(async (filePath, args, options) => {
+    .action(async (filePath, programArguments, options) => {
       const {
         as: agentNames,
         archive: archiveName,
+        mount: mountName,
+        registry: registryName,
+        offline,
         UNCONFINED: importPath,
         powers: powersName = '@none',
         env = {},
@@ -110,8 +129,11 @@ export const main = async rawArgs => {
       const { run } = await import('./commands/run.js');
       return run({
         filePath,
-        args,
+        programArguments,
         archiveName,
+        mountName,
+        registryName,
+        offline,
         importPath,
         powersName,
         agentNames,
@@ -124,6 +146,9 @@ export const main = async rawArgs => {
     .alias('mk')
     .description('make a plugin or a worker caplet (worklet)')
     .option('-z,--archive <archive>', 'Source-only ZIP archive name')
+    .option(...commonOptions.mount)
+    .option(...commonOptions.registry)
+    .option(...commonOptions.offline)
     .option('--UNCONFINED <file>', 'Path to a Node.js module')
     .option(...commonOptions.as)
     .option('-p,--powers <name>', 'Name of powers to grant or NONE, SELF, ENDO')
@@ -143,6 +168,9 @@ export const main = async rawArgs => {
         UNCONFINED: importPath,
         name: resultName,
         archive: archiveName,
+        mount: mountName,
+        registry: registryName,
+        offline,
         worker: workerName = undefined,
         as: agentNames,
         powers: powersName = '@none',
@@ -154,6 +182,9 @@ export const main = async rawArgs => {
         importPath,
         resultName,
         archiveName,
+        mountName,
+        registryName,
+        offline,
         workerName,
         agentNames,
         powersName,
