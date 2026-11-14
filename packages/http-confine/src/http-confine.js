@@ -145,8 +145,9 @@ const validatePositiveInteger = (value, name) => {
   return value;
 };
 
-// ECMA-262 hosts clamp timer delays to a signed 32-bit integer, and the
-// endowed Timer rejects anything larger, so a longer timeout is refused here,
+// The Endo Timer profile caps a delay at a signed 32-bit millisecond count,
+// following the HTML timer initialization steps (Node instead clamps a larger
+// delay to 1 ms); ECMA-262 defines no timers. A longer timeout is refused here,
 // at the policy boundary, rather than surfacing as a request-time timer error.
 const MAX_TIMER_DELAY_MILLISECONDS = 2 ** 31 - 1;
 
@@ -313,10 +314,10 @@ export const makeRateLimiter = ({ maxPerMinute, delay, cancelled }) => {
     },
     remaining: () => (failure === undefined ? Math.max(0, max - active) : 0),
     /**
-     * @param {number} n
+     * @param {number} limit
      */
-    setMaxPerMinute: n => {
-      max = validatePositiveInteger(n, 'maxPerMinute');
+    setMaxPerMinute: limit => {
+      max = validatePositiveInteger(limit, 'maxPerMinute');
     },
   });
   return limiter;

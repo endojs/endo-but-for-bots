@@ -153,6 +153,43 @@ test('makeRateLimiter retunes in place, keeping held slots', t => {
   t.is(limiter.remaining(), 1);
 });
 
+test('makeRateLimiter lowered below its held slots stays full until enough release', async t => {
+  /** @type {Array<() => void>} */
+  const releases = [];
+  const { cancelled } = makeCancelKit();
+  const delay = (_milliseconds, token) =>
+    new Promise((resolve, reject) => {
+      releases.push(() => resolve(undefined));
+      void token.catch(reject);
+    });
+  const settle = async () => {
+    for (let turn = 0; turn < 5; turn += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+  };
+  const limiter = makeRateLimiter({ maxPerMinute: 3, delay, cancelled });
+  limiter.take();
+  limiter.take();
+  limiter.take();
+  limiter.setMaxPerMinute(1);
+  t.is(limiter.remaining(), 0);
+
+  await Promise.resolve();
+  releases.shift()?.();
+  await settle();
+  // Two slots are still held against a cap of one.
+  t.is(limiter.remaining(), 0);
+  t.throws(() => limiter.take(), { instanceOf: RateLimitError });
+
+  releases.shift()?.();
+  await settle();
+  t.is(limiter.remaining(), 0);
+  releases.shift()?.();
+  await settle();
+  t.is(limiter.remaining(), 1);
+});
+
 test('makeRequestCancellation refuses a timeout above the timer bound', t => {
   /** @type {(milliseconds: number, token: Promise<never>) => Promise<undefined>} */
   const delay = () => new Promise(() => {});
@@ -722,10 +759,12 @@ test('revoking mid-body cancels the in-flight read and rejects the request', asy
     { fetch, delay: neverDelay },
   );
 
-  const requestP = core.request({ url: 'https://api.example.com/stream' });
+  const requestPromise = core.request({
+    url: 'https://api.example.com/stream',
+  });
   await secondRead;
   core.revoke();
-  await t.throwsAsync(() => requestP, { instanceOf: RevokedError });
+  await t.throwsAsync(() => requestPromise, { instanceOf: RevokedError });
   t.is(cancelReasons.length, 1);
   t.true(cancelReasons[0] instanceof RevokedError);
 });
@@ -748,12 +787,14 @@ test('setMaxRequestsPerMinute retunes the limiter over the injected delay', asyn
       body: makeBody(['ok']),
     });
   const core = makeHttpConfinement(
-    { allowedOrigins: ['https://api.example.com'], maxRequestsPerMinute: 10 },
+    { allowedOrigins: ['https://api.example.com'], maxRequestsPerMinute: 2 },
     { fetch, delay },
   );
 
-  core.setMaxRequestsPerMinute(1);
+  // Hold a slot under the prior limit, then retune. A replaced limiter would
+  // forget the held slot and admit another request.
   await core.request({ url: 'https://api.example.com/one' });
+  core.setMaxRequestsPerMinute(1);
   await t.throwsAsync(
     () => core.request({ url: 'https://api.example.com/two' }),
     { instanceOf: RateLimitError },
