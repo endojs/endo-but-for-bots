@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: Far facet stubs, not guarded exos.
 /** @import {EndoDirectory, FormulaNumber} from '../src/types.js'; */
 /** @import {Passable} from '@endo/pass-style'; */
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -17,10 +18,10 @@ import * as url from 'node:url';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 import { parseId } from '../src/formula-identifier.js';
 import { makeEndoClient, restart, start, stop } from '../index.js';
 
@@ -42,7 +43,7 @@ for (const fail of [false, true, 'after-write']) {
             release.resolve(undefined);
             cancelled.reject(Error('Test finished'));
           });
-          const powers = await makeDaemonicPowers({
+          const powers = await makeManagerPowers({
             config: {
               statePath: path.join(temporary, 'state'),
               ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -67,7 +68,7 @@ for (const fail of [false, true, 'after-write']) {
           let armed = false;
           /** @type {FormulaNumber | undefined} */
           let lastMarshalNumber;
-          const daemon = await makeDaemon(
+          const daemon = await makeManager(
             {
               ...powers,
               control: /** @type {any} */ ({
@@ -79,7 +80,7 @@ for (const fail of [false, true, 'after-write']) {
                 ) => {
                   void forceCancelled.catch(() => {});
                   return {
-                    workerDaemonFacet: Far('UnusedWorker', {
+                    workerManagerFacet: Far('UnusedWorker', {
                       terminate: () => {},
                     }),
                     workerTerminated: workerCancelled.catch(() => {}),

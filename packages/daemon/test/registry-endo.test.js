@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-/** @import { DaemonDatabase } from '../src/manager-database.js' */
+/** @import { ManagerDatabase } from '../src/manager-database.js' */
 
 // Integration test: the `@registry` special name is populated on every host
 // (mirroring `@node`), so `E(host).lookup('@registry')` returns the host's
@@ -20,7 +20,7 @@ import fsp from 'fs/promises';
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
-import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { makeManagerDatabase } from '../src/manager-database-node.js';
 import { parseId } from '../src/formula-identifier.js';
 
 const contexts = [];
@@ -41,10 +41,10 @@ test.afterEach.always(async () => {
  * inspection and mutation, mirroring `openTestDb` in endo.test.js.
  *
  * @param {string} statePath
- * @returns {DaemonDatabase}
+ * @returns {ManagerDatabase}
  */
 const openTestDb = statePath =>
-  makeDaemonDatabase({
+  makeManagerDatabase({
     statePath,
     ephemeralStatePath: '',
     cachePath: '',

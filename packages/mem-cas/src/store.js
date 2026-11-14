@@ -7,7 +7,7 @@
  * cache growth; consumers sit on top of the CAS via the `CasStore`
  * interface. This module's `makeMemoryCasStore` is the reference
  * implementation suitable for tests. Persistent storage (the
- * daemon-side `store-sha256` tree the `daemon-persistence-powers`
+ * daemon-side `store-sha256` tree the `manager-persistence-powers`
  * module manages) implements the same surface; a future
  * `@endo/git-cas` implements it on top of git's object store.
  *
@@ -20,7 +20,7 @@
  * bind to a platform-specific crypto primitive. Callers wire in a
  * `sha256` power from a companion module (for example
  * `sha256HexWebCrypto` from `./store-web-powers.js`), mirroring the
- * daemon's `daemon-node-powers.js` vs `daemon-go-powers.js` split.
+ * daemon's `manager-node-powers.js` vs `manager-go-powers.js` split.
  *
  * @import { CasStore, RetentionLinks, Sha256Hex } from '../types.js';
  */
@@ -84,7 +84,7 @@ export const makeMemoryCasStore = options => {
   // The in-memory store is a layer-1 local utility, not an exo.
   // CAS bytes are mutable Uint8Arrays and would be rejected by an
   // exo guard's pass-style check.  The daemon-side persistent CAS
-  // (in `daemon-persistence-powers.js`) lives behind the persistence
+  // (in `manager-persistence-powers.js`) lives behind the persistence
   // powers, not behind a remotable interface, so the in-memory
   // reference implementation matches that pattern.
   return harden({

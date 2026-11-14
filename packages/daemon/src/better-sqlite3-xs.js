@@ -3,14 +3,14 @@
    class-methods-use-this, no-undef -- this module is bundled
    into the XS daemon (no Node-style globalThis / class-style
    linting); the underscore-dunder convention is consistent with
-   the rest of bus-daemon-rust-xs.js. */
+   the rest of bus-manager-rust-xs.js. */
 // XS-side adapter that presents a `better-sqlite3`-compatible
 // surface backed by the Rust supervisor's SQLite host functions
 // (powers/sqlite.rs registered in xsnap, aliased to host* in
 // host_aliases.js).
 //
 // The surface this module emulates is a strict subset of
-// better-sqlite3, exactly the methods daemon-database.js uses:
+// better-sqlite3, exactly the methods manager-database.js uses:
 //
 //   const db = new Database(path);
 //   db.pragma(stmt);
@@ -61,7 +61,7 @@ const decodeBigintTag = obj => {
 };
 
 const decodeBytesTag = obj => {
-  // The Rust side base64-encodes BLOB columns.  daemon-database.js
+  // The Rust side base64-encodes BLOB columns.  manager-database.js
   // never reads BLOB columns today; if this changes we'll wire in
   // base64 decoding here.
   return obj.$bytes;
@@ -182,7 +182,7 @@ class XsDatabase {
   /**
    * better-sqlite3 supports `db.pragma('journal_mode = WAL')`
    * (returns rows) and `db.pragma('foreign_keys = ON')`
-   * (no rows expected).  daemon-database.js uses both as
+   * (no rows expected).  manager-database.js uses both as
    * fire-and-forget — we model them as exec() calls with the
    * `PRAGMA ` prefix prepended.
    */

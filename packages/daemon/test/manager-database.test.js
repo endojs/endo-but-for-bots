@@ -10,7 +10,7 @@ const packageDirectory = fileURLToPath(new URL('../', import.meta.url));
 test('database wrappers survive idle garbage collection', t => {
   const script = `
     await import('@endo/init');
-    const { makeDaemonDatabase } = await import('./src/manager-database.js');
+    const { makeManagerDatabase } = await import('./src/manager-database.js');
     let lastStatement;
     class FakeDatabase {
       constructor() {}
@@ -33,7 +33,7 @@ test('database wrappers survive idle garbage collection', t => {
       sockPath: '',
     };
     const openAndDrop = () => {
-      const database = makeDaemonDatabase(config, { Database: FakeDatabase });
+      const database = makeManagerDatabase(config, { Database: FakeDatabase });
       return {
         database: new WeakRef(database.db),
         statement: new WeakRef(lastStatement),

@@ -1,6 +1,6 @@
 /**
  * Ambient declarations for host-injected globals available inside
- * XS bootstraps (bus-daemon-rust-xs.js, bus-xs-core.js,
+ * XS bootstraps (bus-manager-rust-xs.js, bus-xs-core.js,
  * bus-xs-daemon-polyfills.js, bus-worker-xs.js).  These symbols are
  * injected by the Rust supervisor and by polyfills.js.  Signatures
  * are intentionally permissive (`any`) because they sit at the FFI

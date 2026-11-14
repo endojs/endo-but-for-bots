@@ -2,10 +2,10 @@
 /// <reference types="ses"/>
 
 /**
- * SQLite-backed DaemonicPersistencePowers shared by every Endo
+ * SQLite-backed ManagerPersistencePowers shared by every Endo
  * daemon flavour.  Formula records, agent keys, retention
  * tables and the per-node formula index all live in the
- * SQLite-backed `daemon-database.js` schema.  The content store
+ * SQLite-backed `manager-database.js` schema.  The content store
  * (large binary blobs addressed by SHA-256) still lives on the
  * filesystem, since SQLite isn't a great place for many-MB
  * payloads.
@@ -25,18 +25,18 @@ import { makeSnapshotStore } from '@endo/platform/fs/lite';
 
 import { toHex, fromHex } from './hex.js';
 
-/** @import { Config, CryptoPowers, DaemonicPersistencePowers, FilePowers, Formula, FormulaNumber } from './types.js' */
-/** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { Config, CryptoPowers, ManagerPersistencePowers, FilePowers, Formula, FormulaNumber } from './types.js' */
+/** @import { ManagerDatabase } from './manager-database.js' */
 
 /**
- * @param {DaemonDatabase} daemonDb
+ * @param {ManagerDatabase} managerDatabase
  * @param {FilePowers} filePowers
  * @param {CryptoPowers} cryptoPowers
  * @param {Config} config
- * @returns {DaemonicPersistencePowers}
+ * @returns {ManagerPersistencePowers}
  */
-export const makeDaemonicPersistencePowers = (
-  daemonDb,
+export const makeManagerPersistencePowers = (
+  managerDatabase,
   filePowers,
   cryptoPowers,
   config,
@@ -69,7 +69,7 @@ export const makeDaemonicPersistencePowers = (
     deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
-  } = daemonDb;
+  } = managerDatabase;
 
   const initializePersistence = async () => {
     const { statePath, ephemeralStatePath, cachePath } = config;
@@ -79,7 +79,7 @@ export const makeDaemonicPersistencePowers = (
     await Promise.all([statePathP, cachePathP, ephemeralStatePathP]);
   };
 
-  /** @type {DaemonicPersistencePowers['provideRootNonce']} */
+  /** @type {ManagerPersistencePowers['provideRootNonce']} */
   const provideRootNonce = async () => {
     const existingNonce = getState('root_nonce');
     if (existingNonce === undefined) {
@@ -95,7 +95,7 @@ export const makeDaemonicPersistencePowers = (
     };
   };
 
-  /** @type {DaemonicPersistencePowers['provideRootKeypair']} */
+  /** @type {ManagerPersistencePowers['provideRootKeypair']} */
   const provideRootKeypair = async () => {
     const existingPublicHex = getState('public_key');
     if (existingPublicHex === undefined) {
@@ -142,7 +142,7 @@ export const makeDaemonicPersistencePowers = (
   // See `designs/daemon-cas-management.md` Phase 5 for the destination
   // architecture (the Rust supervisor's `cas-*` envelope verbs will
   // later replace the CAS package's implementation without changing the
-  // call site at `daemon.js` line ~330).
+  // call site at `manager.js` line ~330).
   const makeSnapshotContentStore = () => {
     const storageDirectoryPath = filePowers.joinPath(
       config.statePath,
@@ -190,4 +190,4 @@ export const makeDaemonicPersistencePowers = (
     listSecretAuditEvents,
   });
 };
-harden(makeDaemonicPersistencePowers);
+harden(makeManagerPersistencePowers);

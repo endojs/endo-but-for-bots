@@ -31,7 +31,7 @@ import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
+/** @import { ManagerCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
 
 // A read-only view of a name hub: a local in-daemon exo that forwards only the
 // readable hub methods (help / has / list / lookup / maybeLookup) to the
@@ -114,14 +114,14 @@ export const makeReadOnlyDirectoryView = (hub, assertLive = () => {}) => {
 
 /**
  * @param {object} args
- * @param {DaemonCore['provide']} args.provide
+ * @param {ManagerCore['provide']} args.provide
  * @param {(storeId: FormulaIdentifier) => Promise<StoreController>} args.provideStoreController
- * @param {DaemonCore['getIdForRef']} args.getIdForRef
- * @param {DaemonCore['getTypeForId']} args.getTypeForId
- * @param {DaemonCore['getContentIdentityForId']} args.getContentIdentityForId
- * @param {DaemonCore['formulateDirectory']} args.formulateDirectory
- * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['unpinTransient']} args.unpinTransient
+ * @param {ManagerCore['getIdForRef']} args.getIdForRef
+ * @param {ManagerCore['getTypeForId']} args.getTypeForId
+ * @param {ManagerCore['getContentIdentityForId']} args.getContentIdentityForId
+ * @param {ManagerCore['formulateDirectory']} args.formulateDirectory
+ * @param {ManagerCore['formulateReadableBlob']} args.formulateReadableBlob
+ * @param {ManagerCore['unpinTransient']} args.unpinTransient
  */
 export const makeDirectoryMaker = ({
   provide,

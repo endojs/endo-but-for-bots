@@ -483,7 +483,7 @@ const setupDaemon = async () => {
       //
       //   1. `stop()` calls `terminate()` on the daemon, which
       //      rejects the daemon-side cancellation with
-      //      `Error('Termination requested')` (`daemon.js:2810`).
+      //      `Error('Termination requested')` (`manager.js`).
       //      The error message rides back over CapTP and our
       //      client's `onReject` fires with it.
       //   2. Our own `shared.cancel(Error('teardown'))` in

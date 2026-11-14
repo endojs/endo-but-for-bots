@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * Host tool powers: the capabilities the daemon core needs that are
+ * Host tool powers: the capabilities the manager core needs that are
  * implemented by spawning an operating-system process.
  *
  * `@endo/git` shells out to `git` and `@endo/host-spawner` spawns
@@ -9,8 +9,8 @@
  * (and, for git, eight more `node:` builtins).  A static import of
  * either from `manager.js` keeps the daemon out of the XS bundle,
  * which has no host process to spawn into and no `node:` builtins to
- * resolve.  They are therefore injected through `DaemonicPowers`
- * rather than imported by the daemon core, the same way
+ * resolve.  They are therefore injected through `ManagerPowers`
+ * rather than imported by the manager core, the same way
  * `better-sqlite3` reaches the daemon as an injected `Database`
  * constructor.
  *
@@ -38,7 +38,7 @@ const refuse = name => {
 
 /**
  * Fill in refusing stand-ins for a supervisor that supplied no host
- * tools, so the daemon core can call them unconditionally and a `git`
+ * tools, so the manager core can call them unconditionally and a `git`
  * or `shell` formula fails with a diagnosis rather than a missing
  * import.
  *
