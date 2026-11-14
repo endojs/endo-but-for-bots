@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-06-02 |
-| **Updated** | 2026-07-10 |
+| **Updated** | 2026-10-31 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 
 ## Summary
 
@@ -13,15 +13,21 @@ A JavaScript reference implementation of Go-like Minimum Version
 Selection (MVS) adapted to npm package versioning.
 The implementation walks a transitive dependency graph rooted at a
 `package.json`, fetches each transitively-required `package.json`
-from the configured registry, and selects the greatest required
-minor (and patch) per major.
+from the configured registry, partitions the ranges requested of
+each package into groups that some single version satisfies, and
+selects the least published version satisfying each group.
 The output is a `RegistryResolution` consumed by the
 [registry-capability](registry-capability.md) layer.
 
 The Rust analogue lives in
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md); both
-lanes implement the same MVS semantics so a Node-hosted daemon
-and a Rust-hosted daemon resolve identically.
+lanes are meant to implement the same MVS semantics so a
+Node-hosted daemon and a Rust-hosted daemon resolve identically.
+As of 2026-10-31 they do not: `rust/endo/src/npm_resolve.rs`
+still groups by major and selects the greatest available version.
+Until the Rust lane adopts the grouping and least-version rule
+below, against shared conformance vectors, the two lanes can
+produce different resolutions for the same `package.json`.
 This design covers only the algorithm and the
 single-pass-resolution shape.
 The capability that hosts the algorithm is
@@ -84,21 +90,42 @@ This is the **algorithm layer** of the daemon-worker
 ## The MVS algorithm
 
 Go's MVS selects, for each transitively-required module, the
-greatest required version anywhere in the dependency graph.
-For npm-style versioning, the rule adapts to "greatest required
-minor (and patch) per major", because npm packages routinely
-declare incompatible majors and the Go assumption of one major
-per module does not hold.
-[endor-npm-registry-proxy](endor-npm-registry-proxy.md)
-§ *Comparison with Go's MVS* states the rule the JS reference
-implementation also follows.
+greatest version any requirement names, which is the least
+version satisfying every requirement.
+npm ranges do not adapt to that rule directly: packages routinely
+declare incompatible majors, and even within one major two ranges
+(`~1.2.0` and `~1.3.0`) may admit no common version, so the Go
+assumption of one selection per module does not hold.
+The JS reference implementation therefore groups ranges rather
+than keying them by major:
+
+- The ranges requested of a package are visited in order of
+  their least satisfying version, then of their text.
+  Each joins the first group with which some published version
+  satisfies it, and otherwise starts a group of its own.
+  The partition depends only on the set of ranges, not on the
+  order in which the walk met them.
+- Each group selects the least published version that satisfies
+  all of its ranges, by full semver precedence.
+  A pre-release satisfies a range only through a `||` alternative
+  that names a pre-release of the same `major.minor.patch`.
+  Ranges are desugared as npm's `semver` does, so partial versions
+  (`2`, `^1.2`, `<3`, `1.0.0 - 2`) and a space after an operator
+  (`>= 1.0.0 < 3`) resolve, and a malformed alternative such as a
+  dist-tag matches nothing.
+- The walk proceeds in rounds: every edge of a round is recorded
+  before any package is regrouped, and the versions selected for
+  the first time supply the next round's edges.
+  As in Go's MVS, a superseded version's requirements stay in
+  force, but packages reachable only through a superseded version
+  are pruned, and tarballs are fetched, written, and pinned only
+  for the final closure.
 
 The resolution shape that emerges:
 
-- For each `(package, major)` pair reachable from the entry
-  `package.json`, the resolver picks the greatest minor / patch
-  that satisfies every range expressed for that major across the
-  closure.
+- For each group of ranges reachable from the entry
+  `package.json`, the resolver picks the least version that
+  satisfies every range in the group.
 - A package that appears under two majors in the closure (say,
   `ses@^1` from the entry and `ses@^2` from a transitive) lands
   twice in `packagesByKey`, keyed `ses@1.0.0` and `ses@2.3.4`.
@@ -236,11 +263,10 @@ ways:
 The first cut limits scope to MVS resolution from
 `package.json` alone and ignores any `package-lock.json` or
 `yarn.lock` present in the entry mount.
-MVS runs freely and produces the conservative "greatest required
-minor per major" result described in
-[endor-npm-registry-proxy](endor-npm-registry-proxy.md)
-§ *Comparison with Go's MVS*; lockfile honoring is a follow-up
-design that can land once the MVS path is stable.
+MVS runs freely and produces the conservative least-satisfying
+selection per group of ranges described in *The MVS algorithm*;
+lockfile honoring is a follow-up design that can land once the
+MVS path is stable.
 
 Lockfile honoring slots in as a constraint pass within
 `EndoRegistry.resolve` without changing the surrounding
@@ -265,9 +291,13 @@ the worker does not change.
 
 ## JS reference implementation shape
 
-The resolver lives in `packages/daemon/src/registry.js`,
+The resolver was first sketched in `packages/daemon/src/registry.js`,
 co-located with the `EndoRegistry` exo defined by
-[registry-capability](registry-capability.md).
+[registry-capability](registry-capability.md); the reference
+implementation landed as `makeMvsResolveHook` in
+`packages/exo-npm/src/mvs-resolver.js`.
+The daemon copy keeps its own semver parser and range matcher;
+consolidating the two onto one shared primitive is open work.
 Sketch:
 
 ```js
@@ -279,94 +309,102 @@ const resolve = async (packageJsonBytes, options = {}) => {
   // Frontier: pending (name, requestedRange, source) edges, where
   // source is one of 'dependencies' | 'peerDependencies' |
   // 'optionalDependencies' for error classification.
-  // Resolved: name -> Map<major, { version, integrity, treeRef }>.
-  const frontier = enqueueAllDependencies(root);
-  const resolved = new Map();
+  // Ranges: name -> Set<range>; groups: name -> [{ ranges, version }].
+  let frontier = enqueueAllDependencies(root);
+  const rangesByName = new Map();
+  const groupsByName = new Map();
   const peerRequirements = []; // (importer, peer name, range)
   const unmetOptionals = [];   // (importer, dep name, range, reason)
 
+  // Each round records every edge, then regroups the packages whose
+  // ranges grew, so traversal order cannot change the result.
   while (frontier.length > 0) {
-    const edge = frontier.shift();
-    const { name, range, source, importer } = edge;
+    const next = [];
+    const touched = new Set();
+    for (const edge of frontier) {
+      const { name, range, source, importer } = edge;
 
-    // workspace: specifier? resolve from the enumerated members.
-    if (isWorkspaceSpecifier(range)) {
-      if (workspaceRoot === undefined) {
-        // The mapper found no enclosing workspace root, yet an
-        // importer used a `workspace:` specifier.  This reject is
-        // the resolver's: only the graph walk sees the specifier
-        // (see "Workspace resolution").
-        throw makeError(
-          X`workspace dependency ${
-            q(name)} declared but no enclosing workspace root`,
-        );
+      // workspace: specifier? resolve from the enumerated members.
+      if (isWorkspaceSpecifier(range)) {
+        if (workspaceRoot === undefined) {
+          // The mapper found no enclosing workspace root, yet an
+          // importer used a `workspace:` specifier.  This reject is
+          // the resolver's: only the graph walk sees the specifier
+          // (see "Workspace resolution").
+          throw makeError(
+            X`workspace dependency ${
+              q(name)} declared but no enclosing workspace root`,
+          );
+        }
+        const memberTree = workspaceRoot.members[name];
+        if (memberTree === undefined) {
+          throw makeError(
+            X`workspace dependency ${q(name)} not found in workspace at ${
+              q(workspaceRoot.root)}`,
+          );
+        }
+        const workspacePj = await readWorkspaceMemberPackageJson(memberTree);
+        // Workspace members carry no version segment and short-circuit
+        // version selection; see "Workspace resolution" below.
+        upsertWorkspaceMember(groupsByName, name, workspacePj);
+        enqueueAllDependenciesInto(next, workspacePj, name);
+        continue;
       }
-      const memberTree = workspaceRoot.members[name];
-      if (memberTree === undefined) {
-        throw makeError(
-          X`workspace dependency ${q(name)} not found in workspace at ${
-            q(workspaceRoot.root)}`,
-        );
-      }
-      const workspacePj = await readWorkspaceMemberPackageJson(memberTree);
-      // Workspace members carry no version segment and short-circuit
-      // version selection; see "Workspace resolution" below.
-      upsertWorkspaceMember(resolved, name, workspacePj);
-      enqueueAllDependenciesInto(frontier, workspacePj, name);
-      continue;
-    }
 
-    const major = parseRangeMajor(range);
-    const existing = resolved.get(name)?.get(major);
-    let candidate;
-    try {
-      candidate = await selectLeastSatisfying(name, range, {
-        table: registryTable,
-        offline,
-      });
-    } catch (err) {
-      if (source === 'optionalDependencies') {
-        unmetOptionals.push({ importer, name, range, err });
-        continue; // optional misses are silent at the graph level
+      if (!anyVersionSatisfies(name, range, { offline })) {
+        if (source === 'optionalDependencies') {
+          unmetOptionals.push({ importer, name, range });
+          continue; // optional misses are silent at the graph level
+        }
+        throw RegistryMissingPackageError(`no version satisfies ${range}`);
       }
-      throw err;
-    }
-    if (existing && cmp(existing.version, candidate.version) >= 0) {
+      addRange(rangesByName, name, range, touched);
       if (source === 'peerDependencies') {
         peerRequirements.push({ importer, name, range });
       }
-      continue;
     }
-    const treeRef = await fetchOrLookup(name, candidate.version, { offline });
-    upsert(resolved, name, major, { ...candidate, treeRef });
-    if (source === 'peerDependencies') {
-      peerRequirements.push({ importer, name, range });
+    for (const name of [...touched].sort()) {
+      const groups = groupRanges(name, rangesByName.get(name));
+      groupsByName.set(name, groups);
+      for (const { version } of groups) {
+        if (firstSelection(name, version)) {
+          // Metadata only: no tarball is fetched during the walk.
+          enqueueAllDependenciesInto(next, readMetadata(name, version), name);
+        }
+      }
     }
-    const childPj = await readPackageJson(treeRef);
-    enqueueAllDependenciesInto(frontier, childPj, name);
+    frontier = next;
   }
 
-  // Peer cross-check: every recorded peer requirement must be
-  // satisfied by some entry in `resolved`.
-  assertPeerDependenciesSatisfied(peerRequirements, resolved);
+  // Keep only selections reachable from the entry under the final
+  // grouping, check peers, then fetch, write, and pin that closure.
+  const closure = reachableFrom(root, groupsByName);
+  assertPeerDependenciesSatisfied(peerRequirements, closure);
+  await fetchAndPin(closure, { offline });
 
-  return buildRegistryResolution(resolved, { unmetOptionals });
+  return buildRegistryResolution(closure, { unmetOptionals });
 };
 ```
 
 Notes on the sketch:
 
-- `selectLeastSatisfying` consults the registry table for
-  published versions and picks the least that satisfies the
-  range, fetching the package's metadata from the registry when
-  the table is cold.
+- `anyVersionSatisfies` consults the registry table for
+  published versions, fetching the package's metadata from the
+  registry when the table is cold.
   In `offline: true` mode, it consults only the table and rejects
   with `RegistryOfflineError` on a miss.
-- `parseRangeMajor` extracts the major-version key that drives
-  MVS's per-major coexistence; the resolver tracks one selection
-  per `(name, major)`, not one per `name`.
-- `buildRegistryResolution` flattens the `(name, major) ->
-  selection` map into the `packagesByKey` shape the capability
+- `groupRanges` partitions a package's ranges as *The MVS
+  algorithm* describes and selects the least satisfying version
+  per group; the resolver tracks one selection per group of
+  ranges, not one per `name` or per major.
+- `reachableFrom` follows each edge to the group holding its range
+  under the final partition, so selections that only a superseded
+  version required drop out, along with their diagnostics.
+- `fetchAndPin` fetches tarballs for the closure alone; an
+  optional whose tarball fails to fetch is dropped, with what only
+  it required, and pins are taken only once the closure is final.
+- `buildRegistryResolution` flattens the closure's
+  selections into the `packagesByKey` shape the capability
   returns, computes the canonical key list, and derives
   `resolutionHash`.
   The `unmetOptionals` list is attached as diagnostic state on
@@ -377,8 +415,12 @@ Notes on the sketch:
   dependency Y") when an importer's peer requirement does not
   appear in the resolved closure within its declared range.
 - `enqueueAllDependencies` walks `dependencies`,
-  `peerDependencies`, and `optionalDependencies` together;
-  conditional exports do not enter the dependency graph (they
+  `peerDependencies`, and `optionalDependencies` together.
+  A name that is also optional is walked as optional only, since
+  npm copies optional entries into `dependencies` on publish.
+  A peer marked optional in `peerDependenciesMeta` is not walked;
+  it is checked only when the closure already holds the name.
+  Conditional exports do not enter the dependency graph (they
   apply at link time, not at graph-walk time).
 
 ## Phased implementation
@@ -396,7 +438,8 @@ The MVS-specific shape tests this design adds:
 - A small fixture with a transitively-required package whose
   range is widened by a deeper requirement (entry says `pkg@^1.0.0`,
   transitive says `pkg@^1.2.0`); the resolution picks `1.2.0`,
-  the greatest required `1.x` version.
+  the least version both ranges admit, even when a later `1.x`
+  is published.
 - A fixture where two importers require incompatible majors
   (entry says `pkg@^1`, transitive says `pkg@^2`); the resolution
   carries both majors as distinct `packagesByKey` entries.
@@ -484,10 +527,11 @@ The MVS-specific shape tests this design adds:
    See [endor-npm-registry-proxy](endor-npm-registry-proxy.md)
    for the Rust-side counterpart that defers the same lane.
 
-3. **One selection per `(name, major)`, not one per `name`.**
-   The "greatest required minor per major" rule needs per-major
-   bookkeeping in the resolver state; the resolver tracks one
-   selection per `(name, major)` pair throughout the walk.
+3. **One selection per group of ranges, not one per `name`.**
+   Coexistence needs per-group bookkeeping in the resolver state;
+   the resolver tracks one selection per group of mutually
+   satisfiable ranges, which separates incompatible majors and
+   disjoint ranges within one major alike.
    The output flattens to `packagesByKey` keyed by canonical
    `<name>@<version>` strings, which is what
    [registry-capability](registry-capability.md) consumes.
