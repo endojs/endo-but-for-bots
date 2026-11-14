@@ -1178,10 +1178,39 @@ for (const [label, mutate] of /** @type {const} */ ([
     await Promise.resolve();
     release();
     await mutation;
-    await t.throwsAsync(() => pending, { message: /not in the allowed/ });
+    await t.throwsAsync(() => pending, {
+      message: /Policy refuses origin|not in the allowed/,
+    });
     t.deepEqual(fake.calls, []);
   });
 }
+
+test('a binding revocation stays effective when now() rejects', async t => {
+  const fake = makeFakeFetch();
+  let failNow = false;
+  const { client, control } = makeHttpClientAndControl({
+    fetch: fake.fetch,
+    policyMode: 'tofu-auto',
+    now: async () => {
+      await null;
+      if (failNow) {
+        throw Error('clock unavailable');
+      }
+      return 0;
+    },
+  });
+  await E(client).fetch(ALLOWED_URL);
+  t.is(fake.calls.length, 1);
+
+  failNow = true;
+  await t.throwsAsync(() => E(control).revokeBinding(ALLOWED), {
+    message: /clock unavailable/,
+  });
+  await t.throwsAsync(() => E(client).fetch(ALLOWED_URL), {
+    message: /Policy refuses origin/,
+  });
+  t.is(fake.calls.length, 1);
+});
 
 test('policyPromptTimeoutMs above the timer range is rejected', t => {
   t.throws(
