@@ -4,6 +4,7 @@
  * @typedef {import('./src/types.js').ConfinedRequest} ConfinedRequest
  * @typedef {import('./src/types.js').ConfinedResponse} ConfinedResponse
  * @typedef {import('./src/types.js').ConfinedResponseSummary} ConfinedResponseSummary
+ * @typedef {import('./src/types.js').Delay} Delay
  * @typedef {import('./src/types.js').FetchLike} FetchLike
  * @typedef {import('./src/types.js').FetchLikeBodyReader} FetchLikeBodyReader
  * @typedef {import('./src/types.js').FetchLikeRequestOptions} FetchLikeRequestOptions

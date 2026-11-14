@@ -145,6 +145,26 @@ const validatePositiveInteger = (value, name) => {
   return value;
 };
 
+// ECMA-262 hosts clamp timer delays to a signed 32-bit integer, and the
+// endowed Timer rejects anything larger, so a longer timeout is refused here,
+// at the policy boundary, rather than surfacing as a request-time timer error.
+const MAX_TIMER_DELAY_MILLISECONDS = 2 ** 31 - 1;
+
+/**
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {number}
+ */
+const validateTimeout = (value, name) => {
+  const milliseconds = validatePositiveInteger(value, name);
+  if (milliseconds > MAX_TIMER_DELAY_MILLISECONDS) {
+    throw makeError(
+      X`${name} must be at most ${q(MAX_TIMER_DELAY_MILLISECONDS)}, got ${q(value)}`,
+    );
+  }
+  return milliseconds;
+};
+
 /**
  * @param {string} url
  * @returns {URL}
@@ -249,13 +269,27 @@ export const assertHeadersSafe = headers => {
 freeze(assertHeadersSafe);
 
 /**
+ * Each `take()` holds one slot for a 60-second `delay`.
+ * If that delay rejects, the slot stays held and every later `take()` throws:
+ * a failed or revoked timer must not lift the limit.
+ * `setMaxPerMinute` retunes the cap in place, so slots already held keep
+ * counting against the new cap.
+ *
  * @param {{ maxPerMinute: number, delay: Delay, cancelled: Promise<never> }} opts
  */
 export const makeRateLimiter = ({ maxPerMinute, delay, cancelled }) => {
-  const max = validatePositiveInteger(maxPerMinute, 'maxPerMinute');
+  let max = validatePositiveInteger(maxPerMinute, 'maxPerMinute');
   let active = 0;
+  /** @type {Error | undefined} */
+  let failure;
   const limiter = freeze({
     take: () => {
+      if (failure !== undefined) {
+        throw makeNamedError(
+          'RateLimitError',
+          `HttpClient rate limit unavailable: ${failure.message}`,
+        );
+      }
       if (active >= max) {
         throw makeNamedError(
           'RateLimitError',
@@ -265,12 +299,25 @@ export const makeRateLimiter = ({ maxPerMinute, delay, cancelled }) => {
       active += 1;
       void Promise.resolve()
         .then(() => delay(60_000, cancelled))
-        .catch(() => {})
-        .then(() => {
-          active -= 1;
-        });
+        .then(
+          () => {
+            active -= 1;
+          },
+          reason => {
+            failure =
+              reason instanceof Error
+                ? reason
+                : makeError(X`rate window timer failed: ${q(reason)}`);
+          },
+        );
     },
-    remaining: () => Math.max(0, max - active),
+    remaining: () => (failure === undefined ? Math.max(0, max - active) : 0),
+    /**
+     * @param {number} n
+     */
+    setMaxPerMinute: n => {
+      max = validatePositiveInteger(n, 'maxPerMinute');
+    },
   });
   return limiter;
 };
@@ -527,7 +574,7 @@ freeze(snapshotResponse);
  * @returns {{ cancelled: Promise<never>, cancel: (reason?: Error) => void, dispose: () => void }}
  */
 export const makeRequestCancellation = ({ timeoutMs, cancellation, delay }) => {
-  const timeout = validatePositiveInteger(timeoutMs, 'timeoutMs');
+  const timeout = validateTimeout(timeoutMs, 'timeoutMs');
   const { cancelled, cancel } = makeCancelKit(cancellation);
   void Promise.resolve()
     .then(() => delay(timeout, cancelled))
@@ -575,7 +622,7 @@ export const makeHttpConfinement = (policy, { fetch, delay }) => {
     typeof allowedOriginSource === 'function'
       ? parseAllowedOrigins([])
       : parseAllowedOrigins(allowedOriginSource);
-  let rateLimiter = makeRateLimiter({
+  const rateLimiter = makeRateLimiter({
     maxPerMinute:
       policy.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE,
     delay,
@@ -585,7 +632,7 @@ export const makeHttpConfinement = (policy, { fetch, delay }) => {
     policy.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
     'maxResponseBytes',
   );
-  let timeoutMs = validatePositiveInteger(
+  let timeoutMs = validateTimeout(
     policy.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     'timeoutMs',
   );
@@ -717,11 +764,7 @@ export const makeHttpConfinement = (policy, { fetch, delay }) => {
     setMaxRequestsPerMinute: n => {
       assertNotRevoked();
       requestLimit = validatePositiveInteger(n, 'maxRequestsPerMinute');
-      rateLimiter = makeRateLimiter({
-        maxPerMinute: n,
-        delay,
-        cancelled: serviceCancelled,
-      });
+      rateLimiter.setMaxPerMinute(requestLimit);
     },
     /**
      * @param {number} n
@@ -735,7 +778,7 @@ export const makeHttpConfinement = (policy, { fetch, delay }) => {
      */
     setTimeoutMs: n => {
       assertNotRevoked();
-      timeoutMs = validatePositiveInteger(n, 'timeoutMs');
+      timeoutMs = validateTimeout(n, 'timeoutMs');
     },
     revoke: () => {
       revoked = true;
