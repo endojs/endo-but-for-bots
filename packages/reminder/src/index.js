@@ -11,20 +11,22 @@
  * E(host).makeUnconfined(workerName, '@endo/reminder', { powersName, resultName })
  * ```
  *
- * `powers` is agent-shaped (typically a dedicated guest). The plugin resolves
- * everything it needs by name through it and holds no ambient authority beyond
- * the Node worker it runs in:
+ * `powers` is agent-shaped (a tenant guest). The plugin resolves everything it
+ * needs by name through it and holds no ambient authority beyond the Node
+ * worker it runs in:
  *
  * - `E(powers).lookup('reminder-store')` -> a writable virtual-file-system
  *   directory backing the durable store (`./store.js`). The backing may be a
  *   host directory, an in-memory tree, a daemon mount, or a database.
- * - `E(powers).lookup('reminder-recipient')` -> the subscriber capability the
- *   service is bound to. Phase 2 delivers each reminder message by eventual-send
- *   to `E(recipient).notify(message)`, carrying the one-shot `ReminderResponse`
- *   as an argument. Because the capability is re-resolved by name on every
- *   `make()`, it is re-obtained on restart rather than held only in memory, so
- *   nothing durable passes through a mailbox - which is why the Phase 2 baseline
- *   needs no SturdyRef modelling.
+ * - `E(powers).send('@self', [payload], [], [])` -> ordinary guest package mail.
+ *   Each firing is delivered as a self-addressed package message carrying a
+ *   single capability-free JSON string (`./mail.js`, the `minion-reminder/v1`
+ *   schema) and no attached values. The plugin drives the scheduler's internal
+ *   one-shot `ReminderResponse` from the send outcome - `resolve()` only after
+ *   the send fulfills, `reschedule()` after a send failure - so the ephemeral
+ *   response never enters the mailbox. No `reminder-recipient` formula and no
+ *   `EndoHandle` change: delivery rides the guest's existing `send` method, and
+ *   the consumer reads a filtered, deduplicated projection of its own mailbox.
  *
  * Initial `maxActive` / `minPeriodMs` (and an optional initial `paused`) arrive
  * via the `env` option of `makeUnconfined`; thereafter `ReminderControl` adjusts
@@ -40,10 +42,17 @@
 import { E } from '@endo/eventual-send';
 import { makeReminderStore } from './store.js';
 import { makeReminderService } from './scheduler.js';
+import { encodeReminderMessage } from './mail.js';
 
 export { makeReminderService } from './scheduler.js';
 export { makeReminderStore } from './store.js';
 export { ReminderResponseInterface } from './interfaces.js';
+export {
+  REMINDER_MESSAGE_SCHEMA,
+  encodeReminderMessage,
+  decodeReminderPackage,
+  projectReminderEvents,
+} from './mail.js';
 export {
   computeBackoffDelay,
   resolveBackoff,
@@ -101,7 +110,6 @@ const parseOptionalInteger = (value, name) => {
  */
 export const make = async (powers, context, { env = {} } = {}) => {
   const storeDirectory = await E(powers).lookup('reminder-store');
-  const recipient = await E(powers).lookup('reminder-recipient');
   const store = await makeReminderStore(storeDirectory, makeRandomHexId);
 
   const maxActive = parseOptionalInteger(env.maxActive, 'maxActive');
@@ -111,10 +119,31 @@ export const make = async (powers, context, { env = {} } = {}) => {
   const { service, stop } = await makeReminderService({
     store,
     makeId: makeRandomHexId,
-    // Phase 2 delivery baseline: eventual-send to the subscriber capability,
-    // carrying the one-shot ReminderResponse on the message. Retains no durable
-    // capability, so no SturdyRef gate.
-    onMessage: message => E(recipient).notify(message),
+    // Ordinary guest package mail: send a self-addressed, capability-free JSON
+    // string through the guest's existing `send` method, and drive the internal
+    // one-shot ReminderResponse from the send outcome. resolve() ONLY after the
+    // send fulfills; reschedule() after a send failure (which covers an
+    // ambiguous outcome - the retry re-sends the same {reminderId, messageNumber}
+    // so the consumer's mailbox projection dedupes any duplicate). The ephemeral
+    // response is never serialized, so it cannot enter the mailbox. Retains no
+    // durable capability, so no SturdyRef gate.
+    onMessage: message => {
+      const payload = encodeReminderMessage(message);
+      E(powers)
+        .send('@self', [payload], [], [])
+        .then(
+          () => {
+            E(message.reminderResponse).resolve();
+          },
+          error => {
+            console.error(
+              `[reminder] mail delivery failed for ${message.label}, rescheduling:`,
+              error,
+            );
+            E(message.reminderResponse).reschedule();
+          },
+        );
+    },
     ...(maxActive !== undefined ? { maxActive } : {}),
     ...(minPeriodMs !== undefined ? { minPeriodMs } : {}),
     ...(paused !== undefined ? { paused } : {}),
