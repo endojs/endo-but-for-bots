@@ -2704,6 +2704,9 @@ const makeDaemonCore = async (
     } = formula;
     context.thisDiesIfThatDies(workerId);
     context.thisDiesIfThatDies(powersId);
+    // A live mount is snapshotted into this readable-tree formula before the
+    // caplet is formulated. This edge both freezes worker reads and retains
+    // the snapshot's CAS tree for exactly the caplet's lifetime.
     context.thisDiesIfThatDies(sourceId);
     context.thisDiesIfThatDies(registryId);
     if (cancelWithWorker) {
