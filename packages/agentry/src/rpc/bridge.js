@@ -1,0 +1,266 @@
+// @ts-check
+/// <reference types="ses"/>
+
+/**
+ * The stdio RPC bridge dispatcher.
+ *
+ * Parses one JSON command per input line, drives a {@link Session}, and
+ * emits wire events. It subscribes to the session's raw event stream once
+ * and relays every event (translated to the wire vocabulary) tagged with
+ * the in-flight prompt's `id`.
+ *
+ * A prompt round runs concurrently with input parsing: `handleCommand`
+ * starts the round without awaiting its completion so that mid-round
+ * `steer` and `abort` commands, which arrive on later input lines, reach
+ * the agent while it is still working. The session is single-flight — a
+ * `prompt` received while a round is in progress is rejected with an
+ * error rather than silently queued (concurrent sessions are the design's
+ * later multiplexing phase).
+ */
+
+import {
+  makeAckEvent,
+  makeErrorEvent,
+  makeModelsEvent,
+  makeStatusEvent,
+  translateAgentEvent,
+} from './protocol.js';
+
+/** @import { RpcBridge, RpcCommand, RpcEvent, Session } from './types.js' */
+
+/**
+ * @param {unknown} error
+ * @returns {string}
+ */
+const describeError = error => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+};
+
+/**
+ * @param {object} options
+ * @param {Session} options.session
+ * @param {(event: RpcEvent) => void} options.write
+ * @param {(message: string) => void} [options.log]
+ * @returns {RpcBridge}
+ */
+export const makeRpcBridge = ({ session, write, log = () => {} }) => {
+  let busy = false;
+  /** @type {string | undefined} */
+  let currentId;
+  // A unique marker for the in-flight prompt round, set when a `prompt` is
+  // accepted and cleared when the round terminates (via `agent_end` or its
+  // own rejection). The fire-and-forget prompt's late rejection compares
+  // against it so a round that has already been superseded — aborted, then
+  // followed by a new `prompt` — cannot clobber the newer round's `busy` /
+  // `currentId` state or emit a spurious `error` for an already-ended round.
+  /** @type {object | undefined} */
+  let activeRound;
+  // Settles when the active round ends, so `idle()` lets the stream wiring
+  // drain an in-flight round at end of input instead of abandoning it.
+  /** @type {Promise<void>} */
+  let idlePromise = Promise.resolve();
+  let resolveIdle = () => {};
+
+  const endRound = () => {
+    busy = false;
+    currentId = undefined;
+    activeRound = undefined;
+    resolveIdle();
+  };
+
+  /** @param {RpcEvent} event */
+  const safeWrite = event => {
+    try {
+      write(event);
+    } catch (error) {
+      log(`failed to write ${event.type} event: ${describeError(error)}`);
+    }
+  };
+
+  const unsubscribe = session.subscribe(event => {
+    const wire = translateAgentEvent(event, currentId);
+    // Update the round state before writing, and never let a failing write
+    // (a closed pipe) escape into the agent's event dispatch, so the bridge
+    // cannot be wedged busy by an output error.
+    if (event.type === 'agent_end') {
+      endRound();
+    }
+    if (wire) {
+      safeWrite(wire);
+    }
+  });
+
+  /**
+   * @param {RpcCommand} command
+   */
+  const handleCommand = async command => {
+    await null;
+    const { type } = command;
+    const id = command.id;
+    switch (type) {
+      case 'prompt': {
+        if (typeof command.message !== 'string') {
+          write(makeErrorEvent('prompt requires a string "message"', id));
+          return;
+        }
+        if (busy) {
+          write(
+            makeErrorEvent(
+              'agent is busy; steer or abort the current round first',
+              id,
+            ),
+          );
+          return;
+        }
+        busy = true;
+        currentId = id;
+        const round = {};
+        activeRound = round;
+        idlePromise = new Promise(resolve => {
+          resolveIdle = resolve;
+        });
+        const message = command.message;
+        // Round completion is observed via the `agent_end` event above; this
+        // handler covers only a failed `prompt`.
+        Promise.resolve()
+          .then(() => session.prompt(message))
+          .catch(error => {
+            if (activeRound !== round) {
+              return;
+            }
+            endRound();
+            safeWrite(makeErrorEvent(describeError(error), id));
+          });
+        return;
+      }
+      case 'steer': {
+        if (typeof command.message !== 'string') {
+          write(makeErrorEvent('steer requires a string "message"', id));
+          return;
+        }
+        session.steer(command.message);
+        write(makeAckEvent('steer', id));
+        return;
+      }
+      case 'abort': {
+        session.abort();
+        write(makeAckEvent('abort', id));
+        return;
+      }
+      case 'list_models': {
+        write(makeModelsEvent(session.listModels(), id));
+        return;
+      }
+      case 'set_model': {
+        if (
+          typeof command.provider !== 'string' ||
+          typeof command.model !== 'string'
+        ) {
+          write(
+            makeErrorEvent(
+              'set_model requires string "provider" and "model"',
+              id,
+            ),
+          );
+          return;
+        }
+        if (busy) {
+          // Single-flight: switching the model mid-round would re-point the
+          // live agent's model under an in-flight prompt, so the round's next
+          // provider turn would run against a swapped model. The design's
+          // mid-session switching happens between rounds; reject until idle.
+          write(
+            makeErrorEvent(
+              'agent is busy; abort the current round before set_model',
+              id,
+            ),
+          );
+          return;
+        }
+        try {
+          await session.setModel({
+            provider: command.provider,
+            model: command.model,
+          });
+          write(makeAckEvent('set_model', id));
+        } catch (error) {
+          write(makeErrorEvent(describeError(error), id));
+        }
+        return;
+      }
+      case 'get_status': {
+        write(makeStatusEvent({ model: session.describeModel(), busy }, id));
+        return;
+      }
+      default: {
+        log(`ignoring unknown command type: ${String(type)}`);
+        write(makeErrorEvent(`unknown command type: ${String(type)}`, id));
+      }
+    }
+  };
+
+  /**
+   * @param {string} line
+   */
+  const handleLine = async line => {
+    const trimmed = line.trim();
+    if (trimmed === '') {
+      return;
+    }
+    /** @type {unknown} */
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      write(makeErrorEvent(`invalid JSON: ${describeError(error)}`));
+      return;
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      write(makeErrorEvent('each record must be a JSON object'));
+      return;
+    }
+    // `id` is echoed verbatim on every correlated event. A non-string `id`
+    // would be reflected unchecked (breaking the correlation contract and the
+    // typed `string | undefined` currentId), so reject it before dispatch.
+    const { id, type } = /** @type {{ id?: unknown, type?: unknown }} */ (
+      parsed
+    );
+    if (id !== undefined && typeof id !== 'string') {
+      write(
+        makeErrorEvent('each record\'s "id" must be a string when present'),
+      );
+      return;
+    }
+    if (typeof type !== 'string') {
+      write(makeErrorEvent('each record must have a string "type"', id));
+      return;
+    }
+    // Only `id` and `type` are checked here; the dispatcher validates each
+    // payload field before use.
+    const command = /** @type {RpcCommand} */ (parsed);
+    await handleCommand(command).catch(error => {
+      safeWrite(makeErrorEvent(describeError(error), id));
+    });
+  };
+
+  /**
+   * Resolves once no prompt round is in flight.
+   *
+   * @returns {Promise<void>}
+   */
+  const idle = () => idlePromise;
+
+  const close = () => {
+    unsubscribe();
+  };
+
+  return harden({ handleLine, idle, close });
+};
+harden(makeRpcBridge);

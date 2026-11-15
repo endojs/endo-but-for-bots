@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-02 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation
@@ -98,6 +98,11 @@ works on the Node daemon today; once `endor` has Bus-TUI parity, the
 stdio bridge becomes a thin front-end for the bus.
 
 ## Phased implementation
+
+The bridge library for phases 1–4 ships as `@endo/agentry/rpc`
+(framing, event translation, the `steer` / `abort` / `set_model`
+commands, and `serveRpc`).
+The `endo agent rpc` CLI entry point and phase 5 are not yet built.
 
 1. **Protocol skeleton.** `endo agent rpc` accepts `prompt`, emits the
    message events. No tools, no streaming.
