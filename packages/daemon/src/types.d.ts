@@ -461,6 +461,8 @@ export type EnvironmentDeferredTaskParams = {
  * The confinement mode a formula-owned HTTP policy can honor across a daemon
  * restart on its own. `tofu-prompt` / `tofu-attenuator` are excluded because
  * they need a live `policyAuthority` capability the formula does not carry.
+ *
+ * @deprecated Provision confined HTTP through the `@endo/fetch` plugin.
  */
 export type HttpClientPolicyMode = 'strict' | 'tofu-auto';
 
@@ -469,6 +471,8 @@ export type HttpClientPolicyMode = 'strict' | 'tofu-auto';
  * (formula-owned, like `ShellPolicy`), so the capability reconstitutes across
  * daemon restart with identical bounds. The `fetch` and `now` seams are
  * host-owned and injected at reincarnation, never persisted.
+ *
+ * @deprecated Provision confined HTTP through the `@endo/fetch` plugin.
  */
 export type HttpClientPolicy = {
   allowedOrigins: string[];
@@ -477,11 +481,13 @@ export type HttpClientPolicy = {
   policyMode: HttpClientPolicyMode;
 };
 
+/** @deprecated Provision confined HTTP through the `@endo/fetch` plugin. */
 export type HttpClientFormula = {
   type: 'http-client';
   policy: HttpClientPolicy;
 };
 
+/** @deprecated Provision confined HTTP through the `@endo/fetch` plugin. */
 export type HttpClientDeferredTaskParams = {
   httpClientId: FormulaIdentifier;
 };
@@ -2035,6 +2041,8 @@ export interface EndoHost extends EndoAgent {
    * it takes no mount cap — the Network tier is rooted in a host-owned `fetch`
    * seam, not the mount. The policy-bearing `HttpClientControl` is retained
    * host-side, reachable via `getHttpClientControl`.
+   *
+   * @deprecated Provision confined HTTP through the `@endo/fetch` plugin.
    */
   provideHttpClient(
     petName: string | string[],
@@ -2043,6 +2051,8 @@ export interface EndoHost extends EndoAgent {
   /**
    * Recover the host-retained `HttpClientControl` for a daemon-minted
    * `HttpClient` cap (policy mutation, revocation, binding/audit inspection).
+   *
+   * @deprecated Retain the control facet returned by the `@endo/fetch` plugin.
    */
   getHttpClientControl(clientCap: HttpClient): Promise<HttpClientControl>;
   /**
@@ -3171,6 +3181,7 @@ export interface DaemonCore {
     deferredTasks: DeferredTasks<EnvironmentDeferredTaskParams>,
   ) => FormulateResult<EnvironmentKit>;
 
+  /** @deprecated Provision confined HTTP through the `@endo/fetch` plugin. */
   formulateHttpClient: (
     policy: HttpClientPolicy,
     deferredTasks: DeferredTasks<HttpClientDeferredTaskParams>,

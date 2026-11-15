@@ -97,8 +97,20 @@ import {
   makeMountFsTools,
   makeShellTool,
   makeHttpTool,
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionHistoryTools,
 } from '@endo/agent-tools';
 ```
+
+`makeWorkspaceTools` composes an explicit grant record into one catalog.
+It conditionally includes filesystem, Git, GitRemote, Shell, and confined HTTP
+groups from capabilities the host already holds. At the composition boundary,
+it qualifies colliding capability method names as `inspectShell`,
+`inspectGitRemote`, `fetchGitRemote`, and `fetchHttp`, so all groups can coexist
+without name shadowing. `provisionWorkspaceTools` can derive the filesystem view
+from a supplied Git worktree; it never discovers grants from a petstore.
+`provisionHistoryTools` composes read-only file tools over a historical Git ref.
 
 Scoped imports expose each layer:
 
@@ -246,8 +258,9 @@ destination must be a concrete ref, the all-zeros ID is refused (git reads it as
 Each maker names its records after the capability's own methods, so names can
 collide across makers: `makeGitRemoteTool` emits `inspect` and `fetch`, which
 `makeShellTool` and `makeHttpTool` also emit. A host composing several makers
-into one flat tool list must disambiguate them itself; nothing in `makeTool`
-prefixes or dedupes.
+into one flat tool list must disambiguate them itself. The workspace helpers
+apply the qualified names above; nothing in `makeTool` itself prefixes or
+dedupes.
 
 ## Git history tools
 
