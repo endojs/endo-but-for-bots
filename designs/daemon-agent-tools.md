@@ -385,7 +385,8 @@ mount or git capability at the boundary; they do not require every file
 to have a guest petstore name.
 
 The network tier grants the same control / client split through the
-`@endo/fetch` plugin, the canonical provisioning path selected for Phase 8.
+`@endo/fetch` plugin, the canonical provisioning path (selected
+2026-11-15).
 The earlier daemon host methods `provideHttpClient` and
 `getHttpClientControl` remain only as deprecated compatibility APIs. Per
 [endo-fetch](endo-fetch.md), the plugin supplies the confined `HttpClient` /
