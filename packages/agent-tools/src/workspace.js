@@ -18,6 +18,7 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended';
 import { makeGitTool } from './json-tools/git.js';
 import { makeGitMountTools } from './json-tools/git-mount.js';
 import { makeGitRemoteTool } from './json-tools/git-remote.js';
+import { makeHttpTool } from './json-tools/http.js';
 import { makeShellTool } from './json-tools/shell.js';
 import { makeMountFsTools } from './json-tools/fs.js';
 
@@ -26,7 +27,8 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * turns a set of already-granted daemon capabilities into the flat agent-tool
  * catalog a harness advertises to a model, replacing the path-root provisioning
  * sketch (`endo grant fae fs /home/user/project`, a git subprocess rooted at a
- * host path) with composition over the trio's capabilities.
+ * host path) with composition over the granted capabilities (the git-capability trio of
+ * filesystem, Git, and GitRemote, plus Shell and HttpClient).
  *
  * The composition realizes the two rules of daemon-agent-tools § Granting and
  * Provisioning:
@@ -34,9 +36,10 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * - **Conditional composition.** A tool group is present in the catalog only
  *   when the caller holds the backing capability; an ungranted group is
  *   *absent*, not present-but-failing. This maps one grant to one group:
- *   `filesystem` → the mount file tools, `git` → the versioning tools (the
- *   JSON-safe git slice plus agent-facing `status` defaults), `remote` →
- *   the push tier, `shell` → the command tools.
+ *   `filesystem` supplies the mount file tools; `git` supplies the versioning
+ *   tools (the JSON-safe git slice plus agent-facing `status` defaults);
+ *   `remote` supplies the push tier; `shell` supplies the command tools; and
+ *   `http` supplies the confined outbound HTTP tools.
  * - **Formula-owned identity rides the granted `Git`.** Commit attribution is
  *   captured at `provideGit` / `provideGitClone` construction time and is
  *   guest-immutable (daemon-agent-tools § Commit-identity boundary). This
@@ -96,6 +99,7 @@ export const makeWorkspaceTools = ({
   git,
   remote,
   shell,
+  http,
   readOnly = false,
   maxChars,
   shellOptions,
@@ -124,6 +128,9 @@ export const makeWorkspaceTools = ({
       records: makeShellTool(shell, shellOptions),
     });
   }
+  if (http !== undefined) {
+    groups.push({ group: 'http', records: makeHttpTool(http) });
+  }
   return concatDistinctTools(groups);
 };
 harden(makeWorkspaceTools);
@@ -144,6 +151,7 @@ export const provisionWorkspaceTools = async ({
   git,
   remote,
   shell,
+  http,
   filesystem,
   readOnly = false,
   maxChars,
@@ -160,6 +168,7 @@ export const provisionWorkspaceTools = async ({
     git,
     remote,
     shell,
+    http,
     readOnly,
     maxChars,
     shellOptions,

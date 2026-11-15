@@ -2,4 +2,10 @@
 '@endo/agent-tools': minor
 ---
 
-Add the capability-based workspace provisioning adapter (`@endo/agent-tools/workspace.js`), the thin composition seam that turns a set of already-granted daemon capabilities into one flat agent-tool catalog, replacing the path-root provisioning sketch (a git subprocess rooted at a host path) with composition over the git-capability trio. `makeWorkspaceTools({ filesystem, git, remote, shell })` composes each tool group only when its backing capability is granted (an ungranted group is absent, not present-but-failing) and fails closed on a duplicate tool name; `provisionWorkspaceTools` derives the content-layer `Filesystem` from the granted `Git`'s worktree mount so a single `Git` grant yields both the file tools and the versioning tools over the same worktree; `provisionHistoryTools` composes read-only file tools over `Git.filesystemAt(ref)` for historical inspection. Commit attribution rides the granted `Git`'s formula-owned identity (`provideGit`'s `{ identity }`); the adapter never re-states it. A worked end-to-end test closes the M3 version-controlled-filesystem loop entirely through the provisioned catalog: branch → edit via file tools → shell build step → status / diff / commit via git tools → push via the remote tool → inspect the pushed ref via `filesystemAt`, asserting the pushed commit's author and committer carry the granted identity.
+Add the capability-based workspace provisioning adapter (`@endo/agent-tools/workspace.js`).
+`makeWorkspaceTools({ filesystem, git, remote, shell, http })` composes one flat tool catalog from already-granted daemon capabilities.
+A tool group is present only when its capability is granted, and a duplicate tool name fails closed.
+The `http` grant contributes the confined client's `fetch` and `allowedOrigins` tools without exposing its policy controller or the unfettered transport.
+`provisionWorkspaceTools` derives the `Filesystem` from the granted `Git`'s worktree, so one `Git` grant yields both file and versioning tools.
+`provisionHistoryTools` composes read-only file tools over `Git.filesystemAt(ref)`.
+Commit attribution rides the granted `Git`'s formula-owned identity.

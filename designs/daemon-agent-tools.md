@@ -45,8 +45,9 @@ What has shipped, by layer:
   `HttpClientControl` capability), realizing
   [endoclaw-network-fetch](endoclaw-network-fetch.md). The daemon formula was
   superseded by the `@endo/fetch` / `@endo/confined-fetch` plugin split; those
-  plugins, their policy store, and `makeHttpTool` are the remaining delta
-  (§ Tool Groups, § Implementation Plan).
+  plugins and their policy store are the remaining delta; `makeHttpTool`
+  has landed and `makeWorkspaceTools` composes it when an `HttpClient` is
+  granted (§ Tool Groups, § Implementation Plan).
 - **Package-management tier.** `@endo/exo-package-manager` provides the
   portable reader, safe-installer, and project-executor facets (#948).
   The daemon-backed base-session design is #949, the grant-sensitive
@@ -55,7 +56,7 @@ What has shipped, by layer:
   Code mode may consume the facets directly; #950 is part of the reviewed
   JSON-tool tail already in flight when that surface was parked.
 - **Remaining** (the phased delta in § Implementation Plan below): the
-  **network tool** (plugin provisioning plus `makeHttpTool`),
+  **network plugin provisioning** (the `makeHttpTool` binding has landed),
   the **sandbox-spawner shell engine** (Phase 2c, gated on
   [endo-posix-sandbox](endo-posix-sandbox.md)), and the provisioning and
   across-turn persistence wiring.
@@ -110,13 +111,13 @@ What this document owns is the remainder:
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); plugin provisioning and `makeHttpTool` remaining |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed and composed by `makeWorkspaceTools`; plugin provisioning remaining |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
 | Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
 
 > **The JSON tool-wrapper surface is parked — see #731.** The `ToolRecord`
 > wrappers the Status column names (`makeGitTool`, `makeGitRemoteTool`,
-> `makeShellTool`, `makeHttpTool`) are parked as future work in favor of code
+> `makeShellTool`) are parked as future work in favor of code
 > mode as the primary agent surface. The capability substrate in the
 > Reconciled-backing column is unaffected: code mode consumes those
 > capabilities directly, and they stay prioritized. The parking bars *new*
@@ -393,9 +394,9 @@ endows it plus a state directory to `@endo/confined-fetch`. The confined
 plugin mints the `HttpClient` / `HttpClientControl` pair, retains the
 policy-bearing control facet, and binds only the use-facing `HttpClient` into
 the guest petstore. #566 landed the package pair (`@endo/http-confine` plus
-`@endo/exo-http-client`); the two plugins, their durable virtual-file-system
-policy store, and the `makeHttpTool` binding are the remaining wiring (§
-Implementation Plan, Network tier). The
+`@endo/exo-http-client`); the two plugins and their durable virtual-file-system
+policy store are the remaining wiring, while the `makeHttpTool` binding has
+landed (§ Implementation Plan, Network tier). The
 conditional-composition rule is unchanged: the network tool group is
 absent from the catalog unless the agent holds the `HttpClient`.
 
@@ -411,8 +412,8 @@ the landed substrate; Phases 1–3 are dispatchable builder work; Phase 4
 is the integration pass that demonstrates the pillar. As of 2026-08-06,
 Phase 1 (#614), Phase 2a/2b (#615), the local mount-bridged git
 tools (#616, Phase 3.5), and the push tier (#705, Phase 3) have landed on
-`llm`; the remaining builder work is the network tool wiring (Phase 3.6),
-the sandbox shell engine (Phase 2c), and the Phase 4 worked loop.
+`llm`; the network tool binding (Phase 3.6, `makeHttpTool`) has also landed; the
+remaining builder work is the network plugin provisioning, the sandbox shell engine (Phase 2c), and the Phase 4 worked loop.
 
 The loop-level, cross-design sequencing of the git-capability stack is
 canonical in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased
@@ -510,7 +511,7 @@ pure confinement core) and `@endo/exo-http-client` (the `HttpClient` /
 `HttpClientControl` capability); the provisioning is redrafted as the
 `@endo/fetch` base plus `@endo/confined-fetch` plugin
 ([endo-fetch](endo-fetch.md)). Only the tool binding remains in this
-document's scope.
+document's scope, and it has landed.
 
 - ~~Reconcile the largely in-flight daemon HTTP formula from #286 onto
   the shared HTTP core~~ — **superseded by
@@ -522,7 +523,7 @@ document's scope.
   policy persistence and restart reconstitution; #286's formula shape is
   superseded outright and its CLI intent survives as the `endo http` eventual
   surface sketched there.
-- [ ] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
+- [x] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
   hand-authored wire schema and divergence gate, mirroring `makeGitTool`
   / `makeShellTool`; bounds come entirely from the granted `HttpClient`
   ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
