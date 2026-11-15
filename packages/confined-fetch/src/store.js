@@ -34,13 +34,33 @@ import { E } from '@endo/eventual-send';
 
 const SNAPSHOT_NAME = 'policy.json';
 
-/** @param {unknown} error */
-const isEnoent = error => {
+/**
+ * A missing snapshot is reported by the directory's `lookup` as
+ * `ENOENT: "policy.json"`. Match only that, so an error that merely mentions
+ * ENOENT elsewhere is not mistaken for first provisioning.
+ *
+ * @param {unknown} error
+ */
+const isSnapshotMissing = error => {
   const message =
     error && typeof error === 'object' && 'message' in error
       ? String(/** @type {{ message: unknown }} */ (error).message)
       : '';
-  return /ENOENT/.test(message);
+  return message === `ENOENT: ${JSON.stringify(SNAPSHOT_NAME)}`;
+};
+
+const bindingStates = new Set(['Pinned-Allow', 'Pinned-Deny', 'Revoked']);
+
+/** @param {unknown} target */
+const isOrigin = target => {
+  if (typeof target !== 'string') {
+    return false;
+  }
+  try {
+    return new URL(target).origin === target;
+  } catch {
+    return false;
+  }
 };
 
 /**
@@ -51,9 +71,8 @@ const isRecord = value =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * Check the structure of a persisted snapshot. Field values are validated
- * again by `makeHttpClientAndControl`; this only rejects documents whose shape
- * would otherwise be misread as absent or empty state.
+ * Check a persisted snapshot. `makeHttpClientAndControl` validates the policy
+ * fields again, but copies bindings as given, so each binding is checked here.
  *
  * @param {unknown} value
  * @returns {PersistedSnapshot}
@@ -71,6 +90,21 @@ const assertSnapshotShape = value => {
   }
   if (!Array.isArray(bindings) || !bindings.every(isRecord)) {
     throw TypeError('policy.json bindings must be an array of records');
+  }
+  for (const binding of bindings) {
+    if (
+      !isOrigin(binding.target) ||
+      !bindingStates.has(/** @type {string} */ (binding.state)) ||
+      typeof binding.decidedAt !== 'number' ||
+      !Number.isFinite(binding.decidedAt) ||
+      typeof binding.decidedBy !== 'string' ||
+      typeof binding.decisionMode !== 'string' ||
+      (binding.note !== undefined && typeof binding.note !== 'string')
+    ) {
+      throw TypeError(
+        `policy.json holds a malformed binding for ${JSON.stringify(binding.target)}`,
+      );
+    }
   }
   return /** @type {PersistedSnapshot} */ (value);
 };
@@ -97,13 +131,21 @@ export const makeFetchStore = async (root, makeIdentifier) => {
       try {
         file = await E(root).lookup(SNAPSHOT_NAME);
       } catch (error) {
-        if (isEnoent(error)) {
+        if (isSnapshotMissing(error)) {
           return undefined;
         }
         throw error;
       }
       const blob = await E(file).snapshot();
-      return assertSnapshotShape(await E(blob).json());
+      let value;
+      try {
+        value = await E(blob).json();
+      } catch (error) {
+        throw Error(`policy.json cannot be parsed: ${String(error)}`, {
+          cause: error,
+        });
+      }
+      return assertSnapshotShape(value);
     },
 
     /** @param {PersistedSnapshot} snapshot */

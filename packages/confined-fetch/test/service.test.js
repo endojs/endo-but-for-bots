@@ -283,7 +283,7 @@ test('a corrupt policy.json refuses revival rather than reseeding from env', asy
         allowedOrigins: [ALLOWED, OTHER],
         policyMode: 'tofu-auto',
       }),
-    { message: /JSON|Unexpected token/ },
+    { message: /policy\.json cannot be parsed/ },
   );
 });
 
@@ -305,6 +305,25 @@ test('a structurally invalid policy.json refuses revival', async t => {
       bindings: {},
     }),
     JSON.stringify({ policy: { allowedOrigins: [] }, bindings: [] }),
+    ...[
+      { target: 'not-an-origin', state: 'Pinned-Allow' },
+      { target: 42, state: 'Pinned-Allow' },
+      { target: `${ALLOWED}/path`, state: 'Pinned-Allow' },
+      { target: ALLOWED, state: 'Allowed' },
+      { target: ALLOWED, state: 'Pinned-Allow', decidedAt: 'yesterday' },
+    ].map(binding =>
+      JSON.stringify({
+        policy: { allowedOrigins: [], revoked: false },
+        bindings: [
+          {
+            decidedAt: 1,
+            decidedBy: 'test',
+            decisionMode: 'tofu-auto',
+            ...binding,
+          },
+        ],
+      }),
+    ),
   ]) {
     // eslint-disable-next-line no-await-in-loop
     await E(directory).write('policy.json', document);
@@ -339,6 +358,27 @@ test('an unreadable store refuses revival; only absence provisions', async t => 
   await t.throwsAsync(
     () => makeConfinedFetchService({ store, fetch, allowedOrigins: [ALLOWED] }),
     { message: /EIO/ },
+  );
+
+  // An ENOENT that is not the snapshot's own absence is not provisioning.
+  const missingParent = /** @type {FetchStoreDirectory} */ (
+    harden({
+      lookup: async () => {
+        throw Error('ENOENT: "state"');
+      },
+      write: async () => {},
+      move: async () => {},
+    })
+  );
+  const orphaned = await makeFetchStore(missingParent, async () => '1');
+  await t.throwsAsync(
+    () =>
+      makeConfinedFetchService({
+        store: orphaned,
+        fetch,
+        allowedOrigins: [ALLOWED],
+      }),
+    { message: /ENOENT/ },
   );
 });
 

@@ -47,9 +47,40 @@ export const makeTransportFromBase = base => {
         ...(cancelled === undefined ? {} : { cancelled }),
       }),
     );
-    const { body, ...summary } = await (cancelled === undefined
-      ? response
-      : Promise.race([response, cancelled]));
+    let settled = response;
+    if (cancelled !== undefined) {
+      let delivered = false;
+      let abandoned = false;
+      settled = Promise.race([
+        response.then(late => {
+          if (abandoned) {
+            // Cancellation won the race; close the body nobody will read.
+            if (late.body) {
+              E(late.body)
+                .close()
+                .catch(() => {});
+            }
+          } else {
+            delivered = true;
+          }
+          return late;
+        }),
+        // A cancellation token only ever rejects; treat fulfillment as misuse.
+        Promise.resolve(cancelled)
+          .then(
+            () => {
+              throw TypeError('A cancellation token must not fulfill');
+            },
+            reason => {
+              throw reason;
+            },
+          )
+          .finally(() => {
+            abandoned = !delivered;
+          }),
+      ]);
+    }
+    const { body, ...summary } = await settled;
 
     if (body === null) {
       return { ...summary, body: null };
