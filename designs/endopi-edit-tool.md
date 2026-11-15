@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-07-10 |
+| **Updated** | 2026-10-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 | **Parent** | [endopi](endopi.md) |
 
 > **Implementation note (2026-07-10).** The exact-string-replacement core has
@@ -25,8 +25,13 @@
 > non-unique-match and overlap cases surface as thrown structured errors, not
 > as a `conflicts` field on the returned record — superseding the older
 > `{ applied, diff, conflicts }` sketch in the § Design tool surface below.
-> Still open: the Chat UI render-side diff preview, and promoting the tool onto
-> a dedicated `File` capability if/when `Dir.lookup(name) → File` lands.
+>
+> **Completion note (2026-10-19).** The Chat UI now recognizes unified diffs
+> in plain-text and structured tool results and renders file headers, hunks,
+> additions, and removals as distinct rows in the Floot action view. Promoting
+> the tool onto a dedicated `File` capability remains conditional on
+> `Dir.lookup(name) -> File` landing and does not block this design's delivered
+> tree-capability surface.
 
 **Parked note.** The JSON `edit` / `editText` wrappers are parked with the
 agent-tools JSON layer; the shared `applyEdits` algorithm remains kept
