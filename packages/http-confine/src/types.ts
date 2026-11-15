@@ -5,6 +5,9 @@ export type FetchLikeBodyReader = {
 };
 
 export type FetchLikeResponse = {
+  // The Fetch Standard response type; `opaqueredirect` is refused.
+  type?: string;
+  // Null for null-body responses (204, 205, 304, and answers to HEAD).
   body?: {
     getReader: () => FetchLikeBodyReader;
   } | null;

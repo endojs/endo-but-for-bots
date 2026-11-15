@@ -341,7 +341,10 @@ test('a browser opaque redirect through the base is refused', async t => {
   t.is(baseResponse.type, 'opaqueredirect');
 
   const fetchLike = makeTransportFromBase(base);
-  const response = await fetchLike(ALLOWED_URL, { redirect: 'manual' });
+  const response = await fetchLike(ALLOWED_URL, {
+    method: 'GET',
+    redirect: 'manual',
+  });
   t.is(response.type, 'opaqueredirect');
 
   const { powers } = await makePowers({ base });

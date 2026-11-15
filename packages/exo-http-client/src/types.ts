@@ -1,3 +1,21 @@
+import type {
+  Delay,
+  FetchLike,
+  FetchLikeBodyReader,
+  FetchLikeRequestOptions,
+  FetchLikeResponse,
+} from '@endo/http-confine';
+
+// The fetch-like and delay contracts belong to `@endo/http-confine`, which
+// drives them; they are re-exported here for this package's callers.
+export type {
+  Delay,
+  FetchLike,
+  FetchLikeBodyReader,
+  FetchLikeRequestOptions,
+  FetchLikeResponse,
+};
+
 export type PolicyMode =
   'strict' | 'tofu-auto' | 'tofu-prompt' | 'tofu-attenuator';
 
@@ -74,36 +92,6 @@ export type FetchOptions = {
   body?: unknown;
 };
 
-export type FetchLikeRequestOptions = FetchOptions & {
-  redirect: 'manual';
-  cancelled?: Promise<never>;
-};
-
-export type FetchLikeBodyReader = {
-  read: () => Promise<{ done?: boolean; value?: unknown }>;
-  cancel?: (reason?: unknown) => Promise<void>;
-  releaseLock?: () => void;
-};
-
-export type FetchLikeResponse = {
-  // The Fetch Standard response type; `opaqueredirect` is refused.
-  type?: string;
-  // Null for null-body responses (204, 205, 304, and answers to HEAD).
-  body?: {
-    getReader: () => FetchLikeBodyReader;
-  } | null;
-  status?: number;
-  statusText?: string;
-  ok?: boolean;
-  headers?: Headers | Record<string, string> | Iterable<[string, string]>;
-  url?: string;
-};
-
-export type FetchLike = (
-  url: string,
-  options?: FetchLikeRequestOptions,
-) => Promise<FetchLikeResponse> | FetchLikeResponse;
-
 export type HttpResponse = {
   status: () => number;
   statusText: () => string;
@@ -149,8 +137,3 @@ export type HttpClientControl = {
   }) => AuditEntry[];
   help: () => string;
 };
-
-export type Delay = (
-  milliseconds: number,
-  cancelled: Promise<never>,
-) => Promise<undefined>;
