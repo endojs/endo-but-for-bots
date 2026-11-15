@@ -22,10 +22,10 @@
   },
   "type": "module",
   "main": "./index.js",
-  "types": "./index.d.ts",
+  "types": "./types-index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./index.js"
     },
     "./src/http-confine.js": {
@@ -46,6 +46,7 @@
     "test": "ses-ava"
   },
   "dependencies": {
+    "@endo/cancel": "workspace:^",
     "@endo/errors": "workspace:^"
   },
   "devDependencies": {

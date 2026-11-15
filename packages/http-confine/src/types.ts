@@ -5,6 +5,9 @@ export type FetchLikeBodyReader = {
 };
 
 export type FetchLikeResponse = {
+  // The Fetch Standard response type; `opaqueredirect` is refused.
+  type?: string;
+  // Null for null-body responses (204, 205, 304, and answers to HEAD).
   body?: {
     getReader: () => FetchLikeBodyReader;
   } | null;
@@ -20,7 +23,7 @@ export type FetchLikeRequestOptions = {
   method: string;
   headers?: Record<string, string>;
   body?: unknown;
-  signal?: AbortSignal;
+  cancelled?: Promise<never>;
 };
 
 export type FetchLike = (
@@ -58,3 +61,8 @@ export type ConfinedResponse = {
   truncated: boolean;
   maxResponseBytes: number;
 };
+
+export type Delay = (
+  milliseconds: number,
+  cancelled: Promise<never>,
+) => Promise<undefined>;

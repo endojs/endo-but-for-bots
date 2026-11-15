@@ -78,6 +78,9 @@
       "path": "packages/compartment-mapper/tsconfig.composite.json"
     },
     {
+      "path": "packages/confined-fetch/tsconfig.composite.json"
+    },
+    {
       "path": "packages/crc32/tsconfig.composite.json"
     },
     {
@@ -136,6 +139,9 @@
     },
     {
       "path": "packages/far/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/fetch/tsconfig.composite.json"
     },
     {
       "path": "packages/gateway/tsconfig.composite.json"

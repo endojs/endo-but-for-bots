@@ -34,7 +34,10 @@ import {
   makeUnavailableGitCredential,
 } from '@endo/exo-git';
 import { makeShell } from '@endo/exo-shell';
-import { makeHttpClientAndControl } from '@endo/exo-http-client';
+import {
+  makeFetchLikeFromPlatformFetch,
+  makeHttpClientAndControl,
+} from '@endo/exo-http-client';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
@@ -4008,12 +4011,10 @@ const makeDaemonCore = async (
       // `provideHttpClient` time, so the capability reconstitutes across daemon
       // restart with identical bounds.
       const { client, control } = makeHttpClientAndControl({
-        // Native Node `fetch` is structurally a `FetchLike` (its `body` is
-        // `BodyInit` where `FetchLike` accepts `unknown`); cast at the seam as
-        // `@endo/exo-http-client` does for its own `globalThis.fetch` default.
-        fetch: /** @type {import('@endo/exo-http-client').FetchLike} */ (
-          globalThis.fetch
-        ),
+        // Native Node `fetch` honors an `AbortSignal`, not the `cancelled`
+        // token the client passes, so adapt it: a request timeout or
+        // revocation must abort the in-flight request.
+        fetch: makeFetchLikeFromPlatformFetch(globalThis.fetch),
         now: Date.now,
         allowedOrigins: harden([...policy.allowedOrigins]),
         maxRequestsPerMinute: policy.maxRequestsPerMinute,

@@ -1,14 +1,13 @@
 {
   "name": "@endo/fetch",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Unconfined Endo plugin that provisions confined outbound HTTP. A fetch service hands a guest a bounded HttpClient (origin allowlist, rate and byte caps, trust-on-first-bind pins) and retains the HttpClientControl for the integration. Durable policy and pins live on the platform virtual file system, so the backing may be a real directory, a database, or memory. Provision it through the daemon's generic `make-unconfined` pathway and pin it into `@pins` for wake-on-restart.",
+  "description": "Unconfined Endo plugin that adapts the worker's ambient fetch into a passable, unfettered Fetch capability. Integrations retain it and endow it to @endo/confined-fetch, which attenuates it into a policy-bound HttpClient for guests.",
   "keywords": [
     "endo",
     "exo",
     "fetch",
     "http",
-    "confined-fetch",
     "plugin"
   ],
   "author": "Endo contributors",
@@ -22,11 +21,17 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "main": "./src/index.js",
+  "main": "./index.js",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./src/service.js": "./src/service.js",
-    "./src/store.js": "./src/store.js",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./timer.js": {
+      "types": "./src/timer.d.ts",
+      "default": "./src/timer.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -39,22 +44,30 @@
   ],
   "scripts": {
     "build": "exit 0",
-    "test": "ava --serial",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
+    "test": "ava",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'"
   },
   "dependencies": {
-    "@endo/eventual-send": "workspace:^",
-    "@endo/exo-http-client": "workspace:^",
-    "@endo/pass-style": "workspace:^"
+    "@endo/cancel": "workspace:^",
+    "@endo/errors": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/http-confine": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
-    "@endo/platform": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
-    "eslint": "catalog:dev"
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
   },
   "ava": {
     "files": [

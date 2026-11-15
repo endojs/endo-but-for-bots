@@ -1,3 +1,21 @@
+import type {
+  Delay,
+  FetchLike,
+  FetchLikeBodyReader,
+  FetchLikeRequestOptions,
+  FetchLikeResponse,
+} from '@endo/http-confine';
+
+// The fetch-like and delay contracts belong to `@endo/http-confine`, which
+// drives them; they are re-exported here for this package's callers.
+export type {
+  Delay,
+  FetchLike,
+  FetchLikeBodyReader,
+  FetchLikeRequestOptions,
+  FetchLikeResponse,
+};
+
 export type PolicyMode =
   'strict' | 'tofu-auto' | 'tofu-prompt' | 'tofu-attenuator';
 
@@ -74,34 +92,6 @@ export type FetchOptions = {
   body?: unknown;
 };
 
-export type FetchLikeRequestOptions = FetchOptions & {
-  redirect: 'manual';
-  signal?: AbortSignal;
-};
-
-export type FetchLikeBodyReader = {
-  read: () => Promise<{ done?: boolean; value?: unknown }>;
-  cancel?: (reason?: unknown) => Promise<void>;
-  releaseLock?: () => void;
-};
-
-export type FetchLikeResponse = {
-  // Null for null-body responses (204, 205, 304, and answers to HEAD).
-  body?: {
-    getReader: () => FetchLikeBodyReader;
-  } | null;
-  status?: number;
-  statusText?: string;
-  ok?: boolean;
-  headers?: Headers | Record<string, string> | Iterable<[string, string]>;
-  url?: string;
-};
-
-export type FetchLike = (
-  url: string,
-  options?: FetchLikeRequestOptions,
-) => Promise<FetchLikeResponse> | FetchLikeResponse;
-
 export type HttpResponse = {
   status: () => number;
   statusText: () => string;
@@ -130,17 +120,17 @@ export type HttpClientControl = {
     policyMode: string;
     revoked: boolean;
   };
-  setAllowedOrigins: (origins: string[]) => void;
-  addAllowedOrigin: (origin: string) => void;
-  removeAllowedOrigin: (origin: string) => void;
-  setMaxRequestsPerMinute: (n: number) => void;
-  setMaxResponseBytes: (n: number) => void;
-  revoke: () => void;
+  setAllowedOrigins: (origins: string[]) => Promise<void>;
+  addAllowedOrigin: (origin: string) => Promise<void>;
+  removeAllowedOrigin: (origin: string) => Promise<void>;
+  setMaxRequestsPerMinute: (limit: number) => Promise<void>;
+  setMaxResponseBytes: (limit: number) => Promise<void>;
+  revoke: () => Promise<void>;
   isRevoked: () => boolean;
   listBindings: () => Binding[];
-  revokeBinding: (origin: string) => void;
-  unpin: (origin: string) => void;
-  setPolicyMode: (mode: PolicyMode) => void;
+  revokeBinding: (origin: string) => Promise<void>;
+  unpin: (origin: string) => Promise<void>;
+  setPolicyMode: (mode: PolicyMode) => Promise<void>;
   listAuditEntries: (options?: {
     since?: number;
     limit?: number;

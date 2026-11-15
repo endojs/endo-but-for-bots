@@ -1,13 +1,31 @@
 // @ts-check
+// spell-out-exempt: policyPromptTimeoutMs is an established public option.
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
-  makeHttpClientAndControl,
-  makeTrustOnFirstBindPolicyAdapter,
+  makeHttpClientAndControl as makeHttpClientAndControlCore,
+  makeTrustOnFirstBindPolicyAdapter as makeTrustOnFirstBindPolicyAdapterCore,
 } from '../src/http-client.js';
+
+/** @import { PolicySnapshot } from '../src/types.js' */
+
+const neverDelay = (_milliseconds, cancelled) =>
+  new Promise((_resolve, reject) => {
+    void cancelled.catch(reject);
+  });
+
+/** @param {any} [options] */
+const makeHttpClientAndControl = (options = {}) =>
+  makeHttpClientAndControlCore({ delay: neverDelay, ...options });
+
+/** @param {any} [options] */
+const makeTrustOnFirstBindPolicyAdapter = (options = {}) =>
+  makeTrustOnFirstBindPolicyAdapterCore({ delay: neverDelay, ...options });
 
 /**
  * Drain an exo-stream `PassableBytesReader` into a single Uint8Array.
@@ -296,10 +314,10 @@ test('fetch forwards only supported transport options', async t => {
 
   t.deepEqual(Object.keys(fake.calls[0].options).sort(), [
     'body',
+    'cancelled',
     'headers',
     'method',
     'redirect',
-    'signal',
   ]);
   t.deepEqual(fake.calls[0].options.headers, {
     accept: 'application/json',
@@ -401,13 +419,21 @@ test('non-streaming responses are rejected instead of buffered without bound', a
 });
 
 test('rate limiting enforces a per-minute request cap', async t => {
-  let clock = 1000;
+  /** @type {Array<() => void>} */
+  const releaseRateSlot = [];
+  const delay = (milliseconds, cancelled) =>
+    new Promise((resolve, reject) => {
+      if (milliseconds === 60_000) {
+        releaseRateSlot.push(() => resolve(undefined));
+      }
+      void cancelled.catch(reject);
+    });
   const fake = makeFakeFetch();
   const { client } = makeHttpClientAndControl({
     fetch: fake.fetch,
     allowedOrigins: [ALLOWED],
     maxRequestsPerMinute: 2,
-    now: () => clock,
+    delay,
   });
 
   await E(client).fetch(`${ALLOWED}/1`);
@@ -416,7 +442,9 @@ test('rate limiting enforces a per-minute request cap', async t => {
     message: /rate limit exceeded/,
   });
 
-  clock += 60_001;
+  releaseRateSlot.shift()?.();
+  await Promise.resolve();
+  await Promise.resolve();
   await E(client).fetch(`${ALLOWED}/4`);
   t.is(fake.calls.length, 3);
 });
@@ -515,15 +543,100 @@ test('policy-change notifications run in a later event', async t => {
   /** @type {import('../src/types.js').PolicySnapshot[]} */
   const snapshots = [];
   const { control } = makeHttpClientAndControl({
-    onPolicyChange: snapshot => snapshots.push(snapshot),
+    onPolicyChange: snapshot => {
+      snapshots.push(snapshot);
+    },
   });
 
-  control.setMaxResponseBytes(9);
+  const settled = control.setMaxResponseBytes(9);
   t.is(snapshots.length, 0);
 
-  await Promise.resolve();
+  await settled;
   t.is(snapshots.length, 1);
   t.is(snapshots[0].policy.maxResponseBytes, 9);
+});
+
+test('a control mutation resolves only after its snapshot is persisted', async t => {
+  /** @type {() => void} */
+  let commit = () => {};
+  /** @type {Array<PolicySnapshot>} */
+  const committed = [];
+  const { client, control } = makeHttpClientAndControl({
+    fetch: makeFakeFetch().fetch,
+    allowedOrigins: [ALLOWED],
+    onPolicyChange: snapshot =>
+      /** @type {Promise<void>} */ (
+        new Promise(resolve => {
+          commit = () => {
+            committed.push(snapshot);
+            resolve(undefined);
+          };
+        })
+      ),
+  });
+
+  let acknowledged = false;
+  const revoked = E(control)
+    .revoke()
+    .then(() => {
+      acknowledged = true;
+    });
+  // Revocation takes effect at once, before it is durable.
+  await t.throwsAsync(() => E(client).fetch(`${ALLOWED}/`), {
+    message: /revoked/,
+  });
+  t.false(acknowledged);
+
+  commit();
+  await revoked;
+  t.true(acknowledged);
+  t.true(committed[0].policy.revoked);
+});
+
+test('a control mutation rejects when persistence fails, but still applies', async t => {
+  const { client, control } = makeHttpClientAndControl({
+    fetch: makeFakeFetch().fetch,
+    allowedOrigins: [ALLOWED],
+    onPolicyChange: async () => {
+      throw Error('disk full');
+    },
+  });
+
+  await t.throwsAsync(() => E(control).removeAllowedOrigin(ALLOWED), {
+    message: /disk full/,
+  });
+  await t.throwsAsync(() => E(client).fetch(`${ALLOWED}/`), {
+    message: /Policy refuses|not in the allowed-origin list/,
+  });
+  await t.throwsAsync(() => E(control).revoke(), { message: /disk full/ });
+  t.true(await E(control).isRevoked());
+});
+
+test('a remote policy authority is sent a hardened decision request', async t => {
+  /** @type {unknown[]} */
+  const requests = [];
+  const policyAuthority = makeExo(
+    'PolicyAuthority',
+    M.interface('PolicyAuthority', {
+      decide: M.call(M.any()).returns(M.string()),
+    }),
+    {
+      decide: request => {
+        requests.push(request);
+        return 'allow';
+      },
+    },
+  );
+  const { client } = makeHttpClientAndControl({
+    fetch: makeFakeFetch().fetch,
+    policyMode: 'tofu-attenuator',
+    policyAuthority,
+  });
+
+  await E(client).fetch(`${ALLOWED}/`);
+  t.is(requests.length, 1);
+  t.true(Object.isFrozen(requests[0]));
+  t.like(requests[0], { kind: 'http-origin', target: ALLOWED });
 });
 
 test('origin configuration rejects non-http schemes and path-bearing entries', t => {
@@ -714,7 +827,10 @@ test('revoke rejects while response body read is pending', async t => {
   await E(control).revoke();
 
   await t.throwsAsync(() => pending, { message: /revoked/ });
-  t.deepEqual(cancelReasons, ['HttpClient revoked']);
+  t.is(
+    /** @type {Error} */ (cancelReasons[0]).message,
+    'HttpClient has been revoked',
+  );
 });
 
 test('tofu deny pins refusal until the controller unpins it', async t => {
@@ -897,6 +1013,34 @@ test('policy decision records accept only explicit normalized shapes', async t =
   );
 });
 
+test('policy prompt timeout uses the injected delay', async t => {
+  const policy = makeTrustOnFirstBindPolicyAdapter({
+    policyMode: 'tofu-prompt',
+    policyAuthority: harden({ decide: () => new Promise(() => {}) }),
+    delay: async () => undefined,
+  });
+
+  await t.throwsAsync(() => policy.assertAllowed(ALLOWED), {
+    message: /Policy decision timed out/,
+  });
+});
+
+test('binding and audit stamps await the injected clock', async t => {
+  const stamps = [101, 202];
+  const policy = makeTrustOnFirstBindPolicyAdapter({
+    policyMode: 'tofu-auto',
+    now: async () => /** @type {number} */ (stamps.shift()),
+  });
+
+  await policy.assertAllowed(ALLOWED);
+
+  t.is(policy.listBindings()[0].decidedAt, 202);
+  t.deepEqual(
+    policy.listAuditEntries().map(entry => entry.at),
+    [101, 202],
+  );
+});
+
 test('fetch rejects an unsupported method before policy or transport', async t => {
   const fake = makeFakeFetch();
   let decisions = 0;
@@ -1056,4 +1200,114 @@ test('inspect reports tofu-pinned origins, matching allowedOrigins()', async t =
   const effective = await E(client).allowedOrigins();
   t.deepEqual(effective, [ALLOWED]);
   t.deepEqual((await E(control).inspect()).allowedOrigins, effective);
+});
+
+test('addAllowedOrigin re-admits a removed origin and clears its revocation', async t => {
+  const fake = makeFakeFetch();
+  const { client, control } = makeHttpClientAndControl({
+    fetch: fake.fetch,
+    allowedOrigins: [ALLOWED],
+  });
+
+  await E(control).removeAllowedOrigin(ALLOWED);
+  await t.throwsAsync(() => E(client).fetch(ALLOWED_URL), {
+    message: /not in the allowed-origin list|Policy refuses origin/,
+  });
+
+  await E(control).addAllowedOrigin(ALLOWED);
+  await E(control).addAllowedOrigin(ALLOWED);
+  t.deepEqual(await E(client).allowedOrigins(), [ALLOWED]);
+  t.deepEqual(await E(control).listBindings(), []);
+  await E(client).fetch(ALLOWED_URL);
+  t.is(fake.calls.length, 1);
+});
+
+test('pinAllowed admits an origin a strict adapter would refuse', async t => {
+  const policy = makeTrustOnFirstBindPolicyAdapter({
+    now: async () => 303,
+  });
+
+  await t.throwsAsync(() => policy.assertAllowed(ALLOWED), {
+    message: /not in the allowed-origin list/,
+  });
+
+  await policy.pinAllowed(ALLOWED, 'operator');
+  await policy.assertAllowed(ALLOWED);
+  t.like(policy.listBindings()[0], {
+    target: ALLOWED,
+    state: 'Pinned-Allow',
+    decidedAt: 303,
+    decidedBy: 'operator',
+    decisionMode: 'strict',
+  });
+});
+
+for (const [label, mutate] of /** @type {const} */ ([
+  ['revokeBinding', control => E(control).revokeBinding(ALLOWED)],
+  ['unpin', control => E(control).unpin(ALLOWED)],
+  ['setAllowedOrigins', control => E(control).setAllowedOrigins([])],
+])) {
+  test(`${label} refuses a fetch fired while its update is pending`, async t => {
+    const fake = makeFakeFetch();
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const { client, control } = makeHttpClientAndControl({
+      fetch: fake.fetch,
+      allowedOrigins: [ALLOWED],
+      now: async () => {
+        await gate;
+        return 0;
+      },
+    });
+
+    const mutation = mutate(control);
+    const pending = E(client).fetch(ALLOWED_URL);
+    await Promise.resolve();
+    release();
+    await mutation;
+    await t.throwsAsync(() => pending, {
+      message: /Policy refuses origin|not in the allowed/,
+    });
+    t.deepEqual(fake.calls, []);
+  });
+}
+
+test('a binding revocation stays effective when now() rejects', async t => {
+  const fake = makeFakeFetch();
+  let failNow = false;
+  const { client, control } = makeHttpClientAndControl({
+    fetch: fake.fetch,
+    policyMode: 'tofu-auto',
+    now: async () => {
+      await null;
+      if (failNow) {
+        throw Error('clock unavailable');
+      }
+      return 0;
+    },
+  });
+  await E(client).fetch(ALLOWED_URL);
+  t.is(fake.calls.length, 1);
+
+  failNow = true;
+  await t.throwsAsync(() => E(control).revokeBinding(ALLOWED), {
+    message: /clock unavailable/,
+  });
+  await t.throwsAsync(() => E(client).fetch(ALLOWED_URL), {
+    message: /Policy refuses origin/,
+  });
+  t.is(fake.calls.length, 1);
+});
+
+test('policyPromptTimeoutMs above the timer range is rejected', t => {
+  t.throws(
+    () => makeTrustOnFirstBindPolicyAdapter({ policyPromptTimeoutMs: 2 ** 31 }),
+    { message: /policyPromptTimeoutMs" must be at most/ },
+  );
+  t.notThrows(() =>
+    makeTrustOnFirstBindPolicyAdapter({ policyPromptTimeoutMs: 2 ** 31 - 1 }),
+  );
 });

@@ -1,6 +1,5 @@
 // @ts-check
-/* global clearTimeout, setTimeout */
-
+// spell-out-exempt: policyPromptTimeoutMs is an established public option.
 /**
  * HttpClient capability with structural origin confinement.
  *
@@ -16,6 +15,10 @@
  */
 
 import harden from '@endo/harden';
+import { makeCancelKit } from '@endo/cancel';
+import { delay as ambientDelay } from '@endo/cancel/delay';
+import { toAbortSignal } from '@endo/cancel/to-abort';
+import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
@@ -31,6 +34,7 @@ import {
  *   AuditEntry,
  *   Binding,
  *   BindingState,
+ *   Delay,
  *   FetchLike,
  *   FetchOptions,
  *   HttpClient,
@@ -138,17 +142,17 @@ export const HttpClientInterface = M.interface('HttpClient', {
 
 export const HttpClientControlInterface = M.interface('HttpClientControl', {
   inspect: M.call().returns(PolicyShape),
-  setAllowedOrigins: M.call(M.arrayOf(M.string())).returns(),
-  addAllowedOrigin: M.call(M.string()).returns(),
-  removeAllowedOrigin: M.call(M.string()).returns(),
-  setMaxRequestsPerMinute: M.call(M.number()).returns(),
-  setMaxResponseBytes: M.call(M.number()).returns(),
-  revoke: M.call().returns(),
+  setAllowedOrigins: M.callWhen(M.arrayOf(M.string())).returns(),
+  addAllowedOrigin: M.callWhen(M.string()).returns(),
+  removeAllowedOrigin: M.callWhen(M.string()).returns(),
+  setMaxRequestsPerMinute: M.callWhen(M.number()).returns(),
+  setMaxResponseBytes: M.callWhen(M.number()).returns(),
+  revoke: M.callWhen().returns(),
   isRevoked: M.call().returns(M.boolean()),
   listBindings: M.call().returns(M.arrayOf(BindingShape)),
-  revokeBinding: M.call(M.string()).returns(),
-  unpin: M.call(M.string()).returns(),
-  setPolicyMode: M.call(M.string()).returns(),
+  revokeBinding: M.callWhen(M.string()).returns(),
+  unpin: M.callWhen(M.string()).returns(),
+  setPolicyMode: M.callWhen(M.string()).returns(),
   listAuditEntries: M.call()
     .optional(ListAuditOptionsShape)
     .returns(M.arrayOf(M.any())),
@@ -189,6 +193,26 @@ const validatePositiveInteger = (value, name) => {
     );
   }
   return value;
+};
+
+// Hosts clamp or reject timer delays above a signed 32-bit millisecond count
+// (HTML timer initialization steps; Node clamps to 1), so the endowed Timer
+// rejects them and a policy-prompt timeout must stay within the same range.
+const MAX_TIMER_DELAY_MILLISECONDS = 2 ** 31 - 1;
+
+/**
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {number}
+ */
+const validateTimerDelay = (value, name) => {
+  const milliseconds = validatePositiveInteger(value, name);
+  if (milliseconds > MAX_TIMER_DELAY_MILLISECONDS) {
+    throw makeError(
+      X`${name} must be at most ${q(MAX_TIMER_DELAY_MILLISECONDS)}, got ${q(value)}`,
+    );
+  }
+  return milliseconds;
 };
 
 /**
@@ -294,7 +318,8 @@ const normalizeDecision = decision => {
  * @param {object} args
  * @param {PolicyMode} [args.policyMode]
  * @param {PolicyAuthority} [args.policyAuthority]
- * @param {() => number} [args.now]
+ * @param {() => number | Promise<number>} [args.now]
+ * @param {Delay} [args.delay]
  * @param {number} [args.policyPromptTimeoutMs]
  * @param {number} [args.auditLimit]
  * @param {number} [args.bindingLimit]
@@ -309,6 +334,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
   policyMode = 'strict',
   policyAuthority,
   now = Date.now,
+  delay = ambientDelay,
   policyPromptTimeoutMs = DEFAULT_POLICY_PROMPT_TIMEOUT_MS,
   auditLimit = DEFAULT_AUDIT_LIMIT,
   bindingLimit = DEFAULT_BINDING_LIMIT,
@@ -317,7 +343,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
 } = {}) => {
   /** @type {PolicyMode} */
   let mode = validatePolicyMode(policyMode);
-  const promptTimeoutMs = validatePositiveInteger(
+  const promptTimeoutMilliseconds = validateTimerDelay(
     policyPromptTimeoutMs,
     'policyPromptTimeoutMs',
   );
@@ -336,6 +362,15 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
   const pending = new Map();
   /** @type {AuditEntry[]} */
   const audit = [];
+  /**
+   * Origins a controller has revoked while the revocation's timestamp is
+   * still resolving.
+   * The revocation is effective as soon as the origin enters this set; if
+   * `now()` fails, the origin stays here and stays refused.
+   *
+   * @type {Set<string>}
+   */
+  const revoking = new Set();
 
   /**
    * @param {AuditEntry} entry
@@ -393,31 +428,30 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
         decidedBy: 'tofu-auto',
       });
     } else {
-      if (!policyAuthority || typeof policyAuthority.decide !== 'function') {
+      if (policyAuthority === undefined) {
         throw makeError(
           X`Policy mode ${q(mode)} requires a policy authority with decide()`,
         );
       }
-      let timeoutId;
-      const timeout = new Promise((_, reject) => {
-        timeoutId = setTimeout(
-          () =>
-            reject(makeError(X`Policy decision timed out for ${q(target)}`)),
-          promptTimeoutMs,
-        );
+      const { cancelled, cancel } = makeCancelKit();
+      const timeout = delay(promptTimeoutMilliseconds, cancelled).then(() => {
+        throw makeError(X`Policy decision timed out for ${q(target)}`);
       });
       try {
         const rawDecision = await Promise.race([
-          policyAuthority.decide({
-            kind: 'http-origin',
-            target,
-            context: harden({ ...context }),
-          }),
+          // The authority may be a remote presence, so send rather than call.
+          E(policyAuthority).decide(
+            harden({
+              kind: 'http-origin',
+              target,
+              context: harden({ ...context }),
+            }),
+          ),
           timeout,
         ]);
         normalized = normalizeDecision(rawDecision);
       } finally {
-        clearTimeout(timeoutId);
+        cancel(makeError(X`Policy decision settled`));
       }
     }
 
@@ -428,7 +462,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
     const binding = harden({
       target,
       state,
-      decidedAt: now(),
+      decidedAt: await now(),
       decidedBy:
         normalized.decidedBy ||
         (mode === 'tofu-prompt' ? 'tofu-prompt' : 'tofu-attenuator'),
@@ -438,6 +472,9 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
     const current = bindings.get(target);
     if (current && current.state === 'Revoked') {
       return current;
+    }
+    if (revoking.has(target)) {
+      return harden({ ...binding, state: 'Revoked', decidedBy: 'controller' });
     }
     setBinding(target, 'Pending', binding, context);
     return binding;
@@ -449,6 +486,9 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
    */
   const assertAllowed = async (target, context = {}) => {
     await null;
+    if (revoking.has(target)) {
+      throw makeError(X`Policy refuses origin ${q(target)}`);
+    }
     const binding = bindings.get(target);
     if (binding) {
       if (binding.state === 'Pinned-Allow') {
@@ -469,26 +509,29 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
         X`Policy binding limit exceeded: ${q(maxBindings)} bindings`,
       );
     }
-    appendAudit(
-      harden({
-        at: now(),
-        target,
-        fromState: 'Unknown',
-        toState: 'Pending',
-        decisionMode: mode,
-        decidedBy: 'pending',
-        context: harden({ ...context }),
-      }),
-    );
-    const decisionP = decide(target, context);
-    pending.set(target, decisionP);
+    const decisionPromise = (async () => {
+      await null;
+      appendAudit(
+        harden({
+          at: await now(),
+          target,
+          fromState: 'Unknown',
+          toState: 'Pending',
+          decisionMode: mode,
+          decidedBy: 'pending',
+          context: harden({ ...context }),
+        }),
+      );
+      return decide(target, context);
+    })();
+    pending.set(target, decisionPromise);
     let resolved;
     try {
-      resolved = await decisionP;
+      resolved = await decisionPromise;
     } catch (err) {
       appendAudit(
         harden({
-          at: now(),
+          at: await now(),
           target,
           fromState: 'Pending',
           toState: 'Unknown',
@@ -510,13 +553,14 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
    * @param {string} target
    * @param {string} decidedBy
    */
-  const pinAllowed = (target, decidedBy = 'controller') => {
+  const pinAllowed = async (target, decidedBy = 'controller') => {
+    await null;
     const previous = bindings.get(target);
     /** @type {Binding} */
     const binding = harden({
       target,
       state: 'Pinned-Allow',
-      decidedAt: now(),
+      decidedAt: await now(),
       decidedBy,
       decisionMode: mode,
     });
@@ -530,32 +574,39 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
     /**
      * @param {string} target
      */
-    revokeBinding: target => {
+    revokeBinding: async target => {
       const origin = validateOrigin(target);
       const previous = bindings.get(origin);
+      revoking.add(origin);
+      const decidedAt = await now();
       /** @type {Binding} */
       const binding = harden({
         target: origin,
         state: 'Revoked',
-        decidedAt: now(),
+        decidedAt,
         decidedBy: 'controller',
         decisionMode: mode,
       });
       setBinding(origin, previous ? previous.state : 'Unknown', binding);
+      revoking.delete(origin);
     },
     /**
      * @param {string} target
      */
-    unpin: target => {
+    unpin: async target => {
       const origin = validateOrigin(target);
       const previous = bindings.get(origin);
       if (!previous) {
         return;
       }
+      // Remove and persist before awaiting the audit timestamp, so a failed
+      // `now()` cannot leave the pin live or unpersisted.
       bindings.delete(origin);
+      onChange();
+      const at = await now();
       appendAudit(
         harden({
-          at: now(),
+          at,
           target: origin,
           fromState: previous.state,
           toState: 'Unknown',
@@ -563,7 +614,6 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
           decidedBy: 'controller',
         }),
       );
-      onChange();
     },
     /**
      * @param {PolicyMode} nextMode
@@ -645,6 +695,29 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
 };
 
 /**
+ * Adapt a platform `fetch`, which honors an `AbortSignal` but not a
+ * cancellation token, into a `FetchLike`: the `cancelled` token becomes the
+ * request's `signal`, so a timeout or revocation aborts the request.
+ *
+ * @param {(url: string, init?: any) => Promise<any>} platformFetch
+ * @returns {FetchLike}
+ */
+export const makeFetchLikeFromPlatformFetch = platformFetch => {
+  /** @type {FetchLike} */
+  const fetchLike = (url, options) => {
+    const { cancelled, ...init } = options || { redirect: 'manual' };
+    return platformFetch(
+      url,
+      cancelled === undefined
+        ? init
+        : { ...init, signal: toAbortSignal(cancelled) },
+    );
+  };
+  return harden(fetchLike);
+};
+harden(makeFetchLikeFromPlatformFetch);
+
+/**
  * Create a paired HttpClient / HttpClientControl capability.
  *
  * @param {object} args
@@ -657,14 +730,17 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
  * @param {number} [args.policyPromptTimeoutMs]
  * @param {number} [args.auditLimit]
  * @param {number} [args.bindingLimit]
- * @param {() => number} [args.now]
+ * @param {() => number | Promise<number>} [args.now]
+ * @param {Delay} [args.delay]
  * @param {ReadonlyArray<Binding>} [args.initialBindings] - persisted bindings to
  *   reconstitute the trust-on-first-bind table with on restart, so a request-time
  *   pin made before a shutdown survives it.
- * @param {(snapshot: PolicySnapshot) => void} [args.onPolicyChange] - invoked
- *   synchronously after any durable policy or binding mutation, with a hardened
- *   snapshot of the persistable state. A provisioning plugin wires this to its
- *   durable store; the callback stays platform-pure (it never sees the store).
+ * @param {(snapshot: PolicySnapshot) => void | Promise<void>} [args.onPolicyChange]
+ *   - invoked in a later event after any durable policy or binding mutation,
+ *   with a hardened snapshot of the persistable state. A provisioning plugin
+ *   wires this to its durable store. A control mutation does not resolve until
+ *   the callback's returned promise fulfills, and rejects if it rejects, so a
+ *   revocation is never acknowledged before it is durable.
  * @returns {{ client: HttpClient, control: HttpClientControl }}
  *
  * Rate accounting is delegated to the underlying HTTP confinement and occurs
@@ -673,7 +749,9 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
  * coalescing and the binding limit.
  */
 export const makeHttpClientAndControl = ({
-  fetch = /** @type {FetchLike} */ (globalThis.fetch),
+  fetch = typeof globalThis.fetch === 'function'
+    ? makeFetchLikeFromPlatformFetch(globalThis.fetch)
+    : /** @type {FetchLike} */ (/** @type {unknown} */ (undefined)),
   allowedOrigins = [],
   maxRequestsPerMinute = DEFAULT_MAX_REQUESTS_PER_MINUTE,
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
@@ -683,6 +761,7 @@ export const makeHttpClientAndControl = ({
   auditLimit = DEFAULT_AUDIT_LIMIT,
   bindingLimit = DEFAULT_BINDING_LIMIT,
   now = Date.now,
+  delay = ambientDelay,
   initialBindings = [],
   onPolicyChange,
 } = {}) => {
@@ -705,22 +784,25 @@ export const makeHttpClientAndControl = ({
   // not a change). `notifyPolicyChange` starts as a no-op and is replaced with
   // the real notifier once `confinement` exists; the constructor pin loop and
   // the adapter's initial-binding seeding therefore fire only the no-op.
-  /** @type {() => void} */
-  let notifyPolicyChange = () => {};
+  /** @type {() => Promise<void>} */
+  let notifyPolicyChange = async () => {};
   const policy = makeTrustOnFirstBindPolicyAdapter({
     policyMode,
     policyAuthority,
     now,
+    delay,
     policyPromptTimeoutMs,
     auditLimit,
     bindingLimit,
     initialBindings,
-    onChange: () => notifyPolicyChange(),
+    // A request-time pin has no caller to report a persistence failure to;
+    // control mutations await their own later notification instead.
+    onChange: () => {
+      notifyPolicyChange().catch(error => {
+        console.error('[exo-http-client] failed to persist a binding:', error);
+      });
+    },
   });
-
-  for (const origin of allowed) {
-    policy.pinAllowed(origin, 'constructor');
-  }
 
   const effectiveAllowedOrigins = () =>
     harden([
@@ -741,7 +823,7 @@ export const makeHttpClientAndControl = ({
       timeoutMs: DEFAULT_TIMEOUT_MS,
       allowedMethods: new Set(HTTP_METHODS),
     },
-    { fetch, now },
+    { fetch, delay },
   );
 
   // Construction is complete; wire the real notifier. A snapshot captures the
@@ -749,7 +831,7 @@ export const makeHttpClientAndControl = ({
   // fields and the full binding table — exactly the persistable state, and
   // exactly what reconstitutes an identical pair on the next boot. It is built
   // synchronously so a later mutation cannot race the persist that reads it.
-  notifyPolicyChange = () => {
+  notifyPolicyChange = async () => {
     if (onPolicyChange === undefined) {
       return;
     }
@@ -767,15 +849,8 @@ export const makeHttpClientAndControl = ({
     // A persistence callback can run arbitrary integration code. Dispatch it
     // in a later event so it cannot reenter the mutation that produced this
     // immutable snapshot.
-    void Promise.resolve().then(() => {
-      try {
-        onPolicyChange(snapshot);
-      } catch (error) {
-        // Persistence is best-effort and must never break a request or a
-        // control operation; a plugin's callback is expected to log failures.
-        console.error('[exo-http-client] onPolicyChange threw:', error);
-      }
-    });
+    await null;
+    await onPolicyChange(snapshot);
   };
 
   const assertNotRevoked = () => {
@@ -797,7 +872,9 @@ export const makeHttpClientAndControl = ({
     const method = normalizeMethod(options.method, {
       allowedMethods: new Set(HTTP_METHODS),
     });
-    await policy.assertAllowed(origin, { method });
+    if (!allowed.includes(origin)) {
+      await policy.assertAllowed(origin, { method });
+    }
     const confined = await confinement.request({
       url,
       method,
@@ -833,75 +910,87 @@ export const makeHttpClientAndControl = ({
         revoked: confinementPolicy.revoked,
       });
     },
-    setAllowedOrigins: origins => {
+    setAllowedOrigins: async origins => {
+      await null;
       assertNotRevoked();
       const nextAllowed = validateOrigins(origins);
-      for (const origin of allowed) {
+      const previousAllowed = allowed;
+      // Narrow the allowlist before any await, so a removed origin is refused
+      // by the request path at once and stays refused if a revoke rejects.
+      allowed = nextAllowed;
+      for (const origin of previousAllowed) {
         if (!nextAllowed.includes(origin)) {
-          policy.unpin(origin);
+          // eslint-disable-next-line no-await-in-loop
+          await policy.revokeBinding(origin);
         }
       }
-      allowed = nextAllowed;
-      for (const origin of allowed) {
-        policy.pinAllowed(origin, 'controller');
+      for (const origin of nextAllowed) {
+        // eslint-disable-next-line no-await-in-loop
+        await policy.unpin(origin);
       }
-      // The pin loop already notifies, but an empty allowlist runs no pin and
-      // leaves the last notify carrying a stale `allowed`; a final notify with
-      // the settled state makes every path persist the correct snapshot.
-      notifyPolicyChange();
+      // The binding updates already notify, but an unchanged or empty
+      // allowlist runs no update. A final notification makes every path
+      // persist the settled static allowlist.
+      await notifyPolicyChange();
     },
-    addAllowedOrigin: origin => {
+    addAllowedOrigin: async origin => {
       assertNotRevoked();
       const validated = validateOrigin(origin);
       if (!allowed.includes(validated)) {
         allowed = harden([...allowed, validated]);
       }
-      policy.pinAllowed(validated, 'controller');
-      notifyPolicyChange();
+      await policy.unpin(validated);
+      await notifyPolicyChange();
     },
-    removeAllowedOrigin: origin => {
+    removeAllowedOrigin: async origin => {
       assertNotRevoked();
       const validated = validateOrigin(origin);
       allowed = harden(allowed.filter(item => item !== validated));
-      policy.revokeBinding(validated);
-      notifyPolicyChange();
+      await policy.revokeBinding(validated);
+      await notifyPolicyChange();
     },
-    setMaxRequestsPerMinute: n => {
+    setMaxRequestsPerMinute: async limit => {
       assertNotRevoked();
       confinement.setMaxRequestsPerMinute(
-        validatePositiveInteger(n, 'maxRequestsPerMinute'),
+        validatePositiveInteger(limit, 'maxRequestsPerMinute'),
       );
-      notifyPolicyChange();
+      await notifyPolicyChange();
     },
-    setMaxResponseBytes: n => {
+    setMaxResponseBytes: async limit => {
       assertNotRevoked();
       confinement.setMaxResponseBytes(
-        validatePositiveInteger(n, 'maxResponseBytes'),
+        validatePositiveInteger(limit, 'maxResponseBytes'),
       );
-      notifyPolicyChange();
+      await notifyPolicyChange();
     },
-    revoke: () => {
+    // Revocation takes effect before the first await; the returned promise
+    // reports when it is durable.
+    revoke: async () => {
       confinement.revoke();
-      notifyPolicyChange();
+      await notifyPolicyChange();
     },
     isRevoked: () => confinement.isRevoked(),
     listBindings: () => policy.listBindings(),
-    revokeBinding: origin => {
+    revokeBinding: async origin => {
       assertNotRevoked();
-      policy.revokeBinding(origin);
-      allowed = harden(allowed.filter(item => item !== validateOrigin(origin)));
-      notifyPolicyChange();
+      const validated = validateOrigin(origin);
+      // The allowlist shrinks before the await, so a request issued while the
+      // binding update is pending is already refused.
+      allowed = harden(allowed.filter(item => item !== validated));
+      await policy.revokeBinding(validated);
+      await notifyPolicyChange();
     },
-    unpin: origin => {
+    unpin: async origin => {
       assertNotRevoked();
-      policy.unpin(origin);
-      allowed = harden(allowed.filter(item => item !== validateOrigin(origin)));
-      notifyPolicyChange();
+      const validated = validateOrigin(origin);
+      allowed = harden(allowed.filter(item => item !== validated));
+      await policy.unpin(validated);
+      await notifyPolicyChange();
     },
-    setPolicyMode: mode => {
+    setPolicyMode: async mode => {
       assertNotRevoked();
       policy.setPolicyMode(validatePolicyMode(mode));
-      notifyPolicyChange();
+      await notifyPolicyChange();
     },
     listAuditEntries: options => policy.listAuditEntries(options),
     help: () => httpClientControlHelp,

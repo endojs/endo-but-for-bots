@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { Delay as CancellableDelay } from './src/types.js' */
+
 /**
  * @typedef {import('./src/types.js').HttpClient} HttpClient
  * @typedef {import('./src/types.js').HttpResponse} HttpResponse
@@ -16,9 +18,11 @@
  * @typedef {import('./src/types.js').FetchLikeRequestOptions} FetchLikeRequestOptions
  * @typedef {import('./src/types.js').FetchLikeResponse} FetchLikeResponse
  * @typedef {import('./src/types.js').FetchLikeBodyReader} FetchLikeBodyReader
+ * @typedef {CancellableDelay} Delay
  */
 
 export {
+  makeFetchLikeFromPlatformFetch,
   makeHttpClientAndControl,
   makeHttpClientKit,
   makeTrustOnFirstBindPolicyAdapter,
