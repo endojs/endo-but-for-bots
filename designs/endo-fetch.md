@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-13 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-11-15 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Complete |
 | **Supersedes** | [endoclaw-network-fetch](endoclaw-network-fetch.md) (provisioning; the capability shape is landed and carries over) |
 | **Parent** | [endoclaw](endoclaw.md) |
 
@@ -130,6 +130,22 @@ transport or policy and therefore never needs the unfettered base capability.
 `provideHttpClient` half of [daemon-agent-tools](daemon-agent-tools.md) Phase
 3.6 are superseded. Their landed facet split, SSRF defenses, and eventual CLI
 surface remain normative where referenced.
+
+### Canonical provisioning path (2026-11-15)
+
+The plugin is the **canonical** HTTP provisioning path. A daemon
+`provideHttpClient` formula (with `getHttpClientControl` and the
+`http-client` formula type) landed on 2026-07-10, before this redirect, and
+was not removed; it is now **deprecated** as a compatibility API, and new
+integrations provision through `@endo/fetch`. The plugin landed on 2026-07-25
+as a single unconfined `@endo/fetch` package that mints the confined
+`HttpClient` / `HttpClientControl` pair over a virtual-file-system store. The
+base-versus-confined package split described above was not built as two
+packages; the one package holds the base authority privately and grants only
+the confined client. `makeWorkspaceTools` / `provisionWorkspaceTools` in
+`@endo/agent-tools` compose the `http` tool group only when the granted
+`HttpClient` is supplied, so the plugin-provisioned client reaches the same
+provisioning helper as the other tool groups.
 
 ## Dependencies
 
