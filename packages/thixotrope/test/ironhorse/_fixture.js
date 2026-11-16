@@ -104,34 +104,52 @@ export const makeFixture = async (
           options.onOutbound(frame);
         },
       });
+      /** @param {any} message */
+      const isIncrement = message => {
+        if (
+          !fault ||
+          !options.debugName.startsWith('owner(') ||
+          message.t !== 'f' ||
+          typeof message.b64 !== 'string'
+        ) {
+          return false;
+        }
+        // Match the actual counter call, not introductions or GC traffic.
+        const reader = syrupCodec.makeReader(decodeBase64(message.b64));
+        reader.enterRecord();
+        if (reader.readSelectorAsString() !== 'op:deliver') return false;
+        reader.enterRecord();
+        reader.readSelectorAsString();
+        reader.readInteger();
+        reader.exitRecord();
+        reader.enterList();
+        return reader.readSelectorAsString() === 'incr';
+      };
+      /**
+       * @param {any[]} messages one crank's frames
+       * @param {() => Promise<void>} run
+       */
+      const crank = async (messages, run) => {
+        incrementCrank = messages.some(isIncrement);
+        try {
+          if (incrementCrank) inject('before delivery', options.debugName);
+          await run();
+        } finally {
+          incrementCrank = false;
+        }
+      };
+      const { deliverBatch } = worker;
       return harden({
         ...worker,
-        deliver: async message => {
-          if (
-            fault &&
-            options.debugName.startsWith('owner(') &&
-            message.t === 'f' &&
-            typeof message.b64 === 'string'
-          ) {
-            // Match the actual counter call, not introductions or GC traffic.
-            const reader = syrupCodec.makeReader(decodeBase64(message.b64));
-            reader.enterRecord();
-            if (reader.readSelectorAsString() === 'op:deliver') {
-              reader.enterRecord();
-              reader.readSelectorAsString();
-              reader.readInteger();
-              reader.exitRecord();
-              reader.enterList();
-              incrementCrank = reader.readSelectorAsString() === 'incr';
-            }
-          }
-          try {
-            if (incrementCrank) inject('before delivery', options.debugName);
-            await worker.deliver(message);
-          } finally {
-            incrementCrank = false;
-          }
-        },
+        deliver: async message =>
+          crank([message], () => worker.deliver(message)),
+        // GC frames held for the counter call share its crank.
+        ...(deliverBatch === undefined
+          ? {}
+          : {
+              deliverBatch: async (/** @type {any[]} */ messages) =>
+                crank(messages, () => deliverBatch(messages)),
+            }),
       });
     },
   });

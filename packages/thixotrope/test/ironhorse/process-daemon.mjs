@@ -97,19 +97,27 @@ const engine = harden({
         if (active) boundary('output');
       },
     });
+    const crank = async (messages, run) => {
+      active =
+        options.debugName.startsWith('owner(') &&
+        messages.some(message => message.t === 'f' && increment(message.b64));
+      try {
+        await run();
+      } finally {
+        active = false;
+      }
+    };
+    const { deliverBatch } = worker;
     return harden({
       ...worker,
-      deliver: async message => {
-        active =
-          options.debugName.startsWith('owner(') &&
-          message.t === 'f' &&
-          increment(message.b64);
-        try {
-          await worker.deliver(message);
-        } finally {
-          active = false;
-        }
-      },
+      deliver: async message => crank([message], () => worker.deliver(message)),
+      // GC frames held for the counter call share its crank.
+      ...(deliverBatch === undefined
+        ? {}
+        : {
+            deliverBatch: async messages =>
+              crank(messages, () => deliverBatch(messages)),
+          }),
     });
   },
 });
