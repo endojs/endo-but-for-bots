@@ -81,9 +81,8 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   // Bind the tool dispatcher to this guest's powers, then build the
   // AgentTool array pi-agent-core consumes directly. We build the PiAgent via
   // `@endo/agentry/harness`'s `makePiAgent` (which owns the shared
-  // `initialState` shape, the user/assistant/toolResult `convertToLlm` filter,
-  // the `reasoning ? 'medium' : 'off'` thinking default, and
-  // `toolExecution: 'sequential'`) so that
+  // `initialState` shape, the `reasoning ? 'medium' : 'off'` thinking default,
+  // and `toolExecution: 'sequential'`) so that
   //   (a) we are free to seed `messages` from prior transcripts when
   //       cross-restart continuity lands (see PR body),
   //   (b) we control the system prompt verbatim (no policy suffix or
