@@ -679,6 +679,48 @@ and `texts.execBusyReset` (W1b.6 tests both; J-0307).
 - `append: []` (the session's fallback when the append does not fit `frameBytes`, M1a) means "pull
   to `base.count`".
 
+### 9.1 As built (W1b.2)
+
+- **The append is per session, not per turn** (changes contract 6.1's "round 0 `append` is exactly
+  `[TurnStarted]`"): `turn.js` keeps one `sentUpTo` for the session, so every `RoundRequest`
+  carries every record appended since the previous request: a later turn's round 0 starts with the
+  records the turn before appended after its last round (its `Dispatched` when it had one round,
+  `RoundSettled`, `TurnSettled`, a cancelled round's `Partial`, recovery's results) and ends with
+  its own `TurnStarted`. So `base.count` of each request equals the previous request's
+  `base.count + append.length`, and a cache in step never pulls a page between turns (a page pull
+  is a session crank on the turn-start path). Find a request's `TurnStarted` with
+  `append.findLast(r => r.kind === 'turn-started' && r.turnId === req.turnId)`, not `append[0]`.
+- **Gap pull**: same epoch and `cache.count < base.count` (an `append: []` fallback, or a request
+  this incarnation never ran, e.g. parked and dropped): the cache asks `page('p' + cache.count)`
+  (the one cursor the adapter builds; it names an absolute index, as `next` does) and pulls to
+  `base.count`, then applies `append`. Any other mismatch rebuilds from `page()`.
+- **Resolves** are sent as pages bring handles, in whole batches of `blobResolveBatch` (64), the
+  remainder after the last page; files are then read 32 at a time.
+- **Projection** (`AH/projection.js`): transcript records of `guest/lib/transcript-records.js`
+  (`message`, `tool-call`, `tool-result`): per turn the user `message`; per round the assistant
+  `message` (`RoundSettled.text`, or the round's `Partial` when it ended without `roundFinal`;
+  omitted when empty and without native context) with the native context as `providerContext {
+  format: 'native-context', payload }`; the round's `tool-call`s (`id` = op id) and then their
+  `tool-result`s in call order (`failed: true` when failed; results without an intent dropped).
+  A turn with `TurnSettled` and no `Dispatched` is left out; `TurnResolved` is not dialogue.
+  `Projection = { transcript, epoch, count, input? }` (`input`: the full text of the request's
+  `TurnStarted`). `projectionHooks` entries are `(transcript, { records, texts }) => transcript`,
+  run in order after the base projection.
+- **Where it runs**: the endpoint is made with `prepare: req => cache.prepare(session, req)` (one
+  `makeContextCache` per incarnation, `AH/index.js`) and passes the provider a thunk:
+  `provider.startRound(req, channel, prepare?)`. The provider calls it first in every round (so a
+  cancel during a rebuild is seen when it returns). `isAbandoned(error)` (a page broke): send
+  nothing; any other failure: `roundFailed` with `textOf.stagingFailed(message)`, before
+  `dispatching(0)`. Prepares of one session run one at a time.
+- **Retained state**: at most 32 sessions and 128 Mi units of loaded text per incarnation, least
+  recently prepared out (never the one being prepared); `evict(session)`; a failed prepare drops
+  the entry.
+- **Scripted provider log** (tests, W1b.6): with a `logPath`, one `context` line per round,
+  `{ turnId, round, ms, records, bytes, digest, turnDigests }` (`contextDigests(transcript)`:
+  sha-256 prefixes of the transcript records' JSON, the whole (32 hex) and per turn (16 hex each,
+  space-separated; a turn starts at each user message)), written off the round's path. Contexts
+  before and after a restart compare by `turnDigests` prefixes.
+
 ---
 
 ## 10. Pool and list feed (W1b.5)
@@ -746,8 +788,10 @@ guest rules; "Node" = adapter or tests.
 | file | export | signature |
 |---|---|---|
 | `guest/session/context-source.js` (vat) | `makeContextSource({ records, boundary = () => 0 }) -> ContextSource` | section 9 |
-| `AH/context-cache.js` (Node) | `makeContextCache({ store, hooks = projectionHooks }) -> { prepare(session, request) -> Promise<Projection>, evict(session) }` | `session` = the Session presence the endpoint serves |
-| `AH/projection.js` (Node) | `projectRecords(records, { texts }) -> Projection` | `texts`: `Map<Blob, string>` resolved for these records |
+| `AH/context-cache.js` (Node) | `makeContextCache({ store, hooks = projectionHooks, maxSessions?, maxTextUnits?, readsInFlight? }) -> { prepare(session, request) -> Promise<Projection>, evict(session), has(session), stats() }`; `isAbandoned(error)` | `session` = the Session presence the endpoint serves; 9.1 |
+| `AH/endpoint.js` (Node) | `makeEndpoint({ ..., prepare? })`; providers: `startRound(req, channel, prepare?)` | 9.1 |
+| `AH/providers/scripted.js` (Node) | `contextDigests(transcript)`; option `logContext` (default: with `logPath`) | 9.1 |
+| `AH/projection.js` (Node) | `projectRecords(records, { texts, hooks? }) -> Projection`; `NATIVE_CONTEXT_FORMAT` | `texts`: `Map<Blob, string>` resolved for these records; 9.1 |
 | `AH/projection-hooks.js` (Node) | `projectionHooks` | hook table `[]` (M8) |
 
 ### W1b.3 exec vat

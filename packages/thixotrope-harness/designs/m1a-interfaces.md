@@ -468,6 +468,10 @@ it) pays a reopen: A, the lease break, B (fresh ports, round 0 again), C (sectio
 `startRound` of this turn if the message fits `frameBytes`, else `append: []` (M1a adapters do not
 read past records; M1b pulls through `context`). `tools` are the descriptions of the tool-table
 entries available with these ports (M1a: `echoDescription` when `ports.tools` has `echo`).
+(Correction for M1b, W1b.2: `append` carries every record since the previous `startRound` of the
+session, not of the turn, so a later turn's round 0 starts with what the turn before recorded
+after its last round and ends with its `TurnStarted`; every request also carries `context`.
+`m1b-interfaces.md` section 9.)
 `options.modelId` is the session's resolved model. `system` is absent in M1a (M2 prompts).
 
 ### 6.2 A round
@@ -773,7 +777,9 @@ provider (perf `turn.start` splits the start at it).
 
 Behaviour per `startRound(req)`:
 
-1. Round 0: the script turn is chosen from `req.append[0].input` and remembered for `req.turn`
+1. Round 0: the script turn is chosen from `req.append[0].input` (M1b W1b.2: from the context
+   projection's full input of `req.turnId`, else the append's `TurnStarted` of that turn;
+   `m1b-interfaces.md` 9.1) and remembered for `req.turn`
    (a `WeakMap` in this incarnation). No script turn, or no `rounds[req.round]`: `roundFailed({
    reason: textOf.scriptExhausted(round) })`.
 2. Round 0: wait `dispatchDelayMs`; `await E(req.sink).dispatching(0)`; `false` or a rejection ->
