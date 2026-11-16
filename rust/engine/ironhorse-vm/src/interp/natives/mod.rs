@@ -20,4 +20,5 @@ mod string;
 mod sum_precise;
 mod temporal;
 mod uri;
+mod utf8;
 mod weak;

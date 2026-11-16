@@ -1063,6 +1063,16 @@ pub enum NativeMethod {
     Uint8ArraySetFromHex,
     Uint8ArrayToBase64,
     Uint8ArrayToHex,
+    /// Ironhorse's own UTF-8 codec statics on `%Uint8Array%` (no XS or
+    /// specification counterpart): `decodeUtf8(bytes, fatal)` answers
+    /// `{ text, consumed }`, `encodeUtf8(text)` a new `%Uint8Array%`, and
+    /// `encodeUtf8Into(text, bytes)` `{ read, written }`. The boot's codec
+    /// polyfill (`rust/endo/xsnap/src/polyfills.js`) captures and deletes
+    /// them before any other code runs, so `TextDecoder`/`TextEncoder` do
+    /// their per-byte work natively. See `natives/utf8.rs`.
+    Uint8ArrayDecodeUtf8,
+    Uint8ArrayEncodeUtf8,
+    Uint8ArrayEncodeUtf8Into,
     /// `%WrapForValidIteratorPrototype%.next()`: call the `next` method
     /// captured by `Iterator.from` with the wrapped iterator as receiver.
     IteratorWrapperNext,

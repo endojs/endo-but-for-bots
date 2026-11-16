@@ -303,7 +303,7 @@ impl Interp {
     }
 
     /// A new `%Uint8Array%` over exactly `bytes`.
-    fn new_uint8_array(&mut self, bytes: &[u8]) -> Result<Slot, Step> {
+    pub(in crate::interp) fn new_uint8_array(&mut self, bytes: &[u8]) -> Result<Slot, Step> {
         let length = u32::try_from(bytes.len())
             .ok()
             .filter(|&length| length <= 0x7FFF_FFFF)

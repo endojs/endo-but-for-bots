@@ -803,6 +803,11 @@ impl Interp {
             for (name, method, arity) in [
                 ("fromBase64", NativeMethod::Uint8ArrayFromBase64, 1),
                 ("fromHex", NativeMethod::Uint8ArrayFromHex, 1),
+                // Ironhorse's UTF-8 codec statics (`natives/utf8.rs`), which
+                // the boot's codec polyfill captures and deletes.
+                ("decodeUtf8", NativeMethod::Uint8ArrayDecodeUtf8, 2),
+                ("encodeUtf8", NativeMethod::Uint8ArrayEncodeUtf8, 1),
+                ("encodeUtf8Into", NativeMethod::Uint8ArrayEncodeUtf8Into, 2),
             ] {
                 let function = self.alloc_named_method(method, name, arity);
                 self.proto_methods.push((uint8_array, name, function));

@@ -728,7 +728,16 @@ pub(super) const INTRINSIC_KEY_ORDER: &[(&str, &[&str])] = &[
     ),
     (
         "Uint8Array",
-        &["prototype", "BYTES_PER_ELEMENT", "fromBase64", "fromHex"],
+        &[
+            "prototype",
+            "BYTES_PER_ELEMENT",
+            "fromBase64",
+            "fromHex",
+            // Ironhorse's own (`natives/utf8.rs`); XS has no counterpart.
+            "decodeUtf8",
+            "encodeUtf8",
+            "encodeUtf8Into",
+        ],
     ),
     (
         "Uint8Array.prototype",

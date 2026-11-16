@@ -2314,7 +2314,10 @@ impl Interp {
             | NativeMethod::Uint8ArraySetFromBase64
             | NativeMethod::Uint8ArraySetFromHex
             | NativeMethod::Uint8ArrayToBase64
-            | NativeMethod::Uint8ArrayToHex => {
+            | NativeMethod::Uint8ArrayToHex
+            | NativeMethod::Uint8ArrayDecodeUtf8
+            | NativeMethod::Uint8ArrayEncodeUtf8
+            | NativeMethod::Uint8ArrayEncodeUtf8Into => {
                 self.native_method_buffer(m, base, argc, code, this, arg0)?
             }
             NativeMethod::ArrayPush
@@ -3901,6 +3904,11 @@ impl Interp {
             | NativeMethod::Uint8ArrayToBase64
             | NativeMethod::Uint8ArrayToHex => {
                 self.call_uint8_array_base64(m, this, base, argc, code)?
+            }
+            NativeMethod::Uint8ArrayDecodeUtf8
+            | NativeMethod::Uint8ArrayEncodeUtf8
+            | NativeMethod::Uint8ArrayEncodeUtf8Into => {
+                self.call_uint8_array_utf8(m, base, argc)?
             }
             NativeMethod::TypedArrayCopyWithin
             | NativeMethod::TypedArrayFill
