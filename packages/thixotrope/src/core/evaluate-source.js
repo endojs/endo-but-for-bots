@@ -1,13 +1,32 @@
 // @ts-check
 import harden from '@endo/harden';
+import { Fail } from '@endo/errors';
 
 /**
- * Transfer source in bounded messages. Ironhorse's current text decoder
- * copies every prefix of a message, so a single message costs the square of
- * its length in scratch heap: at the default 256 MiB chunk ceiling the crank
- * halts a little under sixteen thousand characters. Bootstraps of a few
- * kilobytes go in one message; a bundle, or anything approaching that
- * bound, goes this way.
+ * String content, in UTF-8 bytes, that one message into an Ironhorse vat
+ * may carry. Every byte of an inbound frame costs the vat a metered
+ * property key when the frame is hardened, so one message halts a fresh vat
+ * at 51,200-52,224 bytes at a 10 M crank budget and 58,368-59,392 bytes at
+ * 50 M and 100 M; this is at most half of the smallest halt point (spike S1
+ * of the harness milestone M0; packages/thixotrope-harness/JOURNAL.md
+ * J-0140, J-0141).
+ */
+export const STAGING_FRAME_BYTES = 24_576;
+
+/**
+ * UTF-16 code units per staged message: UTF-8 takes at most three bytes
+ * per code unit (a surrogate pair is two units and four bytes), so a chunk
+ * of this many units fits `STAGING_FRAME_BYTES` whatever its text.
+ */
+export const STAGING_CHUNK_CHARS = STAGING_FRAME_BYTES / 3;
+
+/**
+ * Transfer source in bounded messages, then evaluate it in one crank. A
+ * single message is bounded by the vat's inbound frame cost (see
+ * `STAGING_FRAME_BYTES`); bootstraps of a few kilobytes go in one message,
+ * and a bundle, or anything approaching that bound, goes this way, in
+ * chunks of `STAGING_CHUNK_CHARS` code units that never split a surrogate
+ * pair.
  *
  * Each concurrent transfer into one vat needs its own staging slot, named by
  * `slot`; two transfers sharing a slot would interleave. A subsequent
@@ -17,20 +36,26 @@ import harden from '@endo/harden';
  * @param {{evaluate: (source: string, endowments?: Record<string, unknown>) => Promise<any>}} worker
  * @param {string} source an expression yielding a function of the endowments
  * @param {Record<string, unknown>} endowments
- * @param {{ slot?: 'thixotrope.installSource' | 'thixotrope.mailSource' | 'thixotrope.workspaceMailboxSource' }} [options]
- *   the staging slot, a name this module's callers agree on rather than
- *   anything user-derived
+ * @param {{
+ *   slot?: 'thixotrope.installSource' | 'thixotrope.mailSource' | 'thixotrope.workspaceMailboxSource',
+ *   chunkChars?: number,
+ * }} [options]
+ *   `slot`: the staging slot, a name this module's callers agree on rather
+ *   than anything user-derived; `chunkChars`: UTF-16 code units per staged
+ *   message, an integer of at least 2 (default `STAGING_CHUNK_CHARS`)
  */
 export const evaluateSource = async (
   worker,
   source,
   endowments,
-  { slot = 'thixotrope.installSource' } = {},
+  { slot = 'thixotrope.installSource', chunkChars = STAGING_CHUNK_CHARS } = {},
 ) => {
+  (Number.isSafeInteger(chunkChars) && chunkChars >= 2) ||
+    Fail`chunkChars must be an integer of at least 2, not ${chunkChars}`;
   const holder = `globalThis[Symbol.for(${JSON.stringify(slot)})]`;
   await worker.evaluate(`(${holder} = [], true)`);
   for (let offset = 0; offset < source.length;) {
-    let end = Math.min(offset + 1024, source.length);
+    let end = Math.min(offset + chunkChars, source.length);
     const last = source.charCodeAt(end - 1);
     if (end < source.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
     // eslint-disable-next-line no-await-in-loop
