@@ -1,0 +1,364 @@
+// @ts-check
+// M1b W1b.1: staging in the scripted provider and echo
+// (resources/agent-host/impl/providers/scripted.js, tools/echo.js;
+// designs/m1b-interfaces.md sections 3.2, 5.2-5.4 and 6.4). Node, a fake
+// TurnSink with `progress`, real files.
+import '../unit/_m1a-prelude.js';
+
+import test from '@endo/ses-ava/test.js';
+
+/* eslint-disable import/no-relative-packages */
+import {
+  m1bInterfaces,
+  m1bShapes,
+  shapes,
+  texts,
+  textOf,
+} from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
+import { messageBytes } from '../../guest/lib/bounded.js';
+/* eslint-enable import/no-relative-packages */
+import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
+import { makeTimers } from '../../resources/agent-host/impl/timers.js';
+import {
+  makeScriptedProvider,
+  tailText,
+} from '../../resources/agent-host/impl/providers/scripted.js';
+import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
+import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js';
+import { makeTestBlobs } from './_m1b-blobs.js';
+
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { E, Far, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
+
+const timers = makeTimers();
+
+/**
+ * @param {() => boolean} predicate
+ * @param {number} [ms]
+ */
+const until = async (predicate, ms = 5000) => {
+  const t0 = Date.now();
+  while (!predicate()) {
+    if (Date.now() - t0 > ms) throw Error('timed out waiting');
+    // eslint-disable-next-line no-await-in-loop
+    await timers.delay(5);
+  }
+};
+
+const makeFakeTurn = () => {
+  /** @type {any[]} */
+  const finals = [];
+  /** @type {any[]} */
+  const failures = [];
+  /** @type {any[]} */
+  const progress = [];
+  const turn = makeExo('Turn', m1bInterfaces.Turn, {
+    getStatus: () =>
+      harden({ turnId: 't1', state: 'running', round: 0, at: 0 }),
+    cancel: () => undefined,
+    whenFinished: async () =>
+      harden({ turnId: 't1', state: 'running', round: 0, at: 0 }),
+    resolve: () => undefined,
+    getContent: () => harden({ records: [] }),
+  });
+  // The M1b guard checks every message as a vat would.
+  const sink = makeExo('TurnSink', m1bInterfaces.TurnSink, {
+    dispatching: () => true,
+    roundFinal: (/** @type {any} */ r) => {
+      finals.push(r);
+    },
+    roundFailed: (/** @type {any} */ f) => {
+      failures.push(f);
+    },
+    deadline: () => undefined,
+    progress: (/** @type {any} */ p) => {
+      progress.push(p);
+    },
+  });
+  return { turn, sink, finals, failures, progress };
+};
+
+/**
+ * @param {any} script
+ * @param {{ input?: any }} [options]
+ */
+const run = async (script, { input = 'hi' } = {}) => {
+  const blobs = makeTestBlobs();
+  /** @type {any[]} */
+  const log = [];
+  const provider = makeScriptedProvider({
+    label: 'scripted',
+    script: harden(script),
+    timers,
+    log: (kind, fields = {}) => log.push({ kind, ...fields }),
+    blobs: blobs.store,
+  });
+  const endpoint = makeEndpoint({
+    provider,
+    channel: harden({ publishDelta: () => {} }),
+    timers,
+  });
+  const fake = makeFakeTurn();
+  void E(endpoint).holdTurn(fake.turn);
+  E.sendOnly(endpoint).startRound(
+    harden({
+      turn: fake.turn,
+      sink: fake.sink,
+      turnId: 't1',
+      round: 0,
+      base: { count: 0, epoch: 0 },
+      append: [{ kind: 'turn-started', turnId: 't1', input, at: 1 }],
+      tools: [],
+      options: { modelId: 'm' },
+    }),
+  );
+  await until(() => fake.finals.length + fake.failures.length > 0);
+  return { ...fake, blobs, log };
+};
+
+test('a 1 MiB reply is staged; progress checkpoints stage the text so far and replace each other', async t => {
+  const chunk = 'r'.repeat(65_536);
+  const r = await run({
+    turns: [
+      {
+        rounds: [
+          { chunks: Array.from({ length: 16 }, () => ({ text: chunk })) },
+        ],
+      },
+    ],
+  });
+  t.teardown(r.blobs.cleanup);
+  const [result] = r.finals;
+  t.true(matches(result, shapes.RoundResult));
+  t.is(result.text.bytes, 1_048_576);
+  t.is(result.text.preview, 'r'.repeat(limits.messagePreviewUnits));
+  t.is(await r.blobs.store.read(result.text.blob), chunk.repeat(16));
+  t.true(messageBytes(result) <= limits.roundResultBytes);
+  // One checkpoint at a time; each is the whole text so far.
+  t.true(r.progress.length >= 1);
+  for (const p of r.progress) {
+    t.true(matches(p, m1bShapes.Progress));
+    t.is(p.tail, 'r'.repeat(limits.messagePreviewUnits));
+    t.is(p.partial.bytes % 65_536, 0);
+  }
+  const last = r.progress[r.progress.length - 1];
+  if (last.partial.bytes === 1_048_576) {
+    t.is(
+      last.partial.blob,
+      result.text.blob,
+      'the reply reuses the checkpoint',
+    );
+  }
+});
+
+test('tool-call args over inlineBytes are staged; then the largest until the round fits roundResultBytes; native context always', async t => {
+  const big = JSON.stringify({ text: 'a'.repeat(9000) });
+  const mid = JSON.stringify({ text: 'b'.repeat(6000) });
+  const r = await run({
+    turns: [
+      {
+        rounds: [
+          {
+            chunks: [{ text: 'ok' }],
+            toolCalls: [
+              { name: 'echo', args: big },
+              { name: 'echo', args: mid },
+              { name: 'echo', args: mid },
+              { name: 'echo', args: mid },
+              { name: 'echo', code: { text: 'return 1;' } },
+            ],
+            nativeContext: 'opaque',
+          },
+        ],
+      },
+    ],
+  });
+  t.teardown(r.blobs.cleanup);
+  const [result] = r.finals;
+  t.true(matches(result, shapes.RoundResult));
+  t.is(result.text, 'ok');
+  const [first, ...rest] = result.toolCalls;
+  t.is(first.args.bytes, big.length);
+  t.is(first.args.preview.length, limits.toolPreviewUnits);
+  t.is(await r.blobs.store.read(first.args.blob), big);
+  // 3 x 6 KB inline would be 18 KB + more: at least one is staged.
+  t.true(
+    rest.slice(0, 3).some((/** @type {any} */ c) => typeof c.args !== 'string'),
+  );
+  t.true(messageBytes(result) <= limits.roundResultBytes);
+  t.is(rest[3].args, JSON.stringify({ code: 'return 1;' }));
+  t.is(result.nativeContext.preview, '');
+  t.is(await r.blobs.store.read(result.nativeContext.blob), 'opaque');
+});
+
+test('more than maxCallsPerMessage calls fail the round with the frame-limit text', async t => {
+  const r = await run({
+    turns: [
+      {
+        rounds: [
+          {
+            toolCalls: Array.from(
+              { length: limits.maxCallsPerMessage + 1 },
+              () => ({
+                name: 'echo',
+              }),
+            ),
+          },
+        ],
+      },
+    ],
+  });
+  t.teardown(r.blobs.cleanup);
+  t.is(r.failures[0].reason, texts.frameLimit);
+  t.true(r.log.some(line => line.kind === 'frame-limit'));
+});
+
+test('a scripted error with a long partial sends it staged', async t => {
+  const r = await run({
+    turns: [
+      {
+        rounds: [
+          {
+            chunks: [{ text: '€', repeat: 20_000 }],
+            error: 'scripted failure',
+          },
+        ],
+      },
+    ],
+  });
+  t.teardown(r.blobs.cleanup);
+  const [failure] = r.failures;
+  t.true(matches(failure, shapes.RoundFailure));
+  t.is(failure.partial.bytes, 60_000);
+  t.is(await r.blobs.store.read(failure.partial.blob), '€'.repeat(20_000));
+});
+
+test('a staged turn input selects its script turn by the full text', async t => {
+  const blobs = makeTestBlobs();
+  t.teardown(blobs.cleanup);
+  const long = 'L'.repeat(9000);
+  const staged = await blobs.store.stage(long);
+  // The run helper makes its own store; stage the input in that one.
+  const r = await (async () => {
+    const provider = makeScriptedProvider({
+      label: 'scripted',
+      script: harden({
+        turns: [
+          { input: long, rounds: [{ chunks: [{ text: 'matched' }] }] },
+          { rounds: [{ chunks: [{ text: 'default' }] }] },
+        ],
+      }),
+      timers,
+      blobs: blobs.store,
+    });
+    const endpoint = makeEndpoint({
+      provider,
+      channel: harden({ publishDelta: () => {} }),
+      timers,
+    });
+    const fake = makeFakeTurn();
+    void E(endpoint).holdTurn(fake.turn);
+    E.sendOnly(endpoint).startRound(
+      harden({
+        turn: fake.turn,
+        sink: fake.sink,
+        turnId: 't1',
+        round: 0,
+        base: { count: 0, epoch: 0 },
+        append: [{ kind: 'turn-started', turnId: 't1', input: staged, at: 1 }],
+        tools: [],
+        options: { modelId: 'm' },
+      }),
+    );
+    await until(() => fake.finals.length > 0);
+    return fake;
+  })();
+  t.is(r.finals[0].text, 'matched');
+});
+
+test('echo: staged args are read; failed outcomes over inlineBytes are staged as the complete Error text', async t => {
+  const blobs = makeTestBlobs();
+  t.teardown(blobs.cleanup);
+  const echo = makeEchoTool({ timers, blobs: blobs.store });
+  const args = await blobs.store.stage(
+    JSON.stringify({ text: 'k'.repeat(9000) }),
+    {
+      previewUnits: limits.toolPreviewUnits,
+    },
+  );
+  const ok = await E(echo).execute(harden({ opId: 'o', args }));
+  t.is(ok.status, 'ok');
+  t.is(await blobs.store.read(ok.text.blob), 'k'.repeat(9000));
+  // An unexpected key quoted in the error text makes it long.
+  const badKey = 'q'.repeat(9000);
+  const failed = await E(echo).execute(
+    harden({ opId: 'o', args: JSON.stringify({ [badKey]: 1 }) }),
+  );
+  t.is(failed.status, 'failed');
+  const failedText = await blobs.store.read(failed.text.blob);
+  t.true(failedText.startsWith('Error: Unexpected argument'));
+  t.is(
+    failedText,
+    textOf.errorResult(
+      textOf.unexpectedArgument(badKey, 'echo', [
+        'text',
+        'delayMs',
+        'bytes',
+        'data',
+      ]),
+    ),
+  );
+});
+
+test('tailText keeps whole surrogate pairs', t => {
+  t.is(tailText('ab😀', 2), '😀');
+  t.is(tailText('ab😀', 1), '');
+  t.is(tailText('abc', 5), 'abc');
+});
+
+test('channels fold staged fields as their previews and deliver the StagedText unchanged', async t => {
+  const channel = makeChannelRegistry().channelFor(Far('Session', {}));
+  const blob = Far('Blob', {});
+  const input = harden({ blob, preview: 'question', bytes: 9000 });
+  const args = harden({ blob, preview: '{"text":', bytes: 9000 });
+  const result = harden({ blob, preview: 'answer', bytes: 40_000 });
+  const final = harden({ blob, preview: 'reply', bytes: 1_048_576 });
+  channel.publisher.publish(
+    harden({
+      rev: 1,
+      events: [
+        { type: 'turn-start', turnId: 't1', input, at: 1 },
+        { type: 'tool_call', turnId: 't1', id: 'o1', name: 'echo', args },
+        {
+          type: 'tool_result',
+          turnId: 't1',
+          id: 'o1',
+          name: 'echo',
+          result,
+          failed: false,
+        },
+        { type: 'final', turnId: 't1', text: final },
+        { type: 'end', turnId: 't1', status: 'completed' },
+      ],
+    }),
+  );
+  const subscription = channel.subscribe();
+  const [snapshot] = (await E(subscription).next()).deliveries;
+  const { messages } = snapshot.event.turn.status;
+  t.true(matches(snapshot, shapes.Delivery));
+  t.like(messages[0], { role: 'tool', args: '{"text":', result: 'answer' });
+  t.like(messages[1], { role: 'assistant', text: 'reply' });
+  const live = channel.subscribe(0);
+  channel.publisher.publish(
+    harden({
+      rev: 2,
+      events: [{ type: 'turn-start', turnId: 't2', input, at: 2 }],
+    }),
+  );
+  const batch = await E(live).next();
+  const start = batch.deliveries.find(
+    (/** @type {any} */ d) => d.event.type === 'turn-start',
+  );
+  t.is(start.event.input, input, 'delivered with the StagedText');
+});
