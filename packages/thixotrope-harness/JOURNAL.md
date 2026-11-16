@@ -4491,3 +4491,125 @@ to 256 before rendering. The exported constants are `NOT_AN_OBJECT_TEXT`, `NO_CO
 Decision: harness texts, not contract constants; the PM may move them into `texts` at sign-off.
 Unit test `test/unit/m1b-exec-vat.test.js` (17 tests, the bundle in a Node Compartment with the
 prelude alone) covers them.
+
+
+### J-0310 2026-11-17 M1b persistence - good fit
+Evidence: W1b.1 built the blob model of `m1b-interfaces.md` 4 as specified (`AH/blobs.js`,
+`AH/content.js`, the sink's `mintBlobs`/`resolveBlobs` in `durable.js`; commits `d2b0e3ede3`,
+`5976b65ac5`). Staging takes a stock handle, writes `<key>.part`, fsyncs it, renames it, fsyncs the
+directory, binds `presence -> { key, bytes }` and only then answers the `StagedText`. Adapter tests
+(`test/adapter/m1b-blobs-store.test.js`) check the step order at the moment the Composer's
+`enqueueOnce` arrives (the file is complete on disk), that a failure before the directory fsync
+sends nothing, and that a fresh incarnation resolves 100 handles in 2 manager calls and reads them.
+In the real system (vat probe below, release worker `7cda4467...`, 50 M) a staged reply's handle
+recorded in the session vat was read through a new incarnation's `Content` after a clean daemon
+restart (`staging.check.afterRestart` ok, 1.0 s including the history page and `getContent`), and
+the next turn with a staged reply completed. The manager needed no cleanup code; the durable heap
+keeps the key counter and the weak key map. The state template carries `agent-host/blobs` (found
+from `argv[3]`).
+Decision: as built. A file renamed in place whose directory fsync failed keeps its key and is an
+orphan (bounded, contract 4.7).
+
+### J-0311 2026-11-17 M1b engine - perf
+Evidence: Node bench of the blob store (`node test/adapter/m1b-blobs.bench.mjs`, no vat, APFS, files
+under `H/tmp`; commit `4843edd146` with other agents' uncommitted files, crank budget not applicable,
+load average in each row):
+{"metric":"blobs.stage","n":5,"median":9.41,"p95":12.163,"min":8.956,"max":12.163,"size":1048576,"reps":5,"mbps":106.3,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.65,1.87,1.94]}
+{"metric":"blobs.read","n":5,"median":0.313,"p95":0.415,"min":0.27,"max":0.415,"size":1048576,"reps":5,"mbps":3191.9,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.65,1.87,1.94]}
+{"metric":"blobs.readPages","n":5,"median":7.664,"p95":10.185,"min":7.079,"max":10.185,"size":1048576,"reps":5,"pages":52,"mbps":130.5,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.65,1.87,1.94]}
+{"metric":"blobs.writer","n":5,"median":14.599,"p95":46.063,"min":13.132,"max":46.063,"size":1048576,"reps":5,"pieces":86,"mbps":68.5,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.65,1.87,1.94]}
+{"metric":"blobs.stage","n":5,"median":15.955,"p95":16.339,"min":14.938,"max":16.339,"size":10485760,"reps":5,"mbps":626.8,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.67,1.87,1.94]}
+{"metric":"blobs.read","n":5,"median":2.512,"p95":2.726,"min":2.493,"max":2.726,"size":10485760,"reps":5,"mbps":3980.3,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.67,1.87,1.94]}
+{"metric":"blobs.readPages","n":5,"median":64.489,"p95":66.608,"min":58.905,"max":66.608,"size":10485760,"reps":5,"pages":512,"mbps":155.1,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.67,1.87,1.94]}
+{"metric":"blobs.writer","n":5,"median":91.385,"p95":136.913,"min":49.737,"max":136.913,"size":10485760,"reps":5,"pieces":854,"mbps":109.4,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.67,1.87,1.94]}
+{"metric":"blobs.stage.field","n":200,"median":10.004,"p95":19.955,"min":7.907,"max":21.041,"size":9216,"managerCranksPerField":0.035,"vatDeliveriesPerField":0,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.67,1.87,1.94]}
+{"metric":"blobs.stage.field","n":200,"median":9.063,"p95":19.005,"min":7.796,"max":20.071,"size":32768,"managerCranksPerField":0.03,"vatDeliveriesPerField":0,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.78,1.89,1.94]}
+{"metric":"blobs.stage.field","n":200,"median":9.981,"p95":19.976,"min":7.906,"max":24.008,"size":98304,"managerCranksPerField":0.03,"vatDeliveriesPerField":0,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.78,1.89,1.94]}
+{"metric":"blobs.resolve","n":1,"median":3.688,"p95":3.688,"min":3.688,"max":3.688,"handles":600,"managerCranks":10,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.78,1.89,1.94]}
+{"metric":"blobs.stream","n":1,"median":321.317,"p95":321.317,"min":321.317,"max":321.317,"size":262144,"chunkBytes":1024,"checkpoints":16,"replyBytes":262144,"diskBytes":2228224,"diskPerReplyByte":8.5,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.78,1.89,1.94]}
+{"metric":"blobs.stream","n":1,"median":1331.249,"p95":1331.249,"min":1331.249,"max":1331.249,"size":1048576,"chunkBytes":1024,"checkpoints":63,"replyBytes":1048576,"diskBytes":34300928,"diskPerReplyByte":32.71,"commit":"4843edd146-dirty","crankBudget":"50000000","loadAvg":[1.78,1.89,1.94]}
+Reading: one staged field costs about 10 ms median, 20 ms p95, whatever its size up to 96 KiB: two
+fsyncs (file and directory, each about 4-5 ms; Node's fsync, not F_FULLFSYNC) dominate. 1 MiB stages
+in 9-15 ms (67-106 MiB/s), 10 MiB in 16-33 ms (300-630 MiB/s); a whole read is 0.3 ms / 2.5 ms
+(3-4 GiB/s, page cache). Reading through `Content` in 20 KiB pages costs about 0.15 ms per page
+in process (52 pages per MiB); in a vat each page is an exec crank (contract 6.2), so the vat, not
+the store, is the bound there. The `BlobWriter` path (86 answered pieces per MiB) is 15-32 ms per
+MiB in process. Restart resolve: 600 handles in 3.7 ms plus 10 manager calls. Manager cranks per
+staged field: 1/32 (stock refill), vat deliveries per staged field: 0.
+Decision: no budget in the milestone; the 10 ms per field is paid before the message is sent, off
+the vat's path.
+
+### J-0312 2026-11-17 M1b engine - perf
+Evidence: vat probe of the turn path (throwaway script under the run lock, `runPerf` + the m1a
+slice template built from the tree, scripted backend, Composer submit to the `end` event on a Live
+subscription, 8 samples per case interleaved, session and manager journal frames per turn; commit
+`5976b65ac5` with other agents' uncommitted files, release worker `7cda4467...`, crank budget 50 M,
+load average 1.5-2.0):
+{"metric":"staging.turn.reply.inline8k","n":8,"median":518,"p95":539,"min":488,"max":539,"statuses":["completed"],"sessionFramesMedian":4,"sessionFramesMax":4,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.reply.staged9k","n":8,"median":463,"p95":611,"min":437,"max":611,"statuses":["completed"],"sessionFramesMedian":4,"sessionFramesMax":5,"managerFramesTotal":3,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.reply.inline8kx16chunks","n":8,"median":1227,"p95":1239,"min":1193,"max":1239,"statuses":["completed"],"sessionFramesMedian":4,"sessionFramesMax":4,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.reply.staged1m","n":8,"median":2583,"p95":3630,"min":2267,"max":3630,"statuses":["completed"],"sessionFramesMedian":53,"sessionFramesMax":61,"managerFramesTotal":99,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.tool.resultInline4k","n":8,"median":745,"p95":1285,"min":676,"max":1285,"statuses":["completed"],"sessionFramesMedian":6,"sessionFramesMax":37,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.tool.resultStaged20k","n":8,"median":696,"p95":1182,"min":661,"max":1182,"statuses":["completed"],"sessionFramesMedian":6,"sessionFramesMax":6,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.tool.argsStaged9k","n":8,"median":686,"p95":721,"min":644,"max":721,"statuses":["completed"],"sessionFramesMedian":6,"sessionFramesMax":6,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.reply.nativeContext","n":8,"median":447,"p95":469,"min":424,"max":469,"statuses":["completed"],"sessionFramesMedian":4,"sessionFramesMax":4,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.submission.inline","n":8,"median":414,"p95":423,"min":397,"max":423,"statuses":["completed"],"sessionFramesMedian":4,"sessionFramesMax":4,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.turn.submission.staged9k","n":8,"median":451,"p95":461,"min":426,"max":461,"statuses":["completed"],"sessionFramesMedian":4,"sessionFramesMax":4,"managerFramesTotal":0,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.87,1.94]}
+{"metric":"staging.check.recorded","staged":true,"bytes":9000,"preview":1024}
+{"metric":"staging.check.log","progress":126,"progressFailed":0,"stagingFailed":0,"frameLimit":0}
+{"metric":"staging.check.afterRestart","ms":1016,"ok":true,"commit":"5976b65ac5-dirty","crankBudget":"50000000","loadAvg":[1.54,1.86,1.94]}
+{"metric":"staging.check.turnAfterRestart","ms":981,"end":{"status":"completed","turnId":"t84","type":"end"}}
+Reading, cost per staged field against the same turn inline: a staged reply (9,000 bytes) 463 ms
+against 518 ms for 8,000 bytes inline, the same 4 session deliveries; a staged echo result (20 KB)
+696 against 745 ms for 4 KB inline, 6 deliveries each; staged tool arguments 686 ms, 6 deliveries;
+a staged native context 447 ms, 4 deliveries; a staged submission 451 against 414 ms (+37 ms: the
+Composer's two fsyncs and the larger enqueue), 4 deliveries. So a staged field adds no session
+delivery and is not slower in the vat (a 1 KB preview instead of up to 8 KB inline offsets the
+handle). Manager frames: 3 for 8 staged replies (stock refills and GC). The streamed 1 MiB reply is
+the exception: 16 chunks of 64 KiB 40 ms apart took 2,583 ms against 1,227 ms for the same chunks
+inline-sized, 53 session frames against 4 and 12 manager frames per turn: about 16 progress
+checkpoints per turn (126 `progress` lines over 8 turns), each one session crank (about 85 ms) plus
+GC frames for the superseded checkpoint handles.
+Decision: staging is off the hot path for single fields. Progress checkpoints are the cost; see
+J-0313.
+
+### J-0313 2026-11-17 M1b persistence - perf
+Evidence: `blobs.stream` (J-0311): a reply streamed in 1 KiB chunks 1 ms apart takes 16 checkpoints
+for 256 KiB and 63 for 1 MiB, writing 8.5 and 32.7 bytes to disk per reply byte (34 MB for a 1 MiB
+reply), because the contract's `progress.partial` is the whole round text so far, staged every
+`progressEveryBytes` (16 KiB): bytes written grow with the square of the reply, and each superseded
+checkpoint's file stays on disk until M13's collection (nothing in M1b deletes a blob). The vat
+pays one crank per checkpoint (J-0312). The provider keeps one checkpoint in flight and skips
+triggers while one is staging, which bounds the rate but not the bytes; the reply reuses the last
+checkpoint's blob when nothing came after it.
+Decision: as contracted for M1b (no redesign in a builder unit). Proposal for the PM, a contract
+change: checkpoint when the new bytes reach max(`progressEveryBytes`, bytes at the last checkpoint)
+(geometric: about log2(n/16 KiB) checkpoints, disk at most about 2 x the reply), keeping the 10 s
+rule; and let M2's delete path (or a `progress` acknowledgement) unlink superseded checkpoints. A
+real model reply is at most a few hundred KB, so the bound is 8-30 x of that until then.
+
+### J-0314 2026-11-17 M1b tools - awkward
+Evidence: what W1b.1 had to touch outside its new files. (1) `ToolRequest.args` was not widened by
+W1b.0 although contract 6.4 sends staged arguments to echo: an additive contract change
+(`805212d92b`). (2) M1a adapter tests asserted the M1a refusals that M1b replaces by staging (64 KiB
+reply frame limit, echo `frame-limit` outcomes, the Composer's `submissionTooLarge`, closed batches
+without `reason`); W1b.1 adapted those assertions in `m1a-agent-host`, `m1a-composer`,
+`m1a-channels`, `m1a-channel-bounds` (the frame-limit case is now 300 tool calls). (3) Not edited
+(W1b.6's or M1a's integration files): `test/integration/m1a-slice.test.js` acceptance 8 and the
+`turn.tooBig.*` probes of `perf/turn.perf.mjs` still expect `frame-limit` for a 64 KiB reply and a
+300 k echo result, which now complete with staged text; they will fail until W1b.6 updates them.
+(4) The session program grew 177,676 -> 186,021 bytes (+8,345; 13,979 left under 200 KB).
+Decision: reported to the PM; comment stripping in `bundle-guest.mjs` (J-0303) matters before
+W1b.2 and W1b.4 add their session code.
+
+### J-0315 2026-11-17 M1b transport - good fit
+Evidence: the session vat never stages and never reads a blob; it copies `StagedText` records from
+where they arrive (Composer, provider, tool callee) into records, events and receipts, so staging
+added no vat delivery and no data-keyed state (J-0312). The progress checkpoint lives in the active
+turn, replaced by each `progress` and appended as one `Partial` in `settle` only when the round
+ends without `roundFinal` (cancel, recovery, `roundFailed` without its own partial), so the log
+stays append-only (unit tests `test/unit/m1b-blobs-session.test.js`). Seams for W1b.4 are in
+`turn.js` (`ToolContext`, `available(ports, services)`, deadlines routed to the issuing entry,
+staged outcomes recorded unchanged). Remotable handles inside records cost the GC traffic of
+J-0312 only when many are minted and dropped (checkpoints).
+Decision: as built.
