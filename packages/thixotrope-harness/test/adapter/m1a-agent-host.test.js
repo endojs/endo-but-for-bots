@@ -818,7 +818,7 @@ test('scripted backend writes its event log as fsynced JSON lines', async t => {
     harden({ opId: 't1/r0/c0', args: '{"text":"z"}' }),
   );
   // The delta line is written on a later turn of the event loop.
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await new Promise(wake => setTimeout(wake, 20));
   const all = readFileSync(logPath, 'utf8')
     .trim()
     .split('\n')
@@ -827,7 +827,12 @@ test('scripted backend writes its event log as fsynced JSON lines', async t => {
   t.is(deltas.length, 1);
   t.like(deltas[0], { turnId: 't1', round: 0, units: 1 });
   const lines = all.filter(line => line.kind !== 'delta');
-  t.true(deltas[0].at >= lines[0].at && deltas[0].at <= lines[1].at);
+  const [publishedAt, requestAt, finalAt] = [
+    deltas[0].at,
+    lines[0].at,
+    lines[1].at,
+  ].map(Number);
+  t.true(publishedAt >= requestAt && publishedAt <= finalAt);
   t.deepEqual(
     lines.map(line => line.kind),
     ['request', 'round-final', 'echo-start', 'echo-end'],
