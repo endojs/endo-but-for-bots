@@ -709,6 +709,35 @@ failure in worker metadata, and retires the logical comms session so pending
 calls reject. Other vats continue to run. Failed vats do not replay the same
 poison input after a restart; inspection does not retry that input.
 
+A worker process that is killed by a signal, or that misses the watchdog, has crashed rather than
+halted, and may not crash again.
+When a crash leaves frames undelivered, the supervisor retries the vat by itself, replaying its
+journal, after one second and then after twice the previous wait, up to a minute; frames that
+arrive meanwhile queue in the journal.
+A vat that crashes five times in a row without getting further than before
+(`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`), which under one supervisor takes at least fifteen seconds, is
+given up on as a halted vat is: its failure is recorded, its session is retired, and pending calls
+reject.
+The count is kept in the vat's metadata, so a restart continues it rather than starting again,
+though the waits start again at one second.
+A supervisor that is asked to stop counts no crash from then on and forgives the one whose retry it
+cancels, because a signal that stops the supervisor's process group kills its workers too.
+A starting supervisor waits for a vat that crashes while its journal is replayed to be retried to
+one end or the other before it serves, which with a large bound and a vat that misses the watchdog
+each time is a long wait, and it then starts either way.
+
+Only a crash is counted, and a crash is not proof of a fault in the vat.
+A signal can come from outside the worker, and a host that is slow enough makes any worker miss the
+watchdog, so trouble of the host's that kills or stalls workers for longer than the retries last
+gives up the vats it catches, and a vat given up on is not got back; raise the bound to widen that
+margin.
+A worker that exits with a status is not counted: that is how it reports that it cannot open its
+heap or write to a full disk, which is the host's trouble.
+It is also how the worker ends after a panic of its own, which is therefore not counted either;
+either way the vat is tried again by the next frame as before, or by the retry it is owed if it
+had crashed, and such a failure while a supervisor starts still stops the start.
+A crash while a snapshot is taken is not counted.
+
 Configure the daemon-wide defaults when starting `thix serve`:
 
 ```sh
@@ -717,10 +746,12 @@ THIXOTROPE_BOOTSTRAP_BUDGET=1500000000 \
 THIXOTROPE_SLOT_CEILING=2000000 \
 THIXOTROPE_CHUNK_CEILING=536870912 \
 THIXOTROPE_REQUEST_TIMEOUT_MS=90000 \
+THIXOTROPE_MAX_DELIVERY_ATTEMPTS=8 \
 thix serve ./private-state
 ```
 
-`thix status ./private-state` reports the effective settings under `ironhorse`.
+`thix status ./private-state` reports the effective Ironhorse limits under `ironhorse`; it does not
+report `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`.
 Per-vat overrides are not implemented yet.
 
 | Setting | Unit | Default | Supported range |
@@ -730,6 +761,7 @@ Per-vat overrides are not implemented yet.
 | `THIXOTROPE_SLOT_CEILING` | slot records | 1,000,000 | 1 to 44,739,242 |
 | `THIXOTROPE_CHUNK_CEILING` | chunk address-space bytes | 268,435,456 | 1 to 536,870,912 |
 | `THIXOTROPE_REQUEST_TIMEOUT_MS` | milliseconds per worker request | 60,000 | 1 to 2^31−1 |
+| `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` | crashes in a row without progress before a vat is given up on | 5 | 2 to 100 |
 
 The worker uses Ironhorse’s consensus profile, which bounds the slot and chunk ceilings.
 It rejects settings above those bounds before executing guest code.
@@ -1207,13 +1239,18 @@ settle normally across restarts.
 
 ## API
 
-`makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, snapshotEveryDeliveries?, verbose? })`
+`makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, snapshotEveryDeliveries?, maxDeliveryAttempts?, crashRetryDelayMs?, verbose? })`
 resolves to a daemon (`idleSleepMs` puts to sleep any worker that has seen no
 deliveries for that long; workers run to quiescence per delivery and
 have no timer queue, so frame silence is exact dormancy;
 `snapshotEveryDeliveries` snapshots an awake worker once that many
 deliveries have accrued since its last snapshot, so a worker that never
-idles still bounds its journal):
+idles still bounds its journal;
+`maxDeliveryAttempts` gives a worker up, as a halt does, once that many
+attempts in a row have ended in a `WorkerCrashError` without progress, with
+`crashRetryDelayMs` the wait before the first retry and each later wait
+double the one before, up to a minute; omitted, crashes are not counted
+and every later frame wakes a crashed worker again):
 
 - `createWorker({ debugLabel?, ephemeral?, allocationKey? })` — makes a
   fresh worker under a generated unguessable id, or finds the one made
