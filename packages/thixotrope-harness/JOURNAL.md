@@ -2393,3 +2393,78 @@ acceptance 8), instead of becoming a failed result the model sees; `systemPrompt
 `spoken` and `reasoningEffort` are refused by `createSession` until their milestones.
 Decision: as written; each later milestone that lifts one of these changes the contract in a
 `contract(thixotrope-harness):` commit.
+
+### J-0230 2026-11-16 M1a adapter - perf
+Evidence: Node microbenchmark `test/adapter/m1a-channels.bench.mjs` (W1a.3; no vat, so no run lock;
+crank budget not applicable, recorded as the harness default 50 M), at commit `0a03343d1a` (the
+worktree was dirty with other units' uncommitted files, none of them channel code), load average
+2.4-2.8. Node 22, lockdown, guest prelude installed as in the adapter.
+{"metric":"channels.delta.e2e","n":200,"median":0.121,"p95":0.255,"p99":0.488,"min":0.089,"max":0.494,"deliveriesPerDelta":0,"subscribers":1,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.71,3.9,4.36]}
+{"metric":"channels.delta.e2e","n":200,"median":0.22,"p95":0.587,"p99":0.639,"min":0.194,"max":0.694,"deliveriesPerDelta":0,"subscribers":3,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.71,3.9,4.36]}
+{"metric":"channels.delta.e2e","n":200,"median":0.666,"p95":1.09,"p99":1.295,"min":0.587,"max":1.361,"deliveriesPerDelta":0,"subscribers":10,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.71,3.9,4.36]}
+{"metric":"channels.delta.publish","n":20,"median":0.026,"p95":0.028,"p99":0.028,"min":0.025,"max":0.028,"deliveriesPerDelta":0,"subscribers":0,"deltasPerSample":1000,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.71,3.9,4.36]}
+{"metric":"channels.delta.publish","n":20,"median":0.029,"p95":0.041,"p99":0.041,"min":0.023,"max":0.041,"deliveriesPerDelta":0,"subscribers":1,"deltasPerSample":1000,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.73,3.88,4.35]}
+{"metric":"channels.delta.publish","n":20,"median":0.031,"p95":0.038,"p99":0.038,"min":0.023,"max":0.038,"deliveriesPerDelta":0,"subscribers":3,"deltasPerSample":1000,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.75,3.87,4.34]}
+{"metric":"channels.delta.publish","n":20,"median":0.031,"p95":0.046,"p99":0.046,"min":0.024,"max":0.046,"deliveriesPerDelta":0,"subscribers":10,"deltasPerSample":1000,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.44,3.74,4.29]}
+{"metric":"channels.fold.turn5000","n":10,"median":167.056,"p95":183.603,"p99":183.603,"min":157.553,"max":183.603,"deliveriesPerDelta":0,"deltas":5000,"toolRounds":2,"pass":null,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.44,3.74,4.29]}
+{"metric":"channels.fold.perDelta","n":10,"median":0.033,"p95":0.037,"p99":0.037,"min":0.032,"max":0.037,"deliveriesPerDelta":0,"deltas":5000,"budget":{"median":5},"pass":true,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.44,3.74,4.29]}
+{"metric":"channels.snapshot.turn5000","n":10,"median":0.018,"p95":0.019,"p99":0.019,"min":0.014,"max":0.019,"snapshotJsonUnits":101756,"pass":null,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.44,3.74,4.29]}
+{"metric":"channels.snapshot.midTurn5000","value":0.021,"streamingTextUnits":153890,"pass":null,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.44,3.74,4.29]}
+{"metric":"channels.next.batch256","n":50,"median":14.203,"p95":30.221,"p99":33.694,"min":12.707,"max":33.694,"deliveriesPerDelta":0,"pass":null,"commit":"0a03343d1a-dirty","crankBudget":"50000000","loadAvg":[2.4,3.72,4.28]}
+Reading: `turn.delta` (budget median 5 ms, 0 deliveries per delta) passes by more than an order of
+magnitude: one 27-unit delta reaches 1 / 3 / 10 waiting subscribers' `next()` (through `E()`, guarded
+exos) in 0.12 / 0.22 / 0.67 ms median, 1.1 ms p95 at 10. The synchronous publish (shape check,
+harden, fold, fan-out) costs 0.026-0.031 ms per delta whatever the subscriber count, since a
+subscriber with no waiting `next()` only queues. A turn of 5,000 deltas plus two tool rounds folds
+in 167 ms (0.033 ms per delta); its snapshot is a shallow copy and costs 0.02 ms (the streaming text
+is shared, not copied). The expensive step is the subscriber's batch read: one `next()` of 256
+queued deliveries takes 14 ms median, 30 ms p95, almost all of it the `LiveBatch` return guard
+(J-0231). Zero vat deliveries per delta by construction: deltas never leave the adapter process.
+Decision: budget met; no change. W1a.7's `turn.delta` check measures the same path end to end with a
+vat-published turn; these numbers are its floor.
+
+### J-0231 2026-11-16 M1a adapter - awkward
+Evidence: a probe of the pattern checks in the same Node process (W1a.3, load average about 3):
+`mustMatch(delta, shapes.DeltaEvent)` 22 us; `matches(delivery, shapes.Delivery)` 56 us for a delta
+and 98 us for a `tool_result` (the `M.or` of snapshot, delta and nine vat-event records is tried in
+order); `matches(batch, shapes.LiveBatch)` of 256 deliveries 15.9 ms; `harden` of a fresh delivery
+2 us. So in Node, @endo/patterns costs 10-50 times the channel's own work, and the contract's
+`LiveSubscription.next` return guard re-checks every delivery the channel has already checked once
+(vat events by the `LivePublisher` guard, deltas by `publishDelta`'s `mustMatch`). The checks cannot
+simply be dropped at publish time: a delivery that fails the return guard would reject the
+subscriber's `next()` and lose the whole batch.
+Decision: keep both checks in M1a (cost per delivery about 0.06-0.1 ms per subscriber, well inside
+the delta budget). Candidate for the PM before M3 (many browser viewers per session): a contract
+change making `LiveSubscription.next` return `M.any()` (or a cheaper `{ deliveries: M.array() }`)
+because every delivery is validated once when it is published; measure with this bench.
+
+### J-0232 2026-11-16 M1a adapter - good fit
+Evidence: D-8 maps onto the adapter directly (`resources/agent-host/impl/channels.js`). The registry
+keys channels by the Session presence in a `WeakMap` (S2 (d)); no session key or id is used anywhere
+in the channel, `Live.subscribe(session, rev)` and `Composer.submit(session, text, requestId)` take
+the Session object, and the only strings are the event texts and the client's request id (F.2 e).
+Fae's `reply-fold.js` (W1a.1 copy) runs unchanged; the channel strips `turnId` (and a delta's
+`round`) before folding so the folded usage matches `shapes.UsageTotals`. The adapter tests check
+"fold equals replay" for subscribers that join before, during and after a turn with tool results
+out of call order, publish batch order and `seq`/`rev` numbering, the drop of a lagging subscriber
+while others continue, `close()`, concurrent `next()` callers, the guards, taps, and the Composer's
+exact UTF-8 bound (8,192 ASCII bytes pass; 2,731 euro signs, 8,193 bytes, are refused; 2,048
+surrogate pairs pass). Two points the contract left open are settled in the module and its tests: a
+snapshot carries the `seq` of the last delivery it accounts for (0 on a fresh channel), so the next
+delivery is exactly `seq + 1`; a waiting `next()` is answered on a microtask, so one publish (or one
+synchronous burst) arrives as one batch.
+Decision: as built. W1a.2's `AH/index.js` (commit `489dff8245`) already composes
+`makeChannelRegistry({ taps: channelTaps })`, `makeLive` and `makeComposer`, so W1a.3 needed no
+registration commit of its own.
+
+### J-0233 2026-11-16 M1a adapter - deviation
+Evidence: three bounds and one tooling gap. (1) The subscriber drop bound (4,096 undelivered
+deliveries, m1a-interfaces.md 3.2) has no name in `limits.js`; it is `SUBSCRIBER_QUEUE_LIMIT` in
+`channels.js` and an option of `makeChannelRegistry`. (2) The fold is kept within
+`limits.foldTextUnits` (a prefix of the streaming text) and `limits.foldMessages` (the oldest
+messages dropped), so the adapter's retained state is bounded (rule 12.6); a turn beyond either
+bound has a snapshot that no longer equals a replay. (3) `subscribe(session, rev)` records nothing
+about the client's `rev`: the comparison is the client's (section 5). (4) The package `tsconfig.json`
+does not include `resources/**`; the channel modules are type-checked only through the test files
+that import them.
+Decision: (1)-(3) as built; (4) for the PM (one include line), not a W1a.3 file.
