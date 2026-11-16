@@ -59,8 +59,9 @@ import { restoreHubState, serializeHubState } from './hub-state.js';
  *
  * Durability: the entire hub state (rows, counters, publications,
  * queued frames, inbound watermarks) serializes to JSON and is written
- * through the injected store after every mutating frame, BEFORE the
- * resulting frames are sent — so the tables can never lag the wire. A
+ * through the injected store after every mutating frame (or batch: a
+ * worker crank, or a disposable observer's frames of one turn), BEFORE
+ * the resulting frames are sent — so the tables can never lag the wire. A
  * successor process reconstructs the hub from the store alone and
  * reattaches its sessions; positions are stable because they are rows,
  * not objects. Frames toward a detached durable session queue in the
