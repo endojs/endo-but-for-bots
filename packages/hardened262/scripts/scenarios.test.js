@@ -6,9 +6,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   scenarioIncludes,
@@ -28,6 +35,10 @@ import {
   diffResultReports,
   readResultBaseline,
   writeResultBaseline,
+  applyBaselineOverlay,
+  unapplyBaselineOverlay,
+  readBaselineOverlay,
+  selectBaselineAgents,
 } from './test.js';
 import {
   decodeIronhorseOutcome,
@@ -514,5 +525,119 @@ test('result baseline uses directories of flat textual lists', () => {
     assert.deepEqual(readResultBaseline(baselineDirectory), report);
   } finally {
     rmSync(baselineDirectory, { recursive: true, force: true });
+  }
+});
+
+// --- Node.js major-version baseline overlays --------------------------------
+
+const versionNeutralBaseline = {
+  version: 1,
+  scenarios: {
+    'sesNode/module': {
+      skipped: [],
+      failed: ['test/a.js'],
+      passed: ['test/caller.js', 'test/z.js'],
+    },
+    'xs/module': { skipped: [], failed: [], passed: ['test/caller.js'] },
+    zeroCoverage: { skipped: ['test/none.js'], failed: [], passed: [] },
+  },
+};
+
+const node26Overlay = {
+  version: 1,
+  scenarios: {
+    'sesNode/module': { failed: ['test/caller.js'] },
+  },
+};
+
+test('applyBaselineOverlay moves only the overlaid tuple', () => {
+  const overlaid = applyBaselineOverlay(versionNeutralBaseline, node26Overlay);
+  assert.deepEqual(overlaid.scenarios['sesNode/module'], {
+    skipped: [],
+    failed: ['test/a.js', 'test/caller.js'],
+    passed: ['test/z.js'],
+  });
+  // The other agent's identical path keeps its outcome.
+  assert.deepEqual(
+    overlaid.scenarios['xs/module'],
+    versionNeutralBaseline.scenarios['xs/module'],
+  );
+  // The input baseline is not mutated.
+  assert.deepEqual(versionNeutralBaseline.scenarios['sesNode/module'].passed, [
+    'test/caller.js',
+    'test/z.js',
+  ]);
+});
+
+test('unapplyBaselineOverlay restores version-neutral outcomes on update', () => {
+  const node26Report = applyBaselineOverlay(
+    versionNeutralBaseline,
+    node26Overlay,
+  );
+  assert.deepEqual(
+    unapplyBaselineOverlay(node26Report, node26Overlay, versionNeutralBaseline),
+    applyBaselineOverlay(versionNeutralBaseline, { scenarios: {} }),
+  );
+});
+
+test('selectBaselineAgents slices scenarios for an --agent run', () => {
+  assert.deepEqual(
+    Object.keys(
+      selectBaselineAgents(versionNeutralBaseline, ['sesNode'], false)
+        .scenarios,
+    ),
+    ['sesNode/module'],
+  );
+  assert.deepEqual(
+    Object.keys(
+      selectBaselineAgents(versionNeutralBaseline, ['sesNode', 'xs'], true)
+        .scenarios,
+    ),
+    ['sesNode/module', 'xs/module', 'zeroCoverage'],
+  );
+});
+
+test('readBaselineOverlay finds baseline-overlays/node<major> beside the baseline', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hardened262-'));
+  try {
+    const baselineDirectory = join(root, 'baseline');
+    const overlayScenario = join(
+      root,
+      'baseline-overlays',
+      'node26',
+      'sesNode',
+      'module',
+    );
+    mkdirSync(overlayScenario, { recursive: true });
+    writeFileSync(join(overlayScenario, 'failed.txt'), 'test/caller.js\n');
+    assert.equal(readBaselineOverlay(baselineDirectory, 24), undefined);
+    const overlay = readBaselineOverlay(baselineDirectory, 26);
+    assert.ok(overlay);
+    assert.deepEqual(overlay.scenarios['sesNode/module'].failed, [
+      'test/caller.js',
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the checked-in Node 26 overlay names only tuples present in the baseline', () => {
+  const baselineDirectory = fileURLToPath(
+    new URL('../baseline', import.meta.url),
+  );
+  const baseline = readResultBaseline(baselineDirectory);
+  const overlay = readBaselineOverlay(baselineDirectory, 26);
+  assert.ok(overlay, 'baseline-overlays/node26 exists');
+  for (const [scenario, outcomes] of Object.entries(overlay.scenarios)) {
+    for (const [status, files] of Object.entries(outcomes)) {
+      for (const file of files) {
+        const known = Object.values(baseline.scenarios[scenario] ?? {}).flat();
+        assert.ok(known.includes(file), `${scenario} ${file} is in baseline/`);
+        assert.ok(
+          !baseline.scenarios[scenario][status].includes(file),
+          `${scenario} ${status} ${file} differs from baseline/`,
+        );
+      }
+    }
   }
 });
