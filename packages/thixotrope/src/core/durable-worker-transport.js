@@ -147,6 +147,11 @@ export const makeDurableWorkerTransport = (
   let snapshotCut = store.getMeta().snapshot?.cut ?? 0;
   let checkpointQueued = false;
   /**
+   * Where the last cadence snapshot failed, so the next is attempted a whole
+   * cadence later rather than after every delivery.
+   */
+  let snapshotFailedAt = 0;
+  /**
    * Crashes since the worker last made progress, as recorded in its
    * metadata: a restart resumes the count instead of forgetting it.
    *
@@ -664,7 +669,8 @@ export const makeDurableWorkerTransport = (
           !resident &&
           engine.canSnapshot &&
           !checkpointQueued &&
-          deliveredUpTo - snapshotCut >= snapshotEveryDeliveries
+          deliveredUpTo - Math.max(snapshotCut, snapshotFailedAt) >=
+            snapshotEveryDeliveries
         ) {
           // Behind the deliveries already queued, as a sleep would be; the
           // worker stays awake through it.
@@ -709,6 +715,10 @@ export const makeDurableWorkerTransport = (
     try {
       ref = await incarnation.snapshot();
     } catch (error) {
+      // The next frame replays the whole journal. Were the cadence left
+      // where it is, that frame would also snapshot again, and a snapshot
+      // that fails every time would cost a full replay per frame.
+      snapshotFailedAt = cut;
       abandonIncarnation(error);
     }
     const previous = store.getMeta().snapshot?.ref;

@@ -596,6 +596,42 @@ test('without a bound, crashes are not counted and every later frame tries again
   t.deepEqual(clock.delays(), []);
 });
 
+test('a cadence snapshot that fails is attempted again a cadence later, not after every frame', async t => {
+  let snapshots = 0;
+  let deliveries = 0;
+  const engine = harden({
+    canSnapshot: true,
+    start: async () =>
+      harden({
+        /** @param {any} message */
+        deliver: async message => {
+          if (message.t === 'f') deliveries += 1;
+        },
+        snapshot: async () => {
+          snapshots += 1;
+          throw Error('ENOSPC: no space left on device');
+        },
+        terminate: async () => {},
+      }),
+  });
+  const { store, transport, settle } = makeKit(t, engine, {
+    snapshotEveryDeliveries: 4,
+  });
+  for (let index = 0; index < 40; index += 1) {
+    transport.write(frame(`frame ${index}`));
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+  }
+  t.is(snapshots, 10, 'one attempt per cadence of four deliveries');
+  t.true(
+    deliveries < 300,
+    `a failed snapshot costs one replay, not one per frame (${deliveries} deliveries)`,
+  );
+  t.is(store.getMeta().failure, undefined, 'a failed snapshot is not a crash');
+});
+
 /**
  * An engine whose starts follow a script: an error to throw, or a function
  * that says whether a frame's delivery crashes.
