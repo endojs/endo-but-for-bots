@@ -812,6 +812,30 @@ export const makeEmulatedTypedArrayConstructor = OriginalConstructor => {
     configurable: true,
   });
 
+  // Carry every other own static of the genuine constructor over unchanged.
+  // On an engine that implements the stage-4 ArrayBuffer base64 proposal,
+  // `%Uint8Array%` owns `fromBase64` and `fromHex`; without this copy the
+  // replacement global hides them, and consumers that feature-test the
+  // global at module load (`@endo/base64`'s `decodeBase64`, for one) fall
+  // back to a pure-JavaScript decoder. The natives construct genuine
+  // `Uint8Array`s, which already share the genuine prototype installed above.
+  for (const key of ownKeys(OriginalConstructor)) {
+    if (
+      key !== 'length' &&
+      key !== 'name' &&
+      key !== 'prototype' &&
+      key !== 'BYTES_PER_ELEMENT'
+    ) {
+      defineProperty(
+        EmulatedTypedArray,
+        key,
+        /** @type {PropertyDescriptor} */ (
+          getOwnPropertyDescriptor(OriginalConstructor, key)
+        ),
+      );
+    }
+  }
+
   // Do NOT freeze here. SES's `hardenIntrinsics` will freeze all
   // primordials (including the emulated constructors installed on globalThis)
   // as part of `lockdown()`. Pre-freezing would cause SES's pre-lockdown
