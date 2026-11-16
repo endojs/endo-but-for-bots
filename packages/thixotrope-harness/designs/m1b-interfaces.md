@@ -507,7 +507,7 @@ cranks at about 70-90 ms each plus `ceil(blobs / 64)` manager cranks; budget `co
 
 | crank | where | does | sends |
 |---|---|---|---|
-| F1 | `createSession(options)` | validate (contract 9 step 1), row `creating`, creation record; take a spare `{ facade, maker }` (none: cold creation as M1a) | `E(backend).describe()` (answered, M) and `E(admin).forSession()` (answered, M) |
+| F1 | `createSession(options)` | validate (contract 9 step 1), row `creating`, creation record; take a spare `{ facade, maker, host }` (none: cold creation as M1a) | `E(backend).describe()` (answered, M); `E(admin).forSession()` only for a cold creation (a spare's unbound `host` was minted when the spare was made, W1b.5) |
 | F2 | answers | build services: `{ backend, host, execVat: makeExecHandle(...) }` (local exo, no hop) | `E(maker).make({ config, services, rowReporter })` (answered, < 2 KB) |
 | S1 | `make` | the spare wakes (157-176 ms, M0); `makeSession`; `E(backend).open(host)` (answered; the manager holds it until the bind) | answer `{ session, internal }` |
 | F3 | `make`'s answer | creation record has `made` | `E(admin).bindSession(host, session)` (answered) |
@@ -685,17 +685,22 @@ and `texts.execBusyReset` (W1b.6 tests both; J-0307).
 
 ### 10.1 Pool
 
-`guest/factory/pool.js`: `makePool({ vats, programs, rows, admin })` keeps up to `spareSessions`
-(2) spare session vats and `spareExec` (1) spare exec vats, each `{ facade, maker | scope, digest }`
-in the factory heap; refills with at most `poolLanes` (4) creations in flight; `whenSettled()`;
-`configure`. Spares sleep (idle sleep) and are not woken at startup. Takes: `takeSession()` (for
-`createSession`), `takeExec()` (for `ExecHandle.scope`). `makeExecHandle({ pool })` -> `ExecHandle`
-per session (3.4). Disk: about 17 MB per sleeping spare (M0).
+`guest/factory/pool.js`: `makePool({ vats, programs: { session, exec }, settings, sessionSources,
+lanes?, mintHost? })` keeps up to `spareSessions` (2) spare session vats and `spareExec` (1) spare
+exec vats, each `{ facade, value: maker | scope, host?, digest, label }` in the factory heap (a
+session spare's `host` is an unbound `SessionHostFacet` minted with it by `mintHost`); refills with
+at most `poolLanes` (4) creations in flight; `whenSettled()`; `configure`. The pool is passive until
+first asked (`configure`, `whenSettled`, a take, or a start), so provisioning sets its targets before
+it fills. Spares sleep (idle sleep) and are not woken at startup. Takes: `takeSession()` (for
+`createSession`), `takeExec()` (for `ExecHandle.scope`). `makeExecHandle({ pool, settings })` ->
+`ExecHandle` per session (3.4). Spare workers are labelled `spare session <n>` / `spare exec <n>`
+(a pooled session's vat keeps that label; cold ones stay `session s<n>`). Disk: about 17 MB per
+sleeping spare (M0; 17.1-17.4 MB snapshots measured in W1b.5, J-0353).
 
 ### 10.2 List feed
 
-`guest/factory/list-feed.js`: `makeListFeed({ admin })` -> `{ changed(row), removed(row), flush(),
-rev(), refresh() }`: collects row changes of a crank, publishes one batch per crank (`flush` at the
+`guest/factory/list-feed.js`: `makeListFeed({ admin, listed, isListed })` (the row table's published
+form and listing rule) -> `{ changed(row), removed(row), flush(), rev(), refresh() }`: collects row changes of a crank, publishes one batch per crank (`flush` at the
 end of every factory method and `RowReporter.changed`), `rev` counter; `refresh()` (start listener)
 gets a fresh publisher with `E(admin).listPublisher()`. `AH/list-channel.js`:
 `makeListChannel({ limits = channelLimits })` -> `{ publisher: ListPublisher, subscribe(rev?) ->
@@ -763,9 +768,9 @@ guest rules; "Node" = adapter or tests.
 
 | file | export | signature |
 |---|---|---|
-| `guest/factory/pool.js` (vat) | `makePool({ vats, programs, rows, settings }) -> Pool` | `{ takeSession(), takeExec(), whenSettled(), status(), configure(settings), refill(), onStart() }` |
+| `guest/factory/pool.js` (vat) | `makePool({ vats, programs: { session, exec }, settings, sessionSources, lanes?, mintHost? }) -> Pool` | `{ takeSession(), takeExec(), retire(facade), whenSettled(), status(), configure(settings), refill(), programChanged(), onStart() }`; `makePoolSettings(initial?)` |
 | | `makeExecHandle({ pool, settings }) -> ExecHandle` | section 3.4 |
-| `guest/factory/list-feed.js` (vat) | `makeListFeed({ admin }) -> ListFeed` | section 10.2 |
+| `guest/factory/list-feed.js` (vat) | `makeListFeed({ admin, listed, isListed }) -> ListFeed` | section 10.2 |
 | `AH/list-channel.js` (Node) | `makeListChannel({ limits? }) -> { publisher, subscribe(rev?), latestRev() }` | section 10.2 |
 | `scripts/provision-steps.js` (Node; hook table) | a step `load exec program` | bundles `exec`, `HarnessRoot.loadExecProgram` pieces as the session program (contract 9) |
 
