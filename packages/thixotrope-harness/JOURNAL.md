@@ -2931,3 +2931,263 @@ Decision: as built; (1) needs a fixed text in `interfaces.js` if the PM wants it
 Evidence: correction to J-0243: the `LiveBatch` return-guard note it cites is in J-0230 and J-0231
 (14-16 ms per 256-delivery batch, "almost all of it the `LiveBatch` return guard"), not J-0233.
 Decision: none; J-0243 stands otherwise (supersedes its cross-reference only).
+
+### J-0270 2026-11-17 M1a engine - good fit
+Evidence: W1a.7 put the real session program (`guest/session/main.js`, 142,994 bytes), the factory,
+the agent-host native and the channels together from the m1a state template (`ensureTemplate(await
+m1aTemplateOptions())`, real program) and ran acceptance 1-10 of M1a as observable behaviour in three
+integration files, each alone under the run lock:
+`packages/thixotrope-harness/test/integration/m1a-slice.test.js` (acceptance 1-4, 8, 9),
+`m1a-slice-restart.test.js` (5-7) and `m1a-slice-crash.test.js` (10). Apart from the queue defect of
+J-0271 nothing needed changing: the first end-to-end turn (create, Composer submit, Live subscription
+with snapshot, phase, three deltas, final, usage, end) passed on its first run. Times are in J-0284.
+Decision: the slice is the M1a deliverable; one integration defect was fixed (J-0271), the rest held.
+
+### J-0271 2026-11-17 M1a engine - awkward
+Evidence: acceptance 4 (FIFO) failed in a real vat: 'fifo 1' ran three times and 'fifo 2' never.
+`guest/session/queue.js` `claim()` threw "C: xsSet ?: not writable" at `waiting.splice(index, 1)`.
+The claim crank had already appended `TurnStarted` and sent `open` (turn.js `claimNext` calls
+`claim()` before `queue.claim()`), so the entry stayed waiting and was claimed again at every settle;
+the exception also skipped the settle's `flushTo(ports)` and `releaseTurn`, so the settled turn's
+`final/usage/end` were published one crank late behind the next turn's `turn-start` and its lease was
+never released. Probes in a worker vat (scratch bundles under the run lock, deleted): right after
+`waiting.push(internal)` the array's new index had `writable: false, enumerable: true, configurable:
+true`; the array was not frozen, sealed or non-extensible; a fresh array or a copy `{ ...internal }`
+pushed fine; whether `internal` itself pushed non-writable into other arrays varied between runs;
+small reproductions (arrays created in an earlier crank, pushes across cranks, exo-state objects,
+`harden([])` beforehand, closures under `harden`) never reproduced it. Node never shows it (the unit
+tests passed throughout). A writable-false, configurable-true data property is a combination no
+`harden`/`freeze`/`seal` produces [inferred: a property-attribute bit of the Ironhorse VM's array
+element storage, possibly near the index store of d0fd6b1138].
+Decision: workaround in `07278d8682`: the queue keeps waiting entries in a `Set` (insertion order;
+no element is ever rewritten). Unit lane unchanged; acceptance 4 passes. Raised as core candidate
+C-16 (Ironhorse VM: an element pushed onto an array can come out non-writable, so `splice`/`shift`
+on it throw); minimal reproduction not found. Other in-place array writes in vat code
+(`turn.js` `calls.waiting.shift()`, `outbox.unshift`, `factory/rows.js` `order.splice`) worked in
+every run but are exposed to the same defect. Separately, `turn.js` `settle()` calls `claimNext()`
+before publishing and releasing: any throw in a claim loses the settle's publish and lease release
+(left as is; the PM may want the claim after the release).
+
+### J-0272 2026-11-17 M1a engine - perf
+Evidence: `perf/turn.perf.mjs` under the run lock, release worker `c2f65dbe...`, crank budget 50 M,
+commit `ba15d18959` (no local changes in the package), IDLE_MS 1 h, SNAP_EVERY 256, one session of
+the real program, 200 turns of a one-chunk reply after 3 warm-up turns, load average 1.6-2.0.
+{"metric":"turn.start","unit":"ms","n":200,"median":575,"p95":911,"p99":10404,"min":512,"max":14444,"deliveries":{"count":2978,"perOp":14.89},"engine":{"delivery":{"count":2978,"ms":222251.3},"snapshot":{"count":10,"ms":4291},"wake":{"count":0,"ms":0}},"from":"Composer stamp (adapter clock)","to":"request log line","daemonDeliveriesPerTurn":14.89,"sessionFramesPerTurn":6,"slowest":[{"turnId":"t200","ms":14444,"frames":193},{"turnId":"t125","ms":10404,"frames":153},{"turnId":"t71","ms":6704,"frames":107},{"turnId":"t149","ms":2262,"frames":6},{"turnId":"t35","ms":2140,"frames":68}],"budget":{"median":350},"pass":false,"exceeded":["median: 575 > 1.25 x 350"],"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.56,1.69,1.99]}
+{"metric":"turn.start.open","unit":"ms","n":200,"median":466,"p95":545,"p99":10169,"min":414,"max":14195,"from":"Composer stamp","to":"round-start (startRound at the provider)","pass":null,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.56,1.69,1.99]}
+{"metric":"turn.start.dispatch","unit":"ms","n":200,"median":109,"p95":136,"p99":1009,"min":91,"max":1707,"from":"round-start","to":"request (dispatching answered)","pass":null,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.56,1.69,1.99]}
+{"metric":"turn.start.client","unit":"ms","n":200,"median":587,"p95":921,"p99":10416,"min":522,"max":14455,"from":"control client before submit","to":"request","pass":null,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.56,1.69,1.99]}
+{"metric":"turn.start.deliveries","unit":"frames","value":4,"deliveries":{"count":4,"perOp":4},"perTurn":[4,4,4,4,4,4,4,4,4,4],"deliverFramesPerTurn":[3,3,3,3,3,3,3,3,3,3],"kinds":["deliver enqueueOnce","deliver fulfill","gc-exports","deliver dispatchingD"],"budget":{"deliveriesPerOp":3},"pass":false,"exceeded":["deliveriesPerOp: 4 > 3"],"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.18,1.58,1.95]}
+Reading: submit to provider request is 575 ms median against 350 ms: **fail (1.64 x)**. 466 ms of it
+is before the round reaches the provider (Composer -> session crank A -> `Backend.open` in the manager
+vat, which itself calls the adapter's ops facet and gets the answer -> crank B -> `startRound`), and
+109 ms is the `dispatching(0)` round trip (crank C). Crank A to crank B crosses the hub six times
+(session -> manager -> adapter -> manager -> session -> adapter) at about 70-80 ms per vat delivery
+(C-7), so the per-turn `open` of the contract (`m1a-interfaces.md` section 15, "Backend.open(host)
+per turn") costs about 300 ms by itself [inferred from the hop count and S2's 70-76 ms per
+vat->adapter->vat call]. Into the session vat the start is 3 `op:deliver` frames as the contract
+says (enqueueOnce, the open answer, dispatching), plus 1 `op:gc-exports` frame in every start
+(J-0277): 4 deliveries against a budget of 3, **fail by one GC frame**. Daemon-wide the engine
+counts 14.9 deliveries per turn (session 6, the manager's open and attach traffic, the factory's row
+reports, GC). The p99 of 10.4 s and max of 14.4 s are GC bursts (J-0277).
+Decision: escalate to the PM (over 1.25 x): turn start cannot meet 350 ms while each turn opens its
+ports through the manager vat. Candidates, none done here: keep `TurnPorts` across turns of one
+adapter incarnation (open once, reopen on a retired break of the lease; contract change), or let the
+adapter push ports to the session; either removes about 4 of the 8 hops. C-7 (a full GC per crank)
+sets the per-hop price.
+
+### J-0273 2026-11-17 M1a engine - awkward
+Evidence: how the turn loop fits vats, from `turn.frames` (decoded session journal, J-0272 run):
+{"metric":"turn.frames","kinds":{"perf start":{"deliver enqueueOnce":197,"deliver fulfill":394,"gc-exports":350,"deliver dispatchingD":197,"deliver roundFinal":197,"gc-answers":128},"perf start probe":{"deliver enqueueOnce":10,"deliver fulfill":20,"gc-exports":10,"deliver dispatchingD":10,"deliver roundFinal":10},"perf stream":{"deliver enqueueOnce":5,"deliver fulfill":10,"gc-exports":52,"deliver dispatchingD":5,"deliver roundFinal":5},"perf plain":{"deliver enqueueOnce":10,"deliver fulfill":20,"gc-exports":10,"deliver dispatchingD":10,"deliver roundFinal":10},"perf tools":{"deliver enqueueOnce":9,"deliver fulfill":36,"gc-exports":9,"deliver dispatchingD":9,"deliver roundFinal":18}},"turnsCounted":{"perf start":203,"perf plain":10,"perf tools":10,"perf stream":5}}
+{"metric":"turn.round","unit":"deliver frames","value":3,"deliveries":{"count":8,"perOp":3},"toolTurnFrames":[9,9,9,9,9,9,9,9,9,9],"plainTurnFrames":[6,6,6,6,6,6,6,6,6,6],"callsPerRound":2,"budget":{"deliveriesPerOp":3},"pass":true,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[0.99,1.48,1.89]}
+{"metric":"turn.lease","unit":"deliver frames","value":1,"deliveries":{"count":1,"perOp":1},"plainTurnDeliverFrames":5,"budget":{"deliveriesPerOp":1},"pass":true,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[0.99,1.48,1.89]}
+A plain turn is exactly 5 `op:deliver` cranks in the session: A `enqueueOnce`, B the `open` answer, C
+`dispatching`, D `roundFinal` (the settle, with publish, row report, releaseTurn and the next claim in
+the same crank) and the lease answer. A round with 2 echo calls adds exactly 3 (its `roundFinal` and
+one per result): `turn.round` 3 and `turn.lease` 1 pass. Every publish is one sendOnly per crank, as
+designed. Where the time goes: the session's own work per crank is small (J-0242: 85-160 ms per
+crank including the ~60 ms delivery floor); the turn's wall time is hops: each answered call between
+two vats or a vat and the adapter costs one delivery of 60-80 ms, and a plain turn makes the session
+wait on 3 of them in series before the provider sees the request (J-0272). A 1,000 ms parallel tool
+round took 1,113-1,208 ms of tool phase (J-0284), so a tool round's overhead is about 110-200 ms.
+Decision: the loop fits vats (one crank per external event, records before effects, no polling);
+the cost is the per-hop delivery price and the per-turn `open` (J-0272). Recorded.
+
+### J-0274 2026-11-17 M1a transport - perf
+Evidence: same run as J-0272: 5 turns of 50 deltas 40 ms apart; latency = arrival at a Live
+subscription in the perf process (a control client, so every batch crosses the hub) minus the
+provider's publish time from its `delta` log line (both `Date.now()` on one machine).
+{"metric":"turn.delta","unit":"ms","n":250,"median":18,"p95":2738,"p99":3156,"min":12,"max":3203,"deliveries":{"count":5,"perOp":0.02},"framesWhileStreaming":[1,48,1,1,1],"kindsWhileStreaming":["deliver roundFinal","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","gc-exports","deliver roundFinal","deliver roundFinal","deliver roundFinal","deliver roundFinal"],"subscriber":"control client through the hub","clock":"Date.now() in the adapter and here","budget":{"median":5,"deliveriesPerOp":0},"pass":false,"exceeded":["median: 18 > 1.25 x 5","deliveriesPerOp: 0.02 > 0"],"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.13,1.54,1.92]}
+Reading: median 18 ms against 5 ms: **fail (3.6 x)**, but the subscriber is in the wrong place for
+this budget: the 12-18 ms floor is the adapter -> hub -> control-client hop of the `next()` answer
+(S4 measured 20-25 ms per adapter hop). In process, W1a.3 measured 0.12 ms from publish to a waiting
+`next()` with one subscriber (J-0230). The p95 of 2.7 s is the stream turn whose window took 48 GC
+frames (J-0277): the hub, single-threaded, delayed the adapter's answers behind them. Deliveries per
+delta: of the 52 frames that reached the session while deltas streamed, 47 were `op:gc-exports` and 5
+were the rounds' own `roundFinal` (sent right after the last delta, inside the measuring window); no
+delivery was caused by a delta, so the true figure is 0 (the row reads 0.02 because it counted the
+`roundFinal`s; fixed in `76045694b3`, not re-run).
+Decision: deltas never touch a vat (D-8 holds). The 5 ms budget can only be measured once the
+subscriber is the gateway's WebSocket (M3); if the gateway is a separate adapter from the agent host,
+each delta crosses the hub once (about 25 ms, S4) and the budget is unreachable without co-locating
+Live with the channels. For the PM.
+
+### J-0275 2026-11-17 M1a transport - good fit
+Evidence: live-event ordering across the hub and the adapter process, observed in the slice tests
+(`m1a-slice.test.js`, all passes of J-0284): every subscription began with the snapshot; deltas
+(published in-process by the provider) always arrived before the same round's vat events
+(`tool_call`, `final`) that come through the hub, because the provider publishes its deltas before it
+sends `roundFinal` and the vat publishes only after receiving it; all `tool_call` events of a round
+arrived before any `tool_result`; across three queued turns every event of a turn arrived before the
+next turn's `turn-start`, and `seq` had no gap (assertion added in `7a70acdb40`). The one ordering
+anomaly seen was caused by the queue defect (J-0271): the settle crank threw before publishing, so
+the settled turn's `final/usage/end` went out one crank later, after the next turn's `turn-start`.
+Decision: ordering holds by construction as designed (architecture 4.2); a throw in a settle crank
+breaks it, which is another reason to make `settle()` publish and release before claiming (J-0271).
+
+### J-0276 2026-11-17 M1a persistence - perf
+Evidence: `perf/restart.perf.mjs`, commit `76045694b3`, idleSleepMs 2,000, crank budget 50 M, load
+1.2-1.8; 11 sessions created and each run one turn (77 s), then 5 SIGKILL restarts with 10 idle
+checkpointed sessions and session s11 stalled after `Dispatched`. A vat counts as woken when its
+journal grew across the restart.
+{"metric":"restart.serving.run","unit":"ms","value":9819.7,"run":1,"sessions":11,"wokenSessions":["session s4","session s1","session s2","session s6","session s5","session s10","session s7","session s3","session s11","session s8","session s9"],"gate":false,"awakeAfterServing":[],"engineSinceStart":{"delivery":{"count":161,"milliseconds":10537.594411},"snapshot":{"count":17,"milliseconds":6319.069878999996},"wake":{"count":21,"milliseconds":4846.432330999997}},"grownFrames":{"session s4":[],"session s1":[],"session s2":[],"session s6":[],"session s5":[],"session s10":[],"session s7":[],"session s3":[],"session s11":["deliver getHistoryPage"],"session s8":[],"session s9":[]},"inFlight":{"atKill":{"awake":true,"unsnapshotted":true},"framesAcrossRestart":10,"stateAtFirstRead":"outcome-unknown"},"daemonWorkers":20,"awakeWorkers":4,"stateKiB":457848,"budget":{"value":10000},"pass":true,"commit":"76045694b3","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.58,1.47,1.76]}
+{"metric":"restart.serving.run","unit":"ms","value":6568.6,"run":2,"sessions":11,"wokenSessions":["session s11"],"gate":true,"awakeAfterServing":[],"engineSinceStart":{"delivery":{"count":120,"milliseconds":7263.370746},"snapshot":{"count":6,"milliseconds":2391.0012090000005},"wake":{"count":10,"milliseconds":2127.1922079999995}},"grownFrames":{"session s11":["deliver getHistoryPage"]},"inFlight":{"atKill":{"awake":true,"unsnapshotted":true},"framesAcrossRestart":10,"stateAtFirstRead":"outcome-unknown"},"daemonWorkers":20,"awakeWorkers":4,"stateKiB":442760,"budget":{"value":10000},"pass":true,"commit":"76045694b3","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.49,1.45,1.75]}
+{"metric":"restart.serving","unit":"ms","n":5,"median":6725.7,"p95":9819.7,"p99":9819.7,"min":6568.6,"max":9819.7,"idleSessions":10,"inFlight":1,"how":"SIGKILL","gateWokenSessions":1,"budget":{"median":10000},"pass":true,"commit":"76045694b3","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.62,1.5,1.76]}
+{"metric":"restart.error","error":"run 1: woken session s4, session s1, session s2, session s6, session s5, session s10, session s7, session s3, session s11, session s8, session s9","pass":false}
+Runs 3-5 were as run 2 (6.6-6.9 s, woken s11 only, gate true).
+Reading: serving after SIGKILL 6.6-9.8 s, median 6.7 s against 10 s: pass. In every run the in-flight
+turn already read `outcome-unknown` with the first call after serving. The gate (only the in-flight
+session woken) **failed in run 1**: all 11 session vats were woken during startup (21 wakes, 17
+snapshots, 161 deliveries before serving), and it held in runs 2-5. A probe (state served with idle
+sleep 1 h after the restart so the journals were not truncated; scratch, deleted) showed the frames
+that wake an idle session: 3 `op:gc-exports` delivered at startup to a session that had run a turn;
+a session that never ran a turn got none; after a clean restart none. The dead peers (the killed
+adapter incarnation and the control client) held imports of the sessions' exports (receipts' Turn,
+QueueEntry, TurnSink); at startup the hub drops them and delivers the GC frames, which wake each
+exporting vat. Once dropped they do not come back, so later restarts woke only s11.
+Decision: **gate fail** recorded; escalate to the PM. D-5's "idle sessions are not woken at restart"
+holds only for sessions with no exports outstanding at the kill. Core candidate C-17: deliver
+`op:gc-*` frames to a sleeping vat lazily (journal them and deliver at its next wake, or batch them
+into one delivery) instead of waking it; with 50 sessions the first restart after a crash pays about
+0.5 s of wake and snapshot per session [inferred from 21 wakes in 4.8 s and 17 snapshots in 6.3 s].
+
+### J-0277 2026-11-17 M1a engine - poor fit
+Evidence: OCapN GC frames are deliveries. From the decoded session journal (J-0272/J-0273): 197
+one-chunk turns brought 350 `op:gc-exports` and 128 `op:gc-answers` frames to the session (2.4 per
+turn), each a full delivery with a full GC (C-7, about 60-80 ms). They come in bursts when a peer's
+garbage collector runs: single turns had 193, 153 and 107 frames in their window, and those turns
+took 14.4, 10.4 and 6.7 s to reach the provider (`turn.start` slowest); a stream turn's 48 GC frames
+gave `turn.delta` its 2.7 s p95; the 2,000-key probe took 11.1 s with 153 frames
+(`turn.tooBig.keys2000`, J-0278) against 1.4 s in an earlier run without a burst. The peers are the
+perf process (a control client holding receipts, Turns and history pages) and the agent-host adapter
+(Turn and TurnSink per turn). Every start carries one `gc-exports` (J-0272).
+Decision: poor fit as it stands: per-object GC messages cost a crank each in the exporting vat. The
+harness exports per turn a Turn, a TurnSink and (when queued) a QueueEntry; fewer exports per turn
+would reduce it, but any long-lived viewer (the M3 gateway) will produce the same bursts. Core
+candidate C-17 (J-0276): batch GC frames into one delivery, or apply them without a crank's full GC.
+For the PM and the core owner.
+
+### J-0278 2026-11-17 M1a engine - perf
+Evidence: too-big probes, same run as J-0272 (each followed by a normal turn, which completed; the
+session vat never halted):
+{"metric":"turn.tooBig.reply64k","unit":"ms","value":2114,"state":"failed","reason":"round output exceeds this build's frame limit","frames":6,"nextTurn":"completed","ok":true,"problems":[],"pass":null,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.07,1.49,1.89]}
+{"metric":"turn.tooBig.echo300k","unit":"ms","value":1175,"state":"failed","reason":"round output exceeds this build's frame limit","frames":7,"nextTurn":"completed","ok":true,"problems":[],"pass":null,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.07,1.49,1.89]}
+{"metric":"turn.tooBig.keys2000","unit":"ms","value":11149,"state":"completed","reason":null,"frames":153,"nextTurn":"completed","ok":true,"problems":[],"pass":null,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.28,1.51,1.89]}
+{"metric":"turn.summary","turns":244,"sessionFrames":2321,"snapshotCut":2086,"commit":"ba15d18959","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.28,1.51,1.89]}
+Reading: the 64 KiB reply is refused in the adapter (`frame-limit` log line, turn failed with the
+frame-limit reason, no `RoundSettled` in the vat); the 300,000-character echo result is cut in the
+callee to 32,768 units with the marker, is still over the frame and fails the turn; the 2,000-key
+arguments reach echo byte for byte and stay text in the vat. The keys turn's 11.1 s is a GC burst
+(153 frames, J-0277), not the 19 KB arguments (1.4 s in the earlier run at `af92685348`).
+Decision: pass (the probes are pass/fail; all ok).
+
+### J-0279 2026-11-17 M1a persistence - good fit
+Evidence: the restart story as observed, from acceptance 5-7 (J-0284) and J-0276. After a SIGKILL
+the daemon served in 9.2-11.0 s (slice tests; the session vats were awake and unsnapshotted, C-3) and
+6.6-9.8 s (perf). The lease break reached the session during startup: the first call after serving
+(1.5-1.9 s later, most of it the control client's lookups and the first `live()`/`composer()`, which
+start the adapter) already showed the turn settled: `outcome-unknown` after `Dispatched` with the
+provider log holding exactly one `request`; `interrupted` with the R4-66 text before `dispatching`,
+the user message once in history; a running echo call recorded "Tool outcome unknown; do not
+automatically retry." with no second `echo-start` and no round 1 request. Queued messages were held
+`restart` with the A.4 text and nothing was claimed until a new message released the hold; the
+interrupted message was never resent. `Turn.resolve(note)` worked while idle. Surprising: (1) idle
+sessions with exports are woken by GC frames at startup (J-0276); (2) the session journal shows the
+in-flight session received 10-13 frames across the restart (the lease and tool breaks, GC of the dead
+adapter's imports, and the reads); (3) recovery needed no change at all: W1a.5's crank order and
+W1a.4's outside publish worked on the first real restart.
+Decision: D-5 and architecture 4.4 hold as designed for the turn path.
+
+### J-0280 2026-11-17 M1a persistence - perf
+Evidence: `restart.crashingSession` (acceptance 10 at the crash bound 5), same run as J-0276; 5 runs,
+each with a fresh session stalled after `Dispatched`, awake and unsnapshotted at the kill, its worker
+killed on sight at the restart.
+{"metric":"restart.crashingSession.run","unit":"ms","value":20491.7,"run":1,"maxDeliveryAttempts":5,"atKill":{"awake":true,"unsnapshotted":true},"kills":[{"pid":59568,"ms":742.6},{"pid":59713,"ms":1800.6},{"pid":60003,"ms":3874.4},{"pid":60565,"ms":7919.5},{"pid":61686,"ms":15965.5}],"crashLog":[{"ms":1817,"text":"thixotrope worker transport session s12(f00f1391): retry after a crash failed (Error#2)"},{"ms":1817.2,"text":"[thixotrope:daemon] worker f00f13912afe2c41f6cee52484bf5575 crashed while resuming: (Error#2)"},{"ms":3895.8,"text":"thixotrope worker transport session s12(f00f1391): retry after a crash failed (Error#3)"},{"ms":3896.5,"text":"[thixotrope:daemon] worker f00f13912afe2c41f6cee52484bf5575 crashed while resuming: (Error#3)"},{"ms":7939.2,"text":"thixotrope worker transport session s12(f00f1391): retry after a crash failed (Error#4)"},{"ms":7939.4,"text":"[thixotrope:daemon] worker f00f13912afe2c41f6cee52484bf5575 crashed while resuming: (Error#4)"},{"ms":15983.2,"text":"thixotrope worker transport session s12(f00f1391): quarantined; crashed 5 times without progress, last while starting: Ironhorse worker exited (signaled)"}],"callLost":{"ok":false,"ms":11.1,"error":"ocapn hub: the target session has been retired"},"callOther":{"ok":true,"ms":134.6},"lostListedMs":219.7,"failedVats":1,"asAcceptance10":true,"depends":"C-8, C-9","budget":{"value":15000},"pass":false,"exceeded":["value: 20491.7 > 1.25 x 15000"],"commit":"76045694b3","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.18,1.4,1.71]}
+{"metric":"restart.crashingSession","unit":"ms","n":5,"median":20491.7,"p95":20613.6,"p99":20613.6,"min":20468.8,"max":20613.6,"maxDeliveryAttempts":5,"depends":"C-8, C-9","budget":{"median":15000},"pass":false,"exceeded":["median: 20491.7 > 1.25 x 15000"],"commit":"76045694b3","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.22,1.35,1.64]}
+Runs 2-5: 20.5-20.6 s, 5 kills each, every run as acceptance 10 (the lost session's call broke with
+the retired text in 10-12 ms, another session answered in 133-135 ms, listed `lost` 220-346 ms
+after serving, only the killed session given up).
+Reading: 20.5 s against the 15 s target: **fail (1.37 x)**, as expected (depends on C-8, C-9). Better
+than M0's 36-69 s for a plain vat because every crash here happens "while starting" (killed before its
+replay completes), so the count never restarts (J-9047): 5 attempts at 0.7, 1.8, 3.9, 7.9 and 16.0 s,
+then serving 4.5 s later. Acceptance 10 itself (bound 2): served in 6.1-7.0 s.
+Decision: recorded against C-8 and C-9; the script exits 1 by design while it misses 15 s.
+
+### J-0281 2026-11-17 M1a admin - perf
+Evidence: `perf/session.perf.mjs`, commit `7a70acdb40`, crank budget 50 M, load 1.1-1.8; 3 fresh
+provisions (each serving a new state directory and running every provisioning step), then 5 cold
+creates on the last one.
+{"metric":"session.program","unit":"bytes","value":142994,"units":142779,"modules":14,"nonAsciiUnits":215,"budget":{"value":200000},"pass":true,"commit":"7a70acdb40","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.41,1.54,1.9]}
+{"metric":"session.provision","run":1,"provisionMs":14579.2,"steps":[{"name":"install-native agentHost","ms":5329,"skipped":false},{"name":"inventory vats","ms":352,"skipped":false},{"name":"install harness","ms":6055.4,"skipped":false,"detail":{"bytes":89648,"digest":"64cb7016e9df6079cf10ab5fced1b0b054dff3f18dc7d32714f02c853cd323f0"}},{"name":"load session program","ms":2842.5,"skipped":false,"detail":{"bytes":142994,"digest":"ea47844007264c5a3790dfde24fec849580ccb7ee78b0525d6b58b5ef6a3d430","withinBudget":true,"pieces":7}}],"start":{"servedMs":15804.66,"createWorkspaceMs":6575.676,"totalMs":22549.253},"commit":"7a70acdb40","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.69,1.59,1.9]}
+{"metric":"install.factory","unit":"ms","n":3,"median":5725.1,"p95":6055.4,"p99":6055.4,"min":5694.3,"max":6055.4,"runs":3,"budget":{"median":15000},"pass":true,"commit":"7a70acdb40","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.23,1.45,1.82]}
+{"metric":"session.createCold","unit":"ms","n":5,"median":5890.304,"p95":5956.202,"p99":5956.202,"min":5827.562,"max":5956.202,"deliveries":{"count":191,"perOp":38.2},"engine":{"delivery":{"count":191,"ms":25368.4},"snapshot":{"count":0,"ms":0},"wake":{"count":5,"ms":2273.2}},"programBytes":142994,"listed":5,"depends":"C-5 (staging cost)","budget":{"median":6000},"pass":true,"commit":"7a70acdb40","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.28,1.44,1.8]}
+Reading: the real session program is 142,994 bytes (0.71 x of 200 KB; 215 non-ASCII units from the
+bundler, so it is staged by bytes into 7 pieces). Installing the factory takes 5.7-6.1 s (0.38 x the
+15 s budget): pass. A cold `createSession` takes 5.89 s median (5.83-5.96 s): pass at 0.98 x the 6 s
+budget, with 38 daemon deliveries per create (190 over 5 creates: staging pieces, the evaluating
+crank, `make`, `forSession`/`bindSession` in the manager, row reports, GC). The slice tests saw
+5.97-6.54 s for their first create of a run (J-0284).
+Decision: pass, with no margin: the next code added to the session program moves cold creation over
+6 s (about 10 us per byte, C-5; J-0262 measured 7.0-7.2 s at 195 KB). The pool (M1b) is the real
+answer; until then, keep the program small.
+
+### J-0282 2026-11-17 M1a admin - awkward
+Evidence: the cold create cost against its parts, from J-0281 and W1a.6's J-0262: about 2.8 s of the
+5.9 s is moving 143 KB through the factory into the new vat in 7 pieces (the same pieces cost 2.7-2.9 s
+to load into the factory itself, `load session program`), about 1 s is the new worker's boot and the
+evaluating crank, and about 0.45 s is `make()` (J-0242: the guards built when the Turn and TurnSink
+classes are defined), the rest manager and row traffic [inferred from these parts; not traced per
+crank]. Every byte of program crosses two inbound frames (operator -> factory once at provisioning,
+factory -> new vat at every create).
+Decision: as designed for M1a; C-5 (per-byte harden of inbound frames) is the lever, then the pool.
+
+### J-0283 2026-11-17 M1a tooling - awkward
+Evidence: test-method points found while running the slice. (1) `test/template/index.js`
+`startFromTemplate` has no crash-bound option, so acceptance 10 and the restart perf serve their copy
+with `copyWithBound` in `test/integration/_m1a-slice.js` (a second supervisor wrapper, modelled on
+`perf/crash.perf.mjs`). (2) ava runs the files of one `yarn test a b c` invocation in parallel worker
+processes, and nested run-lock takers pass through, so several integration files in one invocation
+would run several supervisors at once: run each integration file in its own invocation. (3) A perf
+run's `commit` is read once per process, so a chain of scripts reports the HEAD each started at.
+(4) The session journal (`workers/<id>/journal.jsonl`, base64 OCapN frames) decodes cheaply into
+operation kinds (`frameKind` in the helpers); it was the tool that found J-0273 and J-0277.
+Decision: (1) and (2) for the PM (`test/template/` is M0's); the helpers stay with the slice tests.
+
+### J-0284 2026-11-17 M1a engine - perf
+Evidence: the slice integration files, each alone under the run lock, at commit `7a70acdb40`
+(m1a-slice) and `76045694b3` (restart, crash), release worker, crank budget 50 M, idleSleepMs 2,000,
+template `m1a-*` built in the first file (about 40 s). Durations: m1a-slice 5 tests, 16.0 + 21.3 +
+19.4 + 19.1 + 19.2 s; m1a-slice-restart 3 tests, 27.2 + 28.3 + 29.4 s; m1a-slice-crash 1 test,
+34.7 s. All 10 acceptance tests pass.
+{"metric":"m1a.slice.createCold","unit":"ms","value":5970.6}
+{"metric":"m1a.slice.parallelRound","unit":"ms","echoDelayMs":1000,"oneCall":{"toolPhaseMs":1113,"echo":{"calls":1,"ms":1008}},"twoCalls":{"toolPhaseMs":1208,"echo":{"calls":2,"ms":1014}},"ratio":1.085}
+{"metric":"m1a.slice.restart.stalled","unit":"ms","killMs":3.8,"servedMs":9222.4,"connectedMs":9360.7,"firstReadMs":1468.7}
+{"metric":"m1a.slice.restart.stalledWorker","awake":true,"journalLength":35,"snapshotCut":33}
+{"metric":"m1a.slice.restart.undispatched","unit":"ms","killMs":3.2,"servedMs":9208.4,"connectedMs":9343.7,"firstReadMs":1485.6}
+{"metric":"m1a.slice.restart.echo","unit":"ms","killMs":3.1,"servedMs":9249.4,"connectedMs":9388.7,"firstReadMs":1586.4}
+{"metric":"m1a.slice.crashingSession","unit":"ms","value":6091.4,"maxDeliveryAttempts":2,"atKill":{"awake":true,"journalLength":19,"snapshotCut":17,"unsnapshotted":true},"kills":[{"pid":75997,"ms":668.8},{"pid":76168,"ms":1737.8}],"crashLog":[{"ms":1748.8,"text":"thixotrope worker transport session s1(9eacc81a): quarantined; crashed 2 times without progress, last while replaying journal frame 17: Ironhorse worker exited (signaled)"}],"failedVats":[{"label":"session s1","failure":"crashed 2 times without progress, last while replaying journal frame 17: Ironhorse worker exited (signaled)"}],"callA":{"ok":false,"error":"ocapn hub: the target session has been retired","ms":10.9},"callB":{"ok":true,"ms":134.7},"factoryCall":{"ok":true,"ms":67.6},"lostListedMs":89.2,"rows":[["s1","lost","working"],["s2","ready","passive"]]}
+Reading: acceptance 3's two 1,000 ms echo calls run in parallel: tool phase 1,208 ms against 1,113 ms
+for one call (ratio 1.09 < 1.6). Acceptance 10 at bound 2 serves in 6.1 s, A's call breaks in about
+10 ms, A is listed `lost` within 0.1-0.3 s of serving.
+Decision: M1a acceptance 1-10 pass; perf misses are J-0272 (`turn.start` time and deliveries),
+J-0274 (`turn.delta`, subscriber placement), J-0276 (woken gate, first restart) and J-0280
+(`restart.crashingSession`, C-8/C-9).
