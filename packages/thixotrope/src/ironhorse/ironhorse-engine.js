@@ -8,6 +8,7 @@ import harden from '@endo/harden';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
 import { makeIronhorseLimits } from './ironhorse-limits.js';
 
+import { WorkerCrashError } from '../core/worker-crash-error.js';
 import { WorkerHaltError } from '../core/worker-engine.js';
 import { withExpiry } from '../platform/timers.js';
 
@@ -36,7 +37,8 @@ import { withExpiry } from '../platform/timers.js';
  * @param {LimitInput} [options.bootstrapBudget]
  * @param {LimitInput} [options.slotCeiling]
  * @param {LimitInput} [options.chunkCeiling]
- * @param {LimitInput} [options.requestTimeoutMs] watchdog for compiler/host faults
+ * @param {LimitInput} [options.requestTimeoutMs] watchdog: a worker that has
+ *   not answered a request in this long is killed, and has crashed
  * @returns {WorkerEngine}
  */
 export const makeIronhorseEngine = (
@@ -185,6 +187,20 @@ export const makeIronhorseEngine = (
       let exited;
       /** @type {{ resolve: (value: any) => void, reject: (error: Error) => void } | undefined} */
       let pending;
+      /**
+       * Why the current child can answer nothing more, once it has exited;
+       * a request made after that fails at once instead of at its deadline.
+       *
+       * @type {Error | undefined}
+       */
+      let gone;
+      /**
+       * What went wrong with the child's pipes or replies before its exit
+       * said how it ended.
+       *
+       * @type {Error | undefined}
+       */
+      let symptom;
 
       /** @param {Error} error */
       const fail = error => {
@@ -193,15 +209,53 @@ export const makeIronhorseEngine = (
         child?.kill('SIGKILL');
       };
 
+      /**
+       * A broken pipe or a reply cut short is how a worker's death looks
+       * when it is noticed ahead of the exit. Make sure of the exit, and
+       * let it say what this was: see `ended`.
+       *
+       * @param {Error} error
+       */
+      const failAtExit = error => {
+        symptom ??= error;
+        child?.kill('SIGKILL');
+      };
+
+      /**
+       * How the child ended. A worker killed by a signal has crashed: that
+       * is its own death (an abort, a fault, the kernel reclaiming memory)
+       * or one dealt it from outside, and either way says nothing against
+       * the host. One that exits with a status has reported a failure on
+       * its error stream and left in good order, which is how it refuses a
+       * lease, a heap it cannot open or a disk it cannot write: the host's
+       * trouble, not counted against the worker. So is an exit the host
+       * asked for.
+       *
+       * @param {number | null} code
+       */
+      const ended = code => {
+        const how = `Ironhorse worker exited (${code ?? 'signaled'})`;
+        const message =
+          symptom === undefined ? how : `${how} after ${symptom.message}`;
+        return code === null && !terminated
+          ? new WorkerCrashError(message)
+          : Error(message);
+      };
+
       /** @param {object} [message] */
       const request = message =>
         new Promise((resolve, reject) => {
+          if (gone) {
+            reject(gone);
+            return;
+          }
           if (!child || terminated || pending) {
             reject(Error('Ironhorse worker is unavailable or busy'));
             return;
           }
           const timer = setTimer(
-            () => fail(Error('Ironhorse worker request timed out')),
+            () =>
+              fail(new WorkerCrashError('Ironhorse worker request timed out')),
             timeoutMs,
           );
           pending = {
@@ -236,10 +290,24 @@ export const makeIronhorseEngine = (
           },
         );
         const workerProcess = child;
-        void workerProcess.failed.then(fail);
+        gone = undefined;
+        symptom = undefined;
+        // A process that never started has no exit to wait for, and is the
+        // host's failure to report as it is.
+        const spawned = workerProcess.pid !== 0;
+        // A snapshot closes one child and launches another: what a child's
+        // pipes report late must not be taken out on its successor.
+        const current = () => child === workerProcess;
+        void workerProcess.failed.then(error => {
+          if (current()) (spawned ? failAtExit : fail)(error);
+        });
         exited = workerProcess.exited.then(code => {
-          if (pending)
-            fail(Error(`Ironhorse worker exited (${code ?? 'signaled'})`));
+          if (current()) {
+            gone = spawned
+              ? ended(code)
+              : Error('Ironhorse worker did not start');
+            if (pending) fail(gone);
+          }
           return code;
         });
         void (async () => {
@@ -263,11 +331,11 @@ export const makeIronhorseEngine = (
                   waiter.resolve(reply);
                 }
               } catch (error) {
-                fail(/** @type {Error} */ (error));
+                if (current()) failAtExit(/** @type {Error} */ (error));
               }
             }
           } catch (error) {
-            fail(/** @type {Error} */ (error));
+            if (current()) failAtExit(/** @type {Error} */ (error));
           }
         })();
         const ready = await request();

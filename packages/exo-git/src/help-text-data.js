@@ -24,7 +24,7 @@ export const helpTextEntries = harden([
         'currentBranch() -> Promise<GitRef | undefined>\nGet the branch HEAD currently points at.\nReturns undefined when HEAD is detached.',
       branches:
         "branches() -> Promise<GitRef[]>\nList the repository's branches as refs.",
-      diff: 'diff(options?) -> Promise<string>\nRender a textual diff.\nOptions are `cached`, `base`, `head`, and either `entries` (PathEntry\ncapabilities minted for this worktree) or `paths`.',
+      diff: "diff(options?) -> Promise<string>\nRender a textual diff.\nOptions are `cached`, `base`, `head`, and either `entries` (PathEntry\ncapabilities minted for this worktree) or `paths` (worktree-relative strings\nresolved through this worktree's mount; the worktree root is not a path).",
       log: 'log(options?) -> Promise<GitCommit[]>\nList commits, most recent first.\nOptions are `ref`, `maxCount`, `since`, and `until`.',
       show: 'show(ref) -> Promise<string>\nRender one revision as text, the way `git show` does.',
       revParse:
@@ -64,7 +64,7 @@ export const helpTextEntries = harden([
       merge:
         'merge(ref, options?) -> Promise<string>\nMerge a revision into the current branch.\n`fastForwardOnly: true` refuses anything but a fast-forward;\n`noFastForward: true` always records a merge commit.',
       stashPush:
-        'stashPush(options?) -> Promise<string>\nStash worktree changes and return the resulting stash reference.\nOptions are `message`, `includeUntracked`, and either `entries` or\n`paths`.',
+        "stashPush(options?) -> Promise<string>\nStash worktree changes and return the resulting stash reference.\nOptions are `message`, `includeUntracked`, and either `entries` or\n`paths` (worktree-relative strings resolved through this worktree's mount; the\nworktree root is not a path).",
       stashApply:
         'stashApply(index?) -> Promise<void>\nApply a stash entry without removing it from the stash.',
       stashPop:

@@ -7,6 +7,8 @@ import harden from '@endo/harden';
 
 import { Fail, q } from '@endo/errors';
 
+import { WorkerCrashError } from '../core/worker-crash-error.js';
+
 /**
  * @import {WorkerEngine, WorkerIncarnation} from '../core/worker-engine.js'
  */
@@ -79,6 +81,9 @@ export const makeXsEngine = (
       /** @type {Array<{ expect: string, resolve: (reply: any) => void, reject: (reason: Error) => void }>} */
       const pending = [];
       let exited = false;
+      let terminating = false;
+      /** @type {Error | undefined} how the child ended, once it has */
+      let gone;
       const failAll = reason => {
         while (pending.length > 0) {
           const waiter = pending.shift();
@@ -95,11 +100,15 @@ export const makeXsEngine = (
       void child.failed.then(failProtocol);
       void child.exited.then(code => {
         exited = true;
-        failAll(
-          Error(
-            `thixotrope-xs-worker for ${debugName} exited (${code ?? 'signaled'})`,
-          ),
-        );
+        // A worker killed by a signal has crashed. One that exits with a
+        // status left in good order, and one the host asked to exit did as
+        // it was told: neither is counted against the worker.
+        const message = `thixotrope-xs-worker for ${debugName} exited (${code ?? 'signaled'})`;
+        gone =
+          code === null && !terminating
+            ? new WorkerCrashError(message)
+            : Error(message);
+        failAll(gone);
         return code;
       });
       void (async () => {
@@ -157,7 +166,9 @@ export const makeXsEngine = (
       const request = (payload, expect) =>
         new Promise((resolve, reject) => {
           if (exited) {
-            reject(Error(`thixotrope-xs-worker for ${debugName} has exited`));
+            reject(
+              gone ?? Error(`thixotrope-xs-worker for ${debugName} has exited`),
+            );
             return;
           }
           pending.push({ expect, resolve, reject });
@@ -181,6 +192,7 @@ export const makeXsEngine = (
           if (exited) {
             return;
           }
+          terminating = true;
           child.input(3)?.write('{"op":"exit"}\n');
           const killer = setTimer(() => child.kill('SIGKILL'), 2000);
           unrefTimer?.(killer);

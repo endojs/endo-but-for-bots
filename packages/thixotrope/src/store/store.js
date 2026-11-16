@@ -14,6 +14,16 @@
  */
 
 /**
+ * @typedef {object} WorkerCrashRecord
+ * @property {number} index the highest absolute journal index a crash has
+ *   interrupted: the frame being delivered, or the next one to deliver when
+ *   the incarnation crashed before reaching any
+ * @property {number} attempts crashes in a row without delivering past
+ *   `index`
+ * @property {string} reason the latest crash, for inspection
+ */
+
+/**
  * @typedef {object} WorkerMeta
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
@@ -27,7 +37,12 @@
  * @property {boolean} [ephemeral] this worker's heap is not a recovery
  *   baseline: the next daemon startup retires it instead of restoring it, so
  *   whatever it held dies with the process that held it
- * @property {string} [failure] deterministic halt; retained for inspection
+ * @property {string} [failure] why this worker was given up on: a
+ *   deterministic halt, or a run of crashes without progress; retained for
+ *   inspection
+ * @property {WorkerCrashRecord} [crash] crashes since this worker last made
+ *   progress, kept here so that a supervisor restart does not forget them;
+ *   absent once a wake completes
  * @property {string} [hubDelivery] highest hub outbox sequence covered by the snapshot
  * @property {{ ref: unknown, cut?: number } | null} [snapshot]
  *   the engine snapshot and the absolute journal index (`cut`) it

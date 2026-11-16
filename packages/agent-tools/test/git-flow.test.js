@@ -338,6 +338,51 @@ test('path-string mutators join makeGitTool while restore stays out', t => {
   t.false(mountToolNames.has('restore'));
 });
 
+test('diff paths resolve through the mount at every Git facet', async t => {
+  const { repoRoot, git } = await provisionGit(t);
+  await Promise.all(
+    ['kept.txt', 'other.txt', 'gone.txt'].map(name =>
+      fs.promises.writeFile(path.join(repoRoot, name), 'before\n'),
+    ),
+  );
+  await execFileAsync('git', ['add', '.'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-qm', 'seed'],
+    { cwd: repoRoot },
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'kept.txt'), 'after\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'other.txt'), 'after\n');
+  await fs.promises.rm(path.join(repoRoot, 'gone.txt'));
+
+  const diff = byNameOf(makeGitTool(git))('diff');
+  const diffPaths = (/** @type {string[]} */ ...paths) =>
+    /** @type {Promise<string>} */ (diff.invoke({ options: { paths } }));
+
+  const kept = await diffPaths('kept.txt');
+  t.regex(kept, /^diff --git a\/kept\.txt b\/kept\.txt$/m);
+  t.notRegex(kept, /other\.txt/);
+
+  // A deleted path has nothing on disk, and must still be nameable.
+  t.regex(await diffPaths('gone.txt'), /^deleted file mode/m);
+
+  // A leading `..` clamps at the worktree root and an absolute spelling is
+  // worktree-relative, so git never sees a path beyond the mount, and so never
+  // answers with its "outside repository at <host path>" diagnostic.
+  t.is(await diffPaths('../kept.txt'), kept);
+  t.is(await diffPaths(path.join(repoRoot, 'kept.txt')), '(no output)');
+
+  const refusal = await t.throwsAsync(diffPaths('.'), {
+    message: /must not resolve to the Git worktree root/,
+  });
+  t.false(refusal?.message.includes(repoRoot));
+
+  const readerDiff = byNameOf(
+    makeGitTool(/** @type {any} */ (git).readOnly(), { facet: 'reader' }),
+  )('diff');
+  t.is(await readerDiff.invoke({ options: { paths: ['kept.txt'] } }), kept);
+});
+
 test('a "../" escape in an add path is contained by the mount, clamped at the worktree root', async t => {
   // Lay out an OUTER directory holding two same-named files: one *above* the
   // worktree root (the escape target — it must never be reached) and one at the

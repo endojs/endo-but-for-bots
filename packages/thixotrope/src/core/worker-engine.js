@@ -42,5 +42,11 @@
  *   guest heap is recoverable only from a snapshot plus the journal
  */
 
-/** A deterministic guest halt. Retrying the same journal would halt again. */
+/**
+ * A deterministic guest halt: retrying the same journal would halt again.
+ * It is also what a worker's transport raises once it has given the worker
+ * up, whether for a halt or for a run of crashes without progress (see
+ * `WorkerCrashError`), so catching one means the worker's `failure` is, or
+ * is about to be, on record.
+ */
 export class WorkerHaltError extends Error {}
