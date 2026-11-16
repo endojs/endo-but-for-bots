@@ -631,6 +631,22 @@ jobs:
           PATH=$PATH:$GITHUB_WORKSPACE/bin
           python3 scripts/run-ci-task.py test:xs
 
+      # `.node-version` pins the default toolchain to Node 24, but the
+      # packages declare support for every Node >=22.9.0, including Node 26.
+      # The sesNode agent runs SES on the host Node, so rerun it on Node 26
+      # against the same baseline plus `baseline-overlays/node26`, which
+      # records the tuples whose outcome is specific to that major.
+      - name: Use Node.js 26
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.x
+
+      - name: Run hardened262 sesNode on Node.js 26
+        working-directory: endo/packages/hardened262
+        run: |
+          node --version
+          node scripts/test.js --agent sesNode --baseline baseline
+
   build-xsnap:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-xsnap']) }}

@@ -65,6 +65,20 @@ job runs this comparison with the pinned XS binary. An intentional change
 therefore includes the updated baseline as reviewable evidence; an
 unacknowledged change fails CI.
 
+`baseline/` records outcomes on the Node.js named by the repository's
+`.node-version`. The `sesNode` agent runs SES on the Node.js that drives the
+harness, so a few intrinsic shapes follow the host engine. A tuple whose
+outcome differs on another Node.js major lives in
+`baseline-overlays/node<major>/`, in the same scenario/outcome layout as
+`baseline/`; the comparison applies the overlay for the running major on top
+of `baseline/`. For example, Node 26 gives `Function.prototype.caller` its own
+get/set accessors instead of %ThrowTypeError%, so
+`test/intrinsics/ThrowTypeError/intrinsic-metadata.js` fails under
+`sesNode/module` there. `test-xs` reruns `sesNode` on Node 26 against
+`baseline/` plus that overlay. Updating the baseline on an overlaid major keeps
+the version-neutral outcome of each overlaid tuple in `baseline/`. With
+`--agent`, the comparison covers only the selected agents' scenarios.
+
 The XS and Node.js agents wire `module` and `lockdownModule`; the Ironhorse
 agents wire the four script scenarios `sloppy`, `strict`, `lockdownSloppy`, and
 `lockdownStrict`. The Ironhorse adapter uses the existing `endot-ih`
