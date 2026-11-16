@@ -1778,3 +1778,60 @@ goldens; J-0191's key-name budget as a design rule for adapters; the earlier W0.
 listed in QC advisory 17 still need sign-off; J-0183's cold-session cost (14.6 s) was not
 re-measured and should now be lower [inferred from J-0193's install numbers].
 Decision: as above.
+
+### J-9000 2026-11-16 PM engine - awkward
+Evidence: the three ironhorse-snapshot goldens that failed after M0
+(`metamorphic_determinism::golden_vector_pins_canonical_bytes_and_manifest`,
+`state_golden::math_profile_refuses_a_platform_snapshot_in_deterministic_configuration`,
+`state_golden::carried_state_has_frozen_bytes_manifests_costs_and_continuations`) pass at the
+branch base 48d6f3e08b (engine exported with `git archive` and built into a separate target dir,
+since deleted) and fail at 1d44da02d0 with the same digests as at HEAD (left
+`9b09bf8f...`, `ddb3db45...`, boot fingerprint `6c864841...` against the committed `d3068e26...`).
+So 1d44da02d0 (three boot-minted `%Uint8Array%` UTF-8 statics, listed in `INTRINSIC_KEY_ORDER`)
+moved them; d0fd6b1138 moves no bytes; 54a42f5eec and b10254b252 are outside the engine
+workspace. 1d44da02d0's own message says "the boot fingerprint moves", but it did not re-pin the
+goldens. A content move, not a defect: costs and continuation results are unchanged (asserted by
+the regeneration tool and by the corpus test on all four resume paths), the five
+historical-marker digests are identical under both math providers, and the epoch-3 geometry grew
+by exactly three function objects (1100 -> 1103 slots, 17184 -> 17264 chunk bytes).
+Decision: re-pinned in 0a4bdb3826 by the documented procedure (the ignored
+`regenerate_persistence_identities` in `rust/engine/ironhorse-snapshot/tests/state_golden.rs`
+for both providers; the golden vector from its assertion output under both providers, with a
+comment). No engine change.
+
+### J-9001 2026-11-16 PM persistence - good fit
+Evidence: a container and a FileStore written by the base engine (48d6f3e08b) and resumed by the
+HEAD engine are both refused with `BootLayoutMismatch { expected: 6c864841..., found: d3068e26... }`
+(`from_snapshot_bytes` and `resume_from_store`; scratch programs, since deleted).
+`Signature::check_boot` (`rust/engine/ironhorse-snapshot/src/format.rs:443`) compares against the
+running engine's fingerprint whatever signature the caller passes. d0fd6b1138's
+`globals_caught_up_at` is a cache that is not persisted (the side-table ledger test in
+`rust/engine/ironhorse-snapshot/src/sidetable.rs` classifies it so), charges no computrons, and
+the four resume paths of the corpus agree on bytes and costs with it starting empty.
+Decision: no format version or store schema bump is needed for M0's engine changes; any boot
+change already refuses older Ironhorse state cleanly.
+
+### J-9002 2026-11-16 PM tooling - awkward
+Evidence: `regenerate_persistence_identities` rewrites `tests/fixtures/math-platform-boot.bin`
+but reads it through `include_bytes!` (state_golden.rs:29), so a first run after a boot change
+writes the format-19/20/21 and reserved-id controls normalized to the stale fingerprint. The
+deterministic-math run (recompiled after the file changed) wrote different controls; a third
+(plain) run then changed nothing. Separately, `git archive` gives files the commit's mtime, so
+re-extracting a newer commit over an existing target dir built later the same day did not
+rebuild and the old commit's results were reported (a false "passes at 1d44da02d0" until the
+files were touched).
+Decision: run the regeneration plain, deterministic-math, then plain again, and check the last
+run is idempotent (recorded in 0a4bdb3826's message). Touch extracted sources before building an
+older commit into a reused target dir.
+
+### J-9003 2026-11-16 PM engine - perf
+Evidence: full suites on 3e8753a903's engine (no engine change since 0a4bdb3826), release profile,
+no crank budget involved (Rust unit and integration tests), under `scripts/run-lock.mjs`.
+```
+{"metric":"cargo.test.release","packages":["ironhorse-vm","ironhorse-snapshot"],"features":"default","passed":{"ironhorse-vm":1362,"ironhorse-snapshot":724},"failed":0,"ignored":{"ironhorse-vm":17,"ironhorse-snapshot":21},"wallMinutes":4,"includesRecompile":true,"loadAvg":[2.73,2.57,2.45],"loadAvgEnd":[3.20,3.68,3.09],"at":"2026-11-16T10:16Z"}
+{"metric":"cargo.test.release","packages":["ironhorse-snapshot"],"features":"ironhorse-vm/deterministic-math","passed":{"ironhorse-snapshot":724},"failed":0,"ignored":{"ironhorse-snapshot":21},"wallMinutes":1,"includesRecompile":true,"loadAvg":[2.76,3.52,3.07],"loadAvgEnd":[3.97,3.93,3.27],"at":"2026-11-16T10:21Z"}
+```
+Reading: both suites are green under both math providers (counts include doc-tests: 6 for
+ironhorse-vm, 3 for ironhorse-snapshot); the Thixotrope worker was not rebuilt because no engine
+source changed.
+Decision: none.
