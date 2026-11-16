@@ -1391,3 +1391,172 @@ new `evaluate-source`: 50 tests passed in each config, exit 0. Ironhorse, throug
 `test:ironhorse` lane was not run. The change is one constant on the host side, so the worker and
 `dist-ironhorse` need no rebuild.
 Decision: none; CORE-1b behaves as before apart from message size.
+
+### J-0180 2026-11-16 M0 persistence - good fit
+Evidence: spike S8 (`packages/thixotrope-harness/test/spikes/s8.test.js`) with the template helper
+`packages/thixotrope-harness/test/template/index.js` (both in commit `a3523efbb8`; rows say
+`809e8a15ca-dirty` because the run started before that commit, and the code is the same apart from
+lint comments). Crank budget 50 M, worker sha256 `13aa617b...`, load average 2.3-3.2. Run under the
+run lock, twice. The template is provisioned at `tmp/b<pid>`: supervisor, workspace `w`, an
+application vat `probe`, the S2 attach-fixture native resource `spk`, and a vat `v` that has opened
+an adapter endpoint. It is stopped with SIGTERM and renamed to `tmp/t<key>`, so no template is ever
+served at the path it is stored under. Each copy goes to a new `tmp/<6 chars>`, with sockets skipped
+and files cloned (APFS `COPYFILE_FICLONE`). While copy A served, the template directory was renamed
+away too. Copy A served from its new path: its control socket was there, `runtime/<profile>` was
+rebuilt in the copy, the pre-existing vat and the workspace answered, the native adapter was rebuilt
+and called three times, and a new install worked. No process named an old path. The copy survived
+kill -9 and a restart with the same results, and a second copy served beside it with no shared
+processes. The second run's lines:
+```
+{"spike":"S8","crankBudget":"50000000","metric":"s8.template.build","buildMs":51532.9,"steps":{"serveMs":24922.1,"createWorkspaceMs":9695.9,"provisionMs":15569.7,"stopMs":1344.5},"templateKiB":161756,"builtAt":"b23279","storedAt":"t49c951a5e5","commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.33,2.39,2.57],"at":"2026-11-16T07:36:29.086Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.scan.template","filesNamingBuildPath":[{"file":"heaps/snapshots/1971f10ee8bc0559c74e7f8c0d3f9de4231fcd4564d49c49f43d3290cdbbf0fa.sqlite","count":2,"bytes":13725696}],"filesNamingBuildDirName":[{"file":"heaps/snapshots/1971f10ee8bc0559c74e7f8c0d3f9de4231fcd4564d49c49f43d3290cdbbf0fa.sqlite","count":2,"bytes":13725696}],"filesNamingRepoPath":[{"file":"heaps/snapshots/1971f10ee8bc0559c74e7f8c0d3f9de4231fcd4564d49c49f43d3290cdbbf0fa.sqlite","count":2}],"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.33,2.39,2.57],"at":"2026-11-16T07:36:29.219Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.copy.serve","timings":{"copyMs":148.6,"servedMs":5937.3,"connectedMs":6076.5,"totalMs":6225.1},"copyRoot":"sh75og","rootLength":85,"socketIsSocket":true,"runtimeProfiles":["25c877cc4620403e1c176f0a6d3d1738d9c8156a7011143eec17198ff785e347"],"processes":5,"processesNamingOldPaths":0,"ok":true,"ping":1,"evaluated":"42","incarnation":"23433-ea3e9aa1","adapterCalls":3,"freshPing":1,"firstCallMs":455.4,"adapterMs":732.8,"installMs":4698,"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.69,2.47,2.59],"at":"2026-11-16T07:36:41.905Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.copy.afterKill","servedMs":7786.7,"connectedMs":7917,"ok":true,"ping":1,"evaluated":"42","incarnation":"23522-78ff3594","adapterCalls":3,"freshPing":1,"firstCallMs":452.3,"adapterMs":688.3,"installMs":4748.6,"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.07,2.55,2.62],"at":"2026-11-16T07:36:56.148Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.copy.sideBySide","timings":{"copyMs":351.2,"servedMs":6043.5,"connectedMs":6183.4,"totalMs":6534.6},"overlap":0,"ok":true,"ping":1,"evaluated":"42","incarnation":"23592-c13b5cda","adapterCalls":3,"freshPing":1,"firstCallMs":556.4,"adapterMs":729.6,"installMs":4778.6,"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.85,2.52,2.61],"at":"2026-11-16T07:37:09.283Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.scan.copyAfterRun","filesNamingCopyPath":[{"file":"heaps/snapshots/90320108309e1a1032d99a2f6ee0523140f725a3f67bbb0c63d5576e4dd7da22.sqlite","count":2,"bytes":13733888}],"filesNamingBuildPath":[],"copyKiB":190756,"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.85,2.52,2.61],"at":"2026-11-16T07:37:11.248Z"}
+{"metric":"template.start","unit":"ms","n":5,"median":6353.9,"p95":6439.4,"p99":6439.4,"min":6205,"max":6439.4,"parts":[{"copyMs":91.3,"servedMs":5971.4,"connectedMs":6113.7,"totalMs":6205,"firstCallMs":530.2},{"copyMs":95.8,"servedMs":6199.5,"connectedMs":6343.6,"totalMs":6439.4,"firstCallMs":491.7},{"copyMs":122,"servedMs":6152.8,"connectedMs":6297,"totalMs":6419,"firstCallMs":489.7},{"copyMs":92,"servedMs":6063.1,"connectedMs":6211.3,"totalMs":6303.3,"firstCallMs":567.3},{"copyMs":91,"servedMs":6116.7,"connectedMs":6262.9,"totalMs":6353.9,"firstCallMs":437.4}],"coldServeMs":24922.1,"coldCreateWorkspaceMs":9695.9,"coldProvisionMs":15569.7,"templateKiB":161756,"budget":{"median":20000},"pass":true,"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[3.21,2.67,2.66]}
+```
+Run 1 gave the same verdicts, and `template.start` had median 6,334.8 ms:
+```
+{"metric":"template.start","unit":"ms","n":5,"median":6334.8,"p95":8407.1,"p99":8407.1,"min":6274.7,"max":8407.1,"parts":[{"copyMs":87.5,"servedMs":8176.8,"connectedMs":8319.6,"totalMs":8407.1,"firstCallMs":477},{"copyMs":119.6,"servedMs":6073.3,"connectedMs":6215.2,"totalMs":6334.8,"firstCallMs":474.6},{"copyMs":94.2,"servedMs":6078.6,"connectedMs":6222.3,"totalMs":6316.5,"firstCallMs":542.4},{"copyMs":94.4,"servedMs":6262.2,"connectedMs":6408.1,"totalMs":6502.5,"firstCallMs":561},{"copyMs":93.9,"servedMs":6036.7,"connectedMs":6180.8,"totalMs":6274.7,"firstCallMs":416.2}],"coldServeMs":24969.3,"coldCreateWorkspaceMs":10183.4,"coldProvisionMs":15729.5,"templateKiB":161748,"budget":{"median":20000},"pass":true,"commit":"809e8a15ca-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.78,2.53,2.64]}
+```
+Decision: state directories are path-independent in practice. Integration tests start from a copied
+template (architecture section 10 layer 3), not from a per-file provision. The helper's API is
+`ensureTemplate({ id, provision, crankBudget })`, `startFromTemplate(template, { t, idleSleepMs })`
+with `.client`, `.kill()`, `.restart()`, `.stop()` and `.cleanup()`, plus `takeIntegrationLock(test)`,
+`integrationEnabled` (THIX_HARNESS_INTEGRATION=1 or THIX_HARNESS_SPIKES=1) and `removeTemplates()`.
+M1a's `provision-steps.js` should be passed as `provision` with its own `id`. No fixed symlink
+workaround is needed.
+
+### J-0181 2026-11-16 M0 admin - awkward
+Evidence: in both S8 runs exactly one file of the template names the provisioning path:
+`heaps/snapshots/<sha>.sqlite` (13.7 MB), twice (`s8.scan.template` above). It is a vat heap. The
+control-socket resource's manager vat keeps its registration `{ path, admin }` and `served` path in
+its heap (`packages/thixotrope/resources/control/durable.js:77-90`). The supervisor calls
+`E(controlFacet).serve(socketPath)` with the current path at every start
+(`packages/thixotrope/src/control/supervisor.js:1010`), and because `served !== path` the old
+registration is released and the new one registered. After a run, the copy's heap names the copy's
+path and no longer the build path (`s8.scan.copyAfterRun`: `filesNamingBuildPath: []`). No
+`hub.json`, `runtime.json`, `workspace.json` or journal names a path, and the peer netlayer's
+`peers.sock` designator is not persisted. [inferred, not tested] At a copy's start, the restored
+registration first asks a new adapter to listen on the stale path, before `serve(newPath)` replaces
+it. That attempt fails harmlessly when the old directory is gone. If the original state is live at
+that path (a copy of a running state directory), the copy's adapter could disturb the original's
+socket.
+Decision: the helper never copies a running state. Templates are built at a throwaway `tmp/b<pid>`
+that is deleted (renamed) before any copy runs, and the template itself is never served. This is
+the whole workaround; no core change in M0. For the PM: a supervisor-level `controlSocketPath` that
+the control resource reads at restore time, instead of keeping it in the heap, would make state
+directories fully path-free.
+
+### J-0182 2026-11-16 M0 tooling - perf
+Evidence: `template.start`, measured from the start of the copy until the control client is
+connected, n=5 per run. Run 1 median 6,334.8 ms, run 2 median 6,353.9 ms (p95 6,439.4); budget
+20 s; PASS. The copy itself takes 87-351 ms for a 158 MB state (APFS clone). Serving takes about
+6.0-6.2 s (one 8.2 s outlier in run 1) and connecting about 0.14 s. The first call into the pre-existing `probe` vat takes
+416-567 ms (it wakes from its snapshot). A cold provision of the same state costs 24.9-25.0 s to
+serve, 9.7-10.2 s to create the workspace and 15.6-15.7 s to install probe, the native and `v`:
+about 51.5-52.3 s in all, so a copy saves about 45 s per test file. Restart after kill -9 of a copy
+served in 7.8-8.0 s. The helper's own lifecycle test (`test/template/template.test.js`, base
+template: workspace only) passed under the run lock in 12.7 s, with copy 74.7 ms and
+`totalMs` 5,269.4. The 73 unit tests pass and 10 are skipped (integration and spikes skip without
+the flag). The control socket path is
+`packages/thixotrope-harness/tmp/<6 chars>/control.sock`: 98 bytes in this checkout, against a
+104-byte limit (`rootLength` 85).
+Decision: `template.start` passes with about 3x margin. The socket path leaves only 6 bytes of
+slack, so the helper keeps 6-character names directly under `tmp/`. A checkout at a longer path
+fails at serve with "Socket path exceeds"; `startFromTemplate({ root })` takes a shorter location
+if needed.
+
+### J-0183 2026-11-16 M0 engine - perf
+Evidence: spike S6 (`packages/thixotrope-harness/test/spikes/s6.test.js`, commit `a3523efbb8`,
+clean tree), crank budget 50 M, idleSleepMs 2,000, worker sha256 `13aa617b...`, load average
+2.3-5.2. The state is a copy of the base template. The worker controller (`vats`, which the
+workspace vat holds) is exposed through the workspace inventory. Each spare is
+`E(vats).createWorker(label)`, then the generated program (246,422 ASCII chars; 61 module closures
+of 30 functions each, initialised at load) staged by `evaluateSource` in 24,576-char chunks (13
+messages) and evaluated in one crank. Its completion value is a `SpareMaker`, kept in the inventory
+so it survives restarts. Creation and disk:
+```
+{"spike":"S6","crankBudget":"50000000","metric":"s6.setup","programChars":246422,"modules":61,"functions":1830,"templateBuilt":true,"start":{"copyMs":142.8,"servedMs":5440.8,"connectedMs":5588.1,"totalMs":5730.9},"idleSleepMs":2000,"chunkChars":24576,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.16,2.81,2.71],"at":"2026-11-16T07:39:34.248Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.create","index":0,"label":"sp0","workerId":"fe66e2b0e406034e7adeaaacbb0563a7","createWorkerMs":152.5,"loadMs":13990.1,"evalMs":267.6,"messages":13,"totalMs":14512.9,"awakeRssKiB":136480,"awakeProcesses":1,"sleptAfterMs":2644.7,"asleepProcesses":0,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.73,2.71,2.67],"at":"2026-11-16T07:40:14.225Z"}
+{"metric":"vat.spareCreate","unit":"ms","n":6,"median":14380.2,"p95":14595.4,"p99":14595.4,"min":14131.1,"max":14595.4,"programChars":246422,"messagesPerCreate":13,"createWorker":{"n":6,"median":143.4,"p95":152.5,"p99":152.5,"max":152.5,"min":134.8},"load":{"n":6,"median":13946.1,"p95":14011.7,"p99":14011.7,"max":14011.7,"min":13760.5},"evaluatingCrank":{"n":6,"median":264.8,"p95":267.6,"p99":267.6,"max":267.6,"min":259.3},"awakeRssKiB":{"n":6,"median":135168,"p95":136480,"p99":136480,"max":136480,"min":132256},"diskPerSpareKiB":17731,"stateKiB":229508,"pass":null,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.26,2.56,2.62]}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.createMany","upTo":10,"parallel":4,"wallMs":16867.5,"each":{"n":4,"median":16776.4,"p95":16867.4,"p99":16867.4,"max":16867.4,"min":15699.6},"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.77,2.66,2.65],"at":"2026-11-16T07:42:03.870Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.createMany","upTo":50,"parallel":4,"wallMs":171804.9,"each":{"n":40,"median":16849.3,"p95":19173.7,"p99":19923.3,"max":19923.3,"min":15686.6},"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[5.21,3.74,3.09],"at":"2026-11-16T07:45:31.748Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.disk","sleepingSpares":10,"stateKiB":302472,"perSpareKiB":17935,"workers":0,"rssKiB":0,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.77,2.66,2.65],"at":"2026-11-16T07:42:06.261Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.disk","sleepingSpares":50,"stateKiB":1015540,"perSpareKiB":17848,"workers":0,"rssKiB":0,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.95,3.71,3.08],"at":"2026-11-16T07:45:35.135Z"}
+```
+Reading:
+- One spare costs 14.4 s (median, sequential, n=6). Of that, 143 ms is `createWorker`, which only
+  allocates (the vat boots with the first message), 13.9 s is loading, and the evaluating crank is
+  265 ms.
+- Loading is about 56 us per byte of program, the J-0140 inbound cost again. The 4.4 s boot of a
+  fresh vat is inside the first staged message.
+- Four lanes in parallel scale almost linearly (16.8 s each; 40 spares in 171.8 s, about 4.3 s per
+  spare), at load average 5.2.
+- Disk per sleeping spare is 17.7-17.9 MB.
+- A worker holds 132-136 MB resident while it is awake during creation, and its process exits
+  when it sleeps (0 processes, 0 KiB).
+Decision: the cost of a cold session vat is dominated by shipping the program, not by vat
+creation, so D-4's pool is needed, and the factory should refill it with up to 4 creations in
+parallel. Architecture section 11's "session create without spare pool <= 6 s" (an M1b budget) is
+not reachable with a 250 k session program: about 14.6 s, 2.4x over. A burst of sessions larger
+than `poolSize` waits for that. Escalated to the PM. Two things would help: a smaller session
+program, and the J-0140 core fix (inbound frames should not intern index keys).
+
+### J-0184 2026-11-16 M0 engine - perf
+Evidence: S6 takes. A take is the factory's `createSession` path: one `E(maker).make(config)` on a
+sleeping, checkpointed spare (`wasAwake: false` in every case), followed by one call on the new
+session to show the awake floor. Same run as J-0183:
+```
+{"spike":"S6","crankBudget":"50000000","metric":"s6.take","phase":"asleep","index":0,"wasAwake":false,"takeMs":139.4,"awakeCallMs":63.8,"handlers":1830,"awakeRssKiB":63376,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.26,2.56,2.62],"at":"2026-11-16T07:41:43.902Z"}
+{"metric":"vat.spareTake","unit":"ms","n":6,"median":176.3,"p95":210.1,"p99":210.1,"min":139.4,"max":210.1,"phase":"asleep, same daemon run","awakeCall":{"n":6,"median":64.7,"p95":67.6,"p99":67.6,"max":67.6,"min":61.9},"allWereAsleep":true,"budget":{"median":500},"pass":true,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.26,2.56,2.62]}
+{"metric":"vat.spareTake.afterRestart","unit":"ms","n":6,"median":185.2,"p95":195.3,"p99":195.3,"min":165.1,"max":195.3,"awakeCall":{"n":6,"median":61.9,"p95":65.8,"p99":65.8,"max":65.8,"min":60.9},"allWereAsleep":true,"budget":{"median":500},"pass":true,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[3.38,3.45,3.01]}
+```
+`vat.spareTake` median 176.3 ms (p95 210.1, n=6) in the same daemon run. After restarts with 10 and
+50 sleeping spares it was 185.2 ms (p95 195.3, n=6). Budget 500 ms; PASS both. An awake call on
+the taken session takes 61-68 ms (the durable-crank floor, architecture section 0 fact 1), so waking from the snapshot costs about 110 ms.
+A taken vat restored from its snapshot holds 63 MB resident, against 135 MB while it was being
+created.
+Decision: D-4 is confirmed; CORE-3 (booted-image templates) is not needed. `createSession` with a
+spare costs one wake plus `make()`, about 0.2 s, well inside the 1.5 s budget.
+
+### J-0185 2026-11-16 M0 persistence - good fit
+Evidence: S6 daemon restarts (clean close + serve, and SIGKILL + serve) with 0, 10 and 50 sleeping
+spares. Same run as J-0183:
+```
+{"spike":"S6","crankBudget":"50000000","metric":"s6.restart.summary","rows":[{"how":"clean","sleeping":0,"servedMs":5123.1,"connectedMs":5266.8,"woken":0,"awake":4},{"how":"clean","sleeping":0,"servedMs":5184.3,"connectedMs":5325.4,"woken":0,"awake":4},{"how":"clean","sleeping":10,"servedMs":5417.2,"connectedMs":5553.8,"woken":0,"awake":4},{"how":"clean","sleeping":10,"servedMs":5236.6,"connectedMs":5398,"woken":0,"awake":4},{"how":"sigkill","sleeping":10,"servedMs":5299.2,"connectedMs":5430.9,"woken":0,"awake":4},{"how":"clean","sleeping":50,"servedMs":6078.7,"connectedMs":6236.6,"woken":0,"awake":4},{"how":"clean","sleeping":50,"servedMs":5947,"connectedMs":6096.9,"woken":0,"awake":4},{"how":"sigkill","sleeping":50,"servedMs":6036.5,"connectedMs":6180.3,"woken":0,"awake":4}],"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.38,3.45,3.01],"at":"2026-11-16T07:46:09.151Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.restart.sigkill","sleepingSpares":50,"servedMs":6036.5,"connectedMs":6180.3,"daemonWorkers":57,"awakeWorkers":4,"sparesWoken":0,"sparesUncheckpointed":0,"resident":{"workers":4,"rssKiB":222944},"stateKiB":1075324,"commit":"a3523efbb8","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.59,3.5,3.03],"at":"2026-11-16T07:46:03.477Z"}
+```
+Serving takes 5.12-5.18 s with 0 spares, 5.24-5.42 s with 10 and 5.95-6.08 s with 50, about 17 ms
+per sleeping vat. SIGKILL restarts take the same time as clean ones, because every spare had
+checkpointed (`sparesUncheckpointed: 0`). Startup woke no spare (`sparesWoken: 0` in all 8
+restarts). The same 4 workers are awake after every start, the built-in vats, at 215-230 MB in all,
+whatever the spare count. The state grew from 183 MB with no spares to 1,075 MB with 50.
+[inferred] Each first restart in a phase adds about 59 MB of state (302 to 361 MB, 1,015 to
+1,074 MB); this looks like new heap incarnations of the 4 woken built-ins, but it was not broken
+down.
+Decision: fact 5 holds as the architecture assumed: checkpointed sleepers cost startup almost
+nothing and are not replayed. The pool and idle sessions must be checkpointed before a crash is
+harmless, which means short idleSleepMs (J-0166). The pool's `whenSettled()` (D-4) is enough for
+tests.
+
+### J-0186 2026-11-16 M0 tooling - deviation
+Evidence: four departures in W0.7.
+- S6 drives spare creation from Node. The control client gets the worker controller with
+  `inventory.set('vats', vats)` evaluated in the workspace vat, then `lookup('vats')`. The factory
+  vat will send the same messages itself. [inferred] It will then pay one outbound crank per
+  staged chunk as well (13 per spare; outbound is cheap, J-0142).
+- S6 stages with `chunkChars: 24,576` (`limits.frameBytes`) because the program is ASCII. The
+  `evaluateSource` default of 8,192 (CORE-1b) assumes 3 bytes per unit, and a factory that ships
+  non-ASCII source must use it (39 messages instead of 13).
+- The template helper runs the supervisor as a child process through
+  `scripts/serve.mjs --supervisor-child`, as W0.6's `_crash.js` does, instead of the in-process
+  `serveHarness` of `perf/_harness.mjs` `provision()`. The reason is that `kill()` must be a real
+  SIGKILL. `perf/_harness.mjs` `provision({ template })` still exists and copies with plain
+  `fs.cp`; it was not changed (it is PM-merged).
+- The S8 assertion "no file names the provisioning path" failed on the first run (J-0181). I
+  replaced it with two checks: only vat heaps name the path, and a start replaces it. Both pass.
+Decision: the PM decides whether `perf/_harness.mjs` should use `test/template/index.js`
+`copyState`/`ensureTemplate`. The factory's pool (M1b) should stage ASCII bundles at frameBytes and
+anything else at frameBytes / 3.
