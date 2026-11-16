@@ -476,7 +476,7 @@ handle); update usage totals (`turns` += 1; `incompleteTurns` += 1 unless `compl
 the session ignores); then, if the queue has a waiting entry and no hold, claim it in the same
 crank (6.1 crank A's work). With ports held the next turn starts in this crank too, and its events
 ride in the same batch: `[final?, usage, end | abort, turn-start, phase, pending]`. Turn sources
-(M9) are asked only when the queue has no waiting entry **and no hold** (J-9157).
+(M9) are asked only when the queue has no waiting entry **and no hold** (J-9150).
 
 ### 6.4 Cancel
 
