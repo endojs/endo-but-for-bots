@@ -20,7 +20,12 @@
  *   more. Any other failure,
  *   including a retired break from `liveChannel()` (the manager vat is lost),
  *   drops the batch: viewers re-watch. Outside publishes are serialized so
- *   their revs leave in order.
+ *   their revs leave in order: one in flight, the rest pending behind it.
+ *   The pending ones are bounded (M1b W1b.0, J-9172): at most one batch's
+ *   worth (`outsidePendingEvents` events and `frameBytes`); a newer batch
+ *   drops the oldest pending one (its rev is never sent: viewers see the
+ *   gap and re-watch). A `liveChannel()` or publish that never settles
+ *   therefore holds one batch in flight and at most that bound pending.
  *
  * An event alone over the frame has its one large text field cut to fit
  * (the record log keeps the full text; the live view is a view).
@@ -36,7 +41,7 @@ import {
 import { isRetiredBreak } from '../lib/retired.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E } = /** @type {GuestGlobals} */ (globalThis);
+const { E, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
 /** Bytes kept free in every message for the batch wrapper (`rev`, `events`). */
 const WRAPPER_BYTES = 64;
@@ -78,8 +83,17 @@ export const makeLivePublishing = ({ host, onStale = () => {} }) => {
    * @type {any}
    */
   let outsidePublisher;
-  /** @type {Promise<void>} */
-  let outsideTail = Promise.resolve();
+  /**
+   * Outside batches waiting behind the one in flight, oldest first, each
+   * with the kit its `outside()` caller waits on.
+   * @type {Set<{ batch: any, events: number, bytes: number, kit: { resolve: (v?: any) => void, promise: Promise<any> } }>}
+   */
+  const pending = new Set();
+  let pendingEvents = 0;
+  let pendingBytes = 0;
+  /** @type {Promise<void> | undefined} the batch in flight, until it settles */
+  let inFlight;
+  let dropped = 0;
 
   /**
    * Number the events as batches: each gets the next rev.
@@ -120,6 +134,60 @@ export const makeLivePublishing = ({ host, onStale = () => {} }) => {
     }
   };
 
+  /** The oldest pending batch, or undefined (a Set iterates in insertion order). */
+  const oldestPending = () => pending.values().next().value;
+
+  /** Start the oldest pending batch when none is in flight. */
+  const pump = () => {
+    if (inFlight !== undefined) return;
+    const item = oldestPending();
+    if (item === undefined) return;
+    pending.delete(item);
+    pendingEvents -= item.events;
+    pendingBytes -= item.bytes;
+    const settled = publishOutside(item.batch).then(
+      () => {},
+      () => {},
+    );
+    inFlight = settled;
+    void settled.then(() => {
+      inFlight = undefined;
+      item.kit.resolve(undefined);
+      pump();
+    });
+  };
+
+  /**
+   * Queue one batch; drop the oldest pending ones (never this one) while
+   * the pending batches exceed one batch's worth.
+   * @param {any} batch
+   */
+  const enqueueOutside = batch => {
+    const item = harden({
+      batch,
+      events: batch.events.length,
+      bytes: messageBytes(batch),
+      kit: makePromiseKit(),
+    });
+    pending.add(item);
+    pendingEvents += item.events;
+    pendingBytes += item.bytes;
+    while (
+      pendingEvents > limits.outsidePendingEvents ||
+      pendingBytes > limits.frameBytes
+    ) {
+      const oldest = oldestPending();
+      if (oldest === undefined || oldest === item) break;
+      pending.delete(oldest);
+      pendingEvents -= oldest.events;
+      pendingBytes -= oldest.bytes;
+      dropped += 1;
+      oldest.kit.resolve(undefined);
+    }
+    pump();
+    return item.kit.promise;
+  };
+
   return harden({
     /**
      * Publish a crank's events with the turn's publisher (sendOnly). Returns
@@ -137,22 +205,34 @@ export const makeLivePublishing = ({ host, onStale = () => {} }) => {
       return batches.length;
     },
     /**
-     * Publish events outside a turn (answered). Resolves when every batch was
-     * published or dropped; never rejects.
+     * Publish events outside a turn (answered). Resolves when each of its
+     * batches was published or dropped (failed, or displaced while pending);
+     * never rejects. With no events, resolves when everything queued now has
+     * settled.
      * @param {readonly any[]} events
      * @returns {Promise<void>}
      */
     outside: events => {
-      if (events.length === 0) return outsideTail;
-      const batches = toBatches(events);
-      for (const batch of batches) {
-        outsideTail = outsideTail.then(
-          () => publishOutside(batch).catch(() => {}),
-          () => {},
-        );
+      if (events.length === 0) {
+        const waits = [...pending].map(item => item.kit.promise);
+        if (inFlight !== undefined) waits.push(inFlight);
+        return Promise.all(waits).then(() => {});
       }
-      return outsideTail;
+      const waits = toBatches(events).map(enqueueOutside);
+      return Promise.all(waits).then(() => {});
     },
+    /**
+     * Outside publishing state (tests, diagnostics): batches pending behind
+     * the one in flight, their events and bytes, and how many were dropped.
+     */
+    outsideState: () =>
+      harden({
+        inFlight: inFlight !== undefined,
+        pending: pending.size,
+        pendingEvents,
+        pendingBytes,
+        dropped,
+      }),
     /** The current rev (the last batch's, or 1 before any). */
     rev: () => rev,
     /**
