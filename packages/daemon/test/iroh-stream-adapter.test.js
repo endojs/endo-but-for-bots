@@ -1,6 +1,8 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
+
 import { adaptIrohStream } from '../src/networks/iroh-stream-adapter.js';
 import { deriveIrohSecretKey } from '../src/networks/iroh.js';
 
@@ -145,6 +147,90 @@ test('writer.next forwards bytes via writeAll', async t => {
   );
   t.is(new TextDecoder().decode(send.writes[0]), 'yo');
   t.is(new TextDecoder().decode(send.writes[1]), '!');
+});
+
+/**
+ * A fake iroh SendStream whose CONCURRENT `writeAll` calls complete out of
+ * call order, as the 1.0 binding's may: each `writeAll` takes the stream's
+ * internal (tokio) mutex inside native code, and concurrent futures are not
+ * guaranteed to take it in the order they were called. Here each call lands
+ * its bytes after a delay that shrinks with the number of writes already in
+ * flight, so when writes overlap the latest one lands first. Writes issued
+ * one at a time land in order.
+ */
+const makeOutOfOrderSend = () => {
+  const wire = [];
+  let inFlight = 0;
+  const calls = { finished: 0, reset: 0, bytesBeforeFinish: -1 };
+  return {
+    wire,
+    calls,
+    async writeAll(buf) {
+      const bytes = Uint8Array.from(buf);
+      inFlight += 1;
+      const delay = Math.max(0, 30 - 10 * inFlight);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      inFlight -= 1;
+      wire.push(...bytes);
+    },
+    async finish() {
+      calls.finished += 1;
+      calls.bytesBeforeFinish = wire.length;
+    },
+    async reset() {
+      calls.reset += 1;
+    },
+  };
+};
+
+test('writer.next lands bytes in call order even when concurrent writeAll calls complete out of order', async t => {
+  const send = makeOutOfOrderSend();
+  const { writer } = adaptIrohStream({ send, recv: makeFakeRecv([]) });
+  const enc = new TextEncoder();
+  // The chunked netstring writer issues these three without awaiting each.
+  await Promise.all([
+    writer.next(enc.encode('3:')),
+    writer.next(enc.encode('abc')),
+    writer.next(enc.encode(',')),
+  ]);
+  t.is(new TextDecoder().decode(Uint8Array.from(send.wire)), '3:abc,');
+});
+
+test('a chunked netstring frame survives a send stream whose writes complete out of order', async t => {
+  const send = makeOutOfOrderSend();
+  const { writer } = adaptIrohStream({ send, recv: makeFakeRecv([]) });
+  const enc = new TextEncoder();
+  // The writer the daemon puts on an iroh stream (connection.js
+  // makeNetstringCapTP): length prefix, payload and comma as three
+  // un-awaited writes per message.
+  const frames = makeNetstringWriter(writer, { chunked: true });
+  await frames.next(enc.encode('hello'));
+  await frames.next(enc.encode('world'));
+  const reader = makeNetstringReader(
+    (async function* bytes() {
+      yield Uint8Array.from(send.wire);
+    })(),
+  );
+  const dec = new TextDecoder();
+  const received = [];
+  for await (const message of reader) {
+    received.push(dec.decode(message));
+  }
+  t.deepEqual(received, ['hello', 'world']);
+});
+
+test('writer.return finishes the send stream only after queued writes land', async t => {
+  const send = makeOutOfOrderSend();
+  const { writer } = adaptIrohStream({ send, recv: makeFakeRecv([]) });
+  const pending = writer.next(new TextEncoder().encode('abc'));
+  await writer.return();
+  await pending;
+  t.is(send.calls.finished, 1);
+  t.is(
+    send.calls.bytesBeforeFinish,
+    3,
+    'the FIN does not race ahead of a frame still being written',
+  );
 });
 
 test('writer.return finishes the send stream and resolves closed', async t => {
