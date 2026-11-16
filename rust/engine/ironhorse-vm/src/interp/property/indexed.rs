@@ -99,7 +99,14 @@ impl Interp {
             // `false|9` on XS, `true|undefined` here. It was unreachable
             // while sealing PROMOTED each element out of the item map; making
             // seal stamp items in place is what exposed it.
-            v.flag = a.items().get(&index).map_or(v.flag, |item| item.flag);
+            //
+            // A NEW item is a fresh data property, writable, enumerable and
+            // configurable (CreateDataProperty, OrdinarySet's create step),
+            // whatever bits the incoming slot carries. Keeping the incoming
+            // flag here is how a `const` binding's `XS_DONT_SET_FLAG`, leaked
+            // onto the value stack by `GET_LOCAL`, became a non-writable
+            // element (C-16).
+            v.flag = a.items().get(&index).map_or(0, |item| item.flag);
             a.insert_item(index, v, &mut self.side_refs, &mut self.chunks);
             if index + 1 > a.length {
                 a.length = index + 1;
@@ -896,7 +903,11 @@ impl Interp {
                 if !self.instance_extensible(receiver_inst) {
                     return Ok(Some(false));
                 }
-                self.index_prop_set(receiver_inst, index, value);
+                // A created property has every attribute true, whatever the
+                // incoming slot carries (C-16; see `array_item_set`).
+                let mut created = value;
+                created.flag = 0;
+                self.index_prop_set(receiver_inst, index, created);
             }
         }
         Ok(Some(true))

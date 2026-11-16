@@ -4218,6 +4218,10 @@ impl Interp {
                     let idx = length + i as u32;
                     let mut v = a;
                     v.id = 0;
+                    // Each appended element is a fresh data property with
+                    // every attribute true (C-16: an argument's stray flag
+                    // bits made it non-writable).
+                    v.flag = 0;
                     v.next = crate::value::SlotIndex::NULL;
                     self.arrays.get_mut(&inst).unwrap().insert_item(
                         idx,

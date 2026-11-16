@@ -30,8 +30,20 @@ impl Interp {
         self.stack_slots_in_use() + extra > STACK_SLOT_COUNT - STACK_SLOT_RESERVED
     }
 
+    /// Push a value. A value carries no property attributes: attribute bits
+    /// belong to the binding or property that holds it, and a store that
+    /// creates an element from a flagged value made that element read-only
+    /// (C-16, `get_local`). Debug builds check it at every call site.
     #[inline]
+    #[track_caller]
     pub(super) fn push(&mut self, s: Slot) {
+        debug_assert!(
+            s.flag & (XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG) == 0,
+            "a value pushed with attribute flags {:#x} ({:?}) at {}",
+            s.flag,
+            s.kind,
+            std::panic::Location::caller()
+        );
         self.stack.push(s);
     }
 

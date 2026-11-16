@@ -1036,14 +1036,26 @@ impl Interp {
         }
     }
 
-    /// Read scope slot `k`; `None` if it is still uninitialized (a TDZ
-    /// read) or the index is out of range.
+    /// Read scope slot `k` as a VALUE; `None` if it is still uninitialized
+    /// (a TDZ read) or the index is out of range.
+    ///
+    /// The binding's attribute bits stay on the binding. `CONST_LOCAL` stamps
+    /// `XS_DONT_SET_FLAG` (and, for a sloppy function expression's own name,
+    /// `XS_DONT_ENUM_FLAG`) on the scope slot, and a value read from it must
+    /// not carry them: XS's `mxPushSlot` copies only `kind` and `value`.
+    /// Returning the slot whole put the const's flag on the value stack, and
+    /// every store that keeps an incoming value's flag for a NEW element
+    /// (`Array.prototype.push`, `a[i] = v`, `o[i] = v` on the index store,
+    /// `unshift`, `fill`, `Array.of`, ...) then created that element
+    /// non-writable: `const x = {}; a.push(x); a.splice(0, 1)` threw
+    /// "set ?: not writable" (Thixotrope harness C-16, JOURNAL J-0271).
     pub(super) fn get_local(&self, k: usize) -> Option<Slot> {
         let i = self.local_index(k)?;
-        let s = self.locals[i];
+        let mut s = self.locals[i];
         if s.kind == Kind::Uninitialized {
             None
         } else {
+            s.flag = 0;
             Some(s)
         }
     }
@@ -1080,7 +1092,8 @@ impl Interp {
             if s.kind == Kind::Uninitialized {
                 None
             } else {
-                Some(s)
+                // A value, not the binding: see `get_local` (C-16).
+                Some(Slot::of(s.kind, s.value))
             }
         } else {
             None
