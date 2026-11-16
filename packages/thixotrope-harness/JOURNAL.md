@@ -3576,3 +3576,63 @@ the claim; the manager adapter test expects `open` on a minted, unbound facet to
 (an unminted one is still refused). New: 10 session tests, the growth test, the history guard test,
 the factory `createdAt` test, `since` checks in the manager test.
 Decision: done.
+
+### J-9100 2026-11-17 PM engine - incompatible
+Evidence: C-16 (J-0271) reproduced and reduced. Engine level (`ironhorse-vm`, debug build):
+`(function () { 'use strict'; const x = {}; const a = []; a.push(x); a.push(1); a.splice(0, 1) })()`
+throws `TypeError: C: xsSet ?: not writable`, the vat's exact text; element 0's descriptor reads
+writable false, enumerable true, configurable true. `let x` or a `const` that a closure captures
+gives a plain element. Cause: `GET_LOCAL` pushed the scope slot whole
+(`rust/engine/ironhorse-vm/src/interp/environment.rs` `get_local`), so a `const` local's
+`XS_DONT_SET_FLAG` (stamped by `CONST_LOCAL`) rode the value onto the stack, and the stores that
+create an element kept the incoming slot's flag for a new index: the `Array.prototype.push` fast
+path (`natives/dispatch.rs`), `array_item_set` (`property/indexed.rs`: `a[i] = v`, `unshift`,
+`fill`, `Array.of`, `concat` of a non-array, `map`'s result) and the ordinary index store
+(`o[i] = v`). A captured `const` is read through its closure cell, which copies only kind and
+value: that is why the M1a probes varied and closure-based reductions never failed. Probe of 25
+value sources x 24 stores before the fix: 33 of 600 pairs created a non-plain property, all from
+`const` locals, destructured `const`s and a function expression's own name (sloppy: also
+non-enumerable). Through the real worker (`c2f65dbe...`, the pre-workaround queue shape in
+`packages/thixotrope/test/ironhorse/element-attributes.js`): after three enqueues `waiting` read
+`0:-ec 1:wec 2:wec` and the `o[i] = const` record `0:-ec 1:-ec 2:-ec`; only the first push took the
+fast path, later pushes on a no-longer-plain array went the generic path and came out plain. The
+attribute is not caused by a snapshot, a restore, `harden` or `getOwnPropertyDescriptors`: it is
+set at the push and then persisted with the item like any other flag. The defect is not from
+d0fd6b1138 (it changes none of these paths; the lines are from 2026-09 engine commits).
+Decision: engine fix (J-9101). The harness workarounds (`Set` queue, J-0292's rewrites) are no
+longer needed for correctness; whether to keep them is for the PM (not touched here).
+
+### J-9101 2026-11-17 PM engine - good fit
+Evidence: fix `9828522485`: `get_local` and the with/eval `resolve_frame_get` return the value
+without the binding's attribute bits, as XS's `mxPushSlot` copies only kind and value; the push
+fast path, `array_item_set` and OrdinarySet's create step on the index store give a new element
+flag 0 (CreateDataProperty: all attributes true); `Interp::push` debug-asserts at every call site
+that no value carries attribute bits. Audit with that check (as a logging probe) over the whole
+`ironhorse-vm` suite: zero flagged pushes once `get_local` was fixed, so no other source was
+found. New tests: `ironhorse-vm/tests/index_attribute_matrix.rs` (23 sources x 24 stores, 552
+pairs; 280 cases of arrays, holes, read-only/hidden/non-configurable elements, plain objects and a
+`Uint8Array` through push, pop, shift, unshift, splice, length shrink/grow, reverse, sort, fill,
+copyWithin, writes, delete, defineProperty, freeze, seal, preventExtensions,
+getOwnPropertyDescriptors, a harden of a neighbouring object or of the element, compared with
+Node 22's answers) and `ironhorse-snapshot/tests/index_attributes_carry.rs` (eager, lazy and blob
+resume, checkpoint, against an uninterrupted twin). Before the fix: 42/552 pairs, 4/280 cases and
+both carry tests fail; after: all pass. Two matrix cases are V8 departures, not Ironhorse ones
+(`Object.seal` of a non-empty TypedArray must throw, V8 neither throws nor seals); the generator
+overrides them with the ECMA-262 answer. Lane scenario `d6f4e38b9b`: fails on the old worker as
+quoted in J-9100, passes on the new one.
+Decision: done. Snapshot goldens, the engine boot fingerprint and the golden computrons are
+unchanged; the worker binary changed (`c2f65dbe...` -> `7cda4467...`), so the harness boot digest
+(which keys on the worker) changed and old state directories and cached templates are refused or
+rebuilt. Damaged elements in old Ironhorse state cannot carry forward for the same reason.
+
+### J-9102 2026-11-17 PM engine - perf
+Evidence: suites after the fix, debug profile, under the run lock, commit `9828522485`'s tree.
+{"metric":"cargo.test.debug","packages":["ironhorse-vm","ironhorse-snapshot"],"passed":2086,"failed":1,"failedTest":"index_attribute_matrix (2 V8-departure fixtures, fixed before the commit and rerun: 4/4 pass)","ignored":46,"wallMinutes":8.5,"includesRecompile":true,"loadAvg":[3.86,2.35,2.23],"commit":"9828522485"}
+{"metric":"cargo.test.debug.audit","packages":["ironhorse-vm"],"passed":1358,"failed":0,"ignored":25,"flaggedPushes":0,"wallMinutes":7.6,"runLock":false,"commit":"9828522485 (get_local fix only)"}
+{"metric":"lane.ironhorse","passed":66,"failed":0,"wallMinutes":17.6,"workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","loadAvg":[1.52,1.97,2.14],"loadAvgEnd":[1.50,1.54,1.70],"commit":"d6f4e38b9b"}
+{"metric":"lane.element-attributes","before":{"workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","pass":false},"after":{"workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","pass":true,"ms":4000}}
+Reading: no crank budget is involved (Rust tests and a lane file with default limits). The fix
+adds one byte store per `GET_LOCAL` and per created element and charges nothing: the golden
+computron tests pass unchanged, so metering is identical. The audit run was outside the run lock
+(a mistake; later runs took it). The release worker rebuilds reproducibly to the same sha256.
+Decision: no performance effect to track.
