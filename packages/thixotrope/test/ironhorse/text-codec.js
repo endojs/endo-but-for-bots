@@ -345,12 +345,15 @@ test.serial(
       describe: s => [s.length, Array.from(s).length].join(),
       make: n => 'a\\u00e9\\u20ac\\ud83d\\ude00'.repeat(n),
     })`);
-    // U+FEFF is not first: Syrup decodes each string with a default
-    // (BOM-stripping) TextDecoder, in Node and now in the vat alike, so a
-    // string that begins with U+FEFF loses it in transit (see JOURNAL J-0113).
     const sample = 'a\ufeff\u00e9\u20ac\ud83d\ude00\u0000\uffff\u{10ffff}';
     t.is(await E(echo).twice(sample), sample + sample);
     t.is(await E(echo).describe(sample), `${sample.length},8`);
+    // A string that begins with U+FEFF keeps it in both directions: Syrup
+    // decodes each string with `ignoreBOM: true`, in Node and in the vat.
+    const bom = '\ufeffbom';
+    t.is(await E(echo).describe(bom), '4,4');
+    t.is(await E(echo).twice(bom), bom + bom);
+    t.is(await E(echo).twice('\ufeff'), '\ufeff\ufeff');
     const inbound = 'a\u00e9\u20ac\ud83d\ude00'.repeat(800);
     t.is(await E(echo).describe(inbound), '4000,3200');
     // 50,000 repetitions: 250,000 UTF-16 units, 500,000 UTF-8 bytes out.

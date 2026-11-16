@@ -105,6 +105,8 @@ harden(derivePipeResumption);
  * @param {string} options.workerId
  * @param {PipeRole} options.role which end of the duct this network is
  * @param {(bytes: Uint8Array) => void} options.send outbound frames
+ * @param {() => void} [options.onClose] called once, when the duct closes
+ *   (the OCapN client ended its session, or `close()` was called)
  * @returns {{
  *   network: any,
  *   deliver: (bytes: Uint8Array) => void,
@@ -114,7 +116,13 @@ harden(derivePipeResumption);
  *   sessionId: any,
  * }}
  */
-export const makePipeNetwork = ({ codec, workerId, role, send }) => {
+export const makePipeNetwork = ({
+  codec,
+  workerId,
+  role,
+  send,
+  onClose = undefined,
+}) => {
   const cryptography = makeCryptography(codec, denyEntropy);
   const self = makeSideIdentity(cryptography, workerId, role);
   const peer = makeSideIdentity(cryptography, workerId, otherRole(role));
@@ -143,6 +151,7 @@ export const makePipeNetwork = ({ codec, workerId, role, send }) => {
     }
     closed = true;
     inbound.put(harden({ done: true, value: undefined }));
+    if (onClose !== undefined) onClose();
   };
 
   /** @param {Uint8Array} bytes */

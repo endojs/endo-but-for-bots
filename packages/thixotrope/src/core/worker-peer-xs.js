@@ -48,10 +48,53 @@ const trace = (...args) => {
 /** @param {number} length */
 const randomBytes = length =>
   cryptoPower.getRandomValues(new Uint8Array(length));
+/**
+ * The last error the peer logged, kept for the fatal report below.
+ * @type {string | undefined}
+ */
+let lastError;
+/** @param {...unknown} args */
+const traceError = (...args) => {
+  lastError = args
+    .map(arg =>
+      arg instanceof Error && arg.cause !== undefined
+        ? `${arg} (cause: ${arg.cause})`
+        : String(arg),
+    )
+    .join(' ');
+  trace(...args);
+};
 const powers = harden({
   random: harden({ randomBytes }),
-  logging: makeLogPowers({ log: trace, info: trace, error: trace }),
+  logging: makeLogPowers({ log: trace, info: trace, error: traceError }),
 });
+
+/**
+ * Set when the OCapN session toward the host ends inside this worker, for
+ * example when its frame pump fails to decode a frame (a record whose keys
+ * exhaust the vat's property-key table throws a RangeError there, after the
+ * duct delivery that carried it has returned). The worker can then answer
+ * nothing more, so the crank that ended the session must not complete: the
+ * outbound read below throws, the crank halts, and the host records the
+ * failure and retires the session, breaking every pending answer, instead
+ * of a vat that is awake but silent.
+ * @type {Error | undefined}
+ */
+let sessionEnded;
+const onSessionEnd = () => {
+  sessionEnded = Error(
+    `thixotrope worker peer: the OCapN session to the host ended${
+      lastError === undefined ? '' : ` after: ${lastError}`
+    }`,
+  );
+};
+const takeOutbound = /** @type {any} */ (globalThis).thixotropeTakeOutbound;
+if (typeof takeOutbound === 'function') {
+  /** @type {any} */ (globalThis).thixotropeTakeOutbound = () => {
+    if (sessionEnded !== undefined) throw sessionEnded;
+    return takeOutbound();
+  };
+}
 
 /** @type {{ deliver: (bytes: Uint8Array) => void } | undefined} */
 let peer;
@@ -69,6 +112,7 @@ const dispatch = json => {
       workerId: message.workerId,
       debugLabel: message.debugLabel,
       send: frame => send(JSON.stringify({ t: 'f', b64: encodeBase64(frame) })),
+      onSessionEnd,
     }).then(readyPeer => {
       peer = readyPeer;
       for (const frame of pendingFrames) {
@@ -79,6 +123,7 @@ const dispatch = json => {
     return;
   }
   if (message.t === 'f') {
+    if (sessionEnded !== undefined) throw sessionEnded;
     const frame = decodeBase64(message.b64);
     if (peer === undefined) {
       // Frames can land while the async peer boot settles; they drain

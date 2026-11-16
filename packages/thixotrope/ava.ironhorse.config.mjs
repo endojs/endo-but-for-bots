@@ -18,6 +18,7 @@ export default {
     'test/ironhorse/alarms.js',
     'test/ironhorse/alarm-crash.js',
     'test/ironhorse/text-codec.js',
+    'test/ironhorse/key-space.js',
   ],
   timeout: '3m',
   concurrency: 1,

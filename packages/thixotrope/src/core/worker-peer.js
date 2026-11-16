@@ -48,6 +48,10 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  *   frames toward the host
  * @param {string} [options.debugLabel]
  * @param {boolean} [options.enableImportCollection] replay doubles disable nondeterministic Node GC frames
+ * @param {() => void} [options.onSessionEnd] called once if the OCapN
+ *   session toward the host ends while the worker is alive (its frame
+ *   pump failed, for example on a frame this vat cannot decode); after
+ *   that the worker can no longer answer anything
  */
 export const makeWorkerPeer = async (
   { random, logging },
@@ -56,8 +60,10 @@ export const makeWorkerPeer = async (
     send,
     debugLabel = 'thixotrope-worker-peer',
     enableImportCollection = true,
+    onSessionEnd = undefined,
   },
 ) => {
+  let shuttingDown = false;
   const compartment = new Compartment();
   Object.assign(compartment.globalThis, guestPrelude);
 
@@ -95,6 +101,9 @@ export const makeWorkerPeer = async (
     workerId,
     role: 'worker',
     send,
+    onClose: () => {
+      if (!shuttingDown && onSessionEnd !== undefined) onSessionEnd();
+    },
   });
 
   const client = await makeOcapn({
@@ -116,6 +125,7 @@ export const makeWorkerPeer = async (
     /** @param {Uint8Array} bytes one inbound OCapN frame from the host */
     deliver: pipe.deliver,
     shutdown: () => {
+      shuttingDown = true;
       client.shutdown();
       pipe.close();
     },
