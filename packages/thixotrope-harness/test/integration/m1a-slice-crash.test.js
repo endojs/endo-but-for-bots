@@ -26,9 +26,13 @@ import { E } from '@endo/far';
 
 import { emit } from '../../perf/_harness.mjs';
 import { inputs, sliceScript } from '../fixtures/scripts/m1a-slice.js';
-import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import {
-  copyWithBound,
+  integrationEnabled,
+  killStrays,
+  startFromTemplate,
+  takeIntegrationLock,
+} from '../template/index.js';
+import {
   incarnationNeedle,
   makeSlice,
   round1,
@@ -74,9 +78,10 @@ run(
   async t => {
     t.timeout(4.5 * 60_000);
     const template = await sliceTemplate();
-    const served = await copyWithBound(template);
-    t.teardown(() => served.cleanup());
-    await served.serve(2);
+    const served = await startFromTemplate(template, {
+      t,
+      maxDeliveryAttempts: 2,
+    });
     const slice = await makeSlice(served);
     const { backend, log } = await slice.makeBackend(harden(sliceScript));
     const sessionA = await slice.createSession(backend, 'A');
@@ -110,6 +115,7 @@ run(
     };
     t.log('A at the kill', JSON.stringify(atKill));
     await served.kill();
+    await killStrays(served.root);
 
     const t0 = performance.now();
     const killer = startKiller(
@@ -118,7 +124,7 @@ run(
     );
     let servedMs;
     try {
-      servedMs = await served.serve(2, t0);
+      ({ servedMs } = await served.restart());
       await delay(1500);
     } finally {
       await killer.stop();

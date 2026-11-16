@@ -40,8 +40,9 @@ installGuestPrelude();
 const { E } = await import('@endo/far');
 const { inputs, perfScript } =
   await import('../test/fixtures/scripts/m1a-slice.js');
+const { killStrays, startFromTemplate } =
+  await import('../test/template/index.js');
 const {
-  copyWithBound,
   incarnationNeedle,
   journalTail,
   makeSlice,
@@ -87,11 +88,13 @@ const within = async (fn, ms) => {
 
 await runPerf('restart', async ({ root }) => {
   const template = await sliceTemplate();
-  const served = await copyWithBound(template, { root });
+  const served = await startFromTemplate(template, {
+    root,
+    maxDeliveryAttempts: 5,
+  });
   /** @type {string[]} */
   const wrong = [];
   try {
-    await served.serve(5);
     const slice = await makeSlice(served);
     let made = await slice.makeBackend(harden(perfScript));
     const tCreate = performance.now();
@@ -135,8 +138,8 @@ await runPerf('restart', async ({ root }) => {
       );
       const flightRow = before.get(`session ${flightKey}`);
       await served.kill();
-      const t0 = performance.now();
-      const servedMs = await served.serve(5, t0);
+      await killStrays(served.root);
+      const { servedMs } = await served.restart();
       const { timings } = await served.client.call('status');
       const rows = await slice.workers();
       const after = rows.filter(isSession);
@@ -221,6 +224,7 @@ await runPerf('restart', async ({ root }) => {
       );
       const atKillRow = await slice.sessionWorker(key);
       await served.kill();
+      await killStrays(served.root);
       const t0 = performance.now();
       const killer = startKiller(
         incarnationNeedle(served.root, `session ${key}`),
@@ -228,7 +232,7 @@ await runPerf('restart', async ({ root }) => {
       );
       let servedMs;
       try {
-        servedMs = await served.serve(5, t0);
+        ({ servedMs } = await served.restart());
         await delay(1500);
       } finally {
         await killer.stop();

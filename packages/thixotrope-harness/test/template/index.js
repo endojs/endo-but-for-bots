@@ -162,7 +162,18 @@ export const shortName = (letter = 's') => {
  * @property {() => Promise<void>} stop SIGTERM (clean close), SIGKILL after 60 s
  * @property {() => boolean} running
  * @property {() => string} stderrTail
+ * @property {() => CrashLine[]} crashLog the current serve's crash lines
  */
+
+/**
+ * A supervisor stderr line about a vat crash, its retries or its giving up,
+ * with its time from the start of that serve.
+ * @typedef {{ ms: number, text: string }} CrashLine
+ */
+
+/** Supervisor stderr lines kept in `crashLog()`. */
+export const CRASH_LINE =
+  /crashed while resuming|quarantined|retry after a crash|crash count|gave up|giving up/;
 
 /**
  * A supervisor child process over one state directory.
@@ -171,6 +182,8 @@ export const shortName = (letter = 's') => {
  * @param {bigint} options.crankBudget
  * @param {number} options.idleSleepMs
  * @param {number} [options.snapshotEveryDeliveries]
+ * @param {number} [options.maxDeliveryAttempts] the crash bound
+ *   (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`, 2..100; default the wrapper's)
  * @returns {Supervisor}
  */
 const makeSupervisor = ({
@@ -178,13 +191,17 @@ const makeSupervisor = ({
   crankBudget,
   idleSleepMs,
   snapshotEveryDeliveries,
+  maxDeliveryAttempts,
 }) => {
   /** @type {import('../../scripts/serve.mjs').SupervisorChild | undefined} */
   let started;
+  /** @type {CrashLine[]} */
+  let crashLog = [];
   const running = () => started !== undefined && started.running();
   const serve = async () => {
     if (running()) throw Error('the supervisor is already running');
     const t0 = performance.now();
+    crashLog = [];
     // The same child, environment and parent-death pipe as scripts/serve.mjs.
     started = spawnSupervisorChild(
       {
@@ -192,9 +209,22 @@ const makeSupervisor = ({
         crankBudget,
         idleSleepMs,
         snapshotEveryDeliveries,
+        ...(maxDeliveryAttempts === undefined ? {} : { maxDeliveryAttempts }),
       },
       { stdout: 'pipe', stderr: 'pipe' },
     );
+    let partial = '';
+    started.child.stderr?.on('data', bytes => {
+      const lines = `${partial}${String(bytes)}`.split('\n');
+      partial = lines.pop() ?? '';
+      for (const line of lines) {
+        if (CRASH_LINE.test(line))
+          crashLog.push({
+            ms: round1(performance.now() - t0),
+            text: line.slice(0, 240),
+          });
+      }
+    });
     await started.served;
     return { servedMs: round1(performance.now() - t0) };
   };
@@ -225,6 +255,7 @@ const makeSupervisor = ({
     stop,
     running,
     stderrTail: () => started?.stderrTail() ?? '',
+    crashLog: () => crashLog,
   };
 };
 
@@ -407,6 +438,8 @@ export const copyState = async (from, to) => {
  *   serve the copy again (after kill or stop; stops cleanly first if running)
  * @property {() => Promise<void>} cleanup stop, kill stray processes, delete the copy
  * @property {() => string} stderrTail
+ * @property {() => CrashLine[]} crashLog the supervisor's crash lines since
+ *   the last (re)start, timed from it
  */
 
 /**
@@ -419,11 +452,20 @@ export const copyState = async (from, to) => {
  * @param {number} [options.idleSleepMs] default 2,000 so idle vats checkpoint quickly (architecture section 10)
  * @param {number} [options.snapshotEveryDeliveries]
  * @param {string} [options.root] the copy's path (default tmp/<6 chars>)
+ * @param {number} [options.maxDeliveryAttempts] the supervisor's crash bound
+ *   (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`, 2..100) for every (re)start of the
+ *   copy; default the serve wrapper's (5)
  * @returns {Promise<TemplateState>}
  */
 export const startFromTemplate = async (
   template,
-  { t, idleSleepMs = 2000, snapshotEveryDeliveries, root } = {},
+  {
+    t,
+    idleSleepMs = 2000,
+    snapshotEveryDeliveries,
+    root,
+    maxDeliveryAttempts,
+  } = {},
 ) => {
   const target = root ?? path.join(tmpRoot, shortName());
   const t0 = performance.now();
@@ -434,6 +476,7 @@ export const startFromTemplate = async (
     crankBudget: template.crankBudget,
     idleSleepMs,
     snapshotEveryDeliveries,
+    maxDeliveryAttempts,
   });
   /** @type {any} */
   let client;
@@ -494,6 +537,7 @@ export const startFromTemplate = async (
       },
       cleanup,
       stderrTail: () => supervisor.stderrTail(),
+      crashLog: () => supervisor.crashLog(),
     };
   } catch (error) {
     await cleanup();

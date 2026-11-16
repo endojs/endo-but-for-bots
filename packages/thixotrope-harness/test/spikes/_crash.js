@@ -1,8 +1,9 @@
 // @ts-check
 /**
  * Spike machinery for W0.6 (S2, S4, S7, S9): a real Ironhorse supervisor in
- * a child process (scripts/serve.mjs in its supervisor-child form, with the
- * allowlisted environment), so the spikes can SIGKILL it, plus the throwaway
+ * a child process (`spawnSupervisorChild`: scripts/serve.mjs in its
+ * supervisor-child form, with the allowlisted environment and the parent
+ * pipe), so the spikes can SIGKILL it, plus the throwaway
  * native resource fixture and a vat program that uses it.
  *
  * Like _spike.js, this runs only under THIX_HARNESS_SPIKES=1 and the run lock.
@@ -15,7 +16,7 @@ import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import url from 'node:url';
 
-import { allowlistEnvironment } from '../../scripts/serve.mjs';
+import { spawnSupervisorChild } from '../../scripts/serve.mjs';
 import { harnessRoot } from '../../perf/_harness.mjs';
 import { round1 } from './_spike.js';
 
@@ -23,8 +24,6 @@ import { round1 } from './_spike.js';
 export const ATTACH_FIXTURE = url.fileURLToPath(
   new URL('fixtures/attach', import.meta.url),
 );
-
-const serveScript = path.join(harnessRoot, 'scripts', 'serve.mjs');
 
 /**
  * The spike vat program. `spk` is the fixture facet granted at install. The
@@ -101,49 +100,22 @@ export const startCrashHost = async ({
   await mkdir(root, { recursive: true, mode: 0o700 });
   const socket = path.join(root, 'control.sock');
 
-  /** @type {import('node:child_process').ChildProcess | undefined} */
-  let child;
-  /** @type {Promise<any> | undefined} */
-  let exited;
+  /** @type {import('../../scripts/serve.mjs').SupervisorChild | undefined} */
+  let started;
   /** @type {any} */
   let client;
-  let stderrTail = '';
   let incarnations = 0;
 
   const spawnServe = async () => {
     const t0 = performance.now();
-    const proc = spawn(
-      process.execPath,
-      [
-        serveScript,
-        '--supervisor-child',
-        root,
-        `--crank-budget=${crankBudget}`,
-        `--idle-sleep-ms=${idleSleepMs}`,
-      ],
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: allowlistEnvironment(process.env, { crankBudget }),
-      },
+    // The one way the harness starts a supervisor: the allowlisted
+    // environment and a pipe from this process, so the child stops if this
+    // process dies (a SIGKILLed spike leaves no supervisor behind).
+    started = spawnSupervisorChild(
+      { statePath: root, crankBudget, idleSleepMs },
+      { stdout: 'pipe', stderr: 'pipe' },
     );
-    child = proc;
-    exited = once(proc, 'exit');
-    stderrTail = '';
-    proc.stderr?.on('data', bytes => {
-      stderrTail = `${stderrTail}${String(bytes)}`.slice(-8192);
-    });
-    let out = '';
-    await Promise.race([
-      new Promise(resolve => {
-        proc.stdout?.on('data', bytes => {
-          out = `${out}${String(bytes)}`.slice(-8192);
-          if (out.includes('"serving"')) resolve(undefined);
-        });
-      }),
-      exited.then(() => {
-        throw Error(`serve exited before serving: ${stderrTail.slice(-2000)}`);
-      }),
-    ]);
+    await started.served;
     incarnations += 1;
     const servedMs = round1(performance.now() - t0);
     if (incarnations === 1) {
@@ -166,24 +138,24 @@ export const startCrashHost = async ({
 
   /** SIGKILL the supervisor child and wait for it to be gone. */
   const kill = async () => {
-    const proc = child;
-    if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
-    proc.kill('SIGKILL');
-    await exited;
+    const proc = started;
+    if (!proc?.running()) return;
+    proc.child.kill('SIGKILL');
+    await proc.exited;
     closeClient();
   };
 
   /** Clean stop (SIGTERM: serve.mjs closes the supervisor). */
   const stop = async () => {
-    const proc = child;
+    const proc = started;
     closeClient();
-    if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
-    proc.kill('SIGTERM');
+    if (!proc?.running()) return;
+    proc.child.kill('SIGTERM');
     await Promise.race([
-      exited,
+      proc.exited,
       delay(60_000).then(() => {
-        proc.kill('SIGKILL');
-        return exited;
+        proc.child.kill('SIGKILL');
+        return proc.exited;
       }),
     ]);
   };
@@ -197,10 +169,10 @@ export const startCrashHost = async ({
       return client;
     },
     get pid() {
-      return child?.pid;
+      return started?.pid;
     },
     get stderrTail() {
-      return stderrTail;
+      return started?.stderrTail() ?? '';
     },
     serve: spawnServe,
     kill,

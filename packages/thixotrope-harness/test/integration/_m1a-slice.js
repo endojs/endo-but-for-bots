@@ -15,7 +15,6 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -24,16 +23,7 @@ import { promisify } from 'node:util';
 import { E } from '@endo/far';
 
 import { m1aTemplateOptions, names } from '../../scripts/provision-steps.js';
-import { spawnSupervisorChild } from '../../scripts/serve.mjs';
-import {
-  TEMPLATE_WORKSPACE,
-  connect,
-  copyState,
-  ensureTemplate,
-  killStrays,
-  shortName,
-  tmpRoot,
-} from '../template/index.js';
+import { ensureTemplate } from '../template/index.js';
 
 /** @param {number} ms */
 export const round1 = ms => +ms.toFixed(1);
@@ -297,111 +287,6 @@ export const startKiller = (needle, t0, pollMs = 20) => {
       await done;
     },
   };
-};
-
-/**
- * A copy of a template served by the supervisor child with a chosen crash
- * bound (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`), which the template helper's
- * `startFromTemplate` does not take. The supervisor's crash log lines are
- * kept with their times.
- * @param {{ dir: string, crankBudget: bigint }} template
- * @param {object} [options]
- * @param {number} [options.idleSleepMs]
- * @param {string} [options.root]
- */
-export const copyWithBound = async (
-  template,
-  { idleSleepMs = 2000, root = path.join(tmpRoot, shortName('c')) } = {},
-) => {
-  await copyState(template.dir, root);
-  /** @type {import('../../scripts/serve.mjs').SupervisorChild | undefined} */
-  let started;
-  /** @type {any} */
-  let client;
-  /** @type {{ ms: number, text: string }[]} */
-  let crashLog = [];
-  const closeClient = () => {
-    try {
-      client?.close();
-    } catch {
-      // Gone with its supervisor.
-    }
-    client = undefined;
-  };
-  const self = {
-    root,
-    get client() {
-      return client;
-    },
-    crashLog: () => crashLog,
-    /**
-     * Serve; resolves when the supervisor reports serving.
-     * @param {number} maxDeliveryAttempts
-     * @param {number} [t0] performance.now() the log times are relative to
-     * @param {number} [idle] this serve's idle sleep (default the copy's)
-     */
-    serve: async (
-      maxDeliveryAttempts,
-      t0 = performance.now(),
-      idle = idleSleepMs,
-    ) => {
-      crashLog = [];
-      started = spawnSupervisorChild(
-        {
-          statePath: root,
-          crankBudget: template.crankBudget,
-          idleSleepMs: idle,
-          maxDeliveryAttempts,
-        },
-        { stdout: 'pipe', stderr: 'pipe' },
-      );
-      let partial = '';
-      started.child.stderr?.on('data', bytes => {
-        const lines = `${partial}${String(bytes)}`.split('\n');
-        partial = lines.pop() ?? '';
-        for (const line of lines) {
-          if (
-            /crashed while resuming|quarantined|retry after a crash|crash count|gave up|giving up/.test(
-              line,
-            )
-          )
-            crashLog.push({
-              ms: round1(performance.now() - t0),
-              text: line.slice(0, 240),
-            });
-        }
-      });
-      await started.served;
-      const servedMs = round1(performance.now() - t0);
-      client = await connect(root, { workspace: TEMPLATE_WORKSPACE });
-      return servedMs;
-    },
-    kill: async () => {
-      closeClient();
-      if (started?.running()) started.child.kill('SIGKILL');
-      await started?.exited;
-      await killStrays(root);
-    },
-    stop: async () => {
-      closeClient();
-      if (!started?.running()) return;
-      started.child.kill('SIGTERM');
-      await Promise.race([
-        started.exited,
-        delay(60_000).then(() => {
-          started?.child.kill('SIGKILL');
-          return started?.exited;
-        }),
-      ]);
-    },
-    cleanup: async () => {
-      await self.stop().catch(() => self.kill());
-      await killStrays(root);
-      if (!process.env.KEEP_STATE)
-        await rm(root, { recursive: true, force: true });
-    },
-  };
-  return self;
 };
 
 /**
