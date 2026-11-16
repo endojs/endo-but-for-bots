@@ -174,3 +174,41 @@ export declare function makeOcapnNoiseNetwork(
 //
 // Each module exports a single factory function returning an
 // `OcapnNoiseTransport`.
+
+/**
+ * The two names that make up a connection hint key, `<transport>+<codec>`.
+ */
+export interface HintKey {
+  /** The byte-stream carrier, such as `tcp`. */
+  transport: string;
+  /** The wire codec, such as `cbor`. */
+  codec: string;
+}
+
+/**
+ * A parsed connection hint, `<transport>+<codec>:<address>`.
+ */
+export interface Hint extends HintKey {
+  /** The `<transport>+<codec>` combination. */
+  key: string;
+  /** The transport-specific dial string. */
+  address: string;
+}
+
+/**
+ * A `host:port` authority, the `tcp` hint address.
+ */
+export interface Authority {
+  /** A DNS name, IPv4 literal, or unbracketed IPv6 literal. */
+  host: string;
+  /** An integer in 1..65535. */
+  port: number;
+}
+
+/**
+ * A `host:port/path` authority, the `ws` and `wss` hint address.
+ */
+export interface AuthorityPath extends Authority {
+  /** The required path, beginning with `/`. */
+  path: string;
+}

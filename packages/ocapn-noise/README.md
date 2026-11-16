@@ -185,3 +185,42 @@ await session.writer.next(new TextEncoder().encode('hello'));
 Both peers must share the same OCapN wire codec; the Noise handshake
 provides mutual Ed25519 authentication but leaves codec selection to
 the embedding application.
+
+## Connection hint grammar
+
+`@endo/ocapn-noise/hints` parses and renders the composite connection
+hints described in
+[`designs/ocapn-network-transport-separation.md`](../../designs/ocapn-network-transport-separation.md).
+A hint is keyed by a `<transport>+<codec>` combination, such as
+`tcp+cbor` or `wss+cbor`.
+In an external locator each hint is one `@`-delimited path component,
+`<transport>+<codec>:<address>`, which the locator layer percent-encodes.
+The helpers here work on decoded components.
+
+```js
+import {
+  formatAuthority,
+  formatAuthorityPath,
+  formatHint,
+  parseAuthorityPath,
+  parseHint,
+} from '@endo/ocapn-noise/hints';
+
+formatHint('tcp+cbor', formatAuthority({ host: '::1', port: 3469 }));
+// 'tcp+cbor:[::1]:3469'
+
+const { key, address } = parseHint(
+  'wss+cbor:minion.town:443/.well-known/ocapn-cbor-np',
+);
+// key === 'wss+cbor'
+parseAuthorityPath(address);
+// { host: 'minion.town', port: 443, path: '/.well-known/ocapn-cbor-np' }
+```
+
+`tcp` addresses are a `host:port` authority (`formatAuthority`,
+`parseAuthority`), and `ws` and `wss` addresses are `host:port/path` with a
+required path (`formatAuthorityPath`, `parseAuthorityPath`).
+IPv6 literals are bracketed in the address and unbracketed in the parsed
+`host`.
+The transports do not publish these hints yet; that migration is a
+later step of the design.
