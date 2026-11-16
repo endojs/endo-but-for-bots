@@ -17,6 +17,7 @@ export default {
     'test/ironhorse/http-crash.js',
     'test/ironhorse/alarms.js',
     'test/ironhorse/alarm-crash.js',
+    'test/ironhorse/text-codec.js',
   ],
   timeout: '3m',
   concurrency: 1,
