@@ -463,7 +463,11 @@ run(
       ['echo-start', 'echo-failed'],
     );
     t.is(log().filter(l => l.kind === 'request').length >= 2, true);
-    t.is((await E(queued.turn).whenFinished()).state, 'completed');
+    // The queued message was claimed at the settle (not held) and ran.
+    t.is(queued.state, 'queued');
+    const started = await E(session).getSubmissionReceipt(queued.requestId);
+    t.is(started?.state, 'started');
+    t.is((await E(started.turn).whenFinished()).state, 'completed');
     t.is((await E(session).listPending()).hold, undefined);
   },
 );
