@@ -883,3 +883,262 @@ test262 parity was not re-run.
 Decision: CORE-1 passes the M0 gate (56/56 plus 7). Adding an intrinsic natively was mechanical in
 this engine (one enum variant, one boot roster line, one dispatch arm, one key-order entry), and the
 polyfill capture-and-delete keeps it off every guest surface.
+
+### J-0140 2026-11-16 M0 engine - poor fit
+Evidence: why an inbound frame costs about 160 us of wall time per byte and halts a vat near 52-59 KB
+(J-0102, J-0112 left this open). macOS `sample` of the vat's worker during a 16 KiB `E(t).len(s)`
+(throwaway `tmp/x/explore.mjs`, deleted): 2,142 of 2,491 samples are inside a JS callback run by a
+native collection method (`call_native_method_inner -> native_method_collection -> run_user_callback`)
+that calls an Object native (`native_method_object -> to_property_id`); 2,105 of those are in
+`to_property_id`, mostly `install_pending_intrinsics` (`rust/engine/ironhorse-vm/src/interp/link.rs:1502`)
+building `SymbolName`s (`SymbolIds::get`, `SymbolName::from`, realloc). `to_property_id`
+(`rust/engine/ironhorse-vm/src/interp/property/keys.rs:713-760`) interns every string key it is
+given, including canonical array indices (the read path at :660 does not), and then runs
+`install_pending_intrinsics`, which walks every intrinsic name (`missing_environment_global_bindings`,
+`link.rs:313`) and, after a new name, runs an install pass. SES `harden` of a TypedArray
+(`packages/ses/src/make-hardener.js:108-133`, `freezeTypedArray`) does `arrayForEach(ownKeys(array),
+name => getOwnPropertyDescriptor(array, name) ...)`: one interned index key per byte. Each inbound
+frame is a Uint8Array that is hardened [inferred: `packages/thixotrope/src/net/pipe-network.js:153`
+`harden({ done: false, value: bytes })`; the exact call site was not traced]. Vat micro-probes on a
+fresh vat at 10 M (throwaway `tmp/x/explore2.mjs`, deleted; commit 6758fad7ec, load 3.3-3.9; wall
+time of the call, ping floor 66-70 ms): `Reflect.ownKeys(new Uint8Array(16384))` 72 ms;
+`getOwnPropertyDescriptor` over all 16,384 keys from guest code 151 ms; `harden(new Uint8Array(n))`
+4,096 / 8,192 / 16,384: 567 / 890 / 1,764 ms, the same 16,384 again 638 ms (keys already interned);
+`harden(new Uint8Array(70000))` 8.5 s then `property key space exhausted`. So the inbound cost is
+not Syrup or the codec: it is SES hardening each frame's bytes, which costs the engine about
+100 us per new index key and 35-40 us per known one, mostly unmetered (`install_pending_intrinsics`
+is "unmetered, as at link", keys.rs:111), and permanently interns up to one key per frame byte in
+the vat's 16-bit name table. This explains W0.1's `property key space exhausted` at 64 k and the
+HeapExhausted halts.
+Decision: raised to the PM as the largest single core defect for the harness: (a) engine:
+`to_property_id` should route canonical index strings to `(XS_NO_ID, index)` as `to_read_key` does,
+and `install_pending_intrinsics` should not re-walk every intrinsic per key, or (b) the duct/pipe
+should not harden a TypedArray it owns (it cannot be frozen anyway). Either is a core change
+outside W0.5's paths; not attempted. Until then a vat's name table is consumed by the largest frame
+it has ever received (about 7 k names are used after boot [inferred: 65,535 minus the 58 k halt]), so guest code must keep dynamic
+property names out of objects (use Maps) and frames small.
+
+### J-0141 2026-11-16 M0 transport - perf
+Evidence: spike S1 inbound halt points, `test/spikes/s1.test.js` part `inbound` (W0.5, measured on
+the d66cb48bd5 spike files before lint fixes, recorded as `6758fad7ec-dirty`), release worker
+sha256 13aa617b... (W0.2 CORE-1 build), `pkg/dist-ironhorse` with CORE-1a and CORE-1, a fresh
+vat per probe (installed, one warm ping, ping floor 62-75 ms), ASCII strings so UTF-8 bytes = chars,
+ladder 16/32/40/48/56/64/96/128/192/256 KiB then 3 bisection steps; load average 2.2-6.7 (other
+agents compiling). Halt kind from the daemon's worker record (`status().workers[].failure`).
+
+| config (UTF-8 bytes) | 10 M | 50 M | 100 M |
+|---|---|---|---|
+| 1 string: largest ok / smallest halt | 51,200 / 52,224 MeterAbort | 58,368 / 59,392 key space | 58,368 / 59,392 key space |
+| 8 strings | 50,176 / 51,200 MeterAbort | 57,344 / 58,368 key space | 57,344 / 58,368 key space |
+| 32 strings | 50,176 / 51,200 MeterAbort | 57,344 / 58,368 key space | 57,344 / 58,368 key space |
+| wall time ok at 16 / 32 / 48 KiB | 2.6 / 5.2 / 7.9 s | 2.4 / 5.0 / 7.9 s | 2.4 / 5.1 / 7.9 s |
+| wall time at the largest ok | 8.1 s | 9.1 s | 9.1 s |
+
+("key space" = `guest crank halted: Throw ... RangeError: property key space exhausted`; every
+halt retired the vat: the hub broke the answer with "the target session has been retired" and a
+later ping failed the same way.) Without CORE-1a/CORE-1 (no separate old worker was built,
+J-0144): J-0102 measured a halt between 12,288 and 16,384 chars at 10 M before and after CORE-1a,
+and J-0112 after CORE-1 between 32,768 and 65,536 chars of 1.5-byte text (49-98 KB).
+```
+{"spike":"S1","metric":"frames.inbound.single.haltPoint","crankBudget":"10000000","okMax":51200,"haltMin":52224,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.28,3.97,3.31],"at":"2026-11-16T05:32:59.938Z"}
+{"spike":"S1","metric":"frames.inbound.strings8.haltPoint","crankBudget":"10000000","okMax":50176,"haltMin":51200,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.97,3.99,3.4],"at":"2026-11-16T05:34:42.853Z"}
+{"spike":"S1","metric":"frames.inbound.strings32.haltPoint","crankBudget":"10000000","okMax":50176,"haltMin":51200,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.13,3.76,3.38],"at":"2026-11-16T05:36:26.922Z"}
+{"spike":"S1","metric":"frames.inbound.single.haltPoint","crankBudget":"50000000","okMax":58368,"haltMin":59392,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.06,3.78,3.59],"at":"2026-11-16T05:42:41.479Z"}
+{"spike":"S1","metric":"frames.inbound.strings8.haltPoint","crankBudget":"50000000","okMax":57344,"haltMin":58368,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.96,3.88,3.65],"at":"2026-11-16T05:44:39.779Z"}
+{"spike":"S1","metric":"frames.inbound.strings32.haltPoint","crankBudget":"50000000","okMax":57344,"haltMin":58368,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.93,3.83,3.65],"at":"2026-11-16T05:46:38.417Z"}
+{"spike":"S1","metric":"frames.inbound.single.haltPoint","crankBudget":"100000000","okMax":58368,"haltMin":59392,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.68,3.64,3.63],"at":"2026-11-16T05:50:02.081Z"}
+{"spike":"S1","metric":"frames.inbound.strings8.haltPoint","crankBudget":"100000000","okMax":57344,"haltMin":58368,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.21,3.81,3.69],"at":"2026-11-16T05:52:00.821Z"}
+{"spike":"S1","metric":"frames.inbound.strings32.haltPoint","crankBudget":"100000000","okMax":57344,"haltMin":58368,"haltError":"ocapn hub: the target session has been retired","ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.08,3.91,3.74],"at":"2026-11-16T05:53:58.726Z"}
+{"spike":"S1","metric":"frames.inbound.single","crankBudget":"10000000","utf8Bytes":52224,"strings":1,"ok":false,"ms":8105.2,"floorMs":62,"overFloorMs":8043.2,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p8\",\"failure\":\"guest crank halted: MeterAbort\"}","installMs":4452.9,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.28,3.97,3.31],"at":"2026-11-16T05:32:59.378Z"}
+{"spike":"S1","metric":"frames.inbound.single","crankBudget":"50000000","utf8Bytes":59392,"strings":1,"ok":false,"ms":8552,"floorMs":64.2,"overFloorMs":8487.8,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p8\",\"failure\":\"guest crank halted: Throw { value: Slot { next: SlotIndex(4294967295), id: 0, flag: 0, kind: Reference, value: Reference(SlotIndex(329474)) }, rendered: \\\"RangeError: property key space exhausted\\\" }\"}","installMs":4440.8,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.36,3.87,3.62],"at":"2026-11-16T05:42:26.219Z"}
+{"spike":"S1","metric":"frames.outbound.single","crankBudget":"50000000","utf8Bytes":16777216,"strings":1,"ok":false,"ms":858.2,"floorMs":66,"overFloorMs":792.2,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p28\",\"failure\":\"guest crank halted: HeapExhausted\"}","installMs":4456.5,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.94,3.83,3.66],"at":"2026-11-16T05:46:56.932Z"}
+```
+Reading: the halt is per frame (8 or 32 strings halt within one KiB of a single string). At 10 M
+the meter halts first, at about 52 KB (about 190 computrons per inbound byte); from 50 M up the
+16-bit key table halts first at about 58-59 KB, so a larger budget buys about 14 % and 100 M buys
+nothing over 50 M. Wall time is about 160 us per byte at every budget (J-0140), so the 300 ms
+budget over the floor is reached at about 2 KB of a fresh vat's first frame.
+Decision: `frameBytes` is bounded by the key table, not the budget (J-0144).
+
+### J-0142 2026-11-16 M0 transport - perf
+Evidence: S1 parts `outbound` and `percrank`, same build and method as J-0141; outbound probes
+reuse a vat until it fails. `frames.outbound.*` = the vat returns one string / 32 strings;
+`frames.crankOut.sendOnly8` = one crank does 8 `E.sendOnly(sink).take(i, s)` to a Node sink,
+timed until the sink has all 8; `frames.inbound.pipelined8` = 8 `E(t).len(s)` sent without
+waiting, fresh vat.
+
+| measurement | 10 M | 50 M | 100 M |
+|---|---|---|---|
+| outbound 1 string 64 K / 256 K / 1 M / 4 MiB (ms) | 811 / 461 / 1,724 / 9,400 | 217-794 / 396-451 / 1,523-1,617 / 8,488-8,797 | 204-953 / 387-447 / 1,543-1,593 / 8,708-9,442 |
+| outbound 1 string halt | 7 MiB ok (19.1 s), 10 MiB MeterAbort | 16 MiB HeapExhausted; 8 MiB control link lost | same as 50 M |
+| outbound 32 strings 64 K / 256 K / 1 M / 4 MiB (ms) | 137 / 362 / 1,602 / 9,348 | 124 / 341 / 1,421 / 9,137 | 129 / 349 / 1,549 / 8,909 |
+| 8 sendOnly per crank x 4 K / 16 K / 64 K / 256 K (ms) | 196 / 202 / 576 / 2,572 | 191 / 193 / 553 / 2,416 | 190 / 197 / 563 / 2,444 |
+| 8 sendOnly x 1 MiB (8 MiB in one crank) | ok 11.7 s | not run (control link limit) | not run |
+| 8 pipelined inbound x 4 K / 8 K / 16 K (total ms) | 1,939 / 3,439 / 6,770 | 1,800 / 3,407 / 6,772 | 1,847 / 3,554 / 6,811 |
+```
+{"spike":"S1","metric":"frames.outbound.single.haltPoint","crankBudget":"10000000","okMax":7340032,"haltMin":10485760,"haltError":"ocapn hub: the target session has been retired","ladderTop":16777216,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.74,3.83,3.42],"at":"2026-11-16T05:37:19.561Z"}
+{"spike":"S1","metric":"frames.outbound.strings32.haltPoint","crankBudget":"10000000","okMax":4194304,"haltMin":null,"haltError":null,"ladderTop":4194304,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.04,3.89,3.45],"at":"2026-11-16T05:37:37.816Z"}
+{"spike":"S1","metric":"frames.crankOut.sendOnly8.haltPoint","crankBudget":"10000000","okMax":1048576,"haltMin":null,"haltError":null,"ladderTop":1048576,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[5.51,4.19,3.57],"at":"2026-11-16T05:37:59.945Z"}
+{"spike":"S1","metric":"frames.outbound.single.haltPoint","crankBudget":"50000000","okMax":4194304,"haltMin":null,"haltError":null,"ladderTop":4194304,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.35,3.21,3.49],"at":"2026-11-16T05:58:50.566Z"}
+{"spike":"S1","metric":"frames.outbound.strings32.haltPoint","crankBudget":"50000000","okMax":4194304,"haltMin":null,"haltError":null,"ladderTop":4194304,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.51,3.2,3.48],"at":"2026-11-16T05:59:08.415Z"}
+{"spike":"S1","metric":"frames.crankOut.sendOnly8.haltPoint","crankBudget":"50000000","okMax":262144,"haltMin":null,"haltError":null,"ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.58,3.2,3.48],"at":"2026-11-16T05:59:18.248Z"}
+{"spike":"S1","metric":"frames.outbound.single.haltPoint","crankBudget":"100000000","okMax":4194304,"haltMin":null,"haltError":null,"ladderTop":4194304,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.98,2.97,3.31],"at":"2026-11-16T06:02:36.671Z"}
+{"spike":"S1","metric":"frames.outbound.strings32.haltPoint","crankBudget":"100000000","okMax":4194304,"haltMin":null,"haltError":null,"ladderTop":4194304,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.08,3.22,3.39],"at":"2026-11-16T06:02:54.403Z"}
+{"spike":"S1","metric":"frames.crankOut.sendOnly8.haltPoint","crankBudget":"100000000","okMax":262144,"haltMin":null,"haltError":null,"ladderTop":262144,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.15,3.26,3.4],"at":"2026-11-16T06:03:04.566Z"}
+```
+Reading: outbound is not a frame ceiling at any useful size (W0.2 removed it); a vat emits 8 x 16 KiB
+in one crank in about 195 ms (floor about 66 ms) and 2 MiB in about 2.4 s. Pipelining inbound frames
+gains nothing: 8 x 16 KiB costs the same 6.8 s as 8 separate calls, about 850 ms each (warm keys).
+The 8 MiB failures at 50 M and 100 M are the control connection, not the vat:
+`packages/thixotrope/src/control/local-control.js:15` `MAX_FRAME = 8 * 1024 * 1024` drops the
+connection ("Admin frame too large", :48), and the test saw "Supervisor disconnected; evaluation
+outcome may be unknown"; at 10 M the vat MeterAborted before producing 10 MiB. The ladders now stop
+at 4 MiB (`S1_OUT_MAX_KIB`).
+Decision: `crankOutBytes` = 196,608 (8 frames): 8 x 16 KiB measured at 191-202 ms, 8 x 64 KiB at
+553-576 ms, far below any halt. An outbound message to another vat is that vat's inbound frame,
+so `frameBytes` still bounds each message.
+
+### J-0143 2026-11-16 M0 engine - perf
+Evidence: S1 parts `sends` and `loop`, same build and method. `sendOnly`: n `E.sendOnly(sink).event(i)`
+in one crank, timed until the sink has n. `answered`: n `E(sink).event(i)` in one crank; the time
+includes the n answers returning to the vat (a ping queued behind them). `loop.runaway`:
+`for (;;) {}` in a fresh vat, wall time until the answer breaks.
+
+| measurement | 10 M | 50 M | 100 M |
+|---|---|---|---|
+| sendOnly per crank: largest ok / smallest halt | 400 / 450 MeterAbort | 500 / 600 HeapExhausted | 500 / 600 HeapExhausted |
+| sendOnly 100 / 250 / 500 (ms) | 499 / 1,099 / halt | 513 / 1,107 / 2,797 | 490 / 1,091 / 2,908 |
+| answered per crank: largest ok / smallest halt | 200 / 250 MeterAbort | 200 / 250 HeapExhausted | 200 / 250 HeapExhausted |
+| answered 100 / 200, until all answers are back (ms) | 10,025 / 26,148 | 9,412 / 26,532 | 10,584 / 25,938 |
+| runaway loop to MeterAbort (ms, 3 runs) | 100-104 | 259-271 | 458-473 |
+```
+{"spike":"S1","metric":"sends.perCrank.sendOnly.haltPoint","crankBudget":"10000000","okMax":400,"haltMin":450,"haltError":"ocapn hub: the target session has been retired","ladderTop":8000,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[6.11,4.56,3.74],"at":"2026-11-16T05:38:48.972Z"}
+{"spike":"S1","metric":"sends.perCrank.answered.haltPoint","crankBudget":"10000000","okMax":200,"haltMin":250,"haltError":"ocapn hub: the target session has been retired","ladderTop":2000,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.35,4.33,3.7],"at":"2026-11-16T05:39:38.659Z"}
+{"spike":"S1","metric":"loop.runaway.summary","crankBudget":"10000000","n":3,"median":103,"max":103.9,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[4.27,4.32,3.72],"at":"2026-11-16T05:39:57.729Z"}
+{"spike":"S1","metric":"sends.perCrank.sendOnly.haltPoint","crankBudget":"50000000","okMax":500,"haltMin":600,"haltError":"ocapn hub: the target session has been retired","ladderTop":8000,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.24,2.98,3.38],"at":"2026-11-16T06:00:24.105Z"}
+{"spike":"S1","metric":"sends.perCrank.answered.haltPoint","crankBudget":"50000000","okMax":200,"haltMin":250,"haltError":"ocapn hub: the target session has been retired","ladderTop":2000,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.63,2.96,3.34],"at":"2026-11-16T06:01:13.932Z"}
+{"spike":"S1","metric":"loop.runaway.summary","crankBudget":"50000000","n":3,"median":268.1,"max":271.4,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.44,2.89,3.31],"at":"2026-11-16T06:01:32.988Z"}
+{"spike":"S1","metric":"sends.perCrank.sendOnly.haltPoint","crankBudget":"100000000","okMax":500,"haltMin":600,"haltError":"ocapn hub: the target session has been retired","ladderTop":8000,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.15,3.15,3.35],"at":"2026-11-16T06:04:09.330Z"}
+{"spike":"S1","metric":"sends.perCrank.answered.haltPoint","crankBudget":"100000000","okMax":200,"haltMin":250,"haltError":"ocapn hub: the target session has been retired","ladderTop":2000,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.09,3.14,3.33],"at":"2026-11-16T06:05:01.559Z"}
+{"spike":"S1","metric":"loop.runaway.summary","crankBudget":"100000000","n":3,"median":467.4,"max":472.5,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.94,3.11,3.32],"at":"2026-11-16T06:05:21.810Z"}
+```
+Reading: 10 M computrons are about 35-40 ms of loop work (100 ms with the 65 ms floor), so a
+runaway crank at 50 M ends in about 270 ms, well inside the 1 s budget. Above 50 M the send
+ceiling is the heap ceiling (`THIXOTROPE_CHUNK_CEILING` 256 MiB default), not the meter, so 100 M
+gains nothing. Answered sends are expensive: each answer is a delivery back into the vat, about
+100-130 ms each (100 answers 9.4-10.6 s), and 250 in one crank halt at every budget.
+Decision: crank budget 50 M; guest rule stays 100 eventual sends per crank (less than half the
+answered halt point at every budget); fan-out stays an adapter's job.
+
+### J-0144 2026-11-16 M0 admin - deviation
+Evidence: the settings S1 and S3 chose, written to `packages/thixotrope-harness/config/defaults.js`
+(architecture.md section 9 names no file; created as the task said) and read by `scripts/serve.mjs`
+(`DEFAULT_CRANK_BUDGET = limits.crankBudget`, a small edit of a W0.4 file). Values:
+`frameBytes` 24,576; `crankOutBytes` 196,608; `inlineBytes` 8,192; crank budget 50,000,000;
+`sendsPerCrank` 100; `execSourceBytes` 262,144 (S3, J-0146). `frameBytes` = 24,576 is at most half
+the smallest inbound halt point at every measured budget (51,200 at 10 M, 58,368 at 50/100 M), so a
+later lowering to 10 M stays safe, and leaves about 34 k of the vat's 65,535 property keys for its
+own names after the about 7 k used at boot [inferred] (J-0140). It equals the plan's fallback, not its target
+(>= 196,608): that target is unreachable while every inbound byte interns a key. The "without
+CORE-1a/CORE-1" configuration was not rebuilt: `target/release` is 503 MB (over the 400 MB the task
+allowed for a second target dir) and the old boot bundle would need the pre-fix sources, so the
+before-numbers are W0.1's and W0.2's (J-0101, J-0102, J-0110, J-0112). Guest code cannot import
+`config/` (guest bundles read only `guest/`); M1a must copy the values into `guest/lib` or pass
+them in.
+Decision: as above. `frames.inbound` at this `frameBytes` misses its budget (J-0145), which no
+`frameBytes` choice above about 8 KB can fix; escalated with J-0140.
+
+### J-0145 2026-11-16 M0 transport - perf
+Evidence: M0 acceptance test 1 (S1 part `accept`, 50 M, settings of J-0144): 200 messages of
+24,576 bytes into one vat and 200 out of it, no halt; a fresh vat takes 2 x `frameBytes` (49,152)
+in one message. Then `perf/frames.perf.mjs` (W0.5; `runPerf` + `provision()` of
+`perf/_harness.mjs`, first real use, it works; 200 samples per latency; crank budget 50 M; same
+build; state `tmp/pf<pid>` deleted):
+```
+{"spike":"S1","metric":"accept.frames200","crankBudget":"50000000","frameBytes":24576,"inboundMedianMs":889.4,"inboundFirstMs":3725.3,"inboundMaxMs":3725.3,"outboundMedianMs":81.4,"floorMs":62.3,"ok":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.46,3.12,3.24],"at":"2026-11-16T06:10:01.508Z"}
+{"spike":"S1","metric":"accept.twiceFrameBytes","crankBudget":"50000000","utf8Bytes":49152,"ok":true,"ms":7881.5,"floorMs":66.9,"overFloorMs":7814.6,"installMs":4559.3,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[3.46,3.13,3.24],"at":"2026-11-16T06:10:14.648Z"}
+{"metric":"frames.pingFloor","unit":"ms","n":200,"median":66.11,"p95":69.011,"p99":162.55,"min":62.84,"max":590.734,"deliveries":{"count":234,"perOp":1.17},"engine":{"delivery":{"count":234,"ms":11785.6},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":87166,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","pass":null,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.94,2.79,3.04]}
+{"metric":"frames.inbound.first","unit":"ms","value":3960.562,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","ok":true,"floorMedian":66.11,"pass":null,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.78,2.76,3.03]}
+{"metric":"frames.inbound","unit":"ms","n":200,"median":867.173,"p95":921.753,"p99":967.198,"min":826.391,"max":989.145,"deliveries":{"count":234,"perOp":1.17},"engine":{"delivery":{"count":234,"ms":169431.4},"snapshot":{"count":1,"ms":153.1},"wake":{"count":0,"ms":0}},"hubJsonBytes":23921,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":66.11,"utf8Bytes":24576,"budget":{"median":366.11},"pass":false,"exceeded":["median: 867.173 > 1.25 x 366.11"],"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.97,2.9,3.03]}
+{"metric":"frames.outbound","unit":"ms","n":200,"median":80.171,"p95":96.551,"p99":115.702,"min":75.97,"max":218.562,"deliveries":{"count":227,"perOp":1.135},"engine":{"delivery":{"count":227,"ms":10573.9},"snapshot":{"count":1,"ms":131},"wake":{"count":0,"ms":0}},"hubJsonBytes":23354,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":66.11,"utf8Bytes":24576,"budget":{"median":366.11},"pass":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.97,2.9,3.03]}
+{"metric":"frames.halt","unit":"ms","value":7722.019,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","utf8Bytes":49152,"ok":true,"pass":null,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.76,2.86,3.01]}
+{"metric":"vat.evaluateProgram","unit":"ms","value":8636.34,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"stageMs":8496.7,"evalCrankMs":139.6,"ok":true,"budget":{"value":2000},"pass":false,"exceeded":["value: 8636.34 > 1.25 x 2000"],"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.67,2.83,3]}
+{"metric":"loop.runaway","unit":"ms","n":5,"median":266.247,"p95":272.282,"p99":272.282,"min":255.715,"max":272.282,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","runs":5,"budget":{"median":1000},"pass":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[3.01,2.89,3.02]}
+{"metric":"frames.done","crankBudget":"50000000","frameBytes":24576}
+```
+| check (M0 perf table) | budget | measured | verdict |
+|---|---|---|---|
+| `frames.halt` | chosen `frameBytes` <= half the halt point | 2 x 24,576 passes on a fresh vat (7.7 s); halt 51,200-58,368 | pass |
+| `frames.inbound` at `frameBytes` | <= 300 ms over the ping floor (66 ms) | median 867 ms (p95 922), first frame in a vat 3,961 ms | FAIL, 2.37 x |
+| `frames.outbound` at `frameBytes` | <= 300 ms over the floor | median 80 ms (14 over the floor) | pass |
+| `vat.evaluateProgram` 150 k | <= 2 s, no MeterAbort | 8,636 ms total: 8,497 ms staging 7 frames + 140 ms evaluating crank; no MeterAbort | FAIL on total, 4.3 x; the crank alone passes |
+| `loop.runaway` at 50 M | <= 1 s | median 266 ms (5 runs) | pass |
+
+Reading: every miss is the inbound per-byte cost of J-0140 (steady state about 33 us per byte with
+the frame's keys already interned, about 160 us per byte the first time a vat sees a frame that
+size). Inbound frames meet 300 ms only below about 8 KB; outbound and compute are fine.
+Decision: blocked on J-0140 for the two inbound-bound budgets (`frames.inbound`,
+`vat.evaluateProgram`), escalated to the PM per the 1.25 x rule; not tuned away.
+
+### J-0146 2026-11-16 M0 engine - perf
+Evidence: spike S3 (`test/spikes/s3.test.js`), 50 M, `frameBytes` 24,576, fresh vat per row; the
+program is about N chars of small arrow functions pushed into an array, evaluated with
+`new Compartment().evaluate(src)` in the vat (the vat has `Compartment`); same build; load 2.5-2.8.
+```
+{"spike":"S3","metric":"vat.evaluateProgram.oneMessage","crankBudget":"50000000","frameBytes":24576,"sourceChars":149978,"functions":1615,"ok":false,"ms":9601.8,"floorMs":65,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p2\",\"failure\":\"guest crank halted: Throw { value: Slot { next: SlotIndex(4294967295), id: 0, flag: 0, kind: Reference, value: Reference(SlotIndex(782454)) }, rendered: \\\"RangeError: property key space exhausted\\\" }\"}","commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.67,2.97,3.17],"at":"2026-11-16T06:11:21.322Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.staged","crankBudget":"50000000","frameBytes":24576,"sourceChars":149978,"functions":1615,"chunks":7,"stageMs":8445.5,"evalMs":145.2,"totalMs":8590.7,"ok":true,"result":1615,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.8,2.99,3.17],"at":"2026-11-16T06:11:35.565Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.oneMessage","crankBudget":"50000000","frameBytes":24576,"sourceChars":399938,"functions":4249,"ok":false,"ms":1684.7,"floorMs":67,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p4\",\"failure\":\"guest crank halted: HeapExhausted\"}","commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.68,2.95,3.16],"at":"2026-11-16T06:11:43.175Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.staged","crankBudget":"50000000","frameBytes":24576,"sourceChars":399938,"functions":4249,"chunks":17,"stageMs":17246.3,"evalMs":262.1,"totalMs":17508.4,"ok":true,"result":4249,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.5,2.89,3.13],"at":"2026-11-16T06:12:06.269Z"}
+```
+Reading: a program source cannot arrive in one message: 150 k chars halts the vat (key space,
+9.6 s) and 400 k halts it (HeapExhausted, 1.7 s). Staged in `frameBytes` messages, compiling and
+running 150 k takes a 145 ms crank and 400 k (4,249 functions) a 262 ms crank, well inside 50 M;
+staging costs 8.4 s and 17.2 s (J-0140).
+Decision: `execSourceBytes` stays 262,144, as a staged size (exec source is staged in
+`frameBytes` chunks, then evaluated in one crank); this is a deviation from milestones.md's "in one
+message", which no source above about 50 KB can meet today.
+
+### J-0147 2026-11-16 M0 engine - good fit
+Evidence: spike S5 (`test/spikes/s5.test.js`), 50 M, same build: an async generator suspended at
+`yield`, and an `Array.fromAsync` over an async generator awaiting an unresolved promise, in a
+probe vat; (a) resumed in later deliveries of the same incarnation, (b) suspended across a clean
+supervisor close and serve (the vat snapshotted at close; the worker record afterwards shows a
+`snapshot` and the vat answers).
+```
+{"spike":"S5","metric":"s5.acrossDelivery.genStart","crankBudget":"50000000","ok":true,"ms":65.8,"value":0,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.13,2.71,3.05],"at":"2026-11-16T06:12:56.778Z"}
+{"spike":"S5","metric":"s5.acrossDelivery.genNext5","crankBudget":"50000000","ok":true,"ms":476,"value":5,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.36,2.75,3.06],"at":"2026-11-16T06:12:57.254Z"}
+{"spike":"S5","metric":"s5.acrossDelivery.fromAsyncStart","crankBudget":"50000000","ok":true,"ms":189.6,"value":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.36,2.75,3.06],"at":"2026-11-16T06:12:57.444Z"}
+{"spike":"S5","metric":"s5.acrossDelivery.fromAsyncRelease","crankBudget":"50000000","ok":true,"ms":76.7,"value":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.36,2.75,3.06],"at":"2026-11-16T06:12:57.521Z"}
+{"spike":"S5","metric":"s5.acrossDelivery.fromAsyncResult","crankBudget":"50000000","ok":true,"ms":64.3,"value":"1,2,3","commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.36,2.75,3.06],"at":"2026-11-16T06:12:57.585Z"}
+{"spike":"S5","metric":"s5.acrossRestart.genStart","crankBudget":"50000000","ok":true,"ms":66.1,"value":0,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.17,2.7,3.04],"at":"2026-11-16T06:13:02.671Z"}
+{"spike":"S5","metric":"s5.acrossRestart.genNext5","crankBudget":"50000000","ok":true,"ms":67.7,"value":5,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.17,2.7,3.04],"at":"2026-11-16T06:13:02.738Z"}
+{"spike":"S5","metric":"s5.acrossRestart.fromAsyncStart","crankBudget":"50000000","ok":true,"ms":66.8,"value":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2.17,2.7,3.04],"at":"2026-11-16T06:13:02.805Z"}
+{"spike":"S5","metric":"s5.restart","crankBudget":"50000000","closeMs":1864.5,"serveMs":7159.1,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2,2.66,3.02],"at":"2026-11-16T06:13:11.830Z"}
+{"spike":"S5","metric":"s5.acrossRestart.genNext1","crankBudget":"50000000","ok":true,"ms":114.9,"value":6,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2,2.65,3.02],"at":"2026-11-16T06:13:12.236Z"}
+{"spike":"S5","metric":"s5.acrossRestart.fromAsyncRelease","crankBudget":"50000000","ok":true,"ms":228.3,"value":true,"commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2,2.65,3.02],"at":"2026-11-16T06:13:12.465Z"}
+{"spike":"S5","metric":"s5.acrossRestart.fromAsyncResult","crankBudget":"50000000","ok":true,"ms":66.7,"value":"1,2,3","commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2,2.65,3.02],"at":"2026-11-16T06:13:12.532Z"}
+{"spike":"S5","metric":"s5.afterRestart.vat","crankBudget":"50000000","alive":true,"worker":"{\"awake\":true,\"debugLabel\":\"app:p2\",\"hubDelivery\":\"16\",\"outboundBase\":24,\"snapshot\":{\"cut\":16,\"ref\":\"ee9b6af5819844c999bc5248c21bd19493c74dc9e618fe7c227fcbc8dfaad0d6\"}}","commit":"6758fad7ec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","loadAvg":[2,2.65,3.02],"at":"2026-11-16T06:13:12.648Z"}
+```
+Reading: both persist across a delivery and across a restart in the shipped worker (generator
+resumes 5 -> 6 after the restart; `fromAsync` completes with `1,2,3` after its gate is released
+post-restart). `rust/engine/ironhorse-snapshot/tests/persist_gates.rs:451-509` is right;
+`packages/thixotrope/README.md:761-762` ("Async generators and `Array.fromAsync` suspensions remain
+...") is stale. Not tested: restart by replay after an unclean stop (SIGKILL).
+Decision: architecture rule 12.4 can be relaxed to "allowed, but bounded like any retained state";
+the PM decides. The README is a doc fix outside the harness.
+
+### J-0148 2026-11-16 M0 tooling - awkward
+Evidence: how the spikes run. `test/spikes/*.test.js` are ava files under the package's
+`test/**/*.test.*` glob, so they skip unless `THIX_HARNESS_SPIKES=1` (the unit lane shows 3 skipped);
+each takes the run lock itself (`test/spikes/_spike.js` `takeRunLock`) and serves throwaway state
+`tmp/s1<pid>` etc. through `serveHarness`, so every quarantine happened there and was deleted.
+Per-probe vats are removed (`remove`) so at most two vats are awake. Each new state costs about
+42 s (serve plus `createWorkspace`), each probe vat 4.4-7.1 s to install. S1 is parameterised by
+`S1_BUDGETS` and `S1_PARTS` (one budget's inbound part is about 7 min; the rest about 5 min).
+`perf/_harness.mjs` `provision()` and `runPerf()` ran against a real supervisor for the first time
+here and worked (closes J-0135's open item). Static `import { E } from '@endo/far'` in a plain
+Node script still fails before lockdown ("assert is not defined", J-0131); `frames.perf.mjs`
+imports it dynamically after `_harness.mjs`.
+Decision: run as `THIX_HARNESS_SPIKES=1 S1_BUDGETS=50000000 node scripts/run-lock.mjs -- corepack
+yarn test test/spikes/s1.test.js`; integration tests later should reuse `_spike.js`'s host helper
+or the M0 S8 template.
