@@ -16,7 +16,7 @@ built-ins/Array/from/calling-from-valid-2.js strict pass
 built-ins/Array/from/elements-added-after.js sloppy pass
 built-ins/Array/from/elements-added-after.js strict pass
 built-ins/Array/from/elements-deleted-after.js sloppy pass
-built-ins/Array/from/elements-deleted-after.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: The value of value is expected to equal the value of array[this.arrayIndex] Expected SameValue(«0», «undefined») to be true"
+built-ins/Array/from/elements-deleted-after.js strict skip:oracle-xs-script-decl-eval-framing
 built-ins/Array/from/elements-updated-after.js sloppy pass
 built-ins/Array/from/elements-updated-after.js strict pass
 built-ins/Array/from/from-array.js sloppy pass
@@ -70,7 +70,7 @@ built-ins/Array/from/not-a-constructor.js strict pass
 built-ins/Array/from/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/Array/from/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
 built-ins/Array/from/source-array-boundary.js sloppy pass
-built-ins/Array/from/source-array-boundary.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: The value of value is expected to equal the value of array[this.arrayIndex] Expected SameValue(«1.7976931348623157e+308», «undefined») to be true"
+built-ins/Array/from/source-array-boundary.js strict skip:oracle-xs-script-decl-eval-framing
 built-ins/Array/from/source-object-constructor.js sloppy pass
 built-ins/Array/from/source-object-constructor.js strict pass
 built-ins/Array/from/source-object-iterator-1.js sloppy pass

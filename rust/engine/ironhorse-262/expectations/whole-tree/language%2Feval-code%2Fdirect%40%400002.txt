@@ -90,7 +90,7 @@ language/eval-code/direct/this-value-func-strict-source.js sloppy pass
 language/eval-code/direct/this-value-global.js sloppy pass
 language/eval-code/direct/this-value-global.js strict pass
 language/eval-code/direct/var-env-func-init-global-new.js sloppy pass
-language/eval-code/direct/var-env-func-init-global-update-configurable.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: f descriptor should be enumerable; f descriptor should be writable"
+language/eval-code/direct/var-env-func-init-global-update-configurable.js sloppy pass
 language/eval-code/direct/var-env-func-init-global-update-non-configurable.js sloppy pass
 language/eval-code/direct/var-env-func-init-local-new-delete.js sloppy pass
 language/eval-code/direct/var-env-func-init-local-new.js sloppy pass
@@ -109,7 +109,7 @@ language/eval-code/direct/var-env-lower-lex-non-strict.js sloppy pass
 language/eval-code/direct/var-env-lower-lex-strict-caller.js strict pass
 language/eval-code/direct/var-env-lower-lex-strict-source.js sloppy pass
 language/eval-code/direct/var-env-lower-lex-strict-source.js strict pass
-language/eval-code/direct/var-env-var-init-global-exstng.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: x descriptor should not be configurable"
+language/eval-code/direct/var-env-var-init-global-exstng.js sloppy skip:oracle-xs-script-decl-eval-framing
 language/eval-code/direct/var-env-var-init-global-new.js sloppy pass
 language/eval-code/direct/var-env-var-init-local-exstng.js sloppy pass
 language/eval-code/direct/var-env-var-init-local-new-delete.js sloppy pass

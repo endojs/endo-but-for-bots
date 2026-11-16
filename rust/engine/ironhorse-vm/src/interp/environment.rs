@@ -103,16 +103,8 @@ impl Interp {
         let mut names: Vec<(usize, u16)> = self.id_map.iter().map(|(&id, &i)| (i, id)).collect();
         names.sort_unstable();
         let direct_variable_env = self.direct_eval_variable_environment();
-        for (index, id) in names {
-            // GlobalDeclarationInstantiation: a top-level **function**
-            // declaration must satisfy `CanDeclareGlobalFunction`, else it is
-            // a `TypeError` before any body runs. The compiler hoists a
-            // function declaration's local to `null` (its placeholder) and a
-            // `var` to `undefined`, so the local's kind here tells the two
-            // apart with no source inspection.
-            let kind = self.locals.get(index).map(|slot| slot.kind);
-            let is_function_declaration = matches!(kind, Some(Kind::Null));
-            if let Some(variable_env) = direct_variable_env {
+        if let Some(variable_env) = direct_variable_env {
+            for (_, id) in names {
                 if self.has_lexical_binding_before(variable_env, id) {
                     return Err(self.internal_error(
                         "SyntaxError",
@@ -122,8 +114,22 @@ impl Interp {
                 if !self.has_function_var_binding(variable_env, id) {
                     self.append_environment_capture(variable_env, id, Slot::undefined());
                 }
-                continue;
             }
+            return Ok(());
+        }
+        // GlobalDeclarationInstantiation steps 3-8 / EvalDeclarationInstantiation
+        // steps 3-10 decide every declaration's definability *before* the first
+        // binding is created, so a declaration the global object refuses
+        // (`function NaN(){}`) leaves no sibling declaration behind. Validate the
+        // whole set first, then create.
+        for &(index, id) in &names {
+            // The compiler hoists a function declaration's local to `null` (its
+            // placeholder) and a `var` to `undefined`, so the local's kind here
+            // tells the two apart with no source inspection.
+            let is_function_declaration = matches!(
+                self.locals.get(index).map(|slot| slot.kind),
+                Some(Kind::Null)
+            );
             // A **direct** eval's `var`/function declaration that collides with an
             // enclosing lexical binding — here the realm's global lexical
             // environment, holding the running program's top-level
@@ -141,6 +147,9 @@ impl Interp {
                 ));
             }
             if self.environment.global_props.contains_key(&id) {
+                // A top-level **function** declaration must satisfy
+                // `CanDeclareGlobalFunction`, else it is a `TypeError` before any
+                // body runs.
                 if is_function_declaration && !self.can_declare_global_function(id) {
                     return Err(self.internal_error(
                         "TypeError",
@@ -150,7 +159,7 @@ impl Interp {
                         ),
                     ));
                 }
-            } else {
+            } else if !self.instance_extensible(self.environment.global_obj) {
                 // The property does not yet exist, so it must be *created* on the
                 // global object. Both `CanDeclareGlobalVar` (ECMA-262 9.1.1.4.15)
                 // and `CanDeclareGlobalFunction` (9.1.1.4.16) reduce, for an absent
@@ -161,15 +170,38 @@ impl Interp {
                 // the global yet); it is reached by an `eval` whose realm already
                 // sealed its global. An extensible global (the overwhelming common
                 // case) is unaffected, so this never perturbs an existing run.
-                if !self.instance_extensible(self.environment.global_obj) {
-                    return Err(self.internal_error(
-                        "TypeError",
-                        format!(
-                            "{}: global object not extensible",
-                            self.property_debug_name(id)
-                        ),
-                    ));
+                return Err(self.internal_error(
+                    "TypeError",
+                    format!(
+                        "{}: global object not extensible",
+                        self.property_debug_name(id)
+                    ),
+                ));
+            }
+        }
+        for (index, id) in names {
+            let is_function_declaration = matches!(
+                self.locals.get(index).map(|slot| slot.kind),
+                Some(Kind::Null)
+            );
+            if let Some(&property) = self.environment.global_props.get(&id) {
+                // `CreateGlobalFunctionBinding` step 5: an existing
+                // *configurable* property is redefined as a writable, enumerable
+                // data property whose configurability is `D` (see below); a
+                // non-configurable one keeps its attributes (step 6). A `var`
+                // leaves an existing property untouched. Accessor globals are not
+                // modeled here, so only a data property is redefined.
+                let slot = self.slots.get_mut(property);
+                if is_function_declaration
+                    && slot.flag & XS_DONT_DELETE_FLAG == 0
+                    && slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
+                {
+                    slot.flag &= !(XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG);
+                    if !self.eval_program_hoist {
+                        slot.flag |= XS_DONT_DELETE_FLAG;
+                    }
                 }
+            } else {
                 // `CreateGlobalVarBinding` / `CreateGlobalFunctionBinding` take
                 // the `D` argument as the new property's **configurable**
                 // attribute. GlobalDeclarationInstantiation (a Script) passes
