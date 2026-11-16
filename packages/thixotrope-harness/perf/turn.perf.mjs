@@ -294,6 +294,22 @@ async function measure(template, provision) {
         .map((s, k) => ({ turnId: s.turnId, ms: startMs[k], frames: s.frames }))
         .sort((a, b) => b.ms - a.ms)
         .slice(0, 5),
+      // A sample can only be negative when the turn-start's `at` is not
+      // the Composer stamp of this submit: keep the raw times to tell why.
+      negative: starts
+        .map((s, k) => ({ s, k }))
+        .filter(({ k }) => startMs[k] < 0)
+        .map(({ s, k }) => ({
+          turnId: s.turnId,
+          ms: startMs[k],
+          at: s.at,
+          clientAt: s.clientAt,
+          roundStartAt: roundStartAt.get(s.turnId),
+          requestAt: requestAt.get(s.turnId),
+          previousTurnId: starts[k - 1]?.turnId,
+          previousAt: starts[k - 1]?.at,
+          frames: s.frames,
+        })),
     },
   });
   await stats(
