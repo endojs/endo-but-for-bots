@@ -312,8 +312,12 @@ await runPerf('turn', async ({ provision }) => {
   // Frames that arrived while the deltas streamed: deliveries the deltas
   // caused are `deliver` frames; GC frames come from peers dropping
   // references at their own pace.
-  const streamDeliver = streamingKinds.filter(k =>
-    k.startsWith('deliver'),
+  // The window closes when the last delta reached the subscriber, by
+  // which time the round's own roundFinal (sent right after the last
+  // delta) has usually arrived too: it is the round's delivery, not a
+  // delta's.
+  const streamDeliver = streamingKinds.filter(
+    k => k.startsWith('deliver') && k !== 'deliver roundFinal',
   ).length;
   const perDelta = streamDeliver / (STREAM_CHUNKS * STREAM_TURNS);
   await stats('turn.delta', latencies, {
