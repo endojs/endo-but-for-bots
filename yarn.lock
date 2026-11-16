@@ -2599,6 +2599,7 @@ __metadata:
   resolution: "@endo/hosted-agent@workspace:packages/hosted-agent"
   dependencies:
     "@endo/9p-server": "workspace:^"
+    "@endo/base64": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -2614,6 +2615,7 @@ __metadata:
     "@endo/sandbox": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     esbuild: "npm:0.28.2"
     eslint: "catalog:dev"

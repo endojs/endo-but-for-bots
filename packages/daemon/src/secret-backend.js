@@ -57,12 +57,27 @@ export const makeEncryptedFileSecretBackend = ({
 
   return harden({
     /**
+     * @param {string} _operationId
+     * @param {string} secretId
+     */
+    recover: async (_operationId, secretId) => {
+      const backendRef = `${secretId}.secret`;
+      return (await filePowers.exists(pathFor(backendRef)))
+        ? backendRef
+        : undefined;
+    },
+    /**
      * @param {string} operationId
      * @param {string} secretId
      * @param {Uint8Array} bytes
      */
     create: async (operationId, secretId, bytes) => {
+      await null;
       const backendRef = `${secretId}.secret`;
+      // A caller can know only that the create response was lost. Keep the
+      // first installed bytes so the same operation is safe to replay with a
+      // re-entered key.
+      if (await filePowers.exists(pathFor(backendRef))) return backendRef;
       await write(backendRef, bytes, operationId);
       return backendRef;
     },
