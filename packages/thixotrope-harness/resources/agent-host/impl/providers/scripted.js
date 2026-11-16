@@ -147,6 +147,23 @@ export const makeScriptedProvider = ({
   log = makeEventLog({ label, logPath }),
   now = () => Date.now(),
 }) => {
+  /**
+   * Log after this turn of the event loop, with the `at` of the moment it
+   * happened, so the fsync delays nothing on the turn's path (the `delta`
+   * and `round-start` lines that perf reads). A late write that fails (the
+   * log removed meanwhile) is dropped: it must not take the adapter down.
+   * @param {EventLog} write
+   * @param {string} kind
+   * @param {Record<string, unknown>} fields
+   */
+  const later = (write, kind, fields) =>
+    timers.after(0, () => {
+      try {
+        write(kind, fields);
+      } catch {
+        // Dropped.
+      }
+    });
   /** turn -> the script turn chosen at its round 0 (this incarnation). */
   const chosen = new WeakMap();
   /** turn -> the control of its running round. */
@@ -187,6 +204,7 @@ export const makeScriptedProvider = ({
   const runRound = async (req, channel, control) => {
     const { turn, sink, turnId, round } = req;
     const where = { turnId, round };
+    later(log, 'round-start', { ...where, at: now() });
     const cancelled = () => {
       if (control.stopped() === 'cancel') log('cancelled', where);
     };
@@ -243,17 +261,7 @@ export const makeScriptedProvider = ({
       parts.push(text);
       const publishedAt = now();
       channel.publishDelta(harden({ type: 'delta', turnId, round, text }));
-      // Logged after this turn of the event loop, so the fsync does not
-      // delay the subscribers' answers (perf turn.delta reads `at`). A
-      // late write that fails (the log removed meanwhile) is dropped: it
-      // must not take the adapter process down.
-      timers.after(0, () => {
-        try {
-          log('delta', { ...where, units: text.length, at: publishedAt });
-        } catch {
-          // Dropped.
-        }
-      });
+      later(log, 'delta', { ...where, units: text.length, at: publishedAt });
     }
     const text = parts.join('');
     if (scripted.stall === 'untilCancel') await control.whenStopped;
