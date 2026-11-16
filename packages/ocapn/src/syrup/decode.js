@@ -25,7 +25,11 @@ const FALSE = 'f'.charCodeAt(0);
 // const SINGLE = 'F'.charCodeAt(0);
 const FLOAT64 = 'D'.charCodeAt(0);
 
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
+// `ignoreBOM: true`: each Syrup string or selector is decoded by its own
+// non-streaming call, so a WHATWG decoder would otherwise strip a leading
+// U+FEFF from the value itself and a passable string starting with it would
+// not round-trip.
+const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 const { freeze } = Object;
 

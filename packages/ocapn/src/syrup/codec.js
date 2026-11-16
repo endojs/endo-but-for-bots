@@ -14,8 +14,12 @@ import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 // Strict UTF-8 decoder used for record labels carried as bytestrings on
 // the wire.  `fatal: true` rejects malformed sequences rather than
 // silently substituting U+FFFD, matching the historical behavior of
-// the displaced `buffer-utils` helper.
-const labelTextDecoder = new TextDecoder('utf-8', { fatal: true });
+// the displaced `buffer-utils` helper. `ignoreBOM: true` keeps a label's
+// own leading U+FEFF, which a WHATWG decoder would otherwise strip.
+const labelTextDecoder = new TextDecoder('utf-8', {
+  fatal: true,
+  ignoreBOM: true,
+});
 
 /**
  * @param {Uint8Array} bytes

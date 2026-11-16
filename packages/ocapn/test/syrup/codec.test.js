@@ -193,3 +193,40 @@ test('zoo.bin', t => {
   // t.deepEqual(resultSyrup, originalSyrup);
   t.deepEqual(bytes, zooBin);
 });
+
+test('a leading U+FEFF survives strings, selectors and record labels', t => {
+  // Each Syrup string is decoded by its own TextDecoder call, so a decoder
+  // without ignoreBOM would strip the value's own leading U+FEFF.
+  testCodecBidirectionally(t, StringCodec, '﻿hello');
+  testCodecBidirectionally(t, StringCodec, '﻿');
+  testCodecBidirectionally(t, StringCodec, '﻿﻿x');
+
+  const writer = makeSyrupWriter();
+  writer.writeSelectorFromString('﻿sel');
+  writer.writeString('﻿');
+  const reader = makeSyrupReader(writer.getBytes());
+  t.is(reader.readSelectorAsString(), '﻿sel');
+  t.is(reader.readString(), '﻿');
+
+  const codec = makeRecordCodecFromDefinition(
+    'BomLabelCodec',
+    '﻿label',
+    'bytestring',
+    { field1: 'string' },
+  );
+  testCodecBidirectionally(t, codec, {
+    type: '﻿label',
+    field1: '﻿value',
+  });
+});
+
+test('a string with malformed UTF-8 is refused', t => {
+  for (const hex of ['c328', 'eda080', 'c0af', 'f4908080', 'e282']) {
+    const body = Uint8Array.from(hex.match(/../g) || [], h => parseInt(h, 16));
+    const prefix = new TextEncoder().encode(`${body.length}"`);
+    const bytes = new Uint8Array(prefix.length + body.length);
+    bytes.set(prefix);
+    bytes.set(body, prefix.length);
+    t.throws(() => makeSyrupReader(bytes).readString(), undefined, hex);
+  }
+});
