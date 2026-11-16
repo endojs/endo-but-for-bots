@@ -1172,13 +1172,19 @@ export const makeThixotropeDaemon = async (powers, options) => {
               allocationKey: _allocationKey,
               ...meta
             } = workerStore.getMeta();
+            const stats = daemon.getWorker(workerId).transportStats();
             return harden({
               workerId,
               ...meta,
               startNotice: startNotify !== undefined,
-              journalLength: workerStore.journalLength(),
+              // The delivery frontier: frames owed or given a crank, as
+              // before GC frames waited. A checkpointed worker has
+              // `snapshot.cut === journalLength` whatever it holds; the GC
+              // frames journaled after the frontier, waiting for the next
+              // crank, are `heldFrames`.
+              journalLength: workerStore.journalLength() - stats.heldFrames,
               awake: daemon.getWorker(workerId).isAwake(),
-              ...daemon.getWorker(workerId).transportStats(),
+              ...stats,
             });
           }),
         ),

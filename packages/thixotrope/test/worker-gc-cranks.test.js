@@ -571,6 +571,14 @@ test.serial(
       heldFrames: 2,
       wakes: 0,
     });
+    const row = /** @type {any} */ (daemon)
+      .inspectWorkers()
+      .find((/** @type {any} */ w) => w.workerId === gcOnly);
+    t.like(
+      row,
+      { journalLength: 0, heldFrames: 2, snapshot: { cut: 0 } },
+      'its delivery frontier is its snapshot: it reads as checkpointed',
+    );
     t.like(daemon.getWorker(gcThenFrame).transportStats(), {
       heldFrames: 0,
       wakes: 1,
