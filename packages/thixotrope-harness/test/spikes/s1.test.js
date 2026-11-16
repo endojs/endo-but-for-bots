@@ -12,7 +12,9 @@
  *
  * S1_BUDGETS (default 10000000): crank budgets, one fresh state directory
  *   each. S1_PARTS (default inbound,outbound,percrank,sends,loop): `accept`
- *   adds M0 acceptance test 1 at the settings in config/defaults.js.
+ *   adds M0 acceptance test 1 at the settings in config/defaults.js;
+ *   `inboundUsed` searches the inbound halt point on vats with the history
+ *   of a used session vat (a staged 250 k program and a full key table).
  */
 import { performance } from 'node:perf_hooks';
 
@@ -23,6 +25,7 @@ import {
   E,
   attempt,
   emit,
+  giveHistory,
   makeSink,
   spikesEnabled,
   startHost,
@@ -160,9 +163,9 @@ const haltSearch = async (
   return { okMax, haltMin, haltError, row: summary };
 };
 
-const INBOUND_SIZES = [16, 32, 40, 48, 56, 64, 96, 128, 192, 256].map(
-  n => n * KiB,
-);
+const INBOUND_SIZES = [
+  16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048,
+].map(n => n * KiB);
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -188,15 +191,43 @@ const inbound = async (t, host, crankBudget) => {
             ),
     });
   }
-  // Finding (J-0140): the inbound ceiling is the vat's 16-bit property-key
-  // table (every index of the hardened frame is interned), not the budget.
+  // Before d0fd6b1138 every byte of a hardened frame interned a key and
+  // the ceiling was the 16-bit key table near 58 KB (J-0140, J-0190); the
+  // assertion is the setting's requirement, not the halt's cause.
   for (const k of [1, 8, 32]) {
-    t.truthy(found[k].haltMin, `inbound x${k} halts within the ladder`);
     t.true(
-      (found[k].haltMin ?? Infinity) <= 64 * KiB,
-      `inbound x${k} halts at or below 64 KiB at ${crankBudget}`,
+      found[k].okMax >= 2 * limits.frameBytes,
+      `inbound x${k} takes 2 x frameBytes at ${crankBudget}`,
     );
   }
+};
+
+/**
+ * The inbound halt point on vats that have done work (QC finding 2): each
+ * probe vat first stages and evaluates a 250 k program and fills its key
+ * table to the engine's reserve, so no history can leave less room.
+ * @param {import('ava').ExecutionContext} t
+ * @param {Host} host
+ * @param {bigint} crankBudget
+ */
+const inboundUsed = async (t, host, crankBudget) => {
+  /** @type {Record<string, unknown>} */
+  let history = {};
+  const found = await haltSearch(host, {
+    metric: 'frames.inbound.usedVat',
+    crankBudget,
+    sizes: INBOUND_SIZES,
+    freshEach: true,
+    describe: size => ({ utf8Bytes: size, strings: 1, ...history }),
+    call: async (vat, size) => {
+      history = await giveHistory(vat, { frameBytes: limits.frameBytes });
+      return E(vat).len('x'.repeat(size));
+    },
+  });
+  t.true(
+    found.okMax >= 2 * limits.frameBytes,
+    `a used vat takes 2 x frameBytes at ${crankBudget}`,
+  );
 };
 
 /**
@@ -358,6 +389,44 @@ const sends = async (t, host, crankBudget) => {
 };
 
 /**
+ * Answered sends per crank on a vat with a used session vat's history (QC
+ * finding 2): sendsPerCrank was chosen on the empty probe vat.
+ * @param {import('ava').ExecutionContext} t
+ * @param {Host} host
+ * @param {bigint} crankBudget
+ */
+const sendsUsed = async (t, host, crankBudget) => {
+  const sink = makeSink();
+  /** @type {any} */
+  let wired;
+  /** @type {Record<string, unknown>} */
+  let history = {};
+  const answered = await haltSearch(host, {
+    metric: 'sends.perCrank.answered.usedVat',
+    crankBudget,
+    sizes: [100, 250, 500, 1000],
+    grain: 50,
+    describe: size => ({ sends: size, ...history }),
+    call: async (vat, size) => {
+      if (wired !== vat) {
+        history = await giveHistory(vat, { frameBytes: limits.frameBytes });
+        await E(vat).setSink(sink.sink);
+        wired = vat;
+      }
+      sink.reset();
+      await E(vat).sendAnswered(size);
+      await sink.until(size);
+      await E(vat).ping();
+      return size;
+    },
+  });
+  t.true(
+    answered.okMax >= 2 * limits.sendsPerCrank,
+    'a used vat takes 2 x sendsPerCrank answered sends in one crank',
+  );
+};
+
+/**
  * @param {import('ava').ExecutionContext} t
  * @param {Host} host
  * @param {bigint} crankBudget
@@ -449,9 +518,34 @@ const accept = async (t, host, crankBudget) => {
   );
   await host.retire(fresh.name);
   t.true(twice.ok, 'a fresh vat takes 2 x frameBytes in one message');
+  // The same on a vat with a used session vat's history (QC finding 2).
+  const used = await host.fresh();
+  const history = await giveHistory(used.vat, { frameBytes });
+  const usedTwice = await probeOnce(
+    host,
+    used,
+    {
+      metric: 'accept.twiceFrameBytes.usedVat',
+      crankBudget: String(crankBudget),
+      utf8Bytes: 2 * frameBytes,
+      ...history,
+    },
+    vat => E(vat).len('x'.repeat(2 * frameBytes)),
+  );
+  await host.retire(used.name);
+  t.true(usedTwice.ok, 'a used vat takes 2 x frameBytes in one message');
 };
 
-const PARTS = { inbound, outbound, percrank: perCrank, sends, loop, accept };
+const PARTS = {
+  inbound,
+  inboundUsed,
+  outbound,
+  percrank: perCrank,
+  sends,
+  sendsUsed,
+  loop,
+  accept,
+};
 
 for (const crankBudget of budgets) {
   const run = spikesEnabled ? test.serial : test.skip;

@@ -23,7 +23,8 @@ import {
 
 // After the harness module (it locks down first, J-0131).
 const { limits } = await import('../config/defaults.js');
-const { PROBE_PROGRAM, makeProgram } = await import('../test/spikes/_spike.js');
+const { PROBE_PROGRAM, giveHistory, makeProgram } =
+  await import('../test/spikes/_spike.js');
 const { E } = await import('@endo/far');
 
 const N = Number(process.env.FRAMES_N ?? 200);
@@ -101,8 +102,8 @@ await runPerf('frames', async ({ provision }) => {
   });
 
   const payload = 'x'.repeat(frameBytes);
-  // The first inbound frame of a size in a vat interns its index keys
-  // (JOURNAL J-0140); it is reported on its own, then the steady state.
+  // The first inbound frame into a vat is reported on its own (it used to
+  // intern its index keys, J-0140), then the steady state.
   const first = await time(() => E(probe.vat).len(payload));
   await single('frames.inbound.first', first.ms, {
     extra: { ...settings, ok: first.ok, floorMedian },
@@ -144,9 +145,27 @@ await runPerf('frames', async ({ provision }) => {
   });
   if (!twice.ok) process.exitCode = 1;
   await retire(halt.name);
+  // The same on a vat with a used session vat's history: a staged 250 k
+  // program and a key table filled to the engine's reserve (QC finding 2).
+  const used = await fresh();
+  const history = await giveHistory(used.vat, { frameBytes });
+  const usedTwice = await time(() =>
+    E(used.vat).len('x'.repeat(2 * frameBytes)),
+  );
+  await single('frames.halt.usedVat', usedTwice.ms, {
+    extra: {
+      ...settings,
+      ...history,
+      utf8Bytes: 2 * frameBytes,
+      ok: usedTwice.ok,
+      ...(usedTwice.ok ? {} : { error: usedTwice.error }),
+    },
+  });
+  if (!usedTwice.ok) process.exitCode = 1;
+  await retire(used.name);
 
   // vat.evaluateProgram: a 150 k program source, staged in frameBytes
-  // chunks (one message halts, spike S3), then evaluated in one crank.
+  // chunks as the harness does (CORE-1b), then evaluated in one crank.
   const program = makeProgram(150_000);
   const evalVat = await fresh();
   const t0 = performance.now();
@@ -173,6 +192,19 @@ await runPerf('frames', async ({ provision }) => {
   });
   if (!evalOk) process.exitCode = 1;
   await retire(evalVat.name);
+  // The same source in one message, recorded (no budget: the harness
+  // stages, CORE-1b).
+  const oneVat = await fresh();
+  const one = await time(() => E(oneVat.vat).evalProgram(program.source));
+  await single('vat.evaluateProgram.oneMessage', one.ms, {
+    extra: {
+      ...settings,
+      sourceChars: program.source.length,
+      ok: one.ok && one.value === program.functions,
+      ...(one.ok ? {} : { error: one.error }),
+    },
+  });
+  await retire(oneVat.name);
 
   // loop.runaway: wall time until the meter halts a runaway crank.
   const spins = [];

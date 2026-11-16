@@ -49,7 +49,7 @@ run('S3 program source into a fresh vat', async t => {
     const probe = await host.fresh();
     t.is(await E(probe.vat).hasCompartment(), 'function');
     await host.retire(probe.name);
-    for (const bytes of [150_000, 400_000]) {
+    for (const bytes of [150_000, limits.execSourceBytes, 400_000]) {
       const { source, functions } = makeProgram(bytes);
       // One message.
       // eslint-disable-next-line no-await-in-loop
@@ -127,11 +127,16 @@ run('S3 program source into a fresh vat', async t => {
   } finally {
     await host.close();
   }
-  // Findings (J-0146): a program source above the inbound frame ceiling
-  // cannot arrive in one message; staged in frameBytes chunks it evaluates.
-  t.false(found[150_000].single, '150 k in one message halts the vat');
-  t.false(found[400_000].single, '400 k in one message halts the vat');
+  // One-message results are recorded, not asserted: before d0fd6b1138
+  // every inbound byte interned a key and both halted (J-0146, J-0190).
+  // Staging is what the harness uses (CORE-1b), so every size up to
+  // execSourceBytes, and 400 k, must evaluate staged.
   t.true(found[150_000].staged, '150 k staged evaluates in one crank');
+  t.true(
+    found[limits.execSourceBytes].staged,
+    'execSourceBytes staged evaluates in one crank',
+  );
+  t.true(found[400_000].staged, '400 k staged evaluates in one crank');
 });
 
 if (!spikesEnabled) {

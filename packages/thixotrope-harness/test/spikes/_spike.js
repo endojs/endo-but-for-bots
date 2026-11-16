@@ -48,6 +48,7 @@ export const PROBE_PROGRAM = `({ make: () => {
     sendOnly: n => { for (let i = 0; i < n; i += 1) E.sendOnly(sink).event(i); return n; },
     sendAnswered: n => { for (let i = 0; i < n; i += 1) E(sink).event(i); return n; },
     spin: () => { for (;;) { /* runaway */ } },
+    fill: () => { const o = {}; let i = 0; try { for (;; i += 1) o['fill' + i] = 1; } catch (e) { return i + '|' + e.message; } },
     loop: n => { let x = 0; for (let i = 0; i < n; i += 1) x = (x + i) % 1000003; return x; },
     hasCompartment: () => typeof Compartment,
     evalProgram: src => { const c = new Compartment(); return c.evaluate(src); },
@@ -78,6 +79,38 @@ export const PROBE_PROGRAM = `({ make: () => {
     fromAsyncResult: () => fromAsync.then(list => list.join(',')),
   });
 } })`;
+
+/**
+ * Give a probe vat the history of a used session vat (QC finding 2): stage
+ * and evaluate a `programChars` program in `frameBytes` chunks, then fill
+ * the vat's property-key table with fresh names up to the engine's reserve
+ * (the guest catches the RangeError). Returns what it did.
+ * @param {any} vat
+ * @param {object} options
+ * @param {number} options.frameBytes
+ * @param {number} [options.programChars]
+ */
+export const giveHistory = async (
+  vat,
+  { frameBytes, programChars = 250_000 },
+) => {
+  const t0 = performance.now();
+  // eslint-disable-next-line no-use-before-define
+  const { source, functions } = makeProgram(programChars);
+  for (let offset = 0; offset < source.length; offset += frameBytes) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(vat).stage(source.slice(offset, offset + frameBytes));
+  }
+  const evaluated = await E(vat).evalStaged();
+  if (evaluated !== functions) throw Error(`program evaluated to ${evaluated}`);
+  const [names, why] = String(await E(vat).fill()).split('|');
+  return {
+    historyProgramChars: source.length,
+    historyNames: Number(names),
+    historyFill: why,
+    historyMs: round1(performance.now() - t0),
+  };
+};
 
 /**
  * @param {Record<string, unknown>} row

@@ -10,14 +10,15 @@
  */
 export const limits = Object.freeze({
   /**
-   * String content of one message into or out of a vat. Inbound is the
-   * ceiling: a fresh vat halts at 51,200-52,224 bytes at 10 M (MeterAbort)
-   * and 58,368-59,392 at 50 M and 100 M ("property key space exhausted":
-   * every byte of a hardened inbound frame interns an index key in the vat's
-   * 16-bit key table, J-0140). 24,576 is at most half the smallest halt
-   * point at every measured budget (half of 51,200 is 25,600), so a budget
-   * lowered to 10 M stays safe, and it leaves the key table about 34 k keys
-   * for the vat's own names.
+   * String content of one message into or out of a vat. S1 chose it when
+   * every byte of a hardened inbound frame interned a key in the vat's
+   * 16-bit key table, so a fresh vat halted near 51-59 KB (J-0140, J-0141).
+   * Since d0fd6b1138 frames intern no keys, the halt point no longer
+   * depends on the vat's history, and a vat with a full key table takes
+   * 2 x frameBytes (QC, J-0190..J-0194). Kept at 24,576: the inbound
+   * budget (ping floor + 300 ms) is met here with little room (J-0193),
+   * and the core's evaluate-source STAGING_FRAME_BYTES is a copy of it
+   * (test/limits.test.js keeps them equal).
    */
   frameBytes: 24_576,
   /**
@@ -28,6 +29,15 @@ export const limits = Object.freeze({
   /** Larger text fields are Blobs. */
   inlineBytes: 8192,
   /**
+   * Distinct property names a vat can still intern after boot, about
+   * 57,000 of its 65,535 ids (J-0191); names are never released. Every
+   * fresh record key a vat receives or creates takes one for the vat's
+   * life, and when they run out the vat halts and is retired. Guest code
+   * and every peer or adapter talking to a vat must not use data-dependent
+   * record keys: send lists of entries, keep Maps.
+   */
+  vatKeyNames: 57_000,
+  /**
    * Daemon crank budget (THIXOTROPE_CRANK_BUDGET). A runaway loop ends in
    * about 270 ms at 50 M (100 ms at 10 M, 470 ms at 100 M); 100 M buys no
    * larger frame and no more sends (heap-bound above 50 M) (J-0141, J-0143).
@@ -35,12 +45,17 @@ export const limits = Object.freeze({
   crankBudget: 50_000_000n,
   /**
    * Eventual sends per crank (guest rule). Answered sends halt at 250 in one
-   * crank at every budget, sendOnly at 450 (10 M) / 600 (50 M, 100 M).
+   * crank at every budget, sendOnly at 450 (10 M) / 600 (50 M, 100 M), on
+   * an empty probe vat (J-0143). On a vat with a staged 250 k program and a
+   * full key table, answered sends pass at 250 and halt at 300
+   * (HeapExhausted, 50 M, after d0fd6b1138; J-0194).
    */
   sendsPerCrank: 100,
   /**
    * Exec program source, staged in frameBytes messages and evaluated in one
-   * crank (spike S3, J-0146); one message of it would halt the vat.
+   * crank (spike S3, J-0146, J-0195: 262 k staged in 3.9 s, a 175 ms
+   * evaluating crank); one message of it halts the vat (HeapExhausted
+   * above about 94 KB inbound at 50 M).
    */
   execSourceBytes: 262_144,
 });
