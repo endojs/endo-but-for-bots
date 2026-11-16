@@ -23,6 +23,7 @@ import {
   isRestartSignal as defaultIsRestartSignal,
   recoverAfterRestart as defaultRecoverAfterRestart,
 } from './recovery.js';
+import { makeContextSource } from './context-source.js';
 import { makeLivePublishing } from './live.js';
 import { makeRecordLog } from './records.js';
 import { submissionField } from './staging.js';
@@ -77,6 +78,8 @@ export const makeSession = (
     hooks,
     table,
     maxToolRounds,
+    // W1b.2: the adapter's context cache pulls records through it.
+    contextSource: makeContextSource({ records }),
   });
   // Receipts keep the turn's record; the Turn is minted when one is handed
   // out (J-9152).

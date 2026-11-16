@@ -100,7 +100,7 @@ const messageOf = error => {
  * @param {unknown} value
  * @returns {number}
  */
-const plainBytes = value => {
+export const plainBytes = value => {
   if (typeof value === 'string') return utf8Bytes(value);
   if (typeof value !== 'object' || value === null) return 0;
   let total = 0;
@@ -113,6 +113,7 @@ const plainBytes = value => {
   }
   return total;
 };
+harden(plainBytes);
 
 /** @param {string} text */
 const reason = text => previewText(text, limits.reasonUnits);
@@ -183,7 +184,6 @@ const COUNT_KEYS = harden([
  * @property {any} tools the tool set for these ports
  * @property {RoundCalls | undefined} calls
  * @property {any} roundKit pending until the round's roundFinal
- * @property {number} sentUpTo records before this index were sent to the adapter
  * @property {any} usage summed counts, or undefined before any round reported
  * @property {{ round: number, partial: any } | undefined} checkpoint the
  *   latest progress of the streaming round (W1b.1): kept outside the log,
@@ -202,6 +202,8 @@ const COUNT_KEYS = harden([
  * @param {typeof turnHooks} [options.hooks]
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
+ * @param {any} [options.contextSource] W1b.2: the session's ContextSource,
+ *   sent in every RoundRequest
  */
 export const makeTurnRunner = ({
   config,
@@ -214,7 +216,15 @@ export const makeTurnRunner = ({
   hooks = turnHooks,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
+  contextSource,
 }) => {
+  /**
+   * Records before this index went out in a RoundRequest (W1b.2): per
+   * session, not per turn, so a round 0 also carries what the previous turn
+   * recorded after its last round and the adapter's cache stays in step
+   * without a page pull.
+   */
+  let sentUpTo = 0;
   /** @type {any} */
   let queue;
   /** @type {any} */
@@ -748,15 +758,16 @@ export const makeTurnRunner = ({
   // ------------------------------------------------------------ rounds
 
   /**
-   * The round request: records appended since the previous `startRound` of
-   * this turn (results in call order), or none when they do not fit.
+   * The round request: records appended since the previous `startRound`
+   * (results in call order), or none when they do not fit (the adapter then
+   * pulls them through `context`, contract 9).
    * @param {ActiveTurn} active
    * @param {number} round
    */
   const roundRequest = (active, round) => {
-    const from = active.sentUpTo;
+    const from = sentUpTo;
     const to = records.count();
-    active.sentUpTo = to;
+    sentUpTo = to;
     /** @type {Record<string, any>} */
     const options = { modelId: config.modelId };
     if (config.reasoningEffort !== undefined) {
@@ -772,6 +783,7 @@ export const makeTurnRunner = ({
         append: harden(append),
         tools: active.tools.descriptions,
         options: harden(options),
+        ...(contextSource === undefined ? {} : { context: contextSource }),
       });
     const append = inCallOrder(records.since(from));
     if (append.length <= limits.maxAppendRecords) {
@@ -1187,7 +1199,6 @@ export const makeTurnRunner = ({
       tools: undefined,
       calls: undefined,
       roundKit: undefined,
-      sentUpTo: 0,
       usage: undefined,
       checkpoint: undefined,
     };
@@ -1195,7 +1206,7 @@ export const makeTurnRunner = ({
     take(info);
     turnCounter += 1;
     generation += 1;
-    active.sentUpTo = records.append({
+    records.append({
       kind: 'turn-started',
       turnId,
       input,

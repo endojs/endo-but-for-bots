@@ -30,6 +30,15 @@ const { Far, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 /** Let every pending microtask and eventual send run. */
 const drain = () => new Promise(resolve => setImmediate(resolve));
 
+/**
+ * The request's TurnStarted. M1b W1b.2: the append carries every record
+ * since the previous request, so a later turn's round 0 starts with what the
+ * turn before recorded after its last round.
+ * @param {any} req
+ */
+const startedOf = req =>
+  req.append.findLast((/** @type {any} */ r) => r.kind === 'turn-started');
+
 const retired = () => Error(`ocapn hub: ${RETIRED_TEXT}`);
 
 const usage = (input = 10, output = 5) =>
@@ -758,7 +767,7 @@ test("frame-limit tool result fails the turn after the round's other calls settl
   // The session runs a normal turn afterwards.
   await submit(s, 'again');
   t.is(s.lastRound().round, 0);
-  t.is(s.lastRound().append[0].input, 'again');
+  t.is(startedOf(s.lastRound()).input, 'again');
 });
 
 // ---------------------------------------------------------------- queue
@@ -809,8 +818,9 @@ test('FIFO: a message waits while a turn runs and is claimed in the settle crank
   const current = s.session.getCurrentTurn();
   t.is(current.input, 'two');
   t.is(current.turn, receipt?.turn);
-  t.is(s.lastRound().append[0].input, 'two');
-  t.is(s.lastRound().base.count, 4);
+  t.is(startedOf(s.lastRound()).input, 'two');
+  // The TurnStarted is record 4; the append starts after the last request.
+  t.is(s.lastRound().base.count + s.lastRound().append.length, 5);
   t.deepEqual(s.rows.at(-1), {
     activity: 'working',
     messageCount: 1,
@@ -1121,7 +1131,7 @@ test('startTurn on an idle session ignores the queue hold (A.4 direct start)', a
   const turn = s.session.startTurn(harden({ text: 'direct' }), AT + 7);
   t.is(turn.getStatus().at, AT + 7);
   await drain();
-  t.is(s.lastRound().append[0].input, 'direct');
+  t.is(startedOf(s.lastRound()).input, 'direct');
 });
 
 test('rename reports the title; getInfo', async t => {
@@ -1308,7 +1318,7 @@ test('held ports: opened once at creation; each turn starts in its claim crank w
     ]);
     const req = s.lastRound();
     t.is(req.turn, receipt.turn);
-    t.is(req.append[0].input, `m${i}`);
+    t.is(startedOf(req).input, `m${i}`);
     t.true(req.sink.dispatching(0));
     req.sink.roundFinal(result(0, 'ok'));
     // eslint-disable-next-line no-await-in-loop
@@ -1357,7 +1367,9 @@ test('restart while idle: the first claim on dead ports opens fresh ones and sen
   t.is(req.round, 0);
   t.is(req.turn, receipt.turn);
   t.deepEqual(
-    req.append.map((/** @type {any} */ r) => [r.kind, r.input]),
+    req.append
+      .filter((/** @type {any} */ r) => r.kind === 'turn-started')
+      .map((/** @type {any} */ r) => [r.kind, r.input]),
     [['turn-started', 'two']],
   );
   t.deepEqual(s.eventsOf(s.published.slice(-1)), ['turn-start', 'phase']);
@@ -1397,7 +1409,7 @@ test('an open answered with ports of the incarnation that broke is asked again',
   t.is(receipt.turn.getStatus().state, 'running');
   s.opens[2].resolve(fresh);
   await drain();
-  t.is(s.lastRound().append[0].input, 'two');
+  t.is(startedOf(s.lastRound()).input, 'two');
   t.is(receipt.turn.getStatus().state, 'running');
 });
 
@@ -1436,7 +1448,7 @@ test('a lease break after Dispatched recovers at once, without an open', async t
   receipt.turn.resolve('checked');
   await plainTurn(s, 'next', AT + 1000);
   t.is(s.kinds().filter(kind => kind === 'open').length, 2);
-  t.is(s.lastRound().append[0].input, 'next');
+  t.is(startedOf(s.lastRound()).input, 'next');
 });
 
 test('an outside publish that breaks drops the held ports; the next claim opens', async t => {
