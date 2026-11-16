@@ -3793,7 +3793,7 @@ Decision: QC finding 6 (J-0294) is closed by the core change; crashingSession st
 
 ### J-9126 2026-11-17 M1a hardening tests - awkward
 Evidence: the Ironhorse lane (`corepack yarn test:ironhorse` in `packages/thixotrope`, under the run
-lock), release worker `7cda4467...`. At `3c083b304c`: 62 of 66 passed in 18.6 min; failed: reliability
+lock), release worker `7cda4467...`. At `3c083b304c`: 62 of 66 passed in 19.6 min; failed: reliability
 "SIGKILL recovery at heap/output preserves exactly one increment" ("boundary not reached") and
 scenarios "a pending call recovers after failure before delivery / after commit before outbound"
 (timeouts). Cause: the lane's fault injectors (`test/ironhorse/_fixture.js`,
