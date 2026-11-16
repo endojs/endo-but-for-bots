@@ -64,8 +64,12 @@ const PAGE_OVERHEAD_BYTES = 1024;
 export const makeRowTable = () => {
   /** @type {Map<string, Row>} */
   const byKey = new Map();
-  /** @type {Row[]} rows in creation order */
-  const order = [];
+  /**
+   * Rows in creation order. Only appended to; a drop replaces the array
+   * rather than moving elements in place (C-16, QC advisory 2).
+   * @type {Row[]}
+   */
+  let order = [];
   let counter = 0;
   let rev = 0;
 
@@ -110,8 +114,7 @@ export const makeRowTable = () => {
     if (row.dropped) return;
     row.dropped = true;
     byKey.delete(row.key);
-    const at = order.indexOf(row);
-    if (at >= 0) order.splice(at, 1);
+    order = order.filter(other => other !== row);
     bump();
   };
 

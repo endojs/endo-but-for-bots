@@ -133,7 +133,10 @@ const COUNT_KEYS = harden([
 
 /**
  * @typedef {object} RoundCalls the tool calls of one round
- * @property {any[]} waiting intents not issued yet, in call order
+ * @property {any[]} waiting intents in call order that were not issued at
+ *   once; only appended to, read from `issued` on (no in-place element
+ *   moves: C-16, QC advisory 2)
+ * @property {number} issued how many of `waiting` were issued
  * @property {number} inFlight
  * @property {number} unsettled calls without a recorded result
  * @property {boolean} frameLimited
@@ -380,12 +383,23 @@ export const makeTurnRunner = ({
     info.finished?.resolve(statusOf(info));
     info.finished = undefined;
 
+    // Claim the next entry in this crank, so the batch carries the queue
+    // after the claim (section 6.3), but a claim that throws must lose
+    // neither the settle batch nor the lease release (QC advisory 1): its
+    // error is rethrown only after both went out.
     const { ports } = active;
-    claimNext();
+    /** @type {{ error: unknown } | undefined} */
+    let claimFailure;
+    try {
+      claimNext();
+    } catch (claimError) {
+      claimFailure = { error: claimError };
+    }
     flushTo(ports);
     if (ports !== undefined) {
       E.sendOnly(ports.endpoint).releaseTurn(active.turn);
     }
+    if (claimFailure !== undefined) throw claimFailure.error;
     return true;
   };
 
@@ -454,9 +468,11 @@ export const makeTurnRunner = ({
     while (
       active.state === 'running' &&
       calls.inFlight < limits.callWindow &&
-      calls.waiting.length > 0
+      calls.issued < calls.waiting.length
     ) {
-      issue(active, calls, calls.waiting.shift());
+      const intent = calls.waiting[calls.issued];
+      calls.issued += 1;
+      issue(active, calls, intent);
     }
   };
 
@@ -477,7 +493,7 @@ export const makeTurnRunner = ({
     }
     if (active.state === 'cancelling') {
       // Cancel waited for the running calls; the waiting ones never ran.
-      for (const intent of calls.waiting) {
+      for (const intent of calls.waiting.slice(calls.issued)) {
         recordResult(
           active,
           intent,
@@ -486,6 +502,7 @@ export const makeTurnRunner = ({
         );
       }
       calls.waiting = [];
+      calls.issued = 0;
       settle(active, { status: 'cancelled' });
       return;
     }
@@ -599,6 +616,7 @@ export const makeTurnRunner = ({
     /** @type {RoundCalls} */
     const calls = {
       waiting: [],
+      issued: 0,
       inFlight: 0,
       unsettled: 0,
       frameLimited: false,
@@ -863,11 +881,11 @@ export const makeTurnRunner = ({
    */
   const onPorts = (active, ports) => {
     if (current !== active || active.state !== 'running') return;
-    active.ports = ports;
-    active.tools = toolSetFor(ports, table);
     const { info } = active;
-    // The turn's first events go before any held `pending`.
-    outbox.unshift(
+    // The turn's first events go before any held `pending`. A fresh array,
+    // not `unshift` (no in-place element moves: C-16, QC advisory 2), built
+    // before the ports are set so a throw leaves the turn without ports.
+    outbox = [
       harden({
         type: 'turn-start',
         turnId: active.turnId,
@@ -875,7 +893,10 @@ export const makeTurnRunner = ({
         at: info.at,
       }),
       harden({ type: 'phase', turnId: active.turnId, phase: 'thinking' }),
-    );
+      ...outbox,
+    ];
+    active.ports = ports;
+    active.tools = toolSetFor(ports, table);
     flushTo(ports);
     E(ports.endpoint)
       .holdTurn(active.turn)
@@ -915,22 +936,18 @@ export const makeTurnRunner = ({
   // ------------------------------------------------------------ claim
 
   /**
-   * Crank A: claim a turn for this input: append `TurnStarted`, make the
-   * Turn, send `open`. The caller removes the queue entry in the same crank.
+   * Crank A: claim a turn for this input: make the Turn, let `take(turn)`
+   * remove the queue entry, then append `TurnStarted` and send `open`.
+   * Intent before effect (QC advisory 1, J-0271): `take` runs before any
+   * record or send, so a `take` that throws leaves no turn, no record and no
+   * `open` behind, and the entry stays waiting.
    * @param {string} input
    * @param {number} at
+   * @param {(turn: any) => void} [take]
    */
-  const claim = (input, at) => {
+  const claim = (input, at, take = () => {}) => {
     current === undefined || Fail`a turn is current`;
-    turnCounter += 1;
-    generation += 1;
-    const turnId = `t${turnCounter}`;
-    const index = records.append({
-      kind: 'turn-started',
-      turnId,
-      input,
-      at,
-    });
+    const turnId = `t${turnCounter + 1}`;
     /** @type {TurnInfo} */
     const info = {
       turn: undefined,
@@ -946,7 +963,7 @@ export const makeTurnRunner = ({
       turn: undefined,
       sink: undefined,
       turnId,
-      generation,
+      generation: generation + 1,
       state: 'running',
       round: 0,
       dispatched: false,
@@ -962,10 +979,19 @@ export const makeTurnRunner = ({
       tools: undefined,
       calls: undefined,
       roundKit: undefined,
-      sentUpTo: index,
+      sentUpTo: 0,
       usage: undefined,
     };
     const turn = makeTurn(info);
+    take(turn);
+    turnCounter += 1;
+    generation += 1;
+    active.sentUpTo = records.append({
+      kind: 'turn-started',
+      turnId,
+      input,
+      at,
+    });
     info.turn = turn;
     active.turn = turn;
     active.sink = makeSink(active);
@@ -985,9 +1011,9 @@ export const makeTurnRunner = ({
     if (current !== undefined) return undefined;
     const item = queue.first();
     if (item !== undefined) {
-      const active = claim(item.submission.text, lastKnownTime);
-      queue.claim(item, active.turn);
-      return active;
+      return claim(item.submission.text, lastKnownTime, turn =>
+        queue.claim(item, turn),
+      );
     }
     for (const source of hooks.turnSources) {
       const next = source(core);

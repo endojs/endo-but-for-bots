@@ -20,6 +20,7 @@ import { makeRecordLog, inCallOrder } from '../../guest/session/records.js';
 import { toolSetFor } from '../../guest/session/tool-table.js';
 import { CANCELLED_BEFORE_RUN } from '../../guest/session/turn.js';
 import { fitEvent } from '../../guest/session/live.js';
+import { makeQueue } from '../../guest/session/queue.js';
 import { messageBytes } from '../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -58,8 +59,9 @@ const AT = 1_700_000_000_000;
  * @param {object} [options]
  * @param {number} [options.maxToolRounds]
  * @param {boolean} [options.manualOpen] answer Backend.open by hand
+ * @param {(options: any) => any} [options.makeQueue] wrap the queue
  */
-const setup = ({ maxToolRounds, manualOpen = false } = {}) => {
+const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
   /** @type {any[]} */
   const log = [];
   /** @type {any[]} */
@@ -166,7 +168,10 @@ const setup = ({ maxToolRounds, manualOpen = false } = {}) => {
   });
   const { session, internal } = makeSession(
     { config, services: { backend, host }, rowReporter },
-    maxToolRounds === undefined ? {} : { maxToolRounds },
+    harden({
+      ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
+      ...(mq === undefined ? {} : { makeQueue: mq }),
+    }),
   );
   sessionRef = session;
   return {
@@ -226,6 +231,74 @@ const historyKinds = (/** @type {any} */ page) =>
   page.turns[0].records.map((/** @type {any} */ r) => r.kind);
 
 // ---------------------------------------------------------------- start
+
+/**
+ * The real queue, whose `claim` throws while `failing.claims > 0` (stands
+ * for the C-16 engine defect of J-0271, where `claim` threw in a vat).
+ */
+const failingQueue = () => {
+  const failing = { claims: 0 };
+  const make = (/** @type {any} */ options) => {
+    const queue = makeQueue(options);
+    return harden({
+      ...queue,
+      claim: (/** @type {any} */ item, /** @type {any} */ turn) => {
+        if (failing.claims > 0) {
+          failing.claims -= 1;
+          throw Error('xsSet ?: not writable');
+        }
+        return queue.claim(item, turn);
+      },
+    });
+  };
+  return { failing, make };
+};
+
+test('claim: a queue.claim that throws sends no open and records no turn (QC advisory 1)', async t => {
+  const { failing, make } = failingQueue();
+  const s = setup({ makeQueue: make });
+  failing.claims = 1;
+  t.throws(() =>
+    s.session.enqueueOnce(harden({ text: 'hi' }), requestId(), AT),
+  );
+  await drain();
+  t.false(
+    s.log.some(([kind]) => kind === 'open'),
+    'no effect before the entry is claimed',
+  );
+  t.is(s.session.getCurrentTurn(), undefined);
+  t.deepEqual(s.session.getHistoryPage().turns, []);
+  // The entry is still waiting and runs exactly once at the next claim.
+  t.is(s.session.listPending().entries.length, 1);
+  s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
+  await drain();
+  t.is(s.session.getCurrentTurn().input, 'hi');
+  t.is(s.log.filter(([kind]) => kind === 'open').length, 1);
+});
+
+test('settle: a claim that throws loses neither the settle batch nor the lease release (QC advisory 1)', async t => {
+  const { failing, make } = failingQueue();
+  const s = setup({ makeQueue: make });
+  const receipt = await submit(s);
+  s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
+  await drain();
+  s.lastRound().sink.dispatching(0);
+  failing.claims = 1;
+  try {
+    s.lastRound().sink.roundFinal(result(0, 'done'));
+  } catch {
+    // The claim's throw may reach the caller; what matters is below.
+  }
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'completed');
+  t.true(
+    s.log.some(
+      ([kind, turn]) => kind === 'releaseTurn' && turn === receipt.turn,
+    ),
+    'the lease was released',
+  );
+  t.true(s.eventsOf(s.published).includes('end'), 'the settle batch went out');
+});
 
 test('claim: enqueue on an idle session starts a turn in the same crank', async t => {
   const s = setup();

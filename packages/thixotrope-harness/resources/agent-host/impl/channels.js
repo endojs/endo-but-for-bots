@@ -275,7 +275,11 @@ const makeChannel = (session, { taps, queueLimit }) => {
   const publisher = makeExo('LivePublisher', interfaces.LivePublisher, {
     /** @param {any} batch a PublishBatch (the guard checked it) */
     publish({ rev, events }) {
-      latestRev = rev;
+      // An outside publish that first fetched a publisher can arrive after
+      // a newer in-turn batch: never move latestRev back (QC advisory 4).
+      // The late batch is still delivered, stamped with its own rev.
+      const batchRev = /** @type {number} */ (rev);
+      if (batchRev > latestRev) latestRev = batchRev;
       for (const event of events) deliver(event, rev);
     },
   });
