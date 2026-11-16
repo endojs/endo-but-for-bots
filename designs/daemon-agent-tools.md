@@ -493,10 +493,10 @@ deliverable's shape.
 ### Phase 3.5: Local mount-bridged git tools — landed (#616)
 
 - [x] `makeGitMountTools(gitCap)` in `packages/agent-tools/src/json-tools/git-mount.js`:
-  `status`, `add`, and `checkoutConflict` tools over the *local* `Git`
-  capability, bridging
-  live `EndoMountEntry` remotables across the JSON wire where `makeGitTool`
-  could not carry live-capability signatures. Network operations stay
+  the `status` tool over the *local* `Git` capability (it keeps the
+  collapsed-untracked default). The path-string forms of `add` and
+  `checkoutConflict` belong to the `makeGitTool` catalog, which resolves
+  paths through the mount. Network operations stay
   excluded; the push tier remains the separately granted `GitRemote`
   (Phase 3).
 - [ ] Revisit petname-backed results when a git or file tool returns a
