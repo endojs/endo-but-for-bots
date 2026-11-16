@@ -7,9 +7,15 @@ import path from 'node:path';
 
 import {
   bundleGuest,
+  escapeNonAscii,
   listGuestPrograms,
   parseBundleArgs,
 } from '../scripts/bundle-guest.mjs';
+import {
+  guestRoot,
+  programPieceBytes,
+  sessionEntry,
+} from '../scripts/provision-steps.js';
 import { harnessRoot, scratch } from './_helpers.js';
 
 const fixtureRoot = path.join(harnessRoot, 'test', 'fixtures', 'guest');
@@ -167,4 +173,37 @@ test('the CLI writes one bundle per program and prints JSON lines', async t => {
   t.is(rows[0].program, 'tiny');
   const written = await readFile(path.join(dir, 'tiny.js'), 'utf8');
   t.is(new TextEncoder().encode(written).length, rows[0].bytes);
+});
+
+test('escapeNonAscii keeps identifiers, strings, regexps and cooked templates', t => {
+  const source =
+    "(() => { const $h\u034f_x = 'na\u00efve \u{1F600}'; // caf\u00e9\n return [$h\u034f_x, /\u00e9+/.test('\u00e9\u00e9'), `\u2026${1}`]; })()";
+  const escaped = escapeNonAscii(source);
+  t.true(/^[\x00-\x7f]*$/.test(escaped));
+  t.true(escaped.includes('$h\\u034f_x'));
+  const evaluate = (/** @type {string} */ text) =>
+    new Compartment({ __options__: true }).evaluate(text);
+  t.deepEqual(evaluate(escaped), evaluate(source));
+  t.is(escapeNonAscii('plain ascii\n'), 'plain ascii\n');
+});
+
+test('escapeNonAscii refuses what an escape would change', t => {
+  t.throws(() => escapeNonAscii("'\\\u00e9'"), {
+    message: /after a backslash/,
+  });
+  t.throws(() => escapeNonAscii('// x\u2028y'), { message: /U\+2028/ });
+  t.throws(() => escapeNonAscii('a\u00a0b'), { message: /U\+00a0/ });
+  // An escaped backslash before the character is fine.
+  t.is(escapeNonAscii("'\\\\\u00e9'"), "'\\\\\\u00e9'");
+});
+
+test('the session program bundle is ASCII (J-0244: U+034F hidden names)', async t => {
+  const bundle = await bundleGuest(sessionEntry, { guestRoot });
+  t.true(/^[\x00-\x7f]*$/.test(bundle.source));
+  t.is(bundle.bytes, bundle.source.length);
+  t.true(bundle.source.includes('$h\\u034f_'));
+  // Staged in pieces of programPieceBytes (scripts/provision-steps.js).
+  const pieces = Math.ceil(bundle.bytes / programPieceBytes);
+  t.log(JSON.stringify({ bytes: bundle.bytes, programPieceBytes, pieces }));
+  t.true(pieces <= 7);
 });

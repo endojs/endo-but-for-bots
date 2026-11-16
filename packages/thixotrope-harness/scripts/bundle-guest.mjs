@@ -55,10 +55,51 @@ const isInside = (child, parent) => {
 };
 
 /**
+ * Non-ASCII units that JavaScript reads as white space or a line terminator
+ * in code: an escape is not white space, so they cannot be rewritten without
+ * knowing whether they stand in code or in a string.
+ */
+const NON_ASCII_SPACE =
+  /[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/;
+
+/**
+ * The source with every non-ASCII UTF-16 unit written as a `\uXXXX` escape,
+ * so a bundle is ASCII: its UTF-8 bytes equal its units.
+ *
+ * compartment-mapper's module transform names its hidden bindings with an
+ * invisible U+034F (`$h\u034f_imports`; `@endo/module-source`
+ * src/hidden.js), 216 of them in the session program (J-0244). An escape
+ * names the same binding in an identifier and the same text in a string, a
+ * regular expression or a template's cooked value; in a comment it is
+ * harmless. It would change a template's raw text, which the guest lint
+ * (`ascii-outside-comments`) keeps out of guest code; an astral character
+ * in an identifier would not survive (two escaped surrogates) and none
+ * occurs. Refused (thrown), because an escape would change their meaning:
+ * a non-ASCII unit right after a backslash (an identity escape), and
+ * non-ASCII white space or line terminators.
+ *
+ * @param {string} source
+ * @returns {string}
+ */
+export const escapeNonAscii = source =>
+  source.replace(/[\u0080-\uffff]/g, (unit, offset) => {
+    const code = unit.charCodeAt(0).toString(16).padStart(4, '0');
+    let backslashes = 0;
+    for (let i = offset - 1; i >= 0 && source[i] === '\\'; i -= 1)
+      backslashes += 1;
+    if (backslashes % 2 === 1 || NON_ASCII_SPACE.test(unit))
+      throw Error(
+        `Cannot escape U+${code} at offset ${offset} of the bundle (after a backslash, or white space)`,
+      );
+    return `\\u${code}`;
+  });
+
+/**
  * @typedef {object} GuestBundle
  * @property {string} entry absolute path of the entry module
  * @property {string} guestRoot the guest package root every module lies in
- * @property {string} source the bundle: one script whose value is the namespace
+ * @property {string} source the bundle: one script whose value is the
+ *   namespace, ASCII (`escapeNonAscii`)
  * @property {number} bytes UTF-8 length of `source`
  * @property {string} digest SHA-256 of `source`, hex
  * @property {string[]} modules guest-root-relative paths of the bundled modules
@@ -132,11 +173,12 @@ export const bundleGuest = async (entry, { guestRoot } = {}) => {
     throw Error(
       `Guest bundle ${entryPath} reads modules outside ${root}: ${outside.join(', ')}`,
     );
-  const encoded = new TextEncoder().encode(source);
+  const ascii = escapeNonAscii(source);
+  const encoded = new TextEncoder().encode(ascii);
   return harden({
     entry: entryPath,
     guestRoot: root,
-    source,
+    source: ascii,
     bytes: encoded.length,
     digest: crypto.createHash('sha256').update(encoded).digest('hex'),
     modules: [...modules].sort(),
