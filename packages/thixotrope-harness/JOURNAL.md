@@ -2926,3 +2926,8 @@ over `frameBytes - 64` are published with that field cut (records keep the whole
 `h<n>` ("the turns before the n-th"); a cursor past the turn count, or not of that form, throws
 `texts.badCursor`. (9) `getCurrentTurn().history` is cut to one frame like a page.
 Decision: as built; (1) needs a fixed text in `interfaces.js` if the PM wants it in the contract.
+
+### J-0246 2026-11-16 M1a engine - perf
+Evidence: correction to J-0243: the `LiveBatch` return-guard note it cites is in J-0230 and J-0231
+(14-16 ms per 256-delivery batch, "almost all of it the `LiveBatch` return guard"), not J-0233.
+Decision: none; J-0243 stands otherwise (supersedes its cross-reference only).
