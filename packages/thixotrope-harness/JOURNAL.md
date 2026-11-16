@@ -2715,3 +2715,94 @@ Decision: as built. A halted session vat is detected only when something calls i
 whose vat was given up during startup stays `ready` in the list until a call breaks (D-5 keeps idle
 vats asleep). Acceptance 10 (W1a.7) therefore needs session A working at the kill, as the W1a.0
 report noted.
+
+### J-0250 2026-11-16 M1a persistence - good fit
+Evidence: W1a.5 (`packages/thixotrope-harness/guest/session/queue.js`, `recovery.js`, commit
+`7ca5c5a8e9`). Orthogonal persistence removes most of what Fae's queue had to do: Fae's
+`pending-queue.js` rewrites a store record on every change and needs `dispatching` and
+`interrupted` entry states because the store write and the turn start are separate effects
+(`packages/fae/session/pending-queue.js:17-23` at `1315bef86`). Here the claim removes the entry, turns
+its receipt `started` and appends `TurnStarted` in one crank, so no restart can see an entry half
+claimed, and there is no load, persist or "memory no longer trusted" path. Recovery is a plain
+synchronous function run in the crank that receives the first retired break from the lease or a tool
+call: it never awaits, so a guest call pending forever cannot hold it (unit test), and it is
+idempotent per turn generation (a second break, a late break after a newer turn started, and a
+replay of the crank all leave the log unchanged or identical; unit tests). The hold is set before
+the settle so the settle's claim finds the queue held; within one crank that order is invisible.
+W1a.4's `turn.js` (uncommitted when read) calls it at the lease and at adapter tool call sites only,
+and its `settle` publishes outside the turn when the ports are dropped, as the contract now states.
+Decision: as built; the order and the details the contract left open are recorded in
+m1a-interfaces.md sections 7, 8 and 11 (commit `f7ec250ff0`).
+
+### J-0251 2026-11-16 M1a engine - poor fit
+Evidence: a throwaway vat probe (release worker, crank budget 50 M, base template, workspace vat
+through `client.call('evaluate', ...)`, the queue and recovery bundled together, 78 KB, staged in 10
+pieces of 8,192 characters; each check 7 times, median over the median of 9 floor calls; W1a.5 code
+uncommitted, HEAD as in each line) found three costs that do not exist in Node.
+(1) `makeExo` per entry defines a class per call. (2) Iterating a `Map` costs about 0.27 ms per
+entry visited: with a full prune scan on every `enqueueOnce`, an enqueue with 128 receipts cost 44 ms
+over the floor against 9 ms with none, and the first probe run, 512 `enqueueOnce` + `claim` in one
+crank on a growing receipt table, broke the workspace vat with the retired text (halted; a meter
+abort [inferred]). (3) Every object the vat keeps costs every later delivery: after 4,095 claimed
+receipts that still held their QueueEntry exos the floor rose from 181 to 269 ms (the full GC after
+every crank, C-7); with the claimed entries dropped it rose from 174 to 204 ms. Before (makeExo per
+entry, full prune scan):
+{"metric":"w1a5.probe.enqueue.empty","overFloorMs":[12,9,20,8,6,7,10],"medianOverFloorMs":9,"commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[4.64,4.66,5.37]}
+{"metric":"w1a5.probe.enqueue.receipts128","overFloorMs":[40,38,41,53,44,47,141],"medianOverFloorMs":44,"commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[4.64,4.66,5.37]}
+{"metric":"w1a5.probe.enqueue100euro","overFloorMs":826,"note":"100 enqueueOnce of 8,192 three-byte units in one crank","commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[4.51,4.64,5.35]}
+{"metric":"w1a5.probe.view100euro","overFloorMs":[54,62,67,56,65,61,58],"medianOverFloorMs":61,"bytes":"23199","commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[4.51,4.64,5.35]}
+After (one exo class per queue, prune from the oldest receipt and a full scan only at the limit;
+receipts still holding claimed entries), floor re-measured after the fill:
+{"metric":"w1a5.probe.enqueue.receipts4095","overFloorMs":[-4,-3,-3,1,1,1,5],"medianOverFloorMs":1,"commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[3.26,3.4,4.35]}
+{"metric":"w1a5.probe.floorAfterFill","floorMs":269,"floorBeforeMs":181,"sizeCallOverFloorMs":3,"receiptForOverFloorMs":-9,"commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[3.26,3.4,4.35]}
+{"metric":"w1a5.probe.view100euro","overFloorMs":[8,11,8,8,9,13,13],"medianOverFloorMs":9,"bytes":"23199","commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[3.26,3.4,4.35]}
+Final (claimed entries dropped from their receipts, as committed):
+{"metric":"w1a5.probe.enqueue.empty","overFloorMs":[-1,-25,-16,1,9,129,271],"medianOverFloorMs":1,"commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.22,2.86,3.87]}
+{"metric":"w1a5.probe.enqueue.receipts4095","overFloorMs":[0,19,-9,-15,-13,-19,-17],"medianOverFloorMs":-13,"commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.56,2.87,3.85]}
+{"metric":"w1a5.probe.enqueue100euro","overFloorMs":39,"note":"100 enqueueOnce of 8,192 three-byte units in one crank","commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.56,2.87,3.85]}
+{"metric":"w1a5.probe.fill","batch":64,"receipts":4095,"overFloorMs":[240,28,29,25,39,23,35,20,40,118,199,30,37,46,32,23,23,23,26,24,20,18,26,25,25,27,31,31,40,40,32,45,46,43,46,46,43,46,55,47,48,52,60,47,52,50,45,55,48,48,54,52,56,59,56,53,63,54,54,62,57,54,57,52],"perOpMs":[3.75,0.44,0.45,0.39,0.61,0.36,0.55,0.31,0.63,1.84,3.11,0.47,0.58,0.72,0.5,0.36,0.36,0.36,0.41,0.38,0.31,0.28,0.41,0.39,0.39,0.42,0.48,0.48,0.63,0.63,0.5,0.7,0.72,0.67,0.72,0.72,0.67,0.72,0.86,0.73,0.75,0.81,0.94,0.73,0.81,0.78,0.7,0.86,0.75,0.75,0.84,0.81,0.88,0.92,0.88,0.83,0.98,0.84,0.84,0.97,0.89,0.84,0.89,0.81],"note":"enqueueOnce+claim per crank, receipts growing","commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.08,2.8,3.83]}
+{"metric":"w1a5.probe.firstUse","overFloorMs":14,"commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[2.22,2.86,3.87]}
+{"metric":"w1a5.probe.floorAfterFill","floorMs":204,"floorBeforeMs":174,"sizeCallOverFloorMs":245,"receiptForOverFloorMs":-3,"commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.56,2.87,3.85]}
+{"metric":"w1a5.probe.load","pieces":10,"stageMs":4420,"loadMs":180,"floorMs":174,"commit":"ba4d6b076f","crankBudget":"50000000","loadAvg":[2.22,2.86,3.87]}
+{"metric":"w1a5.probe.recovery.open20","overFloorMs":[14,12,14,21,22,12,12],"medianOverFloorMs":14,"note":"includes makeQueue + 2 enqueues + building 20 intents","commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.75,2.9,3.85]}
+{"metric":"w1a5.probe.view100euro","overFloorMs":[-9,-9,-7,-7,-7,1,-2],"medianOverFloorMs":-7,"bytes":"23199","commit":"d7dcd3dad6","crankBudget":"50000000","loadAvg":[2.56,2.87,3.85]}
+Reading: per-operation costs are now at or under the noise of the floor (enqueue with 4,095 receipts
+about 1 ms over the re-measured floor, the pending view of 100 three-byte entries under 10 ms,
+recovery of 20 open intents with its setup 11-14 ms); what remains is the retained-heap cost, about
+30 ms per delivery for a full receipt table.
+Decision: guest code makes exo classes once (`defineExoClass`), never scans a growing `Map` per
+crank, and drops references it no longer needs. W1a.4 makes a Turn and a TurnSink per turn with
+`makeExo` and keeps every Turn for the session's life (contract 3.1); with C-7 that is a per-delivery
+cost growing with the number of turns, to be measured in W1a.7 (`restart.serving`) and raised with
+C-7 if it shows. `maxReceipts` (4,096) is kept; a full table costs about 30 ms per delivery.
+
+### J-0252 2026-11-16 M1a admin - perf
+Evidence: Node benchmark `packages/thixotrope-harness/test/unit/m1a-queue.bench.mjs` (no vat, no run
+lock), final code:
+{"metric":"queue.enqueue.empty","unit":"ms","n":200,"median":0.008,"p95":0.014,"p99":0.224,"min":0.007,"max":0.346,"note":"Node, no vat; algorithmic cost only","receipts":0,"pass":null,"commit":"f7ec250ff0-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.53,2.98,3.72]}
+{"metric":"queue.enqueue.receipts4095","unit":"ms","n":200,"median":0.006,"p95":0.008,"p99":0.062,"min":0.006,"max":0.463,"note":"Node, no vat; algorithmic cost only","receipts":4095,"pass":null,"commit":"f7ec250ff0-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.53,2.98,3.72]}
+{"metric":"queue.view.100ascii","unit":"ms","n":200,"median":0.128,"p95":0.181,"p99":3.591,"min":0.11,"max":3.711,"note":"Node, no vat; algorithmic cost only","entries":100,"bytes":9799,"pass":null,"commit":"f7ec250ff0-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.53,2.98,3.72]}
+{"metric":"queue.view.100euro","unit":"ms","n":200,"median":0.125,"p95":0.226,"p99":3.311,"min":0.108,"max":3.511,"note":"Node, no vat; algorithmic cost only","entries":100,"bytes":23199,"pass":null,"commit":"f7ec250ff0-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.53,2.98,3.72]}
+{"metric":"recovery.open20","unit":"ms","n":200,"median":0.028,"p95":0.036,"p99":0.096,"min":0.026,"max":1.022,"note":"Node, no vat; algorithmic cost only","openIntents":20,"queued":2,"pass":null,"commit":"f7ec250ff0-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.53,2.98,3.72]}
+{"metric":"session.queueRecovery.bundle","unit":"ms","value":0,"queueBundle":67262,"queueSource":14427,"recoveryBundle":52879,"recoverySource":7564,"boundedBundle":53528,"boundedSource":10235,"note":"value unused; sizes in bytes; queue.js bundles bounded.js, interfaces.js and limits.js with it","pass":null,"commit":"f7ec250ff0-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.53,2.98,3.72]}
+Reading: Node costs are microseconds; the session-program share of W1a.5 is 14.4 KB of queue source
+and 7.6 KB of recovery source over the contract and `bounded.js` both already carry (`queue.js`
+bundled alone 67,262 bytes against `bounded.js` alone 53,528).
+Decision: recorded for `session.program` (W1a.7).
+
+### J-0253 2026-11-16 M1a spec - deviation
+Evidence: points where W1a.5 departs from Endo's queue or decides what the spec leaves open.
+(1) Empty text: Fae trims a submission and refuses a blank one ("A queued message must be non-empty
+text", `packages/fae/session/pending-queue.js:49-53` at `1315bef86`); the M1a contract has no such
+text and `enqueueOnce` keeps the text exactly as given, empty included. (2) A cancelled entry keeps
+its receipt (`queued`, with an entry whose `describe()` says "This message is no longer waiting"),
+so a retry of its request id does not resurrect it; Fae returns the old id with `duplicate: true`
+too. (3) A duplicate `enqueueOnce` releases no hold; only a new entry does (as Fae's `submit`).
+(4) Recovery reports every intent of the current round without a result as "Tool outcome unknown",
+including calls that were still waiting for the call window and were never issued (the log does not
+say which were issued; conservative, as the contract says). (5) A turn that was `cancelling` with a
+call in flight recovers as `outcome-unknown`, not `cancelled`.
+Decision: (1) open for the PM: a blank-text refusal needs a fixed text in `interfaces.js` (a
+contract change) and belongs with the Composer or `enqueueOnce`; (2) and (3) as built and recorded
+in m1a-interfaces.md section 8; (4) and (5) as built, following section 7's rule (every open intent;
+`Dispatched` decides the status).
