@@ -614,10 +614,54 @@ test('echo: an argument error that quotes the hub break text is not a break (QC 
   t.true(fitsFrame(huge));
 });
 
+/**
+ * Timers fired by hand, so a test of deadline order does not depend on how
+ * late the real timers run under load (QC finding 2: with real timers, a
+ * 10 ms timer ran 50-80 ms late in the full lane, the 60 ms one fired
+ * before the test released the turn, and `deadlines.length === 1` was
+ * never seen).
+ */
+const makeManualTimers = () => {
+  /** @type {{ ms: number, fn: () => void, cancelled: boolean, fired: boolean }[]} */
+  const pending = [];
+  const after = (/** @type {number} */ ms, /** @type {() => void} */ fn) => {
+    const entry = { ms, fn, cancelled: false, fired: false };
+    pending.push(entry);
+    return () => {
+      entry.cancelled = true;
+    };
+  };
+  /** Fire every live timer due by `ms`, in due order. */
+  const runUntil = (/** @type {number} */ ms) => {
+    for (const entry of [...pending].sort((x, y) => x.ms - y.ms)) {
+      if (entry.ms <= ms && !entry.cancelled && !entry.fired) {
+        entry.fired = true;
+        entry.fn();
+      }
+    }
+  };
+  return {
+    timers: harden({ after, delay: () => Promise.resolve() }),
+    pending,
+    runUntil,
+  };
+};
+
 test('deadlines: armDeadline calls sink.deadline; disarm and release cancel', async t => {
   const fake = makeFakeTurn();
   const script = harden({ turns: [{ rounds: [{ stall: 'untilCancel' }] }] });
-  const { endpoint } = makeRig(script, fake.events);
+  const provider = makeScriptedProvider({
+    label: 'scripted',
+    script,
+    timers,
+    log: () => {},
+  });
+  const manual = makeManualTimers();
+  const endpoint = makeEndpoint({
+    provider,
+    channel: harden({ publishDelta: () => {} }),
+    timers: manual.timers,
+  });
   void E(endpoint).holdTurn(fake.turn);
   E.sendOnly(endpoint).startRound(roundRequest(fake));
   await until(() => fake.events.some(([kind]) => kind === 'dispatching'));
@@ -631,13 +675,27 @@ test('deadlines: armDeadline calls sink.deadline; disarm and release cancel', as
   E.sendOnly(endpoint).armDeadline(
     harden({ turn: fake.turn, opId: 'c', ms: 60 }),
   );
+  await until(() => manual.pending.length === 3);
+  t.deepEqual(
+    manual.pending.map(entry => [entry.ms, entry.cancelled]),
+    [
+      [10, false],
+      [30, true],
+      [60, false],
+    ],
+    'disarm cancelled b',
+  );
+  manual.runUntil(30);
   await until(() => fake.deadlines.length === 1);
   t.is(fake.deadlines[0].opId, 'a');
   E.sendOnly(endpoint).releaseTurn(fake.turn);
-  await sleep(100);
+  await until(() => manual.pending[2].cancelled);
+  manual.runUntil(Infinity);
+  await sleep(20);
   t.deepEqual(
     fake.deadlines.map(deadline => deadline.opId),
     ['a'],
+    'release cancelled c; the disarmed b never fired',
   );
 });
 
