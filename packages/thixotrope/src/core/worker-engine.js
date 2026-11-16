@@ -35,6 +35,13 @@
  * @property {(message: Record<string, unknown>) => Promise<void>} deliver
  *   deliver one duct message and run the guest to quiescence; resolves
  *   after the guest's outbound effects have been emitted
+ * @property {(messages: Array<Record<string, unknown>>) => Promise<void>} [deliverBatch]
+ *   deliver several duct messages as one crank: dispatch each in order,
+ *   then run the guest to quiescence once (one collection, one outbound
+ *   read). A host uses it for OCapN GC frames gathered for the next frame
+ *   (see `durable-worker-transport.js`); the same journal must be replayed
+ *   with the same batches, so an engine either always offers it or never
+ *   does
  * @property {() => Promise<unknown>} snapshot capture the guest heap as
  *   a durable snapshot ref (engines with `canSnapshot: false` return
  *   null)

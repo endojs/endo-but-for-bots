@@ -9,7 +9,7 @@ import { E, Far } from '@endo/far';
 import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
 import { makeCryptography } from '@endo/ocapn/cryptography';
 
-import { makeOcapnHub } from '../net/hub.js';
+import { makeGcFrameTest, makeOcapnHub } from '../net/hub.js';
 import { makePeerSessions } from '../net/peer-sessions.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { makeInProcessHubSession } from '../net/in-process-session.js';
@@ -70,6 +70,9 @@ import {
  * @property {string | undefined} debugLabel
  * @property {(source: string, endowments?: Record<string, unknown>) => Promise<any>} evaluate
  * @property {() => boolean} isAwake
+ * @property {() => { heldFrames: number, wakes: number, cranks: number }} transportStats
+ *   GC frames held for the worker's next crank, and incarnations started and
+ *   cranks delivered in this process (diagnostics)
  * @property {() => Promise<void>} wake
  * @property {() => Promise<void>} sleep
  * @property {() => Promise<void>} retire
@@ -209,6 +212,7 @@ const buildDaemon = async (
   );
   /** @type {any} */
   const handoffDialRef = {};
+  const isGcFrame = makeGcFrameTest(codec);
   const hub = makeOcapnHub({
     codec,
     store: harden({
@@ -250,6 +254,7 @@ const buildDaemon = async (
           // the very traffic it exists to absorb.
           resident: workerStore.getMeta().ephemeral === true,
           onFatal: () => hub.retireSession(workerId),
+          isGcFrame,
           onFrames: frames => holder.sink.deliverBatch(frames),
           onFrame: (
             /** @type {Uint8Array} */ bytes,
@@ -611,6 +616,7 @@ const buildDaemon = async (
       evaluate: (source, endowments = {}) =>
         evaluateIn(workerId, source, endowments),
       isAwake: () => entryOf().transport.isAwake(),
+      transportStats: () => entryOf().transport.stats(),
       wake: async () => entryOf().transport.wake(),
       sleep: async () => entryOf().transport.sleep(),
       retire: async () => retireWorkerNow(workerId),
@@ -857,10 +863,9 @@ const buildDaemon = async (
       [...workers].map(async ([workerId, entry]) => {
         const workerStore = store.provideWorkerStore(workerId);
         const meta = workerStore.getMeta();
-        if (
-          meta.failure === undefined &&
-          workerStore.journalLength() > (meta.snapshot?.cut ?? 0)
-        ) {
+        // GC frames held for a sleeping worker's next delivery are not owed
+        // a crank: they must not wake it here either.
+        if (meta.failure === undefined && entry.transport.owesDelivery()) {
           // Fatal guest replay quarantines only that worker, just as live
           // delivery does. So does a run of crashes that is being counted:
           // each further wake waits for the retry the transport owes the
@@ -1173,6 +1178,7 @@ export const makeThixotropeDaemon = async (powers, options) => {
               startNotice: startNotify !== undefined,
               journalLength: workerStore.journalLength(),
               awake: daemon.getWorker(workerId).isAwake(),
+              ...daemon.getWorker(workerId).transportStats(),
             });
           }),
         ),

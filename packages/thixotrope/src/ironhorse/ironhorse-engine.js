@@ -5,6 +5,7 @@
 /** @import { SpawnedProcess, ProcessPowers } from '../platform/processes.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
+import { Fail } from '@endo/errors';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
 import { makeIronhorseLimits } from './ironhorse-limits.js';
 
@@ -14,6 +15,9 @@ import { withExpiry } from '../platform/timers.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
 /** @import { LimitInput } from './ironhorse-limits.js' */
+
+/** The largest budget the worker accepts (u64). */
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
 /**
  * Ironhorse with immutable sleep images. Each incarnation uses a private
@@ -379,38 +383,71 @@ export const makeIronhorseEngine = (
         await terminate();
         throw error;
       }
+      /**
+       * One crank: dispatch `source` (calls of the bootstrap's dispatch),
+       * drain its jobs, collect and finalize, take outbound.
+       *
+       * @param {string} source
+       * @param {string} budget decimal computrons
+       */
+      const crank = async (source, budget) => {
+        let reply;
+        if (combinedDelivery) {
+          // The native operation runs dispatch jobs and the complete
+          // finalizer cascade before extracting outbound, with no extra GC
+          // for the allocation-only bridge read.
+          reply = await request({
+            op: 'deliver',
+            source,
+            budget,
+            drainBudget: limits.crankBudget,
+          });
+        } else {
+          // A pinned older runtime must replay its original two evaluations.
+          // Do not change its collection/finalization schedule on restart.
+          await request({ op: 'eval', source, budget });
+          reply = await request({
+            op: 'eval',
+            source: 'JSON.stringify(thixotropeTakeOutbound())',
+            budget: limits.crankBudget,
+          });
+        }
+        const frames = JSON.parse(reply.result);
+        if (onOutboundBatch !== undefined) onOutboundBatch(frames);
+        else for (const frame of frames) onOutbound(frame);
+      };
+      /** @param {Record<string, unknown>} message */
+      const dispatchSource = message =>
+        // The queue and dispatch function belong to the trusted worker
+        // bootstrap; the guest evaluator receives neither one.
+        `thixotropeDispatch(${JSON.stringify(JSON.stringify(message))});`;
       return harden({
         deliver: async message => {
           owned.assertOwned();
-          // The queue and dispatch function belong to the trusted worker
-          // bootstrap; the guest evaluator receives neither one.
-          const source = `thixotropeDispatch(${JSON.stringify(JSON.stringify(message))});`;
-          const budget =
-            message.t === 'init' ? limits.bootstrapBudget : limits.crankBudget;
-          let reply;
-          if (combinedDelivery) {
-            // The native operation runs dispatch jobs and the complete
-            // finalizer cascade before extracting outbound, with no extra GC
-            // for the allocation-only bridge read.
-            reply = await request({
-              op: 'deliver',
-              source,
-              budget,
-              drainBudget: limits.crankBudget,
-            });
-          } else {
-            // A pinned older runtime must replay its original two evaluations.
-            // Do not change its collection/finalization schedule on restart.
-            await request({ op: 'eval', source, budget });
-            reply = await request({
-              op: 'eval',
-              source: 'JSON.stringify(thixotropeTakeOutbound())',
-              budget: limits.crankBudget,
-            });
+          await crank(
+            dispatchSource(message),
+            message.t === 'init' ? limits.bootstrapBudget : limits.crankBudget,
+          );
+        },
+        /**
+         * Several frames in one crank: the dispatches run in order in one
+         * evaluation, then one drain, one collection and one outbound read.
+         * The crank's budget is the sum of its frames' budgets, so the
+         * frames a GC run waited for keep the whole budget they had alone.
+         *
+         * @param {Array<Record<string, unknown>>} messages
+         */
+        deliverBatch: async messages => {
+          owned.assertOwned();
+          messages.length > 0 || Fail`Ironhorse deliverBatch needs a message`;
+          for (const message of messages) {
+            message.t === 'f' || Fail`Ironhorse deliverBatch takes frames only`;
           }
-          const frames = JSON.parse(reply.result);
-          if (onOutboundBatch !== undefined) onOutboundBatch(frames);
-          else for (const frame of frames) onOutbound(frame);
+          const budget = BigInt(limits.crankBudget) * BigInt(messages.length);
+          await crank(
+            messages.map(dispatchSource).join(''),
+            String(budget < U64_MAX ? budget : U64_MAX),
+          );
         },
         snapshot: async () => {
           await close(); // SQLite folds the WAL before the file is copied.

@@ -35,9 +35,17 @@ export const makeMeasuredEngine = (rawEngine, timers) => {
     ...rawEngine,
     start: async options => {
       const worker = await timed('wake', () => rawEngine.start(options));
+      const { deliverBatch } = worker;
       return harden({
         ...worker,
         deliver: bytes => timed('delivery', () => worker.deliver(bytes)),
+        // One crank, however many frames it carries: one delivery.
+        ...(deliverBatch === undefined
+          ? {}
+          : {
+              deliverBatch: (/** @type {any} */ messages) =>
+                timed('delivery', () => deliverBatch(messages)),
+            }),
         snapshot: () => timed('snapshot', () => worker.snapshot()),
       });
     },

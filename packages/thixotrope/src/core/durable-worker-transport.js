@@ -24,6 +24,51 @@ const DEFAULT_CRASH_RETRY_DELAY_MS = 1000;
 const MAX_CRASH_RETRY_DELAY_MS = 60_000;
 
 /**
+ * The most GC frames one crank carries. A run of journaled GC frames is
+ * delivered with the next ordinary frame, or on its own once it is this
+ * long. Part of the replay contract: a journal written under one limit must
+ * be replayed under the same one, since it decides where cranks begin.
+ */
+export const GC_FRAMES_PER_CRANK = 64;
+
+/**
+ * @typedef {{ b64: string, hubSequence?: string, gc?: true }} JournalEntry
+ */
+
+/**
+ * Split journal entries into the cranks they are delivered in: a run of GC
+ * entries goes with the ordinary entry that follows it, or alone once it
+ * holds {@link GC_FRAMES_PER_CRANK}. GC entries after the last such boundary
+ * are held: not yet any crank's.
+ *
+ * Pure in the entries, so a replay finds the cranks the live deliveries
+ * made, as long as it starts where a crank began (a snapshot cut always
+ * does: a cut is where delivery stopped, and delivery stops only between
+ * cranks).
+ *
+ * @param {Array<JournalEntry>} entries
+ * @param {number} base the absolute journal index of `entries[0]`
+ * @returns {{ cranks: Array<{ start: number, entries: Array<JournalEntry> }>, heldStart: number, held: Array<JournalEntry> }}
+ */
+export const journalCranks = (entries, base) => {
+  /** @type {Array<{ start: number, entries: Array<JournalEntry> }>} */
+  const cranks = [];
+  let start = base;
+  /** @type {Array<JournalEntry>} */
+  let run = [];
+  entries.forEach((entry, offset) => {
+    run.push(entry);
+    if (entry.gc !== true || run.length === GC_FRAMES_PER_CRANK) {
+      cranks.push({ start, entries: run });
+      start = base + offset + 1;
+      run = [];
+    }
+  });
+  return { cranks, heldStart: start, held: run };
+};
+harden(journalCranks);
+
+/**
  * The durability envelope of one worker's hub session: the "wire" is
  * the worker engine's duct, the durability is snapshot-keyed frame
  * retention, and the OCapN hub owns all routing. Worker→host frames
@@ -47,6 +92,19 @@ const MAX_CRASH_RETRY_DELAY_MS = 60_000;
  * - A crash without sleep restarts from the snapshot plus the full
  *   journal suffix and re-emits the suffix's frames under their
  *   original numbers, which the hub skips.
+ *
+ * - OCapN GC frames (`op:gc-exports`, `op:gc-answers`, as `isGcFrame`
+ *   tells them) are journaled like any frame but not delivered on their
+ *   own: a run of them waits in the journal for the next ordinary frame
+ *   and goes into the worker in the same crank, before it and in order, or
+ *   goes alone once {@link GC_FRAMES_PER_CRANK} have gathered. A GC frame
+ *   therefore never wakes a sleeping worker and never costs a crank (with
+ *   the full collection that ends every crank) of its own; a burst of a
+ *   hundred costs two. The journal marks each GC entry, so where cranks
+ *   begin is a function of the journal alone (`journalCranks`) and a
+ *   replay delivers the same cranks. Delaying a release is always safe: a
+ *   reference is released later, never earlier, and no frame crosses
+ *   another.
  *
  * Sleep ends the incarnation: snapshot, record `{ ref, cut }` (the
  * journal index the snapshot subsumes), advance the outbound base,
@@ -112,6 +170,10 @@ const MAX_CRASH_RETRY_DELAY_MS = 60_000;
  *   how long to wait before the first retry of a crashed worker; each
  *   further retry waits twice as long, up to a minute
  * @param {() => void} [options.onFatal] retire the failed logical session
+ * @param {(bytes: Uint8Array) => boolean} [options.isGcFrame] whether a
+ *   host→worker frame is an OCapN GC frame, which waits for the next
+ *   ordinary frame (see above); omitted means every frame is delivered at
+ *   once, in its own crank
  */
 export const makeDurableWorkerTransport = (
   { timers, logging },
@@ -128,6 +190,7 @@ export const makeDurableWorkerTransport = (
     debugLabel = undefined,
     resident = false,
     onFatal = () => {},
+    isGcFrame = undefined,
   },
 ) => {
   typeof onFrame === 'function' ||
@@ -185,6 +248,19 @@ export const makeDurableWorkerTransport = (
       if (n > receivedHubSequence) receivedHubSequence = n;
     }
   }
+  /**
+   * The GC frames at the end of the journal that no crank has taken yet
+   * (`journalCranks`), and the journal index of the first. Every entry
+   * before `heldStart` belongs to a crank that has been, or is queued to
+   * be, delivered.
+   */
+  let { heldStart, held } = journalCranks(
+    store.readJournal(snapshotCut),
+    snapshotCut,
+  );
+  /** Incarnations started and cranks delivered by this transport object. */
+  let wakes = 0;
+  let cranks = 0;
   /**
    * The operation queue: deliveries, wakes, sleeps, crashes, and
    * retirement all serialize here.
@@ -439,7 +515,7 @@ export const makeDurableWorkerTransport = (
       during !== undefined &&
       maxDeliveryAttempts !== undefined &&
       !standingDown &&
-      store.journalLength() > snapshotCut
+      heldStart > snapshotCut
     ) {
       const failure = noteCrash(error, during, maxDeliveryAttempts);
       if (failure !== undefined) throw failure;
@@ -461,6 +537,42 @@ export const makeDurableWorkerTransport = (
     // exactly once, with no per-frame metadata write here.
     seenOutbound += 1;
     onFrame(decodeBase64(envelope.b64), outboundBase + seenOutbound);
+  };
+
+  /**
+   * Deliver one crank's journal entries: one frame as before; several (GC
+   * frames, and the ordinary frame they waited for) in one engine delivery
+   * where the engine can, else one after another.
+   *
+   * @param {WorkerIncarnation} running
+   * @param {Array<JournalEntry>} entries
+   */
+  const deliverCrank = async (running, entries) => {
+    cranks += 1;
+    if (entries.length === 1) {
+      await running.deliver(harden({ t: 'f', b64: entries[0].b64 }));
+    } else if (running.deliverBatch !== undefined) {
+      await running.deliverBatch(
+        harden(entries.map(({ b64 }) => ({ t: 'f', b64 }))),
+      );
+    } else {
+      for (const { b64 } of entries) {
+        // eslint-disable-next-line no-await-in-loop
+        await running.deliver(harden({ t: 'f', b64 }));
+      }
+    }
+  };
+
+  /**
+   * @param {Array<JournalEntry>} entries
+   * @returns {string | undefined} the last hub sequence among them
+   */
+  const lastHubSequence = entries => {
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const { hubSequence } = entries[i];
+      if (hubSequence !== undefined) return hubSequence;
+    }
+    return undefined;
   };
 
   /** Chain-context only: start an incarnation if none is running. */
@@ -517,6 +629,7 @@ export const makeDurableWorkerTransport = (
                 if (frames.length > 0) onFrames(frames);
               },
       });
+    wakes += 1;
     const started = await start().catch(error => {
       // Only a crash has anything to count or clean up here: there is no
       // incarnation yet, and any other failure to start is passed on as it
@@ -536,18 +649,21 @@ export const makeDurableWorkerTransport = (
         during = { index: cut, phase: 'initializing' };
         await started.deliver(harden({ t: 'init', workerId, debugLabel }));
       }
-      const entries = store.readJournal(cut);
+      const replay = journalCranks(store.readJournal(cut), cut);
+      replay.heldStart === heldStart ||
+        Fail`worker ${q(debugName)}: journal cranks disagree with the frames written (${q(replay.heldStart)} != ${q(heldStart)})`;
       deliveredUpTo = cut;
       deliveredHubSequence = String(meta.hubDelivery ?? '0');
-      for (const { b64, hubSequence } of entries) {
+      for (const crank of replay.cranks) {
         during = {
           index: deliveredUpTo,
           phase: `replaying journal frame ${deliveredUpTo}`,
         };
         // eslint-disable-next-line no-await-in-loop
-        await started.deliver(harden({ t: 'f', b64 }));
-        if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
-        deliveredUpTo += 1;
+        await deliverCrank(started, crank.entries);
+        deliveredHubSequence =
+          lastHubSequence(crank.entries) ?? deliveredHubSequence;
+        deliveredUpTo = crank.start + crank.entries.length;
       }
     } catch (error) {
       abandonIncarnation(error, during);
@@ -628,12 +744,29 @@ export const makeDurableWorkerTransport = (
         return true;
       const b64 = encodeBase64(bytes);
       const index = store.journalLength();
+      const gc = isGcFrame !== undefined && isGcFrame(bytes);
+      /** @type {JournalEntry} */
+      const entry = harden({
+        b64,
+        ...(hubSequence === undefined ? {} : { hubSequence }),
+        ...(gc ? { gc: true } : {}),
+      });
+      index === heldStart + held.length ||
+        Fail`worker ${q(debugName)}: journal grew behind the transport`;
       // Journal before the duct: a frame the OCapN layer believes it
       // sent must survive any crash from here on.
-      store.appendJournal(
-        hubSequence === undefined ? { b64 } : { b64, hubSequence },
-      );
+      store.appendJournal(entry);
       if (hubSequence !== undefined) receivedHubSequence = BigInt(hubSequence);
+      // Where cranks begin follows from the journal alone (`journalCranks`):
+      // this frame either joins the held GC run or ends it, with itself as
+      // the run's last frame.
+      held = [...held, entry];
+      if (gc && held.length < GC_FRAMES_PER_CRANK) return true;
+      const crankStart = heldStart;
+      const crankEntries = held;
+      heldStart = index + 1;
+      held = [];
+      const crankEnd = index + 1;
       enqueue(async () => {
         if (destroyed) {
           return;
@@ -645,25 +778,26 @@ export const makeDurableWorkerTransport = (
           return;
         }
         const running = await ensureAwake();
-        if (index < deliveredUpTo) {
-          // The wake replay already delivered this frame from the
+        if (crankEnd <= deliveredUpTo) {
+          // The wake replay already delivered this crank from the
           // journal.
           return;
         }
-        index === deliveredUpTo ||
+        crankStart === deliveredUpTo ||
           Fail`worker ${q(debugName)}: journal delivery out of order`;
         try {
-          await running.deliver(harden({ t: 'f', b64 }));
+          await deliverCrank(running, crankEntries);
         } catch (error) {
-          // The frame stays in the journal; the wake this failure
-          // provokes replays it against a fresh incarnation.
+          // The frames stay in the journal; the wake this failure
+          // provokes replays them against a fresh incarnation.
           abandonIncarnation(error, {
-            index,
-            phase: `delivering journal frame ${index}`,
+            index: crankStart,
+            phase: `delivering journal frame ${crankStart}`,
           });
         }
-        deliveredUpTo = index + 1;
-        if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
+        deliveredUpTo = crankEnd;
+        deliveredHubSequence =
+          lastHubSequence(crankEntries) ?? deliveredHubSequence;
         if (
           snapshotEveryDeliveries !== undefined &&
           !resident &&
@@ -764,6 +898,17 @@ export const makeDurableWorkerTransport = (
     /** Stop accepting frames; deliveries in flight drain. */
     end: () => connection.end(),
     isAwake: () => incarnation !== undefined,
+    /**
+     * Whether the journal holds frames past the snapshot that a crank is
+     * owed (held GC frames are not owed one): what a restart must replay.
+     */
+    owesDelivery: () => heldStart > snapshotCut,
+    /**
+     * Counts for diagnostics: GC frames journaled and held for the next
+     * crank, and incarnations started and cranks delivered by this
+     * transport object (process-local).
+     */
+    stats: () => harden({ heldFrames: held.length, wakes, cranks }),
     wake,
     standDown,
     /** See {@link sleepInternal}, which the idle timer shares. */

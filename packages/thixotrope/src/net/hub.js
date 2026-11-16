@@ -128,6 +128,33 @@ const makeMemoryHubStore = () => {
 };
 
 /**
+ * A test for OCapN GC frames (`op:gc-exports`, `op:gc-answers`) in `codec`'s
+ * wire form, reading only the record label. A frame it cannot read is not a
+ * GC frame: it is delivered as any other frame is.
+ *
+ * @param {any} codec an OCapN codec (syrup or cbor)
+ * @returns {(bytes: Uint8Array) => boolean}
+ */
+export const makeGcFrameTest = codec => {
+  /** @param {Uint8Array} bytes */
+  const isGcFrame = bytes => {
+    try {
+      const reader = codec.makeReader(bytes);
+      reader.enterRecord();
+      const label = reader.readRecordLabel();
+      return (
+        label.type === 'selector' &&
+        (label.value === 'op:gc-exports' || label.value === 'op:gc-answers')
+      );
+    } catch {
+      return false;
+    }
+  };
+  return harden(isGcFrame);
+};
+harden(makeGcFrameTest);
+
+/**
  * @param {object} options
  * @param {any} options.codec an OCapN codec (syrup or cbor); every
  *   attached session must speak it
@@ -2003,9 +2030,12 @@ export const makeOcapnHub = ({
         harden(Error('ocapn hub: the target session has been retired')),
       );
     }
-    const outerCause = gcCause;
-    gcCause = `retired ${sessionKey}`;
-    try {
+    // The retiree's holdings are released together: one GC frame per
+    // destination and kind (at most 64 positions each), not one per row. A
+    // forgotten transient session (a control client or adapter of a previous
+    // process) can hold many references into many vats. Only GC frames are
+    // produced in here, so batching moves none past an ordinary message.
+    withGcBatch(() => {
       for (const row of [...refs.values()]) {
         if (row.facing.has(sessionKey) || row.refcounts.has(sessionKey)) {
           row.facing.delete(sessionKey);
@@ -2013,9 +2043,7 @@ export const makeOcapnHub = ({
           maybeReleaseRef(row);
         }
       }
-    } finally {
-      gcCause = outerCause;
-    }
+    }, `retired ${sessionKey}`);
     // Answers the retiree owed other sessions. Each asker's route pins the
     // answer's row until the asker's collector drops the answer and it
     // sends op:gc-answers; an asker whose realm has no WeakRef never does,
