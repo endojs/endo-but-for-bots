@@ -70,10 +70,13 @@ run(
 
     // Acceptance 1.
     const t0 = performance.now();
+    const at = Date.now();
     const session = await E(slice.factory).createSession(
-      harden({ title: 't', preset: slice.chatOnly, backend }),
+      harden({ title: 't', preset: slice.chatOnly, backend, at }),
     );
     const createMs = round1(performance.now() - t0);
+    // createdAt is the caller's clock (CreateOptions.at, J-9150).
+    t.is((await E(session).getInfo()).createdAt, at);
     const page = await E(slice.factory).listSessions();
     t.is(page.rows.length, 1);
     t.like(page.rows[0], {

@@ -177,12 +177,14 @@ export const makeSlice = async state => {
       return { backend, logPath, log: () => readLog(logPath) };
     },
     /**
+     * The caller has the clock (`CreateOptions.at`, J-9150): the session's
+     * `createdAt` is this process's `Date.now()` at the call.
      * @param {any} backend
      * @param {string} [title]
      */
     createSession: (backend, title = 't') =>
       E(self.factory).createSession(
-        harden({ title, preset: self.chatOnly, backend }),
+        harden({ title, preset: self.chatOnly, backend, at: Date.now() }),
       ),
     /**
      * Submit through the Composer.
