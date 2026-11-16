@@ -59,6 +59,17 @@ const store = harden({
         if (id === ownerId && armed === 'journal' && increment(entry.b64))
           boundary('journal');
       },
+      // A hub flush is journaled in one append (C-20): the boundary is after
+      // the append that holds the increment.
+      appendJournalEntries: entries => {
+        /** @type {any} */ (s).appendJournalEntries(entries);
+        if (
+          id === ownerId &&
+          armed === 'journal' &&
+          entries.some(entry => increment(entry.b64))
+        )
+          boundary('journal');
+      },
       setMeta: meta => {
         s.setMeta(meta);
         if (id === ownerId && meta.snapshot) boundary('snapshot');

@@ -44,6 +44,10 @@ export const makeMemoryStore = () => {
       },
       appendJournal: message =>
         state.journal.push(JSON.parse(JSON.stringify(message))),
+      appendJournalEntries: messages => {
+        for (const message of messages)
+          state.journal.push(JSON.parse(JSON.stringify(message)));
+      },
       readJournal: (from = 0) =>
         state.journal.slice(Math.max(0, from - state.base)),
       journalLength: () => state.base + state.journal.length,

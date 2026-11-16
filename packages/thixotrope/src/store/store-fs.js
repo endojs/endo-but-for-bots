@@ -175,6 +175,27 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
         // Counted once durable: a failed append leaves the length as it was.
         journalCount += 1;
       },
+      appendJournalEntries: entries => {
+        if (entries.length === 0) return;
+        if (!syncFiles.exists(journalPath)) {
+          writeJournalFile(0, []);
+        }
+        ensureJournalRepaired();
+        if (!journalCounted) readJournalFile();
+        const text = entries
+          .map(entry => `${JSON.stringify(entry)}\n`)
+          .join('');
+        try {
+          syncFiles.appendTextDurable(journalPath, text);
+        } catch (error) {
+          // Some leading lines may be durable and the last one torn: read
+          // the file again (repairing the tail) before the next use.
+          journalCounted = false;
+          journalRepaired = false;
+          throw error;
+        }
+        journalCount += entries.length;
+      },
       readJournal: (from = 0) => {
         const { base, lines } = readJournalFile();
         return lines

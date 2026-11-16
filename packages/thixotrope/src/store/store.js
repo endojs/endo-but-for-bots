@@ -68,6 +68,10 @@
  * @property {() => WorkerMeta} getMeta
  * @property {(meta: WorkerMeta) => void} setMeta
  * @property {(entry: unknown) => void} appendJournal
+ * @property {(entries: Array<unknown>) => void} [appendJournalEntries]
+ *   append several entries in order with one durable write (one fsync); on
+ *   failure some leading entries may be durable, and the journal's length
+ *   is re-read from storage
  * @property {(from?: number) => Array<any>} readJournal entries with
  *   absolute index >= from (entries before the truncation point are gone)
  * @property {() => number} journalLength total absolute entry count

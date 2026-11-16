@@ -728,6 +728,106 @@ export const makeDurableWorkerTransport = (
     }
   };
 
+  /**
+   * A frame toward the worker, decoded for the journal: its entry, and
+   * whether it is a GC frame (held for the next crank).
+   *
+   * @param {Uint8Array} bytes
+   * @param {string} [hubSequence]
+   */
+  const journalEntryOf = (bytes, hubSequence) => {
+    const gc = isGcFrame !== undefined && isGcFrame(bytes);
+    /** @type {JournalEntry} */
+    const entry = harden({
+      b64: encodeBase64(bytes),
+      ...(hubSequence === undefined ? {} : { hubSequence }),
+      ...(gc ? { gc: true } : {}),
+    });
+    return entry;
+  };
+
+  /**
+   * After a durable append of `entry` at journal `index`: it either joins
+   * the held GC run or ends it, with itself as the run's last frame, and a
+   * crank that ends is queued for delivery.
+   *
+   * @param {JournalEntry} entry
+   * @param {number} index
+   */
+  const afterAppend = (entry, index) => {
+    const gc = entry.gc === true;
+    if (entry.hubSequence !== undefined)
+      receivedHubSequence = BigInt(entry.hubSequence);
+    // Where cranks begin follows from the journal alone (`journalCranks`):
+    // this frame either joins the held GC run or ends it, with itself as
+    // the run's last frame.
+    held = [...held, entry];
+    if (gc && held.length < GC_FRAMES_PER_CRANK) return;
+    const crankStart = heldStart;
+    const crankEntries = held;
+    heldStart = index + 1;
+    held = [];
+    const crankEnd = index + 1;
+    enqueue(async () => {
+      if (destroyed) {
+        return;
+      }
+      if (retry !== undefined) {
+        // A crashed worker is owed a retry, and the retry replays this
+        // frame from the journal: attempting here as well would make
+        // every frame of a burst a counted attempt.
+        return;
+      }
+      const running = await ensureAwake();
+      if (crankEnd <= deliveredUpTo) {
+        // The wake replay already delivered this crank from the
+        // journal.
+        return;
+      }
+      crankStart === deliveredUpTo ||
+        Fail`worker ${q(debugName)}: journal delivery out of order`;
+      try {
+        await deliverCrank(running, crankEntries);
+      } catch (error) {
+        // The frames stay in the journal; the wake this failure
+        // provokes replays them against a fresh incarnation.
+        abandonIncarnation(error, {
+          index: crankStart,
+          phase: `delivering journal frame ${crankStart}`,
+        });
+      }
+      deliveredUpTo = crankEnd;
+      deliveredHubSequence =
+        lastHubSequence(crankEntries) ?? deliveredHubSequence;
+      if (
+        snapshotEveryDeliveries !== undefined &&
+        !resident &&
+        engine.canSnapshot &&
+        !checkpointQueued &&
+        deliveredUpTo - Math.max(snapshotCut, snapshotFailedAt) >=
+          snapshotEveryDeliveries
+      ) {
+        // Behind the deliveries already queued, as a sleep would be; the
+        // worker stays awake through it.
+        checkpointQueued = true;
+        enqueue(async () => {
+          checkpointQueued = false;
+          await checkpointInternal();
+        }).catch(error => {
+          logging.error(
+            `thixotrope worker transport ${debugName}: cadence snapshot failed`,
+            error,
+          );
+        });
+      }
+    }).catch(error => {
+      logging.error(
+        `thixotrope worker transport ${debugName}: delivery failed`,
+        error,
+      );
+    });
+  };
+
   const connection = harden({
     /**
      * @param {Uint8Array} bytes one OCapN frame toward the worker
@@ -742,90 +842,58 @@ export const makeDurableWorkerTransport = (
         BigInt(hubSequence) <= receivedHubSequence
       )
         return true;
-      const b64 = encodeBase64(bytes);
+      const entry = journalEntryOf(bytes, hubSequence);
       const index = store.journalLength();
-      const gc = isGcFrame !== undefined && isGcFrame(bytes);
-      /** @type {JournalEntry} */
-      const entry = harden({
-        b64,
-        ...(hubSequence === undefined ? {} : { hubSequence }),
-        ...(gc ? { gc: true } : {}),
-      });
       index === heldStart + held.length ||
         Fail`worker ${q(debugName)}: journal grew behind the transport`;
       // Journal before the duct: a frame the OCapN layer believes it
       // sent must survive any crash from here on.
       store.appendJournal(entry);
-      if (hubSequence !== undefined) receivedHubSequence = BigInt(hubSequence);
-      // Where cranks begin follows from the journal alone (`journalCranks`):
-      // this frame either joins the held GC run or ends it, with itself as
-      // the run's last frame.
-      held = [...held, entry];
-      if (gc && held.length < GC_FRAMES_PER_CRANK) return true;
-      const crankStart = heldStart;
-      const crankEntries = held;
-      heldStart = index + 1;
-      held = [];
-      const crankEnd = index + 1;
-      enqueue(async () => {
-        if (destroyed) {
-          return;
-        }
-        if (retry !== undefined) {
-          // A crashed worker is owed a retry, and the retry replays this
-          // frame from the journal: attempting here as well would make
-          // every frame of a burst a counted attempt.
-          return;
-        }
-        const running = await ensureAwake();
-        if (crankEnd <= deliveredUpTo) {
-          // The wake replay already delivered this crank from the
-          // journal.
-          return;
-        }
-        crankStart === deliveredUpTo ||
-          Fail`worker ${q(debugName)}: journal delivery out of order`;
-        try {
-          await deliverCrank(running, crankEntries);
-        } catch (error) {
-          // The frames stay in the journal; the wake this failure
-          // provokes replays them against a fresh incarnation.
-          abandonIncarnation(error, {
-            index: crankStart,
-            phase: `delivering journal frame ${crankStart}`,
-          });
-        }
-        deliveredUpTo = crankEnd;
-        deliveredHubSequence =
-          lastHubSequence(crankEntries) ?? deliveredHubSequence;
-        if (
-          snapshotEveryDeliveries !== undefined &&
-          !resident &&
-          engine.canSnapshot &&
-          !checkpointQueued &&
-          deliveredUpTo - Math.max(snapshotCut, snapshotFailedAt) >=
-            snapshotEveryDeliveries
-        ) {
-          // Behind the deliveries already queued, as a sleep would be; the
-          // worker stays awake through it.
-          checkpointQueued = true;
-          enqueue(async () => {
-            checkpointQueued = false;
-            await checkpointInternal();
-          }).catch(error => {
-            logging.error(
-              `thixotrope worker transport ${debugName}: cadence snapshot failed`,
-              error,
-            );
-          });
-        }
-      }).catch(error => {
-        logging.error(
-          `thixotrope worker transport ${debugName}: delivery failed`,
-          error,
-        );
-      });
+      afterAppend(entry, index);
       return true;
+    },
+    /**
+     * Several frames toward the worker in order, journaled with one durable
+     * append (one fsync where the store has `appendJournalEntries`) before
+     * any of them is delivered. The journal holds exactly what `write` would
+     * have appended frame by frame, so cranks and replay are unchanged.
+     *
+     * @param {Array<{ bytes: Uint8Array, sequence?: string }>} frames
+     * @returns {number} how many leading frames the worker now owns: all of
+     *   them, or 0 when it refuses frames (destroyed or quarantined)
+     */
+    writeBatch: frames => {
+      if (destroyed || store.getMeta().failure !== undefined) {
+        return 0;
+      }
+      /** @type {Array<JournalEntry>} */
+      const entries = [];
+      let seen = receivedHubSequence;
+      for (const { bytes, sequence } of frames) {
+        // A duplicate of what the journal holds is already owned.
+        const fresh = sequence === undefined || BigInt(sequence) > seen;
+        if (fresh) {
+          if (sequence !== undefined) seen = BigInt(sequence);
+          entries.push(journalEntryOf(bytes, sequence));
+        }
+      }
+      if (entries.length === 0) return frames.length;
+      const index = store.journalLength();
+      index === heldStart + held.length ||
+        Fail`worker ${q(debugName)}: journal grew behind the transport`;
+      if (store.appendJournalEntries === undefined) {
+        entries.forEach((entry, offset) => {
+          store.appendJournal(entry);
+          afterAppend(entry, index + offset);
+        });
+      } else {
+        // Journal before the duct, as `write`: every frame of the batch is
+        // durable before any of them can reach the worker. A failed append
+        // throws before any is delivered (a torn tail is repaired on read).
+        store.appendJournalEntries(entries);
+        entries.forEach((entry, offset) => afterAppend(entry, index + offset));
+      }
+      return frames.length;
     },
     end: () => {
       destroyed = true;
@@ -895,6 +963,8 @@ export const makeDurableWorkerTransport = (
     debugLabel,
     /** One host→worker OCapN frame: journal, then deliver in order. */
     write: connection.write,
+    /** Several host→worker frames journaled with one fsync, then delivered. */
+    writeBatch: connection.writeBatch,
     /** Stop accepting frames; deliveries in flight drain. */
     end: () => connection.end(),
     isAwake: () => incarnation !== undefined,
