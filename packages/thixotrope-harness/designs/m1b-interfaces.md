@@ -636,7 +636,7 @@ deadline }`. Module state (the vat has one session): `scope` (current `ExecScope
 Acceptance 3 reads with this table: after cancelling during a 30 s `sleep`, the next turn's `exec`
 sees `x === 5` **if it arrives after the abandoned run ended** (the test waits for the 30 s sleep
 to end, e.g. 31 s); an `exec` that arrives while the abandoned run still sleeps gets `busy`, a reset
-and `texts.execBusyReset` (W1b.6 tests both).
+and `texts.execBusyReset` (W1b.6 tests both; J-0307).
 
 ### 8.4 Cancel, deadline and busy in the session (W1b.4 hooks)
 
@@ -845,12 +845,17 @@ W1b.0 changes:
 
 | bundle | before | after | delta |
 |---|---|---|---|
-| session program (`guest/session/main.js`) | 157,493 | 177,675 | +20,182 (budget 200,000: 22,325 left) |
-| factory program | 94,336 | 112,075 | +17,739 |
-| `interfaces.js` + `limits.js` alone | 45,825 | 63,564 | +17,739 |
+| session program (`guest/session/main.js`) | 157,493 | 177,676 | +20,183 (budget 200,000: 22,324 left) |
+| factory program | 94,336 | 112,076 | +17,740 |
+| `interfaces.js` + `limits.js` alone | 45,825 | 63,565 | +17,740 |
 
 Without comments the session program would be about 111 KB (a rough regex strip, estimate only).
-The vat probe (load and first use of the M1b guards, accept and refuse checks) is in JOURNAL J-0303.
+Vat probe (workspace vat, release worker `7cda4467...`, 50 M, J-0303): the 63,565-byte contract
+staged in 4 pieces in 1.67 s; evaluating crank 47 ms over the 168 ms floor (M1a: about 40 ms);
+first use of the M1b guards a session vat needs (`TurnSink`, `Turn`, `ContextSource`,
+`ExecHandle`, `ExecScope`, `StagedText` and the widened `Submission`, `RoundResult`,
+`TurnRecord`) 127 ms over the floor, once per vat; again 9 ms; all 16 M1b interfaces and every M1b
+shape 238 ms. Every accept and refuse check passed in the vat.
 
 ---
 
@@ -859,26 +864,26 @@ The vat probe (load and first use of the M1b guards, accept and refuse checks) i
 1. **Blank-submission text** kept from Fae (14.3; deviation; J-0302).
 2. **`ExecHandle.scope()` instead of `ExecHandle.run`** (3.4): the session calls the exec vat
    directly; a run forwarded through the factory would add 2 deliveries (about 110 ms) per call
-   against a 250 ms budget (J-0305).
+   against a 250 ms budget (J-0304).
 3. **Exec `console` discards output** (8.1): R3-42 says console output does not reach the model, a
    vat has no daemon log, and returning a log with the result (architecture 6 "bounded per-call
    log") would have no reader in M1b and repeats the leak of W-13. M12 diagnostics may revisit
-   (J-0306).
+   (J-0305).
 4. **Context pages up to 4 frames** (`contextPageBytes` 98,304), vat -> adapter only: outbound
    from a vat is cheap (fact 2) and the receiver is Node; with `frameBytes` pages a 1,000-turn
    rebuild would need 33-100 session cranks (2.8-8.5 s) against a 5 s budget. Cost: each queued page
-   is written to `hub.json` in hex while queued (fact 9, C-1) (J-0307).
+   is written to `hub.json` in hex while queued (fact 9, C-1) (J-0306).
 5. **Partial text outside the log** (3.2): the latest checkpoint replaces the previous one in the
    session's turn state and is appended as one `Partial` only when the round ends without
    `roundFinal`; the record log stays append-only, so `{count, epoch}` is monotonic.
 6. **List deletions are M2** (10.2): acceptance 9's "delete" needs `deleteSession` (M2 W2.7).
-   Open for the PM: test delete in M2, or let W1b.6 test create and rename only.
+   Open for the PM: test delete in M2, or let W1b.6 test create and rename only (J-0309).
 7. **Ownership of M1a files in M1b** (2.1): the milestone's "Owns" line omits the M1a files the
    work needs (`turn.js`, `session.js`, `durable.js`, `endpoint.js`, `channels.js`, ...); this
-   contract assigns each to one unit per group (J-0308).
+   contract assigns each to one unit per group (J-0300).
 8. **Staged duplicates compare by `bytes` and `preview`** (3.3): exact identity would need a
    digest in `StagedText`; a retry of a different text with the same length and first 1,024 units
-   is taken as the same submission. Open: add `digest` (64 hex) if that matters.
+   is taken as the same submission. Open: add `digest` (64 hex) if that matters (J-0309).
 9. **Session program size** (15): 22 KB left for staging, the context source and the exec tool.
    Recommendation to the PM: strip comments in `scripts/bundle-guest.mjs` (J-0201's standing
    decision) before W1b.4 lands (J-0303).

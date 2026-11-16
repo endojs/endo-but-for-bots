@@ -4086,3 +4086,131 @@ supervisor thread that also persists `hub.json` per frame (C-2) and handles the 
 single, crank p95 <= 200 ms) has not been tried.
 Decision: risk for M1b; `concurrency.10` must report per-session turn start p50/p99, the hub's GC
 frames per second and `hub.json` rewrites per second, so a miss can be attributed to C-2, C-7 or C-20.
+
+### J-0300 2026-11-17 M1b tooling - awkward
+Evidence: `makeExo` refuses an interface guard with a method it does not implement ("methods
+["b"] not implemented by "X"", W1b.0 probe in Node), and the M1a contract test requires every
+shape and interface in the tables to have a sample (`test/unit/m1a-interfaces.test.js:479,670`). So
+adding `TurnSink.progress` or `AgentHostAdmin.content` to the M1a guards would break every running
+exo of those interfaces (session vats, the manager, the gateway services) until each owner
+implements the method, and break the M1a test. Separately, the milestone's ownership line for M1b
+names only new files, while staging, the context source and the exec seams need edits to M1a files
+(`turn.js`, `session.js`, `durable.js`, `endpoint.js`, `channels.js`, `scripted.js`, `echo.js`).
+Decision: the M1b contract lives in its own tables (`m1bShapes`, `m1bInterfaces`,
+`m1bMethodNames`; commit `3df16eafd4`); an M1b interface under an M1a name keeps the M1a methods
+first and its implementer switches `makeExo` to it in the commit that adds the methods; the PM folds
+the tables at sign-off. Text fields that may be staged are widened in place (additive; the M1a test
+passes unchanged). `m1b-interfaces.md` 2.1 assigns every M1a file M1b touches to one unit per
+parallel group (W1b.1 owns the session vat and the agent-host files in group A; W1b.2 owns
+`turn.js`/`session.js` in group B; W1b.4 only appends to hook tables), and 2.3 lists the seams
+W1b.1 adds to `turn.js` so the exec tool needs no `turn.js` edit. Guards that must list every
+method are a mild poor fit for growing an interface across parallel units.
+
+### J-0301 2026-11-17 M1b persistence - good fit
+Evidence: the blob model (`m1b-interfaces.md` 4). Handles are manager-vat exos kept in a
+`WeakMap<Blob, key>`; the adapter holds a stock minted 32 at a time (one manager crank per refill),
+writes and fsyncs a file and renames it into place before a handle leaves the process, and maps
+presence to file in its own `WeakMap` (one presence per vat object per incarnation, S2 (d)). After
+a restart it resolves missing presences in batches of 64, one manager crank each. The stock that
+died with the adapter needs no cleanup code: its handles were exported only to the dead adapter
+session, so the hub's release of that session's imports lets the manager collect them; a vat that
+holds a handle keeps it alive with no bookkeeping. Orphans are limited to files renamed in place
+whose handle never left the adapter (the blobs being staged at one crash); `*.part` files are
+deleted at adapter start.
+Decision: as specified; session deletion (M2) pages the session's blobs out of the session vat
+(`blobPage`) and releases them through the manager (`releaseBlobs`), signatures fixed now. Not
+built or measured in W1b.0 (W1b.1 builds it; its adapter tests check "never handed out before
+fsync" and "resolved after a restart").
+
+### J-0302 2026-11-17 M1b spec - deviation
+Evidence: R4-55 and A.4 name the refusal of a blank submission but give no text; M1a refuses
+`text.trim() === ''` with Fae's "A queued message must be non-empty text"
+(`packages/fae/session/pending-queue.js:49-53` at `1315bef86`; J-0253, J-9150). The PM accepted it.
+Decision: kept as `texts.blankSubmission` (unit test `m1b-interfaces.test.js` "the fixed M1b
+texts"); from M1b the Composer applies the same rule before staging, so a long all-whitespace text
+is refused without a blob.
+
+### J-0303 2026-11-17 M1b engine - perf
+Evidence: W1b.0 bundle sizes (`scripts/bundle-guest.mjs`, ASCII, comments included), before
+(`7efa7fb3e4`) and after (`3df16eafd4`): session program 157,493 -> 177,676 bytes (+20,183; 8
+pieces of 23,552 instead of 7), factory program 94,336 -> 112,076, `interfaces.js` + `limits.js`
+45,825 -> 63,565. A rough regex strip of comments puts the session program at about 111 KB
+(estimate). Vat probe (throwaway script under the run lock, `runPerf` + base template, workspace
+vat through `client.call('evaluate', ...)`, commit `6be1bd3403` with other agents' core edits
+uncommitted in the tree, release worker `7cda4467...`, crank budget 50 M), JSON line unchanged:
+{"metric":"w1b0.interfaces.vatLoad","unit":"ms","value":214.748,"bytes":63565,"modules":["lib/interfaces.js","lib/limits.js"],"floorMs":167.9,"pieces":4,"stageMs":1674.8,"exports":"12","loadOverFloorMs":46.8,"firstUseSessionM1bMs":126.8,"secondUseMs":8.7,"firstUseRestMs":238.3,"m1bInterfaces":"16","checks":"'stagedMatches=true,stagedExtraKey=false,submissionStaged=true,submissionInline=true,turnStartedStaged=true,progress:accepted,progressExtraKey:refused,roundFinalStaged:accepted,page512:accepted,page513:refused,list64:accepted,list65:refused,retireScope:accepted,retireString:refused,liveBatchReason=true,execBusy=true,execBusyText=false,execReqInline8192=true,execReqInline8193=false,terminated=exec scope terminated:'","checkMs":629.8,"pass":null,"commit":"6be1bd3403-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.62,2.35,2.38]}
+Reading: loading the larger contract costs 47 ms over the floor (M1a 40 ms, J-0201): the lazy
+tables keep load flat; a session vat's first use of the M1b guards it needs costs 127 ms once (M1a's
+six interfaces 199-202 ms), 9 ms after; all 16 M1b interfaces and every M1b shape 238 ms. In the vat
+a `StagedText` matched and an extra key was refused; staged `Submission`, `TurnStarted` and
+`roundFinal` were accepted; `progress` with an extra key, a 513-record context page, a 65-event list
+batch, a string passed as an exec scope, `busy` with text and 8,193-unit inline exec arguments were
+refused. Staging the bundle (4 pieces of 16,384) took 1.67 s, about 26 us per byte at the floor
+plus inbound cost (C-5).
+Decision: 22,324 bytes remain under the 200 KB session-program bound for W1b.1's staging, W1b.2's
+context source and W1b.4's exec tool; every spare and cold creation pays about 10 us per byte. The
+PM should have `bundle-guest.mjs` strip comments (J-0201's standing decision) before W1b.4 lands;
+`test/bundle-guest.test.js` now checks the 200 KB bound instead of M1a's 7 pieces (`ba7ea219a5`).
+
+### J-0304 2026-11-17 M1b tools - awkward
+Evidence: the milestone gives `ExecHandle` the methods `run` and `retire`, held by the session and
+implemented in the factory vat, which holds the exec vat's worker facade. A `run` forwarded through
+the factory costs a factory crank and an answer back on every call, about 2 x 56 ms (fact 1),
+against `exec.trivial` <= 250 ms, where a direct call already costs the session's issuing crank,
+the exec crank and the answer.
+Decision: `ExecHandle.scope() -> { scope: ExecScope, deadlineMs }` (answered; only for the first
+call and after a retire) and `retire(scope)` (sendOnly); the session calls `E(scope).run(...)`
+directly. The session still never holds the facade (no `evaluate`), so architecture 3.2's
+attenuation holds. Recorded as a departure from the milestone wording, not from the spec.
+
+### J-0305 2026-11-17 M1b spec - deviation
+Evidence: R3-42 says `exec` console output goes to the daemon log, not to the model; architecture 6
+planned "a bounded per-call log returned with the result" (W-13). A vat has no daemon log; a log
+returned with the result has no reader in M1b and would be the W-13 leak again if it were ever
+shown to the model.
+Decision: the exec vat's `console` methods accept anything and discard it (`m1b-interfaces.md`
+8.1). M12 diagnostics may add an operator-only log later.
+
+### J-0306 2026-11-17 M1b transport - awkward
+Evidence: the context cache pulls a session's records after a restart (D-9). Pages of at most
+`frameBytes` (architecture 4.5) make a 1,000-turn session of 4-8 records per turn (0.8-2.4 MB)
+33-100 pages, each a session crank plus an adapter hop (about 70-90 ms), 2.8-8.5 s against the
+`context.rebuild` budget of 5 s [inferred from fact 1]. The answer goes from the vat to the adapter
+(Node), and outbound from a vat is cheap (8 x 64 KiB in one crank in 553-576 ms, J-0142); the frame
+ceiling is an inbound limit of vats.
+Decision: `contextPageBytes` = 98,304 (4 frames), vat -> adapter only (`m1b-interfaces.md` 1.1
+rule 2, 9); every other message keeps `frameBytes`. Cost to watch: a page queued for the adapter is
+written to `hub.json` in hex (fact 9, C-1), so W1b.6's `context.rebuild` row should report
+`hubJsonBytes`; if hub persistence dominates, the page size is the knob.
+
+### J-0307 2026-11-17 M1b tools - awkward
+Evidence: R4-49 (a running tool is not interrupted) plus architecture 6 (busy at the next call ->
+retire) make acceptance 3 ("cancel during a 30 s exec sleep; in the next turn `return x` still
+returns 5") depend on timing: the cancelled call keeps sleeping in the exec vat, and an `exec` that
+arrives before the sleep ends finds the vat busy and resets the scope. Endo has no such conflict
+because each call there is a fresh compartment and calls overlap freely.
+Decision: the contract keeps the busy rule (one call at a time per persistent scope) and states
+acceptance 3 for an `exec` after the abandoned call ended; W1b.6 also tests the early case, which
+must yield `texts.execBusyReset` (`m1b-interfaces.md` 8.3). The cancelled call's result is
+`texts.execAbandoned`, recorded in the cancel crank, so cancel does not wait 30 s (M1a's cancel
+waits for running adapter tools).
+
+### J-0308 2026-11-17 M1b transport - good fit
+Evidence: the outside-publish bound (`guest/session/live.js`, `65be7b9756`; J-9172). With one
+publish in flight and a `Set` of waiting batches capped at one batch's worth (64 events, and
+`frameBytes`), 1,000 outside publishes behind a publish that never answers leave 1 in flight, 64
+waiting and 935 dropped; the same behind a `liveChannel()` that never settles (unit tests in
+`test/unit/m1b-interfaces.test.js`). The drop needs no new protocol: a dropped batch's rev is never
+sent, the channel gives up on it after `reorderWaitMs`, and viewers re-watch, the same path as a
+batch lost to a restart (contract 3.2).
+Decision: as built. Outside publishes are rare (queue edits, renames, recovery), so the bound only
+matters when the manager or adapter is unreachable.
+
+### J-0309 2026-11-17 M1b spec - deviation
+Evidence: acceptance 9 asks that list-feed subscribers see a delete; `deleteSession` is M2 (W2.7),
+and M1b has no path that removes a listed row. Staged duplicate submissions can only be compared by
+`bytes` and `preview` (the vat cannot read a blob), so a retry with a different text of the same
+length and the same first 1,024 units counts as the same submission.
+Decision: the `row-removed` event is in the contract and published by M2's `deleteSession`; W1b.6
+tests create and rename (PM to confirm, `m1b-interfaces.md` 16.6). The duplicate rule stands; a
+`digest` field in `StagedText` is the fix if it matters (16.8, open).
