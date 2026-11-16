@@ -4,6 +4,194 @@
 
 // -- TextEncoder / TextDecoder (XS lacks Web APIs) --
 //
+// Two implementations. Ironhorse's VM provides a native UTF-8 codec as three
+// statics on `%Uint8Array%` (`decodeUtf8`, `encodeUtf8`, `encodeUtf8Into`,
+// `rust/engine/ironhorse-vm/src/interp/natives/utf8.rs`). When they are
+// present, the first block below captures them, deletes them so that no later
+// code (the SES shim, a guest) ever sees them, and builds WHATWG-conformant
+// classes on them: `fatal` throws a TypeError on malformed input, otherwise
+// each maximal subpart becomes one U+FFFD; `{ stream: true }` carries an
+// incomplete final sequence (at most three bytes) to the next call; a leading
+// byte order mark is stripped unless `ignoreBOM`; the encoder writes U+FFFD
+// for an unpaired surrogate. Every per-byte loop is native, so decoding and
+// encoding cost a small fraction of a computron per byte instead of more than
+// a hundred. Labels are not checked, as before: every decoder is UTF-8
+// (`@endo/ocapn` constructs an `'ascii'` decoder for bytes it has already
+// checked are ASCII).
+//
+// XS has no such statics, so on XS the first block does nothing and the
+// pure-JavaScript classes after it are installed exactly as before.
+{
+  const GenuineUint8Array = globalThis.Uint8Array;
+  const decodeUtf8 = GenuineUint8Array && GenuineUint8Array.decodeUtf8;
+  const encodeUtf8 = GenuineUint8Array && GenuineUint8Array.encodeUtf8;
+  const encodeUtf8Into = GenuineUint8Array && GenuineUint8Array.encodeUtf8Into;
+  if (
+    typeof decodeUtf8 === 'function' &&
+    typeof encodeUtf8 === 'function' &&
+    typeof encodeUtf8Into === 'function'
+  ) {
+    delete GenuineUint8Array.decodeUtf8;
+    delete GenuineUint8Array.encodeUtf8;
+    delete GenuineUint8Array.encodeUtf8Into;
+    const GenuineArrayBuffer = globalThis.ArrayBuffer;
+    const GenuineSharedArrayBuffer = globalThis.SharedArrayBuffer;
+    const { isView } = GenuineArrayBuffer;
+
+    if (typeof globalThis.TextEncoder === 'undefined') {
+      globalThis.TextEncoder = class TextEncoder {
+        // eslint-disable-next-line class-methods-use-this
+        get encoding() {
+          return 'utf-8';
+        }
+
+        // eslint-disable-next-line class-methods-use-this
+        encode(input = '') {
+          return encodeUtf8(String(input));
+        }
+
+        // eslint-disable-next-line class-methods-use-this
+        encodeInto(source, destination) {
+          const s = String(source);
+          // `Uint8Array` is read when called: after the SES boot it is
+          // `@endo/immutable-arraybuffer`'s emulated constructor, whose
+          // immutable views answer `instanceof` but have no elements.
+          if (!(destination instanceof Uint8Array)) {
+            throw new TypeError('encodeInto destination must be a Uint8Array');
+          }
+          // Writes to an emulated view are silently dropped, so reporting a
+          // `written` count for bytes that never landed would be worse than
+          // refusing.
+          if (!isView(destination)) {
+            throw new TypeError(
+              'encodeInto: emulated ArrayBuffer views are not writable',
+            );
+          }
+          return encodeUtf8Into(s, destination);
+        }
+      };
+    }
+
+    if (typeof globalThis.TextDecoder === 'undefined') {
+      /** @param {unknown} input */
+      const toBytes = input => {
+        if (input === undefined) {
+          return new GenuineUint8Array(0);
+        }
+        if (isView(input)) {
+          return input instanceof GenuineUint8Array
+            ? input
+            : new GenuineUint8Array(
+                input.buffer,
+                input.byteOffset,
+                input.byteLength,
+              );
+        }
+        // A host without genuine immutable ArrayBuffer views emulates them:
+        // the result answers `instanceof Uint8Array` and stringifies as
+        // `[object Uint8Array]`, but it has no indexed elements at all, so
+        // reading it here would decode garbage. `ArrayBuffer.isView` is what
+        // distinguishes the two, and refusing is the contract
+        // `ImmutableArrayBuffer`'s parity cases require of a host that cannot
+        // read such a view.
+        if (input instanceof Uint8Array) {
+          throw new TypeError(
+            'TextDecoder.decode: emulated ArrayBuffer views are not readable',
+          );
+        }
+        if (
+          input instanceof GenuineArrayBuffer ||
+          (GenuineSharedArrayBuffer !== undefined &&
+            input instanceof GenuineSharedArrayBuffer)
+        ) {
+          return new GenuineUint8Array(input);
+        }
+        throw new TypeError(
+          'TextDecoder.decode: input is not an ArrayBuffer or a view of one',
+        );
+      };
+
+      globalThis.TextDecoder = class TextDecoder {
+        #fatal;
+
+        #ignoreBOM;
+
+        // The incomplete final sequence of the last streaming call.
+        #carry = undefined;
+
+        #bomSeen = false;
+
+        #doNotFlush = false;
+
+        constructor(_label = 'utf-8', options = undefined) {
+          this.#fatal = Boolean(options && options.fatal);
+          this.#ignoreBOM = Boolean(options && options.ignoreBOM);
+        }
+
+        // eslint-disable-next-line class-methods-use-this
+        get encoding() {
+          return 'utf-8';
+        }
+
+        get fatal() {
+          return this.#fatal;
+        }
+
+        get ignoreBOM() {
+          return this.#ignoreBOM;
+        }
+
+        decode(input = undefined, options = undefined) {
+          let bytes = toBytes(input);
+          if (!this.#doNotFlush) {
+            this.#carry = undefined;
+            this.#bomSeen = false;
+          }
+          const stream = Boolean(options && options.stream);
+          this.#doNotFlush = stream;
+          const carry = this.#carry;
+          if (carry !== undefined) {
+            this.#carry = undefined;
+            const joined = new GenuineUint8Array(carry.length + bytes.length);
+            joined.set(carry);
+            joined.set(bytes, carry.length);
+            bytes = joined;
+          }
+          const fatal = this.#fatal;
+          const { text, consumed } = decodeUtf8(bytes, fatal);
+          let out = text;
+          if (consumed < bytes.length) {
+            if (stream) {
+              // At most three bytes; copied by hand so no species lookup
+              // can substitute another constructor.
+              const tail = new GenuineUint8Array(bytes.length - consumed);
+              for (let i = 0; i < tail.length; i += 1) {
+                tail[i] = bytes[consumed + i];
+              }
+              this.#carry = tail;
+            } else if (fatal) {
+              throw new TypeError(
+                'The encoded data was not valid for encoding utf-8',
+              );
+            } else {
+              out += '\uFFFD';
+            }
+          }
+          if (!this.#ignoreBOM && !this.#bomSeen && out.length > 0) {
+            this.#bomSeen = true;
+            if (out.charCodeAt(0) === 0xfeff) {
+              out = out.slice(1);
+            }
+          }
+          return out;
+        }
+      };
+    }
+  }
+}
+
+// The pure-JavaScript classes, for XS.
+//
 // Implemented in pure JavaScript rather than via XS extensions
 // (`ArrayBuffer.fromString` / `String.fromArrayBuffer`) because SES
 // lockdown removes those non-standard bindings and also replaces
@@ -171,7 +359,7 @@ if (!globalThis.assert) {
   const Fail = (template, ...subs) => {
     throw Error(String.raw(template, ...subs));
   };
-  const quote = (val) => {
+  const quote = val => {
     if (typeof val === 'string') return JSON.stringify(val);
     try {
       return JSON.stringify(val);
@@ -193,7 +381,7 @@ if (!globalThis.assert) {
     if (typeof val !== type)
       throw Error(optDetails ? String(optDetails) : 'Expected ' + type);
   };
-  baseAssert.fail = (optDetails) => {
+  baseAssert.fail = optDetails => {
     throw Error(optDetails ? String(optDetails) : 'Assert failed');
   };
   baseAssert.equal = (a, b, optDetails) => {
@@ -207,7 +395,7 @@ if (!globalThis.assert) {
   baseAssert.Fail = Fail;
   baseAssert.quote = quote;
   baseAssert.makeAssert = () => baseAssert;
-  baseAssert.error = (optDetails) =>
+  baseAssert.error = optDetails =>
     Error(optDetails ? String(optDetails) : 'Error');
   baseAssert.makeError = baseAssert.error;
   globalThis.assert = baseAssert;
@@ -222,7 +410,7 @@ if (!globalThis.assert) {
 // all downstream harden calls will be shallow.
 if (!globalThis.harden) {
   const visited = new WeakSet();
-  const deepFreeze = (obj) => {
+  const deepFreeze = obj => {
     if (Object(obj) !== obj) return obj; // primitive
     if (visited.has(obj)) return obj;
     visited.add(obj);
