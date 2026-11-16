@@ -1,9 +1,12 @@
 // @ts-check
-
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { ShellInterface } from '@endo/exo-shell/src/interfaces.js';
+import {
+  MAX_SHELL_OUTPUT_BYTES,
+  ShellInterface,
+  shellHelp,
+} from '@endo/exo-shell';
 import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { M, mustMatch } from '@endo/patterns';
 
@@ -183,7 +186,15 @@ export const makeEnvironment = async ({ id, recipe, directory, resolve }) => {
     return stopping;
   };
   const shell = makeExo('EnvironmentShell', ShellInterface, {
-    inspect: async () => recipe.policy,
+    help: shellHelp,
+    inspect: async () =>
+      harden({
+        ...recipe.policy,
+        maxOutputBytes: Math.min(
+          recipe.policy.maxOutputBytes,
+          MAX_SHELL_OUTPUT_BYTES,
+        ),
+      }),
     exec: (command, args, options = {}) => {
       let failedController;
       const pending = inOrder(async () => {

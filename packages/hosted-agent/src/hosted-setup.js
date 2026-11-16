@@ -22,6 +22,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { installationPath } from './installation-path.js';
 
 import { normalizeRunnerLimits } from './delegated-runner.js';
 import { BROKER_SETTINGS_FILE } from './provider-broker-service.js';
@@ -310,10 +311,10 @@ export const provideAccountOracle = async (
   },
 ) => {
   const suffix = subscriptionId === undefined ? '' : `-${subscriptionId}`;
-  const oraclePath = [dir, `account-oracle${suffix}`];
-  const sourcePath = [dir, `account-source${suffix}`];
-  const powersPath = [dir, `account-oracle${suffix}-powers`];
-  const handlePath = [dir, `account-oracle${suffix}-handle`];
+  const oraclePath = installationPath(dir, `account-oracle${suffix}`);
+  const sourcePath = installationPath(dir, `account-source${suffix}`);
+  const powersPath = installationPath(dir, `account-oracle${suffix}-powers`);
+  const handlePath = installationPath(dir, `account-oracle${suffix}-handle`);
   const handleName = `${dir}.account-oracle${suffix}-handle`;
   const powersName = `${dir}.account-oracle${suffix}-powers`;
   (await E(hostAgent).has(...brokerPath)) ||
@@ -391,11 +392,17 @@ export const provideSubscriptionAdmin = async (
   { label, dir, brokerPath, specifier, redeemerSpecifier, subscriptionId },
 ) => {
   const suffix = subscriptionId === undefined ? '' : `-${subscriptionId}`;
-  const adminPath = [dir, `subscription-admin${suffix}`];
-  const redeemerPath = [dir, `reset-redeemer${suffix}`];
-  const sourcePath = [dir, `account-source${suffix}`];
-  const powersPath = [dir, `subscription-admin${suffix}-powers`];
-  const handlePath = [dir, `subscription-admin${suffix}-handle`];
+  const adminPath = installationPath(dir, `subscription-admin${suffix}`);
+  const redeemerPath = installationPath(dir, `reset-redeemer${suffix}`);
+  const sourcePath = installationPath(dir, `account-source${suffix}`);
+  const powersPath = installationPath(
+    dir,
+    `subscription-admin${suffix}-powers`,
+  );
+  const handlePath = installationPath(
+    dir,
+    `subscription-admin${suffix}-handle`,
+  );
   const handleName = `${dir}.subscription-admin${suffix}-handle`;
   const powersName = `${dir}.subscription-admin${suffix}-powers`;
   (await E(hostAgent).has(...brokerPath)) ||
@@ -493,7 +500,7 @@ export const provideBrokerSubscription = async (
   hostAgent,
   { label, dir, brokerPath, specifier },
 ) => {
-  const subscriptionPath = [dir, 'subscription'];
+  const subscriptionPath = installationPath(dir, 'subscription');
   (await E(hostAgent).has(...brokerPath)) ||
     Fail`${b(label)} subscription needs the broker service ${q(brokerPath.join('/'))}`;
   if (await E(hostAgent).has(...subscriptionPath)) {
@@ -517,14 +524,14 @@ export const provideBrokerSubscription = async (
     throw error;
   }
   const locator = await E(hostAgent).locate(...subscriptionPath);
-  const names = await E(hostAgent).list(dir);
+  const names = await E(hostAgent).list(...installationPath(dir));
   for (const name of Array.isArray(names) ? names : []) {
     // Only shares made over this adapter's own broker follow it. A share
     // narrowed from somebody else's says so, and is left alone.
     const match = /^share-([A-Za-z0-9][A-Za-z0-9_-]{0,31})-powers$/.exec(name);
     if (match) {
       // eslint-disable-next-line no-await-in-loop
-      const powers = await E(hostAgent).lookup([dir, name]);
+      const powers = await E(hostAgent).lookup(installationPath(dir, name));
       // eslint-disable-next-line no-await-in-loop
       if (!(await E(powers).has('share-of-another'))) {
         // eslint-disable-next-line no-await-in-loop
@@ -572,7 +579,7 @@ export const provideDelegatedRunner = async (
     dir,
     runnerId,
     limits,
-    poolPowersPath = [dir, 'broker-powers'],
+    poolPowersPath = installationPath(dir, 'broker-powers'),
     unmetered = false,
   },
 ) => {
@@ -582,11 +589,11 @@ export const provideDelegatedRunner = async (
     Fail`Runner id ${q(runnerId)} is a name this uses`;
   // Always the adapter's own backend, which setup re-points runners at on
   // every run (`republishDelegatedRunners`).
-  const backendPath = [dir, 'backend'];
-  const runnerPath = [dir, `runner-${runnerId}`];
-  const kitPath = [dir, `runner-${runnerId}-kit`];
-  const powersPath = [dir, `runner-${runnerId}-powers`];
-  const handlePath = [dir, `runner-${runnerId}-handle`];
+  const backendPath = installationPath(dir, 'backend');
+  const runnerPath = installationPath(dir, `runner-${runnerId}`);
+  const kitPath = installationPath(dir, `runner-${runnerId}-kit`);
+  const powersPath = installationPath(dir, `runner-${runnerId}-powers`);
+  const handlePath = installationPath(dir, `runner-${runnerId}-handle`);
   const handleName = `${dir}.runner-${runnerId}-handle`;
   const powersName = `${dir}.runner-${runnerId}-powers`;
   (await E(hostAgent).has(...backendPath)) ||
@@ -682,15 +689,15 @@ harden(provideDelegatedRunner);
  */
 export const republishDelegatedRunners = async (hostAgent, { label, dir }) => {
   await null;
-  const backendPath = [dir, 'backend'];
+  const backendPath = installationPath(dir, 'backend');
   try {
     if (!(await E(hostAgent).has(...backendPath))) return;
     const locator = await E(hostAgent).locate(...backendPath);
-    const names = await E(hostAgent).list(dir);
+    const names = await E(hostAgent).list(...installationPath(dir));
     for (const name of Array.isArray(names) ? names : []) {
       if (/^runner-[A-Za-z0-9][A-Za-z0-9_]{0,31}-powers$/.test(name)) {
         // eslint-disable-next-line no-await-in-loop
-        const powers = await E(hostAgent).lookup([dir, name]);
+        const powers = await E(hostAgent).lookup(installationPath(dir, name));
         // eslint-disable-next-line no-await-in-loop
         await E(powers).storeLocator('backend', locator);
       }
@@ -719,7 +726,7 @@ export const publishBrokerSubscription = async (hostAgent, { label, dir }) => {
     await provideBrokerSubscription(hostAgent, {
       label,
       dir,
-      brokerPath: [dir, 'broker-service'],
+      brokerPath: installationPath(dir, 'broker-service'),
       specifier: moduleSpecifier('./subscription-module.js'),
     });
   } catch (error) {
@@ -770,13 +777,13 @@ export const provideSubscriptionShare = async (
   // `-powers` and `-handle` are this function's own suffixes.
   !/(^|-)(powers|handle|kit)$/.test(shareId) ||
     Fail`Share id ${q(shareId)} must not be or end in -powers, -handle or -kit`;
-  const sharePath = [dir, `share-${shareId}`];
-  const kitPath = [dir, `share-${shareId}-kit`];
-  const powersPath = [dir, `share-${shareId}-powers`];
-  const handlePath = [dir, `share-${shareId}-handle`];
+  const sharePath = installationPath(dir, `share-${shareId}`);
+  const kitPath = installationPath(dir, `share-${shareId}-kit`);
+  const powersPath = installationPath(dir, `share-${shareId}-powers`);
+  const handlePath = installationPath(dir, `share-${shareId}-handle`);
   const handleName = `${dir}.share-${shareId}-handle`;
   const powersName = `${dir}.share-${shareId}-powers`;
-  const beneathPath = subscriptionPath ?? [dir, 'subscription'];
+  const beneathPath = subscriptionPath ?? installationPath(dir, 'subscription');
   (await E(hostAgent).has(...beneathPath)) ||
     Fail`${b(label)} share needs the subscription ${q(beneathPath.join('/'))}`;
   const beneathLocator = await E(hostAgent).locate(...beneathPath);
@@ -914,7 +921,7 @@ export const publishAccountOracle = async (
       const oraclePath = await provideAccountOracle(hostAgent, {
         label,
         dir,
-        brokerPath: [dir, 'broker-service'],
+        brokerPath: installationPath(dir, 'broker-service'),
         providerId,
         specifier: moduleSpecifier('./account-oracle-module.js'),
         sourceSpecifier: moduleSpecifier('./account-source-module.js'),
@@ -925,7 +932,7 @@ export const publishAccountOracle = async (
           ? await provideSubscriptionAdmin(hostAgent, {
               label,
               dir,
-              brokerPath: [dir, 'broker-service'],
+              brokerPath: installationPath(dir, 'broker-service'),
               specifier: moduleSpecifier('./subscription-admin-module.js'),
               redeemerSpecifier: moduleSpecifier('./reset-redeemer-module.js'),
               ...(subscriptionId === undefined ? {} : { subscriptionId }),

@@ -30,12 +30,14 @@ const locatorFor = number => formatLocator(`${number}:${NODE}`, 'handle');
  * @param {(value: any) => Promise<void>} [options.beforeStore] - Delay or refuse a durable write.
  * @param {Map<string, unknown>} [options.storedDirectory] - Retained names from a prior incarnation.
  * @param {bigint} [options.firstNumber] - First new mailbox number after restart.
+ * @param {(number: bigint, strings: string[]) => Promise<void>} [options.beforeReply]
  */
 const makeLiveMailbox = ({
   onEcho,
   beforeStore,
   storedDirectory,
   firstNumber = 1n,
+  beforeReply,
 } = {}) => {
   /** @type {Map<string, unknown>} */
   const directory = new Map([
@@ -201,6 +203,7 @@ const makeLiveMailbox = ({
       echoSend(keyOf(recipient), strings);
     },
     reply: async (number, strings) => {
+      await beforeReply?.(number, strings);
       sent.push({ replyTo: number, strings: [...strings] });
       echoSend('@host', strings, `in-${number}`);
     },
@@ -1883,4 +1886,341 @@ test('cancelling an image request checkpoints receipts before stop and recovers 
   );
   t.is(decodeImageResult(recovered.content), undefined);
   t.regex(recovered.content, /Not replayed after an incomplete turn/);
+});
+
+for (const protocol of ['responses', 'messages']) {
+  for (const scenario of [
+    'reply-dismiss-empty',
+    'reply-dismiss-incomplete',
+    'empty-before-reply',
+    'failed-reply-empty',
+    'other-message-reply-empty',
+    'dismiss-empty',
+    'failed-error-delivery',
+  ]) {
+    test(`subscription ${protocol} terminal recovery: ${scenario}`, async t => {
+      t.timeout(15_000);
+      let replyAttempts = 0;
+      const mailbox = makeLiveMailbox({
+        beforeReply: async number => {
+          replyAttempts += 1;
+          if (mailbox.dismissed.includes(number)) {
+            throw Error('No such message after dismiss');
+          }
+          if (
+            replyAttempts === 1 &&
+            ['failed-reply-empty', 'failed-error-delivery'].includes(scenario)
+          ) {
+            throw Error('Reply delivery failed');
+          }
+        },
+      });
+      const requests = [];
+      let firstNumber;
+      const opaque = harden({
+        type: 'reasoning',
+        id: 'terminal-reasoning',
+        encrypted_content: 'retained-terminal-context',
+      });
+      const call = (name, number) => ({
+        type: 'function_call',
+        id: `item-${requests.length}`,
+        call_id: `call-${requests.length}`,
+        name,
+        arguments: JSON.stringify({
+          messageNumber: Number(number),
+          ...(name === 'reply' ? { strings: ['Explicit answer'] } : {}),
+        }),
+        status: 'completed',
+      });
+      const subscription = Far('TerminalSubscription', {
+        describe: () => harden({ models: ['test-luna'] }),
+        openEndpoint: () =>
+          Far('TerminalEndpoint', {
+            requestByteStream: request => {
+              const body = JSON.parse(request.body);
+              requests.push(body);
+              const userText = (body.input ?? body.messages)
+                .filter(item => item.role === 'user')
+                .map(item =>
+                  typeof item.content === 'string'
+                    ? item.content
+                    : item.content
+                        .filter(b => b.type === 'text')
+                        .map(b => b.text)
+                        .join('\n'),
+                )
+                .join('\n');
+              const number = BigInt(
+                [...userText.matchAll(/\[Inbox message #(\d+)\]/g)].at(-1)[1],
+              );
+              firstNumber ??= number;
+              let output = [];
+              let type = 'response.completed';
+              if (number !== firstNumber) {
+                output = [
+                  {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [
+                      { type: 'output_text', text: 'Next turn works.' },
+                    ],
+                  },
+                ];
+              } else if (requests.length === 1) {
+                if (
+                  scenario.startsWith('reply-dismiss') ||
+                  scenario === 'failed-reply-empty'
+                ) {
+                  output = [call('reply', number)];
+                } else if (scenario === 'other-message-reply-empty') {
+                  output = [call('reply', number + 100n)];
+                } else if (scenario === 'dismiss-empty') {
+                  output = [call('dismiss', number)];
+                }
+              } else if (
+                requests.length === 2 &&
+                scenario.startsWith('reply-dismiss')
+              ) {
+                output = [call('dismiss', number)];
+              } else if (scenario === 'reply-dismiss-empty') {
+                output = [opaque];
+              } else if (scenario === 'reply-dismiss-incomplete') {
+                type = 'response.incomplete';
+              }
+              const blocks = output.map(item =>
+                item.type === 'reasoning'
+                  ? {
+                      type: 'thinking',
+                      thinking: '',
+                      signature: item.encrypted_content,
+                    }
+                  : item.type === 'function_call'
+                    ? {
+                        type: 'tool_use',
+                        id: item.call_id,
+                        name: item.name,
+                        input: JSON.parse(item.arguments),
+                      }
+                    : {
+                        type: 'text',
+                        text: item.content.map(part => part.text).join(''),
+                      },
+              );
+              const events =
+                protocol === 'messages'
+                  ? [
+                      {
+                        type: 'message_start',
+                        message: {
+                          type: 'message',
+                          role: 'assistant',
+                          content: [],
+                        },
+                      },
+                      ...blocks.flatMap((block, index) => [
+                        {
+                          type: 'content_block_start',
+                          index,
+                          content_block: block,
+                        },
+                        { type: 'content_block_stop', index },
+                      ]),
+                      {
+                        type: 'message_delta',
+                        delta: {
+                          stop_reason:
+                            type === 'response.incomplete'
+                              ? 'max_tokens'
+                              : blocks.some(b => b.type === 'tool_use')
+                                ? 'tool_use'
+                                : 'end_turn',
+                        },
+                      },
+                      { type: 'message_stop' },
+                    ]
+                  : [
+                      {
+                        type,
+                        response: {
+                          status:
+                            type === 'response.completed'
+                              ? 'completed'
+                              : 'incomplete',
+                          output,
+                        },
+                      },
+                    ];
+              const bytes = new TextEncoder().encode(
+                events
+                  .map(event => `data: ${JSON.stringify(event)}\n\n`)
+                  .join(''),
+              );
+              return harden({
+                status: 200,
+                contentType: 'text/event-stream',
+                reader: bytesReaderFromIterator([bytes][Symbol.iterator]()),
+              });
+            },
+            revoke: () => {},
+          }),
+      });
+      const loop = spawnWorkerLoop(
+        mailbox.powers,
+        undefined,
+        harden({
+          kind:
+            protocol === 'messages'
+              ? 'subscription-messages'
+              : 'subscription-responses',
+          subscription,
+          model: 'test-luna',
+        }),
+        'test prompt',
+        { sessionId: 'terminal-recovery' },
+      );
+      t.teardown(async () => {
+        mailbox.close();
+        await loop;
+      });
+      mailbox.deliver({ from: locatorFor(HOST), strings: ['First request'] });
+      t.true(
+        await until(
+          () =>
+            requests.length > 0 &&
+            mailbox.directory.get('fae-conversation')?.turnActive === false,
+        ),
+      );
+      const replies = mailbox.sent.filter(
+        record => record.replyTo !== undefined,
+      );
+      if (scenario.startsWith('reply-dismiss')) {
+        t.is(
+          replyAttempts,
+          1,
+          'never reply again to the dismissed inbound message',
+        );
+        t.deepEqual(
+          replies.map(record => record.strings[0]),
+          ['Explicit answer'],
+        );
+      } else if (scenario === 'dismiss-empty') {
+        t.is(
+          replyAttempts,
+          0,
+          'failure stays in logs once the inbound message is dismissed',
+        );
+      } else if (scenario === 'failed-error-delivery') {
+        t.is(replyAttempts, 1);
+        t.is(replies.length, 0);
+      } else {
+        t.true(
+          replies.at(-1).strings[0].includes('could not complete'),
+          'empty output without a successful current-message reply remains a failure',
+        );
+      }
+      if (scenario === 'reply-dismiss-empty') {
+        const nodes = [...mailbox.directory.values()].filter(
+          value => value && typeof value === 'object' && 'messages' in value,
+        );
+        t.true(
+          nodes.some(node =>
+            node.messages.some(message =>
+              protocol === 'messages'
+                ? message.messagesOutput?.content.some(
+                    b => b.signature === opaque.encrypted_content,
+                  )
+                : message.responsesOutput?.items.some(
+                    item => item.id === opaque.id,
+                  ),
+            ),
+          ),
+        );
+      }
+      mailbox.deliver({ from: locatorFor(HOST), strings: ['Second request'] });
+      t.true(
+        await until(() =>
+          mailbox.sent.some(record => record.strings[0] === 'Next turn works.'),
+        ),
+      );
+      t.true(
+        await until(
+          () => mailbox.directory.get('fae-conversation')?.turnActive === false,
+        ),
+      );
+      if (scenario === 'reply-dismiss-empty') {
+        t.true(
+          (protocol === 'messages'
+            ? requests
+                .at(-1)
+                .messages.flatMap(m => m.content)
+                .map(b => ({ encrypted_content: b.signature }))
+            : requests.at(-1).input
+          ).some(item => item.encrypted_content === opaque.encrypted_content),
+        );
+      }
+      mailbox.close();
+      await loop;
+    });
+  }
+}
+
+test('failed provider-selection notification clears the turn fence and next turn can recover', async t => {
+  const recovered = harden({
+    chat: async () =>
+      harden({
+        message: { role: 'assistant', content: 'Recovered provider.' },
+      }),
+  });
+  const config = {
+    host: 'https://openrouter.ai/api/v1',
+    model: 'test-model',
+    provider: undefined,
+  };
+  let attempts = 0;
+  const mailbox = makeLiveMailbox({
+    beforeReply: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        config.provider = recovered;
+        throw Error('Original message unavailable');
+      }
+    },
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    undefined,
+    config,
+    'test prompt',
+    {
+      provideAuthToken: async () => {
+        throw Error('Credential unavailable');
+      },
+    },
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['No provider yet'] });
+  t.true(
+    await until(
+      () =>
+        attempts === 1 &&
+        mailbox.directory.get('fae-conversation')?.turnActive === false,
+    ),
+  );
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['Provider restored'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.strings[0] === 'Recovered provider.'),
+    ),
+  );
+  t.true(
+    await until(
+      () => mailbox.directory.get('fae-conversation')?.turnActive === false,
+    ),
+  );
+  mailbox.close();
+  await loop;
 });

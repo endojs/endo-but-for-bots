@@ -6,6 +6,8 @@ import {
   createProvider,
   makeSubscriptionResponsesProvider,
   assertSubscriptionResponsesRecipe,
+  makeSubscriptionMessagesProvider,
+  assertSubscriptionMessagesRecipe,
 } from '@endo/lal/providers/index.js';
 
 /**
@@ -43,14 +45,26 @@ export const makeProviderOwner = ({
     Fail`Inline provider authToken is unsupported; use a Secrets resolver`;
   config.kind === undefined ||
     config.kind === 'subscription-responses' ||
+    config.kind === 'subscription-messages' ||
     Fail`Unsupported Fae provider kind`;
-  const subscriptionBacked = config.kind === 'subscription-responses';
+  const subscriptionBacked = [
+    'subscription-responses',
+    'subscription-messages',
+  ].includes(config.kind || '');
+  const assertRecipe =
+    config.kind === 'subscription-messages'
+      ? assertSubscriptionMessagesRecipe
+      : assertSubscriptionResponsesRecipe;
+  const makeSubscriptionProvider =
+    config.kind === 'subscription-messages'
+      ? makeSubscriptionMessagesProvider
+      : makeSubscriptionResponsesProvider;
   if (subscriptionBacked) {
-    assertSubscriptionResponsesRecipe(config);
+    assertRecipe(config);
     sessionId !== undefined || Fail`Stable inference session identity required`;
   } else {
     !Object.hasOwn(config, 'subscription') ||
-      Fail`Subscription requires the subscription-responses provider kind`;
+      Fail`Subscription requires a supported subscription provider kind`;
   }
   /** @type {any} */
   let cachedProvider;
@@ -74,7 +88,7 @@ export const makeProviderOwner = ({
     // the whole configuration; there is no token to follow.
     if (config.provider) return config.provider;
     if (subscriptionBacked) {
-      cachedProvider ??= makeSubscriptionResponsesProvider({
+      cachedProvider ??= makeSubscriptionProvider({
         subscription: config.subscription,
         sessionId: /** @type {string} */ (sessionId),
         model: config.model || '',

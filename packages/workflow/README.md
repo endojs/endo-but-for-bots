@@ -110,27 +110,26 @@ reachability and deaf-timer warnings).
 
 ## Provisioning
 
-The plugin module exports the standard unconfined-caplet maker.
-Provision it through the daemon's generic pathway, with a dedicated
-guest as its powers, and **pin it** so it wakes on restart:
-
-```
-# a dedicated agent for the service
-endo mkguest workflow-powers workflow-agent
-
-# provision the plugin from its entry module; pinning the result is
-# what revives it at boot (--UNCONFINED takes a file path)
-endo make --UNCONFINED node_modules/@endo/workflow/src/index.js \
-  --powers workflow-agent --name workflow-service
-endo cp workflow-service @pins/workflow-service
-```
-
-`@endo/workflow/setup.js` does the same unattended, for a daemon that lists
-it in `ENDO_EXTRA`:
+Use the host setup for both fresh installations and upgrades:
 
 ```
 endo run --UNCONFINED node_modules/@endo/workflow/setup.js --powers @agent
 ```
+
+It retains the service at `@pins/installations/workflow/service` and preserves the direct
+`@pins/workflow-service` alias required to wake stored runs at daemon startup.
+The dedicated guest and its handle live at `@pins/installations/workflow/state`
+and `@pins/installations/workflow/state-handle`.
+Do not grant this installation directory as a substitute for the workflow service.
+
+Upgrades move the old `workflow-agent` and `workflow-powers` bindings by identity.
+Setup validates the service-to-guest and guest-to-handle references before moving anything,
+refuses conflicting aliases, and resumes interrupted copy/remove operations.
+An absent public service name is recovered from its existing pin; conflicting pins or
+incomplete installations require restoring the existing bindings, never replacement state.
+Floot grants and saved Workflows views use `@pins/installations/workflow/service`.
+Legacy root service aliases are adopted by identity and removed after the private
+binding and startup pin have been verified.
 
 It is idempotent — a re-run keeps the installed service, so the formula
 identity that grants derived from it depend on never changes — and it

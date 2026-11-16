@@ -36,6 +36,7 @@
  * @typedef {object} Block
  * @property {'paragraph' | 'heading' | 'code-fence' | 'list-item' | 'list' | 'table' | 'blockquote' | 'horizontal-rule'} type
  * @property {number} [level]
+ * @property {boolean} [closed] - Whether a code fence has its closing delimiter.
  * @property {string} [language]
  * @property {Token[] | string} [content]
  * @property {Block[]} [children]
@@ -51,6 +52,7 @@ import { parseBlocks } from '@endo/markmdown';
 import { Fragment, h } from 'preact';
 
 import { CodeFenceColorizer } from './code-fence.js';
+import { InteractiveWidget } from './interactive-widget.js';
 
 // The chip-placeholder character (Unicode private use area). Must match the
 // constant used by `prepareTextWithPlaceholders` in markdown-render.js. It is
@@ -273,6 +275,14 @@ const renderBlockList = (blocks, renderToken, counter, colorize) => {
         // imperative renderer.
         const plain = renderCodeContent(content, renderToken, counter);
         const language = block.language;
+        if (
+          language === 'endowidget' &&
+          block.closed &&
+          !content.includes(PLACEHOLDER)
+        ) {
+          out.push(h(InteractiveWidget, { key, source: content }));
+          break;
+        }
         // When a colorizer is supplied and the fence has a language, swap the
         // code element's content for a `CodeFenceColorizer`, which renders this
         // plain source immediately and asynchronously replaces it with Monaco

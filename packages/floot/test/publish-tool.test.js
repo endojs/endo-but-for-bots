@@ -568,3 +568,23 @@ test('a serve the server refuses is reported, and the pending id is kept', async
   );
   t.deepEqual(recorded, { id: 'c'.repeat(32), pending: true });
 });
+
+test('publication guidance distinguishes static files from a working backend', async t => {
+  const asset = makeAssetServer();
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeFilesystemCap(),
+  });
+  for (const guidance of [tool.schema().function.description, tool.help()]) {
+    t.regex(guidance, /index.html/);
+    t.regex(guidance, /relative asset paths/);
+    t.regex(guidance, /WebSocket\/CapTP/);
+    t.regex(guidance, /non-root prefix/);
+  }
+  const first = await tool.execute({});
+  const again = await tool.execute({});
+  t.is(first, again);
+  t.regex(first, /Static files only: no WebSocket\/CapTP/);
+  t.regex(first, /separately provisioned backend/);
+  t.is(asset.served.length, 1);
+});

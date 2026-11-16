@@ -370,7 +370,7 @@ test('a workspace is called a directory only where the backend mounts one', t =>
  * @returns {string[]}
  */
 const codeBlocks = prompt =>
-  [...prompt.matchAll(/```\n([\s\S]*?)\n```/g)].map(match => match[1]);
+  [...prompt.matchAll(/^```[^\n]*\n([\s\S]*?)\n```/gm)].map(match => match[1]);
 
 test('every recipe stands alone: what it calls, it first looks up', t => {
   // Each exec call is a fresh function body. A block that uses `git` because
@@ -510,4 +510,25 @@ test('custom preset instructions describe only selected template objects', t => 
   t.regex(prompt, /Development Shell/);
   t.regex(prompt, /HTTP_PROXY/);
   t.notRegex(prompt, /You hold full control/);
+});
+
+test('development guidance makes workflow, transport and shell lifetimes explicit', t => {
+  const prompt = composePresetPrompt({ presetId: 'development' });
+  for (const text of [
+    'If handoffDesign is in your current tool list',
+    'continue authorized implementation directly',
+    'Background',
+    'same command with cleanup on exit',
+    'no WebSocket/CapTP endpoint or daemon bootstrap',
+    'relative asset paths',
+    'a real update stream, reconnection and disposal',
+    'Component tests do not',
+    '/usr/bin/chromium',
+    '--use-angle=swiftshader --enable-unsafe-swiftshader',
+    'node /opt/endo-browser-smoke.mjs',
+    'requestNetworkPolicyChange',
+  ])
+    t.true(prompt.includes(text), text);
+  t.false(prompt.includes('requestSandboxNetworkPolicy'));
+  t.false(prompt.includes('Re-run\npublishWorkspace after'));
 });

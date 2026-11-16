@@ -26,6 +26,8 @@ const unsupportedSpecifier = new URL('../src/codex-client.js', import.meta.url)
 
 const makeFakeHost = () => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   /** @type {any[]} */
   const mints = [];
   /** @type {any[]} */
@@ -63,6 +65,13 @@ const makeFakeHost = () => {
         throw Error(`Unknown pet name: ${parts[0]}`);
       }
       return bindings.has(key(...parts));
+    },
+    /** @param {string[]} namePath */
+    async provideDirectory(namePath) {
+      for (let n = 1; n <= namePath.length; n += 1) {
+        const prefix = key(namePath.slice(0, n));
+        if (!bindings.has(prefix)) bindings.set(prefix, 'dir');
+      }
     },
     async makeDirectory(namePath) {
       bindings.set(key(...namePath), 'dir');
@@ -139,8 +148,18 @@ test.serial('mints both host formulas with null powers', async t => {
   const state = fake.mints.find(
     mint => mint.specifier === stateProviderSpecifier,
   );
-  t.deepEqual(native.options.resultName, ['codex-sandbox', 'native-sandbox']);
-  t.deepEqual(state.options.resultName, ['codex-sandbox', 'state-provider']);
+  t.deepEqual(native.options.resultName, [
+    '@pins',
+    'installations',
+    'codex-sandbox',
+    'native-sandbox',
+  ]);
+  t.deepEqual(state.options.resultName, [
+    '@pins',
+    'installations',
+    'codex-sandbox',
+    'state-provider',
+  ]);
   // Both are constructed with a slot-free stored null, not `@agent` and not
   // `@none` — which would be a denied-method guest capability, not null.
   t.is(fake.stored.length, 2);

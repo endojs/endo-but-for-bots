@@ -1,178 +1,33 @@
 // @ts-check
-
-import { makeCapTP } from '@endo/captp';
-import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
-import { makePromiseKit } from '@endo/promise-kit';
+import { connectApplication } from '@endo/browser-endo/application.js';
 import { noteDecodedErrorId } from '@endo/spaces-util/error-trace.js';
 
-/**
- * @typedef {object} ConnectionOptions
- * @property {string} gateway - Gateway address (host:port)
- * @property {string} agent - Agent formula identifier
+/** Chat consumes the shared application runtime, with an explicitly named agent.
+ * @param {{gateway?: string, agent?: string, relay?: string, relayDomain?: string, endowments?: Record<string, string>}} config
  */
-
-/**
- * @typedef {object} Connection
- * @property {Promise<unknown>} powers - The host (AGENT) powers object
- * @property {() => void} close - Close the connection
- * @property {Promise<void>} closed - Promise that resolves when closed
- */
-
-const ClientBootstrapInterface = M.interface('ClientBootstrap', {
-  ping: M.call().returns(),
-  reject: M.call(M.string()).returns(),
-});
-
-/**
- * Connect to the Endo daemon gateway via WebSocket and establish CapTP.
- * The connection fetches the ENDO capability using the nonce, then
- * retrieves the host (AGENT) powers from ENDO.
- *
- * @param {ConnectionOptions} options
- * @returns {Connection}
- */
-export const connectToGateway = ({ gateway, agent }) => {
-  // Match the page's security context: an HTTPS page (e.g. served over a
-  // Tailscale cert) cannot open an insecure ws:// socket (mixed content), so
-  // use wss:// there. Plain http/file origins keep ws://.
-  const secure =
-    typeof window !== 'undefined' && window.location.protocol === 'https:';
-  const gatewayUrl = `${secure ? 'wss' : 'ws'}://${gateway}/`;
-  console.log(`[Gateway] Connecting to ${gatewayUrl}...`);
-
-  const powersKit = makePromiseKit();
-  const closedKit = makePromiseKit();
-
-  let ws;
-  try {
-    ws = new WebSocket(gatewayUrl);
-    ws.binaryType = 'arraybuffer';
-    console.log('[Gateway] WebSocket created, waiting for connection...');
-  } catch (error) {
-    console.error('[Gateway] Failed to create WebSocket:', error);
-    powersKit.reject(error);
-    closedKit.reject(error);
-    return {
-      powers: powersKit.promise,
-      close: () => {},
-      closed: closedKit.promise,
-    };
-  }
-
-  const textEncoder = new TextEncoder();
-  const textDecoder = new TextDecoder();
-
-  /** @type {((message: unknown) => void) | undefined} */
-  let dispatch;
-  /** @type {(() => void) | undefined} */
-  let abort;
-
-  // Create client bootstrap that the gateway can call
-  const clientBootstrap = makeExo('ClientBootstrap', ClientBootstrapInterface, {
-    ping() {
-      console.log('[Gateway] Received ping from server');
+export const connectToGateway = config => {
+  const connection = connectApplication(
+    {
+      ...config,
+      endowments: config.endowments || { agent: config.agent || '' },
     },
-    reject(message) {
-      console.error('[Gateway] Server rejected:', message);
-      powersKit.reject(new Error(message));
+    {
+      capTpOptions: {
+        marshalLoadError: (error, id) => noteDecodedErrorId(error, id),
+      },
     },
+  );
+  return harden({
+    powers: connection.endowments.then(endowments => {
+      if (!Object.hasOwn(endowments, 'agent'))
+        throw new Error('Chat requires an agent endowment');
+      return endowments.agent;
+    }),
+    close: connection.close,
+    closed: connection.closed,
   });
-
-  ws.onopen = () => {
-    console.log('[Gateway] WebSocket connected, establishing CapTP...');
-
-    /** @param {unknown} message */
-    const send = message => {
-      const text = JSON.stringify(message);
-      console.log('[Gateway] Sending:', text.slice(0, 200));
-      const bytes = textEncoder.encode(text);
-      ws.send(bytes);
-    };
-
-    // Capture the wire-level errorId of every decoded CapTP error at marshal
-    // decode time. Under SES `errorTaming: 'safe'` the decoded error's public
-    // `.name` is the bare constructor name, so the id is not otherwise
-    // recoverable from the error object. The chat's `/js` failure path
-    // (`resolveErrorTrace`) reads it back to correlate the local error to its
-    // daemon-side trace (stack + producing worker) via `diagnostics().traces()`.
-    const captp = makeCapTP('Chat', send, clientBootstrap, {
-      marshalLoadError: (err, errorId) => noteDecodedErrorId(err, errorId),
-    });
-    dispatch = captp.dispatch;
-    abort = captp.abort;
-
-    console.log('[Gateway] CapTP established, fetching AGENT capability...');
-
-    // Get the gateway bootstrap and fetch the AGENT capability directly
-    const gatewayBootstrap = captp.getBootstrap();
-    E(gatewayBootstrap)
-      .fetch(agent)
-      .then(
-        host => {
-          console.log('[Gateway] AGENT (host) powers received successfully');
-          powersKit.resolve(host);
-        },
-        error => {
-          console.error('[Gateway] Failed to fetch AGENT:', error);
-          powersKit.reject(error);
-        },
-      );
-  };
-
-  ws.onmessage = event => {
-    if (dispatch) {
-      const bytes = new Uint8Array(event.data);
-      const text = textDecoder.decode(bytes);
-      console.log('[Gateway] Received:', text.slice(0, 200));
-      try {
-        const message = JSON.parse(text);
-        dispatch(message);
-      } catch (error) {
-        console.error('[Gateway] Failed to parse message:', error, text);
-      }
-    } else {
-      console.warn('[Gateway] Received message before CapTP initialized');
-    }
-  };
-
-  ws.onerror = event => {
-    console.error('[Gateway] WebSocket error:', event);
-    const error = new Error(
-      `WebSocket error connecting to ${gatewayUrl}. Is Endo running?`,
-    );
-    powersKit.reject(error);
-    closedKit.reject(error);
-  };
-
-  ws.onclose = event => {
-    console.log(
-      `[Gateway] WebSocket closed: code=${event.code}, reason=${event.reason || '(none)'}, wasClean=${event.wasClean}`,
-    );
-    if (abort) {
-      abort();
-    }
-    // If powers haven't been resolved yet, reject them
-    powersKit.reject(
-      new Error(
-        `WebSocket closed before powers received (code: ${event.code})`,
-      ),
-    );
-    closedKit.resolve(undefined);
-  };
-
-  const close = () => {
-    console.log('[Gateway] Closing connection...');
-    ws.close();
-  };
-
-  return {
-    powers: powersKit.promise,
-    close,
-    closed: closedKit.promise,
-  };
 };
+harden(connectToGateway);
 
-// Legacy export for backwards compatibility
 export const connectToHubCap = connectToGateway;
+harden(connectToHubCap);

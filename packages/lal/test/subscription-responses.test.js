@@ -6,7 +6,10 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 import { Far } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { makeSubscriptionResponsesProvider } from '../providers/subscription-responses.js';
+import {
+  makeSubscriptionResponsesProvider,
+  getEmptyResponsesOutput,
+} from '../providers/subscription-responses.js';
 import { abortableDelay } from '../providers/delay.js';
 // Exercise the real internal broker without exporting its constructor as API.
 // eslint-disable-next-line import/no-relative-packages
@@ -27,19 +30,20 @@ const callItem = {
   status: 'completed',
 };
 /** @param {any[]} [output] */
-const completion = (output = [textItem('Done')]) => ({
-  type: 'response.completed',
-  response: {
-    status: 'completed',
-    output,
-    usage: {
-      input_tokens: 100,
-      input_tokens_details: { cached_tokens: 60 },
-      output_tokens: 30,
-      output_tokens_details: { reasoning_tokens: 10 },
+const completion = (output = [textItem('Done')]) =>
+  /** @type {any} */ ({
+    type: 'response.completed',
+    response: {
+      status: 'completed',
+      output,
+      usage: {
+        input_tokens: 100,
+        input_tokens_details: { cached_tokens: 60 },
+        output_tokens: 30,
+        output_tokens_details: { reasoning_tokens: 10 },
+      },
     },
-  },
-});
+  });
 
 /**
  * @param {any[]} events
@@ -1257,4 +1261,34 @@ test('subscription Responses sends image tool results as native input_image bloc
     ],
   });
   t.is(subject.revocations(), 2);
+});
+
+test('validated empty completion retains opaque context without treating failed or forged output as terminal', async t => {
+  const opaque = {
+    type: 'reasoning',
+    id: 'empty-reasoning',
+    encrypted_content: 'retained',
+  };
+  const event = completion([opaque]);
+  event.response.usage = { input_tokens: 10, output_tokens: 2 };
+  const subject = fixture([event]);
+  t.teardown(() => subject.provider.dispose());
+  const error = await t.throwsAsync(() => subject.provider.chat([], []), {
+    message: /Empty Responses/,
+  });
+  const outcome = getEmptyResponsesOutput(error);
+  t.is(outcome.message.content, '');
+  t.deepEqual(outcome.message.responsesOutput.items, [opaque]);
+  t.is(outcome.usage.inputTokens, 10);
+  t.is(outcome.usage.outputTokens, 2);
+  t.is(
+    getEmptyResponsesOutput(Error('Empty Responses assistant output')),
+    undefined,
+  );
+  const incomplete = fixture([
+    { type: 'response.incomplete', response: { output: [] } },
+  ]);
+  t.teardown(() => incomplete.provider.dispose());
+  const failure = await t.throwsAsync(() => incomplete.provider.chat([], []));
+  t.is(getEmptyResponsesOutput(failure), undefined);
 });

@@ -9,7 +9,10 @@ const declaration = harden([
   { id: 'first', credsName: 'claude-creds' },
   { id: 'second', label: 'Second account', credsName: 'claude-subscription-2' },
 ]);
-/** @param {any} [members] @param {Record<string, string>} [extra] */
+/**
+ * @param {any} [members] @param {Record<string, string>} [extra]
+ * @param extra
+ */
 const read = (members = declaration, extra = {}) => {
   const pool = readClaudePool({
     ENDO_CLAUDE_SUBSCRIPTIONS: JSON.stringify(members),
@@ -53,12 +56,14 @@ const fixture = () => {
     has: async (...parts) =>
       parts[0] === 'secrets'
         ? secrets.has(parts[1])
-        : parts[1] === 'broker-powers' && present,
+        : parts.at(-1) === 'broker-powers' && present,
     lookup: async () => namespace,
-    identify: async (dir, name) =>
-      dir === 'secrets' ? secrets.get(name) : `holder:${name}`,
-    locate: async (dir, name) =>
-      dir === 'secrets' ? `host-route:${secrets.get(name)}` : `holder:${name}`,
+    identify: async (dir, ...parts) =>
+      dir === 'secrets' ? secrets.get(parts[0]) : `holder:${parts.at(-1)}`,
+    locate: async (dir, ...parts) =>
+      dir === 'secrets'
+        ? `host-route:${secrets.get(parts[0])}`
+        : `holder:${parts.at(-1)}`,
     provideGuest: async () => {
       writes.push('guest');
       present = true;
@@ -151,7 +156,7 @@ test('retained renewal holder cannot silently move to another Secrets record', a
   const withHolder = harden({
     ...host,
     has: async (...parts) =>
-      parts[0] === 'claude-sandbox' && parts[1] === 'credential-second'
+      parts[2] === 'claude-sandbox' && parts[3] === 'credential-second'
         ? true
         : host.has(...parts),
   });

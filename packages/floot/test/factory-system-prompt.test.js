@@ -142,7 +142,10 @@ const makeWorld = ({
         : hostStore.get(names.flat().join('/')),
     locate: name => `locator:${name}`,
     copy: () => undefined,
-    provideGuest: async (_name, { agentName }) => {
+    provideGuest: async (_name, { agentName: agentPath }) => {
+      const agentName = agentPath.join('/');
+      if (!hostStore.has(_name.join('/')))
+        hostStore.set(_name.join('/'), harden({}));
       await beforeGuest?.();
       if (!hostStore.has(agentName)) hostStore.set(agentName, makeGuest());
     },
@@ -208,7 +211,7 @@ test('subagent capability name collision rolls back without replacing inventory'
   t.teardown(world.close);
   const parent = await E(world.factory).createSession(hosted);
   const parentId = (await E(parent).getInfo()).id;
-  const guest = world.hostStore.get(`session-agent-${parentId}`);
+  const guest = world.hostStore.get(`floot-private-sessions/${parentId}/guest`);
   await E(guest).storeValue('explicit', 'source');
   world.duringNextTurn(async tools => {
     await t.throwsAsync(
@@ -237,7 +240,7 @@ test('subagent spawn installs explicit capabilities without inheriting the paren
   t.teardown(world.close);
   const parent = await E(world.factory).createSession(hosted);
   const parentId = (await E(parent).getInfo()).id;
-  const guest = world.hostStore.get(`session-agent-${parentId}`);
+  const guest = world.hostStore.get(`floot-private-sessions/${parentId}/guest`);
   const source = Far('ReadOnlySource', { read: () => 'approved source' });
   await E(guest).storeValue(source, 'source');
   await E(guest).storeValue('private', 'parent-only');
@@ -255,7 +258,9 @@ test('subagent spawn installs explicit capabilities without inheriting the paren
     s => s.parentSessionId === parentId,
   );
   t.truthy(child);
-  const childGuest = world.hostStore.get(`session-agent-${child.id}`);
+  const childGuest = world.hostStore.get(
+    `floot-private-sessions/${child.id}/guest`,
+  );
   t.is(await E(childGuest).lookup('project'), source);
   t.false(await E(childGuest).has('parent-only'));
   t.false(await E(childGuest).has('source'));
@@ -1307,7 +1312,7 @@ test('duplicate concurrent names and failed introductions do not leak reservatio
   t.teardown(world.close);
   const parent = await E(world.factory).createSession(hosted);
   const { id } = await E(parent).getInfo();
-  await E(world.hostStore.get(`session-agent-${id}`)).storeValue(
+  await E(world.hostStore.get(`floot-private-sessions/${id}/guest`)).storeValue(
     'value',
     'source',
   );
@@ -1449,7 +1454,7 @@ test('editable presets snapshot prompt and endowments across restart, later edit
   const parent = await E(world.factory).createAssistantSession();
   const info = await E(parent).getInfo();
   t.like(info, { presetId: custom.id, backendId: 'test', modelId: 'm' });
-  const guest = world.hostStore.get(`session-agent-${info.id}`);
+  const guest = world.hostStore.get(`floot-private-sessions/${info.id}/guest`);
   t.is(await E(guest).lookup('notebook'), firstGrant);
   const firstPrompt = await world.promptOf(parent);
   t.true(firstPrompt.includes('Standing instruction alpha.'));
@@ -1473,7 +1478,7 @@ test('editable presets snapshot prompt and endowments across restart, later edit
   );
   t.true((await world.promptOf(later)).includes('Standing instruction beta.'));
   const laterGuest = world.hostStore.get(
-    `session-agent-${(await E(later).getInfo()).id}`,
+    `floot-private-sessions/${(await E(later).getInfo()).id}/guest`,
   );
   t.is(await E(laterGuest).lookup('new-notebook'), secondGrant);
   t.false(await E(laterGuest).has('notebook'));
@@ -1489,7 +1494,9 @@ test('editable presets snapshot prompt and endowments across restart, later edit
     session => session.parentSessionId === info.id,
   );
   t.truthy(child);
-  const childGuest = world.hostStore.get(`session-agent-${child.id}`);
+  const childGuest = world.hostStore.get(
+    `floot-private-sessions/${child.id}/guest`,
+  );
   t.is(await E(childGuest).lookup('notebook'), firstGrant);
   t.false(await E(childGuest).has('new-notebook'));
   t.false(await E(guest).has('new-notebook'));

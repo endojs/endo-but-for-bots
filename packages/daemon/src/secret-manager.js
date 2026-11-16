@@ -3,6 +3,7 @@
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import { E } from '@endo/eventual-send';
 
 import {
   SecretAdminInterface,
@@ -178,6 +179,18 @@ export const makeSecretManager = ({
         ...extra,
       }),
     );
+  };
+
+  /** @type {Map<string, Set<() => void>>} */
+  const observers = new Map();
+  const notify = secretId => {
+    for (const listener of observers.get(secretId) || []) {
+      try {
+        listener();
+      } catch {
+        /* observers cannot block a secret mutation */
+      }
+    }
   };
 
   /** @type {Map<string, SecretBlob>} */
@@ -381,6 +394,7 @@ export const makeSecretManager = ({
                 updatedAt: now(),
               });
               persistence.writeSecretRecord(updated);
+              notify(secretId);
               // Synchronously adjacent to the commit: no reader turn can
               // interleave, so no read observes post-write bytes under the
               // pre-replacement generation, and a read starting after the
@@ -472,6 +486,7 @@ export const makeSecretManager = ({
           });
           // Persist the denial before attempting backend cleanup: fail closed.
           persistence.writeSecretRecord(revoked);
+          notify(secretId);
           try {
             await backend.revoke(operationId, before.backendRef);
             await audit(
@@ -518,6 +533,7 @@ export const makeSecretManager = ({
             );
             await removeKnownGrantPaths(paths);
             persistence.deleteSecret(secretId);
+            notify(secretId);
             await audit(
               secretId,
               'delete',
@@ -678,7 +694,35 @@ export const makeSecretManager = ({
     });
   };
 
-  return harden({ makeHostDirectory });
+  // Only the daemon receives this accessor. Exact local read facets are
+  // required; foreign objects and delegated wrappers cannot supply a source.
+  const sourceForBlob = blob => {
+    const secretId = secretIdForBlob.get(blob);
+    if (!secretId) throw fixedError('FOREIGN_SECRET');
+    requireRecord(secretId);
+    return harden({
+      read: () => E(blob).readBase64WithGeneration(),
+      state: () => {
+        const record = persistence.getSecretRecord(secretId);
+        return harden({
+          active: record?.state === 'active',
+          version:
+            (record?.generation || 0n) * 2n +
+            (record?.state === 'active' ? 0n : 1n),
+        });
+      },
+      watch: listener => {
+        const listeners = observers.get(secretId) || new Set();
+        observers.set(secretId, listeners);
+        listeners.add(listener);
+        return harden(() => {
+          listeners.delete(listener);
+          if (!listeners.size) observers.delete(secretId);
+        });
+      },
+    });
+  };
+  return harden({ makeHostDirectory, sourceForBlob });
 };
 harden(makeSecretManager);
 

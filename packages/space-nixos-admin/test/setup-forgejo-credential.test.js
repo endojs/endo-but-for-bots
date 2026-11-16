@@ -1,136 +1,96 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
-
 import { main } from '../setup-forgejo-credential.js';
 
-const AUDIENCE = 'https://git.example';
-
-/**
- * Records what the setup asked the host to do. `credential` is whatever is
- * already filed under the credential name, or undefined when the name is free.
- *
- * @param {object} [options]
- * @param {{ audience: string, kind: string }} [options.credential]
- */
-const makeAgent = ({ credential } = {}) => {
-  /** @type {{ provided: any[], rotated: any[] }} */
-  const calls = { provided: [], rotated: [] };
+const path = '@pins/installations/nixos/forgejo-credential';
+const makeAgent = ({ legacy = false, secret = false } = {}) => {
+  const bindings = new Map([['@pins', {}]]);
   const cap = {};
-  const controller = {
-    async inspect() {
-      return credential;
-    },
-    async rotate(material) {
-      calls.rotated.push(material);
-    },
+  if (legacy) bindings.set('forgejo-credential', cap);
+  const entries = [];
+  const secretCap = {};
+  const addSecret = () => {
+    entries.push({
+      petNamePaths: [['secrets', 'forgejo-password']],
+      summary: { state: 'active' },
+    });
+    bindings.set('secrets/forgejo-password', secretCap);
   };
+  if (secret) addSecret();
+  /** @type {{ imports: any[], provisions: any[] }} */
+  const calls = { imports: [], provisions: [] };
+  bindings.set('@secrets/catalog', { list: async () => entries });
+  bindings.set('@secrets/create', {
+    createBase64: (...args) => {
+      calls.imports.push(args);
+      addSecret();
+    },
+  });
+  const key = name => (Array.isArray(name) ? name.join('/') : name);
   const agent = {
-    async lookup(name) {
-      if (credential === undefined) {
-        throw new Error(`${name} is not bound`);
-      }
-      return cap;
+    has: (...parts) => bindings.has(parts.join('/')),
+    identify: (...parts) => bindings.get(parts.join('/')),
+    lookup: name => {
+      if (!bindings.has(key(name))) throw Error('Missing binding');
+      return bindings.get(key(name));
     },
-    async getGitCredentialController(candidate) {
-      if (candidate !== cap) {
-        throw new Error('not a daemon-minted Git credential cap');
-      }
-      return controller;
+    provideDirectory: name => {
+      if (!bindings.has(key(name))) bindings.set(key(name), {});
     },
-    async provideBasicCredential(name, options) {
-      calls.provided.push({ name, ...options });
+    remove: name => bindings.delete(name),
+    provideSecretBasicCredential: (name, options) => {
+      calls.provisions.push(options);
+      bindings.set(key(name), options.existingCredential || cap);
       return cap;
     },
   };
-  return { agent, calls };
+  return { agent, bindings, cap, entries, calls };
 };
-
-/**
- * Set env vars for one test and restore them afterwards.
- *
- * @param {import('ava').ExecutionContext} t
- * @param {Record<string, string>} env
- */
-const withEnv = (t, env) => {
-  const previous = { ...process.env };
-  Object.assign(process.env, env);
-  t.teardown(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in previous)) delete process.env[key];
-    }
-    Object.assign(process.env, previous);
-  });
+const env = {
+  ENDO_FORGEJO_FLOOT_PW: 'bootstrap-canary',
+  ENDO_FORGEJO_URL: 'https://git.example',
 };
-
-test('a host with no forge password provisions nothing', async t => {
-  withEnv(t, { ENDO_FORGEJO_FLOOT_PW: '', ENDO_FORGEJO_URL: AUDIENCE });
-  const { agent, calls } = makeAgent();
-
-  await main(agent);
-
-  t.deepEqual(calls.provided, []);
-  t.deepEqual(calls.rotated, []);
+test('fresh install imports once, keeps private credential, and reruns without overwriting secret', async t => {
+  const w = makeAgent();
+  await main(w.agent, env);
+  t.is(w.calls.imports.length, 1);
+  t.is(w.bindings.get(path), w.cap);
+  t.false(w.bindings.has('forgejo-credential'));
+  await main(w.agent, { ...env, ENDO_FORGEJO_FLOOT_PW: 'stale' });
+  t.is(w.calls.imports.length, 1);
+  t.is(w.calls.provisions[1].existingCredential, w.cap);
 });
-
-test('an unbound name is minted', async t => {
-  withEnv(t, {
-    ENDO_FORGEJO_FLOOT_PW: 'hunter2',
-    ENDO_FORGEJO_URL:
-      'https://embedded:must-not-leak@git.example/org/repo.git?token=nope',
-  });
-  const { agent, calls } = makeAgent();
-
-  await main(agent);
-
-  t.deepEqual(calls.provided, [
-    {
-      name: 'forgejo-credential',
-      audience: AUDIENCE,
-      username: 'floot',
-      password: 'hunter2',
-    },
-  ]);
-  t.deepEqual(calls.rotated, []);
+test('migration preserves legacy capability and respects existing secret', async t => {
+  const w = makeAgent({ legacy: true, secret: true });
+  await main(w.agent, env);
+  t.is(w.calls.provisions[0].existingCredential, w.cap);
+  t.is(w.bindings.get(path), w.cap);
+  t.false(w.bindings.has('forgejo-credential'));
+  t.is(w.calls.imports.length, 0);
 });
-
-test('an invalid forge URL is rejected without provisioning', async t => {
-  withEnv(t, {
-    ENDO_FORGEJO_FLOOT_PW: 'hunter2',
-    ENDO_FORGEJO_URL: 'ssh://git.example/org/repo.git',
-  });
-  const { agent, calls } = makeAgent();
-
-  await t.throwsAsync(() => main(agent), {
-    message: /absolute HTTP\(S\) URL/,
-  });
-  t.deepEqual(calls.provided, []);
-  t.deepEqual(calls.rotated, []);
+test('missing bootstrap password does not install an unused system', async t => {
+  const w = makeAgent();
+  await main(w.agent, {});
+  t.is(w.calls.provisions.length, 0);
+  t.false(w.bindings.has('@pins/installations'));
 });
-
-// The regression this setup exists to prevent: re-minting would bind the name
-// to a fresh formula and leave every GitRemote from the previous process
-// holding a revoked cap, which only surfaces when a push fails.
-test('a bound name is rotated in place, not re-minted', async t => {
-  withEnv(t, { ENDO_FORGEJO_FLOOT_PW: 'hunter2', ENDO_FORGEJO_URL: AUDIENCE });
-  const { agent, calls } = makeAgent({
-    credential: { audience: AUDIENCE, kind: 'basic' },
-  });
-
-  await main(agent);
-
-  t.deepEqual(calls.rotated, [{ username: 'floot', password: 'hunter2' }]);
-  t.deepEqual(calls.provided, []);
+test('revoked and deleted secrets cannot be resurrected by bootstrap environment', async t => {
+  const w = makeAgent();
+  await main(w.agent, env);
+  w.entries[0].summary.state = 'revoked';
+  await t.throwsAsync(main(w.agent, env), { message: /revoked/ });
+  w.entries.length = 0;
+  w.bindings.delete('secrets/forgejo-password');
+  await t.throwsAsync(main(w.agent, env), { message: /missing/ });
+  t.is(w.calls.imports.length, 1);
 });
-
-test('a credential for another audience is replaced rather than rotated', async t => {
-  withEnv(t, { ENDO_FORGEJO_FLOOT_PW: 'hunter2', ENDO_FORGEJO_URL: AUDIENCE });
-  const { agent, calls } = makeAgent({
-    credential: { audience: 'https://git.elsewhere', kind: 'basic' },
-  });
-
-  await main(agent);
-
-  t.deepEqual(calls.rotated, []);
-  t.is(calls.provided.length, 1);
-  t.is(calls.provided[0].audience, AUDIENCE);
+test('invalid URL and conflicting capability bindings refuse', async t => {
+  const w = makeAgent();
+  await t.throwsAsync(
+    main(w.agent, { ...env, ENDO_FORGEJO_URL: 'ssh://git.example' }),
+    { message: /HTTP/ },
+  );
+  await main(w.agent, env);
+  w.bindings.set('forgejo-credential', {});
+  await t.throwsAsync(main(w.agent, env), { message: /Conflicting/ });
 });

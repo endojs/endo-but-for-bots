@@ -2,6 +2,10 @@
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import {
+  SESSION_CONTROL_NAMES,
+  forgetSessionStorage,
+} from './session-storage-layout.js';
 
 // One host binding, regardless of the number of sessions or journal records.
 const ROOT = 'floot-private-sessions';
@@ -36,6 +40,7 @@ const createRoot = host => {
 export const createPrivateTurnStorage = async (host, sessionId) => {
   assertSessionId(sessionId);
   await createRoot(host);
+  forgetSessionStorage(host, sessionId);
   !(await E(host).has(ROOT, sessionId)) ||
     Fail`Private journal namespace already exists`;
   await E(host).createDirectory(harden([ROOT, sessionId]));
@@ -115,12 +120,15 @@ const assertSchema = (schema, sessionId) => {
  */
 export const retirePrivateTurnStorage = async (host, sessionId) => {
   assertSessionId(sessionId);
+  // A lost unlink acknowledgement must not cache a directory that is gone.
+  forgetSessionStorage(host, sessionId);
   if (!(await E(host).has(ROOT))) return;
   if (!(await E(host).has(ROOT, sessionId))) return;
   await openDirectory(host, sessionId);
   for (const name of await E(host).list(ROOT, sessionId)) {
     if (
       name !== 'schema' &&
+      !SESSION_CONTROL_NAMES.includes(name) &&
       !/^floot-attachment-(?:[0-9]|[12][0-9]|3[01])$/.test(name)
     ) {
       if (name.startsWith('floot-network-')) assertNetworkName(sessionId, name);
@@ -128,6 +136,7 @@ export const retirePrivateTurnStorage = async (host, sessionId) => {
     }
   }
   await E(host).remove(ROOT, sessionId);
+  forgetSessionStorage(host, sessionId);
 };
 harden(retirePrivateTurnStorage);
 

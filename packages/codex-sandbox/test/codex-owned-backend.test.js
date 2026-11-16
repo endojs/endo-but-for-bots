@@ -67,7 +67,14 @@ test('Codex refuses a storage owner holding another provider before creating an 
   };
   let ownerRequests = 0;
   const host = Far('Host', {
-    identify: (_namespace, name) => name,
+    identify: (...names) => {
+      t.deepEqual(names.slice(0, -1), [
+        '@pins',
+        'installations',
+        'codex-sandbox',
+      ]);
+      return names.at(-1);
+    },
     diagnostics: () =>
       Far('Diagnostics', {
         getFormula: name =>

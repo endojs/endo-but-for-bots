@@ -356,3 +356,116 @@ test('remote control connects first, ignores second and third, entagles cancella
   await t.throwsAsync(() => bob2Cancelled);
   await t.throwsAsync(() => bob3Cancelled);
 });
+
+test('remote control does not retain idle handles or disconnected ephemeral peers', async t => {
+  await null;
+  for (const localNode of ['a', 'z']) {
+    const provide = makeRemoteControlProvider(localNode);
+    for (let index = 0; index < 32; index += 1) {
+      const remoteNode = `m-${index}`;
+      const control = provide(remoteNode);
+      t.is(control.getStateName(), 'start');
+      t.deepEqual(provide.getConnectionStates(), {});
+
+      const transport = makePromiseKit();
+      const incarnation = makePromiseKit();
+      const gateway = makeFakeGateway();
+      if (index % 2 === 0) {
+        control.accept(gateway, transport.reject, transport.promise);
+      } else {
+        control.connect(() => gateway, transport.reject, transport.promise);
+      }
+      // Exercise replacement state objects as well as the initial connected
+      // state. Both node orderings must observe their latest incarnation.
+      t.is(
+        control.connect(
+          () => makeFakeGateway(),
+          incarnation.reject,
+          incarnation.promise,
+        ),
+        gateway,
+      );
+      t.is(Object.keys(provide.getConnectionStates()).length, 1);
+      transport.reject(new Error('Tab closed'));
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all([
+        t.throwsAsync(() => transport.promise),
+        t.throwsAsync(() => incarnation.promise),
+      ]);
+      t.is(control.getStateName(), 'start');
+      t.deepEqual(provide.getConnectionStates(), {});
+    }
+  }
+});
+
+test('retained handles share a replacement controller and ignore old cancellation', async t => {
+  const provide = makeRemoteControlProvider('alice');
+  const oldHandle = provide('bob');
+  const initial = makePromiseKit();
+  oldHandle.connect(() => makeFakeGateway(), initial.reject, initial.promise);
+  initial.reject(new Error('First transport closed'));
+  await t.throwsAsync(() => initial.promise);
+  t.deepEqual(provide.getConnectionStates(), {});
+
+  const newHandle = provide('bob');
+  const replaced = makePromiseKit();
+  let replacedCancelled = false;
+  newHandle.accept(
+    makeFakeGateway(),
+    () => {
+      replacedCancelled = true;
+    },
+    replaced.promise,
+  );
+  const active = makePromiseKit();
+  const gateway = makeFakeGateway();
+  oldHandle.accept(gateway, active.reject, active.promise);
+  t.true(
+    replacedCancelled,
+    'old handle must replace the new handle’s current controller',
+  );
+
+  // The superseded transport's actual close can arrive after the replacement
+  // is installed; it must not remove that replacement from the provider map.
+  replaced.reject(new Error('Delayed old transport close'));
+  await t.throwsAsync(() => replaced.promise);
+  t.deepEqual(provide.getConnectionStates(), { bob: 'accepted' });
+  const incarnation = makePromiseKit();
+  let dialed = false;
+  const received = newHandle.connect(
+    () => {
+      dialed = true;
+      return makeFakeGateway();
+    },
+    incarnation.reject,
+    incarnation.promise,
+  );
+  t.false(dialed);
+  t.is(received, gateway);
+
+  active.reject(new Error('Replacement transport closed'));
+  await Promise.all([
+    t.throwsAsync(() => active.promise),
+    t.throwsAsync(() => incarnation.promise),
+  ]);
+  t.is(oldHandle.getStateName(), 'start');
+  t.is(newHandle.getStateName(), 'start');
+  t.deepEqual(provide.getConnectionStates(), {});
+});
+
+test('synchronous dial failure leaves no cached idle controller', t => {
+  const provide = makeRemoteControlProvider('alice');
+  const lifetime = makePromiseKit();
+  t.throws(
+    () =>
+      provide('bob').connect(
+        () => {
+          throw new Error('Dial failed');
+        },
+        lifetime.reject,
+        lifetime.promise,
+      ),
+    { message: 'Dial failed' },
+  );
+  t.deepEqual(provide.getConnectionStates(), {});
+});

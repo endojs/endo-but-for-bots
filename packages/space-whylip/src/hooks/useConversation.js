@@ -1,13 +1,37 @@
 // @ts-check
 /* eslint-disable no-await-in-loop */
 
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from 'preact/hooks';
 import { E } from '@endo/eventual-send';
+import { parseLocator } from '@endo/daemon/locator.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   makeConversationTree,
   makeMemoryBackend,
 } from '@endo/conversation-tree';
+
+/**
+ * Compare mailbox addresses without transport hints or other locator metadata.
+ * @param {unknown} left
+ * @param {unknown} right
+ */
+const sameMailbox = (left, right) => {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  try {
+    const a = parseLocator(left);
+    const b = parseLocator(right);
+    return a.number === b.number && a.node === b.node;
+  } catch {
+    return false;
+  }
+};
+harden(sameMailbox);
 
 // `@endo/conversation-tree` does not expose its `./types.js` through its
 // package `exports` map, so the structural shape of a conversation node used
@@ -186,7 +210,10 @@ const parseResponse = text => {
  * @param {unknown} powers - Resolved endo powers (the fae agent's profile)
  */
 export const useConversation = powers => {
-  const [tree] = useState(() => makeConversationTree(makeMemoryBackend()));
+  const tree = useMemo(
+    () => makeConversationTree(makeMemoryBackend()),
+    [powers],
+  );
   const [nodes, setNodes] = useState(/** @type {TreeNode[]} */ ([]));
   const [activeNodeId, setActiveNodeId] = useState(
     /** @type {string | null} */ (null),
@@ -198,6 +225,8 @@ export const useConversation = powers => {
   const [sending, setSending] = useState(false);
 
   const treeRef = useRef(tree);
+  treeRef.current = tree;
+  const nodeMessageNumbers = useMemo(() => new Map(), [tree]);
   /** Track format-error retries to avoid infinite correction loops */
   const formatRetryRef = useRef(0);
 
@@ -205,7 +234,7 @@ export const useConversation = powers => {
    * Rebuild the flat node list from the tree for rendering.
    */
   const refreshNodes = useCallback(async () => {
-    const roots = await treeRef.current.getRoots();
+    const roots = await tree.getRoots();
     /** @type {TreeNode[]} */
     const flat = [];
 
@@ -224,7 +253,7 @@ export const useConversation = powers => {
         parsed = parseResponse(content);
       }
 
-      const children = await treeRef.current.getChildren(node.id);
+      const children = await tree.getChildren(node.id);
 
       flat.push({
         id: node.id,
@@ -244,14 +273,21 @@ export const useConversation = powers => {
       await walk(root, 0);
     }
 
-    setNodes(flat);
-  }, []);
+    if (treeRef.current === tree) setNodes(flat);
+  }, [tree]);
 
   /**
    * Initialize: sync from mailbox and start streaming.
    */
   useEffect(() => {
     let cancelled = false;
+    const isCurrent = () => !cancelled && treeRef.current === tree;
+    setNodes([]);
+    setActiveNodeId(null);
+    setActiveScene(null);
+    setActiveNarrative('');
+    setSending(false);
+    formatRetryRef.current = 0;
     /**
      * The live message-stream iterator, held so cleanup can close the remote
      * stream eagerly rather than leaving the daemon subscription open until the
@@ -273,27 +309,35 @@ export const useConversation = powers => {
         const messageToNodeId = new Map();
 
         for (const msg of messages) {
-          if (cancelled) return;
+          if (!isCurrent()) return;
 
           const { messageId, replyTo, from: fromId, strings, type } = msg;
-          if (messageId) {
+          if (
+            typeof messageId === 'string' &&
+            type === 'package' &&
+            Array.isArray(strings) &&
+            !messageToNodeId.has(messageId)
+          ) {
             let text = '';
             if (type === 'package' && Array.isArray(strings)) {
               text = strings.join('').trim();
             }
 
-            const role = fromId === selfId ? 'user' : 'assistant';
+            const role = sameMailbox(fromId, selfId) ? 'user' : 'assistant';
             let parentId = null;
             if (typeof replyTo === 'string' && messageToNodeId.has(replyTo)) {
               parentId = messageToNodeId.get(replyTo) || null;
             }
 
-            const node = await treeRef.current.addNode(
+            const node = await tree.addNode(
               parentId,
               [{ role, content: text }],
               { messageId },
             );
+            if (!isCurrent()) return;
             messageToNodeId.set(messageId, node.id);
+            if (typeof msg.number === 'bigint')
+              nodeMessageNumbers.set(node.id, msg.number);
 
             if (role === 'assistant') {
               const parsed = parseResponse(text);
@@ -305,7 +349,7 @@ export const useConversation = powers => {
         }
 
         await refreshNodes();
-        if (cancelled) return;
+        if (!isCurrent()) return;
 
         // Stream new messages. `followMessages()` returns an exo-stream
         // PassableReader (it exposes `stream()`, not `next()`), so it must be
@@ -318,7 +362,7 @@ export const useConversation = powers => {
         const MAX_FORMAT_RETRIES = 1;
 
         for await (const msg of messageIter) {
-          if (cancelled) break;
+          if (!isCurrent()) break;
 
           const {
             messageId,
@@ -326,13 +370,16 @@ export const useConversation = powers => {
             from: fromId,
             strings,
             type,
+            number,
           } = /** @type {any} */ (msg);
-          if (!messageId) {
+          if (
+            typeof messageId !== 'string' ||
+            type !== 'package' ||
+            !Array.isArray(strings)
+          ) {
             // skip
           } else if (messageToNodeId.has(messageId)) {
             // Skip messages already processed during init
-          } else if (fromId === selfId) {
-            // Skip our own outgoing messages (already tracked on send)
           } else {
             let text = '';
             if (type === 'package' && Array.isArray(strings)) {
@@ -344,46 +391,58 @@ export const useConversation = powers => {
               parentId = messageToNodeId.get(replyTo) || null;
             }
 
-            const node = await treeRef.current.addNode(
+            const node = await tree.addNode(
               parentId,
-              [{ role: 'assistant', content: text }],
+              [
+                {
+                  role: sameMailbox(fromId, selfId) ? 'user' : 'assistant',
+                  content: text,
+                },
+              ],
               { messageId },
             );
+            if (!isCurrent()) return;
             messageToNodeId.set(messageId, node.id);
-
-            const parsed = parseResponse(text);
-
-            // If the response looks like malformed JSON and we haven't
-            // exhausted retries, send the error back to the agent so it
-            // can reformat its answer.
-            if (
-              parsed.parseError &&
-              // eslint-disable-next-line @endo/restrict-comparison-operands
-              formatRetryRef.current < MAX_FORMAT_RETRIES
-            ) {
-              formatRetryRef.current += 1;
-              console.warn(
-                '[whylip] Parse error, requesting reformat:',
-                parsed.parseError,
-              );
-              setActiveNarrative('Reformatting response...');
-
-              await E(/** @type {any} */ (powers)).send(
-                'fae',
-                [
-                  `FORMAT_ERROR: ${parsed.parseError}\n\nHere is your previous response that failed to parse:\n${text}`,
-                ],
-                [],
-                [],
-              );
-            } else {
-              setActiveScene(parsed.scene);
-              setActiveNarrative(parsed.narrative);
+            if (typeof number === 'bigint')
+              nodeMessageNumbers.set(node.id, number);
+            if (sameMailbox(fromId, selfId)) {
               setActiveNodeId(node.id);
-              setSending(false);
-              formatRetryRef.current = 0;
-
               await refreshNodes();
+            } else {
+              const parsed = parseResponse(text);
+
+              // If the response looks like malformed JSON and we haven't
+              // exhausted retries, send the error back to the agent so it
+              // can reformat its answer.
+              if (
+                parsed.parseError &&
+                formatRetryRef.current < MAX_FORMAT_RETRIES
+              ) {
+                formatRetryRef.current += 1;
+                console.warn(
+                  '[whylip] Parse error, requesting reformat:',
+                  parsed.parseError,
+                );
+                setActiveNarrative('Reformatting response...');
+
+                await E(/** @type {any} */ (powers)).send(
+                  'fae',
+                  [
+                    `FORMAT_ERROR: ${parsed.parseError}\n\nHere is your previous response that failed to parse:\n${text}`,
+                  ],
+                  [],
+                  [],
+                  number,
+                );
+              } else {
+                setActiveScene(parsed.scene);
+                setActiveNarrative(parsed.narrative);
+                setActiveNodeId(node.id);
+                setSending(false);
+                formatRetryRef.current = 0;
+
+                await refreshNodes();
+              }
             }
           }
         }
@@ -402,7 +461,7 @@ export const useConversation = powers => {
         messageIter = null;
       }
     };
-  }, [powers, refreshNodes]);
+  }, [powers, refreshNodes, tree, nodeMessageNumbers]);
 
   /**
    * Send a message to the fae agent.
@@ -416,21 +475,21 @@ export const useConversation = powers => {
       formatRetryRef.current = 0;
 
       try {
-        const userNode = await treeRef.current.addNode(activeNodeId, [
-          { role: 'user', content: text },
-        ]);
-        setActiveNodeId(userNode.id);
-        await refreshNodes();
-
         // Send to fae agent via the well-known "fae" petname
         // written into this profile's pet store at space creation time.
-        await E(/** @type {any} */ (powers)).send('fae', [text], [], []);
+        await E(/** @type {any} */ (powers)).send(
+          'fae',
+          [text],
+          [],
+          [],
+          nodeMessageNumbers.get(activeNodeId),
+        );
       } catch (err) {
         console.error('[whylip] send error:', err);
-        setSending(false);
+        if (treeRef.current === tree) setSending(false);
       }
     },
-    [activeNodeId, powers, refreshNodes],
+    [activeNodeId, powers, tree, nodeMessageNumbers],
   );
 
   /**
@@ -438,19 +497,22 @@ export const useConversation = powers => {
    *
    * @param {string} nodeId
    */
-  const navigateTo = useCallback(async nodeId => {
-    const node = await treeRef.current.getNode(nodeId);
-    if (!node) return;
+  const navigateTo = useCallback(
+    async nodeId => {
+      const node = await tree.getNode(nodeId);
+      if (!node || treeRef.current !== tree) return;
 
-    setActiveNodeId(nodeId);
+      setActiveNodeId(nodeId);
 
-    const firstMsg = node.messages[0];
-    if (firstMsg && firstMsg.role === 'assistant') {
-      const parsed = parseResponse(firstMsg.content);
-      setActiveScene(parsed.scene);
-      setActiveNarrative(parsed.narrative);
-    }
-  }, []);
+      const firstMsg = node.messages[0];
+      if (firstMsg && firstMsg.role === 'assistant') {
+        const parsed = parseResponse(firstMsg.content);
+        setActiveScene(parsed.scene);
+        setActiveNarrative(parsed.narrative);
+      }
+    },
+    [tree],
+  );
 
   return {
     nodes,

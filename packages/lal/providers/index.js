@@ -132,6 +132,7 @@ export { makeOllamaProvider } from './ollama.js';
 export { makeOpenRouterProvider } from './openrouter.js';
 export {
   makeSubscriptionResponsesProvider,
+  getEmptyResponsesOutput,
   messageFromResponsesOutput,
   assertSubscriptionResponsesRecipe,
 } from './subscription-responses.js';
@@ -139,3 +140,11 @@ export {
   planContextCompaction,
   summarizeContext,
 } from './context-compaction.js';
+
+export {
+  makeSubscriptionMessagesProvider,
+  getEmptyMessagesOutput,
+  messageFromMessagesOutput,
+  assertSubscriptionMessagesRecipe,
+  claudeMessagesEfforts,
+} from './subscription-messages.js';

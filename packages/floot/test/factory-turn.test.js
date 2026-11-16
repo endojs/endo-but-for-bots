@@ -115,11 +115,14 @@ test('factory facets retain disconnected turns, commit history, and provision de
       lookups.push(names.flat().join('/'));
       return hostStore.get(names.flat().join('/'));
     },
-    provideGuest: (_name, { agentName }) => {
+    provideGuest: (_name, { agentName: agentPath }) => {
+      const agentName = agentPath.join('/');
+      if (!hostStore.has(_name.join('/')))
+        hostStore.set(_name.join('/'), harden({}));
       hostStore.set(agentName, guest);
     },
-    remove: name => {
-      hostStore.delete(name);
+    remove: (...path) => {
+      hostStore.delete(path.join('/'));
     },
   });
   const factory = make(host);

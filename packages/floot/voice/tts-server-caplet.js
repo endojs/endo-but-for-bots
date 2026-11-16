@@ -43,9 +43,12 @@ import { basename, dirname, join } from 'node:path';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+import { makeSpeechCodeFilter } from '../src/speech-code-filter.js';
+
 // `synthesize` is synchronous (returns the audio reader immediately, then
 // streams), so it is guarded with `M.call`. Guards are permissive — the daemon
 // path is not runtime-tested here.
+
 const TtsServerInterface = M.interface('TtsServer', {
   synthesize: M.call(M.any()).optional(M.record()).returns(M.remotable()),
   getConfiguration: M.call().returns(M.record()),
@@ -108,6 +111,7 @@ const isBoundary = (text, i) => {
 };
 
 const makeChunker = () => {
+  const codeFilter = makeSpeechCodeFilter();
   let buffer = '';
   const flush = () => {
     const rawParts = [];
@@ -139,11 +143,11 @@ const makeChunker = () => {
   };
   return harden({
     push: text => {
-      buffer += text;
+      buffer += codeFilter.push(text);
       return flush();
     },
     finish: () => {
-      const trimmed = stripMarkdown(buffer).trim();
+      const trimmed = stripMarkdown(buffer + codeFilter.finish()).trim();
       buffer = '';
       return trimmed ? [trimmed] : [];
     },

@@ -430,10 +430,15 @@ export const main = async agent => {
 
   // POSIX execution is separate from inference. Copy the configured durable
   // runner identity, never its paths or administration into a model's guest.
-  if (await E(agent).has('environments', 'runner')) {
+  const environmentPath = ['@pins', 'installations', 'environments', 'runner'];
+  if (
+    (await E(agent).has('@pins', 'installations')) &&
+    (await E(agent).has('@pins', 'installations', 'environments')) &&
+    (await E(agent).has(...environmentPath))
+  ) {
     await E(factoryHost).storeLocator(
       'environment-runner',
-      await E(agent).locate('environments', 'runner'),
+      await E(agent).locate(...environmentPath),
     );
   } else if (await E(factoryHost).has('environment-runner')) {
     await E(factoryHost).remove('environment-runner');

@@ -13,33 +13,10 @@ import { E } from '@endo/eventual-send';
 import { assertValidLocator } from '@endo/spaces-util/locator.js';
 import { petNamePathsAutocomplete } from '@endo/spaces-util/petname-paths-autocomplete.js';
 import { importFlootObjects } from './floot-transfer.js';
+import { createWhylipBook } from './whylip-book.js';
 import { ALL_ICONS, IconSelector } from './icon-selector.js';
 import { createSchemePicker } from './scheme-picker.js';
 import { Fragment, h, renderConfined } from './setup-preact-container.js';
-
-const WHYLIP_SYSTEM_PROMPT = `\
-You are The Whylip Primer — an interactive illustrated primer that teaches \
-through story and interactive experience.
-
-You communicate via the reply tool. When you receive a message, use the \
-reply tool and set the strings parameter to a single JSON object:
-{
-  "narrative": "markdown prose explaining the concept",
-  "scene": {
-    "title": "Scene title",
-    "html": "<!-- fully self-contained HTML+CSS+JS document for an iframe -->"
-  }
-}
-
-Set scene to null if no interactive visualization is needed for this response.
-
-IMPORTANT: The JSON object must be the ONLY content in your reply. Do not \
-include any text before or after the JSON. Do not wrap it in code fences. \
-After replying, dismiss the message and stop — do not output anything else.
-
-Scene HTML must be fully self-contained (inline CSS + JS, no external requests). \
-Use canvas, SVG, or DOM manipulation to create interactive visualizations. \
-The scene runs in a sandboxed iframe with no network access.`;
 
 /**
  * @typedef {object} AddSpaceModalAPI
@@ -101,7 +78,6 @@ The scene runs in a sandboxed iframe with no network access.`;
  * @property {string | null} connectExistingSpaceId
  * @property {Array<{ id: string, name: string, icon: string, profilePath: string[] }>} existingChannelSpaces
  * @property {string} whylipName
- * @property {string} whylipAgentName
  * @property {string} flootImport
  * @property {string} flootAudioPath
  * @property {string} flootTtsPath
@@ -794,29 +770,13 @@ const WhylipForm = ({ view, on }) =>
       placeholder: 'e.g., physics-primer',
       value: view.whylipName,
       onInput: on.whylipNameInput,
-      hint: 'A short name for this primer (letters, numbers, hyphens)',
-      pattern: '[a-zA-Z][a-zA-Z0-9_-]*',
+      hint: 'Start with a letter; up to 80 letters, numbers, hyphens, or underscores.',
+      pattern: '[a-zA-Z][a-zA-Z0-9_-]{0,79}',
     }),
     h(
-      'div',
-      { class: 'add-space-field' },
-      h('label', { for: 'whylip-agent-name' }, 'Fae Factory'),
-      h('input', {
-        type: 'text',
-        id: 'whylip-agent-name',
-        placeholder: 'e.g., fae-factory',
-        value: view.whylipAgentName,
-        autocomplete: 'off',
-        /** @param {{ target: { value: string } }} e */
-        onInput: e => on.whylipAgentNameInput(e.target.value),
-      }),
-      h(
-        'div',
-        { class: 'field-hint' },
-        'Pet name of the Fae factory controller (from ',
-        h('code', null, 'endo list'),
-        ')',
-      ),
+      'p',
+      { class: 'field-hint' },
+      'Uses the installed Fae agent and shared inference backend.',
     ),
     h(IconField, { view, on }),
     h(SchemeSlot, null),
@@ -1013,7 +973,7 @@ const WorkflowForm = ({ view, on }) =>
         type: 'text',
         id: 'workflow-service-path',
         class: 'add-space-input',
-        placeholder: 'workflow',
+        placeholder: '@pins/installations/workflow/service',
         value: view.workflowServicePath,
         /** @param {{ target: { value: string } }} e */
         onInput: e => on.workflowServiceInput(e.target.value),
@@ -1021,7 +981,7 @@ const WorkflowForm = ({ view, on }) =>
       h(
         'div',
         { class: 'field-hint' },
-        'Pet-name path to a provisioned @endo/workflow service (slash-separated). Defaults to workflow.',
+        'Pet-name path to a provisioned @endo/workflow service (slash-separated). Defaults to @pins/installations/workflow/service.',
       ),
     ),
     h(SchemeSlot, null),
@@ -1114,7 +1074,6 @@ harden(AddSpaceView);
  * @property {(mode: 'chat' | 'forum' | 'outliner' | 'microblog') => void} channelViewMode
  * @property {(mode: 'new' | 'existing') => void} channelPersonaMode
  * @property {(value: string) => void} whylipNameInput
- * @property {(value: string) => void} whylipAgentNameInput
  * @property {(value: string) => void} flootImportInput
  * @property {(value: string) => void} flootAudioInput
  * @property {(value: string) => void} flootTtsInput
@@ -1166,8 +1125,6 @@ export const createAddSpaceModal = ({
   let mode = 'choose';
   /** @type {string} */
   let whylipName = '';
-  /** @type {string} */
-  let whylipAgentName = '';
   /** @type {string} */
   let flootImport = '';
   let flootAudioPath = '';
@@ -1258,7 +1215,6 @@ export const createAddSpaceModal = ({
         ? getExistingChannelSpaces()
         : [],
       whylipName,
-      whylipAgentName,
       flootImport,
       flootAudioPath,
       flootTtsPath,
@@ -1540,7 +1496,6 @@ export const createAddSpaceModal = ({
         selectedIcon = '📖';
         useLetterIcon = false;
         whylipName = '';
-        whylipAgentName = '';
         error = null;
         render();
       } else if (selectedMode === 'graph') {
@@ -1699,9 +1654,6 @@ export const createAddSpaceModal = ({
     },
     whylipNameInput: value => {
       whylipName = value;
-    },
-    whylipAgentNameInput: value => {
-      whylipAgentName = value;
     },
     flootImportInput: value => {
       flootImport = value;
@@ -2208,27 +2160,20 @@ export const createAddSpaceModal = ({
 
   /**
    * Handle Whylip Book form submission.
-   * Looks up the fae-factory by petname, calls createAgent with the
-   * whylip system prompt, then creates a host profile with the fae
-   * agent reference written into its pet store.
+   * Creates or resumes a book using the installed Fae factory, keeping its
+   * agent and host recovery references in private installation storage.
    */
   const handleWhylipSubmit = async () => {
+    if (isSubmitting) return;
     const name = whylipName.trim();
     if (!name) {
       error = 'Please enter a book name';
       render();
       return;
     }
-    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(name)) {
       error =
-        'Name must start with a letter and contain only letters, numbers, hyphens, and underscores';
-      render();
-      return;
-    }
-
-    const factoryPetName = whylipAgentName.trim();
-    if (!factoryPetName) {
-      error = 'Please enter the pet name of a Fae factory';
+        'Name must start with a letter and contain up to 80 letters, numbers, hyphens, and underscores';
       render();
       return;
     }
@@ -2238,64 +2183,14 @@ export const createAddSpaceModal = ({
     render();
 
     try {
-      const faeAgentName = `${name}-agent`;
-      const finalAgentName = `whylip-${name}`;
-
-      // Look up the fae-factory and create an agent with the whylip prompt.
-      const faeFactory = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
-          powers
-        ),
-      ).lookup(factoryPetName);
-
-      const agentProfileName = /** @type {string} */ (
-        await E(
-          /** @type {{ createAgent: (name: string, opts: object) => Promise<string> }} */ (
-            faeFactory
-          ),
-        ).createAgent(
-          faeAgentName,
-          harden({ systemPrompt: WHYLIP_SYSTEM_PROMPT }),
-        )
-      );
-
-      // Get the endo:// locator for the agent profile so we can write
-      // it into the whylip host's pet store.  Per issue #150 reply,
-      // prefer locate()/storeLocator over identify()/storeIdentifier so
-      // the system can drop bare-identifier support in the future.
-      const agentLocator = /** @type {string} */ (
-        await E(
-          /** @type {{ locate: (petName: string) => Promise<string> }} */ (
-            powers
-          ),
-        ).locate(agentProfileName)
-      );
-
-      // Create the whylip host profile.
-      await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
-          powers
-        ),
-      ).provideHost(name, { agentName: finalAgentName });
-
-      // Write the fae agent reference into the whylip host's pet store
-      // under the well-known name "fae".
-      const whylipPowers = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
-          powers
-        ),
-      ).lookup(finalAgentName);
-
-      await E(
-        /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
-          whylipPowers
-        ),
-      ).storeLocator('fae', agentLocator);
+      const profilePath = await createWhylipBook(powers, {
+        name,
+      });
 
       await onSubmit({
         name,
         icon: selectedIcon,
-        profilePath: [finalAgentName],
+        profilePath,
         layout: 'whylip',
         scheme: schemePicker ? schemePicker.getValue() : 'auto',
       });
@@ -2646,7 +2541,6 @@ export const createAddSpaceModal = ({
     connectPersonaMode = 'new';
     connectExistingSpaceId = null;
     whylipName = '';
-    whylipAgentName = '';
     flootImport = '';
     flootAudioPath = '';
     flootTtsPath = '';

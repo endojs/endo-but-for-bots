@@ -36,7 +36,8 @@
  * @module
  */
 
-import { assertPetNames } from '@endo/daemon/pet-name.js';
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
+import { assertPetNamePath } from '@endo/daemon/pet-name.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
@@ -66,7 +67,9 @@ import {
  * Where the daemon session owner keeps this backend's records; shared with
  * `setup-hosted.js`.
  */
-export const SESSION_RECORDS_PATH = harden([SANDBOX_DIR, 'session-records']);
+export const SESSION_RECORDS_PATH = harden(
+  installationPath(SANDBOX_DIR, 'session-records'),
+);
 
 export { controllerSpecifier };
 
@@ -177,15 +180,16 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   (storage.roots.workspaceDir === workspaceBaseDir &&
     storage.roots.mcpDir === mcpBaseDir) ||
     Fail`Backend roots must equal the recorded session storage owner's roots`;
-  const recordsPath = [...SESSION_RECORDS_PATH];
-  assertPetNames(recordsPath);
+  const { namePath: recordsPath } = assertPetNamePath([
+    ...SESSION_RECORDS_PATH,
+  ]);
   const owner = await E(hostAgent).provideSessionOwner(
     recordsPath,
     controllerSpecifier,
   );
   const brokerService = () =>
     /** @type {Promise<{ subscriptions(): Promise<any>, modelCatalog(subscriptionId?: string): Promise<any> }>} */ (
-      E(hostAgent).lookup([SANDBOX_DIR, 'broker-service'])
+      E(hostAgent).lookup(installationPath(SANDBOX_DIR, 'broker-service'))
     );
   // What a session may be pinned to: the broker's declared subscriptions.
   const listSubscriptions = makeSubscriptionLister(

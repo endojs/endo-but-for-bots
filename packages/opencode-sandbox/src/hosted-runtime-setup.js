@@ -1,5 +1,6 @@
 // @ts-check
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { Fail } from '@endo/errors';
 import {
   assertRuntimePlacement as assertHostedRuntimePlacement,
@@ -52,7 +53,7 @@ export const SANDBOX_DIR = 'opencode-sandbox';
 harden(SANDBOX_DIR);
 
 /**
- * Read one immutable formula under `opencode-sandbox/` by its verified
+ * Read one immutable formula under `@pins/installations/opencode-sandbox/` by its verified
  * entrypoint; see `@endo/hosted-agent/hosted-setup.js`.
  * @param {EndoHost} host
  * @param {string} name
@@ -61,7 +62,7 @@ harden(SANDBOX_DIR);
 const readProvisionedEnvironment = (host, name, expectedSpecifier) =>
   readHostedProvisionedEnvironment(host, {
     label: LABEL,
-    namePath: [SANDBOX_DIR, name],
+    namePath: installationPath(SANDBOX_DIR, name),
     expectedSpecifier,
   });
 

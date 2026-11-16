@@ -126,10 +126,10 @@ export const makeGitRemoteEndpoint = ({
   /**
    * Returns `undefined` if `requiresCredential` is false.
    *
-   * @returns {GitRemoteCredential | undefined}
+   * @returns {Promise<GitRemoteCredential | undefined>}
    * @throws {Error} if the credential material is unavailable.
    */
-  const ensureCredentialUsable = () => {
+  const ensureCredentialUsable = async () => {
     if (requiresCredential) {
       const record = assertGitCredentialForUrl(
         /** @type {object} */ (credential),
@@ -137,7 +137,7 @@ export const makeGitRemoteEndpoint = ({
       );
       const usable = gitCredentialFromMaterial(
         record.kind,
-        record.getMaterial(),
+        await record.getMaterial(),
       );
       if (usable === undefined) {
         throw new Error('Git credential material is unavailable');
@@ -154,7 +154,7 @@ export const makeGitRemoteEndpoint = ({
 
   /**
    * @param {string} operation
-   * @param {number | undefined} version
+   * @param {number | bigint | undefined} version
    */
   const assertCredentialUnchanged = (operation, version) => {
     if (requiresCredential && credentialRecord !== undefined) {
@@ -183,9 +183,9 @@ export const makeGitRemoteEndpoint = ({
    * and the next push was the first thing that said so. A holder can now ask
    * first.
    *
-   * @returns {RemoteCredentialHealth}
+   * @returns {Promise<RemoteCredentialHealth>}
    */
-  const credentialHealth = () => {
+  const credentialHealth = async () => {
     if (!requiresCredential || credentialRecord === undefined) {
       return harden({ required: false });
     }
@@ -199,7 +199,7 @@ export const makeGitRemoteEndpoint = ({
       available:
         gitCredentialFromMaterial(
           credentialRecord.kind,
-          credentialRecord.getMaterial(),
+          await credentialRecord.getMaterial(),
         ) !== undefined,
       revoked: credentialRecord.isRevoked(),
     });
@@ -772,7 +772,8 @@ export const makeGitRemote = ({
         ensureDirection('fetch');
         const fetchOptions = fetchOptionsFromOptions(options);
         fence = captureOperationFence();
-        const transportCredential = ensureCredentialUsable();
+        const transportCredential = await ensureCredentialUsable();
+        assertOperationFence('credential read', fence);
         const activeOperation = beginOperation();
         let result;
         try {
@@ -811,7 +812,8 @@ export const makeGitRemote = ({
         ensureDirection('fetch');
         const fetchOptions = fetchOptionsFromOptions(options);
         fence = captureOperationFence();
-        const transportCredential = ensureCredentialUsable();
+        const transportCredential = await ensureCredentialUsable();
+        assertOperationFence('credential read', fence);
         const opts =
           /** @type {{ branch?: unknown, strategy?: 'merge' | 'rebase' | 'ff-only' }} */ (
             options
@@ -906,7 +908,8 @@ export const makeGitRemote = ({
       try {
         ensureDirection('push');
         fence = captureOperationFence();
-        const transportCredential = ensureCredentialUsable();
+        const transportCredential = await ensureCredentialUsable();
+        assertOperationFence('credential read', fence);
         const { refspecs, forceWithLease, setUpstream } =
           pushRefspecsFromOptions(options);
         const activeOperation = beginOperation();

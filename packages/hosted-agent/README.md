@@ -178,3 +178,29 @@ Request and response size bounds and simultaneous request slots protect host res
 completed requests do not exhaust a lifetime budget.
 An open stream holds its slot until upstream EOF, cancellation, or failure.
 Token and dollar spending limits are future application policy, not implicit defaults.
+
+## Installation storage
+
+Managed credential wrappers are retained at
+`@pins/installations/credentials/<secret-name>`; their bytes remain in Secrets
+Manager at `secrets/<secret-name>`.
+Provisioning migrates legacy root wrappers by identity and rejects conflicting
+bindings. It never overwrites an existing secret with bootstrap environment data.
+No temporary root secret-read alias is created.
+
+The environment runner and its setup state live under
+`@pins/installations/environments/`, with the runner at `runner`.
+Setup migrates the former `environments` directory intact after checking its
+runner formula. The configured operator limits and native ownership checks still
+apply; a different configuration requires explicit retirement.
+Floot receives the runner capability directly, and models receive only their
+session Shell. Do not share the installation storage directory with a guest.
+
+Backend installation directories also live under `@pins/installations/`:
+`claude-sandbox`, `codex-sandbox`, and `opencode-sandbox`.
+`installationPath()` resolves these adapter IDs to their storage paths while
+keeping account binding source IDs unchanged.
+Other explicit namespaces passed to the shared provisioning helpers retain their
+existing path behavior.
+Startup migrates the entire directory binding and refuses conflicting identities;
+native owners, session records, plans, and account capabilities are retained.

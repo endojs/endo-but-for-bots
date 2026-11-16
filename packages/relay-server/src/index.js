@@ -6,11 +6,14 @@ import { WebSocketServer } from 'ws';
 import { makeRelay } from './relay.js';
 
 const parseArgs = argv => {
-  const args = { port: 8943, domain: 'localhost' };
+  const args = { port: 8943, domain: 'localhost', host: '0.0.0.0' };
   // eslint-disable-next-line @endo/restrict-comparison-operands
   for (let i = 2; i < argv.length; i += 1) {
     if (argv[i] === '--port' && argv[i + 1]) {
       args.port = parseInt(argv[i + 1], 10);
+      i += 1;
+    } else if (argv[i] === '--host' && argv[i + 1]) {
+      args.host = argv[i + 1];
       i += 1;
     } else if (argv[i] === '--domain' && argv[i + 1]) {
       args.domain = argv[i + 1];
@@ -39,7 +42,7 @@ const makeInfoPage = domain => `<!DOCTYPE html>
   <h1>Endo Relay</h1>
   <p>This is a WebSocket relay server for <a href="https://github.com/endojs/endo">Endo</a> peer-to-peer connections.</p>
   <p>Domain: <code>${domain}</code></p>
-  <p>Peers connect over WebSocket using an ed25519 challenge-response handshake. The relay bridges encrypted channels between authenticated peers without reading application data.</p>
+  <p>Peers connect over WebSocket using an ed25519 challenge-response handshake. The relay routes CapTP channels between authenticated peers. TLS protects each client connection; the relay is trusted with unencrypted application traffic.</p>
   <p><a href="/health">Health status</a></p>
 </body>
 </html>`;
@@ -68,7 +71,7 @@ const main = () => {
   const wss = new WebSocketServer({ server });
   wss.on('connection', relay.handleConnection);
 
-  server.listen(args.port, () => {
+  server.listen(args.port, args.host, () => {
     console.log(
       `Endo relay server listening on port ${args.port}, domain=${args.domain}`,
     );

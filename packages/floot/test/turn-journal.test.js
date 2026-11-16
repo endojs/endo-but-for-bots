@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 
+import { recoverUndispatchedTurns } from '../src/recover-undispatched.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
 import { encodeJournalPresentation } from '../src/journal-presentation.js';
 
@@ -1433,4 +1434,70 @@ test('archive pages never publish an uncounted chunk after failed snapshot', asy
   const revived = makeTurnJournal(f.powers);
   t.deepEqual(await revived.listArchivedPage(), { records: [], next: null });
   t.is((await revived.readView()).retained.length, 278);
+});
+
+test('startup repairs only provably undispatched interruptions and preserves uncertain effects', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const undispatched = await journal.begin(options);
+  const afterCrash = makeTurnJournal(f.powers);
+  const uncertain = await afterCrash.begin(options);
+  await afterCrash.dispatch(uncertain);
+  await afterCrash.append(uncertain, {
+    type: 'tool-intent',
+    callId: '1',
+    name: 'exec',
+    args: 'publish()',
+  });
+  const afterSecondCrash = makeTurnJournal(f.powers);
+  const settledNative = await afterSecondCrash.begin(options);
+  await afterSecondCrash.dispatch(settledNative);
+  await afterSecondCrash.append(settledNative, {
+    type: 'observed-tool-call',
+    callId: '2',
+    name: 'shell',
+    args: 'publish',
+  });
+  await afterSecondCrash.append(settledNative, {
+    type: 'observed-tool-result',
+    callId: '2',
+    result: 'ok',
+  });
+  await afterSecondCrash.append(settledNative, {
+    type: 'finish',
+    state: 'outcome-unknown',
+    error: 'Cleanup failed',
+  });
+  const restored = makeTurnJournal(f.powers);
+  await recoverUndispatchedTurns(restored);
+  t.like(await restored.get(undispatched), {
+    state: 'cancelled',
+    terminal: true,
+    dispatchState: 'not-dispatched',
+  });
+  t.like(await restored.get(uncertain), {
+    state: 'outcome-unknown',
+    dispatchState: 'possibly-dispatched',
+  });
+  t.falsy((await restored.get(uncertain)).resolution);
+  t.falsy((await restored.get(settledNative)).resolution);
+  const status = await restored.status();
+  await recoverUndispatchedTurns(restored);
+  t.deepEqual(await restored.status(), status, 'recovery is idempotent');
+  t.is(
+    (await makeTurnJournal(f.powers).get(undispatched)).state,
+    'cancelled',
+    'repair survives restart',
+  );
+});
+
+test('automatic recovery never claims success when its durable write fails', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  await journal.begin(options);
+  const restored = makeTurnJournal(f.powers);
+  f.fail();
+  await t.throwsAsync(recoverUndispatchedTurns(restored), {
+    message: /Lost acknowledgement/,
+  });
 });

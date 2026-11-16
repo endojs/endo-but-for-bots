@@ -363,6 +363,14 @@ export const GuestInterface = M.interface('EndoGuest', {
 
 export const HostInterface = M.interface('EndoHost', {
   createDirectory: M.call(NameOrPathShape).returns(M.promise()),
+  provideDirectory: M.call(NameOrPathShape)
+    .optional(
+      M.splitRecord(
+        {},
+        { adoptFrom: NameOrPathShape, keepSource: M.boolean() },
+      ),
+    )
+    .returns(M.promise()),
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
@@ -508,6 +516,10 @@ export const HostInterface = M.interface('EndoHost', {
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('BearerCredential')),
   provideBasicCredential: M.callWhen(
+    NameOrPathShape,
+    M.recordOf(M.string(), M.any()),
+  ).returns(M.remotable('BasicCredential')),
+  provideSecretBasicCredential: M.callWhen(
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('BasicCredential')),

@@ -22,6 +22,7 @@
  * @module
  */
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
@@ -127,7 +128,7 @@ export const make = async (host, _context, { env = {} } = {}) => {
   const read = (name, relative) =>
     readProvisionedEnvironment(host, {
       label: 'Codex',
-      namePath: ['codex-sandbox', name],
+      namePath: installationPath('codex-sandbox', name),
       expectedSpecifier: current(relative),
     });
   const [sandbox, broker, state] = await Promise.all([
@@ -137,7 +138,7 @@ export const make = async (host, _context, { env = {} } = {}) => {
   ]);
   const storage = await readProvisionedEnvironment(host, {
     label: 'Codex',
-    namePath: ['codex-sandbox', 'session-storage'],
+    namePath: installationPath('codex-sandbox', 'session-storage'),
     expectedSpecifier: current('./codex-session-storage-module.js'),
     expectedPowersIdentifier: state.identifier,
   });
@@ -160,11 +161,11 @@ export const make = async (host, _context, { env = {} } = {}) => {
       ? undefined
       : JSON.parse(env.CODEX_MOUNTER_ENV);
   const owner = await E(host).provideSessionOwner(
-    harden(['codex-sandbox', 'session-records']),
+    harden(installationPath('codex-sandbox', 'session-records')),
     controllerSpecifier,
   );
   const brokerService = () =>
-    E(host).lookup(['codex-sandbox', 'broker-service']);
+    E(host).lookup(installationPath('codex-sandbox', 'broker-service'));
   // What a session may be pinned to: the broker's declared subscriptions.
   // A broker over one credential, or one from before it could say, has
   // none, and there is then nothing to choose.

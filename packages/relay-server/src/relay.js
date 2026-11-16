@@ -19,11 +19,13 @@ import {
   encodeAuthFail,
   encodeIncoming,
   encodeOpened,
+  encodeOpenFailed,
   encodeData,
   encodeClose as encodeCloseFrame,
   encodePeerGone,
   toHex,
 } from './protocol.js';
+import { makeChannelIdAllocator } from './channel-ids.js';
 
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
@@ -59,7 +61,18 @@ export const makeRelay = domain => {
   /** @type {Map<import('ws').WebSocket, ConnectionState>} */
   const connections = new Map();
 
-  let nextServerChannelId = 1;
+  const allocateServerChannelId = makeChannelIdAllocator(1, 0x7fff_ffff);
+
+  /** @param {ConnectionState} conn */
+  const allocateIncoming = conn => {
+    let id = allocateServerChannelId();
+    // Older clients used the lower half for outgoing channels too. Preserve
+    // those connections during rollout without overwriting either direction.
+    while (id !== undefined && conn.channels.has(id)) {
+      id = allocateServerChannelId();
+    }
+    return id;
+  };
 
   const textEncoder = new TextEncoder();
 
@@ -89,10 +102,7 @@ export const makeRelay = domain => {
    */
   const removePendingOpen = (ws, ch) => {
     for (const [target, pending] of pendingOpens.entries()) {
-      const filtered = pending.filter(
-        // eslint-disable-next-line @endo/restrict-comparison-operands
-        p => !(p.ws === ws && p.chId === ch),
-      );
+      const filtered = pending.filter(p => !(p.ws === ws && p.chId === ch));
       if (filtered.length !== pending.length) {
         if (filtered.length === 0) {
           pendingOpens.delete(target);
@@ -130,7 +140,6 @@ export const makeRelay = domain => {
       const bk = makeBridgeKey(ws, ch);
       const bridge = bridges.get(bk);
       if (bridge) {
-        // eslint-disable-next-line @endo/restrict-comparison-operands
         const other = bridge.a.ws === ws ? bridge.b : bridge.a;
         sendBinary(other.ws, encodePeerGone(other.chId));
         const otherConn = connections.get(other.ws);
@@ -170,23 +179,29 @@ export const makeRelay = domain => {
     if (pending) {
       pendingOpens.delete(conn.hexNodeId);
       for (const req of pending) {
-        const serverChId = nextServerChannelId;
-        nextServerChannelId += 1;
-        conn.channels.add(serverChId);
-
         const reqConn = connections.get(req.ws);
         if (reqConn) {
-          const bkA = makeBridgeKey(req.ws, req.chId);
-          const bkB = makeBridgeKey(ws, serverChId);
-          const bridgeEntry = {
-            a: { ws: req.ws, chId: req.chId },
-            b: { ws, chId: serverChId },
-          };
-          bridges.set(bkA, bridgeEntry);
-          bridges.set(bkB, bridgeEntry);
+          const serverChId = allocateIncoming(conn);
+          if (serverChId === undefined) {
+            reqConn.channels.delete(req.chId);
+            sendBinary(
+              req.ws,
+              encodeOpenFailed(req.chId, 'Relay channel identifiers exhausted'),
+            );
+          } else {
+            conn.channels.add(serverChId);
+            const bkA = makeBridgeKey(req.ws, req.chId);
+            const bkB = makeBridgeKey(ws, serverChId);
+            const bridgeEntry = {
+              a: { ws: req.ws, chId: req.chId },
+              b: { ws, chId: serverChId },
+            };
+            bridges.set(bkA, bridgeEntry);
+            bridges.set(bkB, bridgeEntry);
 
-          sendBinary(ws, encodeIncoming(serverChId, req.fromNodeId));
-          sendBinary(req.ws, encodeOpened(req.chId));
+            sendBinary(ws, encodeIncoming(serverChId, req.fromNodeId));
+            sendBinary(req.ws, encodeOpened(req.chId));
+          }
         }
       }
     }
@@ -255,17 +270,39 @@ export const makeRelay = domain => {
       case MSG_OPEN: {
         const { channelId, targetNodeId } = decodeOpen(payload);
         const targetHex = toHex(targetNodeId);
+        if (channelId === 0 || conn.channels.has(channelId)) {
+          sendBinary(
+            ws,
+            encodeOpenFailed(
+              channelId,
+              'Channel identifier is already in use or invalid',
+            ),
+          );
+          return;
+        }
         conn.channels.add(channelId);
 
         const targetPeer = peers.get(targetHex);
         if (targetPeer) {
-          const serverChId = nextServerChannelId;
-          nextServerChannelId += 1;
-
           const targetConn = connections.get(targetPeer.ws);
-          if (targetConn) {
-            targetConn.channels.add(serverChId);
+          if (!targetConn) {
+            conn.channels.delete(channelId);
+            sendBinary(ws, encodeOpenFailed(channelId, 'Peer is unavailable'));
+            return;
           }
+          const serverChId = allocateIncoming(targetConn);
+          if (serverChId === undefined) {
+            conn.channels.delete(channelId);
+            sendBinary(
+              ws,
+              encodeOpenFailed(
+                channelId,
+                'Relay channel identifiers exhausted',
+              ),
+            );
+            return;
+          }
+          targetConn.channels.add(serverChId);
 
           const bkA = makeBridgeKey(ws, channelId);
           const bkB = makeBridgeKey(targetPeer.ws, serverChId);
@@ -298,7 +335,6 @@ export const makeRelay = domain => {
         const bk = makeBridgeKey(ws, channelId);
         const bridge = bridges.get(bk);
         if (bridge) {
-          // eslint-disable-next-line @endo/restrict-comparison-operands
           const other =
             bridge.a.ws === ws && bridge.a.chId === channelId
               ? bridge.b
@@ -313,7 +349,6 @@ export const makeRelay = domain => {
         const bk = makeBridgeKey(ws, channelId);
         const bridge = bridges.get(bk);
         if (bridge) {
-          // eslint-disable-next-line @endo/restrict-comparison-operands
           const other =
             bridge.a.ws === ws && bridge.a.chId === channelId
               ? bridge.b

@@ -327,7 +327,7 @@ for (const boundary of ['onBegun', 'setup']) {
 
 for (const fault of ['beforeStore', 'afterStore']) {
   for (const kind of ['hosted', 'provider']) {
-    test(`${kind} dispatch intent ${fault} failure refuses send and revival preserves uncertainty`, async t => {
+    test(`${kind} dispatch intent ${fault} failure refuses send and revival follows durable dispatch evidence`, async t => {
       t.timeout(5000);
       const f = fixture();
       let sends = 0;
@@ -386,7 +386,10 @@ for (const fault of ['beforeStore', 'afterStore']) {
         turn.dispatchState,
         fault === 'afterStore' ? 'possibly-dispatched' : 'not-dispatched',
       );
-      t.is(turn.state, 'outcome-unknown');
+      t.is(
+        turn.state,
+        fault === 'afterStore' ? 'outcome-unknown' : 'cancelled',
+      );
       t.is(sends, 0, 'revival never replays the uncertain input');
       const context = await readContextTranscript(makeTurnJournal(f.powers));
       t.is(
@@ -825,7 +828,9 @@ for (const fault of ['beforeStore', 'afterStore']) {
       t.is(turns.length, 1);
       t.deepEqual(turns[0].mail, mail);
       t.is(turns[0].input, 'Incoming task');
-      t.is(turns[0].state, 'outcome-unknown');
+      t.is(turns[0].state, 'cancelled');
+      t.is(turns[0].dispatchState, 'not-dispatched');
+      t.is(requests, 0, 'automatic repair never dispatches the mail');
     }
   });
 }

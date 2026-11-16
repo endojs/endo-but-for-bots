@@ -60,7 +60,7 @@ const template = `
     <span class="inventory-title">Inventory</span>
     <div class="inventory-toggles">
       <button type="button" class="inventory-toggle" id="group-by-type-toggle"
-        aria-pressed="true" title="Group by type">▤</button>
+        aria-pressed="false" title="Group by type">▤</button>
       <button type="button" class="inventory-toggle" id="show-special-toggle"
         aria-pressed="false" title="Show special names">@</button>
     </div>

@@ -645,8 +645,8 @@ harden(InventoryItem);
 /**
  * A level of the inventory tree: owns the `followNameChanges` subscription for
  * its `powers`, the list-level drop zone, and the link/move drop menu. Renders
- * an {@link InventoryItem} per discovered name. When `grouped` is true (the
- * default at the root level), items are organized into collapsible
+ * an {@link InventoryItem} per discovered name. When `grouped` is true,
+ * items are organized into collapsible
  * {@link InventoryGroupSection} sections instead of a flat list.
  *
  * @param {object} props
@@ -655,8 +655,8 @@ harden(InventoryItem);
  * @param {string[]} props.path
  * @param {ERef<EndoHost>} props.rootPowers
  * @param {string[]} props.rootPrefix
- * @param {boolean} [props.grouped] - When true (default), render items in
- *   collapsible groups by formula type. Nested InventoryLists pass false.
+ * @param {boolean} [props.grouped] - When true, render items in collapsible
+ *   groups by formula type. Defaults to the directory layout at every level.
  */
 export const InventoryList = ({
   powers,
@@ -664,7 +664,7 @@ export const InventoryList = ({
   path,
   rootPowers,
   rootPrefix,
-  grouped = true,
+  grouped = false,
 }) => {
   const [names, dispatch] = useReducer(
     namesReducer,

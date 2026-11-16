@@ -1,7 +1,7 @@
 // @ts-check
 
 // Establish a SES perimeter (provides the `harden` global).
-// eslint-disable-next-line import/order
+
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -514,4 +514,38 @@ test('host engine: the child sees only the policy env, never the host process en
   // cwd is the mount directory.
   const cwd = await shell.exec('pwd', []);
   t.is(cwd.stdout.trim(), fs.realpathSync(root));
+});
+
+test('oversized output crosses the exo guard as a truncated preview and the next command works', async t => {
+  t.timeout(5000);
+  let invocations = 0;
+  const fake = makeFakeSpawner(() => {
+    invocations += 1;
+    return invocations === 1
+      ? {
+          stdout: [new TextEncoder().encode('x'.repeat(200_000))],
+          stderr: [new TextEncoder().encode('é'.repeat(100_000))],
+        }
+      : { stdout: [new TextEncoder().encode('still usable')] };
+  });
+  const shell = makeShell({
+    cwd: '/private/workspace',
+    spawner: fake.spawner,
+    policy: { ...basePolicy, maxOutputBytes: 16 * 1024 * 1024 },
+  });
+  const effective = await shell.inspect();
+  t.is(effective.maxOutputBytes, 65_536);
+  const result = await shell.exec('echo', harden([]));
+  t.true(result.truncated);
+  t.is(result.exitCode, 0);
+  t.is(new TextEncoder().encode(result.stdout).length, 65_536);
+  t.is(new TextEncoder().encode(result.stderr).length, 65_536);
+  t.is((await shell.exec('echo', harden([]))).stdout, 'still usable');
+  t.is(invocations, 2);
+  t.deepEqual(fake.killLog, []);
+  t.regex(
+    await shell.help('exec'),
+    /no persistence guarantee|need not survive/,
+  );
+  t.regex(await shell.help('inspect'), /65536/);
 });

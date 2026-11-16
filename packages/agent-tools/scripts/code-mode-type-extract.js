@@ -874,8 +874,9 @@ const resolvePackageRoot = (require, packageName) => {
  * Resolve the declaration source behind an imported type expression.
  * Workspace packages expose runtime paths for their default condition, while
  * the extractor needs the checked source type host instead: the `types`
- * condition of the package's `exports` map, else the `.ts` or `.d.ts` beside
- * the resolved runtime module.
+ * condition of the package's `exports` map, else the checked `.ts` beside
+ * the resolved runtime module. An undeclared `.d.ts` beside a runtime entry
+ * can be a local build artifact, so its presence must not affect extraction.
  *
  * A package that publishes no type source (`@endo/patterns` and
  * `@endo/pass-style` export a bare runtime path) resolves to `undefined`, and
@@ -896,8 +897,8 @@ const resolveTypeModule = (moduleName, fromFile) => {
     const candidates = /\.(?:d\.)?ts$/u.test(resolved)
       ? [resolved]
       : [
-          `${resolved.replace(/\.js$/u, '')}.d.ts`,
           `${resolved.replace(/\.js$/u, '')}.ts`,
+          `${resolved.replace(/\.js$/u, '')}.d.ts`,
         ];
     return candidates.find(candidate => existsSync(candidate));
   }
@@ -936,9 +937,8 @@ const resolveTypeModule = (moduleName, fromFile) => {
     return runtime;
   }
   const base = runtime.replace(/\.js$/u, '');
-  return [`${base}.ts`, `${base}.d.ts`].find(candidate =>
-    existsSync(candidate),
-  );
+  const source = `${base}.ts`;
+  return existsSync(source) ? source : undefined;
 };
 harden(resolveTypeModule);
 

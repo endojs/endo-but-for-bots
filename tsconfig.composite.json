@@ -21,6 +21,9 @@
       "path": "packages/benchmark/tsconfig.composite.json"
     },
     {
+      "path": "packages/browser-endo/tsconfig.composite.json"
+    },
+    {
       "path": "packages/bundle-source/tsconfig.composite.json"
     },
     {

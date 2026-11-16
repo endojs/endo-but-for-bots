@@ -259,22 +259,28 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['followLocatorNameChanges']} */
-    const followLocatorNameChanges = async function* followLocatorNameChanges(
-      locator,
-    ) {
-      const { id } = internalizeLocator(locator);
-      for await (const idNameChange of controller.followIdNameChanges(id)) {
-        /** @type {any} */
-        const locatorNameChange = {
-          ...idNameChange,
-          ...(Object.hasOwn(idNameChange, 'add')
-            ? { add: locator }
-            : { remove: locator }),
-        };
-
-        yield /** @type {LocatorNameChange} */ (locatorNameChange);
-      }
-    };
+    const followLocatorNameChanges = locator =>
+      makeCancelableIterator(async function* locatorChanges(setCancelPending) {
+        const { id } = internalizeLocator(locator);
+        const subscription = controller.followIdNameChanges(id);
+        try {
+          const cancellation = setCancelPending(() =>
+            cancelPendingIterator(subscription),
+          );
+          if (cancellation !== undefined) await cancellation;
+          for await (const idNameChange of subscription) {
+            yield /** @type {LocatorNameChange} */ ({
+              ...idNameChange,
+              ...(Object.hasOwn(idNameChange, 'add')
+                ? { add: locator }
+                : { remove: locator }),
+            });
+          }
+        } finally {
+          await subscription.return(undefined);
+        }
+        return undefined;
+      });
 
     /** @type {EndoDirectory['list']} */
     const list = async (...petNamePath) => {
@@ -786,8 +792,12 @@ export const makeDirectoryMaker = ({
         identify,
         locate,
         reverseLocate,
-        followLocatorNameChanges: locator =>
-          readerFromIterator(directory.followLocatorNameChanges(locator)),
+        followLocatorNameChanges: locator => {
+          const iterator = directory.followLocatorNameChanges(locator);
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
+        },
         list,
         listValues,
         listIdentifiers,

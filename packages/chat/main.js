@@ -15,6 +15,9 @@
 import './pre-lockdown.js';
 import '@endo/init';
 
+import { parseApplicationConfig } from '@endo/browser-endo/application.js';
+
+import { upgradeChatConnection } from './peer-connection.js';
 import { connectToGateway } from './connection.js';
 import { connectToAndroid } from './android-connection.js';
 import { make } from './chat.js';
@@ -91,12 +94,13 @@ const urlParams = new URLSearchParams(window.location.hash.slice(1));
 const androidBridge = /** @type {any} */ (window).AndroidEndo;
 const gateway = urlParams.get('gateway');
 const agent = urlParams.get('agent');
+const hasPeerConfig = urlParams.has('cap.agent');
 
 // If the fragment doesn't contain config, try the Vite /dev endpoint
 // which will redirect back with the config in the fragment.
 // Guard against infinite loops: only attempt the redirect once per page load.
 // In Electron mode, /dev is not available — show an error instead.
-if (!androidBridge && (!gateway || !agent)) {
+if (!androidBridge && !hasPeerConfig && (!gateway || !agent)) {
   if (!isElectronMode && !sessionStorage.getItem('endo-dev-attempted')) {
     sessionStorage.setItem('endo-dev-attempted', '1');
     console.log('[Chat] No config in fragment, trying /dev...');
@@ -114,7 +118,6 @@ sessionStorage.removeItem('endo-dev-attempted');
 
 console.log('[Chat] Starting application...');
 console.log(`[Chat] Gateway: ${gateway}`);
-console.log(`[Chat] Agent: ${(agent || 'local').slice(0, 16)}...`);
 
 /**
  * Show reconnecting UI overlay.
@@ -295,12 +298,15 @@ async function connectAndRun() {
   const heading = document.createElement('h1');
   heading.textContent = androidBridge
     ? 'Connecting to this phone’s Endo…'
-    : 'Connecting to Endo Gateway…';
+    : 'Connecting to Endo…';
   document.body.append(heading);
 
-  const connection = androidBridge
+  const runtimeConfig = androidBridge
+    ? undefined
+    : parseApplicationConfig(window.location.hash);
+  let connection = androidBridge
     ? connectToAndroid(androidBridge, crypto.randomUUID())
-    : connectToGateway({ gateway: String(gateway), agent: String(agent) });
+    : connectToGateway(runtimeConfig || {});
 
   let powers;
   try {
@@ -308,10 +314,33 @@ async function connectAndRun() {
     resetReconnectBackoff();
     console.log('[Chat] Host powers received, initializing UI...');
   } catch (error) {
+    connection.close();
     console.error('[Chat] Failed to connect:', error);
     showReconnecting(/** @type {Error} */ (error).message);
     startReconnection();
     return;
+  }
+
+  // Existing hosted bookmarks can migrate using authority already granted by
+  // their gateway. Never move capability traffic to a different relay host.
+  if (
+    !androidBridge &&
+    !isLocalGateway &&
+    !(runtimeConfig && 'relay' in runtimeConfig) &&
+    gateway &&
+    agent
+  ) {
+    const upgraded = await upgradeChatConnection({
+      connection,
+      powers,
+      gateway,
+      agent,
+      connect: connectToGateway,
+    });
+    connection = upgraded.connection;
+    powers = upgraded.powers;
+    if (upgraded.fragment)
+      window.history.replaceState(null, '', `#${upgraded.fragment}`);
   }
 
   // Hide any leftover reconnection overlay from a previous attempt.

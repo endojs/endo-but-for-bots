@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { messageFromMessagesOutput } from '@endo/lal/providers/index.js';
 
 import {
   pairToolCalls,
@@ -878,4 +879,37 @@ test('a compaction segment reaches the tree in its own place', t => {
     records.map(record => record.kind),
     ['message', 'message', 'compaction', 'message'],
   );
+});
+
+test('Claude signed thinking and native tool ids survive journal recovery without cross-protocol replay', t => {
+  const assistant = messageFromMessagesOutput({
+    model: 'claude-sonnet-4-6',
+    content: [
+      { type: 'thinking', thinking: 'private', signature: 'opaque' },
+      {
+        type: 'tool_use',
+        id: 'tool_1',
+        name: 'lookup',
+        input: { name: 'shell' },
+      },
+    ],
+  });
+  const history = [
+    { role: 'user', content: 'hello' },
+    assistant,
+    { role: 'tool', tool_call_id: 'tool_1', content: 'ok' },
+  ];
+  const records = projectTranscript(history).map(record =>
+    JSON.parse(encodeJournalTranscript(record)),
+  );
+  t.deepEqual(
+    transcriptToProviderMessages(records, 'messages-output-v1'),
+    history,
+  );
+  t.throws(() => transcriptToProviderMessages(records, 'responses-output-v1'), {
+    message: /Incompatible/,
+  });
+  t.throws(() => projectTranscript([{ ...assistant, content: 'invented' }]), {
+    message: /projection differs/,
+  });
 });

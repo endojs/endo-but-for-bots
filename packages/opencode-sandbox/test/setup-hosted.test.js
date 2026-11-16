@@ -31,6 +31,8 @@ const makeFakeHost = ({
   nativeSpecifier = nativeSandboxSpecifier,
 } = {}) => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   const mints = [];
   const copies = [];
   const removed = [];
@@ -53,13 +55,25 @@ const makeFakeHost = ({
   const oraclePowers = Far('TestOraclePowers', {
     storeLocator: async (name, locator) => {
       bindings.set(
-        key('opencode-sandbox', 'account-oracle-powers', name),
+        key(
+          '@pins',
+          'installations',
+          'opencode-sandbox',
+          'account-oracle-powers',
+          name,
+        ),
         locator,
       );
     },
   });
-  bindings.set(key('opencode-sandbox', 'account-oracle'), oracle);
-  bindings.set(key('opencode-sandbox', 'account-oracle-powers'), oraclePowers);
+  bindings.set(
+    key('@pins', 'installations', 'opencode-sandbox', 'account-oracle'),
+    oracle,
+  );
+  bindings.set(
+    key('@pins', 'installations', 'opencode-sandbox', 'account-oracle-powers'),
+    oraclePowers,
+  );
   /** @type {Map<string, Record<string, string | undefined>>} */
   const environments = new Map();
   environments.set(
@@ -112,6 +126,16 @@ const makeFakeHost = ({
           reads.push(['env', id]);
           return environments.get(id);
         },
+        /** @param {string[]} namePath */
+        async provideDirectory(namePath) {
+          for (let n = 1; n <= namePath.length; n += 1) {
+            const prefix = key(namePath.slice(0, n));
+            if (!bindings.has(prefix)) bindings.set(prefix, 'dir');
+          }
+        },
+        async makeDirectory(parts) {
+          bindings.set(key(parts), 'dir');
+        },
         async has(...parts) {
           return bindings.has(key(...parts));
         },
@@ -121,18 +145,28 @@ const makeFakeHost = ({
           return `test:${parts.join('/')}`;
         },
         async lookup(pathParts) {
+          if (key(pathParts).includes('"credentials"'))
+            return Far('ManagedCredentials', {
+              storage: () => 'secrets-manager',
+              kind: () => 'apiKey',
+              issue: () => {},
+              revoke: () => {},
+            });
           if (key(pathParts) === key('floot', 'controller-profile'))
             return profile;
           if (
-            pathParts[0] === 'opencode-sandbox' &&
-            pathParts[1]?.startsWith('account-oracle')
+            pathParts[2] === 'opencode-sandbox' &&
+            pathParts[3]?.startsWith('account-oracle')
           ) {
             return bindings.get(key(pathParts));
           }
           if (pathParts[1] === 'catalog') {
             return harden({ list: async () => [] });
           }
-          if (key(pathParts) === key('opencode-sandbox', 'broker-service')) {
+          if (
+            key(pathParts) ===
+            key('@pins', 'installations', 'opencode-sandbox', 'broker-service')
+          ) {
             return harden({
               configure: async settings => {
                 configured.push(settings);
@@ -198,7 +232,10 @@ const withEnv = async (t, values) => {
 const preflightHost = () => {
   const fake = makeFakeHost();
   for (const name of ['native-sandbox']) {
-    fake.bindings.set(key('opencode-sandbox', name), 'cap');
+    fake.bindings.set(
+      key('@pins', 'installations', 'opencode-sandbox', name),
+      'cap',
+    );
   }
   fake.bindings.set(key('floot', 'controller-profile'), 'dir');
   return fake;
@@ -237,7 +274,10 @@ const baseEnv = async t => {
 test.serial('requires setup-host.js artifacts', async t => {
   await baseEnv(t);
   const noNative = makeFakeHost();
-  noNative.bindings.set(key('opencode-sandbox', 'state-provider'), 'cap');
+  noNative.bindings.set(
+    key('@pins', 'installations', 'opencode-sandbox', 'state-provider'),
+    'cap',
+  );
   await t.throwsAsync(main(noNative.host), { message: /native-sandbox/ });
   t.is(noNative.mints.length, 0, 'no mint precedes the preflight failures');
 });
@@ -248,7 +288,10 @@ test.serial(
     await baseEnv(t);
     const fake = makeFakeHost({ nativeSpecifier: unsupportedSpecifier });
     for (const name of ['native-sandbox']) {
-      fake.bindings.set(key('opencode-sandbox', name), 'cap');
+      fake.bindings.set(
+        key('@pins', 'installations', 'opencode-sandbox', name),
+        'cap',
+      );
     }
     await t.throwsAsync(main(fake.host), { message: /Retire the old runtime/ });
     t.deepEqual(fake.mints, []);
@@ -347,7 +390,9 @@ test.serial(
     });
     t.is(
       publication.accounts[0].oracle,
-      bindings.get(key('opencode-sandbox', 'account-oracle')),
+      bindings.get(
+        key('@pins', 'installations', 'opencode-sandbox', 'account-oracle'),
+      ),
     );
 
     // The fifth is the broker's read-only account source, minted again over
@@ -363,15 +408,21 @@ test.serial(
     t.is(mints[2].specifier, sessionStorageSpecifier);
     t.regex(mints[3].specifier, /opencode-backend-module\.js$/);
     t.deepEqual(mints[3].options.resultName, [
+      '@pins',
+      'installations',
       'opencode-sandbox',
       'backend-next',
     ]);
     t.true(
-      bindings.has(key('opencode-sandbox', 'backend')),
+      bindings.has(
+        key('@pins', 'installations', 'opencode-sandbox', 'backend'),
+      ),
       'backend is live under its final name',
     );
     t.false(
-      bindings.has(key('opencode-sandbox', 'backend-next')),
+      bindings.has(
+        key('@pins', 'installations', 'opencode-sandbox', 'backend-next'),
+      ),
       'the temporary mint is removed after the swap',
     );
     t.true(
@@ -383,13 +434,15 @@ test.serial(
     t.deepEqual(
       copies.find(copy => copy.to.at(-1) === 'opencode-backend'),
       {
-        from: ['opencode-sandbox', 'backend'],
+        from: ['@pins', 'installations', 'opencode-sandbox', 'backend'],
         to: ['floot', 'controller-profile', 'opencode-backend'],
       },
     );
     t.true(
       removed.some(
-        parts => key(...parts) === key('opencode-sandbox', 'backend-next'),
+        parts =>
+          key(...parts) ===
+          key('@pins', 'installations', 'opencode-sandbox', 'backend-next'),
       ),
     );
   },
@@ -406,6 +459,8 @@ test.serial(
     );
     t.truthy(storage);
     t.deepEqual(storage?.options.resultName, [
+      '@pins',
+      'installations',
       'opencode-sandbox',
       'session-storage',
     ]);
@@ -481,6 +536,8 @@ test.serial(
     );
     t.truthy(broker);
     t.deepEqual(broker?.options.resultName, [
+      '@pins',
+      'installations',
       'opencode-sandbox',
       'broker-service',
     ]);
@@ -539,7 +596,10 @@ test.serial(
     });
     const fake = preflightHost();
     for (const name of ['broker-service', 'session-storage']) {
-      fake.bindings.set(key('opencode-sandbox', name), 'cap');
+      fake.bindings.set(
+        key('@pins', 'installations', 'opencode-sandbox', name),
+        'cap',
+      );
     }
     fake.specifiers.set('broker-service-id', brokerServiceSpecifier);
     fake.specifiers.set('session-storage-id', sessionStorageSpecifier);
@@ -588,7 +648,10 @@ test.serial(
     // credential mint or any directory creation, with no storage owner to
     // refuse first.
     const brokerOnly = preflightHost();
-    brokerOnly.bindings.set(key('opencode-sandbox', 'broker-service'), 'cap');
+    brokerOnly.bindings.set(
+      key('@pins', 'installations', 'opencode-sandbox', 'broker-service'),
+      'cap',
+    );
     await t.throwsAsync(main(brokerOnly.host), {
       message: /unsupported entrypoint/,
     });
@@ -603,7 +666,10 @@ test.serial(
     // replaced. The broker is retained here too, so nothing reaches Podman.
     const unsupported = preflightHost();
     for (const name of ['broker-service', 'session-storage']) {
-      unsupported.bindings.set(key('opencode-sandbox', name), 'cap');
+      unsupported.bindings.set(
+        key('@pins', 'installations', 'opencode-sandbox', name),
+        'cap',
+      );
     }
     unsupported.specifiers.set('broker-service-id', brokerServiceSpecifier);
     unsupported.environments.set('broker-service-id', brokerEnv);
@@ -638,7 +704,10 @@ test.serial(
       });
     const retainedHost = brokerEnv => {
       const fake = preflightHost();
-      fake.bindings.set(key('opencode-sandbox', 'broker-service'), 'cap');
+      fake.bindings.set(
+        key('@pins', 'installations', 'opencode-sandbox', 'broker-service'),
+        'cap',
+      );
       fake.specifiers.set('broker-service-id', brokerServiceSpecifier);
       fake.environments.set('broker-service-id', brokerEnv);
       return fake;
@@ -652,7 +721,7 @@ test.serial(
     const bumped = retainedHost(retained());
     await t.throwsAsync(main(bumped.host), {
       message: new RegExp(
-        `pins OpenCode sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "opencode-sandbox/broker-service" when no session depends on it, then rerun setup`,
+        `pins OpenCode sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "@pins/installations/opencode-sandbox/broker-service" when no session depends on it, then rerun setup`,
       ),
     });
     t.deepEqual(bumped.mints, [], 'refused before the credential mint');
@@ -884,7 +953,10 @@ test.serial('ignores bare OPENCODE_* variables the daemon strips', async t => {
   const { host, bindings } = preflightHost();
   await main(host);
 
-  t.true(bindings.has(key('test-auth')), 'ENDO_ creds name wins');
+  t.true(
+    bindings.has(key('@pins', 'installations', 'credentials', 'test-auth')),
+    'ENDO_ creds name wins',
+  );
   t.false(bindings.has(key('hijacked-secret')));
   t.true(
     bindings.has(key('floot', 'controller-profile', 'opencode-backend')),
@@ -905,7 +977,9 @@ test.serial(
     const { host, bindings } = preflightHost();
     await main(host);
     t.true(
-      bindings.has(key('openrouter-auth')),
+      bindings.has(
+        key('@pins', 'installations', 'credentials', 'openrouter-auth'),
+      ),
       'defaults to the documented OpenRouter secret name',
     );
     t.false(
@@ -927,13 +1001,21 @@ test.serial(
       'old-backend',
     );
     for (const name of ['native-sandbox']) {
-      failing.bindings.set(key('opencode-sandbox', name), 'cap');
+      failing.bindings.set(
+        key('@pins', 'installations', 'opencode-sandbox', name),
+        'cap',
+      );
     }
     failing.bindings.set(key('floot', 'controller-profile'), 'dir');
-    failing.bindings.set(key('opencode-sandbox', 'backend'), 'old-backend');
+    failing.bindings.set(
+      key('@pins', 'installations', 'opencode-sandbox', 'backend'),
+      'old-backend',
+    );
     await t.throwsAsync(main(failing.host), { message: /mint failed/ });
     t.is(
-      failing.bindings.get(key('opencode-sandbox', 'backend')),
+      failing.bindings.get(
+        key('@pins', 'installations', 'opencode-sandbox', 'backend'),
+      ),
       'old-backend',
       'the old backend is untouched',
     );

@@ -37,6 +37,8 @@ const refuseInspect = async (file, args) => {
  */
 const makeFakeHost = ({ hostId = 'fake-host-id', failMint, failCopy } = {}) => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   const formulas = new Map();
   /** @type {any[]} */
   const calls = [];
@@ -608,7 +610,8 @@ test("Floot's profile is bound in place, with the asset server when the adapter 
   t.deepEqual(calls, [
     ['copy', ['x', 'backend'], ['floot', 'controller-profile', 'x-backend']],
   ]);
-  bindings.set(key('asset-server'), 'cap');
+  bindings.set(key('assets'), 'dir');
+  bindings.set(key('assets', 'publisher'), 'cap');
   calls.length = 0;
   t.true(
     await bindFlootBackend(host, {
@@ -618,9 +621,24 @@ test("Floot's profile is bound in place, with the asset server when the adapter 
   );
   t.deepEqual(calls, [
     ['copy', ['x', 'backend'], ['floot', 'controller-profile', 'x-backend']],
-    ['copy', ['asset-server'], ['floot', 'controller-profile', 'asset-server']],
+    [
+      'copy',
+      ['assets', 'publisher'],
+      ['floot', 'controller-profile', 'asset-server'],
+    ],
   ]);
   calls.length = 0;
   t.true(await bindFlootBackend(host, options));
   t.is(calls.length, 1, 'no asset server unless the adapter names one');
+  bindings.set(key('custom-publisher'), 'custom-cap');
+  calls.length = 0;
+  await bindFlootBackend(host, {
+    ...options,
+    assetServerName: 'custom-publisher',
+  });
+  t.deepEqual(calls[1], [
+    'copy',
+    ['custom-publisher'],
+    ['floot', 'controller-profile', 'custom-publisher'],
+  ]);
 });

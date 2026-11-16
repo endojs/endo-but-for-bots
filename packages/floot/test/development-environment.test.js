@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { directoryHost } from './_directory-host.js';
 import {
   provideDevelopmentEnvironment,
   lookupEnvironmentAdmin,
@@ -8,7 +9,13 @@ import {
 } from '../src/development-environment.js';
 
 const fixture = () => {
-  const hostStore = new Map();
+  /** @type {Map<string, unknown>} */
+  const hostStore = new Map([
+    [
+      'floot-private-sessions/test/schema',
+      harden({ version: 2, sessionId: 'test' }),
+    ],
+  ]);
   const guestStore = new Map();
   const publications = [];
   let refuseCopy = false;
@@ -34,20 +41,25 @@ const fixture = () => {
     has: name => guestStore.has(name),
     lookup: name => guestStore.get(name),
   });
-  hostStore.set('session-agent-test', guest);
+  hostStore.set('floot-private-sessions/test/guest', guest);
   hostStore.set('environment-runner', Far('Runner'));
   const host = Far('Host', {
-    has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
-    remove: name => hostStore.delete(name),
+    ...directoryHost(hostStore),
     provideEnvironment(runner, workspace, adminName, shellName, recipe) {
       publications.push({ runner, workspace, recipe });
-      hostStore.set(adminName, Far('Admin', { stop: () => undefined }));
-      hostStore.set(shellName, shell);
+      hostStore.set(
+        adminName.join('/'),
+        Far('Admin', { stop: () => undefined }),
+      );
+      hostStore.set(shellName.join('/'), shell);
     },
-    copy([source], [agentName, name]) {
+    copy(sourcePath, targetPath) {
+      const source = sourcePath.join('/');
+      const agentName = targetPath.slice(0, -1).join('/');
+      const name = targetPath.at(-1);
       if (refuseCopy) throw Error('Copy failed');
-      if (agentName !== 'session-agent-test') throw Error('Wrong guest');
+      if (agentName !== 'floot-private-sessions/test/guest')
+        throw Error('Wrong guest');
       guestStore.set(name, hostStore.get(source));
     },
   });
@@ -68,7 +80,7 @@ const provision = f =>
   provideDevelopmentEnvironment({
     host: f.host,
     guest: f.guest,
-    agentName: 'session-agent-test',
+    agentName: ['floot-private-sessions', 'test', 'guest'],
     id: 'test',
     networkPolicy: 'public-internet',
   });
@@ -85,8 +97,8 @@ test('development publication retains private admin, shares exact workspace, and
   t.is(f.guestStore.get('shell'), f.shell);
   t.false(f.guestStore.has('environment-runner'));
   t.false(f.guestStore.has('admin'));
-  t.true(f.hostStore.has('floot-environment-admin-test'));
-  t.false(f.hostStore.has('floot-environment-shell-test'));
+  t.true(f.hostStore.has('floot-private-sessions/test/environment-admin'));
+  t.false(f.hostStore.has('floot-private-sessions/test/environment-shell'));
 });
 
 test('development shell limits are recorded in the recipe and never rewritten on revival', async t => {
@@ -94,7 +106,7 @@ test('development shell limits are recorded in the recipe and never rewritten on
   const options = {
     host: f.host,
     guest: f.guest,
-    agentName: 'session-agent-test',
+    agentName: ['floot-private-sessions', 'test', 'guest'],
     id: 'test',
     networkPolicy: 'public-internet',
   };
@@ -120,7 +132,7 @@ test('failed Shell publication retries the same allocation; missing private admi
   f.refuse(false);
   await provision(f);
   t.is(f.publications.length, 1);
-  f.hostStore.delete('floot-environment-admin-test');
+  f.hostStore.delete('floot-private-sessions/test/environment-admin');
   await t.throwsAsync(provision(f), { message: /private admin is missing/ });
   await t.throwsAsync(
     lookupEnvironmentAdmin(f.host, 'test', { checkGuest: true }),
@@ -136,7 +148,10 @@ test('failed Shell publication retries the same allocation; missing private admi
 
 test('incomplete private publication refuses a new allocation', async t => {
   const f = fixture();
-  f.hostStore.set('floot-environment-admin-test', Far('Admin'));
+  f.hostStore.set(
+    'floot-private-sessions/test/environment-admin',
+    Far('Admin'),
+  );
   await t.throwsAsync(provision(f), { message: /incomplete/ });
   t.is(f.publications.length, 0);
 });

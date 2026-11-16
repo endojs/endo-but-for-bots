@@ -2326,3 +2326,81 @@ test('BearerCredential.audience returns the normalized origin', t => {
   });
   t.is(credential.audience(), 'https://github.com');
 });
+
+test.serial(
+  'secret-backed Git credential preserves identity and survives daemon restart without bootstrap material',
+  async t => {
+    t.timeout(120_000);
+    const { host, config } = await provisionHostContext(t);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'git-password',
+      'Git test password',
+      btoa('secret-canary'),
+    );
+    const secret = await E(host).lookup(['secrets', 'git-password']);
+    const legacy = await E(host).provideBasicCredential('git-credential', {
+      audience: 'https://git.example',
+      username: 'user',
+      password: 'old-canary',
+    });
+    const before = await E(host).identify('git-credential');
+    const options = harden({
+      audience: 'https://git.example',
+      username: 'user',
+      secret,
+      existingCredential: legacy,
+    });
+    await t.throwsAsync(
+      E(host).provideSecretBasicCredential('invalid-credential', {
+        ...options,
+        existingCredential: null,
+      }),
+      { message: new RegExp('Expected a local Git credential') },
+    );
+    t.false(await E(host).has('invalid-credential'));
+    await E(host).provideSecretBasicCredential('git-credential', options);
+    t.is(await E(host).identify('git-credential'), before);
+    const diag = await E(host).diagnostics();
+    const formula = await E(diag).getFormula(before);
+    t.is(formula.properties.secret.kind, 'reference');
+    t.false(JSON.stringify(formula).includes('canary'));
+    await E(host).provideSecretBasicCredential('git-credential', options);
+    await t.throwsAsync(
+      E(host).provideSecretBasicCredential('bad', {
+        ...options,
+        audience: 'https://other.example',
+      }),
+      { message: /audience mismatch/ },
+    );
+    await t.throwsAsync(
+      E(host).provideSecretBasicCredential('bad', {
+        ...options,
+        secret: Far('FakeSecret', { readBase64: () => btoa('bad') }),
+      }),
+      { message: /FOREIGN_SECRET/ },
+    );
+    await stop(config);
+    await start(config);
+    const cancelled = makePromiseKit();
+    cancelled.promise.catch(() => {});
+    const client = await makeEndoClient(
+      'restarted',
+      config.sockPath,
+      cancelled.promise,
+    );
+    t.teardown(() => cancelled.reject(Error('done')));
+    const reopened = await E(client.getBootstrap()).host();
+    t.is(await E(reopened).identify('git-credential'), before);
+    const credential = await E(reopened).lookup('git-credential');
+    const control = await E(reopened).getGitCredentialController(credential);
+    t.true((await E(control).inspect()).available);
+    const catalog = await E(reopened).lookup(['@secrets', 'catalog']);
+    const entry = (await E(catalog).list())[0];
+    await E(entry.admin).replaceBase64(btoa('rotated-canary'));
+    t.true((await E(control).inspect()).available);
+    await E(entry.admin).revoke();
+    t.false((await E(control).inspect()).available);
+    t.true((await E(control).inspect()).revoked);
+  },
+);

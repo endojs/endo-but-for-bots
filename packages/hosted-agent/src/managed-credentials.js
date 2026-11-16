@@ -45,8 +45,19 @@ export const provideManagedCredentials = async (
   (name !== 'secrets' && !name.endsWith('-secret-read')) ||
     Fail`Reserved credential name`;
   ['apiKey', 'oauthToken'].includes(kind) || Fail`Invalid credential kind`;
-  if (await E(host).has(name)) {
-    const existing = await E(host).lookup(name);
+  const path = ['@pins', 'installations', 'credentials', name];
+  await E(host).provideDirectory(path.slice(0, -1));
+  const legacy = await E(host).has(name);
+  const installed = await E(host).has(...path);
+  if (legacy || installed) {
+    if (
+      legacy &&
+      installed &&
+      (await E(host).identify(name)) !== (await E(host).identify(...path))
+    )
+      throw Error('Conflicting managed credential bindings');
+
+    const existing = await E(host).lookup(installed ? path : name);
     // eslint-disable-next-line no-underscore-dangle
     const methods = await E(existing).__getMethodNames__();
     (methods.includes('storage') &&
@@ -57,6 +68,12 @@ export const provideManagedCredentials = async (
       Fail`Unexpected credential storage`;
     (await E(existing).kind()) === kind ||
       Fail`Credential kind changed; configure a new credential name`;
+    if (legacy) {
+      if (!installed) await E(host).copy([name], path);
+      if ((await E(host).identify(name)) !== (await E(host).identify(...path)))
+        throw Error('Managed credential migration changed identity');
+      await E(host).remove(name);
+    }
     return;
   }
   const catalog = await E(host).lookup(['@secrets', 'catalog']);
@@ -78,21 +95,11 @@ export const provideManagedCredentials = async (
       btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join('')),
     );
   }
-  // powersName is a single pet name. The formula captures the read capability,
-  // not the alias, so removing this temporary alias does not break
-  // reincarnation.
-  const temporary = `${name}-secret-read`;
-  if (await E(host).has(temporary)) await E(host).remove(temporary);
-  try {
-    await E(host).copy(['secrets', name], [temporary]);
-    if (await E(host).has(name)) await E(host).remove(name);
-    await E(host).makeUnconfined('@main', credentialsModuleSpecifier, {
-      powersName: temporary,
-      resultName: name,
-      env: harden({ CREDENTIALS_KIND: kind, CREDENTIALS_LABEL: label }),
-    });
-  } finally {
-    await E(host).remove(temporary);
-  }
+  // Capture the read capability directly; no temporary root alias is needed.
+  await E(host).makeUnconfined('@main', credentialsModuleSpecifier, {
+    powersName: ['secrets', name],
+    resultName: path,
+    env: harden({ CREDENTIALS_KIND: kind, CREDENTIALS_LABEL: label }),
+  });
 };
 harden(provideManagedCredentials);

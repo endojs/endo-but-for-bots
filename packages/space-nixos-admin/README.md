@@ -43,12 +43,29 @@ Mutating methods fail until both required directories are configured.
 
 `setup-forgejo-credential.js` is an optional hosted-development integration.
 It is not required to inspect or administer a NixOS machine.
-It reads `ENDO_FORGEJO_FLOOT_PW`, `ENDO_FORGEJO_USER` (default `floot`), and
-`ENDO_FORGEJO_URL` (default `http://127.0.0.1:3000`), and the credential's
-audience is that URL's origin.
-The daemon's Git remotes accept a credential only over https, so a
-deployment that wants to push through this credential must set
-`ENDO_FORGEJO_URL` to an https origin; the setup warns when it is not.
+On first setup, create `secrets/forgejo-password` in Secrets Manager, or supply
+`ENDO_FORGEJO_FLOOT_PW` once as a bootstrap value.
+Existing secret material is never overwritten from the environment.
+Keep `ENDO_FORGEJO_USER` (default `floot`) and `ENDO_FORGEJO_URL` configured;
+Git remotes require an HTTPS origin.
+
+The use capability lives at `@pins/installations/nixos/forgejo-credential`.
+Setup migrates the old root binding without changing its identity, so existing Git
+remotes keep working.
+It stores only a SecretBlob reference, username, audience, and revocation state in
+the credential formula; the password is read afresh for each transport operation.
+Secrets Manager rotation aborts in-flight operations and applies to the next one;
+revocation fails closed, including after daemon restart.
+Use Secrets Manager to rotate the password, and rotate the server-side Forgejo
+password to match as part of the same operator change.
+Git credential controller revocation affects only that credential; it does not
+revoke a shared SecretBlob.
+
+After migration, remove the bootstrap password from the service environment file.
+Deleting or revoking the secret never causes startup to recreate it from stale
+bootstrap settings.
+To replace a deliberately retired credential or change its audience, perform an
+explicit reprovision and rebind its consumers rather than silently replacing it.
 
 `@endo/floot`'s factory setup grants the controller and the credential to its
 factory host for the `machine-admin` session preset, and binds the controller

@@ -27,11 +27,11 @@ test('a status without a reason has no detail', t => {
   });
 });
 
-test('an unknown outcome asks for a check before retrying', t => {
-  t.regex(
+test('an interruption is calm while preserving diagnostic detail', t => {
+  t.is(
     turnStatusView(status('outcome-unknown', 'Turn outcome-unknown: lost'))
       .summary,
-    /Check any tool results before retrying/,
+    'This turn was interrupted.',
   );
 });
 

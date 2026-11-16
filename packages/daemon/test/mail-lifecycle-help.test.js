@@ -2,6 +2,7 @@
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -51,6 +52,81 @@ test.serial(
     const guest = await E(host).provideGuest('researcher', {
       agentName: 'researcher-agent',
     });
+    for (const method of [
+      'lookup',
+      'list',
+      'makeDirectory',
+      'remove',
+      'evaluate',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const documentation = await E(guest).help(method);
+      t.false(documentation.includes('No documentation available'), method);
+      t.true(documentation.startsWith(`${method}(`), method);
+    }
+    t.regex(
+      await E(guest).help('evaluate'),
+      /retained result does not make a shell child persistent/,
+    );
+    t.regex(
+      await E(guest).help('lookupByLocator'),
+      /separately provisioned compatible transport/,
+    );
+    t.regex(await E(guest).help('readOnly'), /No documentation available/);
+    t.regex(await E(guest).help('provideGuest'), /No documentation available/);
+    const streamHelp = await E(guest).help('followNameChanges');
+    const streamExample = /```js\n([\s\S]*?)```/.exec(streamHelp)?.[1];
+    if (!streamExample) throw Error('Missing executable subscription example');
+    const readOne = new Compartment({
+      __options__: true,
+      globals: { E, iterateReader },
+    }).evaluate(`(async guest => { ${streamExample} })`);
+    t.false((await readOne(guest)).done);
+    const changesReader = await E(guest).followNameChanges();
+    t.teardown(() => E(changesReader).close());
+    const changes = iterateReader(changesReader);
+    const initialNames = await E(guest).list();
+    for (const name of initialNames) {
+      // eslint-disable-next-line no-await-in-loop
+      t.like(await changes.next(), { value: { add: name }, done: false });
+    }
+    const pendingChange = changes.next();
+    await E(guest).list(); // A remote turn after the pending stream request.
+    await E(changesReader).close();
+    t.true((await pendingChange).done);
+
+    await E(guest).storeValue(2, 'operand');
+    const locator = await E(guest).locate('operand');
+    if (!locator) throw Error('Missing test value locator');
+    const directory = await E(guest).makeDirectory('subscription-directory');
+    for (const agent of [guest, host, directory]) {
+      // eslint-disable-next-line no-await-in-loop
+      const reader = await E(agent).followLocatorNameChanges(locator);
+      t.teardown(() => E(reader).close());
+      const updates = iterateReader(reader);
+      // eslint-disable-next-line no-await-in-loop
+      t.false((await updates.next()).done);
+      const pending = updates.next();
+      // eslint-disable-next-line no-await-in-loop
+      await E(agent).list();
+      // eslint-disable-next-line no-await-in-loop
+      await E(reader).close();
+      // eslint-disable-next-line no-await-in-loop
+      t.true((await pending).done);
+    }
+
+    await E(guest).evaluate(
+      undefined,
+      'operand + 1',
+      ['operand'],
+      ['operand'],
+      'answer',
+    );
+    t.is(await E(guest).lookup('answer'), 3);
+    await E(guest).remove('answer');
+    await E(guest).remove('operand');
+    await E(guest).remove('subscription-directory');
+    t.deepEqual(await E(guest).list(), initialNames);
     const help = await E(guest).help('listMessages');
     t.is(await E(host).help('listMessages'), help);
     t.regex(help, /dismissed is a Promise<void>/);

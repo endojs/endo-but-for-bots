@@ -31,6 +31,8 @@ const key = (...parts) => JSON.stringify(parts.flat());
  */
 const makeFakeHost = () => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
   const formulas = new Map();
   const environments = new Map();
   /** @type {any[]} */
@@ -41,10 +43,10 @@ const makeFakeHost = () => {
   const removed = [];
   /** @type {string[][]} */
   const reads = [];
-  bindings.set(key('claude-sandbox'), 'dir');
+  bindings.set(key('@pins', 'installations', 'claude-sandbox'), 'dir');
   const seedFormula = (name, specifier, env) => {
     const id = `persisted-${name}`;
-    bindings.set(key('claude-sandbox', name), id);
+    bindings.set(key('@pins', 'installations', 'claude-sandbox', name), id);
     formulas.set(id, {
       type: 'make-unconfined',
       properties: { specifier: { kind: 'literal', value: specifier } },
@@ -57,6 +59,13 @@ const makeFakeHost = () => {
       harden({
         async has(...parts) {
           return bindings.has(key(...parts));
+        },
+        /** @param {string[]} namePath */
+        async provideDirectory(namePath) {
+          for (let n = 1; n <= namePath.length; n += 1) {
+            const prefix = key(namePath.slice(0, n));
+            if (!bindings.has(prefix)) bindings.set(prefix, 'dir');
+          }
         },
         async makeDirectory(...parts) {
           bindings.set(key(...parts), 'dir');
@@ -161,13 +170,23 @@ test.serial(
       'handle',
     ];
     for (const name of legacyNames) {
-      bindings.set(key('claude-sandbox', name), `old-${name}`);
+      bindings.set(
+        key('@pins', 'installations', 'claude-sandbox', name),
+        `old-${name}`,
+      );
     }
     await main(host);
     for (const name of legacyNames) {
-      t.is(bindings.get(key('claude-sandbox', name)), `old-${name}`);
+      t.is(
+        bindings.get(key('@pins', 'installations', 'claude-sandbox', name)),
+        `old-${name}`,
+      );
       t.false(
-        removed.some(parts => key(...parts) === key('claude-sandbox', name)),
+        removed.some(
+          parts =>
+            key(...parts) ===
+            key('@pins', 'installations', 'claude-sandbox', name),
+        ),
       );
     }
   },
@@ -182,8 +201,8 @@ test.serial(
     t.deepEqual(
       mints.map(mint => mint.options.resultName),
       [
-        ['claude-sandbox', 'native-sandbox'],
-        ['claude-sandbox', 'state-provider'],
+        ['@pins', 'installations', 'claude-sandbox', 'native-sandbox'],
+        ['@pins', 'installations', 'claude-sandbox', 'state-provider'],
       ],
     );
     const [native, state] = mints;

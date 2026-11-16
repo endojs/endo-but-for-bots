@@ -32,6 +32,12 @@ const key = (...parts) => JSON.stringify(parts.flat());
 
 const makeFakeHost = () => {
   const bindings = new Map();
+  bindings.set(key('@pins'), 'pins');
+  bindings.set(key('@pins', 'installations'), 'installations');
+  bindings.set(
+    key('@pins', 'installations', 'opencode-sandbox'),
+    'installation',
+  );
   const mints = [];
   const formulas = new Map();
   const environments = new Map();
@@ -52,6 +58,13 @@ const makeFakeHost = () => {
       /** @type {unknown} */ ({
         async has(...parts) {
           return bindings.has(key(...parts));
+        },
+        /** @param {string[]} namePath */
+        async provideDirectory(namePath) {
+          for (let n = 1; n <= namePath.length; n += 1) {
+            const prefix = key(namePath.slice(0, n));
+            if (!bindings.has(prefix)) bindings.set(prefix, 'dir');
+          }
         },
         async makeDirectory(...parts) {
           bindings.set(key(...parts), 'dir');
@@ -104,7 +117,10 @@ const makeFakeHost = () => {
 
 const seedFormula = (fake, name, specifier, env) => {
   const id = `persisted-${name}`;
-  fake.bindings.set(key('opencode-sandbox', name), id);
+  fake.bindings.set(
+    key('@pins', 'installations', 'opencode-sandbox', name),
+    id,
+  );
   fake.formulas.set(
     id,
     harden({
@@ -189,9 +205,13 @@ test.serial(
 
     t.deepEqual(
       mints.map(mint => mint.options.resultName),
-      [['opencode-sandbox', 'native-sandbox']],
+      [['@pins', 'installations', 'opencode-sandbox', 'native-sandbox']],
     );
-    t.false(bindings.has(key('opencode-sandbox', 'state-provider')));
+    t.false(
+      bindings.has(
+        key('@pins', 'installations', 'opencode-sandbox', 'state-provider'),
+      ),
+    );
     t.false(
       await stat(stateDir).then(
         () => true,
@@ -219,11 +239,15 @@ test.serial(
       ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
     });
     t.false(
-      bindings.has(key('opencode-sandbox', 'sandbox-factory')),
+      bindings.has(
+        key('@pins', 'installations', 'opencode-sandbox', 'sandbox-factory'),
+      ),
       'no capability-based factory is minted',
     );
     t.false(
-      bindings.has(key('opencode-sandbox', 'fs-mounter')),
+      bindings.has(
+        key('@pins', 'installations', 'opencode-sandbox', 'fs-mounter'),
+      ),
       'no shared mounter is minted',
     );
   },
@@ -250,7 +274,7 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(main(host));
       t.is(mints.length, 0);
-      t.is(bindings.size, 0);
+      t.is(bindings.size, 3);
       for (const name of Object.keys(values)) {
         if (original[name] === undefined) delete process.env[name];
         else process.env[name] = original[name];
@@ -276,7 +300,7 @@ test.serial(
     const { host, mints, bindings } = makeFakeHost();
     await t.throwsAsync(main(host), { message: /must be disjoint/ });
     t.is(mints.length, 0);
-    t.is(bindings.size, 0);
+    t.is(bindings.size, 3);
   },
 );
 
@@ -306,13 +330,18 @@ test.serial(
     const { runtimeDir, tmp } = await withRuntime(t);
     await withStateDir(t, path.join(tmp, 'state-root'));
     const { host, bindings, mints, stored } = makeFakeHost();
-    bindings.set(key('opencode-sandbox', 'sandbox-factory'), 'old-factory');
+    bindings.set(
+      key('@pins', 'installations', 'opencode-sandbox', 'sandbox-factory'),
+      'old-factory',
+    );
     await t.throwsAsync(main(host), {
       message: /sandbox-factory is still bound: retire the old runtime/,
     });
-    t.is(bindings.size, 1);
+    t.is(bindings.size, 4);
     t.is(
-      bindings.get(key('opencode-sandbox', 'sandbox-factory')),
+      bindings.get(
+        key('@pins', 'installations', 'opencode-sandbox', 'sandbox-factory'),
+      ),
       'old-factory',
     );
     t.is(mints.length, 0);
@@ -320,8 +349,14 @@ test.serial(
     // A retained native runtime beside the legacy names is kept; the legacy
     // names are reported, never read, removed, or replaced.
     const retained = makeFakeHost();
-    retained.bindings.set(key('opencode-sandbox', 'sandbox-factory'), 'old');
-    retained.bindings.set(key('opencode-sandbox', 'fs-mounter'), 'old-mount');
+    retained.bindings.set(
+      key('@pins', 'installations', 'opencode-sandbox', 'sandbox-factory'),
+      'old',
+    );
+    retained.bindings.set(
+      key('@pins', 'installations', 'opencode-sandbox', 'fs-mounter'),
+      'old-mount',
+    );
     seedFormula(
       retained,
       'native-sandbox',
@@ -330,15 +365,19 @@ test.serial(
     );
     await main(retained.host);
     t.deepEqual(
-      retained.mints.map(mint => mint.options.resultName[1]),
+      retained.mints.map(mint => mint.options.resultName.at(-1)),
       [],
     );
     t.is(
-      retained.bindings.get(key('opencode-sandbox', 'sandbox-factory')),
+      retained.bindings.get(
+        key('@pins', 'installations', 'opencode-sandbox', 'sandbox-factory'),
+      ),
       'old',
     );
     t.is(
-      retained.bindings.get(key('opencode-sandbox', 'fs-mounter')),
+      retained.bindings.get(
+        key('@pins', 'installations', 'opencode-sandbox', 'fs-mounter'),
+      ),
       'old-mount',
     );
     t.deepEqual(retained.removed, []);
@@ -366,7 +405,7 @@ test.serial(
     });
     t.deepEqual(marked.mints, []);
     t.deepEqual(marked.stored, []);
-    t.is(marked.bindings.size, 0, 'refused before the directory is made');
+    t.is(marked.bindings.size, 3, 'refused before the directory is made');
     t.is(await readlink(marker), 'endo-sandbox-owner-v1-stale', 'untouched');
     await rm(marker);
     const files = path.join(runtimeDir, `${ownerId}.files`);
@@ -377,7 +416,7 @@ test.serial(
     });
     t.deepEqual(rooted.mints, []);
     t.deepEqual(rooted.stored, []);
-    t.is(rooted.bindings.size, 0, 'refused before the directory is made');
+    t.is(rooted.bindings.size, 3, 'refused before the directory is made');
     t.true((await stat(files)).isDirectory(), 'untouched');
     await rm(files, { recursive: true });
     // Another owner's leftovers are not this runtime's to judge: not probed,
@@ -387,7 +426,7 @@ test.serial(
     const fresh = makeFakeHost();
     await main(fresh.host);
     t.deepEqual(
-      fresh.mints.map(mint => mint.options.resultName[1]),
+      fresh.mints.map(mint => mint.options.resultName.at(-1)),
       ['native-sandbox'],
     );
     t.is(await readlink(foreign), 'endo-sandbox-owner-v1-other', 'untouched');
@@ -413,7 +452,7 @@ test.serial(
     });
     await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
     t.deepEqual(fake.mints, []);
-    t.is(fake.bindings.size, 1);
+    t.is(fake.bindings.size, 4);
   },
 );
 
@@ -435,7 +474,7 @@ test.serial(
     await withEnv(t, { ENDO_SANDBOX_RUNTIME_DIR: 'ignored-relative-path' });
     await main(fake.host);
     t.deepEqual(
-      fake.mints.map(mint => mint.options.resultName[1]),
+      fake.mints.map(mint => mint.options.resultName.at(-1)),
       [],
     );
     t.deepEqual(fake.stored, [], 'no replacement powers are stored');

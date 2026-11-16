@@ -234,6 +234,7 @@ harden(devReviewChart);
  * @param {any} options.service
  * @param {any} options.project - Git for the implementation worktree
  * @param {string} options.projectName - participant-local project petname
+ * @param {string[]} [options.projectPath] - owning project collection; defaults to projects/projectName
  * @param {any} options.developer - developer guest powers
  * @param {any[]} options.reviewers - reviewer guest powers
  * @param {any} options.initiator - originating Floot guest powers
@@ -246,6 +247,7 @@ export const provisionDevReview = async ({
   service,
   project,
   projectName,
+  projectPath = ['projects', projectName],
   developer,
   reviewers,
   initiator,
@@ -266,11 +268,28 @@ export const provisionDevReview = async ({
     );
   if (await E(initiator).has('dev-review'))
     throw Error('This conversation already has a dev-review connection');
-  if (await E(host).has(`review-connection-${projectName}`))
+  if (
+    projectPath.length < 2 ||
+    projectPath[0] !== 'projects' ||
+    projectPath.some(part => !/^[a-z][a-z0-9-]{0,79}$/.test(part))
+  )
+    throw Error('Review storage must belong to a project collection');
+  const reviewPath = [...projectPath, 'reviews', projectName];
+  for (let n = 1; n <= reviewPath.length; n += 1) {
+    const directory = reviewPath.slice(0, n);
+    // Parents must exist before their children can be named.
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await E(host).has(...directory)))
+      // eslint-disable-next-line no-await-in-loop
+      await E(host).makeDirectory(directory);
+  }
+  const projectPowersName = [...reviewPath, 'project'];
+  const readerName = [...reviewPath, 'reader'];
+  const resolverName = [...reviewPath, 'resolver'];
+  const connectionPowersName = [...reviewPath, 'powers'];
+  const connectionName = [...reviewPath, 'connection'];
+  if (await E(host).has(...connectionName))
     throw Error('Use a unique projectName for this connection');
-  const projectPowersName = `review-project-${projectName}`;
-  const readerName = `review-reader-${projectName}`;
-  const resolverName = `review-resolver-${projectName}`;
   await E(host).storeValue(project, projectPowersName);
   await E(host).makeUnconfined(
     '@main',
@@ -307,9 +326,7 @@ export const provisionDevReview = async ({
       endowments,
     }),
   );
-  const connectionPowersName = `review-connection-powers-${projectName}`;
-  const connectionName = `review-connection-${projectName}`;
-  await E(host).provideGuest(`review-connection-handle-${projectName}`, {
+  await E(host).provideGuest([...reviewPath, 'handle'], {
     agentName: connectionPowersName,
   });
   const connectionPowers = await E(host).lookup(connectionPowersName);

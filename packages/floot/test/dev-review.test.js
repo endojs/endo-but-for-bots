@@ -239,6 +239,7 @@ test('design handoff pins candidates, repeats review, and durably notifies readi
 });
 
 test('provisioning registers attenuated capabilities before granting them', async t => {
+  const keyOf = key => (Array.isArray(key) ? key.join('/') : key);
   const registered = new WeakSet();
   const stores = new Map();
   const register = value => {
@@ -251,8 +252,8 @@ test('provisioning registers attenuated capabilities before granting them', asyn
     values.set('@self', register(Far(`${name} mail`, {})));
     return register(
       Far(name, {
-        has: key => values.has(key),
-        lookup: key => values.get(key),
+        has: key => values.has(keyOf(key)),
+        lookup: key => values.get(keyOf(key)),
         storeValue: (value, key) => {
           if (
             typeof value === 'object' &&
@@ -260,7 +261,7 @@ test('provisioning registers attenuated capabilities before granting them', asyn
             !registered.has(value)
           )
             throw Error('Capability has no daemon formula');
-          values.set(key, value);
+          values.set(keyOf(key), value);
         },
       }),
     );
@@ -283,14 +284,22 @@ test('provisioning registers attenuated capabilities before granting them', asyn
   modules.set('review-reader.js', makeReader);
   modules.set('review-project.js', makeProject);
   modules.set('review-connection.js', makeConnection);
+  let failReaderOnce = true;
   const host = Far('Host', {
-    has: key => E(hostPowers).has(key),
+    has: (...keys) => E(hostPowers).has(keys.flat()),
+    makeDirectory: key =>
+      E(hostPowers).storeValue(register(Far('Directory', {})), key),
     lookup: key => E(hostPowers).lookup(key),
     storeValue: (value, key) => E(hostPowers).storeValue(value, key),
-    provideGuest: async (_handle, { agentName }) => {
+    provideGuest: async (handle, { agentName }) => {
       await E(hostPowers).storeValue(guest(agentName), agentName);
+      await E(hostPowers).storeValue(register(Far('Handle', {})), handle);
     },
     makeUnconfined: async (_worker, url, { powersName, resultName }) => {
+      if (failReaderOnce) {
+        failReaderOnce = false;
+        throw Error('Interrupted reader setup');
+      }
       const moduleName = new URL(url).pathname.split('/').pop();
       if (moduleName === undefined) throw Error('Missing module name');
       const make = modules.get(moduleName);
@@ -307,14 +316,32 @@ test('provisioning registers attenuated capabilities before granting them', asyn
     service,
     project,
     projectName: 'project',
+    projectPath: ['projects', 'ironhorse'],
     developer,
     reviewers: [reviewer],
     initiator,
     operator: register(Far('Operator', {})),
     implementationTimeoutMs: 60_000,
   };
+  await t.throwsAsync(provisionDevReview(options), {
+    message: 'Interrupted reader setup',
+  });
+  t.deepEqual(
+    [...stores.get('host').keys()].filter(name => !name.includes('/')),
+    ['@self', 'projects'],
+  );
   const { fid } = await provisionDevReview(options);
   t.is(fid, 'factory-test');
+  const rootNames = () => [...stores.get('host').keys()];
+  t.deepEqual(
+    rootNames().filter(name => !name.includes('/')),
+    ['@self', 'projects'],
+  );
+  for (const leaf of ['project', 'reader', 'resolver', 'powers', 'connection'])
+    t.true(
+      stores.get('host').has(`projects/ironhorse/reviews/project/${leaf}`),
+    );
+  const beforeRerun = rootNames();
   t.is(stores.get('developer').get('project'), project);
   t.is(stores.get('reviewer').get('project'), reader);
   t.true(registered.has(stores.get('initiator').get('dev-review')));
@@ -325,6 +352,7 @@ test('provisioning registers attenuated capabilities before granting them', asyn
   await t.throwsAsync(provisionDevReview(options), {
     message: 'This conversation already has a dev-review connection',
   });
+  t.deepEqual(rootNames(), beforeRerun);
 });
 
 test('budget updates survive pending base and candidate resolution', async t => {

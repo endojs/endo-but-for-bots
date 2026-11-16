@@ -30,12 +30,12 @@ import {
  * @typedef {object} GitCredentialRecord
  * @property {GitCredentialKind} kind
  * @property {string} audience
- * @property {() => GitCredentialMaterial} getMaterial
- * @property {() => number} getVersion
+ * @property {() => GitCredentialMaterial | Promise<GitCredentialMaterial>} getMaterial
+ * @property {() => number | bigint} getVersion
  * @property {() => boolean} isRevoked
  * @property {(listener: () => void) => (() => void)} watchChange
- * @property {(material: GitCredentialMaterial) => void} rotate
- * @property {() => void} revoke
+ * @property {(material: GitCredentialMaterial) => void | Promise<void>} rotate
+ * @property {() => void | Promise<void>} revoke
  */
 
 /**
@@ -123,14 +123,14 @@ const makeGitCredentialController = record =>
         kind: record.kind,
         audience: record.audience,
         available:
-          gitCredentialFromMaterial(record.kind, record.getMaterial()) !==
+          gitCredentialFromMaterial(record.kind, await record.getMaterial()) !==
           undefined,
         revoked: record.isRevoked(),
       });
     },
 
     async rotate(material) {
-      record.rotate(
+      await record.rotate(
         normalizeMaterial(
           record.kind,
           /** @type {Record<string, unknown>} */ (material),
@@ -140,17 +140,50 @@ const makeGitCredentialController = record =>
     },
 
     async revoke() {
-      record.revoke();
+      await record.revoke();
     },
   });
 harden(makeGitCredentialController);
 
-/**
- * @param {object} credential
- * @param {GitCredentialRecord} record
- */
+/** @type {WeakMap<object, (source: GitCredentialRecord) => void>} */
+const credentialSourceSetters = new WeakMap();
+/** @param {object} credential @param {GitCredentialRecord} record */
 const registerCredential = (credential, record) => {
-  const durableRecord = harden(record);
+  const { kind, audience } = record;
+  let current = record;
+  let version = 0n;
+  let sampledVersion = current.getVersion();
+  const changes = makeChangeNotifier();
+  let unwatch = current.watchChange(changes.notifyChange);
+  // Remotes and controllers retain this stable record even when an existing
+  // credential is migrated to durable secret backing.
+  const durableRecord = harden({
+    kind,
+    audience,
+    getMaterial: () => current.getMaterial(),
+    getVersion: () => {
+      const next = current.getVersion();
+      if (next !== sampledVersion) {
+        sampledVersion = next;
+        version += 1n;
+      }
+      return version;
+    },
+    isRevoked: () => current.isRevoked(),
+    watchChange: changes.watchChange,
+    rotate: material => current.rotate(material),
+    revoke: () => current.revoke(),
+  });
+  credentialSourceSetters.set(credential, source => {
+    if (source.kind !== kind || source.audience !== audience)
+      throw Error('Credential source kind or audience changed');
+    unwatch();
+    current = source;
+    sampledVersion = current.getVersion();
+    version += 1n;
+    unwatch = current.watchChange(changes.notifyChange);
+    changes.notifyChange();
+  });
   credentialRecords.set(credential, durableRecord);
   credentialControllers.set(
     credential,
@@ -419,3 +452,15 @@ export const makeUnavailableGitCredential = ({
   });
 };
 harden(makeUnavailableGitCredential);
+
+/**
+ * Host-private identity-preserving backing migration; never exported on a cap.
+ * @param {object} credential
+ * @param {GitCredentialRecord} source
+ */
+export const bindGitCredentialSource = (credential, source) => {
+  const bind = credentialSourceSetters.get(credential);
+  if (!bind) throw Error('Expected a daemon-minted Git credential');
+  bind(source);
+};
+harden(bindGitCredentialSource);

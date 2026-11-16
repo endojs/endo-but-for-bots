@@ -6,7 +6,15 @@ The direct-provider worker image remains minimal and separate.
 This coordinated base refresh uses Node 22.23.2 (already used on Tokyo) and the
 immutable 2026-09-20 Debian snapshot, avoiding a Claude/OpenCode Node downgrade.
 It provides bash, CA certificates, curl, git, ripgrep, C/C++ build tools, Python,
-pip, venv, OpenSSL, and tar; it does not add Rust or Go.
+pip, venv, OpenSSL, tar, procps, Chromium, and fonts; it does not add Rust or Go.
+The image build runs an offline Chromium smoke test for text layout, software
+WebGL, and screenshot output, so missing browser libraries fail the build.
+Use `/usr/bin/chromium` as Playwright's `executablePath` to avoid downloading
+another browser; install test libraries in native HOME.
+Run `node /opt/endo-browser-smoke.mjs` inside the development slice to check it.
+For browser tests, keep the test server and browser in the same shell invocation
+and clean up the server on exit.
+The shell does not provide persistent public hosting or a daemon transport.
 
 Build the base once, then reuse its immutable local image ID for each overlay:
 
@@ -76,17 +84,34 @@ Verify the installed matcher's behavior and the actual selected arguments;
 a no-matching-tests error provides no coverage.
 This command exercises JavaScript workspace `test` scripts, not every separate
 Rust, XS, test262, lint or typecheck CI lane.
-Browser downloads can live in HOME, but the base image does not claim every
-browser runtime library or other project's optional system dependencies.
-On Debian, APT can use user-owned lists, cache and a copy of installed-package
-status for signed download-only dependency resolution.
-Extract the resulting packages with `dpkg-deb -x` into a HOME prefix, then use
-that prefix's binary/library paths for the relevant commands.
-This keeps normal repository verification and needs no root or writable system
-mount; do not replace it with disabled signature checks or a host package install.
-The Tokyo browser suites passed with this approach.
-The hosted-agent suite also needs `pgrep` from `procps`; download/extract its
-packages into a HOME prefix and include its binary and library paths.
+The packaged Chromium and fonts cover ordinary headless browser checks.
+Other projects may still need optional system dependencies.
+Do not disable signature checks or install packages on the host to repair a slice.
 The locked Electron package's explicit `install.js` also worked with
 `ELECTRON_GET_USE_PROXY=1`; it retained checksum verification without globally
 enabling dependency scripts or fetching an unpinned installer.
+
+
+### Browser launch recipe
+
+Inside the confined development container, run `node /opt/endo-browser-smoke.mjs`
+for the offline browser self-check.
+Use this Playwright launch configuration (keep its npm installation in HOME):
+
+```js
+const browser = await chromium.launch({
+  executablePath: '/usr/bin/chromium',
+  headless: true,
+  args: [
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    '--use-angle=swiftshader',
+    '--enable-unsafe-swiftshader',
+  ],
+});
+```
+
+The CLI uses the same arguments plus `--headless`.
+These flags rely on the outer container confinement; they are not a host browser recipe.
+Close the browser and stop any local server in the same bounded shell invocation.
+A software WebGL check does not establish that a physical headset supports WebXR.

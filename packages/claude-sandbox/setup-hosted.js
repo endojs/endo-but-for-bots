@@ -69,7 +69,9 @@
 // pool, the `anthropic-beta` profile, the state provider the storage owner is
 // minted over) is the code between its steps here.
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { Fail, q } from '@endo/errors';
+import { E } from '@endo/eventual-send';
 import { readBrokerWorkloadEnv } from '@endo/hosted-agent/provider-broker-service.js';
 import {
   assertGuestRootsDisjoint,
@@ -94,6 +96,7 @@ import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
+import { main as publishDirectInference } from './setup-direct.js';
 import { ANTHROPIC_BETA_PATTERN } from './src/claude-broker.js';
 import { readClaudeBrokerConfig } from './src/claude-broker-service-agent.js';
 import { assertCredentialKind } from './src/claude-credential-kinds.js';
@@ -235,13 +238,13 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       Fail`Changing Claude pool mode requires retiring the broker and its sessions first`;
     credentialKind = retained.credentialKind;
     if (requestedKind !== undefined && requestedKind !== credentialKind) {
-      throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} reads a ${q(credentialKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
+      throw Fail`The retained ${q(`${installationPath(SANDBOX_DIR).join('/')}/broker-service`)} reads a ${q(credentialKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
     }
     // Likewise its pins: a changed image is refused here, not silently
     // discarded (a live broker cannot be re-pinned in place).
     await assertRetainedBrokerImages({
       label: LABEL,
-      serviceName: `${SANDBOX_DIR}/broker-service`,
+      serviceName: `${installationPath(SANDBOX_DIR).join('/')}/broker-service`,
       retained,
       rootfs,
       listenerImageRef,
@@ -331,7 +334,9 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     configEnvName: 'CLAUDE_BROKER_CONFIG',
     readBrokerConfig: readClaudeBrokerConfig,
     specifier: brokerServiceSpecifier,
-    powersPath: pool ? [SANDBOX_DIR, 'broker-powers'] : ['secrets', credsName],
+    powersPath: pool
+      ? installationPath(SANDBOX_DIR, 'broker-powers')
+      : ['secrets', credsName],
     temporary: `${credsName}.broker-read`,
   });
 
@@ -345,19 +350,21 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     );
   } else {
     await mintWithPowersPath(hostAgent, {
-      powersPath: [SANDBOX_DIR, 'state-provider'],
+      powersPath: installationPath(SANDBOX_DIR, 'state-provider'),
       temporary: 'claude.state-provider-powers',
       specifier: sessionStorageSpecifier,
-      resultName: [SANDBOX_DIR, 'session-storage'],
+      resultName: installationPath(SANDBOX_DIR, 'session-storage'),
       env: {
         CLAUDE_WORKSPACE_BASE_DIR: workspaceDir,
         CLAUDE_MCP_DIR: mcpDir,
       },
     });
-    console.log(`Minted ${SANDBOX_DIR}/session-storage`);
+    console.log(
+      `Minted ${installationPath(SANDBOX_DIR).join('/')}/session-storage`,
+    );
   }
 
-  // Sessions are records under `claude-sandbox/session-records`, owned by
+  // Sessions are records under `@pins/installations/claude-sandbox/session-records`, owned by
   // the daemon; the factory itself holds nothing durable.
   const backendPath = await provideBackendCaplet(hostAgent, {
     label: LABEL,
@@ -382,10 +389,16 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     providerId: 'anthropic',
     flootDir,
     backendId: 'claude',
+    additionalBackendIds: ['fae-claude'],
     accountAuthority,
     ...(pool
       ? { subscriptionIds: pool.set.members.map(member => member.id) }
       : {}),
   });
+  if (
+    await E(hostAgent).has(...installationPath(SANDBOX_DIR, 'subscription'))
+  ) {
+    await publishDirectInference(hostAgent, { env });
+  }
 };
 harden(main);

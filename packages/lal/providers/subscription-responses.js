@@ -12,9 +12,15 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { M, mustMatch } from '@endo/patterns';
 
 import { abortableDelay } from './delay.js';
+import { responseEvents } from './subscription-events.js';
 
-// A transport bound matching the Codex broker, not a model context limit.
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const emptyResponsesOutputs = new WeakMap();
+/** A completed, validated response with no text or calls, not a failed stream.
+ * @param {unknown} error
+ */
+export const getEmptyResponsesOutput = error =>
+  error instanceof Error ? emptyResponsesOutputs.get(error) : undefined;
+harden(getEmptyResponsesOutput);
 const OVERLOAD_RETRY_DELAYS_MS = harden([5000, 10_000, 20_000, 40_000, 60_000]);
 // These events stay inside the adapter. In particular, seeing a function-call
 // item does not dispatch a tool: only a completed response leaves the adapter.
@@ -180,7 +186,6 @@ const commonMessage = items => {
       throw Error('Unsupported Responses output item');
     }
   }
-  content.trim() || calls.length > 0 || Fail`Empty Responses assistant output`;
   return {
     role: 'assistant',
     content,
@@ -304,61 +309,6 @@ const requestContext = (messages, model) => {
   }
   pending.size === 0 || Fail`Responses history has unresolved tool calls`;
   return { instructions: instructions.join('\n\n'), input };
-};
-
-/**
- * SSE framing is independent of chunk boundaries and retains multiline data.
- * The broker's usage tap is deliberately not an SSE parser: it skips oversized
- * lines and malformed JSON, whereas an inference consumer must reject them.
- * @param {AsyncIterableIterator<Uint8Array>} bytes
- */
-const responseEvents = async function* responseEventIterator(bytes) {
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let pending = '';
-  let data = [];
-  let size = 0;
-  const takeEvent = () => {
-    const text = data.join('\n');
-    data = [];
-    if (text === '[DONE]') return { type: 'stream.done' };
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw Error('Invalid Responses stream event');
-    }
-  };
-  for await (const chunk of bytes) {
-    size += chunk.byteLength;
-    size <= MAX_RESPONSE_BYTES ||
-      Fail`Responses stream exceeds transport bound`;
-    pending += decoder.decode(chunk, { stream: true });
-    for (;;) {
-      const match = /^(.*?)(\r\n|\n|\r(?!$))/s.exec(pending);
-      if (!match) break;
-      pending = pending.slice(match[0].length);
-      const line = match[1];
-      if (line === '') {
-        if (data.length > 0) {
-          const event = takeEvent();
-          if (event !== undefined) yield event;
-        }
-      } else if (line.startsWith('data:')) {
-        data.push(line.slice(5).replace(/^ /, ''));
-      }
-    }
-  }
-  pending += decoder.decode();
-  // A trailing CR is held across chunks to distinguish CRLF. At EOF it is
-  // itself the final line ending, including a CR-only blank dispatch line.
-  if (pending === '\r') {
-    pending = '';
-    if (data.length > 0) {
-      const event = takeEvent();
-      if (event !== undefined) yield event;
-    }
-  }
-  (!pending.trim() && data.length === 0) ||
-    Fail`Truncated Responses stream event`;
 };
 
 /**
@@ -664,18 +614,33 @@ export const makeSubscriptionResponsesProvider = ({
       const output = completed.output.length
         ? completed.output
         : streamedOutput;
-      return harden({
+      const outcome = harden({
         message: messageFromResponsesOutput({ model, items: output }),
         ...(usage ? { usage } : {}),
       });
+      if (
+        !outcome.message.content.trim() &&
+        !outcome.message.tool_calls?.length
+      ) {
+        const error = Error('Empty Responses assistant output');
+        emptyResponsesOutputs.set(error, outcome);
+        throw error;
+      }
+      return outcome;
     } finally {
       admission.reject(Error('Inference acquisition not admitted'));
-      signal?.removeEventListener('abort', abort);
       // Do not hide a stalled acquisition/read behind stalled caller cancellation.
       // Its retained cleanup must still finish before dispose() acknowledges it.
-      if (wasCancelled) void cleanup().catch(() => undefined);
-      else await cleanup();
-      if (iterator) void iterator.return?.().catch(() => undefined);
+      try {
+        if (wasCancelled) void cleanup().catch(() => undefined);
+        else {
+          await wait(cleanup());
+          assertLive();
+        }
+      } finally {
+        signal?.removeEventListener('abort', abort);
+        if (iterator) void iterator.return?.().catch(() => undefined);
+      }
     }
   };
   /**

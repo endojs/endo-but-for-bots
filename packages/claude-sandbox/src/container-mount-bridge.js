@@ -29,6 +29,7 @@
  * @module
  */
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -113,7 +114,9 @@ export const makeContainerMountBridge = (
     powers.getFsMounter ||
     (() =>
       E(hostAgent).lookup(
-        sandboxNamespace ? [sandboxNamespace, fsMounterName] : fsMounterName,
+        sandboxNamespace
+          ? installationPath(sandboxNamespace, fsMounterName)
+          : fsMounterName,
       ));
 
   /** @param {string} key */

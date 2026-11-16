@@ -556,9 +556,6 @@ export const FlootApp = ({ controller }) => {
     status,
   } = state;
   const active = sessions.find(s => s.id === activeSessionId);
-  const needsRecovery = state.recovery?.turns.some(
-    turn => turn.state === 'outcome-unknown' && !turn.resolution,
-  );
 
   const onNew = () => {
     // What the backends list now, not what they listed at load.
@@ -610,34 +607,23 @@ export const FlootApp = ({ controller }) => {
           .join(' | ')
       : accountChip(account, accountNow);
 
-  // The journal and a pending network request are labels, not glyphs, so they
-  // render as chips beside the icon buttons. A badge carries the part that
-  // needs the operator (an unknown outcome, an approval to decide) and
-  // collapses to a dot where the header is too narrow for the words.
+  // Historical interruption evidence belongs in details. Current execution
+  // failures and approvals have their own actionable controls.
   const journalButton = state.recovery
     ? h(
         'button',
         {
           type: 'button',
-          class: `floot-header-btn chip${recoveryOpen ? ' on' : ''}${
-            needsRecovery ? ' attention' : ''
-          }`,
-          'aria-label': needsRecovery
-            ? 'Turn journal and recovery: recovery needed'
-            : 'Turn journal and recovery',
+          class: `floot-header-btn chip${recoveryOpen ? ' on' : ''}`,
+          'aria-label': 'Turn journal and recovery',
           'aria-pressed': recoveryOpen ? 'true' : 'false',
-          title: needsRecovery
-            ? 'A turn has an unknown outcome; inspect the journal before repeating its effects'
-            : 'Turn journal and recovery',
+          title: 'Session details',
           onClick: () => {
             setRecoveryOpen(!recoveryOpen);
             controller.refreshRecovery?.();
           },
         },
-        'Journal',
-        needsRecovery
-          ? h('span', { class: 'floot-header-badge' }, 'recovery needed')
-          : null,
+        'Details',
       )
     : null;
   const networkButton = state.network?.request

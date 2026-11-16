@@ -82,8 +82,12 @@ export const makeGitCloner = ({ endpoint, clone, makeGit, makeRemote }) => {
       }
       // Constructive: there is no repo yet; the clone creates the
       // worktree at destPath from the endpoint authority.
-      const credential = endpoint.ensureCredentialUsable();
       try {
+        const credential = await endpoint.ensureCredentialUsable();
+        endpoint.assertCredentialUnchanged(
+          'credential read',
+          credentialVersion,
+        );
         await clone({
           url: endpoint.url,
           destPath,

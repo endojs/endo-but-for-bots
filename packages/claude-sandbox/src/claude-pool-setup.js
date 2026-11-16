@@ -1,5 +1,6 @@
 // @ts-check
 
+import { installationPath } from '@endo/hosted-agent/installation-path.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import {
@@ -78,7 +79,7 @@ export const prepareClaudePool = async (
     readCredential = readManagedRenewableCredentials,
   } = {},
 ) => {
-  const powersPath = ['claude-sandbox', 'broker-powers'];
+  const powersPath = installationPath('claude-sandbox', 'broker-powers');
   const existing = await E(host).has(...powersPath);
   const powers = existing ? await E(host).lookup(powersPath) : undefined;
   const identities = await Promise.all(
@@ -102,7 +103,10 @@ export const prepareClaudePool = async (
       (await E(powers).identify(identityName)) === identities[index] ||
         Fail`Claude subscription ${member.id} is bound to another secret; use a new id`;
     }
-    const namePath = ['claude-sandbox', `credential-${member.id}`];
+    const namePath = installationPath(
+      'claude-sandbox',
+      `credential-${member.id}`,
+    );
     // Validate every retained holder before publishing any changed member.
     // eslint-disable-next-line no-await-in-loop
     if (await E(host).has(...namePath)) {
@@ -129,13 +133,16 @@ export const prepareClaudePool = async (
         await E(host).provideGuest(handleName, { agentName: powersName });
         await E(host).move(
           [handleName],
-          ['claude-sandbox', 'broker-powers-handle'],
+          installationPath('claude-sandbox', 'broker-powers-handle'),
         );
         await E(host).move([powersName], powersPath);
         namespace = await E(host).lookup(powersPath);
       }
       for (const [index, member] of pool.set.members.entries()) {
-        const namePath = ['claude-sandbox', `credential-${member.id}`];
+        const namePath = installationPath(
+          'claude-sandbox',
+          `credential-${member.id}`,
+        );
         // eslint-disable-next-line no-await-in-loop
         await provideCredential(host, {
           namePath,

@@ -1384,6 +1384,32 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/browser-endo@workspace:^, @endo/browser-endo@workspace:packages/browser-endo":
+  version: 0.0.0-use.local
+  resolution: "@endo/browser-endo@workspace:packages/browser-endo"
+  dependencies:
+    "@endo/captp": "workspace:^"
+    "@endo/daemon": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/relay-server": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    "@playwright/test": "npm:^1.64.0"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+    vite: "npm:^6.0.0"
+    ws: "npm:^8.22.0"
+  languageName: unknown
+  linkType: soft
+
 "@endo/bundle-source@workspace:^, @endo/bundle-source@workspace:packages/bundle-source":
   version: 0.0.0-use.local
   resolution: "@endo/bundle-source@workspace:packages/bundle-source"
@@ -1574,6 +1600,7 @@ __metadata:
   resolution: "@endo/chat@workspace:packages/chat"
   dependencies:
     "@endo/base64": "workspace:^"
+    "@endo/browser-endo": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
@@ -3508,6 +3535,7 @@ __metadata:
   resolution: "@endo/space-floot@workspace:packages/space-floot"
   dependencies:
     "@endo/harden": "workspace:^"
+    "@endo/spaces-util": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     preact: "npm:^10.29.8"
@@ -3559,6 +3587,7 @@ __metadata:
   resolution: "@endo/space-whylip@workspace:packages/space-whylip"
   dependencies:
     "@endo/conversation-tree": "workspace:^"
+    "@endo/daemon": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
@@ -5556,7 +5585,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@playwright/test@npm:^1.64.1":
+"@playwright/test@npm:^1.64.0, @playwright/test@npm:^1.64.1":
   version: 1.64.1
   resolution: "@playwright/test@npm:1.64.1"
   dependencies:

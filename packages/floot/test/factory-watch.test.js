@@ -87,11 +87,14 @@ const makeWorld = existingStore => {
   hostStore.set('codex-backend', backend);
   const host = Far('TestHost', {
     ...directoryHost(hostStore),
-    provideGuest: (_name, { agentName }) => {
+    provideGuest: (_name, { agentName: agentPath }) => {
+      const agentName = agentPath.join('/');
+      if (!hostStore.has(_name.join('/')))
+        hostStore.set(_name.join('/'), harden({}));
       hostStore.set(agentName, guest);
     },
-    remove: name => {
-      hostStore.delete(name);
+    remove: (...path) => {
+      hostStore.delete(path.join('/'));
     },
   });
   const factory = make(host);
@@ -510,8 +513,8 @@ test('a queue goes with its session', async t => {
   await E(session).enqueue('one');
   const run = await nextRun();
   await E(session).enqueue('two');
-  t.true(hostStore.has('floot-pending-3-one'));
+  t.true(hostStore.has('floot-private-sessions/one/pending'));
   run.push(harden({ type: 'abort', reason: 'going away' }));
   await E(factory).deleteSession('one');
-  t.false(hostStore.has('floot-pending-3-one'));
+  t.false(hostStore.has('floot-private-sessions/one/pending'));
 });

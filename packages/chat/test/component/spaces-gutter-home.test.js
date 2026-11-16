@@ -10,6 +10,9 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { createDOM, tick, waitFor } from '../helpers/dom-setup.js';
 
 const { document: testDocument } = createDOM();
+const selfNumber = 'a'.repeat(64);
+const storagePath = ['@pins', 'installations', 'chat', selfNumber, 'spaces'];
+const storagePrefix = storagePath.join('/');
 
 /**
  * Build mock powers that support space 0 config storage and the spaces
@@ -24,15 +27,24 @@ const { document: testDocument } = createDOM();
  *   storedValues: Map<string, unknown>,
  * }}
  */
-const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
+const makeSpacesPowers = ({ storedValues = new Map(), booksService } = {}) => {
+  for (const [key, value] of [...storedValues]) {
+    if (key.startsWith('spaces/')) {
+      storedValues.set(
+        `${storagePrefix}/${key.slice('spaces/'.length)}`,
+        value,
+      );
+      storedValues.delete(key);
+    }
+  }
   /** @type {Array<{method: string, args: unknown[]}>} */
   const calls = [];
 
   /** @type {string[]} */
   const spaceIds = [];
   for (const key of storedValues.keys()) {
-    if (key.startsWith('spaces/')) {
-      spaceIds.push(key.slice('spaces/'.length));
+    if (key.startsWith(`${storagePrefix}/`)) {
+      spaceIds.push(key.slice(storagePrefix.length + 1));
     }
   }
 
@@ -69,6 +81,7 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
   });
 
   const powers = Far('MockPowers', {
+    identify: () => `${selfNumber}:${'b'.repeat(64)}`,
     lookup(pathOrFirst, ...rest) {
       let path;
       if (Array.isArray(pathOrFirst)) {
@@ -80,7 +93,10 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
       }
       calls.push({ method: 'lookup', args: path });
       const key = path.join('/');
-      if (key === 'spaces') {
+      if (key === '@pins/installations/whylip/books-service' && booksService) {
+        return booksService;
+      }
+      if (key === storagePrefix) {
         return spacesDir;
       }
       if (storedValues.has(key)) {
@@ -89,9 +105,10 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
       throw new Error(`Not found: ${key}`);
     },
 
-    list(name) {
-      calls.push({ method: 'list', args: [name] });
-      if (name === 'spaces') {
+    list(...path) {
+      const name = path.join('/');
+      calls.push({ method: 'list', args: path });
+      if (name === storagePrefix) {
         const ids = [...spaceIds];
         return Far('SpaceIterator', {
           [Symbol.asyncIterator]() {
@@ -112,9 +129,9 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
       throw new Error(`Not found: ${name}`);
     },
 
-    makeDirectory(name) {
-      calls.push({ method: 'makeDirectory', args: [name] });
-      return undefined;
+    provideDirectory(path, options) {
+      calls.push({ method: 'provideDirectory', args: [path, options] });
+      return spacesDir;
     },
 
     storeValue(value, petNamePath) {
@@ -122,8 +139,8 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
       calls.push({ method: 'storeValue', args: [value, petNamePath] });
       storedValues.set(key, value);
       const pathParts = petNamePath;
-      if (pathParts.length === 2 && pathParts[0] === 'spaces') {
-        const id = pathParts[1];
+      if (pathParts.slice(0, -1).join('/') === storagePrefix) {
+        const id = pathParts.at(-1);
         if (!spaceIds.includes(id)) {
           spaceIds.push(id);
         }
@@ -133,9 +150,10 @@ const makeSpacesPowers = ({ storedValues = new Map() } = {}) => {
       }
     },
 
-    remove(dir, name) {
-      calls.push({ method: 'remove', args: [dir, name] });
-      const key = `${dir}/${name}`;
+    remove(...path) {
+      const name = path.at(-1);
+      calls.push({ method: 'remove', args: path });
+      const key = path.join('/');
       storedValues.delete(key);
       const idx = spaceIds.indexOf(name);
       if (idx !== -1) {
@@ -176,8 +194,8 @@ const setupGutter = async (opts = {}) => {
   const regularSpaceIds = [];
   let homeIconOverride;
   for (const [key, value] of storedValues.entries()) {
-    if (key.startsWith('spaces/')) {
-      const id = key.slice('spaces/'.length);
+    if (key.startsWith(`${storagePrefix}/`)) {
+      const id = key.slice(storagePrefix.length + 1);
       if (id === '0') {
         homeIconOverride = /** @type {{ icon?: string }} */ (value)?.icon;
       } else {
@@ -469,15 +487,14 @@ test.serial(
       calls.some(
         c =>
           c.method === 'storeValue' &&
-          c.args[1][0] === 'spaces' &&
-          c.args[1][1] === '0',
+          c.args[1].join('/') === `${storagePrefix}/0`,
       ),
     );
 
     // Check that storeValue was called with ['spaces', '1']
     const storeCalls = calls.filter(c => c.method === 'storeValue');
     const homeStoreCall = storeCalls.find(
-      c => c.args[1][0] === 'spaces' && c.args[1][1] === '0',
+      c => c.args[1].join('/') === `${storagePrefix}/0`,
     );
     t.truthy(homeStoreCall, 'storeValue called for spaces.0');
 
@@ -784,3 +801,92 @@ for (const cold of [true, false]) {
     },
   );
 }
+
+test.serial(
+  'saved spaces use private storage for create, edit, refresh, and deletion',
+  async t => {
+    const { gutter, calls, storedValues } = await setupGutter();
+    const profilePath = ['projects', 'my-project'];
+    const id = await gutter.addSpace({
+      name: 'Project',
+      icon: '📁',
+      scheme: 'auto',
+      mode: 'files',
+      profilePath,
+    });
+    t.deepEqual(
+      storedValues.get(`${storagePrefix}/${id}`).profilePath,
+      profilePath,
+    );
+    await gutter.updateSpace(id, { name: 'Renamed' });
+    await gutter.refresh();
+    t.is(gutter.getSpaces().find(space => space.id === id).name, 'Renamed');
+    await gutter.removeSpace(id);
+    t.false(storedValues.has(`${storagePrefix}/${id}`));
+    t.true(
+      calls
+        .filter(call => call.method === 'storeValue')
+        .every(call => call.args[1].slice(0, -1).join('/') === storagePrefix),
+    );
+    t.true(
+      calls.some(
+        call =>
+          call.method === 'provideDirectory' &&
+          call.args[1]?.adoptFrom?.[0] === 'spaces',
+      ),
+    );
+    t.false([...storedValues.keys()].some(key => key.startsWith('spaces/')));
+  },
+);
+
+test.serial(
+  'two stale gutters reopen one deterministic Whylip view through the daemon service',
+  async t => {
+    const storedValues = new Map();
+    let saves = 0;
+    const booksService = Far('WhylipBooks', {
+      getOwnerIdentity: () => `${selfNumber}:${'b'.repeat(64)}`,
+      provideSpace(config) {
+        const id = `whylip-${config.profilePath[1]}`;
+        const key = `${storagePrefix}/${id}`;
+        if (!storedValues.has(key)) {
+          saves += 1;
+          storedValues.set(key, harden({ ...config, id }));
+        }
+        return storedValues.get(key);
+      },
+    });
+    const one = await setupGutter({ storedValues, booksService });
+    const two = await setupGutter({ storedValues, booksService });
+    await tick();
+    const config = {
+      name: 'Primer',
+      icon: 'P',
+      scheme: 'dark',
+      mode: 'whylip',
+      profilePath: ['whylip', 'primer'],
+    };
+    const ids = await Promise.all([
+      one.gutter.addSpace(config),
+      two.gutter.addSpace({ ...config, scheme: 'light' }),
+    ]);
+    t.deepEqual(ids, ['whylip-primer', 'whylip-primer']);
+    t.is(await one.gutter.addSpace(config), 'whylip-primer');
+    t.is(saves, 1);
+    for (const client of [one, two]) {
+      t.is(
+        client.gutter.getSpaces().filter(space => space.mode === 'whylip')
+          .length,
+        1,
+      );
+      t.is(client.gutter.getActiveSpaceId(), 'whylip-primer');
+      t.is(
+        client.gutter.getSpaces().find(space => space.id === 'whylip-primer')
+          .scheme,
+        'dark',
+      );
+      t.deepEqual(client.navigated.at(-1), ['whylip', 'primer']);
+    }
+    t.teardown(() => testDocument.body.replaceChildren());
+  },
+);

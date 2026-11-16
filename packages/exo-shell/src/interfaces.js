@@ -3,6 +3,11 @@
 
 import { M } from '@endo/patterns';
 
+// Keep buffered previews below the default pattern string limit at every
+// forwarding exo. Larger output belongs in files or byte streams, not records.
+export const MAX_SHELL_OUTPUT_BYTES = 64 * 1024;
+harden(MAX_SHELL_OUTPUT_BYTES);
+
 // #region Shape primitives
 
 /**
@@ -53,6 +58,7 @@ const ExecOptionsShape = M.splitRecord({}, { timeoutMs: M.number() });
  * 4 (argv arrays only; no shell interpolation on the guest surface).
  */
 export const ShellInterface = M.interface('Shell', {
+  help: M.call().optional(M.string()).returns(M.string()),
   // `callWhen` so the returns guard applies to the *resolved* value (these
   // methods are async); `M.promise(...)` takes a label, not a payload shape,
   // so it cannot constrain the resolution — `callWhen().returns(shape)` can.

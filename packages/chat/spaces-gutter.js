@@ -21,6 +21,8 @@ import {
 } from './setup-preact-container.js';
 import { createAddSpaceModal } from './add-space-modal.js';
 import { createEditSpaceModal } from './edit-space-modal.js';
+import { provideSpacesStorage, spacesStoragePath } from './spaces-storage.js';
+import { provideWhylipSpace } from './whylip-book.js';
 
 /** @type {ReadonlySet<string>} */
 const KNOWN_MODES = new Set([
@@ -41,7 +43,7 @@ const KNOWN_MODES = new Set([
 
 /**
  * @typedef {object} SpaceConfig
- * @property {string} id - unique identifier (sequential integer as string, e.g., "1", "2")
+ * @property {string} id - unique identifier (numeric for ordinary spaces, whylip-name for new books)
  * @property {string} name - display name (shown on hover)
  * @property {string} icon - emoji character
  * @property {string[]} profilePath - pet-name path to the agent
@@ -584,9 +586,14 @@ export const createSpacesGutter = ({
    * @returns {SpaceConfig[]}
    */
   const getSpacesArray = () => {
-    return [...spacesMap.values()].sort(
-      (a, b) => parseInt(a.id, 10) - parseInt(b.id, 10),
-    );
+    return [...spacesMap.values()].sort((a, b) => {
+      const left = Number(a.id);
+      const right = Number(b.id);
+      if (Number.isFinite(left) && Number.isFinite(right)) return left - right;
+      if (Number.isFinite(left)) return -1;
+      if (Number.isFinite(right)) return 1;
+      return a.id.localeCompare(b.id);
+    });
   };
 
   /**
@@ -634,6 +641,16 @@ export const createSpacesGutter = ({
    * @returns {Promise<string>}
    */
   const addSpace = async config => {
+    if (
+      config.mode === 'whylip' &&
+      config.profilePath.length === 2 &&
+      config.profilePath[0] === 'whylip'
+    ) {
+      const saved = await provideWhylipSpace(powers, config);
+      spacesMap.set(saved.id, saved);
+      selectSpace(saved.id);
+      return saved.id;
+    }
     // Generate next sequential ID
     const existingIds = [...spacesMap.keys()]
       .map(id => parseInt(id, 10))
@@ -642,17 +659,13 @@ export const createSpacesGutter = ({
     const id = String(nextId);
     const spaceConfig = harden({ ...config, id });
 
-    // Ensure 'spaces' directory exists
-    await null; // safe-await-separator
-    try {
-      await E(powers).lookup('spaces');
-    } catch {
-      // Directory doesn't exist, create it
-      await E(powers).makeDirectory('spaces');
-    }
+    await provideSpacesStorage(powers);
 
     // Store as passable object (not JSON)
-    await E(powers).storeValue(spaceConfig, ['spaces', id]);
+    await E(powers).storeValue(spaceConfig, [
+      ...(await spacesStoragePath(powers)),
+      id,
+    ]);
 
     // Add to map immediately and select the new space
     spacesMap.set(id, spaceConfig);
@@ -678,6 +691,7 @@ export const createSpacesGutter = ({
     // Cannot remove home space
     if (id === 'home') return;
 
+    await provideSpacesStorage(powers);
     await null; // safe-await-separator
 
     // Look up the space config before removing it so we know what to clean up.
@@ -729,7 +743,7 @@ export const createSpacesGutter = ({
     }
 
     try {
-      await E(powers).remove('spaces', id);
+      await E(powers).remove(...(await spacesStoragePath(powers)), id);
     } catch {
       // May not exist
     }
@@ -749,6 +763,7 @@ export const createSpacesGutter = ({
    * @returns {Promise<void>}
    */
   const updateSpace = async (id, updates) => {
+    await provideSpacesStorage(powers);
     if (id === 'home') {
       // Home space: enforce indelible name and profilePath
       const updated = harden({
@@ -760,14 +775,11 @@ export const createSpacesGutter = ({
         mode: /** @type {const} */ ('inbox'),
       });
 
-      await null; // safe-await-separator
-      // Ensure 'spaces' directory exists
-      try {
-        await E(powers).lookup('spaces');
-      } catch {
-        await E(powers).makeDirectory('spaces');
-      }
-      await E(powers).storeValue(updated, ['spaces', '0']);
+      await provideSpacesStorage(powers);
+      await E(powers).storeValue(updated, [
+        ...(await spacesStoragePath(powers)),
+        '0',
+      ]);
 
       homeSpaceConfig = updated;
 
@@ -788,7 +800,10 @@ export const createSpacesGutter = ({
     });
 
     await null; // safe-await-separator
-    await E(powers).storeValue(updated, ['spaces', id]);
+    await E(powers).storeValue(updated, [
+      ...(await spacesStoragePath(powers)),
+      id,
+    ]);
 
     spacesMap.set(id, updated);
 
@@ -1272,7 +1287,10 @@ export const createSpacesGutter = ({
   const loadSpaceConfig = async id => {
     try {
       // eslint-disable-next-line @jessie.js/safe-await-separator
-      const value = await E(powers).lookup(['spaces', id]);
+      const value = await E(powers).lookup([
+        ...(await spacesStoragePath(powers)),
+        id,
+      ]);
       return validateSpaceConfig(value, id);
     } catch {
       return null;
@@ -1340,18 +1358,10 @@ export const createSpacesGutter = ({
    * @returns {Promise<void>}
    */
   const watchSpaces = async () => {
-    await null; // safe-await-separator
+    // Initialization failures must surface instead of silently disabling saved
+    // spaces. A transport failure after subscription still permits fallback.
+    const spacesDir = await provideSpacesStorage(powers);
     try {
-      // Ensure spaces directory exists
-      try {
-        await E(powers).lookup('spaces');
-      } catch {
-        // Directory doesn't exist yet, create it
-        await E(powers).makeDirectory('spaces');
-      }
-
-      // Get the spaces directory and watch for changes
-      const spacesDir = await E(powers).lookup('spaces');
       const changesRef = E(
         /** @type {ERef<EndoHost>} */ (spacesDir),
       ).followNameChanges();
@@ -1385,13 +1395,18 @@ export const createSpacesGutter = ({
    * @returns {Promise<void>}
    */
   const refresh = async () => {
+    // Provision before clearing UI state: a migration conflict must surface,
+    // not masquerade as an empty list of saved spaces.
+    await provideSpacesStorage(powers);
     spacesMap.clear();
     homeSpaceConfig = HOME_SPACE_DEFAULTS;
 
     await null; // safe-await-separator
     try {
       // Check if 'spaces' directory exists by trying to list it
-      const spaceIds = await E(powers).list('spaces');
+      const spaceIds = await E(powers).list(
+        ...(await spacesStoragePath(powers)),
+      );
 
       // Load all space configs in parallel
       const loadPromises = [];

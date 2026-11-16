@@ -24,6 +24,7 @@ import path from 'node:path';
 
 import { Fail, b, makeError, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { installationPath } from './installation-path.js';
 
 import {
   configureBroker,
@@ -151,8 +152,8 @@ export const requireProvisioned = async (hostAgent, sandboxDir, names) => {
   await null;
   for (const name of names) {
     // eslint-disable-next-line no-await-in-loop
-    if (!(await E(hostAgent).has(sandboxDir, name))) {
-      throw Fail`${q(`${sandboxDir}/${name}`)} is missing — run setup-host.js first.`;
+    if (!(await E(hostAgent).has(...installationPath(sandboxDir, name)))) {
+      throw Fail`${q(`${installationPath(sandboxDir).join('/')}/${name}`)} is missing — run setup-host.js first.`;
     }
   }
 };
@@ -180,7 +181,9 @@ export const resolveSessionStorageRoots = async (
   { prefix, sandboxDir, requestedRoots, readSessionStorage },
 ) => {
   await null;
-  const existingStorage = await E(hostAgent).has(sandboxDir, 'session-storage');
+  const existingStorage = await E(hostAgent).has(
+    ...installationPath(sandboxDir, 'session-storage'),
+  );
   const { workspaceDir, mcpDir } = existingStorage
     ? (await readSessionStorage()).roots
     : requestedRoots;
@@ -214,12 +217,14 @@ export const readRetainedBroker = async (
   { sandboxDir, accountAuthority, readBrokerService },
 ) => {
   await null;
-  if (!(await E(hostAgent).has(sandboxDir, 'broker-service'))) {
+  if (
+    !(await E(hostAgent).has(...installationPath(sandboxDir, 'broker-service')))
+  ) {
     return undefined;
   }
   const retained = (await readBrokerService()).config;
   retained.accountAuthority === accountAuthority ||
-    Fail`The retained ${q(`${sandboxDir}/broker-service`)} serves account authority ${q(retained.accountAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
+    Fail`The retained ${q(`${installationPath(sandboxDir).join('/')}/broker-service`)} serves account authority ${q(retained.accountAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
   return retained;
 };
 harden(readRetainedBroker);
@@ -405,7 +410,7 @@ export const provideBrokerService = async (
 ) => {
   await null;
   const settingsEnv = readBrokerWorkloadEnv(workloadEnv);
-  const brokerPath = [sandboxDir, 'broker-service'];
+  const brokerPath = installationPath(sandboxDir, 'broker-service');
   if (existingBroker) {
     const retained = await readProvisionedEnvironment(hostAgent, {
       label,
@@ -448,7 +453,9 @@ export const provideBrokerService = async (
       resultName: brokerPath,
       env: { [configEnvName]: brokerConfig, ...settingsEnv },
     });
-    console.log(`Minted ${sandboxDir}/broker-service`);
+    console.log(
+      `Minted ${installationPath(sandboxDir).join('/')}/broker-service`,
+    );
   }
   await configureBroker(hostAgent, brokerPath, brokerSettings, label);
 };
@@ -487,8 +494,8 @@ export const provideBackendCaplet = async (
   },
 ) => {
   await null;
-  const backendPath = [sandboxDir, 'backend'];
-  const backendNextPath = [sandboxDir, 'backend-next'];
+  const backendPath = installationPath(sandboxDir, 'backend');
+  const backendNextPath = installationPath(sandboxDir, 'backend-next');
   if (await E(hostAgent).has(...backendNextPath)) {
     await E(hostAgent).remove(...backendNextPath);
   }
@@ -521,7 +528,9 @@ harden(provideBackendCaplet);
  * discover the backend if the copy fails. An adapter whose factory publishes
  * new-project workspaces also names the host-global static asset server,
  * bound the same way so the factory resolves it from its own powers; the
- * asset server's setup re-mints it against the current release each start.
+ * asset setup preserves healthy identities and refreshes this grant if rebuilt.
+ * The default publisher lives at assets/publisher; the profile keeps the
+ * stable local name asset-server. Custom names remain single root names.
  *
  * @param {any} hostAgent
  * @param {object} spec
@@ -549,11 +558,24 @@ export const bindFlootBackend = async (
   ]);
   console.log(`Bound "${backendName}" into "${flootDir}/controller-profile".`);
   if (assetServerName !== undefined) {
-    if (await E(hostAgent).has(assetServerName)) {
-      await E(hostAgent).copy(
-        [assetServerName],
-        [flootDir, 'controller-profile', assetServerName],
-      );
+    const publisherPath =
+      assetServerName === 'asset-server'
+        ? ['assets', 'publisher']
+        : [assetServerName];
+    let available = true;
+    for (let n = 1; n <= publisherPath.length; n += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await E(hostAgent).has(...publisherPath.slice(0, n)))) {
+        available = false;
+        break;
+      }
+    }
+    if (available) {
+      await E(hostAgent).copy(publisherPath, [
+        flootDir,
+        'controller-profile',
+        assetServerName,
+      ]);
       console.log(
         `Bound "${assetServerName}" into "${flootDir}/controller-profile".`,
       );
@@ -580,6 +602,7 @@ harden(bindFlootBackend);
  * @param {string} spec.flootDir
  * @param {string} spec.backendId
  * @param {string} spec.accountAuthority
+ * @param {string[]} [spec.additionalBackendIds] Other consumers of the pool.
  * @param {string[]} [spec.subscriptionIds] A pool's members.
  */
 export const publishHostedAccount = async (
@@ -591,6 +614,7 @@ export const publishHostedAccount = async (
     flootDir,
     backendId,
     accountAuthority,
+    additionalBackendIds = [],
     subscriptionIds = undefined,
   },
 ) => {
@@ -601,11 +625,12 @@ export const publishHostedAccount = async (
     flootDir,
     backendId,
     accountAuthority,
+    additionalBackendIds,
     ...(subscriptionIds ? { subscriptionIds } : {}),
   });
   await publishBrokerSubscription(hostAgent, { label, dir: sandboxDir });
   console.log(
-    `Hosted ${label} sandbox ready. Floot sessions on backend "${backendId}" are recorded under "${sandboxDir}/session-records" and owned by the daemon.`,
+    `Hosted ${label} sandbox ready. Floot sessions on backend "${backendId}" are recorded under "${installationPath(sandboxDir).join('/')}/session-records" and owned by the daemon.`,
   );
 };
 harden(publishHostedAccount);

@@ -20,7 +20,8 @@
     "./setup-host.js": "./setup-host.js",
     "./setup-hosted.js": "./setup-hosted.js",
     "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./setup-direct.js": "./setup-direct.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -31,7 +32,9 @@
     "setup:hosted": "endo run --UNCONFINED setup-hosted.js --powers @agent",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
-    "lint:eslint": "eslint '**/*.js'"
+    "lint:eslint": "eslint '**/*.js'",
+    "setup:direct": "endo run --UNCONFINED setup-direct.js --powers @agent",
+    "login:direct": "node login.js"
   },
   "dependencies": {
     "@endo/9p-server": "workspace:^",

@@ -733,6 +733,11 @@ test.serial(
       'collapsed evidence is not rendered',
     );
     t.false(textareaIn(parent, '.floot-input').disabled);
+    t.is(
+      parent.querySelector('.floot-header-btn.chip.attention'),
+      null,
+      'historical unknown outcomes do not demand attention',
+    );
     const compose = textareaIn(parent, '.floot-input');
     compose.value = 'unrelated work without replay';
     compose.dispatchEvent(new testWindow.Event('input', { bubbles: true }));

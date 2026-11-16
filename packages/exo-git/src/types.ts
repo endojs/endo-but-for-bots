@@ -268,13 +268,13 @@ export type GitRemoteEndpoint = {
   protocol: string;
   requiresCredential: boolean;
   allowLocalFileTransport: boolean;
-  ensureCredentialUsable: () => GitRemoteCredential | undefined;
-  captureCredentialVersion: () => number | undefined;
+  ensureCredentialUsable: () => Promise<GitRemoteCredential | undefined>;
+  captureCredentialVersion: () => number | bigint | undefined;
   assertCredentialUnchanged: (
     operation: string,
-    version: number | undefined,
+    version: number | bigint | undefined,
   ) => void;
-  credentialHealth: () => RemoteCredentialHealth;
+  credentialHealth: () => Promise<RemoteCredentialHealth>;
   watchChange: (onChange: () => void) => (() => void) | undefined;
 };
 

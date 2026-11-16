@@ -1,6 +1,11 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { E } from '@endo/eventual-send';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { makePromiseKit } from '@endo/promise-kit';
+import { cancelPendingIterator } from '../src/cancelable-iterator.js';
 
 import {
   assertFormulaNumber,
@@ -43,4 +48,50 @@ test('subscribing captures the name snapshot before a concurrent addition', asyn
   assertPetName(later);
   await store.storeIdentifier(later, id);
   t.like((await second).value, { add: 'later' });
+});
+
+test('locator subscriptions cancel a confirmed pending read and can subscribe again', async t => {
+  t.timeout(5000);
+  const database = /** @type {DaemonDatabase} */ (
+    /** @type {unknown} */ ({ listPetStoreEntries: () => [] })
+  );
+  const number = 'b'.repeat(64);
+  assertFormulaNumber(number);
+  const id = `${number}:${number}`;
+  assertValidId(id);
+  const store = await makePetStoreMaker(database).makeIdentifiedPetStore(
+    number,
+    'pet-store',
+    assertPetName,
+  );
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const changes = store.followIdNameChanges(id);
+    t.teardown(() => changes.return(undefined));
+    // eslint-disable-next-line no-await-in-loop
+    const first = await changes.next();
+    if (first.done || !first.value)
+      throw Error('Missing initial locator snapshot');
+    t.deepEqual(first.value.names, []);
+    const entered = makePromiseKit();
+    const tracked = {
+      next: () => {
+        const pending = changes.next();
+        entered.resolve(undefined);
+        return pending;
+      },
+      return: () => changes.return(undefined),
+    };
+    const reader = readerFromIterator(tracked, {
+      cancelPending: () => cancelPendingIterator(changes),
+    });
+    const consumer = iterateReader(reader);
+    const pending = consumer.next();
+    // Prove the reader has invoked the source before asking it to close.
+    // eslint-disable-next-line no-await-in-loop
+    await entered.promise;
+    // eslint-disable-next-line no-await-in-loop
+    await E(reader).close();
+    // eslint-disable-next-line no-await-in-loop
+    t.true((await pending).done);
+  }
 });

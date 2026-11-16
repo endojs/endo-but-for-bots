@@ -115,10 +115,6 @@ const hasRootIndexFile = async filesystem => {
   }
 };
 
-// The wording is part of the tool set's identity, which a hosted backend pins
-// to its thread (Codex rotates the thread when it changes), so it is left as
-// it was: calling again is still harmless, and the reply says what is true
-// now — the URL is stable and serves the live files.
 /** @type {import('@endo/fae/src/tool-makers.js').ToolSchema} */
 const publishSchema = harden({
   type: 'function',
@@ -127,9 +123,11 @@ const publishSchema = harden({
     description:
       'Publish this project workspace as a static website and return a ' +
       'shareable URL. The URL is an unguessable capability link that opens ' +
-      'in a new browser tab. Call it again after you change files to serve ' +
-      'the latest version. Only this session’s own workspace can be ' +
-      'published.',
+      'in a new browser tab. Requires index.html at the workspace root and ' +
+      'relative asset paths such as ./app.js, not /app.js. Edits appear on ' +
+      'reload. Static files only: no server process, WebSocket/CapTP endpoint, ' +
+      'or daemon bootstrap. Test under a non-root prefix and verify any ' +
+      'separately provisioned backend. Only this session’s workspace is published.',
     parameters: { type: 'object', properties: {}, required: [] },
   },
 });
@@ -216,7 +214,10 @@ export const makePublishTool = ({
     `Published your workspace at ${url}\n` +
     'This is an unguessable capability URL; it opens in a new browser ' +
     'tab. It serves the files as they are now, so edits show on reload, ' +
-    'and it stays the same across restarts until this session is deleted.';
+    'and it stays the same across restarts until this session is deleted.\n' +
+    'Static files only: no WebSocket/CapTP endpoint or daemon bootstrap is ' +
+    'provisioned. Use relative asset paths under this URL. Verify the page ' +
+    'and any separately provisioned backend before claiming they work.';
 
   const publish = async () => {
     const workspace = await getWorkspace();
@@ -327,7 +328,11 @@ export const makePublishTool = ({
     execute: () => serialize(publish),
     help: () =>
       'publishWorkspace() — serve this session’s project workspace as a ' +
-      'static site and return a shareable capability URL.',
+      'static site and return a shareable capability URL. Requires index.html at ' +
+      'the workspace root. Use relative asset paths (./app.js), not origin-root ' +
+      'paths (/app.js). Serves live files under a capability path; does not run ' +
+      'a server, provide a WebSocket/CapTP route, or expose daemon objects. ' +
+      'Test under a non-root prefix and verify any backend separately.',
     // Not part of the tool wire; the factory calls it on session deletion to
     // release the served route.
     revoke: () => serialize(revoke),

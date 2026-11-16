@@ -9,6 +9,18 @@ import { makeMockPowers } from '../helpers/mock-powers.js';
 
 const { document: testDocument } = createDOM();
 
+// Exercise grouping explicitly in the existing grouping and drag/drop cases.
+// The default-layout case below omits this optional host toggle entirely.
+test.beforeEach(() => {
+  const toggle = testDocument.createElement('button');
+  toggle.id = 'group-by-type-toggle';
+  toggle.setAttribute('aria-pressed', 'true');
+  testDocument.body.appendChild(toggle);
+});
+test.afterEach(() => {
+  testDocument.getElementById('group-by-type-toggle')?.remove();
+});
+
 // The drop menu defers its dismiss-on-outside-click listener with
 // requestAnimationFrame (so the interaction that opened it does not also close
 // it), matching channel-list.js's menu idiom. dom-setup stubs setTimeout but
@@ -905,23 +917,23 @@ test.serial(
 
 // ── group-by-type toggle ──────────────────────────────────────────────
 //
-// The grouped layout is the default. A host toggle icon button
-// (#group-by-type-toggle, aria-pressed) makes it optional: when un-pressed the
-// wrapper threads grouped=false into the confined tree, which renders the prior
-// flat list (items directly, no group sections).
+// The directory layout is the default. A host toggle icon button
+// (#group-by-type-toggle, aria-pressed) opts into formula-type grouping.
 
 test.serial(
-  'absent the group-by-type toggle, the grouped layout renders',
+  'absent the group-by-type toggle, the directory layout renders',
   async t => {
+    testDocument.getElementById('group-by-type-toggle').remove();
     const { $list } = await setupInventory({
       names: ['alice'],
       locators: new Map([['alice', 'endo://?type=handle&number=10']]),
     });
 
-    await waitFor(() => !!groupSectionFor($list, 'handles'));
-    t.truthy(
-      groupSectionFor($list, 'handles'),
-      'a group section renders when no group toggle is present',
+    await waitFor(() => !!wrapperFor($list, 'alice'));
+    t.is(
+      $list.querySelectorAll('[data-group-key]').length,
+      0,
+      'items render directly when no group toggle is present',
     );
   },
 );
@@ -929,13 +941,9 @@ test.serial(
 test.serial(
   'un-pressing the group-by-type toggle renders the flat list',
   async t => {
-    // The group toggle starts pressed (grouped is the default); flipping it off
+    // The fixture explicitly enables grouping; flipping it off
     // must drop the group sections and render items directly in the list.
-    const $groupToggle = testDocument.createElement('button');
-    $groupToggle.id = 'group-by-type-toggle';
-    $groupToggle.setAttribute('aria-pressed', 'true');
-    testDocument.body.appendChild($groupToggle);
-    t.teardown(() => $groupToggle.remove());
+    const $groupToggle = testDocument.getElementById('group-by-type-toggle');
 
     const { $list } = await setupInventory({
       names: ['alice'],

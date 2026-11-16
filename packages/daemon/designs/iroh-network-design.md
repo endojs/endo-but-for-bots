@@ -96,7 +96,7 @@ packages/daemon/src/networks/
   iroh.js                 # the EndoNetwork transport (make/connect/accept)
   iroh-stream-adapter.js  # iroh BiStream  <->  @endo/stream Reader/Writer
   iroh-address.js         # pure URL <-> NodeAddr helpers (unit-tested)
-  setup-iroh.js           # installer caplet: makeUnconfined + move to @nets/iroh
+  setup-iroh.js           # installer caplet: private worker + direct @nets/iroh
 ```
 
 `@number0/iroh` is added to `optionalDependencies` (see
@@ -455,3 +455,28 @@ the discovery path end-to-end, strip an accepted address down to a bare
 - iroh 1.0 — "Dial Keys, not IPs": https://www.iroh.computer/blog/v1
 - `@number0/iroh` (npm): https://www.npmjs.com/package/@number0/iroh
 - CapTP-over-netstring: `packages/daemon/src/connection.js`
+
+## Installation inventory
+
+Both the daemon setup and the hosted setup retain the active transport directly
+under `@nets/iroh`, where `reviveNetworks()` discovers it on restart.
+The worker is named `@pins/installations/iroh/worker`; this nested name retains
+installation state and does not add an ordinary inventory root entry.
+The service formula itself retains and revives its worker dependency.
+
+On upgrade, setup inspects the existing service formula's worker reference.
+It moves only root `iroh-worker` or `iroh-worker-*` aliases whose identifiers
+match that exact worker, preserving the service and worker identities.
+Unrelated historical workers are left for an explicit retirement audit.
+The migration checks destination directory types and identity conflicts before
+changing bindings, copies before removal, and resumes after an interrupted copy.
+A conflicting canonical worker or service fails closed rather than replacing
+the active network.
+An active worker with neither its private binding nor a known root alias also
+requires repair instead of creating a replacement.
+The same checks run on every startup before the installed-service return.
+
+A retained legacy `network-service-iroh` alias is moved to `@nets/iroh` if it is
+the only service or matches the existing service identity.
+Fresh setup creates the worker at its private path and the service directly at
+`@nets/iroh`, avoiding the old temporary root service name.

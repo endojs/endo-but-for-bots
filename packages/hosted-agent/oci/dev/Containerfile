@@ -15,8 +15,13 @@ RUN sed -i \
   && apt-get update \
   && apt-get install -y --no-install-recommends \
     bash ca-certificates curl git ripgrep build-essential \
-    python3 python3-pip python3-venv openssl tar \
+    python3 python3-pip python3-venv openssl tar procps \
+    chromium fonts-liberation fonts-noto-color-emoji \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt/* \
   && rm -f /var/cache/ldconfig/aux-cache \
   && : > /var/log/dpkg.log \
   && : > /var/log/alternatives.log
+
+# Verify rendering in the image build, without a network dependency or npm install.
+COPY browser-smoke.mjs /opt/endo-browser-smoke.mjs
+RUN node /opt/endo-browser-smoke.mjs
