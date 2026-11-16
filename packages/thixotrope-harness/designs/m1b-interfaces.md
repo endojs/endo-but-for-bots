@@ -368,6 +368,7 @@ decision 16.2). The session calls the scope directly.
 |---|---|---|---|
 | `Submission` | whole | `{ text }` | `{ text }` or `StagedText` |
 | `ToolCall`, `ToolIntent` | `args` | `Text` | `Text` or `StagedText` (preview 256) |
+| `ToolRequest` (`AdapterTool.execute`) | `args` | `Text` | `Text` or `StagedText` (W1b.1 contract change: section 6.4 sends staged `args` to echo) |
 | `TurnStarted` | `input` | `SubmissionText` | or `StagedText` |
 | `Partial` | `text` | `Text` | or `StagedText` (a checkpoint) |
 | `RoundSettled` | `text`; new optional `nativeContext` | `Text` | `Text` or `StagedText`; `nativeContext: StagedText` (always staged) |

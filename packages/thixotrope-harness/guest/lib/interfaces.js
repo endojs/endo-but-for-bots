@@ -561,8 +561,8 @@ export const shapes = lazyTable({
         timer: M.remotable('Timer'),
       },
     ),
-  /** `AdapterTool.execute` argument. */
-  ToolRequest: () => record({ opId: S.Id, args: S.Text }),
+  /** `AdapterTool.execute` argument; M1b: `args` may be staged (W1b.1, 6.4). */
+  ToolRequest: () => record({ opId: S.Id, args: staged(S.Text) }),
   /**
    * A tool outcome (adapter tools and the vat's tool-table entries alike).
    * `failed`: `text` is the error message (the session writes `Error: <text>`).
