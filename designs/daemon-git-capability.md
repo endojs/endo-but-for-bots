@@ -801,6 +801,7 @@ It is not part of the normative design.
 - **#371** (`fix(daemon): correctness and authority-boundary fixes for the git capability`) — correctness and authority-boundary hardening on the shipped `Git` surface.
 - **`Git.filesystemAt(ref)`** ([endo-fs-from-git](endo-fs-from-git.md) Phases 1-3 plus a Phase-4 slice) — the historical-read `Filesystem` view over the git object database (§ Historical Read); the exo surface now lives in `packages/exo-git` (`makeGit`, `makeGitFsBackend`) with the native driver in `packages/git`.
 - **#644** (`feat(git): add commit amend and reword`) — `commit({ amend })` and `reword(ref, message)` behind the gated `allowHistoryRewrite` attenuation axis (Design Decision 11), plus the elevated `makeGitHistoryTool` in `@endo/agent-tools` and code-mode regeneration.
+- **`paths` options on `diff` and `stashPush`** now resolve through the worktree mount, as `add` and `restore` already did, so a JSON tool call cannot hand git an unconfined path or draw a host path out of a git diagnostic.
 
 ### Forward-design notes
 
