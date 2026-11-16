@@ -2549,3 +2549,80 @@ deterministic mixed texts, and equality with Fae's `boundToolOutput` (R4-46) for
 boundary; the vat probe repeated the chunking checks (no split, joins equal). One difference from Fae:
 a lone high surrogate exactly at the cut is kept (Fae drops it); no pair is ever split in either.
 Decision: as built; W1a.2, W1a.4, W1a.5 and W1a.6 use these entry points (m1a-interfaces.md section 11).
+
+### J-0220 2026-11-16 M1a native - good fit
+Evidence: `packages/thixotrope-harness/resources/agent-host/durable.js` copies the S2 attach pattern
+(`test/spikes/fixtures/attach/`) with one change: `withOps` classifies the break with
+`isRetiredBreak` instead of a substring test. One registration (`agent-host`) carries a manager-owned
+`AgentHostSink`; `impl/attach.js` `bind` awaits `E(sink).attach(ops)`; a call that finds its ops facet
+retired reconciles once through `manager.register` (`same: () => true`) and calls again. The manager
+vat keeps only durable identities: Backend exos with their specs, minted `SessionHostFacet`s bound to
+their Session through two `WeakMap`s, and at most 16 start listeners. On the real daemon (J-0222)
+the first `open` built the adapter in 0.83-1.13 s (S2: 0.9-1.2 s), a second `open` cost 164-175 ms
+(one manager crank plus one adapter hop), and after SIGKILL and restart the manager's restore had
+re-attached before the first call, so `open` cost 151-163 ms with no retry. The adapter keys
+everything per incarnation by presence (`WeakMap` of Backend -> provider and tools; one channel per
+Session presence, W1a.3): two opens returned the same publisher. `Backend.open` sends the spec to
+the adapter on every open (<= frameBytes; the adapter builds a provider only on first sight of the
+Backend presence), so the spec crosses the hub in clear once per turn (C-1): harmless for scripts,
+and the reason M2 backend specs must carry Secret handles, never values.
+Decision: as built. The ops facet stays W1a.2-internal (guarded, closed records). Adapter tests
+(`test/adapter/m1a-agent-host.test.js`, 18 tests) drive the manager with a fake manager kit whose
+"restart" retires the ops facet; the real kit was exercised only by the check in J-0222.
+
+### J-0221 2026-11-16 M1a native - awkward
+Evidence: D-14 wants `ephemeral.js` to `import()` its implementation from `implDir`. Installed native
+bundles are made by `makeFunctor(..., { format: 'cjs' })` (`packages/thixotrope/src/platform/bundler.js:44-53`)
+and loaded with `require` (`packages/thixotrope/src/platform/node/adapter-process-entry.js:39`). A probe
+bundled a module using both: `import(x)` is rewritten to a `$h_import` hook the functor does not
+provide ("$h_import is not a function"), and `import.meta.url` is `undefined`. Node builtins are exits
+resolved with the process's `require`, so the loader imports `createRequire` from `node:module` and
+loads `scripts/guest-prelude.js` and `impl/index.js` with `require`, which evaluates an ES module
+graph synchronously on Node 22.23 (no top-level await allowed under `impl/`; probe and real daemon
+both work). `installNative(name, directory)` takes no configuration and the bundle cannot see its
+source path, so `implDir` is not an install-time setting: the loader derives the harness root from
+`process.argv[1]` (the core's `adapter-process-entry.js`, four directories up plus
+`thixotrope-harness`) and refuses to start if `resources/agent-host/impl/index.js` is not there. The
+loader bundle is 231,495 bytes (it carries `makeAdapter` and `@endo/far`); the durable bundle 62,100
+bytes (`interfaces.js` is 42 KB of it). `impl/` is resolved from the harness tree at run time,
+including its `@endo/far` and the prelude's `@endo/patterns`/`@endo/exo` (no bundled duplicates).
+Decision: deviation from D-14's "operator-owned directory, path fixed at install": `implDir` is the
+harness checkout's `resources/agent-host/impl`, a sibling of the running core. A fix in `impl/` is
+still a file change plus a restart. Candidate for the PM: an `installNative` configuration record
+(or grants) so the manager can carry `implDir` in its service spec; that is a core change and a
+contract change, not made here.
+
+### J-0222 2026-11-16 M1a native - perf
+Evidence: throwaway check (not committed) under the run lock: base template copy, `installNative
+agentHostAdmin resources/agent-host`, makeBackend, forSession/bindSession, two opens, Live
+subscribe, one scripted round driven from a control client (handshake, deltas, roundFinal), echo
+with 2,000-key arguments and with a 300 k output, lease release, SIGKILL, restart, a fresh open and
+echo. W1a.2 code at `3cba52d616` (the second run's HEAD `5edad95632` adds only another unit's
+journal); crank budget 50 M.
+{"metric":"w1a2.agentHost.ironhorseCheck","commit":"3cba52d616","crankBudget":"50000000","installNativeMs":9297,"makeBackendMs":199.8,"firstOpenMs":1125.8,"secondOpenMs":175.2,"toolNames":"echo","samePublisher":true,"snapshotType":"snapshot","startToDispatchingMs":59.3,"startToFinalMs":146.2,"finalText":"Hello!","argsIsText":true,"argsBytes":18900,"deltaTexts":"Hel|lo|!","echo2000KeysMs":54.2,"echoStatus":"ok","echo300kMs":35.2,"echo300kStatus":"frame-limit","leaseBeforeRelease":"pending","leaseAfterRelease":"settled","logKinds":"request,round-final,echo-start,echo-end,echo-start,echo-frame-limit","echoArgsIntact":true,"restartServedMs":9506.7,"openAfterRestartMs":162.8,"newAdapterPid":true,"echoAfterRestart":"b","loadAvg":[10.92,7.01,5.54]}
+{"metric":"w1a2.agentHost.ironhorseCheck","commit":"5edad95632","crankBudget":"50000000","installNativeMs":5442.2,"makeBackendMs":148.1,"firstOpenMs":827.2,"secondOpenMs":163.8,"toolNames":"echo","samePublisher":true,"snapshotType":"snapshot","startToDispatchingMs":33.1,"startToFinalMs":107.8,"finalText":"Hello!","argsIsText":true,"argsBytes":18900,"deltaTexts":"Hel|lo|!","echo2000KeysMs":50.6,"echoStatus":"ok","echo300kMs":30.1,"echo300kStatus":"frame-limit","leaseBeforeRelease":"pending","leaseAfterRelease":"settled","logKinds":"request,round-final,echo-start,echo-end,echo-start,echo-frame-limit","echoArgsIntact":true,"restartServedMs":9036.9,"openAfterRestartMs":150.6,"newAdapterPid":true,"echoAfterRestart":"b","loadAvg":[6.03,6.59,5.54]}
+Reading: every step passed twice. `installNative` took 5.4-9.3 s (bundling plus shipping the 62 KB
+durable bundle; the 9.3 s run was at load 10.9). Client -> endpoint `startRound` -> `dispatching`
+answered -> deltas -> `roundFinal` took 108-146 ms in all with no vat on the path; deltas reached the
+channel in order (`Hel|lo|!`). The 2,000-key arguments crossed as one 18,900-byte string and `echo`
+logged them byte-identical; a 300 k echo was cut in the callee and answered `frame-limit` in 30-35
+ms. The lease stayed pending until `releaseTurn`. After SIGKILL the daemon served in 9.0-9.5 s (the
+manager vat was not yet snapshotted; C-3), the adapter pid changed and the manager answered `open` in
+151-163 ms without a retry. Not covered here: a session vat holding the lease across the restart (the
+control client's own presences die with its connection); that is W1a.7's acceptance 5.
+Decision: no budget of M1a's table applies to this unit alone; `turn.start` and `install.factory` are
+measured by W1a.7 and W1a.6.
+
+### J-0223 2026-11-16 M1a transport - awkward
+Evidence: the session sends `E(endpoint).holdTurn(turn)` (answered) and
+`E.sendOnly(endpoint).startRound(req)` in one crank. The contract guards `holdTurn` with `M.callWhen`,
+so the exo awaits its arguments before the method body runs, while `startRound` (`M.call`) runs
+synchronously on delivery: the round can reach the provider before the lease is registered, and the
+contract also says the adapter must never run a round for a turn it holds no lease for. Separately, an
+`M.call` method that returns a promise fails its return guard synchronously (the adapter-test fake of
+`TurnSink.dispatching` that answered with a rejection produced an unhandled rejection); a vat's
+`dispatching` must answer synchronously, which W1a.4's design does.
+Decision: `impl/endpoint.js` parks a `startRound` that arrives before its lease (one per turn, at most 8
+turns) and runs it when `holdTurn` registers the lease; a round for a released turn is dropped, and a
+`holdTurn` for a released turn settles at once. Tested (`lease: ...` adapter test). No contract
+change.
