@@ -47,7 +47,7 @@ import { turnHooks } from './turn-hooks.js';
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RecordLog } from './records.js' */
 /** @import { LivePublishing } from './live.js' */
-const { E, Fail, makeExo, makePromiseKit, matches } =
+const { E, Fail, defineExoClass, makePromiseKit, matches } =
   /** @type {GuestGlobals} */ (globalThis);
 
 /** Rejection reason of an engine wait whose turn settled meanwhile. */
@@ -763,11 +763,18 @@ export const makeTurnRunner = ({
 
   // ------------------------------------------------------------ the sink
 
-  /** @param {ActiveTurn} active */
-  const makeSink = active =>
-    makeExo('TurnSink', interfaces.TurnSink, {
+  /**
+   * One TurnSink per turn; the class is defined once per session (vat):
+   * `makeExo` would define a class per object (J-0251).
+   */
+  const makeSink = defineExoClass(
+    'TurnSink',
+    interfaces.TurnSink,
+    (/** @type {ActiveTurn} */ active) => ({ active }),
+    {
       /** @param {number} round */
       dispatching(round) {
+        const { active } = /** @type {any} */ (this).state;
         if (current !== active || active.state !== 'running') return false;
         if (round !== active.round) return false;
         if (!active.dispatched) {
@@ -778,6 +785,7 @@ export const makeTurnRunner = ({
       },
       /** @param {any} result */
       roundFinal(result) {
+        const { active } = /** @type {any} */ (this).state;
         if (current !== active || active.state !== 'running') return;
         if (result.round !== active.round || active.roundKit === undefined) {
           return;
@@ -825,6 +833,7 @@ export const makeTurnRunner = ({
       },
       /** @param {any} failure */
       roundFailed(failure) {
+        const { active } = /** @type {any} */ (this).state;
         if (current !== active || active.state !== 'running') return;
         if (failure.round !== active.round) return;
         see(failure.at);
@@ -842,7 +851,8 @@ export const makeTurnRunner = ({
       deadline(_request) {
         // M1a arms no deadline; an unknown op id is ignored.
       },
-    });
+    },
+  );
 
   // ------------------------------------------------------------ ports
 
@@ -1034,16 +1044,22 @@ export const makeTurnRunner = ({
 
   // ------------------------------------------------------------ the Turn
 
-  /** @param {TurnInfo} info */
-  const makeTurn = info =>
-    makeExo('Turn', interfaces.Turn, {
+  /** One Turn per turn, kept for the session's life; one class per session. */
+  const makeTurn = defineExoClass(
+    'Turn',
+    interfaces.Turn,
+    (/** @type {TurnInfo} */ info) => ({ info }),
+    {
       getStatus() {
+        const { info } = /** @type {any} */ (this).state;
         return statusOf(info);
       },
       cancel() {
+        const { info } = /** @type {any} */ (this).state;
         cancel(info);
       },
       async whenFinished() {
+        const { info } = /** @type {any} */ (this).state;
         const { finished } = info;
         if (finished === undefined) return statusOf(info);
         await finished.promise;
@@ -1051,6 +1067,7 @@ export const makeTurnRunner = ({
       },
       /** @param {string} note */
       resolve(note) {
+        const { info } = /** @type {any} */ (this).state;
         if (current !== undefined) throw Error(texts.activeTurn);
         if (info.state !== 'outcome-unknown') {
           throw Error(texts.resolveNotUnknown);
@@ -1063,7 +1080,8 @@ export const makeTurnRunner = ({
         });
         info.resolution = note;
       },
-    });
+    },
+  );
 
   // ------------------------------------------------------------ previews
 
