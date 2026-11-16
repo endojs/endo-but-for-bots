@@ -2806,3 +2806,123 @@ Decision: (1) open for the PM: a blank-text refusal needs a fixed text in `inter
 contract change) and belongs with the Composer or `enqueueOnce`; (2) and (3) as built and recorded
 in m1a-interfaces.md section 8; (4) and (5) as built, following section 7's rule (every open intent;
 `Dispatched` decides the status).
+
+### J-0240 2026-11-16 M1a engine - good fit
+Evidence: the session's turn side (`packages/thixotrope-harness/guest/session/turn.js`, W1a.4,
+commits `895685da57`, `2e5733e116`) runs Fae's `runAgenticTurn` unchanged with each callback a crank
+step: `invoke` sends `startRound` and returns a promise that the next `roundFinal` delivery resolves;
+`runTools` records `ToolIntents`, issues at most `callWindow` calls and returns a promise the last
+result's delivery resolves. The engine's suspended async frame spans deliveries; every effect's record
+is appended earlier in the same crank (`TurnStarted` before `open`, `Dispatched` in the crank that
+answers `dispatching(0)`, `ToolIntents` before any `execute`), so S9 (J-0165) covers it. Turn state
+needed by recovery lives in plain records (`ActiveTurn`, the record log), not only in the engine frame
+(rule 12.4): settling a turn rejects the engine's pending waits, so a recovered or cancelled turn
+leaves no live frame. In a real vat (J-0242) one turn with a two-call round costs the session 2
+deliveries before the round reaches the adapter (A, B), 1 for `dispatching`, 3 for the round (D, E1,
+E2) and 1 for the final round, plus the lease answer: the `turn.round` row (<= 3 per round with 2
+calls, plus 1 lease delivery per turn) holds by construction. 31 unit tests with in-memory fakes
+(`test/unit/m1a-session-turn.test.js`, `m1a-session-program.test.js`) check intent before effect, call
+order, the round limit, claim-removes-entry, one publish per crank, cancel, recovery through W1a.5.
+Decision: as built. The loop body stays the engine; later milestones plug in through
+`guest/session/turn-hooks.js` and `tool-table.js` (created empty but for `echo`).
+
+### J-0241 2026-11-16 M1a transport - awkward
+Evidence: "one publish per crank" (architecture 4.2) needs to know where a crank's work ends, and a vat
+has no end-of-crank hook: a delivery handler that resolves an engine promise (a valid `roundFinal`,
+the last tool result of a round) is followed by several microtask hops before the engine reaches its
+next stop (`startRound`, a wait for tool results, or the settle). A microtask-scheduled flush would
+fire in the middle of that chain and split the crank's events into two publishes. `turn.js` keeps an
+outbox and publishes only at those stops and at the end of every other handler; a handler that hands
+control to the engine never publishes. Changes coming from outside the turn code (W1a.5's
+`QueueEntry.cancel`, which calls `onChange`) schedule a microtask flush instead, which finds the outbox
+empty whenever a turn handler already published. The vat probe saw exactly one publish per crank in
+every turn: `turn-start,phase,pending` (B), `phase,tool_call,tool_call` (D), `tool_result` (E1),
+`tool_result,phase` (E2, with `startRound` sent after the publish), `final,usage,end` (settle). The
+same rule decides where the row patch goes (`RowReporter.changed` once per crank, merged). The lease
+needs nothing special: `holdTurn` is answered only by `releaseTurn`, and its rejection handler routes a
+retired break to `recoverAfterRestart` (any other rejection fails the turn).
+Decision: as built; the rule ("publish at the engine's stops; never in a handler that resumes the
+engine") is written in `turn.js`'s module comment. A core hook "after this delivery's microtasks
+drain" would make it mechanical; not requested.
+
+### J-0242 2026-11-16 M1a engine - perf
+Evidence: throwaway vat probe (not committed) under the run lock: base template, a fresh worker from
+`vats.createWorker`, the bundled session program staged as section 9 says (non-ASCII, see J-0244:
+8,192 units per piece), one evaluating crank, `make()` with Node-side fakes for the Backend, Endpoint,
+publisher, host facet, row reporter and echo tool (transient objects, as the agent host's are); 5
+turns of "enqueue, dispatching, a round with 2 echo calls answered out of order, a final round"; reads
+3 times each. Crank budget 50 M, release worker. First run at `895685da57-dirty` (the exo-class
+change of `2e5733e116` uncommitted); the turn rows of earlier runs (before it) were within 10 ms.
+{"metric":"w1a4.vat.load","bundleBytes":142764,"pieces":18,"createWorkerMs":70,"stageMs":5712.7,"evaluateMs":250,"makeMs":446.1,"floorMs":138.9,"commit":"895685da57-dirty","crankBudget":"50000000","loadAvg":[4.92,4.22,4.01]}
+{"metric":"w1a4.vat.turn","turns":[{"submitToStartRoundMs":225.4,"startDeliveries":2,"dispatchingMs":87.5,"roundFinalToExecuteMs":142.5,"firstResultToPublishMs":84.9,"lastResultToStartRoundMs":106.3,"finalToReleaseMs":135.4,"deliveriesAfterStart":5},{"submitToStartRoundMs":213.4,"startDeliveries":2,"dispatchingMs":93.5,"roundFinalToExecuteMs":157.6,"firstResultToPublishMs":96,"lastResultToStartRoundMs":113.2,"finalToReleaseMs":140.9,"deliveriesAfterStart":5},{"submitToStartRoundMs":221.9,"startDeliveries":2,"dispatchingMs":99.5,"roundFinalToExecuteMs":162.5,"lastResultToStartRoundMs":196.3,"finalToReleaseMs":143.6,"deliveriesAfterStart":5},{"submitToStartRoundMs":231.1,"startDeliveries":2,"dispatchingMs":94.4,"roundFinalToExecuteMs":153.5,"lastResultToStartRoundMs":200.7,"finalToReleaseMs":147.8,"deliveriesAfterStart":5},{"submitToStartRoundMs":229.9,"startDeliveries":2,"dispatchingMs":95.3,"roundFinalToExecuteMs":160.9,"lastResultToStartRoundMs":197.2,"finalToReleaseMs":140.8,"deliveriesAfterStart":5}],"commit":"895685da57-dirty","crankBudget":"50000000","loadAvg":[4.92,4.22,4.01]}
+{"metric":"w1a4.vat.reads","getUsage0":[93.6,89.8,102.6],"watch0":[102.7,103.7,105.4],"history0":[86.2,85.8,82],"history1":[204.7,205.6,204.3],"history5":[680.5,696.7,709.2],"getUsage5":[105.7,103.4,106.1],"watch5":[125.4,128,119.2],"recoveryState":"outcome-unknown","recoveryMs":278.5,"commit":"895685da57-dirty","crankBudget":"50000000","loadAvg":[4.92,4.22,4.01]}
+(Three `firstResultToPublishMs` samples of 0.4-0.5 ms were the probe catching the previous crank's
+publish and are left out; their `lastResultToStartRoundMs` then covers both result cranks.)
+Reading: a session call costs about 85-105 ms from a control client (`getUsage`). Submit to
+`startRound` at the adapter: 213-231 ms (cranks A and B and the fake `open` round trip; 2 deliveries);
+`dispatching` answered in 88-100 ms; so a scripted provider's request would leave about 310-330 ms
+after the submit, under the `turn.start` budget of 350 ms with little room (W1a.7 measures it through
+the real Composer and agent host). `roundFinal` with 2 calls to both `execute`s at the adapter 143-163
+ms; a result to its publish 85-96 ms; the last result to the next `startRound` 106-113 ms; the final
+round to `releaseTurn` 135-148 ms. Deliveries per turn after the start: 5 (C, D, E1, E2, final; the
+fake never answers the lease). Recovery from a lease break: 279 ms until `getStatus` shows
+`outcome-unknown`. Load: evaluating crank 250 ms; `make()` 446 ms, of which about 200 ms is building
+the Turn and TurnSink guards for their classes (moved from the first turn to `make` by `2e5733e116`;
+`make` was 256-271 ms before). `session.program`: 142,764 bytes (71 % of 200,000), with W1a.5's
+queue and recovery; comments are kept by the bundler (`turn.js` alone is 38 KB of source, about half
+comments). Staging the 18 pieces took 5.7-6.8 s, far more than the evaluating crank (J-0244).
+Decision: `session.program` passes (142,764 <= 200,000; `test/unit/m1a-session-program.test.js`
+checks it on every unit run). `turn.start` is close to its budget; W1a.7 owns the measurement.
+
+### J-0243 2026-11-16 M1a engine - poor fit
+Evidence: in the same probe `getHistoryPage()` costs 82-86 ms with no turns, 204-206 ms with one turn
+of 8 records and 680-709 ms with 5 such turns: about 120 ms per turn, 15 ms per record, unchanged
+after the page builder stopped using `messageBytes` and cached record previews (a run at
+`ab4d3d1970-dirty` gave 628-661 ms before, 670-684 ms after). The return guard is the cost: in Node,
+`mustMatch(page, shapes.HistoryPage)` alone takes 93-120 us per record (1 / 5 / 32 turns of 8
+records: 0.96 / 4.0 / 23.9 ms; `tmp` benchmark, not committed), because every record is matched
+against `shapes.TurnRecord`, an `M.or` of eight closed `M.splitRecord`s tried in turn. At the vat's
+cost a 32-turn page would take about 3.5 s against the architecture 11 budget of 300 ms (a 32-turn
+page fits in one frame only when turns are short; with 2,000-character answers 9 turns filled
+24,576 bytes). Appending a record ran the same `M.or`; `records.js` now matches the shape named by the
+record's `kind` (`shapeOfKind`), one `splitRecord` per append.
+Decision: open for the PM (contract change candidate, like J-0233's `LiveBatch` note): the records in
+a history page were checked when they were appended, so `Session.getHistoryPage` (and
+`getCurrentTurn`) could return through a guard that checks the page's shape and bounds but not every
+record again, or `TurnRecord` could become a kind-dispatched pattern. Not changed here; acceptance 3
+reads a one-turn page.
+
+### J-0244 2026-11-16 M1a engine - awkward
+Evidence: (1) The first load of the session bundle failed in its evaluating crank with
+`SES_IMPORT_REJECTED` ("Possible import expression rejected at <unknown>:3229"): line 3229 was a JSDoc
+type `{import('./records.js').RecordLog}` in `turn.js`. The bundler keeps comments, and SES refuses
+any source that looks like it holds `import(` (or an HTML comment), even inside a comment; the guest
+lint (`lint/guest-rules.js`) forbids dynamic `import()` expressions but cannot see comments. The types
+now use `@import` tags, and `test/unit/m1a-session-program.test.js` bundles the program, checks the
+source against both patterns and runs a turn in a `Compartment` that has only the guest prelude.
+(2) The bundle is not ASCII: compartment-mapper's output carries 215 copies of U+034F (combining
+grapheme joiner), so section 9's staging rule chooses `frameBytes / 3` units per piece: 18 pieces for
+142,764 bytes, 5.7-6.8 s of staging against 250 ms for the evaluating crank (control-client floor
+139-163 ms per piece). Cutting by UTF-8 bytes (`chunkText(source, frameBytes)`) would make 6 pieces.
+Decision: (1) fixed and tested here; a guest-lint rule for `import(` in comments is a candidate for
+the PM (`lint/guest-rules.js` is not a W1a.4 file). (2) recorded for W1a.6 and W1a.7
+(`session.createCold`, C-5): staging by bytes rather than by an ASCII test would cut the piece count by
+three.
+
+### J-0245 2026-11-16 M1a spec - deviation
+Evidence: points the contract left open that W1a.4 decided (all in `guest/session/turn.js` unless
+stated). (1) Calls of a round still waiting (beyond `callWindow`) when the turn is cancelled never
+run; each gets a failed `ToolResult` "Error: the turn was cancelled before this call ran"
+(`CANCELLED_BEFORE_RUN`, a harness text not in `interfaces.js`), so every intent has a result for the
+next context. (2) `TurnStarted.at` of a queued entry is the claim crank's `lastKnownTime`, not the
+entry's `at`. (3) A `roundFinal` accepted without a prior `dispatching` is recorded normally
+(`Dispatched` stays absent); an adapter that skips the handshake makes a restart in that round
+`interrupted`. (4) A lease rejected with anything but the retired text fails the turn with that
+message. (5) Live events whose one large field (`input`, `args`, `result`, `text`) would put the event
+over `frameBytes - 64` are published with that field cut (records keep the whole text).
+(6) `makeSession(makeArgs, options)` takes test overrides (queue, recovery, tool table, hooks,
+`maxToolRounds`); the program passes none. (7) Tool-table entries carry `site: 'adapter' | 'guest'`
+(default adapter) so a retired break is classified by call site (section 7). (8) History cursors are
+`h<n>` ("the turns before the n-th"); a cursor past the turn count, or not of that form, throws
+`texts.badCursor`. (9) `getCurrentTurn().history` is cut to one frame like a page.
+Decision: as built; (1) needs a fixed text in `interfaces.js` if the PM wants it in the contract.
